@@ -381,6 +381,14 @@ function checkWorkflowConsoleContract() {
       styles.indexOf("Final settings-scope overrides") >= 0,
     "설정 범위 선택과 모바일 반응형 스타일 계약이 없습니다."
   );
+  assertOk(
+    code.indexOf('data-decision-tone="') >= 0 &&
+      code.indexOf('className: "decision-list-surface"') >= 0 &&
+      styles.indexOf("Each instrument is a separate decision record") >= 0 &&
+      /\.decision-list-surface \.oa-data-row\.oa-decision-row\s*\{[\s\S]*?border-left: 4px solid var\(--decision-record-accent\);[\s\S]*?border-radius: 6px;/.test(styles) &&
+      /@media \(max-width: 860px\)[\s\S]*?\.decision-list-surface \.oa-data-table\s*\{[\s\S]*?gap: 10px;/.test(styles),
+    "판단 목록의 종목별 경계와 상태색 구분이 없습니다."
+  );
   const earlyThemeBootstrapPosition = indexHtml.indexOf('window.localStorage.getItem("exitLensSettings")');
   const themeStylesheetPosition = indexHtml.indexOf('<link rel="stylesheet"');
   assertOk(
@@ -390,7 +398,7 @@ function checkWorkflowConsoleContract() {
       indexHtml.indexOf('document.documentElement.setAttribute("data-theme", theme)') >= 0 &&
       manifest.background_color === "#0c1117" &&
       manifest.theme_color === "#0c1117" &&
-      serviceWorker.indexOf("orbit-alpha-shell-20260817-dark-theme-v1") >= 0,
+      /const SHELL_CACHE = "orbit-alpha-shell-\d{8}-[a-z0-9-]+-v\d+";/.test(serviceWorker),
     "다크 기본 테마가 초기 화면과 설치형 웹 앱에 먼저 적용되지 않습니다."
   );
   assertOk(

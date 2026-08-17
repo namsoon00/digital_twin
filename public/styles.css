@@ -34640,6 +34640,86 @@ html[data-theme="dark"] :where(
   background-color: var(--panel);
 }
 
+/* Each instrument is a separate decision record, not an undivided table row. */
+.decision-list-surface {
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.decision-list-surface > .oa-surface-head {
+  min-height: 0;
+  padding: 4px 2px 14px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+
+.decision-list-surface .oa-data-table {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+  background: transparent;
+}
+
+.decision-list-surface .oa-table-head.oa-decision-row {
+  margin-bottom: -2px;
+  border: 0;
+  border-radius: 4px;
+}
+
+.decision-list-surface .oa-data-row.oa-decision-row {
+  --decision-record-accent: var(--ds-card-status-neutral);
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--decision-record-accent);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.decision-list-surface .oa-data-row.oa-decision-row:hover {
+  border-color: color-mix(in srgb, var(--decision-record-accent) 56%, var(--line));
+  border-left-color: var(--decision-record-accent);
+  background: color-mix(in srgb, var(--decision-record-accent) 5%, var(--panel));
+}
+
+.decision-list-surface .oa-decision-row[data-decision-tone="watch"] {
+  --decision-record-accent: var(--green);
+}
+
+.decision-list-surface .oa-decision-row[data-decision-tone="caution"] {
+  --decision-record-accent: var(--amber);
+}
+
+.decision-list-surface .oa-decision-row[data-decision-tone="danger"] {
+  --decision-record-accent: var(--red);
+}
+
+.decision-list-surface > .oa-pager-slot .oa-pager {
+  padding-inline: 2px;
+  border-color: var(--line);
+}
+
+@media (max-width: 860px) {
+  .decision-list-surface > .oa-surface-head {
+    padding: 4px 2px 14px;
+  }
+
+  .decision-list-surface .oa-data-table {
+    gap: 10px;
+    padding: 12px 0 4px;
+  }
+
+  .decision-list-surface .oa-data-row.oa-decision-row {
+    margin: 0;
+    padding: 14px 14px 14px 16px;
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--decision-record-accent);
+    border-radius: 6px;
+  }
+}
+
 @media (max-width: 1180px) {
   .settings-scope-content,
   .settings-preference-scope,

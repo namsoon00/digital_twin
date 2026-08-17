@@ -56,7 +56,7 @@
       }
     ],
     "settings": {
-      "appTheme": "light",
+      "appTheme": "dark",
       "appTimezone": "Asia/Seoul",
       "watchlistSymbols": "TSLA,AAPL,NVDA,000660",
       "mysqlHost": "127.0.0.1",

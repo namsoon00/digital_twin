@@ -1087,7 +1087,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         return fallback
 
     settings = {
-        "appTheme": value("appTheme", "APP_THEME", "light"),
+        "appTheme": value("appTheme", "APP_THEME", "dark"),
         "appTimezone": value("appTimezone", "APP_TIMEZONE", "Asia/Seoul"),
         "watchlistSymbols": value("watchlistSymbols", "WATCHLIST_SYMBOLS", "TSLA,AAPL,NVDA,000660"),
         "mysqlUrl": value("mysqlUrl", "MYSQL_URL", ""),

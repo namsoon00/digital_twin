@@ -1,6 +1,6 @@
 (function () {
   window.OrbitAlphaDefaultSettings = {
-    appTheme: "light",
+    appTheme: "dark",
     appTimezone: "Asia/Seoul",
     watchlistSymbols: "TSLA,AAPL,NVDA,000660",
     tossApiBaseUrl: "https://openapi.tossinvest.com",

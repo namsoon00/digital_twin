@@ -381,6 +381,28 @@ function checkWorkflowConsoleContract() {
       styles.indexOf("Final settings-scope overrides") >= 0,
     "설정 범위 선택과 모바일 반응형 스타일 계약이 없습니다."
   );
+  const earlyThemeBootstrapPosition = indexHtml.indexOf('window.localStorage.getItem("exitLensSettings")');
+  const themeStylesheetPosition = indexHtml.indexOf('<link rel="stylesheet"');
+  assertOk(
+    appDefaultsCode.indexOf('appTheme: "dark"') >= 0 &&
+      earlyThemeBootstrapPosition >= 0 &&
+      earlyThemeBootstrapPosition < themeStylesheetPosition &&
+      indexHtml.indexOf('document.documentElement.setAttribute("data-theme", theme)') >= 0 &&
+      manifest.background_color === "#0c1117" &&
+      manifest.theme_color === "#0c1117" &&
+      serviceWorker.indexOf("orbit-alpha-shell-20260817-dark-theme-v1") >= 0,
+    "다크 기본 테마가 초기 화면과 설치형 웹 앱에 먼저 적용되지 않습니다."
+  );
+  assertOk(
+    styles.indexOf("Theme paint lock") >= 0 &&
+      styles.indexOf("background: #f4f6f8;") < 0 &&
+      styles.indexOf("background: #fff;") < 0 &&
+      /\.oa-metric-strip\s*\{[\s\S]*?background: var\(--panel\);/.test(styles) &&
+      /\.oa-filter-bar,[\s\S]*?background: var\(--panel\);/.test(styles) &&
+      /\.oa-filter-bar :is\(input, select\),[\s\S]*?background: var\(--input\);/.test(styles) &&
+      /\.oa-detail-queue\s*\{[\s\S]*?background: var\(--panel\);/.test(styles),
+    "다크 모드 문서 여백 또는 공통 콘솔 표면에 라이트 고정색이 남아 있습니다."
+  );
   assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
   assertOk(
     code.indexOf('params.set("limit", String(state.notificationJobsPageSize || 20))') >= 0 &&

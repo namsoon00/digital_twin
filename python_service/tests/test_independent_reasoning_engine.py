@@ -347,6 +347,52 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(0, recorder.calls)
         self.assertFalse(engine.health()["monitorRunnerUsed"])
 
+    def test_native_rule_failure_is_deferred_instead_of_completed_as_blocked(self):
+        class RetryableNativeFailureExecutor:
+            def execute(self, request, snapshots):
+                del request, snapshots
+                return {
+                    "acct": {
+                        "saved": True,
+                        "status": "ok",
+                        "nativeRuleFailure": {
+                            "retryable": True,
+                            "recommendedRetryAfterSeconds": 17,
+                            "reason": "One native TypeDB subject was incomplete.",
+                            "reasonCode": "typedbSubjectFanoutIncomplete",
+                            "stage": "native-rule-query",
+                            "ruleId": "graph.temporal.stale_observation.block.v1",
+                        },
+                        "inferenceBox": {
+                            "status": "native-rule-failed",
+                            "nativeTypeDbReasoningCompleted": False,
+                            "generationAligned": False,
+                        },
+                    }
+                }
+
+        engine = V2ReasoningEngine(
+            descriptor(),
+            FakeAssembler(),
+            RetryableNativeFailureExecutor(),
+            FakeCandidateBuilder(),
+            delivery_authorized_provider=lambda: False,
+        )
+
+        result = engine.consume([source_event()])
+
+        self.assertEqual("deferred", result["status"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual(17, result["retry_after_seconds"])
+        self.assertIn("native TypeDB subject", result["reason"])
+        projection = result["projection_results"]["acct"]
+        self.assertTrue(projection["retryable"])
+        self.assertEqual("typedbSubjectFanoutIncomplete", projection["failureReasonCode"])
+        self.assertEqual(
+            "graph.temporal.stale_observation.block.v1",
+            projection["blockingRuleId"],
+        )
+
     def test_active_delivery_uses_existing_notification_ai_handoff(self):
         recorder = FakeCycleRecorder()
         engine = V2ReasoningEngine(

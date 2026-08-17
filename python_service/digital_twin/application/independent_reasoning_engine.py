@@ -63,6 +63,36 @@ def projection_inference_identity(projection: object) -> Dict[str, object]:
     }
 
 
+def projection_retry_policy(projection: object) -> Dict[str, object]:
+    """Normalize transient projection failures, including native-rule details."""
+
+    values = dict(projection or {}) if isinstance(projection, Mapping) else {}
+    failure = (
+        dict(values.get("nativeRuleFailure") or {})
+        if isinstance(values.get("nativeRuleFailure"), Mapping)
+        else {}
+    )
+    retryable = bool(values.get("retryable") or failure.get("retryable"))
+    retry_after = int(
+        values.get("recommendedRetryAfterSeconds")
+        or failure.get("recommendedRetryAfterSeconds")
+        or 0
+    )
+    reason = str(
+        values.get("reason")
+        or failure.get("reason")
+        or ""
+    )
+    return {
+        "retryable": retryable,
+        "retryAfterSeconds": max(1, retry_after) if retryable else 0,
+        "reason": reason,
+        "reasonCode": str(failure.get("reasonCode") or ""),
+        "failureStage": str(failure.get("stage") or ""),
+        "blockingRuleId": str(failure.get("ruleId") or ""),
+    }
+
+
 def alert_event_payload(event: object) -> Dict[str, object]:
     source_metadata = deepcopy(getattr(event, "metadata", {}) or {})
     metadata = {
@@ -104,6 +134,7 @@ def alert_event_payload(event: object) -> Dict[str, object]:
 def compact_projection_result(projection: object) -> Dict[str, object]:
     values = dict(projection or {}) if isinstance(projection, Mapping) else {}
     identity = projection_inference_identity(values)
+    retry = projection_retry_policy(values)
     stages = (
         values.get("runtimeStages")
         if isinstance(values.get("runtimeStages"), Mapping)
@@ -134,6 +165,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "generationAligned": identity["generationAligned"],
         "inferenceRelationCount": identity["relationCount"],
         "inferenceTraceCount": identity["traceCount"],
+        "retryable": retry["retryable"],
+        "retryAfterSeconds": retry["retryAfterSeconds"],
+        "failureReasonCode": retry["reasonCode"],
+        "failureStage": retry["failureStage"],
+        "blockingRuleId": retry["blockingRuleId"],
         "stages": {
             str(key): int(value)
             for key, value in stages.items()
@@ -611,12 +647,24 @@ class V2ReasoningEngine:
         elif delivery_authorized:
             ai_handoff_status = "delivery-recorder-unavailable"
 
-        retryable = any(bool((projection_results.get(account_id) or {}).get("retryable")) for account_id in failed_accounts)
-        retry_after = max([
-            int((projection_results.get(account_id) or {}).get("recommendedRetryAfterSeconds") or 0)
+        retry_policies = {
+            account_id: projection_retry_policy(projection_results.get(account_id))
             for account_id in failed_accounts
+        }
+        retryable = any(bool(policy.get("retryable")) for policy in retry_policies.values())
+        retry_after = max([
+            int(policy.get("retryAfterSeconds") or 0)
+            for policy in retry_policies.values()
         ] or [0])
-        status = "ok" if verified_accounts and not failed_accounts else "partial" if verified_accounts else "deferred" if retryable else "blocked"
+        status = (
+            "ok"
+            if verified_accounts and not failed_accounts
+            else "deferred"
+            if retryable
+            else "partial"
+            if verified_accounts
+            else "blocked"
+        )
         if status == "ok":
             reason = "Independent V2 TypeDB inference completed."
         elif status == "partial":
@@ -624,9 +672,11 @@ class V2ReasoningEngine:
         else:
             reason = str(next(
                 (
-                    (projection_results.get(account_id) or {}).get("reason")
+                    retry_policies.get(account_id, {}).get("reason")
+                    or (projection_results.get(account_id) or {}).get("reason")
                     for account_id in failed_accounts
-                    if (projection_results.get(account_id) or {}).get("reason")
+                    if retry_policies.get(account_id, {}).get("reason")
+                    or (projection_results.get(account_id) or {}).get("reason")
                 ),
                 "Independent V2 TypeDB inference is not ready.",
             ))

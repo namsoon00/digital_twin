@@ -1,4 +1,4 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260817-decision-boundary-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260817-chart-event-links-v1";
 const APP_SHELL = [
   "./",
   "./index.html",

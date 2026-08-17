@@ -13,7 +13,10 @@ from ..domain.reasoning_engine_versions import (
     engine_transition_allowed,
 )
 from ..domain.reasoning_shadow import reasoning_comparison_summary
-from ..domain.independent_reasoning import independent_reasoning_request
+from ..domain.independent_reasoning import (
+    independent_reasoning_request,
+    shard_reasoning_event,
+)
 from ..domain.investment_reasoning import FactDelta
 from ..domain.time_series_storage import (
     TemporalFeatureSnapshot,
@@ -595,6 +598,18 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
     """Direct source-event queue for independently executable engines."""
 
     @staticmethod
+    def native_target_symbol_limit_with_connection(connection) -> int:
+        try:
+            row = connection.execute(
+                "SELECT value FROM runtime_settings WHERE `key` = %s",
+                ("typedbNativeRuleTargetSymbolLimit",),
+            ).fetchone() or {}
+            value = int(float(str(row.get("value") or "4")))
+        except (AttributeError, TypeError, ValueError):
+            value = 4
+        return max(1, min(200, value))
+
+    @staticmethod
     def target_deployments_with_connection(connection) -> List[str]:
         control = connection.execute(
             "SELECT active_deployment_id, delivery_deployment_id, candidate_deployment_id "
@@ -632,67 +647,75 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
     @classmethod
     def ingress_event_with_connection(cls, connection, event) -> Dict[str, object]:
         deployments = cls.target_deployments_with_connection(connection)
+        symbol_limit = cls.native_target_symbol_limit_with_connection(connection)
+        # Persist one stable scope per symbol. The runner can still combine
+        # compatible symbol jobs up to the native TypeDB execution limit.
+        source_events = shard_reasoning_event(event, 1)
         stamp = iso_utc()
         saved_jobs = []
         superseded = 0
         for deployment_id in deployments:
-            request = independent_reasoning_request(deployment_id, [event])
-            event_payload = dict(getattr(event, "payload", {}) or {})
-            source_boundary = event_payload.get("verifiedSourceSnapshot")
-            source_boundary = dict(source_boundary or {}) if isinstance(source_boundary, Mapping) else {}
-            job_id = "reasoning-engine-job:" + uuid.uuid4().hex
-            cursor = connection.execute(
-                """
-                INSERT IGNORE INTO reasoning_engine_jobs (
-                    job_id, deployment_id, source_event_id, source_snapshot_id,
-                    source_snapshot_at, scope_key,
-                    input_fingerprint, request_json, result_json, job_status,
-                    priority, supersedable, reasoning_lane, available_at, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    job_id,
-                    str(deployment_id or "")[:191],
-                    str(getattr(event, "event_id", "") or "")[:191],
-                    str(source_boundary.get("snapshotId") or "")[:191],
-                    str(source_boundary.get("generatedAt") or "")[:40],
-                    request.scope_id[:191],
-                    request.input_fingerprint[:64],
-                    canonical_json({
-                        "request": request.to_dict(),
-                        "sourceEvent": event.to_dict(),
-                    }),
-                    cls.event_priority(event),
-                    1 if request.supersedable else 0,
-                    FactDelta.from_request(request).lane,
-                    stamp,
-                    stamp,
-                    stamp,
-                ),
-            )
-            saved = bool(int(getattr(cursor, "rowcount", 0) or 0))
-            if not saved:
-                continue
-            saved_jobs.append(job_id)
-            if request.supersedable:
-                updated = connection.execute(
+            for source_event in source_events:
+                request = independent_reasoning_request(deployment_id, [source_event])
+                event_payload = dict(getattr(source_event, "payload", {}) or {})
+                source_boundary = event_payload.get("verifiedSourceSnapshot")
+                source_boundary = dict(source_boundary or {}) if isinstance(source_boundary, Mapping) else {}
+                job_id = "reasoning-engine-job:" + uuid.uuid4().hex
+                cursor = connection.execute(
                     """
-                    UPDATE reasoning_engine_jobs
-                    SET job_status = 'superseded', completed_at = %s,
-                        lease_owner = '', lease_expires_at = '', updated_at = %s,
-                        last_error = 'A newer direct source revision owns this scope.'
-                    WHERE deployment_id = %s AND scope_key = %s
-                      AND job_id <> %s AND supersedable = 1
-                      AND job_status IN ('queued', 'retry')
+                    INSERT IGNORE INTO reasoning_engine_jobs (
+                        job_id, deployment_id, source_event_id, source_snapshot_id,
+                        source_snapshot_at, scope_key,
+                        input_fingerprint, request_json, result_json, job_status,
+                        priority, supersedable, reasoning_lane, available_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
                     """,
-                    (stamp, stamp, deployment_id, request.scope_id, job_id),
+                    (
+                        job_id,
+                        str(deployment_id or "")[:191],
+                        str(source_event.event_id or "")[:191],
+                        str(source_boundary.get("snapshotId") or "")[:191],
+                        str(source_boundary.get("generatedAt") or "")[:40],
+                        request.scope_id[:191],
+                        request.input_fingerprint[:64],
+                        canonical_json({
+                            "request": request.to_dict(),
+                            "sourceEvent": source_event.to_dict(),
+                        }),
+                        cls.event_priority(source_event),
+                        1 if request.supersedable else 0,
+                        FactDelta.from_request(request).lane,
+                        stamp,
+                        stamp,
+                        stamp,
+                    ),
                 )
-                superseded += int(getattr(updated, "rowcount", 0) or 0)
+                saved = bool(int(getattr(cursor, "rowcount", 0) or 0))
+                if not saved:
+                    continue
+                saved_jobs.append(job_id)
+                if request.supersedable:
+                    updated = connection.execute(
+                        """
+                        UPDATE reasoning_engine_jobs
+                        SET job_status = 'superseded', completed_at = %s,
+                            lease_owner = '', lease_expires_at = '', updated_at = %s,
+                            last_error = 'A newer direct source revision owns this scope.'
+                        WHERE deployment_id = %s AND scope_key = %s
+                          AND job_id <> %s AND supersedable = 1
+                          AND job_status IN ('queued', 'retry')
+                        """,
+                        (stamp, stamp, deployment_id, request.scope_id, job_id),
+                    )
+                    superseded += int(getattr(updated, "rowcount", 0) or 0)
         return {
             "saved": bool(saved_jobs),
             "savedJobIds": saved_jobs,
             "deploymentIds": deployments,
             "supersededCount": superseded,
+            "sourceShardCount": len(source_events),
+            "sourceShardSymbolLimit": 1,
+            "nativeTargetSymbolLimit": symbol_limit,
         }
 
     def ingress_event(self, event) -> Dict[str, object]:
@@ -700,6 +723,112 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
 
         with self.transaction() as connection:
             return self.ingress_event_with_connection(connection, event)
+
+    def reshard_claimed_job(
+        self,
+        job_id: str,
+        event,
+        max_symbols: int,
+        worker_id: str = "",
+    ) -> Dict[str, object]:
+        """Atomically replace one legacy oversized job with bounded shards."""
+
+        source_events = shard_reasoning_event(event, max_symbols)
+        if len(source_events) <= 1:
+            return {"status": "unchanged", "shardCount": len(source_events)}
+        stamp = iso_utc()
+        inserted_job_ids = []
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone() or {}
+            if not row:
+                return {"status": "missing", "shardCount": 0}
+            if str(row.get("job_status") or "") != "processing":
+                return {"status": "lease-lost", "shardCount": 0}
+            if str(worker_id or "") and str(row.get("lease_owner") or "") != str(worker_id or ""):
+                return {"status": "lease-lost", "shardCount": 0}
+            deployment_id = str(row.get("deployment_id") or "")
+            priority = int(row.get("priority") or self.event_priority(event))
+            first_event = source_events[0]
+            first_request = independent_reasoning_request(deployment_id, [first_event])
+            first_payload = dict(first_event.payload or {})
+            first_boundary = first_payload.get("verifiedSourceSnapshot")
+            first_boundary = dict(first_boundary or {}) if isinstance(first_boundary, Mapping) else {}
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET source_event_id = %s, source_snapshot_id = %s,
+                    source_snapshot_at = %s, scope_key = %s,
+                    input_fingerprint = %s, request_json = %s, result_json = '{}',
+                    job_status = 'queued', supersedable = %s, reasoning_lane = %s,
+                    available_at = %s, lease_owner = '', lease_expires_at = '',
+                    heartbeat_at = '', claimed_at = '', duration_ms = 0,
+                    last_error = 'Oversized source event was split before TypeDB execution.',
+                    completed_at = '', updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    str(first_event.event_id or "")[:191],
+                    str(first_boundary.get("snapshotId") or "")[:191],
+                    str(first_boundary.get("generatedAt") or "")[:40],
+                    first_request.scope_id[:191],
+                    first_request.input_fingerprint[:64],
+                    canonical_json({
+                        "request": first_request.to_dict(),
+                        "sourceEvent": first_event.to_dict(),
+                    }),
+                    1 if first_request.supersedable else 0,
+                    FactDelta.from_request(first_request).lane,
+                    stamp,
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+            inserted_job_ids.append(str(job_id or ""))
+            for source_event in source_events[1:]:
+                request = independent_reasoning_request(deployment_id, [source_event])
+                event_payload = dict(source_event.payload or {})
+                source_boundary = event_payload.get("verifiedSourceSnapshot")
+                source_boundary = dict(source_boundary or {}) if isinstance(source_boundary, Mapping) else {}
+                child_job_id = "reasoning-engine-job:" + uuid.uuid4().hex
+                cursor = connection.execute(
+                    """
+                    INSERT IGNORE INTO reasoning_engine_jobs (
+                        job_id, deployment_id, source_event_id, source_snapshot_id,
+                        source_snapshot_at, scope_key,
+                        input_fingerprint, request_json, result_json, job_status,
+                        priority, supersedable, reasoning_lane, available_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        child_job_id,
+                        deployment_id[:191],
+                        str(source_event.event_id or "")[:191],
+                        str(source_boundary.get("snapshotId") or "")[:191],
+                        str(source_boundary.get("generatedAt") or "")[:40],
+                        request.scope_id[:191],
+                        request.input_fingerprint[:64],
+                        canonical_json({
+                            "request": request.to_dict(),
+                            "sourceEvent": source_event.to_dict(),
+                        }),
+                        priority,
+                        1 if request.supersedable else 0,
+                        FactDelta.from_request(request).lane,
+                        stamp,
+                        stamp,
+                        stamp,
+                    ),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0):
+                    inserted_job_ids.append(child_job_id)
+        return {
+            "status": "resharded",
+            "shardCount": len(source_events),
+            "jobIds": inserted_job_ids,
+        }
 
     def next_lane(self, deployment_id: str) -> str:
         stamp = iso_utc()

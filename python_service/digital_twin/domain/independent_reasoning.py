@@ -2,8 +2,9 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
-from typing import Dict, Iterable, Mapping, Tuple
+from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 
@@ -94,6 +95,74 @@ def reasoning_event_scope(event: object) -> Dict[str, object]:
         "workClass": work_class,
         "supersedable": supersedable,
     }
+
+
+def _filter_symbol_maps(value: object, symbols: Tuple[str, ...]) -> object:
+    """Keep symbol-indexed facts aligned with a bounded reasoning shard."""
+
+    if isinstance(value, list):
+        return [_filter_symbol_maps(item, symbols) for item in value]
+    if not isinstance(value, Mapping):
+        return deepcopy(value)
+    allowed = set(symbols)
+    filtered = {}
+    for key, item in value.items():
+        text_key = str(key or "")
+        if text_key.endswith("BySymbol") and isinstance(item, Mapping):
+            filtered[text_key] = {
+                str(symbol): _filter_symbol_maps(symbol_value, symbols)
+                for symbol, symbol_value in item.items()
+                if str(symbol or "").upper().strip() in allowed
+            }
+            continue
+        filtered[text_key] = _filter_symbol_maps(item, symbols)
+    return filtered
+
+
+def shard_reasoning_event(event: object, max_symbols: int) -> Tuple[DomainEvent, ...]:
+    """Split one source event without changing its point-in-time boundary.
+
+    The first shard retains the durable source event id so ingress-repair
+    anti-joins still recognize the original event. Remaining shard ids are
+    deterministic, making retries idempotent.
+    """
+
+    source = _event(event)
+    symbols = tuple(reasoning_event_scope(source).get("symbols") or ())
+    limit = max(1, int(max_symbols or 1))
+    if len(symbols) <= limit:
+        return (source,)
+    chunks = tuple(
+        tuple(symbols[index:index + limit])
+        for index in range(0, len(symbols), limit)
+    )
+    shards: List[DomainEvent] = []
+    for index, chunk in enumerate(chunks):
+        payload = _filter_symbol_maps(source.payload, chunk)
+        for key in ("affectedSymbols", "symbols", "targetSymbols"):
+            if key in payload:
+                payload[key] = list(chunk)
+        payload["reasoningShard"] = {
+            "contractVersion": "reasoning-event-shard-v1",
+            "parentEventId": source.event_id,
+            "shardIndex": index,
+            "shardCount": len(chunks),
+            "symbols": list(chunk),
+        }
+        shard_event_id = source.event_id
+        if index:
+            identity = _hash({"parentEventId": source.event_id, "symbols": chunk})
+            shard_event_id = "reasoning-shard:" + identity[:48]
+        shards.append(DomainEvent(
+            name=source.name,
+            aggregate_id=source.aggregate_id,
+            schema_version=source.schema_version,
+            payload=payload,
+            occurred_at=source.occurred_at,
+            event_id=shard_event_id,
+            correlation_id=source.correlation_id,
+        ))
+    return tuple(shards)
 
 
 @dataclass(frozen=True)

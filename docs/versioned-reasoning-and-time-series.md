@@ -123,6 +123,15 @@ stage timings, input fingerprints, source ABox IDs, inference generation IDs,
 and candidate output. Terminal rows use the normal bounded MySQL retention
 policy.
 
+The durable inbox stores one job per symbol even when the source snapshot
+contains an entire account. Every shard keeps the same immutable snapshot
+boundary and only its symbol-indexed fact revisions, changed fields, and fact
+contract. The first shard retains the original event ID and later shard IDs
+are deterministic, so crash repair remains idempotent. At execution time the
+worker may combine compatible jobs up to the native TypeDB target-symbol
+limit. A legacy job wider than that limit is atomically re-sharded before
+projection; it can never be partially inferred and then marked complete.
+
 Compatible pending events are claimed as one bounded batch and projected as a
 union of affected symbols. Events with a different verified snapshot boundary
 are deferred to a separate turn, so batching never mixes point-in-time facts.

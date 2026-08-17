@@ -12,6 +12,7 @@ from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import (
     independent_reasoning_request,
     reasoning_event_scope,
+    shard_reasoning_event,
 )
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.domain.reasoning_engine_versions import (
@@ -190,6 +191,69 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(["TSLA"], reasoning_event_scope(event)["symbols"])
+
+    def test_multi_symbol_source_is_sharded_without_losing_fact_boundaries(self):
+        event = source_event("NVDA")
+        symbols = ["NVDA", "TSLA", "AAPL", "MSFT", "META"]
+        event.payload.update({
+            "affectedSymbols": symbols,
+            "changedFieldsBySymbol": {
+                symbol: ["price", "volume"] for symbol in symbols
+            },
+            "factRevisionsBySymbol": {
+                symbol: "revision:" + symbol for symbol in symbols
+            },
+            "verifiedSourceSnapshot": {
+                "snapshotId": "snapshot:fixed",
+                "generatedAt": "2026-08-16T00:00:00Z",
+            },
+            "factChangeContract": {
+                "version": "fact-change-contract-v1",
+                "status": "ready",
+                "scopeFamilies": ["market"],
+                "scopeFamiliesBySymbol": {
+                    symbol: ["market"] for symbol in symbols
+                },
+                "unclassifiedFactTypes": [],
+                "unclassifiedFactTypesBySymbol": {},
+            },
+        })
+
+        shards = shard_reasoning_event(event, 2)
+
+        self.assertEqual(3, len(shards))
+        self.assertEqual(event.event_id, shards[0].event_id)
+        self.assertEqual(
+            [["AAPL", "META"], ["MSFT", "NVDA"], ["TSLA"]],
+            [list(reasoning_event_scope(shard)["symbols"]) for shard in shards],
+        )
+        self.assertEqual(3, len({shard.event_id for shard in shards}))
+        for shard in shards:
+            scoped_symbols = set(reasoning_event_scope(shard)["symbols"])
+            self.assertEqual(
+                scoped_symbols,
+                set(shard.payload["changedFieldsBySymbol"]),
+            )
+            self.assertEqual(
+                scoped_symbols,
+                set(shard.payload["factChangeContract"]["scopeFamiliesBySymbol"]),
+            )
+            self.assertEqual(
+                "snapshot:fixed",
+                shard.payload["verifiedSourceSnapshot"]["snapshotId"],
+            )
+
+    def test_reasoning_event_shards_are_deterministic(self):
+        event = source_event("NVDA")
+        event.payload["affectedSymbols"] = ["NVDA", "TSLA", "AAPL"]
+
+        first = shard_reasoning_event(event, 1)
+        second = shard_reasoning_event(event, 1)
+
+        self.assertEqual(
+            [shard.to_dict() for shard in first],
+            [shard.to_dict() for shard in second],
+        )
 
     def test_request_preserves_the_authoritative_source_fact_boundary(self):
         event = source_event("NVDA")
@@ -460,6 +524,48 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("job:2", queue.deferred[0][0])
         self.assertIn("target-symbol limit", queue.deferred[0][1])
         self.assertEqual(1, result["result"]["capacity_deferred_job_count"])
+
+    def test_runner_reshards_one_oversized_job_before_engine_execution(self):
+        event = source_event("NVDA", [])
+        event.payload["affectedSymbols"] = ["NVDA", "TSLA", "AAPL", "MSFT", "META"]
+
+        class Queue:
+            def __init__(self):
+                self.resharded = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{"jobId": "job:wide", "sourceEvent": event.to_dict()}]
+
+            def reshard_claimed_job(self, job_id, source, limit, worker_id=""):
+                self.resharded.append((job_id, source, limit, worker_id))
+                return {"status": "resharded", "shardCount": 3}
+
+            def summary(self, _deployment_id):
+                return {"pendingCount": 3}
+
+        class Engine:
+            def descriptor(self):
+                return descriptor()
+
+            def consume(self, _events):
+                raise AssertionError("an oversized job must never reach TypeDB")
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            Engine(),
+            SimpleNamespace(),
+            settings={"typedbNativeRuleTargetSymbolLimit": "2"},
+            worker_id="worker:test",
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("resharded", result["status"])
+        self.assertEqual(0, result["processedCount"])
+        self.assertEqual(1, result["reshardedJobCount"])
+        self.assertEqual(2, queue.resharded[0][2])
+        self.assertEqual("worker:test", queue.resharded[0][3])
 
     def test_runner_claims_only_the_realtime_lane_batch_limit(self):
         class Queue:

@@ -772,6 +772,16 @@ class IndependentReasoningJobRunner:
                 "repairedIngressCount": repaired,
                 "queue": self.queue_summary(descriptor.deployment_id),
             }
+        jobs, resharded = self.reshard_oversized_jobs(jobs)
+        if not jobs:
+            return {
+                "status": "resharded" if resharded else "deferred",
+                "processedCount": 0,
+                "reshardedJobCount": len(resharded),
+                "reshardedJobs": resharded,
+                "repairedIngressCount": repaired,
+                "queue": self.queue_summary(descriptor.deployment_id),
+            }
         batch_key = self.batch_compatibility_key(jobs[0])
         reasoning_lane = self.reasoning_lane(jobs[0])
         compatible_jobs = [job for job in jobs if self.batch_compatibility_key(job) == batch_key]
@@ -859,6 +869,7 @@ class IndependentReasoningJobRunner:
             return {
                 "status": outcome,
                 "processedCount": len(selected_jobs),
+                "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
                 "jobId": job_ids[-1],
                 "jobIds": job_ids,
@@ -891,6 +902,7 @@ class IndependentReasoningJobRunner:
             return {
                 "status": "failed" if terminal else "retry",
                 "processedCount": len(selected_jobs),
+                "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
                 "jobId": job_ids[-1],
                 "jobIds": job_ids,
@@ -963,6 +975,9 @@ class IndependentReasoningJobRunner:
         limit = self.native_target_symbol_limit()
         for job in jobs or []:
             symbols = set(self.job_symbols(job))
+            if len(symbols) > limit:
+                deferred.append(job)
+                continue
             combined = selected_symbols | symbols
             if selected and symbols and len(combined) > limit:
                 deferred.append(job)
@@ -970,6 +985,43 @@ class IndependentReasoningJobRunner:
             selected.append(job)
             selected_symbols = combined
         return selected, deferred
+
+    def reshard_oversized_jobs(self, jobs):
+        """Never let TypeDB see a job wider than its native subject bound."""
+
+        bounded = []
+        resharded = []
+        limit = self.native_target_symbol_limit()
+        callback = getattr(self.queue, "reshard_claimed_job", None)
+        for job in jobs or []:
+            symbols = self.job_symbols(job)
+            if len(symbols) <= limit:
+                bounded.append(job)
+                continue
+            if not callable(callback):
+                self.queue.defer(
+                    job["jobId"],
+                    "Oversized V2 source event requires durable symbol sharding before execution.",
+                    5,
+                )
+                continue
+            event = DomainEvent.from_dict(dict(job.get("sourceEvent") or {}))
+            outcome = dict(callback(
+                job["jobId"],
+                event,
+                limit,
+                worker_id=self.worker_id,
+            ) or {})
+            if str(outcome.get("status") or "") == "unchanged":
+                bounded.append(job)
+                continue
+            resharded.append({
+                "jobId": str(job.get("jobId") or ""),
+                "sourceSymbolCount": len(symbols),
+                "nativeTargetSymbolLimit": limit,
+                **outcome,
+            })
+        return bounded, resharded
 
     def heartbeat_seconds(self) -> int:
         return _int_setting(self.settings, "reasoningEngineV2HeartbeatSeconds", 15, 2, 120)

@@ -14450,16 +14450,16 @@ html[data-theme="dark"] .ontology-risk-ledger {
 :root {
   --oa-shell-width: 1760px;
   --oa-page-gutter: clamp(32px, 4.2vw, 80px);
-  --oa-surface-border: #d8dee7;
-  --oa-row-border: #e5e9ef;
-  --oa-surface-soft: #f7f9fb;
-  --oa-row-hover: #f4f7fa;
+  --oa-surface-border: var(--line);
+  --oa-row-border: color-mix(in srgb, var(--line) 72%, transparent);
+  --oa-surface-soft: var(--panel-soft);
+  --oa-row-hover: color-mix(in srgb, var(--panel-soft) 86%, var(--panel));
   --oa-nav: #111923;
   --oa-nav-soft: #192431;
 }
 
 body {
-  background: #f4f6f8;
+  background: linear-gradient(180deg, var(--ds-color-page-top) 0, var(--bg) 240px, var(--ds-color-page-bottom) 100%);
 }
 
 .console-shell.web-style-shell {
@@ -14699,7 +14699,7 @@ body {
   min-width: 0;
   border: 1px solid var(--oa-surface-border);
   border-radius: 7px;
-  background: #fff;
+  background: var(--panel);
   overflow: hidden;
 }
 
@@ -14763,7 +14763,7 @@ body {
 }
 
 .oa-metric em {
-  color: #7a8493;
+  color: var(--muted);
   font-size: 11px;
   font-style: normal;
   font-weight: 700;
@@ -14788,7 +14788,7 @@ body {
   min-width: 0;
   border: 1px solid var(--oa-surface-border);
   border-radius: 7px;
-  background: #fff;
+  background: var(--panel);
   overflow: hidden;
 }
 
@@ -14801,7 +14801,7 @@ body {
   min-height: 84px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--oa-row-border);
-  background: #fbfcfd;
+  background: var(--ds-card-head-bg);
 }
 
 .oa-surface-head > div:first-child {
@@ -14811,7 +14811,7 @@ body {
 }
 
 .oa-surface-head span {
-  color: #7c8796;
+  color: var(--muted);
   font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
@@ -14836,7 +14836,7 @@ body {
 }
 
 .oa-surface-head > strong {
-  color: #4d5969;
+  color: var(--muted);
   font-size: 13px;
   white-space: nowrap;
 }
@@ -14868,7 +14868,7 @@ button.oa-context-row {
   border: 0;
   border-bottom: 1px solid var(--oa-row-border);
   border-radius: 0;
-  background: #fff;
+  background: var(--panel);
   color: var(--ink);
   text-align: left;
   cursor: pointer;
@@ -14903,7 +14903,7 @@ button.oa-context-row:hover {
 }
 
 .oa-row-kind {
-  color: #6d7887;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 900;
 }
@@ -14987,7 +14987,7 @@ button.oa-context-row:hover {
   padding: 7px 16px;
   border-bottom: 1px solid var(--oa-surface-border);
   background: var(--oa-surface-soft);
-  color: #737f8f;
+  color: var(--muted);
   font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
@@ -15039,9 +15039,9 @@ button.oa-context-row:hover {
   gap: 4px;
   margin: 16px 18px 18px;
   padding: 14px;
-  border: 1px solid #d9e2ec;
+  border: 1px solid var(--oa-surface-border);
   border-radius: 5px;
-  background: #f6f9fc;
+  background: var(--panel-soft);
 }
 
 .oa-next-event span,
@@ -15067,7 +15067,7 @@ button.oa-context-row:hover {
 
 .oa-news-row > small {
   grid-column: 2;
-  color: #7b8694;
+  color: var(--muted);
   font-size: 10px;
   font-weight: 700;
 }
@@ -15174,7 +15174,7 @@ button.oa-context-row:hover {
   padding: 13px 16px;
   border: 1px solid var(--oa-surface-border);
   border-radius: 7px;
-  background: #fff;
+  background: var(--panel);
 }
 
 .oa-console-page .notification-search-panel {
@@ -15204,7 +15204,7 @@ button.oa-context-row:hover {
   min-height: 38px;
   border: 1px solid var(--oa-surface-border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--input);
   color: var(--ink);
   padding: 0 10px;
   font-size: 12px;
@@ -31351,7 +31351,7 @@ body.oa-overlay-open {
   overflow: hidden;
   border: 1px solid var(--oa-surface-border);
   border-radius: 7px;
-  background: #fff;
+  background: var(--panel);
 }
 
 .work-detail-layer:focus {
@@ -34618,6 +34618,16 @@ html[data-theme="dark"] {
   --oa-row-border: var(--line);
   --oa-surface-soft: var(--panel-soft);
   --oa-row-hover: var(--panel-soft);
+}
+
+/* Theme paint lock: document gutters and iOS overscroll follow the active theme. */
+html,
+body {
+  background-color: var(--bg);
+}
+
+body {
+  background-image: linear-gradient(180deg, var(--ds-color-page-top) 0, var(--bg) 240px, var(--ds-color-page-bottom) 100%);
 }
 
 html[data-theme="dark"] :where(

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#101820" />
+    <meta name="theme-color" content="#0c1117" />
     <meta name="color-scheme" content="dark light" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -12,10 +12,25 @@
     <meta name="format-detection" content="telephone=no" />
     <meta name="description" content="Orbit Alpha - institutional portfolio signal console" />
     <title>Orbit Alpha</title>
-    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=20260817-app-experience-v1" />
-    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20260817-app-experience-v1" />
-    <link rel="manifest" href="manifest.webmanifest?v=20260817-app-experience-v1" />
-    <link rel="stylesheet" href="styles.css?v=20260817-settings-scope-v1" />
+    <script>
+      (function () {
+        var preference = "dark";
+        try {
+          var stored = JSON.parse(window.localStorage.getItem("exitLensSettings") || "{}");
+          if (["light", "dark", "system"].indexOf(stored.appTheme) >= 0) preference = stored.appTheme;
+        } catch (error) {}
+        var theme = preference === "system" && window.matchMedia
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : preference;
+        document.documentElement.setAttribute("data-theme", theme);
+        document.documentElement.setAttribute("data-theme-setting", preference);
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", theme === "dark" ? "#0c1117" : "#f3f5f8");
+      }());
+    </script>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=20260817-dark-theme-v1" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=20260817-dark-theme-v1" />
+    <link rel="manifest" href="manifest.webmanifest?v=20260817-dark-theme-v1" />
+    <link rel="stylesheet" href="styles.css?v=20260817-dark-theme-v1" />
   </head>
   <body>
     <div id="app-request-progress" class="app-request-progress" role="progressbar" aria-label="데이터 작업 진행 상태" aria-hidden="true" aria-valuetext="대기 중">
@@ -24,7 +39,7 @@
     </div>
     <div id="app" class="app-shell"></div>
     <script src="vendor/lightweight-charts.standalone.production.js?v=5.2.1"></script>
-    <script src="app-default-settings.js?v=20260817-app-responsiveness-v1"></script>
-    <script src="app.js?v=20260817-settings-scope-v1"></script>
+    <script src="app-default-settings.js?v=20260817-dark-theme-v1"></script>
+    <script src="app.js?v=20260817-dark-theme-v1"></script>
   </body>
 </html>

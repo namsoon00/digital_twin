@@ -1682,8 +1682,8 @@
   }
 
   function currentAppTheme() {
-    var value = String((state.settings && state.settings.appTheme) || defaultSettings.appTheme || "light").toLowerCase();
-    if (["light", "dark", "system"].indexOf(value) < 0) return "light";
+    var value = String((state.settings && state.settings.appTheme) || defaultSettings.appTheme || "dark").toLowerCase();
+    if (["light", "dark", "system"].indexOf(value) < 0) return "dark";
     return value;
   }
 
@@ -1751,7 +1751,7 @@
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.setAttribute("data-theme-setting", currentAppTheme());
     var themeMeta = document.querySelector('meta[name="theme-color"]');
-    if (themeMeta) themeMeta.setAttribute("content", theme === "dark" ? "#101820" : "#f3f5f8");
+    if (themeMeta) themeMeta.setAttribute("content", theme === "dark" ? "#0c1117" : "#f3f5f8");
   }
 
   function isStandaloneApp() {

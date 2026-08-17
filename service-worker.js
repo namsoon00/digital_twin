@@ -1,4 +1,4 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260817-settings-scope-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260817-dark-theme-v1";
 const APP_SHELL = [
   "./",
   "./index.html",

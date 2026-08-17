@@ -373,13 +373,17 @@
   var activeJsonRequests = {};
   var networkActivitySequence = 0;
   var networkActivities = {};
+  var networkActivityRevealTimer = null;
   var pendingNetworkControl = null;
   var pendingNetworkControlTimer = null;
+  var pendingRenderTransition = "";
   var REQUEST_TIMEOUT_MS = 12000;
+  var NETWORK_ACTIVITY_REVEAL_MS = 180;
   var cytoscapeLoadPromise = null;
   var realtimeSeenEventIds = {};
   var renderSuppressionDepth = 0;
   var renderQueuedDuringSuppression = false;
+  var dashboardRegionReplacementOccurred = false;
   var appNavLastScrollY = 0;
   var appNavHidden = false;
   var appNavScrollTicking = false;
@@ -680,6 +684,7 @@
     instrumentTimelines: {},
     instrumentTimelineLoading: {},
     instrumentTimelineErrors: {},
+    instrumentTimelineLastKeys: {},
     instrumentWorkspaceTabs: {},
     instrumentTimelineRanges: {},
     expandedOntologyGraphId: ""
@@ -887,8 +892,26 @@
     var count = Object.keys(networkActivities).length;
     var progress = document.getElementById("app-request-progress");
     if (!progress) return;
-    progress.classList.toggle("is-active", count > 0);
-    progress.setAttribute("aria-hidden", count ? "false" : "true");
+    var now = Date.now();
+    var progressVisible = Object.keys(networkActivities).some(function (id) {
+      return now - Number(networkActivities[id].startedAt || now) >= NETWORK_ACTIVITY_REVEAL_MS;
+    });
+    if (networkActivityRevealTimer && (!count || progressVisible)) {
+      clearTimeout(networkActivityRevealTimer);
+      networkActivityRevealTimer = null;
+    }
+    if (count && !progressVisible && !networkActivityRevealTimer) {
+      var nextRevealIn = Object.keys(networkActivities).reduce(function (minimum, id) {
+        var elapsed = now - Number(networkActivities[id].startedAt || now);
+        return Math.min(minimum, Math.max(0, NETWORK_ACTIVITY_REVEAL_MS - elapsed));
+      }, NETWORK_ACTIVITY_REVEAL_MS);
+      networkActivityRevealTimer = setTimeout(function () {
+        networkActivityRevealTimer = null;
+        syncNetworkActivityDom();
+      }, nextRevealIn);
+    }
+    progress.classList.toggle("is-active", progressVisible);
+    progress.setAttribute("aria-hidden", progressVisible ? "false" : "true");
     var latest = count ? networkActivities[Object.keys(networkActivities)[count - 1]] : null;
     var status = count > 1 ? "데이터 작업 " + count + "건 진행 중" : (latest ? latest.label : "작업 완료");
     progress.setAttribute("aria-valuetext", status);
@@ -945,7 +968,8 @@
     networkActivities[id] = {
       id: id,
       descriptor: pending ? pending.descriptor : null,
-      label: networkActivityBusyLabel(pending ? pending.text : "", method, path)
+      label: networkActivityBusyLabel(pending ? pending.text : "", method, path),
+      startedAt: Date.now()
     };
     syncNetworkActivityDom();
     return id;
@@ -1023,6 +1047,7 @@
       force: Boolean(force)
     }).then(function (payload) {
       state.instrumentTimelines[cacheKey] = payload;
+      state.instrumentTimelineLastKeys[normalized] = cacheKey;
       state.instrumentTimelineErrors[cacheKey] = "";
       return payload;
     }).catch(function (error) {
@@ -1787,7 +1812,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260817-chart-event-clusters-v2", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260817-app-responsiveness-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -2543,7 +2568,7 @@
 
   function mobileInfiniteScrollPrefetchDistance() {
     var viewportHeight = Math.max(0, Number((typeof window !== "undefined" && window.innerHeight) || 0));
-    return Math.round(Math.max(960, Math.min(1600, viewportHeight * 1.5)));
+    return Math.round(Math.max(1400, Math.min(2600, viewportHeight * 2.25)));
   }
 
   function mergeUniqueItems(existing, incoming, keyResolver) {
@@ -2739,12 +2764,40 @@
     });
   }
 
+  function renderedScrollableElements() {
+    if (!app || !app.querySelectorAll) return [];
+    var selectors = [
+      "[data-scroll-key]",
+      "[data-preserve-scroll]",
+      ".tab-bar",
+      ".app-nav-tabs",
+      ".app-nav-menu-list",
+      ".oa-data-table",
+      ".work-detail-backdrop",
+      ".work-detail-body",
+      ".command-palette-results",
+      ".ontology-graph-expanded-dialog",
+      ".investment-calendar-month-shell",
+      ".market-workspace-tabs",
+      ".instrument-workspace-tabs",
+      ".instrument-range-control"
+    ];
+    var elements = Array.prototype.slice.call(app.querySelectorAll(selectors.join(",")));
+    var active = document.activeElement;
+    while (active && active !== app && app.contains(active)) {
+      elements.push(active);
+      active = active.parentElement;
+    }
+    return elements.filter(function (element, index) {
+      return elements.indexOf(element) === index && (scrollTopNumber(element.scrollTop) || scrollTopNumber(element.scrollLeft));
+    });
+  }
+
   function rememberRenderedInteractiveState() {
     if (!app || !app.querySelectorAll) return null;
-    var scrollPositions = Array.prototype.slice.call(app.querySelectorAll("*")).map(function (element) {
+    var scrollPositions = renderedScrollableElements().map(function (element) {
       var top = scrollTopNumber(element.scrollTop);
       var left = scrollTopNumber(element.scrollLeft);
-      if (!top && !left) return null;
       var path = renderedElementPath(element);
       if (!path) return null;
       return {
@@ -2983,18 +3036,11 @@
     return Math.abs(point.x - start.x) <= 12 && Math.abs(point.y - start.y) <= 12;
   }
 
-  function stopActiveScrollMomentum() {
-    var scroller = currentWorkspaceScroller();
-    if (scroller) scroller.scrollTop = scrollTopNumber(scroller.scrollTop);
-    if (window.scrollTo) window.scrollTo(0, windowScrollTop());
-  }
-
   function activateTabButton(button, event) {
     var nextTab = button.getAttribute("data-tab") || "overview";
     if (nextTab === state.activeTab) return false;
     if (event && event.preventDefault) event.preventDefault();
     if (event && event.stopPropagation) event.stopPropagation();
-    stopActiveScrollMomentum();
     closeAppNavMenu();
     navigateToTab(nextTab);
     return true;
@@ -3040,6 +3086,49 @@
     });
   }
 
+  function primeActiveTabData(tab) {
+    if (!state.snapshot) return;
+    var active = normalizeTabId(tab || state.activeTab);
+    if (!state.symbolUniverseRefreshStatusLoaded && !state.symbolUniverseRefreshStatusLoading) {
+      loadSymbolUniverseRefreshStatus(false);
+    }
+    if ((active === "overview" || active === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
+      loadInvestmentCalendar(false);
+    }
+    if (active === "calendar" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
+      loadInvestmentCalendarCandidates(false);
+    }
+    if (active === "feed") {
+      if (!state.researchEvidence && !state.researchEvidenceLoading) loadResearchEvidence(false);
+      if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
+      if (normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) {
+        loadSymbolUniverse();
+      }
+    }
+    if (active === "notifications") {
+      if (!state.researchEvidence && !state.researchEvidenceLoading) loadResearchEvidence(false);
+      if (!state.notificationJobsLoaded && !state.notificationJobsLoading) loadNotificationJobs();
+      if (!state.notificationTemplatesLoaded && !state.notificationTemplatesLoading) loadNotificationTemplates();
+      if (!state.notificationRulesLoaded && !state.notificationRulesLoading) loadNotificationRules();
+    }
+    if (active === "settings") {
+      if (!state.serverSettingsLoaded && !state.serverSettingsLoading) loadServerSettings();
+      if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
+      if (!state.ontologyReasoningStatusLoaded && !state.ontologyReasoningStatusLoading) loadOntologyReasoningStatus(false);
+    }
+    if (active === "experiments") {
+      if (!state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) loadOntologyExperiments(false);
+      if (!state.hypothesisDevelopmentLoaded && !state.hypothesisDevelopmentLoading) loadHypothesisDevelopment(false);
+      if (!state.ontologyAuditLoaded && !state.ontologyAuditLoading) loadOntologyAudit(false);
+    }
+    if (active === "modeling" || active === "experiments") {
+      if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) loadStrategyProposals(false);
+      if (shouldLoadHypothesisWorkspace() && !state.hypothesisWorkspaceLoaded && !state.hypothesisWorkspaceLoading) loadHypothesisWorkspace(false);
+      if (shouldLoadOntologyInferenceLedger() && !state.ontologyInferenceLedgerLoaded && !state.ontologyInferenceLedgerLoading) loadOntologyInferenceLedger(false);
+      if (shouldLoadOntologyStrategyDetail() && !snapshotHasFullOntologyDetail(state.snapshot) && !state.ontologyStrategyDetailLoading) loadOntologyStrategyDetail(false);
+    }
+  }
+
   function navigateToTab(tab, options) {
     options = options || {};
     var nextTab = normalizeTabId(tab);
@@ -3055,7 +3144,8 @@
     if (!options.skipPrevious) state.previousTab = priorTab;
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
     setAppNavHidden(false);
-    render();
+    primeActiveTabData(nextTab);
+    render({ transition: "tab" });
   }
 
   function syncTabFromLocation() {
@@ -3110,7 +3200,7 @@
         || (marketWorkspaceChanged && nextTab === "feed")
         || ((experimentSectionChanged || ontologyExperimentChanged) && nextTab === "experiments")
         || pageModeChanged;
-      if (shouldRender) render();
+      if (shouldRender) render({ transition: detailChanged ? (nextWorkDetailLayer ? "detail-open" : "detail-close") : "section" });
       if (detailChanged && !nextWorkDetailLayer) restoreWorkDetailFocus();
       return;
     }
@@ -3119,7 +3209,8 @@
     pendingTabTransition = true;
     state.activeTab = nextTab;
     if (nextTab !== "notifications") state.monitoringDetail = null;
-    render();
+    primeActiveTabData(nextTab);
+    render({ transition: "tab" });
     if (detailChanged && !nextWorkDetailLayer) restoreWorkDetailFocus();
   }
 
@@ -10703,6 +10794,7 @@
         state.ontologyStrategyDetailError = "";
         state.error = "";
         writeCachedSnapshot(snapshot);
+        primeActiveTabData(state.activeTab);
         loadPortfolioLifecycle(false);
       })
       .catch(function (error) {
@@ -10848,6 +10940,84 @@
     });
   }
 
+  function reconcileWorkDetailLayer(current, next) {
+    var currentBackdrop = current.querySelector("[data-work-detail-backdrop]");
+    var nextBackdrop = next.querySelector("[data-work-detail-backdrop]");
+    if (!currentBackdrop && !nextBackdrop) return;
+    if (currentBackdrop && !nextBackdrop) {
+      currentBackdrop.remove();
+      dashboardRegionReplacementOccurred = true;
+      return;
+    }
+    var nextIndex = Array.prototype.indexOf.call(next.children || [], nextBackdrop);
+    if (!currentBackdrop && nextBackdrop) {
+      var inserted = nextBackdrop.cloneNode(true);
+      current.insertBefore(inserted, current.children[nextIndex] || null);
+      bindAutoGrowingTextareas(inserted);
+      bindActions(inserted);
+      dashboardRegionReplacementOccurred = true;
+      return;
+    }
+    var sameDetail = currentBackdrop.getAttribute("data-work-detail-type") === nextBackdrop.getAttribute("data-work-detail-type")
+      && currentBackdrop.getAttribute("data-work-detail-key") === nextBackdrop.getAttribute("data-work-detail-key");
+    if (sameDetail && !dashboardDomMismatchPath(currentBackdrop, nextBackdrop, "work-detail")) return;
+    var scrollTop = scrollTopNumber(currentBackdrop.scrollTop);
+    if (currentBackdrop.querySelector("[data-ontology-cytoscape]")) destroyOntologyCytoscapeGraphs();
+    var replacement = nextBackdrop.cloneNode(true);
+    currentBackdrop.replaceWith(replacement);
+    replacement.scrollTop = scrollTop;
+    bindAutoGrowingTextareas(replacement);
+    bindActions(replacement);
+    dashboardRegionReplacementOccurred = true;
+  }
+
+  function replaceDashboardRegion(currentRegion, nextRegion) {
+    var scrollTop = scrollTopNumber(currentRegion.scrollTop);
+    var scrollLeft = scrollTopNumber(currentRegion.scrollLeft);
+    if (currentRegion.querySelector && currentRegion.querySelector("[data-ontology-cytoscape]")) {
+      destroyOntologyCytoscapeGraphs();
+    }
+    var replacement = nextRegion.cloneNode(true);
+    currentRegion.replaceWith(replacement);
+    replacement.scrollTop = scrollTop;
+    replacement.scrollLeft = scrollLeft;
+    bindAutoGrowingTextareas(replacement);
+    bindActions(replacement);
+    dashboardRegionReplacementOccurred = true;
+    return replacement;
+  }
+
+  function reconcileDashboardMainRegion(current, next) {
+    var currentMain = current.querySelector('[data-style-region="main"]');
+    var nextMain = next.querySelector('[data-style-region="main"]');
+    if (!currentMain || !nextMain) return;
+    if (!dashboardDomMismatchPath(currentMain, nextMain, "main")) return;
+    replaceDashboardRegion(currentMain, nextMain);
+  }
+
+  function reconcileOptionalDashboardRegion(current, next, selector) {
+    var currentRegion = current.querySelector(selector);
+    var nextRegion = next.querySelector(selector);
+    if (!currentRegion && !nextRegion) return;
+    if (currentRegion && !nextRegion) {
+      currentRegion.remove();
+      dashboardRegionReplacementOccurred = true;
+      return;
+    }
+    if (!currentRegion && nextRegion) {
+      var nextIndex = Array.prototype.indexOf.call(next.children || [], nextRegion);
+      var inserted = nextRegion.cloneNode(true);
+      current.insertBefore(inserted, current.children[nextIndex] || null);
+      bindAutoGrowingTextareas(inserted);
+      bindActions(inserted);
+      dashboardRegionReplacementOccurred = true;
+      return;
+    }
+    if (dashboardDomMismatchPath(currentRegion, nextRegion, "optional-region")) {
+      replaceDashboardRegion(currentRegion, nextRegion);
+    }
+  }
+
   function syncStableDashboardDom(currentNode, nextNode) {
     if (currentNode.nodeType === 3 || currentNode.nodeType === 8) {
       if (currentNode.nodeValue !== nextNode.nodeValue) currentNode.nodeValue = nextNode.nodeValue;
@@ -10872,7 +11042,11 @@
     template.innerHTML = String(markup || "").trim();
     var next = template.content.firstElementChild;
     if (!next || !next.classList || !next.classList.contains("console-shell")) return false;
+    dashboardRegionReplacementOccurred = false;
     reconcileDashboardCollections(current, next);
+    reconcileWorkDetailLayer(current, next);
+    reconcileOptionalDashboardRegion(current, next, '[data-style-region="deskbar"]');
+    reconcileDashboardMainRegion(current, next);
     var mismatch = dashboardDomMismatchPath(current, next);
     if (mismatch) {
       document.documentElement.setAttribute("data-dashboard-render-mode", "full:" + (mismatch || "structure"));
@@ -10910,7 +11084,13 @@
     return overlayOpen;
   }
 
-  function render() {
+  function reducedMotionPreferred() {
+    return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  function render(options) {
+    options = options || {};
+    if (options.transition) pendingRenderTransition = String(options.transition);
     if (renderSuppressionDepth > 0) {
       renderQueuedDuringSuppression = true;
       return;
@@ -10918,7 +11098,31 @@
     if (scheduledRenderFrame) return;
     var run = function () {
       scheduledRenderFrame = 0;
-      renderNow();
+      var transitionKind = pendingRenderTransition;
+      pendingRenderTransition = "";
+      var perform = function () { renderNow(); };
+      if (!transitionKind || reducedMotionPreferred()) {
+        perform();
+        return;
+      }
+      document.documentElement.setAttribute("data-app-transition", transitionKind);
+      var clearTransitionState = function () {
+        if (document.documentElement.getAttribute("data-app-transition") === transitionKind) {
+          document.documentElement.removeAttribute("data-app-transition");
+        }
+      };
+      if (typeof document.startViewTransition !== "function") {
+        perform();
+        window.setTimeout(clearTransitionState, 240);
+        return;
+      }
+      try {
+        var transition = document.startViewTransition(perform);
+        Promise.resolve(transition.finished).catch(function () { return null; }).finally(clearTransitionState);
+      } catch (error) {
+        perform();
+        window.setTimeout(clearTransitionState, 240);
+      }
     };
     scheduledRenderFrame = window.requestAnimationFrame ? window.requestAnimationFrame(run) : setTimeout(run, 0);
   }
@@ -10968,11 +11172,14 @@
       initOntologyCytoscapeGraphs();
       restoreTabBarPosition();
       bindPageScrollMemory();
+    } else if (dashboardRegionReplacementOccurred) {
+      initOntologyCytoscapeGraphs();
+      bindPageScrollMemory();
     }
     syncNetworkActivityDom();
     decorateRenderedBusyControls();
     restoreRenderedDisclosureState(renderedInteractiveState);
-    if (!patchedDashboard) {
+    if (!patchedDashboard || dashboardRegionReplacementOccurred) {
       restoreRenderedPageScrollPositionAfterLayout(renderedScrollPosition);
       restoreRenderedInteractiveStateAfterLayout(renderedInteractiveState);
     }
@@ -11215,7 +11422,7 @@
       loadOntologyAuditSection(state.workDetailLayer.key);
     }
     writeWorkDetailHistory(type, key);
-    render();
+    render({ transition: "detail-open" });
     if (state.workDetailLayer.type === "market-instrument") {
       loadInstrumentTimeline(state.workDetailLayer.key, false);
     }
@@ -11225,6 +11432,7 @@
     if (!state.workDetailLayer) return;
     var params = new URLSearchParams(window.location.search);
     if (params.get("detail") && window.history && window.history.state && window.history.state.workDetail && window.history.back) {
+      pendingRenderTransition = "detail-close";
       window.history.back();
       return;
     }
@@ -11236,7 +11444,7 @@
       delete nextState.detailKey;
       window.history.replaceState(nextState, "", workDetailUrl("", ""));
     }
-    render();
+    render({ transition: "detail-close" });
     restoreWorkDetailFocus();
   }
 
@@ -11387,8 +11595,8 @@
     var presentation = workDetailPresentation(detail.type);
     var backdropCloseAttr = presentation.dismissOnBackdrop ? " data-work-detail-close" : "";
     return [
-      '<div class="work-detail-backdrop" data-work-detail-backdrop data-work-detail-kind="' + escapeHtml(presentation.kind) + '"' + backdropCloseAttr + '>',
-      '<aside class="work-detail-layer work-detail-layer-' + escapeHtml(presentation.size) + '" role="dialog" aria-modal="true" aria-labelledby="' + headingId + '"' + (payload.meta ? ' aria-describedby="' + descriptionId + '"' : '') + ' tabindex="-1" data-work-detail-dialog data-work-detail-size="' + escapeHtml(presentation.size) + '">',
+      '<div class="work-detail-backdrop" data-work-detail-backdrop data-work-detail-kind="' + escapeHtml(presentation.kind) + '" data-work-detail-type="' + escapeHtml(detail.type) + '" data-work-detail-key="' + escapeHtml(detail.key || "") + '"' + backdropCloseAttr + '>',
+      '<aside class="work-detail-layer work-detail-layer-' + escapeHtml(presentation.size) + '" role="dialog" aria-modal="true" aria-labelledby="' + headingId + '"' + (payload.meta ? ' aria-describedby="' + descriptionId + '"' : '') + ' tabindex="-1" data-work-detail-dialog data-work-detail-size="' + escapeHtml(presentation.size) + '" data-work-detail-type="' + escapeHtml(detail.type) + '" data-work-detail-key="' + escapeHtml(detail.key || "") + '">',
       '<header class="work-detail-head">',
       '<div>',
       '<p class="label">' + escapeHtml(payload.kicker || "Detail") + '</p>',
@@ -13579,10 +13787,16 @@
   function instrumentTimelineViewState(symbol) {
     var range = instrumentTimelineRange(symbol);
     var key = instrumentTimelineCacheKey(symbol, range);
+    var normalized = String(symbol || "").toUpperCase();
+    var currentPayload = (state.instrumentTimelines || {})[key] || null;
+    var fallbackKey = String((state.instrumentTimelineLastKeys || {})[normalized] || "");
+    var fallbackPayload = fallbackKey ? (state.instrumentTimelines || {})[fallbackKey] || null : null;
     return {
       range: range,
       key: key,
-      payload: (state.instrumentTimelines || {})[key] || null,
+      payloadKey: currentPayload ? key : (fallbackPayload ? fallbackKey : key),
+      payload: currentPayload || fallbackPayload,
+      stale: Boolean(!currentPayload && fallbackPayload),
       loading: Boolean((state.instrumentTimelineLoading || {})[key]),
       error: String((state.instrumentTimelineErrors || {})[key] || ""),
       staticPreview: isStaticPreviewHost()
@@ -13639,19 +13853,25 @@
   function renderInstrumentChart(row, view) {
     var payload = view.payload || {};
     var series = payload.series || {};
+    var hasCandles = Array.isArray(series.candles) && series.candles.length > 0;
     var rangeOptions = [["1d", "1일"], ["1w", "1주"], ["1m", "1개월"], ["3m", "3개월"], ["6m", "6개월"], ["1y", "1년"], ["3y", "3년"], ["all", "전체"]];
     var ranges = '<div class="instrument-range-control" role="group" aria-label="차트 기간">' + rangeOptions.map(function (option) {
       return '<button type="button" data-instrument-range="' + option[0] + '" data-instrument-symbol="' + escapeHtml(row.symbol) + '" class="' + (view.range === option[0] ? "active" : "") + '">' + option[1] + '</button>';
     }).join("") + '</div>';
     var status = view.staticPreview
       ? '<div class="instrument-chart-state"><strong>GitHub Pages는 정적 화면입니다.</strong><p>실시간 타임라인 API와 운영 DB는 로컬 또는 공유 앱에서 조회할 수 있습니다. 정적 화면에는 임의의 캔들을 표시하지 않습니다.</p></div>'
-      : view.loading
+      : view.loading && !hasCandles
       ? '<div class="instrument-chart-state is-loading"><span></span><strong>가격·사건 데이터를 조회하고 있습니다.</strong></div>'
-      : view.error
+      : view.error && !hasCandles
         ? '<div class="instrument-chart-state is-error"><strong>' + escapeHtml(view.error) + '</strong><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>'
         : series.availability === "no-data"
           ? '<div class="instrument-chart-state"><strong>저장된 실제 시계열이 없습니다.</strong><p>모의 캔들은 표시하지 않습니다. 다음 시세 수집 후 이 위치에 실제 데이터가 나타납니다.</p><button type="button" class="text-button" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">새로고침</button></div>'
-          : '<div class="instrument-candle-chart" data-instrument-candle-chart="' + escapeHtml(view.key) + '" aria-label="' + escapeHtml((row.name || row.symbol) + " 실제 캔들 차트") + '"></div>';
+          : '<div class="instrument-candle-chart" data-instrument-candle-chart="' + escapeHtml(view.payloadKey || view.key) + '" aria-label="' + escapeHtml((row.name || row.symbol) + " 실제 캔들 차트") + '"></div>';
+    var continuity = hasCandles && view.loading
+      ? '<div class="instrument-chart-refreshing" role="status"><span aria-hidden="true"></span><strong>' + escapeHtml(view.range) + ' 구간을 준비하는 동안 이전 차트를 유지합니다.</strong></div>'
+      : (hasCandles && view.stale && view.error
+        ? '<div class="instrument-chart-refreshing is-error" role="status"><strong>이전 차트를 유지 중입니다.</strong><button type="button" class="text-button compact" data-instrument-timeline-refresh="' + escapeHtml(row.symbol) + '">다시 조회</button></div>'
+        : "");
     var eventCounts = (payload.events || []).reduce(function (counts, event) {
       counts[event.type] = (counts[event.type] || 0) + 1;
       return counts;
@@ -13663,6 +13883,7 @@
       '<section class="instrument-chart-workspace">',
       '<header><div><span class="label">PRICE + EVENTS</span><h3>가격과 사건을 한 흐름으로 보기</h3><p>같은 캔들의 사건은 하나의 표식으로 묶고 대표 유형과 건수를 표시합니다.</p></div><span class="tone-chip ' + escapeHtml(view.staticPreview ? "caution" : "watch") + '">' + escapeHtml(view.staticPreview ? "STATIC" : "ACTUAL") + '</span></header>',
       ranges,
+      continuity,
       '<div class="instrument-chart-meta"><span>간격 <strong>' + escapeHtml((payload.query || {}).interval || "-") + '</strong></span><span>캔들 <strong>' + escapeHtml(series.pointCount || 0) + '개</strong></span><span>사건 <strong>' + escapeHtml((payload.events || []).length) + '건</strong><small>차트 표식 ' + escapeHtml(markerProjection.markerCount) + '개</small></span><span>최신 <strong>' + escapeHtml(formatClock(series.latestAt)) + '</strong></span></div>',
       status,
       '<div class="instrument-event-legend"><span class="evidence">뉴스 ' + escapeHtml(eventCounts.evidence || 0) + '</span><span class="calendar">일정 ' + escapeHtml(eventCounts.calendar || 0) + '</span><span class="decision">판단 ' + escapeHtml(eventCounts.decision || 0) + '</span><span class="hypothesis">가설 ' + escapeHtml(eventCounts.hypothesis || 0) + '</span><span class="notification">알림 ' + escapeHtml(eventCounts.notification || 0) + '</span></div>',
@@ -30402,7 +30623,7 @@
         event.preventDefault();
         var instrumentSymbol = String(instrumentTab.getAttribute("data-instrument-symbol") || "").toUpperCase();
         state.instrumentWorkspaceTabs[instrumentSymbol] = instrumentTab.getAttribute("data-instrument-workspace-tab") || "summary";
-        render();
+        render({ transition: "section" });
         if (state.instrumentWorkspaceTabs[instrumentSymbol] !== "summary") loadInstrumentTimeline(instrumentSymbol, false);
         return;
       }
@@ -30550,7 +30771,9 @@
     });
   }
 
-  function bindActions() {
+  function bindActions(app) {
+    app = app || document.getElementById("app");
+    if (!app) return;
     var refresh = app.querySelector('[data-action="refresh"]');
     if (refresh) {
       refresh.addEventListener("click", function () {
@@ -31387,7 +31610,8 @@
         if (section === state.activeExperimentSection) return;
         state.activeExperimentSection = section;
         writeExperimentSectionHistory(section);
-        render();
+        primeActiveTabData("experiments");
+        render({ transition: "section" });
       });
     });
 
@@ -31609,7 +31833,7 @@
         else if (page === "modeling") writeStrategySectionHistory(state.activeStrategySection);
         else if (page === "feed") writeFeedSectionHistory(state.activeFeedSection);
         else writePageModeHistory(page, mode);
-        render();
+        render({ transition: "section" });
       });
     });
 
@@ -31622,7 +31846,8 @@
         state.notificationPolicyEditorOpen = false;
         state.notificationTemplateEditorOpen = false;
         writeNotificationSectionHistory(section);
-        render();
+        primeActiveTabData("notifications");
+        render({ transition: "section" });
       });
     });
 
@@ -31633,7 +31858,7 @@
         state.activeAccountSection = section;
         state.pageViewModes.accounts = sectionModeForPage("accounts", section);
         writeAccountSectionHistory(section);
-        render();
+        render({ transition: "section" });
       });
     });
 
@@ -31644,7 +31869,8 @@
         state.activeStrategySection = section;
         state.pageViewModes.modeling = sectionModeForPage("modeling", section);
         writeStrategySectionHistory(section);
-        render();
+        primeActiveTabData("modeling");
+        render({ transition: "section" });
       });
     });
 
@@ -31655,7 +31881,8 @@
         state.activeFeedSection = section;
         state.pageViewModes.feed = sectionModeForPage("feed", section);
         writeFeedSectionHistory(section);
-        render();
+        primeActiveTabData("feed");
+        render({ transition: "section" });
       });
     });
 
@@ -31677,7 +31904,8 @@
         state.activeOntologySection = legacySection;
         state.activeStrategySection = section;
         writeStrategySectionHistory(section);
-        render();
+        primeActiveTabData("modeling");
+        render({ transition: "section" });
       });
     });
 
@@ -32112,8 +32340,8 @@
         rememberRenderedPageScrollPosition();
         state.marketWorkspaceMode = mode;
         writeMarketWorkspaceHistory(mode);
-        render();
         if (mode === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) loadSymbolUniverse();
+        render({ transition: "section" });
       });
     });
 
@@ -32387,6 +32615,7 @@
   }
   registerOrbitAlphaServiceWorker();
   connectRealtime();
+  primeActiveTabData(state.activeTab);
   render();
   if (state.workDetailLayer && state.workDetailLayer.type === "notification-job" && state.workDetailLayer.key) {
     loadNotificationJobDetail(state.workDetailLayer.key);

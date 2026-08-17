@@ -321,6 +321,136 @@
   }
 }
 
+/* App-like navigation and progressive data continuity. */
+.instrument-chart-refreshing {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--blue) 34%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--blue) 6%, var(--panel));
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.instrument-chart-refreshing > span {
+  width: 15px;
+  height: 15px;
+  border: 2px solid color-mix(in srgb, var(--blue) 24%, var(--line));
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: oa-request-spin .72s linear infinite;
+}
+
+.instrument-chart-refreshing.is-error {
+  justify-content: space-between;
+  border-color: color-mix(in srgb, var(--red) 36%, var(--line));
+  background: color-mix(in srgb, var(--red) 5%, var(--panel));
+}
+
+.console-shell :is(button, [role="button"], .app-nav-tab, .tab-bar button) {
+  touch-action: manipulation;
+}
+
+@supports (content-visibility: auto) {
+  .oa-data-row[data-console-row-key],
+  .instrument-timeline-event[data-console-row-key],
+  .investment-calendar-candidate,
+  .notification-decision-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 104px;
+  }
+}
+
+@supports (view-transition-name: oa-content) {
+  .console-shell .app-nav {
+    view-transition-name: oa-navigation;
+  }
+
+  .console-shell .web-style-topbar {
+    view-transition-name: oa-topbar;
+  }
+
+  .console-shell .workspace-layout > .tab-bar {
+    view-transition-name: oa-tabs;
+  }
+
+  .console-shell .workspace-main {
+    view-transition-name: oa-content;
+  }
+
+  .work-detail-layer {
+    view-transition-name: oa-detail;
+  }
+
+  .console-shell.is-tab-transitioning .workspace-main > * {
+    animation: none;
+  }
+
+  ::view-transition-group(oa-navigation),
+  ::view-transition-group(oa-topbar),
+  ::view-transition-group(oa-tabs) {
+    animation-duration: 140ms;
+  }
+
+  ::view-transition-old(oa-content) {
+    animation: oa-view-content-out 100ms ease-in both;
+  }
+
+  ::view-transition-new(oa-content) {
+    animation: oa-view-content-in 180ms ease-out both;
+  }
+
+  ::view-transition-new(oa-detail) {
+    animation: oa-view-detail-in 190ms ease-out both;
+  }
+
+  ::view-transition-old(oa-detail) {
+    animation: oa-view-detail-out 130ms ease-in both;
+  }
+}
+
+@keyframes oa-view-content-out {
+  to { opacity: 0.72; transform: translateY(-2px); }
+}
+
+@keyframes oa-view-content-in {
+  from { opacity: 0.68; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes oa-view-detail-in {
+  from { opacity: 0; transform: translateY(10px) scale(.995); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes oa-view-detail-out {
+  to { opacity: 0; transform: translateY(6px) scale(.995); }
+}
+
+@supports not (view-transition-name: oa-content) {
+  html[data-app-transition="detail-open"] .work-detail-backdrop {
+    animation: oa-detail-backdrop-in 180ms ease-out both;
+  }
+
+  html[data-app-transition="detail-open"] .work-detail-layer {
+    animation: oa-view-detail-in 190ms ease-out both;
+  }
+}
+
+@keyframes oa-detail-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instrument-chart-refreshing > span {
+    animation-duration: 1.4s;
+  }
+}
+
 @media (max-width: 390px) {
   .console-shell .workspace-layout > .tab-bar button {
     font-size: 9px;

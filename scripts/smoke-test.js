@@ -2928,6 +2928,13 @@ async function checkNormalMode(port, context) {
   assertOk(notificationJobsPayload.summary && typeof notificationJobsPayload.summary === "object", "최근 알림 판단 API summary가 없습니다.");
   assertOk(notificationJobsPayload.limit === 10, "최근 알림 판단 API limit이 반영되지 않았습니다.");
 
+  const investmentFlow = await request(port, "/api/investment-flow?limit=10");
+  assertOk(investmentFlow.statusCode === 200, "투자 판단 흐름 API 응답 코드가 200이 아닙니다: " + investmentFlow.statusCode + " · " + investmentFlow.body.slice(0, 500));
+  const investmentFlowPayload = JSON.parse(investmentFlow.body);
+  assertOk(investmentFlowPayload.version === "investment-flow-v1", "투자 판단 흐름 API 버전이 없습니다.");
+  assertOk(Array.isArray(investmentFlowPayload.items), "투자 판단 흐름 API items가 배열이 아닙니다.");
+  assertOk(investmentFlowPayload.operatorView && Array.isArray(investmentFlowPayload.operatorView.stages), "투자 판단 흐름 API 운영 단계가 없습니다.");
+
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode + " · " + emptyAccounts.body.slice(0, 500));
   const emptyAccountsPayload = JSON.parse(emptyAccounts.body);

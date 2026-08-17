@@ -33,6 +33,7 @@ from ..application.notification_ai_gate_message import (
     prepend_execution_start_badge,
 )
 from ..application.notification_replay_service import NotificationReplayService
+from ..application.investment_flow_query_service import InvestmentFlowQueryService
 from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
@@ -1311,6 +1312,24 @@ def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> D
         account_id=account_id,
         market_id=str(first_query(query, "marketId") or first_query(query, "market") or ""),
         world_id=world_id,
+    )
+
+
+def investment_flow_api_payload(query: Dict[str, List[str]], episode_id: str = "") -> Dict[str, object]:
+    """Read the persisted decision lineage without running TypeDB on an HTTP request."""
+
+    settings = operational_read_settings()
+    service = InvestmentFlowQueryService(
+        decision_episode_store=stores.investment_decision_episode_store(settings),
+        notification_job_store=stores.notification_job_store(settings),
+        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
+    )
+    if episode_id:
+        return service.detail(str(episode_id or ""))
+    return service.summary(
+        account_id=str(first_query(query, "accountId") or first_query(query, "account") or "").strip(),
+        symbol=str(first_query(query, "symbol") or "").upper().strip(),
+        limit=safe_int(first_query(query, "limit"), 100, 1, 500),
     )
 
 
@@ -5364,6 +5383,17 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/flow-lens" and self.command == "GET":
             return self.send_payload(200, flow_lens_read_payload(query), cache_control="no-store")
+
+        if path in {"/api/investment-flow", "/api/investment-validation"} and self.command == "GET":
+            payload = investment_flow_api_payload(query)
+            payload["view"] = "validation" if path.endswith("validation") else "flow"
+            return self.send_payload(200, payload, cache_control="no-store")
+
+        investment_flow_match = re.match(r"^/api/investment-flow/([^/]+)$", path)
+        if investment_flow_match and self.command == "GET":
+            episode_id = urllib.parse.unquote(investment_flow_match.group(1))
+            payload = investment_flow_api_payload(query, episode_id=episode_id)
+            return self.send_payload(200 if payload.get("status") == "ok" else 404, payload, cache_control="no-store")
 
         if path == "/api/investment-analysis" and self.command == "GET":
             mock_value = configured(first_query(query, "mock") or first_query(query, "mode")).lower()

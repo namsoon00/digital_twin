@@ -7,6 +7,7 @@ from digital_twin.domain.events import (
     domain_event_storage_payload,
     ontology_reasoning_requested_event,
     research_evidence_collected_event,
+    investment_decision_changed_event,
 )
 
 
@@ -142,6 +143,25 @@ class DomainEventStoragePayloadTests(unittest.TestCase):
         stored = domain_event_storage_payload(request.name, request.payload)
 
         self.assertEqual(fields, stored["changedFieldsBySymbol"]["AAPL"])
+
+    def test_decision_change_event_carries_flow_and_state_transition(self):
+        event = investment_decision_changed_event(
+            {"action": "HOLD", "validationState": "conditional"},
+            {
+                "flowId": "flow:1",
+                "episodeId": "episode:1",
+                "accountId": "account-1",
+                "symbol": "AAPL",
+                "action": "BUY",
+                "validationState": "ready",
+                "inferenceGenerationId": "generation:1",
+            },
+        )
+
+        self.assertEqual("investment.decision_changed", event.name)
+        self.assertEqual("flow:1", event.correlation_id)
+        self.assertEqual("HOLD", event.payload["previousAction"])
+        self.assertEqual("BUY", event.payload["currentAction"])
 
 
 if __name__ == "__main__":

@@ -71,6 +71,8 @@ INVESTMENT_ACTION_PLAN_PROPOSED = "investment.action_plan_proposed"
 TRADE_EXECUTION_RECORDED = "trade.execution_recorded"
 INVESTMENT_DECISION_REVIEWED = "investment.decision_reviewed"
 INVESTMENT_PERFORMANCE_ATTRIBUTED = "investment.performance_attributed"
+INVESTMENT_DECISION_CHANGED = "investment.decision_changed"
+INVESTMENT_VALIDATION_CHANGED = "investment.validation_changed"
 
 
 @dataclass(frozen=True)
@@ -1218,6 +1220,74 @@ def hypothesis_lifecycle_transitioned_event(payload: Dict[str, object]) -> Domai
             "evidenceDelta": dict(payload.get("evidenceDelta") or payload.get("evidence_delta") or {}),
             "source": "typedb-hypothesis-lifecycle",
         },
+    )
+
+
+def investment_decision_changed_event(
+    previous: Dict[str, object],
+    current: Dict[str, object],
+    *,
+    notification_job_id: str = "",
+) -> DomainEvent:
+    """Record a material account decision transition without dispatching twice."""
+
+    before = dict(previous or {})
+    after = dict(current or {})
+    account_id = str(after.get("accountId") or after.get("account_id") or "default")
+    symbol = str(after.get("symbol") or "").upper()
+    episode_id = str(after.get("episodeId") or after.get("episode_id") or "")
+    flow_id = str(after.get("flowId") or "")
+    return DomainEvent(
+        name=INVESTMENT_DECISION_CHANGED,
+        aggregate_id=("investment-decision:" + account_id + ":" + symbol)[:191],
+        payload={
+            "flowId": flow_id,
+            "episodeId": episode_id,
+            "accountId": account_id,
+            "symbol": symbol,
+            "previousAction": str(before.get("action") or ""),
+            "currentAction": str(after.get("action") or ""),
+            "previousReviewLevel": str(before.get("reviewLevel") or before.get("review_level") or ""),
+            "currentReviewLevel": str(after.get("reviewLevel") or after.get("review_level") or ""),
+            "previousDataState": str(before.get("dataState") or before.get("data_state") or ""),
+            "currentDataState": str(after.get("dataState") or after.get("data_state") or ""),
+            "previousValidationState": str(before.get("validationState") or before.get("validation_state") or ""),
+            "currentValidationState": str(after.get("validationState") or after.get("validation_state") or ""),
+            "inferenceGenerationId": str(after.get("inferenceGenerationId") or after.get("inference_generation_id") or ""),
+            "selectedHypothesisId": str(after.get("selectedHypothesisId") or after.get("selected_hypothesis_id") or ""),
+            "notificationJobId": str(notification_job_id or ""),
+            "changedAt": str(after.get("decidedAt") or after.get("decided_at") or ""),
+        },
+        correlation_id=(flow_id or episode_id or (account_id + ":" + symbol))[:191],
+    )
+
+
+def investment_validation_changed_event(
+    previous: Dict[str, object],
+    current: Dict[str, object],
+) -> DomainEvent:
+    before = dict(previous or {})
+    after = dict(current or {})
+    account_id = str(after.get("accountId") or after.get("account_id") or "default")
+    symbol = str(after.get("symbol") or "").upper()
+    episode_id = str(after.get("episodeId") or after.get("episode_id") or "")
+    flow_id = str(after.get("flowId") or "")
+    return DomainEvent(
+        name=INVESTMENT_VALIDATION_CHANGED,
+        aggregate_id=("investment-validation:" + account_id + ":" + symbol)[:191],
+        payload={
+            "flowId": flow_id,
+            "episodeId": episode_id,
+            "accountId": account_id,
+            "symbol": symbol,
+            "previousDataState": str(before.get("dataState") or before.get("data_state") or ""),
+            "currentDataState": str(after.get("dataState") or after.get("data_state") or ""),
+            "previousValidationState": str(before.get("validationState") or before.get("validation_state") or ""),
+            "currentValidationState": str(after.get("validationState") or after.get("validation_state") or ""),
+            "inferenceGenerationId": str(after.get("inferenceGenerationId") or after.get("inference_generation_id") or ""),
+            "changedAt": str(after.get("decidedAt") or after.get("decided_at") or ""),
+        },
+        correlation_id=(flow_id or episode_id or (account_id + ":" + symbol))[:191],
     )
 
 

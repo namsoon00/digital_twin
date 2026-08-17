@@ -1911,6 +1911,41 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_flow_heads (
+        flow_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        decision_episode_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        selected_hypothesis_id VARCHAR(191) NOT NULL DEFAULT '',
+        action VARCHAR(32) NOT NULL DEFAULT 'HOLD',
+        data_state VARCHAR(32) NOT NULL DEFAULT 'partial',
+        validation_state VARCHAR(32) NOT NULL DEFAULT 'conditional',
+        decided_at VARCHAR(40) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_investment_flow_subject_episode (account_id, symbol, decision_episode_id),
+        KEY idx_investment_flow_subject_time (account_id, symbol, decided_at),
+        KEY idx_investment_flow_validation_time (validation_state, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    INSERT IGNORE INTO investment_flow_heads (
+        flow_id, account_id, symbol, decision_episode_id,
+        source_abox_snapshot_id, inference_generation_id, selected_hypothesis_id, action,
+        data_state, validation_state, decided_at, updated_at
+    )
+    SELECT CONCAT('flow:', LEFT(SHA2(CONCAT(COALESCE(NULLIF(TRIM(account_id), ''), 'default'), '|', UPPER(symbol), '|', episode_id), 256), 24)),
+        account_id, UPPER(symbol), episode_id,
+        CASE WHEN JSON_VALID(payload_json)
+            THEN COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.sourceAboxSnapshotId')), '')
+            ELSE '' END,
+        inference_generation_id,
+        selected_hypothesis_id, action, data_state, validation_state,
+        decided_at, updated_at
+    FROM investment_decision_episodes
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_follow_ups (
         condition_id VARCHAR(191) PRIMARY KEY,
         episode_id VARCHAR(191) NOT NULL,

@@ -20,8 +20,11 @@ from ..domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
 from ..domain.market_time_series import market_timezone
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.trade_execution import ActionPlan
+from ..domain.events import investment_decision_changed_event, investment_validation_changed_event
+from ..domain.investment_flow import investment_flow_id
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
+from .mysql_operational_events import insert_domain_event_with_connection
 from .operational_common import json_dumps
 
 
@@ -49,7 +52,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episode.action_plan_id = plan.plan_id
         stamp = utc_now_iso()
         payload = episode.to_dict()
+        flow_id = investment_flow_id(episode.account_id, episode.symbol, episode.episode_id)
+        payload["flowId"] = flow_id
         with self.transaction() as connection:
+            current_row = connection.execute(
+                "SELECT payload_json FROM investment_decision_episodes WHERE episode_id = %s",
+                (episode.episode_id,),
+            ).fetchone()
+            prior_row = current_row or connection.execute(
+                "SELECT payload_json FROM investment_decision_episodes "
+                "WHERE account_id = %s AND symbol = %s ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
+                (episode.account_id, episode.symbol),
+            ).fetchone()
+            previous_payload = _json_loads(prior_row.get("payload_json"), {}) if prior_row else {}
             connection.execute(
                 """
                 INSERT INTO investment_decision_episodes (
@@ -83,6 +98,37 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     episode.source,
                     json_dumps(payload),
                     stamp,
+                    stamp,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO investment_flow_heads (
+                    flow_id, account_id, symbol, decision_episode_id,
+                    source_abox_snapshot_id, inference_generation_id,
+                    selected_hypothesis_id, action, data_state,
+                    validation_state, decided_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE decision_episode_id = VALUES(decision_episode_id),
+                    source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
+                    inference_generation_id = VALUES(inference_generation_id),
+                    selected_hypothesis_id = VALUES(selected_hypothesis_id),
+                    action = VALUES(action), data_state = VALUES(data_state),
+                    validation_state = VALUES(validation_state),
+                    decided_at = VALUES(decided_at), updated_at = VALUES(updated_at)
+                """,
+                (
+                    flow_id,
+                    episode.account_id,
+                    episode.symbol,
+                    episode.episode_id,
+                    episode.source_abox_snapshot_id,
+                    episode.inference_generation_id,
+                    episode.selected_hypothesis_id,
+                    episode.action,
+                    episode.data_state,
+                    episode.validation_state,
+                    episode.decided_at,
                     stamp,
                 ),
             )
@@ -138,6 +184,25 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                         stamp,
                         str(condition.get("transitionAt") or ""),
                     ),
+                )
+            decision_fields = ("action", "reviewLevel", "dataState", "validationState", "selectedHypothesisId")
+            decision_changed = not previous_payload or any(
+                str(previous_payload.get(key) or "") != str(payload.get(key) or "")
+                for key in decision_fields
+            )
+            validation_changed = not previous_payload or any(
+                str(previous_payload.get(key) or "") != str(payload.get(key) or "")
+                for key in ("dataState", "validationState")
+            )
+            if decision_changed:
+                insert_domain_event_with_connection(
+                    connection,
+                    investment_decision_changed_event(previous_payload, payload),
+                )
+            if validation_changed:
+                insert_domain_event_with_connection(
+                    connection,
+                    investment_validation_changed_event(previous_payload, payload),
                 )
         return episode
 

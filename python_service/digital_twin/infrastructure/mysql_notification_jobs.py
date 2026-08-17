@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 import uuid
 
 from ..application.notification.admission import NotificationAdmissionPolicy
@@ -150,6 +150,25 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params + [page_size, page_offset],
             ).fetchall()
         return [self.job_from_row(row) for row in rows], int(total_row["count"] or 0) if total_row else 0
+
+    def jobs_for_decision_episodes(self, episode_ids: Iterable[str], limit: int = 200) -> List[NotificationJob]:
+        ids = list(dict.fromkeys(
+            str(item or "").strip()
+            for item in episode_ids or []
+            if str(item or "").strip()
+        ))
+        if not ids:
+            return []
+        placeholders = ",".join(["%s"] * len(ids))
+        params = ids + [max(1, min(1000, int(limit or 200)))]
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT text, payload_json FROM notification_jobs "
+                "WHERE decision_episode_id IN (" + placeholders + ") "
+                "ORDER BY updated_at DESC, job_id DESC LIMIT %s",
+                params,
+            ).fetchall()
+        return [self.job_from_row(row) for row in rows or []]
 
     def recent_page_with_summary(
         self,

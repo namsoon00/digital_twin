@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from ...domain.disclosure_analysis import local_disclosure_analysis
 from ...domain.investment_brain import decision_episode_from_context
+from ...domain.investment_flow import INVESTMENT_FLOW_VERSION, investment_flow_id
 from ...domain.message_types import (
     INVESTMENT_INSIGHT,
     OPERATOR_REASONING_REPORT,
@@ -222,8 +223,28 @@ class NotificationAIValidatedGateEnricher:
                 episode = decision_episode_from_context(context, response.to_dict(), job_id=job.job_id)
                 if episode:
                     self.decision_episode_store.save(episode)
+                    previous = (
+                        context.get("previousInvestmentDecisionEpisode")
+                        if isinstance(context.get("previousInvestmentDecisionEpisode"), dict)
+                        else {}
+                    )
+                    previous_action = str(previous.get("action") or "").strip()
+                    previous_validation = str(previous.get("validationState") or "").strip()
+                    current_action = str(episode.action or "").strip()
+                    current_validation = str(episode.validation_state or "").strip()
                     context["investmentDecisionEpisodeId"] = episode.episode_id
                     context["investmentDecisionEpisode"] = episode.to_dict()
+                    context["investmentFlow"] = {
+                        "version": INVESTMENT_FLOW_VERSION,
+                        "flowId": investment_flow_id(episode.account_id, episode.symbol, episode.episode_id),
+                        "episodeId": episode.episode_id,
+                        "previousAction": previous_action,
+                        "currentAction": current_action,
+                        "decisionChanged": bool(previous_action and previous_action != current_action),
+                        "previousValidationState": previous_validation,
+                        "currentValidationState": current_validation,
+                        "validationChanged": bool(previous_validation and previous_validation != current_validation),
+                    }
             except Exception as error:  # noqa: BLE001 - memory persistence must not block a time-sensitive alert.
                 response.validation_warnings.append("투자 판단 기억 저장 실패: " + str(error)[:140])
         job.context = context_with_validated_ai_response(context, response, self.settings)

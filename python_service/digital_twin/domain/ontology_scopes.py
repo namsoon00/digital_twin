@@ -2231,6 +2231,57 @@ def select_target_scoped_manifest_patch(
             "sharedRemovedScopeIds": shared_removed_scope_ids,
         }
     retired_scope_set = set(retired_scope_ids)
+
+    def target_owned_scope(scope_id: str) -> bool:
+        direct_symbol = _symbol(scope_symbol(scope_id))
+        if direct_symbol in requested_symbols:
+            return True
+        # Link scope IDs intentionally preserve their owning subject even
+        # when ``scope_symbol`` treats the link itself as shared metadata.
+        return any(
+            ("symbol:" + symbol + ":") in _clean(scope_id)
+            for symbol in requested_symbols
+        )
+
+    replaced_dependency_scope_ids: Set[str] = set()
+    cascaded_retired_scope_ids: Set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for scope_id, active_item in active_by_scope.items():
+            if scope_id in retired_scope_set:
+                continue
+            active_dependencies = {
+                _clean(dependency)
+                for dependency in active_item.get("dependencyScopeIds") or []
+                if _clean(dependency)
+            }
+            if not active_dependencies.intersection(retired_scope_set):
+                continue
+            incoming_item = incoming.get(scope_id)
+            incoming_dependencies = {
+                _clean(dependency)
+                for dependency in (incoming_item or {}).get("dependencyScopeIds") or []
+                if _clean(dependency)
+            }
+            if incoming_item and not incoming_dependencies.intersection(retired_scope_set):
+                # Replace the retained link with the current source version,
+                # which no longer points at the retired target fact.
+                selected.add(scope_id)
+                replaced_dependency_scope_ids.add(scope_id)
+                selection_reasons.setdefault(scope_id, set()).add(
+                    "replace-retired-dependency-reference"
+                )
+                continue
+            if incoming_item is None and target_owned_scope(scope_id):
+                # The source removed both a target fact and its target-owned
+                # link. Retire them together; unrelated/shared links remain
+                # protected by the blocking check below.
+                retired_scope_set.add(scope_id)
+                cascaded_retired_scope_ids.add(scope_id)
+                changed = True
+
+    retired_scope_ids = sorted(retired_scope_set)
     retained_active_by_scope = {
         scope_id: item
         for scope_id, item in active_by_scope.items()
@@ -2241,7 +2292,11 @@ def select_target_scoped_manifest_patch(
         for scope_id, item in retained_active_by_scope.items()
         if any(
             _clean(dependency) in retired_scope_set
-            for dependency in item.get("dependencyScopeIds") or []
+            for dependency in (
+                (incoming.get(scope_id) or {}).get("dependencyScopeIds") or []
+                if scope_id in selected and scope_id in incoming
+                else item.get("dependencyScopeIds") or []
+            )
         )
     )
     selected_dependency_references = sorted(
@@ -2262,6 +2317,8 @@ def select_target_scoped_manifest_patch(
             "retiredScopeIds": retired_scope_ids,
             "retainedDependencyScopeIds": retained_dependency_references,
             "selectedDependencyScopeIds": selected_dependency_references,
+            "replacedDependencyScopeIds": sorted(replaced_dependency_scope_ids),
+            "cascadedRetiredScopeIds": sorted(cascaded_retired_scope_ids),
         }
 
     # A relation can point to a brand new endpoint inside an existing scope.
@@ -2415,6 +2472,8 @@ def select_target_scoped_manifest_patch(
         "reusedActiveScopeIds": sorted(set(retained_active_by_scope) - selected),
         "deferredScopeIds": sorted(deferred),
         "retiredScopeIds": retired_scope_ids,
+        "replacedDependencyScopeIds": sorted(replaced_dependency_scope_ids),
+        "cascadedRetiredScopeIds": sorted(cascaded_retired_scope_ids),
         "removedRelevantScopeIds": removed_relevant_scopes,
         "factSlot": fact_slot_selection,
         "scopeSelectionTrace": {

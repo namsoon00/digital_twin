@@ -1352,6 +1352,67 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             for scope_id in patch["scopeGenerationIds"]
         ))
 
+    def test_target_patch_replaces_link_that_drops_a_retired_target_dependency(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
+                "ontologyBox": "ABox", "symbol": "005930",
+            })],
+        )
+        identity = apply_scoped_abox_identity(graph, world_id="portfolio:local:main")
+        endpoint_scope = "symbol:005930:exposure:world:test"
+        link_scope = "link:symbol:005930:exposure:world:test"
+        current_link = {
+            "scopeId": link_scope,
+            "scopeFamily": "link",
+            "generationId": "link:g1",
+            "fingerprint": "link:f1",
+            "dependencyScopeIds": [],
+        }
+        graph.worldview["scopePlan"] = [
+            *[deepcopy(item) for item in identity["scopePlan"]],
+            deepcopy(current_link),
+        ]
+        graph.worldview["scopeGenerationIds"][link_scope] = "link:g1"
+        graph.worldview["scopeFingerprints"][link_scope] = "link:f1"
+        active_link = {
+            **current_link,
+            "dependencyScopeIds": [endpoint_scope],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                *[deepcopy(item) for item in identity["scopePlan"]],
+                {
+                    "scopeId": endpoint_scope,
+                    "scopeFamily": "exposure",
+                    "generationId": "exposure:g1",
+                    "fingerprint": "exposure:f1",
+                },
+                active_link,
+            ],
+            "scopeGenerationIds": {
+                **dict(identity["scopeGenerationIds"]),
+                endpoint_scope: "exposure:g1",
+                link_scope: "link:g1",
+            },
+            "scopeFingerprints": {
+                **dict(identity["scopeFingerprints"]),
+                endpoint_scope: "exposure:f1",
+                link_scope: "link:f1",
+            },
+        }
+
+        patch = merge_target_scoped_abox_manifest(graph, active, ["005930"])
+
+        self.assertTrue(patch["applied"])
+        self.assertIn(endpoint_scope, patch["retiredScopeIds"])
+        self.assertIn(link_scope, patch["replacedDependencyScopeIds"])
+        self.assertNotIn(endpoint_scope, patch["scopeGenerationIds"])
+        self.assertIn(link_scope, patch["scopeGenerationIds"])
+
     def test_observation_followup_retains_missing_target_scopes_until_full_reconciliation(self):
         graph = PortfolioOntology(
             "main",

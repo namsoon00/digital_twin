@@ -5725,7 +5725,10 @@ class OntologyReasoningRunner:
             summary["projectionFailures"] = [
                 {
                     key: item.get(key)
-                    for key in ["accountId", "stage", "status", "reason", "retryAfterSeconds"]
+                    for key in [
+                        "accountId", "stage", "status", "reason",
+                        "retryAfterSeconds", "diagnostics",
+                    ]
                     if key in item
                 }
                 for item in projection_failures[:8]

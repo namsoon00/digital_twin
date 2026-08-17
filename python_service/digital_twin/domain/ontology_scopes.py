@@ -292,11 +292,18 @@ def scope_requires_v8_bounded_slot(scope_id: object) -> bool:
     """Whether one active v7 symbol scope still needs online migration."""
 
     clean_scope = _clean(scope_id)
-    if not scope_symbol(clean_scope) or _scope_type(clean_scope) not in {"symbol", "link"}:
+    scope_type = _scope_type(clean_scope)
+    if not scope_symbol(clean_scope) or scope_type not in {"symbol", "link"}:
         return False
     family = scope_family(clean_scope)
     if family == "temporal":
-        return ":window:" not in clean_scope
+        # Temporal relation-only scopes can legitimately connect a subject's
+        # current market and state anchors without owning one temporal window.
+        # Treating that aggregate link as a legacy slot forced every event to
+        # migrate the subject's complete scope boundary again. Only temporal
+        # fact owners require the v8 window suffix; window-owned links already
+        # inherit it from their temporal endpoint.
+        return scope_type == "symbol" and ":window:" not in clean_scope
     if family in BOUNDED_SCOPE_BUCKET_COUNTS:
         return ":bucket:" not in clean_scope
     return False

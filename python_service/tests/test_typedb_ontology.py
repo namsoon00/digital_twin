@@ -27,6 +27,7 @@ from digital_twin.domain.ontology_scopes import (
     apply_scoped_abox_repair_epochs,
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
+    scope_requires_v8_bounded_slot,
     select_target_scoped_manifest_patch,
 )
 from digital_twin.domain.ontology_native_rule_planning import (
@@ -95,6 +96,65 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_v8_migration_does_not_treat_aggregate_temporal_link_as_window_fact(self):
+        self.assertTrue(scope_requires_v8_bounded_slot("symbol:005930:temporal"))
+        self.assertFalse(scope_requires_v8_bounded_slot("symbol:005930:temporal:window:15m"))
+        self.assertFalse(scope_requires_v8_bounded_slot("link:symbol:005930:temporal"))
+        self.assertTrue(scope_requires_v8_bounded_slot("link:symbol:005930:evidence"))
+        self.assertFalse(scope_requires_v8_bounded_slot("link:symbol:005930:evidence:bucket:03"))
+
+    def test_aggregate_temporal_link_does_not_expand_fact_slot_patch_to_full_subject(self):
+        temporal_link = "link:symbol:005930:temporal"
+        evidence_scope = "symbol:005930:evidence:bucket:03"
+        profile_scope = "symbol:005930:profile"
+        active_plan = [
+            {"scopeId": temporal_link, "generationId": "generation:t1", "fingerprint": "t1", "scopeFamily": "temporal"},
+            {"scopeId": evidence_scope, "generationId": "generation:e1", "fingerprint": "e1", "scopeFamily": "evidence"},
+            {"scopeId": profile_scope, "generationId": "generation:p1", "fingerprint": "p1", "scopeFamily": "profile"},
+        ]
+        incoming_plan = deepcopy(active_plan)
+        incoming_plan[1].update({"generationId": "generation:e2", "fingerprint": "e2"})
+        graph = PortfolioOntology("main")
+        graph.worldview.update({
+            "scopePlan": incoming_plan,
+            "scopeGenerationIds": {
+                item["scopeId"]: item["generationId"] for item in incoming_plan
+            },
+            "scopeFingerprints": {
+                item["scopeId"]: item["fingerprint"] for item in incoming_plan
+            },
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "targetScopeRetentionMode": "incremental-target-patch",
+        })
+        active = {
+            "status": "ok",
+            "scopePlan": active_plan,
+            "scopeGenerationIds": {
+                item["scopeId"]: item["generationId"] for item in active_plan
+            },
+            "scopeFingerprints": {
+                item["scopeId"]: item["fingerprint"] for item in active_plan
+            },
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+        }
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["005930"],
+            fact_slot_plan=build_fact_slot_projection_plan(
+                ["005930"],
+                ["evidence"],
+                requested_fact_families_by_symbol={"005930": ["evidence"]},
+                event_boundary_authoritative=True,
+            ),
+        )
+
+        self.assertFalse(selection["scopeTopologyMigration"]["applied"])
+        self.assertEqual([evidence_scope], selection["selectedIncomingScopeIds"])
+        self.assertIn(profile_scope, selection["reusedActiveScopeIds"])
+
     def test_default_schema_function_provisioning_uses_a_small_bounded_maintenance_batch(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 

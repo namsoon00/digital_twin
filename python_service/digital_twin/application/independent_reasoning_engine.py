@@ -790,6 +790,7 @@ class IndependentReasoningJobRunner:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
+        lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
@@ -820,6 +821,7 @@ class IndependentReasoningJobRunner:
                 "status": "idle",
                 "processedCount": 0,
                 "repairedIngressCount": repaired,
+                "leaseRecovery": lease_recovery,
                 "queue": self.queue_summary(descriptor.deployment_id),
             }
         jobs, resharded = self.reshard_oversized_jobs(jobs)
@@ -830,6 +832,7 @@ class IndependentReasoningJobRunner:
                 "reshardedJobCount": len(resharded),
                 "reshardedJobs": resharded,
                 "repairedIngressCount": repaired,
+                "leaseRecovery": lease_recovery,
                 "queue": self.queue_summary(descriptor.deployment_id),
             }
         batch_key = self.batch_compatibility_key(jobs[0])
@@ -921,6 +924,7 @@ class IndependentReasoningJobRunner:
                 "processedCount": len(selected_jobs),
                 "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
+                "leaseRecovery": lease_recovery,
                 "jobId": job_ids[-1],
                 "jobIds": job_ids,
                 "result": result,
@@ -954,6 +958,7 @@ class IndependentReasoningJobRunner:
                 "processedCount": len(selected_jobs),
                 "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
+                "leaseRecovery": lease_recovery,
                 "jobId": job_ids[-1],
                 "jobIds": job_ids,
                 "reason": str(error)[:300],
@@ -1107,6 +1112,23 @@ class IndependentReasoningJobRunner:
                 validation_cohort_id=str(release.get("validationCohortId") or ""),
             )
         return self.queue.summary(deployment_id)
+
+    def recover_dead_local_leases(self, deployment_id: str) -> Dict[str, object]:
+        callback = getattr(self.queue, "recover_dead_local_leases", None)
+        if not callable(callback):
+            return {"status": "unsupported", "recoveredCount": 0}
+        try:
+            result = callback(
+                deployment_id,
+                current_worker_id=self.worker_id,
+            )
+        except Exception as error:  # noqa: BLE001 - normal lease expiry remains available.
+            return {
+                "status": "error",
+                "recoveredCount": 0,
+                "reason": str(error)[:180],
+            }
+        return dict(result or {"status": "unchanged", "recoveredCount": 0})
 
     def repair_ingress(self, deployment_id: str) -> int:
         reader = getattr(self.event_reader, "unmaterialized_reasoning_engine_events", None)

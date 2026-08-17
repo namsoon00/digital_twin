@@ -1,6 +1,8 @@
 """MySQL control-plane stores for versioned engines and temporal backends."""
 
 import json
+import os
+import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Mapping, Optional
@@ -46,6 +48,34 @@ def json_value(value: object, fallback):
     except (TypeError, ValueError, json.JSONDecodeError):
         return fallback
     return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def reasoning_worker_process_owner(worker_id: object):
+    """Return the host and PID encoded in a managed reasoning worker ID."""
+
+    parts = str(worker_id or "").split(":", 2)
+    if len(parts) < 3 or not parts[0].strip():
+        return "", 0
+    try:
+        process_id = int(parts[1])
+    except (TypeError, ValueError):
+        return "", 0
+    return parts[0].strip(), process_id if process_id > 0 else 0
+
+
+def local_process_is_alive(process_id: int) -> bool:
+    """Check a local PID without sending a signal that changes the process."""
+
+    try:
+        os.kill(int(process_id), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        # An ambiguous OS response must not steal a possibly live lease.
+        return True
+    return True
 
 
 class MySQLTimeSeriesBackendRegistryStore(MySQLOperationalConnection):
@@ -828,6 +858,67 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "status": "resharded",
             "shardCount": len(source_events),
             "jobIds": inserted_job_ids,
+        }
+
+    def recover_dead_local_leases(
+        self,
+        deployment_id: str,
+        current_worker_id: str = "",
+        host_name: str = "",
+        process_alive=None,
+    ) -> Dict[str, object]:
+        """Immediately return jobs owned by a dead worker on this machine.
+
+        The durable expiry remains authoritative for remote or ambiguous
+        owners. A supervised local restart has stronger evidence: the worker
+        ID contains its host and PID, so the replacement can recover only a
+        process that the local OS confirms no longer exists.
+        """
+
+        local_host = str(host_name or socket.gethostname()).strip()
+        alive = process_alive if callable(process_alive) else local_process_is_alive
+        stamp = iso_utc()
+        recovered_job_ids = []
+        recovered_owners = []
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT job_id, lease_owner FROM reasoning_engine_jobs "
+                "WHERE deployment_id = %s AND job_status = 'processing' "
+                "AND lease_owner <> '' FOR UPDATE",
+                (str(deployment_id or ""),),
+            ).fetchall()
+            for row in rows or []:
+                owner = str(row.get("lease_owner") or "")
+                if not owner or owner == str(current_worker_id or ""):
+                    continue
+                owner_host, process_id = reasoning_worker_process_owner(owner)
+                if owner_host != local_host or process_id <= 0:
+                    continue
+                try:
+                    owner_alive = bool(alive(process_id))
+                except Exception:  # noqa: BLE001 - uncertain ownership keeps the lease.
+                    owner_alive = True
+                if owner_alive:
+                    continue
+                recovered_job_ids.append(str(row.get("job_id") or ""))
+                recovered_owners.append(owner)
+            recovered_job_ids = [value for value in recovered_job_ids if value]
+            if recovered_job_ids:
+                placeholders = ",".join(["%s"] * len(recovered_job_ids))
+                connection.execute(
+                    "UPDATE reasoning_engine_jobs SET job_status = 'retry', "
+                    "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                    "claimed_at = '', available_at = %s, "
+                    "last_error = 'The previous local V2 worker stopped; retrying immediately.', "
+                    "updated_at = %s WHERE deployment_id = %s "
+                    "AND job_status = 'processing' AND job_id IN (" + placeholders + ")",
+                    (stamp, stamp, str(deployment_id or ""), *recovered_job_ids),
+                )
+        return {
+            "status": "recovered" if recovered_job_ids else "unchanged",
+            "recoveredCount": len(recovered_job_ids),
+            "recoveredJobIds": recovered_job_ids,
+            "recoveredOwnerCount": len(set(recovered_owners)),
         }
 
     def next_lane(self, deployment_id: str) -> str:

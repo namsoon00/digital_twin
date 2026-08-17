@@ -1,4 +1,5 @@
 import unittest
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 from digital_twin.application.independent_reasoning_engine import (
@@ -20,6 +21,10 @@ from digital_twin.domain.reasoning_engine_versions import (
     ReasoningEngineDescriptor,
 )
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
+from digital_twin.infrastructure.mysql_versioned_runtime import (
+    MySQLReasoningEngineJobStore,
+    reasoning_worker_process_owner,
+)
 
 
 def source_event(symbol="NVDA", account_ids=None):
@@ -118,6 +123,46 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_reasoning_worker_process_owner_rejects_ambiguous_lease_ids(self):
+        self.assertEqual(("worker-host", 1234), reasoning_worker_process_owner("worker-host:1234:v2-deadbeef"))
+        self.assertEqual(("", 0), reasoning_worker_process_owner("worker:test"))
+        self.assertEqual(("", 0), reasoning_worker_process_owner("worker-host:not-a-pid:v2"))
+
+    def test_mysql_queue_recovers_only_confirmed_dead_local_worker_leases(self):
+        class Connection:
+            def __init__(self):
+                self.update_params = ()
+
+            def execute(self, sql, params=()):
+                if sql.lstrip().startswith("SELECT"):
+                    return SimpleNamespace(fetchall=lambda: [
+                        {"job_id": "job:dead", "lease_owner": "worker-host:111:v2-old"},
+                        {"job_id": "job:live", "lease_owner": "worker-host:222:v2-live"},
+                        {"job_id": "job:remote", "lease_owner": "remote-host:333:v2-remote"},
+                        {"job_id": "job:current", "lease_owner": "worker-host:444:v2-current"},
+                    ])
+                self.update_params = tuple(params)
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        store = object.__new__(Store)
+        result = store.recover_dead_local_leases(
+            "ontology-v2-shadow",
+            current_worker_id="worker-host:444:v2-current",
+            host_name="worker-host",
+            process_alive=lambda process_id: process_id != 111,
+        )
+
+        self.assertEqual("recovered", result["status"])
+        self.assertEqual(["job:dead"], result["recoveredJobIds"])
+        self.assertEqual("job:dead", connection.update_params[-1])
+
     def test_scoped_executor_reuses_verified_market_inference_within_batch(self):
         class Recorder:
             def __init__(self):
@@ -617,6 +662,14 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         class Queue:
             def __init__(self):
                 self.claim_call = {}
+                self.recovery_call = {}
+
+            def recover_dead_local_leases(self, deployment_id, current_worker_id=""):
+                self.recovery_call = {
+                    "deploymentId": deployment_id,
+                    "workerId": current_worker_id,
+                }
+                return {"status": "recovered", "recoveredCount": 2}
 
             def next_lane(self, _deployment_id):
                 return "REALTIME"
@@ -655,6 +708,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual("idle", result["status"])
+        self.assertEqual(2, result["leaseRecovery"]["recoveredCount"])
+        self.assertEqual("ontology-v2-shadow", queue.recovery_call["deploymentId"])
         self.assertEqual(1, queue.claim_call["limit"])
         self.assertEqual("REALTIME", queue.claim_call["reasoningLane"])
 

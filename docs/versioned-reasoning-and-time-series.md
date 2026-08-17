@@ -123,6 +123,12 @@ stage timings, input fingerprints, source ABox IDs, inference generation IDs,
 and candidate output. Terminal rows use the normal bounded MySQL retention
 policy.
 
+On a supervised local restart, the replacement V2 worker also checks the host
+and PID encoded in each `processing` owner. It immediately returns only a
+locally owned job whose process is confirmed absent; remote, malformed, and
+ambiguous owners still wait for durable lease expiry. This removes the normal
+ten-minute restart stall without weakening multi-host lease safety.
+
 The durable inbox stores one job per symbol even when the source snapshot
 contains an entire account. Every shard keeps the same immutable snapshot
 boundary and only its symbol-indexed fact revisions, changed fields, and fact
@@ -450,7 +456,11 @@ Source events also retain their verified fact-change boundary through the V2
 queue. For example, a news or calendar update may project evidence, temporal,
 and required link scopes without replaying unrelated price, position, macro,
 or company-value scopes. An unclassified event fails closed to the existing
-conservative target projection.
+conservative target projection. A subject-level temporal relation link may
+legitimately connect current market and state anchors without owning a time
+window; only temporal fact scopes require the v8 `:window:` slot. This
+distinction prevents an aggregate link from repeatedly reopening a completed
+scope-topology migration and expanding every event into a full-subject write.
 
 ## Adding V3 Or Another Database
 

@@ -13588,7 +13588,7 @@
     var data = decisionStateMeta("data", row.dataState, "partial");
     var validation = decisionStateMeta("validation", row.validationState, "conditional");
     return [
-      '<button class="oa-data-row oa-decision-row" type="button" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
+      '<button class="oa-data-row oa-decision-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.actionLabel) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + ' · ' + escapeHtml(review.label) + '</em></span>',
       '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화 조건은 상세에서 확인</em></span>',
@@ -13646,7 +13646,7 @@
     return renderConsoleManagedPage("modeling", metrics, [
       renderDecisionFilterToolbar(),
       '<div class="oa-console-grid oa-decision-grid">',
-      renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "보유·관심 종목별로 지금 검토할 행동과 이유를 보여줍니다. 자동 주문은 하지 않습니다.", meta: page.items.length + " / " + rows.length + "건", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
+      renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "보유·관심 종목별로 지금 검토할 행동과 이유를 보여줍니다. 자동 주문은 하지 않습니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
       renderConsoleSurface({ kicker: "REVIEW", title: "판단 전 확인할 것", description: "자료나 관계 분석이 아직 준비되지 않은 종목을 따로 보여줍니다.", actions: reviewNeeded.length ? renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact") : "", body: renderConsoleLiveRegion("decision-blocker-body", blockers) }),
       '</div>'
     ].join(""));

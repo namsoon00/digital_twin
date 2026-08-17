@@ -136,6 +136,7 @@ class IndependentReasoningResult:
     inference_generation_ids: Tuple[str, ...] = ()
     projection_results: Dict[str, object] = field(default_factory=dict)
     candidate_events: Tuple[Dict[str, object], ...] = ()
+    decision_syntheses: Tuple[Dict[str, object], ...] = ()
     delivery_events: Tuple[Dict[str, object], ...] = ()
     delivery_authorized: bool = False
     ai_handoff_status: str = "not-requested"
@@ -160,6 +161,7 @@ class IndependentReasoningResult:
             "source_abox_snapshot_ids",
             "inference_generation_ids",
             "candidate_events",
+            "decision_syntheses",
             "delivery_events",
         ]:
             payload[key] = list(payload[key])

@@ -15,7 +15,6 @@ from ..domain.independent_reasoning import (
     reasoning_event_scope,
 )
 from ..domain.investment_reasoning import FactDelta
-from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 
 
@@ -83,6 +82,7 @@ def alert_event_payload(event: object) -> Dict[str, object]:
             "dataState",
             "validationState",
             "investmentReasoningCaseId",
+            "v2DecisionSynthesis",
         ]
         if source_metadata.get(key) not in (None, "", [], {})
     }
@@ -428,51 +428,6 @@ class ScopedTypeDBInferenceExecutor:
         return results
 
 
-class GraphDecisionCandidateBuilder:
-    """Translate verified InferenceBox output into graph-backed alert candidates."""
-
-    def __init__(self, monitor, monitor_store):
-        self.monitor = monitor
-        self.monitor_store = monitor_store
-
-    @staticmethod
-    def filter_events(events, request: IndependentReasoningRequest, account_id: str):
-        if not request.symbols:
-            return list(events or [])
-        allowed = set(request.symbols)
-        portfolio_scope = bool(
-            "PORTFOLIO" in set(request.context.get("subjectKinds") or [])
-            and (not request.account_ids or account_id in request.account_ids)
-        )
-        return [
-            event for event in events or []
-            if str(getattr(event, "symbol", "") or "").upper().strip() in allowed
-            or (
-                portfolio_scope
-                and not str(getattr(event, "symbol", "") or "").strip()
-                and str(getattr(event, "rule", "") or "") in {PORTFOLIO_ONTOLOGY_SIGNAL, "investmentInsight"}
-            )
-        ]
-
-    def build(self, request, snapshots, previous_by_account, projection_results, force=False):
-        detected = []
-        ready = []
-        for snapshot in snapshots or []:
-            account_id = str(getattr(snapshot, "account_id", "") or "")
-            identity = projection_inference_identity(projection_results.get(account_id) or {})
-            if not identity["verified"]:
-                continue
-            events = self.monitor.events_for_snapshot(
-                snapshot,
-                previous_by_account.get(account_id) or {},
-                reasoning_context=dict(request.context),
-            )
-            events = self.filter_events(events, request, account_id)
-            detected.extend(events)
-            ready.extend(self.monitor.apply_cadence(events, self.monitor_store, force=force))
-        return {"detected": detected, "ready": ready}
-
-
 class V2ReasoningEngine:
     """Concrete independent engine implementation for the V2 deployment."""
 
@@ -481,7 +436,7 @@ class V2ReasoningEngine:
         descriptor,
         input_assembler: IndependentReasoningInputAssembler,
         inference_executor: ScopedTypeDBInferenceExecutor,
-        candidate_builder: GraphDecisionCandidateBuilder,
+        candidate_builder,
         cycle_recorder=None,
         delivery_authorized_provider=None,
         settings=None,
@@ -624,10 +579,15 @@ class V2ReasoningEngine:
         stages["candidateBuildMs"] = int((time.perf_counter() - candidate_started) * 1000)
         detected_events = list(candidates.get("detected") or [])
         ready_events = list(candidates.get("ready") or [])
+        decision_syntheses = list(candidates.get("syntheses") or [])
         if reasoning_case is not None and verified_accounts:
             reasoning_case = self.reasoning_orchestrator.hypotheses_ready(
                 reasoning_case.case_id,
                 detected_events,
+            )
+            reasoning_case = self.reasoning_orchestrator.decisions_synthesized(
+                reasoning_case.case_id,
+                decision_syntheses,
             )
             self.reasoning_orchestrator.attach_case_context(
                 reasoning_case.case_id,
@@ -704,6 +664,10 @@ class V2ReasoningEngine:
             inference_generation_ids=generation_ids,
             projection_results=compact_projections,
             candidate_events=tuple(alert_event_payload(event) for event in detected_events),
+            decision_syntheses=tuple(
+                item.to_dict() if hasattr(item, "to_dict") else dict(item or {})
+                for item in decision_syntheses
+            ),
             delivery_events=tuple(alert_event_payload(event) for event in delivery_events),
             delivery_authorized=delivery_authorized,
             ai_handoff_status=ai_handoff_status,

@@ -29,6 +29,13 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   delivery authorization remain explicit replaceable stages. Stable V1/V2/V3
   deployment IDs are separate from the mutable active/delivery/candidate
   control pointers.
+- Between TypeDB hypotheses and AI judgement, persist one deterministic
+  `DecisionSynthesis` per account/subject/generation. It must contain only
+  graph-authored candidate, allowed and blocked actions, eligible and
+  reference hypotheses, evidence IDs, counter-evidence and invalidation
+  conditions. Python may normalize this contract but must not score, rank, or
+  invent an investment action. AI publication must reject reference-only
+  hypotheses and actions outside the TypeDB action envelope.
 - A reasoning request bound to `verifiedSourceSnapshot.generatedAt` must read
   that exact MySQL snapshot-history row. Never substitute a newer snapshot.
   If the point-in-time row is unavailable, defer or reject the request with an

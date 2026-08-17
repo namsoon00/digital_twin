@@ -68,7 +68,8 @@ flowchart LR
     Case --> Input[Point-in-time input]
     Input --> TypeDB[TypeDB native inference]
     TypeDB --> Hypotheses[Graph hypothesis set]
-    Hypotheses --> AIQueue[Durable AI queue]
+    Hypotheses --> Synthesis[Decision synthesis: alternatives and action envelope]
+    Synthesis --> AIQueue[Durable AI queue]
     AIQueue --> AI[AI judgement]
     AI --> Validate[Contract validation]
     Validate --> Notify[Notification queue]
@@ -77,15 +78,23 @@ flowchart LR
 
 One durable `ReasoningCase` carries the request ID, changed fact families,
 execution lane, source ABox snapshot IDs, inference generation IDs, competing
-hypotheses, AI request/result, final action, and stage history. The lifecycle
-is `CREATED -> INPUT_READY -> INFERENCE_COMPLETED -> HYPOTHESES_READY ->
-AI_PENDING -> AI_COMPLETED -> VALIDATED -> PUBLISHED`. Shadow or no-delivery
+hypotheses, TypeDB-authored action alternatives, AI request/result, final
+action, and stage history. The lifecycle is `CREATED -> INPUT_READY ->
+INFERENCE_COMPLETED -> HYPOTHESES_READY -> DECISION_SYNTHESIZED -> AI_PENDING
+-> AI_COMPLETED -> VALIDATED -> PUBLISHED`. Shadow or no-delivery
 executions end at `COMPLETED`; retryable point-in-time gaps use `DEFERRED`;
 invalid graph/AI contracts use `BLOCKED`.
 
-The AI worker may select and explain only a hypothesis already present in the
-TypeDB-derived hypothesis set. An empty set, an unknown selected hypothesis,
-or an invalid action blocks publication. `VALIDATED` means the AI result was
+`DecisionSynthesis` is not a second rules engine. It freezes the current
+InferenceBox generation, eligible and reference-only hypotheses, candidate
+action, allowed and blocked actions, counter-evidence, invalidation conditions,
+and trace identifiers into a deterministic handoff. Python neither ranks the
+alternatives nor derives a new investment action.
+
+The AI worker may select and explain only a decision-eligible hypothesis
+already present in the TypeDB-derived hypothesis set. An empty set, an unknown
+or reference-only selected hypothesis, an action blocked by the TypeDB action
+envelope, or an invalid action blocks publication. `VALIDATED` means the AI result was
 accepted and the notification was returned to the delivery queue;
 `PUBLISHED` is recorded only after the channel confirms delivery.
 
@@ -150,13 +159,22 @@ The independent worker performs one bounded pipeline:
 3. project that scope to the isolated V2 TypeDB database;
 4. require native TypeDB completion, aligned generation IDs, source ABox IDs,
    and inference traces;
-5. translate verified InferenceBox output into graph-backed candidates;
+5. normalize verified InferenceBox hypotheses and action envelopes into a
+   `DecisionSynthesis`, then package graph-backed candidates without calling
+   the V1 `RealtimeMonitor`;
 6. block delivery in shadow/candidate, or hand active candidates to the common
    notification and AI queues;
 7. persist the result and update deployment health.
 
 Input assembly, inference execution, candidate construction, and queue running
 are separate application components. None imports a database driver.
+
+Every V2 release freezes its RuleBox fingerprint. Startup fails if the RuleBox
+stored in the isolated V2 TypeDB database changes under the same deployment
+ID. Deployment health includes a compact rule inventory by domain module,
+execution stage, lifecycle class, decision effect, disabled rules, invalid
+dependency contracts, and high-cost rules. A changed RuleBox requires a new
+deployment release rather than silently mixing evidence cohorts.
 
 ## Shadow Comparison Contract
 

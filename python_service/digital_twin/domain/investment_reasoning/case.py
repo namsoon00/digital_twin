@@ -14,6 +14,7 @@ from .contracts import (
     FactDelta,
     HypothesisRecord,
     InferenceResult,
+    DecisionSynthesis,
     INVESTMENT_REASONING_CONTRACT_VERSION,
 )
 
@@ -22,6 +23,7 @@ CASE_CREATED = "CREATED"
 CASE_INPUT_READY = "INPUT_READY"
 CASE_INFERENCE_COMPLETED = "INFERENCE_COMPLETED"
 CASE_HYPOTHESES_READY = "HYPOTHESES_READY"
+CASE_DECISION_SYNTHESIZED = "DECISION_SYNTHESIZED"
 CASE_AI_PENDING = "AI_PENDING"
 CASE_AI_COMPLETED = "AI_COMPLETED"
 CASE_VALIDATED = "VALIDATED"
@@ -38,7 +40,8 @@ CASE_TRANSITIONS = {
     CASE_DEFERRED: {CASE_INPUT_READY, CASE_DEFERRED, CASE_BLOCKED, CASE_FAILED},
     CASE_INPUT_READY: {CASE_INFERENCE_COMPLETED, CASE_DEFERRED, CASE_BLOCKED, CASE_FAILED},
     CASE_INFERENCE_COMPLETED: {CASE_HYPOTHESES_READY, CASE_BLOCKED, CASE_FAILED},
-    CASE_HYPOTHESES_READY: {CASE_AI_PENDING, CASE_VALIDATED, CASE_COMPLETED, CASE_BLOCKED, CASE_FAILED},
+    CASE_HYPOTHESES_READY: {CASE_DECISION_SYNTHESIZED, CASE_AI_PENDING, CASE_VALIDATED, CASE_COMPLETED, CASE_BLOCKED, CASE_FAILED},
+    CASE_DECISION_SYNTHESIZED: {CASE_AI_PENDING, CASE_VALIDATED, CASE_COMPLETED, CASE_BLOCKED, CASE_FAILED},
     CASE_AI_PENDING: {CASE_AI_COMPLETED, CASE_VALIDATED, CASE_BLOCKED, CASE_FAILED},
     CASE_AI_COMPLETED: {CASE_VALIDATED, CASE_BLOCKED, CASE_FAILED},
     CASE_VALIDATED: {CASE_COMPLETED, CASE_PUBLISHED, CASE_BLOCKED, CASE_FAILED},
@@ -69,6 +72,7 @@ class ReasoningCase:
     fact_delta: FactDelta
     input_fingerprint: str = ""
     hypotheses: Tuple[HypothesisRecord, ...] = ()
+    decision_syntheses: Tuple[DecisionSynthesis, ...] = ()
     inference_result: Optional[InferenceResult] = None
     ai_judgment: Optional[AIJudgmentResult] = None
     final_decision: Optional[FinalDecision] = None
@@ -147,6 +151,7 @@ class ReasoningCase:
             "factDelta": self.fact_delta.to_dict(),
             "inputFingerprint": self.input_fingerprint,
             "hypotheses": [item.to_dict() for item in self.hypotheses],
+            "decisionSyntheses": [item.to_dict() for item in self.decision_syntheses],
             "inferenceResult": self.inference_result.to_dict() if self.inference_result else {},
             "aiJudgment": self.ai_judgment.to_dict() if self.ai_judgment else {},
             "finalDecision": self.final_decision.to_dict() if self.final_decision else {},
@@ -180,6 +185,11 @@ class ReasoningCase:
                 HypothesisRecord.from_dict(item)
                 for item in payload.get("hypotheses") or []
                 if isinstance(item, Mapping) and (item.get("hypothesisId") or item.get("hypothesis_id"))
+            ),
+            decision_syntheses=tuple(
+                DecisionSynthesis.from_dict(item)
+                for item in payload.get("decisionSyntheses") or payload.get("decision_syntheses") or []
+                if isinstance(item, Mapping) and (item.get("synthesisId") or item.get("synthesis_id"))
             ),
             inference_result=InferenceResult.from_dict(inference) if inference else None,
             ai_judgment=AIJudgmentResult.from_dict(judgment) if judgment else None,

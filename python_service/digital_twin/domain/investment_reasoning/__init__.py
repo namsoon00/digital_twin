@@ -7,6 +7,7 @@ from .case import (
     CASE_COMPLETED,
     CASE_CREATED,
     CASE_DEFERRED,
+    CASE_DECISION_SYNTHESIZED,
     CASE_FAILED,
     CASE_HYPOTHESES_READY,
     CASE_INFERENCE_COMPLETED,
@@ -17,21 +18,27 @@ from .case import (
 )
 from .contracts import (
     AIJudgmentResult,
+    ActionAlternative,
+    DecisionSynthesis,
     FactDelta,
     FinalDecision,
     HypothesisRecord,
     InferenceResult,
 )
 from .hypotheses import GraphHypothesisManager
+from .synthesis import decision_synthesis_from_relation_context
+from .rule_inventory import reasoning_rule_inventory
 
 __all__ = [
     "AIJudgmentResult",
+    "ActionAlternative",
     "CASE_AI_COMPLETED",
     "CASE_AI_PENDING",
     "CASE_BLOCKED",
     "CASE_COMPLETED",
     "CASE_CREATED",
     "CASE_DEFERRED",
+    "CASE_DECISION_SYNTHESIZED",
     "CASE_FAILED",
     "CASE_HYPOTHESES_READY",
     "CASE_INFERENCE_COMPLETED",
@@ -39,9 +46,12 @@ __all__ = [
     "CASE_PUBLISHED",
     "CASE_VALIDATED",
     "FactDelta",
+    "DecisionSynthesis",
     "FinalDecision",
     "GraphHypothesisManager",
     "HypothesisRecord",
     "InferenceResult",
     "ReasoningCase",
+    "decision_synthesis_from_relation_context",
+    "reasoning_rule_inventory",
 ]

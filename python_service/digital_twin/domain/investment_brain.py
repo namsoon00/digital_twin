@@ -2926,6 +2926,8 @@ def decision_episode_from_context(
         source="notification-ai-hypothesis-competition",
         facts_at_decision={
             **dict(relation_context.get("facts") or {}),
+            **({"investmentReasoningCaseId": context.get("investmentReasoningCaseId")} if context.get("investmentReasoningCaseId") else {}),
+            **({"v2DecisionSynthesis": dict(context.get("v2DecisionSynthesis") or {})} if isinstance(context.get("v2DecisionSynthesis"), dict) and context.get("v2DecisionSynthesis") else {}),
             **({"hypothesisOutcomeContract": outcome_contract} if outcome_contract else {}),
             **({"engineManifest": replay_manifest} if replay_manifest else {}),
             **({"decisionReferenceDateRaw": raw_decided_at} if raw_decided_at != decided_at else {}),
@@ -2996,6 +2998,12 @@ def decision_replay_manifest(
         "reasoningEngineVersion": str(relation_context.get("engineVersion") or ""),
         "inferenceGenerationId": str(relation_context.get("inferenceGenerationId") or ""),
         "sourceAboxSnapshotId": str(relation_context.get("sourceAboxSnapshotId") or ""),
+        "investmentReasoningCaseId": str(context.get("investmentReasoningCaseId") or ""),
+        "decisionSynthesisId": str(
+            (context.get("v2DecisionSynthesis") or {}).get("synthesis_id")
+            or (context.get("v2DecisionSynthesis") or {}).get("synthesisId")
+            or ""
+        ) if isinstance(context.get("v2DecisionSynthesis"), dict) else "",
     }
 
 

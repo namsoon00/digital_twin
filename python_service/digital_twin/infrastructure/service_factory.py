@@ -21,13 +21,15 @@ from ..application.operational_storage_capacity_service import (
 )
 from ..application.investment_analysis_service import InvestmentAnalysisService
 from ..application.independent_reasoning_engine import (
-    GraphDecisionCandidateBuilder,
     IndependentReasoningInputAssembler,
     IndependentReasoningJobRunner,
     ScopedTypeDBInferenceExecutor,
     V2ReasoningEngine,
 )
-from ..application.investment_reasoning import InvestmentReasoningOrchestrator
+from ..application.investment_reasoning import (
+    InvestmentReasoningOrchestrator,
+    V2GraphDecisionCandidateBuilder,
+)
 from ..application.shared_instrument_inference_service import SharedInstrumentInferenceService
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_domain_service import InvestmentDomainService
@@ -110,6 +112,7 @@ from ..domain.portfolio import account_snapshot_from_monitor_state
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
 from ..domain.reasoning_engine_versions import reasoning_release_identity
+from ..domain.investment_reasoning import reasoning_rule_inventory
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
@@ -1822,8 +1825,10 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         candidate_rulebox.get("sourceRulesHash")
         or candidate_rulebox.get("rulesHash")
         or candidate_rulebox.get("ruleboxRulesHash")
-        or ""
+        or payload_hash(candidate_rulebox.get("rules") or [])
     )
+    if str(candidate_rulebox.get("status") or "") != "ok" or not candidate_rulebox.get("rules"):
+        raise RuntimeError("The independent V2 RuleBox release is unavailable or empty")
     release_identity = reasoning_release_identity(descriptor, rulebox_fingerprint)
     candidate_settings["_reasoningEngineReleaseFingerprint"] = str(
         release_identity.get("releaseFingerprint") or ""
@@ -1860,6 +1865,17 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         rule_catalog_provider=projection_recorder.rulebox_rules_for_impact,
     )
     existing_health = dict((registry_store.get(descriptor.deployment_id) or {}).get("health") or {})
+    frozen_rulebox_fingerprint = str(existing_health.get("ruleboxFingerprint") or "")
+    if (
+        frozen_rulebox_fingerprint
+        and str(existing_health.get("candidateReleaseId") or "")
+        and frozen_rulebox_fingerprint != rulebox_fingerprint
+    ):
+        raise RuntimeError(
+            "The independent V2 RuleBox changed after its release was frozen; "
+            "register a new V2 deployment before starting the worker."
+        )
+    rule_inventory = reasoning_rule_inventory(candidate_rulebox.get("rules") or [])
     existing_health.update({
         "candidateReleaseId": release_identity.get("releaseId"),
         "candidateRuntimeRevision": release_identity.get("runtimeRevision"),
@@ -1870,6 +1886,9 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         "independentExecution": True,
         "directSourceEvents": True,
         "monitorRunnerUsed": False,
+        "ruleboxOwnership": "v2-release-frozen",
+        "ruleInventory": rule_inventory,
+        "ruleInventoryReleaseReady": bool(rule_inventory.get("releaseReady")),
     })
     registry_store.update_health(descriptor.deployment_id, existing_health)
 
@@ -1896,8 +1915,8 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
             projection_recorder,
             shared_inference_service=shared_inference_service,
         ),
-        candidate_builder=GraphDecisionCandidateBuilder(
-            RealtimeMonitor(candidate_settings),
+        candidate_builder=V2GraphDecisionCandidateBuilder(
+            candidate_settings,
             monitor_store,
         ),
         cycle_recorder=stores.monitoring_cycle_recorder(

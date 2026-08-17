@@ -193,6 +193,7 @@ CLASS_CONTEXT_OVERRIDES: Dict[str, str] = {
     "FactorExposure": "risk-exposure",
     "InvestmentQuestion": "decision-intelligence",
     "HypothesisSet": "decision-intelligence",
+    "DecisionSynthesis": "decision-intelligence",
     "DecisionGuardrail": "decision-intelligence",
     "DecisionAbstention": "decision-intelligence",
     "DecisionEpisode": "decision-intelligence",

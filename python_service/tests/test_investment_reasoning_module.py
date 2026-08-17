@@ -1,15 +1,24 @@
+import inspect
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.investment_reasoning import InvestmentReasoningOrchestrator
+from digital_twin.application.investment_reasoning import (
+    InvestmentReasoningOrchestrator,
+    V2GraphDecisionCandidateBuilder,
+)
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
 from digital_twin.domain.investment_reasoning import (
     CASE_BLOCKED,
+    CASE_DECISION_SYNTHESIZED,
     CASE_PUBLISHED,
     CASE_VALIDATED,
     FactDelta,
     GraphHypothesisManager,
+    DecisionSynthesis,
+    ActionAlternative,
+    decision_synthesis_from_relation_context,
+    reasoning_rule_inventory,
 )
 
 
@@ -72,6 +81,107 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
 
 
 class InvestmentReasoningModuleTests(unittest.TestCase):
+    def test_v2_candidate_builder_has_no_v1_monitor_dependency(self):
+        source = inspect.getsource(V2GraphDecisionCandidateBuilder)
+
+        self.assertNotIn("RealtimeMonitor", source)
+        self.assertNotIn("events_for_snapshot", source)
+
+    def test_typedb_relation_context_becomes_auditable_action_alternatives(self):
+        relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]
+        relation.update({
+            "subject": {"symbol": "NVDA", "name": "NVIDIA"},
+            "sourceAboxSnapshotId": "abox:1",
+            "inferenceGenerationId": "generation:1",
+            "generationAligned": True,
+            "allowedActions": ["BUY", "WATCH"],
+            "blockedActions": ["SELL"],
+            "decision": {
+                "candidateAction": "BUY",
+                "selectedRuleId": "graph.price.recovery.v1",
+                "nextChecks": ["volume confirmation"],
+            },
+            "graphStoreInference": {
+                "traces": [{"id": "trace:1"}],
+                "relations": [{
+                    "ruleId": "graph.price.recovery.v1",
+                    "candidateAction": "BUY",
+                }],
+            },
+        })
+
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+
+        self.assertEqual("BUY", synthesis.graph_candidate_action)
+        self.assertEqual(("hypothesis:recovery",), synthesis.eligible_hypothesis_ids)
+        self.assertEqual(["BUY"], [item.action for item in synthesis.alternatives])
+        self.assertTrue(synthesis.graph_trace_complete)
+        self.assertIn("SELL", synthesis.blocked_actions)
+
+    def test_reasoning_case_persists_decision_synthesis_before_ai(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [hypothesis_candidate()])
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:1",
+            account_id="account:1",
+            symbol="NVDA",
+            source_abox_snapshot_id="abox:1",
+            inference_generation_id="generation:1",
+            graph_candidate_action="BUY",
+            allowed_actions=("BUY", "WATCH"),
+            alternatives=(ActionAlternative(
+                action="BUY",
+                hypothesis_ids=("hypothesis:recovery",),
+                decision_eligible=True,
+            ),),
+            eligible_hypothesis_ids=("hypothesis:recovery",),
+        )
+
+        synthesized = orchestrator.decisions_synthesized(reasoning_case.case_id, [synthesis])
+
+        self.assertEqual(CASE_DECISION_SYNTHESIZED, synthesized.stage)
+        self.assertEqual("synthesis:1", synthesized.to_dict()["decisionSyntheses"][0]["synthesis_id"])
+        self.assertEqual(
+            "BUY",
+            orchestrator.compact_context(synthesized)["decisionSyntheses"][0]["graphCandidateAction"],
+        )
+
+    def test_rule_inventory_exposes_unroutable_rules_before_release(self):
+        inventory = reasoning_rule_inventory([{
+            "rule_id": "graph.complete.v1",
+            "enabled": True,
+            "domain_manifest": {
+                "module": "decision-intelligence",
+                "dependencyContractVersion": "v2",
+                "triggerDependencies": [{"conditionId": "price"}],
+                "derivedOutputs": [{"relationType": "SUPPORTS"}],
+                "invalidationContract": {"mode": "not-materialized"},
+                "executionStage": "critical",
+                "lifecycleClass": "hot",
+                "decisionEffects": ["support"],
+            },
+        }, {
+            "rule_id": "graph.incomplete.v1",
+            "enabled": True,
+        }])
+
+        self.assertEqual(2, inventory["ruleCount"])
+        self.assertEqual(1, inventory["invalidRuleCount"])
+        self.assertFalse(inventory["releaseReady"])
+
     def test_fact_delta_routes_market_price_to_realtime_lane(self):
         delta = FactDelta.from_request(reasoning_request())
 

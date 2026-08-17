@@ -91,6 +91,7 @@ ONTOLOGY_CONTEXT_KEYS = (
     "ontologyWorldview",
     "activeInvestmentOpinion",
     "ontologyReviewContext",
+    "v2DecisionSynthesis",
 )
 PROMOTED_REFERENCE_LABELS = (
     "상태",

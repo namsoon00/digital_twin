@@ -13,6 +13,7 @@ from ...domain.investment_reasoning import (
     CASE_COMPLETED,
     CASE_CREATED,
     CASE_DEFERRED,
+    CASE_DECISION_SYNTHESIZED,
     CASE_HYPOTHESES_READY,
     CASE_INFERENCE_COMPLETED,
     CASE_INPUT_READY,
@@ -22,6 +23,7 @@ from ...domain.investment_reasoning import (
     GraphHypothesisManager,
     InferenceResult,
     ReasoningCase,
+    DecisionSynthesis,
 )
 
 
@@ -120,6 +122,34 @@ class InvestmentReasoningOrchestrator:
         self.repository.save(reasoning_case)
         return reasoning_case
 
+    def decisions_synthesized(
+        self,
+        case_id: str,
+        syntheses: Iterable[object],
+    ) -> ReasoningCase:
+        reasoning_case = self.required(case_id)
+        indexed = {}
+        for item in syntheses or []:
+            synthesis = item if isinstance(item, DecisionSynthesis) else DecisionSynthesis.from_dict(item)
+            if synthesis.synthesis_id:
+                indexed[synthesis.synthesis_id] = synthesis
+        reasoning_case.decision_syntheses = tuple(indexed[key] for key in sorted(indexed))
+        if reasoning_case.stage == CASE_HYPOTHESES_READY:
+            reasoning_case.transition(
+                CASE_DECISION_SYNTHESIZED,
+                "typedb-action-alternatives-synthesized",
+                {
+                    "synthesisCount": len(reasoning_case.decision_syntheses),
+                    "eligibleHypothesisCount": len({
+                        hypothesis_id
+                        for synthesis in reasoning_case.decision_syntheses
+                        for hypothesis_id in synthesis.eligible_hypothesis_ids
+                    }),
+                },
+            )
+        self.repository.save(reasoning_case)
+        return reasoning_case
+
     def attach_case_context(self, case_id: str, events: Iterable[object]) -> None:
         reasoning_case = self.required(case_id)
         compact = self.compact_context(reasoning_case)
@@ -156,7 +186,7 @@ class InvestmentReasoningOrchestrator:
         reasoning_case = self.required(case_id)
         reasoning_case.ai_request_id = str(request_id or "")
         reasoning_case.notification_job_id = str(notification_job_id or "")
-        if reasoning_case.stage == CASE_HYPOTHESES_READY:
+        if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
             reasoning_case.transition(CASE_AI_PENDING, "ai-judgment-queued")
         self.repository.save(reasoning_case)
         return reasoning_case
@@ -174,7 +204,7 @@ class InvestmentReasoningOrchestrator:
         reasoning_case.ai_judgment = judgment
         reasoning_case.ai_request_id = judgment.request_id
         reasoning_case.notification_job_id = str(getattr(request, "notification_job_id", "") or "")
-        if reasoning_case.stage == CASE_HYPOTHESES_READY:
+        if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
             reasoning_case.transition(CASE_AI_PENDING, "ai-judgment-recovered")
         if reasoning_case.stage == CASE_AI_PENDING:
             reasoning_case.transition(CASE_AI_COMPLETED, "ai-judgment-completed")
@@ -231,7 +261,7 @@ class InvestmentReasoningOrchestrator:
             return None
         reasoning_case = self.required(case_id)
         reasoning_case.record_error(CASE_AI_PENDING, reason, False)
-        if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_AI_PENDING}:
+        if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED, CASE_AI_PENDING}:
             reasoning_case.transition(CASE_BLOCKED, "ai-judgment-failed")
         self.repository.save(reasoning_case)
         return reasoning_case
@@ -247,7 +277,7 @@ class InvestmentReasoningOrchestrator:
             reason=str(reason or ""),
             published=False,
         )
-        if reasoning_case.stage == CASE_HYPOTHESES_READY:
+        if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
             reasoning_case.transition(CASE_COMPLETED, reason)
         self.repository.save(reasoning_case)
         return reasoning_case
@@ -261,6 +291,32 @@ class InvestmentReasoningOrchestrator:
             return False, "TypeDB hypothesis set is empty; AI publication is not allowed."
         if judgment.selected_hypothesis_id not in hypothesis_ids:
             return False, "AI selected hypothesis is not present in the TypeDB hypothesis set."
+        if reasoning_case.decision_syntheses:
+            eligible_ids = {
+                hypothesis_id
+                for synthesis in reasoning_case.decision_syntheses
+                for hypothesis_id in synthesis.eligible_hypothesis_ids
+            }
+            if judgment.selected_hypothesis_id not in eligible_ids:
+                return False, "AI selected hypothesis is reference-only in the TypeDB decision synthesis."
+            blocked_actions = {
+                action
+                for synthesis in reasoning_case.decision_syntheses
+                for action in synthesis.blocked_actions
+            }
+            if judgment.action in blocked_actions:
+                return False, "AI judgment action is blocked by the TypeDB action envelope."
+            applicable = [
+                synthesis for synthesis in reasoning_case.decision_syntheses
+                if judgment.selected_hypothesis_id in synthesis.eligible_hypothesis_ids
+            ]
+            allowed_actions = {
+                action
+                for synthesis in applicable
+                for action in synthesis.allowed_actions
+            }
+            if allowed_actions and judgment.action not in allowed_actions:
+                return False, "AI judgment action is outside the TypeDB action envelope."
         if str(judgment.validation_state or "").lower() in {"blocked", "invalid", "failed", "error"}:
             return False, "AI judgment validation state blocks publication."
         return True, ""
@@ -279,6 +335,25 @@ class InvestmentReasoningOrchestrator:
             "sourceAboxSnapshotIds": list(inference.source_abox_snapshot_ids) if inference else [],
             "inferenceGenerationIds": list(inference.inference_generation_ids) if inference else [],
             "hypothesisIds": [item.hypothesis_id for item in reasoning_case.hypotheses],
+            "decisionSyntheses": [
+                {
+                    "synthesisId": item.synthesis_id,
+                    "symbol": item.symbol,
+                    "graphCandidateAction": item.graph_candidate_action,
+                    "allowedActions": list(item.allowed_actions),
+                    "blockedActions": list(item.blocked_actions),
+                    "eligibleHypothesisIds": list(item.eligible_hypothesis_ids),
+                    "alternatives": [
+                        {
+                            "action": alternative.action,
+                            "hypothesisIds": list(alternative.hypothesis_ids),
+                            "decisionEligible": alternative.decision_eligible,
+                        }
+                        for alternative in item.alternatives
+                    ],
+                }
+                for item in reasoning_case.decision_syntheses
+            ],
             "contractVersion": reasoning_case.contract_version,
         }
 

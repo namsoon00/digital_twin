@@ -8,10 +8,11 @@ from typing import Dict, Iterable, Mapping, Tuple
 from ..ontology_change_impact import requested_scope_families_for_event_fact_types
 
 
-INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v1"
+INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v2"
 FACT_DELTA_VERSION = "investment-fact-delta-v1"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v1"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v1"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -152,6 +153,112 @@ class HypothesisRecord:
             "causal_trace_ids", "assumptions", "invalidation_conditions",
         ]:
             payload[key] = list(payload[key])
+        return payload
+
+
+@dataclass(frozen=True)
+class ActionAlternative:
+    """One graph-authored action path and the hypotheses that support it."""
+
+    action: str
+    hypothesis_ids: Tuple[str, ...] = ()
+    supporting_rule_ids: Tuple[str, ...] = ()
+    supporting_evidence_ids: Tuple[str, ...] = ()
+    counter_evidence_ids: Tuple[str, ...] = ()
+    invalidation_conditions: Tuple[str, ...] = ()
+    decision_eligible: bool = False
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ActionAlternative":
+        payload = dict(value or {})
+        return cls(
+            action=str(payload.get("action") or "").upper(),
+            hypothesis_ids=_texts(payload.get("hypothesis_ids") or payload.get("hypothesisIds")),
+            supporting_rule_ids=_texts(payload.get("supporting_rule_ids") or payload.get("supportingRuleIds")),
+            supporting_evidence_ids=_texts(payload.get("supporting_evidence_ids") or payload.get("supportingEvidenceIds")),
+            counter_evidence_ids=_texts(payload.get("counter_evidence_ids") or payload.get("counterEvidenceIds")),
+            invalidation_conditions=_texts(payload.get("invalidation_conditions") or payload.get("invalidationConditions")),
+            decision_eligible=bool(payload.get("decision_eligible") or payload.get("decisionEligible")),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        for key in [
+            "hypothesis_ids", "supporting_rule_ids", "supporting_evidence_ids",
+            "counter_evidence_ids", "invalidation_conditions",
+        ]:
+            payload[key] = list(payload[key])
+        return payload
+
+
+@dataclass(frozen=True)
+class DecisionSynthesis:
+    """Stable handoff from TypeDB alternatives to the AI judgement boundary."""
+
+    synthesis_id: str
+    account_id: str
+    symbol: str
+    source_abox_snapshot_id: str
+    inference_generation_id: str
+    graph_candidate_action: str = ""
+    allowed_actions: Tuple[str, ...] = ()
+    blocked_actions: Tuple[str, ...] = ()
+    alternatives: Tuple[ActionAlternative, ...] = ()
+    eligible_hypothesis_ids: Tuple[str, ...] = ()
+    reference_hypothesis_ids: Tuple[str, ...] = ()
+    selected_rule_id: str = ""
+    review_level: str = ""
+    data_state: str = ""
+    change_state: str = ""
+    conflict_state: str = ""
+    missing_data: Tuple[str, ...] = ()
+    next_checks: Tuple[str, ...] = ()
+    reversal_conditions: Tuple[str, ...] = ()
+    judgement_blocked: bool = False
+    graph_trace_complete: bool = False
+    version: str = DECISION_SYNTHESIS_VERSION
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "DecisionSynthesis":
+        payload = dict(value or {})
+        return cls(
+            synthesis_id=str(payload.get("synthesis_id") or payload.get("synthesisId") or ""),
+            account_id=str(payload.get("account_id") or payload.get("accountId") or ""),
+            symbol=str(payload.get("symbol") or "").upper(),
+            source_abox_snapshot_id=str(payload.get("source_abox_snapshot_id") or payload.get("sourceAboxSnapshotId") or ""),
+            inference_generation_id=str(payload.get("inference_generation_id") or payload.get("inferenceGenerationId") or ""),
+            graph_candidate_action=str(payload.get("graph_candidate_action") or payload.get("graphCandidateAction") or "").upper(),
+            allowed_actions=_texts(payload.get("allowed_actions") or payload.get("allowedActions"), uppercase=True),
+            blocked_actions=_texts(payload.get("blocked_actions") or payload.get("blockedActions"), uppercase=True),
+            alternatives=tuple(
+                ActionAlternative.from_dict(item)
+                for item in payload.get("alternatives") or []
+                if isinstance(item, Mapping)
+            ),
+            eligible_hypothesis_ids=_texts(payload.get("eligible_hypothesis_ids") or payload.get("eligibleHypothesisIds")),
+            reference_hypothesis_ids=_texts(payload.get("reference_hypothesis_ids") or payload.get("referenceHypothesisIds")),
+            selected_rule_id=str(payload.get("selected_rule_id") or payload.get("selectedRuleId") or ""),
+            review_level=str(payload.get("review_level") or payload.get("reviewLevel") or ""),
+            data_state=str(payload.get("data_state") or payload.get("dataState") or ""),
+            change_state=str(payload.get("change_state") or payload.get("changeState") or ""),
+            conflict_state=str(payload.get("conflict_state") or payload.get("conflictState") or ""),
+            missing_data=_texts(payload.get("missing_data") or payload.get("missingData")),
+            next_checks=_texts(payload.get("next_checks") or payload.get("nextChecks")),
+            reversal_conditions=_texts(payload.get("reversal_conditions") or payload.get("reversalConditions")),
+            judgement_blocked=bool(payload.get("judgement_blocked") or payload.get("judgementBlocked")),
+            graph_trace_complete=bool(payload.get("graph_trace_complete") or payload.get("graphTraceComplete")),
+            version=str(payload.get("version") or DECISION_SYNTHESIS_VERSION),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        for key in [
+            "allowed_actions", "blocked_actions", "eligible_hypothesis_ids",
+            "reference_hypothesis_ids", "missing_data", "next_checks",
+            "reversal_conditions",
+        ]:
+            payload[key] = list(payload[key])
+        payload["alternatives"] = [item.to_dict() for item in self.alternatives]
         return payload
 
 

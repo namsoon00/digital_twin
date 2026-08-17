@@ -13036,6 +13036,22 @@
     return { label: value || "확인", tone: "hold" };
   }
 
+  function consoleMetricTargetAttributes(target) {
+    target = target && typeof target === "object" ? target : {};
+    var type = String(target.type || "").trim();
+    if (!type) return "";
+    var attributes = ' data-console-metric-target="' + escapeHtml(type) + '"';
+    if (target.value != null) attributes += ' data-console-metric-value="' + escapeHtml(String(target.value)) + '"';
+    if (target.key != null) attributes += ' data-console-metric-key="' + escapeHtml(String(target.key)) + '"';
+    if (target.scope != null) attributes += ' data-console-metric-scope="' + escapeHtml(String(target.scope)) + '"';
+    if (target.quality != null) attributes += ' data-console-metric-quality="' + escapeHtml(String(target.quality)) + '"';
+    if (type === "detail") {
+      attributes += ' data-work-detail="' + escapeHtml(String(target.value || "")) + '"';
+      attributes += ' data-work-detail-key="' + escapeHtml(String(target.key || "")) + '"';
+    }
+    return attributes;
+  }
+
   function renderConsoleMetricStrip(metrics) {
     var options = arguments.length > 1 && arguments[1] ? arguments[1] : {};
     var loading = Boolean(options.loading);
@@ -13051,16 +13067,93 @@
             '</div>'
           ].join("");
         }
+        var targetAttributes = consoleMetricTargetAttributes(metric.target);
+        var interactive = Boolean(targetAttributes);
+        var tag = interactive ? "button" : "div";
         return [
-          '<div class="oa-metric ' + escapeHtml(metric.tone || "neutral") + '">',
+          '<' + tag + (interactive ? ' type="button"' : '') + ' class="oa-metric ' + escapeHtml(metric.tone || "neutral") + (interactive ? ' is-link' : '') + '"' + targetAttributes + (interactive ? ' aria-label="' + escapeHtml([metric.label || "지표", metric.value == null ? "" : metric.value, "상세 보기"].filter(Boolean).join(" ")) + '"' : '') + '>',
           '<span>' + escapeHtml(metric.label || "-") + '</span>',
           '<strong>' + escapeHtml(metric.value == null ? "-" : metric.value) + '</strong>',
           '<em>' + escapeHtml(metric.detail || "") + '</em>',
-          '</div>'
+          interactive ? '<i class="oa-metric-arrow" aria-hidden="true">&rarr;</i>' : '',
+          '</' + tag + '>'
         ].join("");
       }).join(""),
       '</section>'
     ].join("");
+  }
+
+  function focusConsoleMetricDestination(name) {
+    var destination = String(name || "");
+    if (!destination) return;
+    window.setTimeout(function () {
+      var target = Array.prototype.slice.call(app.querySelectorAll("[data-console-monitor-destination]")).filter(function (node) {
+        return node.getAttribute("data-console-monitor-destination") === destination;
+      })[0];
+      if (!target) return;
+      if (target.scrollIntoView) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (target.focus) focusElementWithoutScroll(target);
+    }, 90);
+  }
+
+  function activateConsoleMetricTarget(button) {
+    if (!button) return false;
+    var type = String(button.getAttribute("data-console-metric-target") || "");
+    var value = String(button.getAttribute("data-console-metric-value") || "");
+    var key = String(button.getAttribute("data-console-metric-key") || "");
+    var scope = String(button.getAttribute("data-console-metric-scope") || "");
+    var quality = String(button.getAttribute("data-console-metric-quality") || "");
+    if (type === "detail") {
+      openWorkDetailLayer(value, key);
+      return true;
+    }
+    if (type === "tab") {
+      navigateToTab(value);
+      return true;
+    }
+    if (type === "market") {
+      state.marketWorkspaceMode = normalizeMarketWorkspaceMode(value);
+      state.consoleMarketScope = scope || "all";
+      state.consoleMarketSearch = "";
+      state.consolePages.market = 1;
+      if (state.activeTab !== "feed") navigateToTab("feed");
+      else render({ transition: "section" });
+      writeMarketWorkspaceHistory(state.marketWorkspaceMode);
+      if (state.marketWorkspaceMode === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) loadSymbolUniverse();
+      focusConsoleMetricDestination("market");
+      return true;
+    }
+    if (type === "decision") {
+      state.consoleDecisionSearch = "";
+      state.consoleDecisionScope = "all";
+      state.consoleDecisionAction = value || "all";
+      state.consoleDecisionQuality = quality || "all";
+      state.consolePages.decision = 1;
+      render({ transition: "section" });
+      focusConsoleMetricDestination("decisions");
+      return true;
+    }
+    if (type === "notification") {
+      state.notificationJobSearch = "";
+      state.notificationInboxFilter = value || "all";
+      state.notificationJobStatusFilter = scope || "all";
+      state.notificationJobTypeFilter = "all";
+      resetNotificationJobsPaging();
+      loadNotificationJobs();
+      render({ transition: "section" });
+      focusConsoleMetricDestination("alerts");
+      return true;
+    }
+    if (type === "anchor") {
+      focusConsoleMetricDestination(value);
+      return true;
+    }
+    if (type === "calendar-entry") {
+      state.calendarEntryModalOpen = true;
+      render({ transition: "detail-open" });
+      return true;
+    }
+    return false;
   }
 
   function renderConsoleSurface(options) {
@@ -13337,7 +13430,9 @@
       var isWatch = row.source === "watchlist";
       if (scope === "holding" && isWatch) return false;
       if (scope === "watchlist" && !isWatch) return false;
-      if (action !== "all" && row.actionCode !== action) return false;
+      if (action === "BUY_REVIEW" && row.actionCode !== "BUY" && row.actionCode !== "ADD") return false;
+      if (action === "SELL_REVIEW" && row.actionCode !== "SELL" && row.actionCode !== "TRIM") return false;
+      if (action !== "all" && action !== "BUY_REVIEW" && action !== "SELL_REVIEW" && row.actionCode !== action) return false;
       if (quality === "actual" && (row.isMock || row.quality.label !== "실데이터")) return false;
       if (quality === "mock" && !row.isMock) return false;
       if (quality === "issue" && row.quality.tone !== "danger" && row.quality.tone !== "caution") return false;
@@ -13525,11 +13620,11 @@
       return recordChangedAt(item, snapshot.generatedAt);
     }).slice(0, 5);
     var metrics = [
-      { label: "총 평가", value: formatMoney(portfolio.total), detail: portfolio.holdingCount + "개 보유" },
-      { label: "평가 손익", value: portfolio.pnlAvailable ? formatMoney(portfolio.pnl) : "-", detail: portfolio.pnlAvailable ? "현재 보유 기준" : "손익 미수집", tone: portfolio.pnl < 0 ? "danger" : "watch" },
-      { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch" },
-      { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음" },
-      { label: "데이터", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone }
+      { label: "총 평가", value: formatMoney(portfolio.total), detail: portfolio.holdingCount + "개 보유", target: { type: "market", value: "mine", scope: "holding" } },
+      { label: "평가 손익", value: portfolio.pnlAvailable ? formatMoney(portfolio.pnl) : "-", detail: portfolio.pnlAvailable ? "현재 보유 기준" : "손익 미수집", tone: portfolio.pnl < 0 ? "danger" : "watch", target: { type: "market", value: "mine", scope: "holding" } },
+      { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch", target: { type: "detail", value: "today-work-queue" } },
+      { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음", target: upcoming[0] ? { type: "detail", value: "investment-calendar-event", key: upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "" } : { type: "tab", value: "calendar" } },
+      { label: "데이터", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone, target: { type: "detail", value: "feed-source-board" } }
     ];
     var taskBody = tasks.length ? '<div class="oa-work-list" data-console-keyed-list="today-primary">' + tasks.slice(0, 8).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("오늘 처리할 작업이 없습니다", "새 판단, 알림 실패, 예정 일정이 생기면 우선순위에 따라 표시합니다.");
     var contextBody = [
@@ -13660,11 +13755,11 @@
       tone: quoteReady ? "warn" : "caution"
     };
     var metrics = [
-      { label: "보유 종목", value: portfolio.holdingCount + "개", detail: "계정 기준" },
-      { label: "관심 종목", value: portfolio.watchCount + "개", detail: "중복 제거" },
-      { label: "저장 근거", value: evidence.length + "건", detail: "뉴스·공시" },
-      { label: "주요 악재", value: negative + "건", detail: "영향 분석", tone: negative ? "danger" : "watch" },
-      { label: "시세 상태", value: quoteState.label, detail: quoteState.detail, tone: quoteState.tone }
+      { label: "보유 종목", value: portfolio.holdingCount + "개", detail: "계정 기준", target: { type: "market", value: "mine", scope: "holding" } },
+      { label: "관심 종목", value: portfolio.watchCount + "개", detail: "중복 제거", target: { type: "market", value: "mine", scope: "watchlist" } },
+      { label: "저장 근거", value: evidence.length + "건", detail: "뉴스·공시", target: { type: "market", value: "news" } },
+      { label: "주요 악재", value: negative + "건", detail: "영향 분석", tone: negative ? "danger" : "watch", target: { type: "market", value: "news" } },
+      { label: "시세 상태", value: quoteState.label, detail: quoteState.detail, tone: quoteState.tone, target: { type: "detail", value: "feed-source-board" } }
     ];
     var mode = normalizeMarketWorkspaceMode(state.marketWorkspaceMode);
     var workspace = mode === "universe"
@@ -13674,7 +13769,7 @@
         : (mode === "news" ? renderMarketNewsWorkspace(evidence) : renderMarketMineWorkspace(snapshot, rows)));
     return renderConsoleManagedPage("feed", metrics, [
       renderMarketWorkspaceNavigation(),
-      '<div class="market-workspace market-workspace-' + escapeHtml(mode) + '">',
+      '<div class="market-workspace market-workspace-' + escapeHtml(mode) + '" data-console-monitor-destination="market" tabindex="-1">',
       workspace,
       '</div>'
     ].join(""));
@@ -13700,7 +13795,7 @@
       '<form class="oa-filter-bar oa-decision-filter" data-console-decision-form>',
       '<label><span>판단 검색</span><input type="search" data-console-decision-search value="' + escapeHtml(state.consoleDecisionSearch || "") + '" placeholder="종목명, 코드, 근거" /></label>',
       '<label><span>범위</span><select data-console-decision-filter="scope"><option value="all"' + (state.consoleDecisionScope === "all" ? " selected" : "") + '>전체</option><option value="holding"' + (state.consoleDecisionScope === "holding" ? " selected" : "") + '>보유</option><option value="watchlist"' + (state.consoleDecisionScope === "watchlist" ? " selected" : "") + '>관심</option></select></label>',
-      '<label><span>행동</span><select data-console-decision-filter="action"><option value="all"' + (state.consoleDecisionAction === "all" ? " selected" : "") + '>전체 행동</option><option value="BUY"' + (state.consoleDecisionAction === "BUY" ? " selected" : "") + '>매수</option><option value="ADD"' + (state.consoleDecisionAction === "ADD" ? " selected" : "") + '>추가매수</option><option value="HOLD"' + (state.consoleDecisionAction === "HOLD" ? " selected" : "") + '>유지</option><option value="TRIM"' + (state.consoleDecisionAction === "TRIM" ? " selected" : "") + '>축소</option><option value="SELL"' + (state.consoleDecisionAction === "SELL" ? " selected" : "") + '>매도</option><option value="BLOCKED"' + (state.consoleDecisionAction === "BLOCKED" ? " selected" : "") + '>보류</option></select></label>',
+      '<label><span>행동</span><select data-console-decision-filter="action"><option value="all"' + (state.consoleDecisionAction === "all" ? " selected" : "") + '>전체 행동</option><option value="BUY_REVIEW"' + (state.consoleDecisionAction === "BUY_REVIEW" ? " selected" : "") + '>매수 검토 전체</option><option value="SELL_REVIEW"' + (state.consoleDecisionAction === "SELL_REVIEW" ? " selected" : "") + '>매도 검토 전체</option><option value="BUY"' + (state.consoleDecisionAction === "BUY" ? " selected" : "") + '>매수</option><option value="ADD"' + (state.consoleDecisionAction === "ADD" ? " selected" : "") + '>추가매수</option><option value="HOLD"' + (state.consoleDecisionAction === "HOLD" ? " selected" : "") + '>유지</option><option value="TRIM"' + (state.consoleDecisionAction === "TRIM" ? " selected" : "") + '>축소</option><option value="SELL"' + (state.consoleDecisionAction === "SELL" ? " selected" : "") + '>매도</option><option value="BLOCKED"' + (state.consoleDecisionAction === "BLOCKED" ? " selected" : "") + '>보류</option></select></label>',
       '<label><span>데이터</span><select data-console-decision-filter="quality"><option value="all"' + (state.consoleDecisionQuality === "all" ? " selected" : "") + '>전체 품질</option><option value="actual"' + (state.consoleDecisionQuality === "actual" ? " selected" : "") + '>실데이터</option><option value="mock"' + (state.consoleDecisionQuality === "mock" ? " selected" : "") + '>Mock</option><option value="issue"' + (state.consoleDecisionQuality === "issue" ? " selected" : "") + '>지연·부족</option></select></label>',
       '</form>'
     ].join("");
@@ -13728,11 +13823,11 @@
     var buy = allRows.filter(function (row) { return row.actionCode === "BUY" || row.actionCode === "ADD"; }).length;
     var sell = allRows.filter(function (row) { return row.actionCode === "SELL" || row.actionCode === "TRIM"; }).length;
     var metrics = [
-      { label: "판단 후보", value: allRows.length + "건", detail: "현재 상태" },
-      { label: "매수 검토", value: buy + "건", detail: "조건 확인", tone: buy ? "watch" : "neutral" },
-      { label: "매도 검토", value: sell + "건", detail: "위험 관리", tone: sell ? "danger" : "neutral" },
-      { label: "판단 보류", value: blocked.length + "건", detail: "관계 분석 대기", tone: blocked.length ? "caution" : "watch" },
-      { label: "근거 준비", value: allRows.filter(function (row) { return row.quality.tone === "watch" && !row.isMock; }).length + "/" + allRows.length, detail: "실데이터" }
+      { label: "판단 후보", value: allRows.length + "건", detail: "현재 상태", target: { type: "decision", value: "all", quality: "all" } },
+      { label: "매수 검토", value: buy + "건", detail: "조건 확인", tone: buy ? "watch" : "neutral", target: { type: "decision", value: "BUY_REVIEW", quality: "all" } },
+      { label: "매도 검토", value: sell + "건", detail: "위험 관리", tone: sell ? "danger" : "neutral", target: { type: "decision", value: "SELL_REVIEW", quality: "all" } },
+      { label: "판단 보류", value: blocked.length + "건", detail: "관계 분석 대기", tone: blocked.length ? "caution" : "watch", target: { type: "decision", value: "BLOCKED", quality: "all" } },
+      { label: "근거 준비", value: allRows.filter(function (row) { return row.quality.tone === "watch" && !row.isMock; }).length + "/" + allRows.length, detail: "실데이터", target: { type: "decision", value: "all", quality: "actual" } }
     ];
     var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="decision-primary"><div class="oa-table-head oa-decision-row"><span>종목</span><span>행동·확인 단계</span><span>핵심 근거</span><span>자료·검증</span></div>' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 판단이 없습니다", "검색어 또는 필터를 조정하세요.", renderWorkDetailButton("strategy-trace-board", "", "추론 상태", "text-button compact"));
     var reviewNeeded = rows.filter(function (row) { return row.blocked || row.dataState !== "sufficient" || row.validationState !== "ready"; });
@@ -13743,7 +13838,7 @@
     }).join("") + '</div>' : renderConsoleEmpty("추가 확인 요인이 없습니다", "현재 판단 후보는 필요한 자료와 검증 상태를 갖추고 있습니다.");
     return renderConsoleManagedPage("modeling", metrics, [
       renderDecisionFilterToolbar(),
-      '<div class="oa-console-grid oa-decision-grid">',
+      '<div class="oa-console-grid oa-decision-grid" data-console-monitor-destination="decisions" tabindex="-1">',
       renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "보유·관심 종목별로 지금 검토할 행동과 이유를 보여줍니다. 자동 주문은 하지 않습니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
       renderConsoleSurface({ kicker: "REVIEW", title: "판단 전 확인할 것", description: "자료나 관계 분석이 아직 준비되지 않은 종목을 따로 보여줍니다.", actions: reviewNeeded.length ? renderWorkDetailButton("strategy-trace-board", "", "검증 전체", "text-button compact") : "", body: renderConsoleLiveRegion("decision-blocker-body", blockers) }),
       '</div>'
@@ -13797,16 +13892,18 @@
     var inbox = state.notificationInboxSummary || {};
     var initialLoading = !state.notificationJobsLoaded && !state.notificationJobsError;
     var metrics = [
-      { label: "읽지 않음", value: Number(inbox.unread || 0) + "건", detail: "내 알림", tone: Number(inbox.unread || 0) ? "caution" : "watch" },
-      { label: "중요", value: Number(inbox.important || 0) + "건", detail: "직접 표시", tone: Number(inbox.important || 0) ? "watch" : "neutral" },
-      { label: "확인 필요", value: Number(inbox.actionRequired || 0) + "건", detail: "미확인 변화", tone: Number(inbox.actionRequired || 0) ? "danger" : "watch" },
-      { label: "전체 알림", value: Number(inbox.total || state.notificationJobsTotal || 0) + "건", detail: "최신순" },
-      { label: "전송 실패", value: Number(summary.failed || 0) + "건", detail: "전달 상태", tone: Number(summary.failed || 0) ? "danger" : "watch" }
+      { label: "읽지 않음", value: Number(inbox.unread || 0) + "건", detail: "내 알림", tone: Number(inbox.unread || 0) ? "caution" : "watch", target: { type: "notification", value: "unread" } },
+      { label: "중요", value: Number(inbox.important || 0) + "건", detail: "직접 표시", tone: Number(inbox.important || 0) ? "watch" : "neutral", target: { type: "notification", value: "important" } },
+      { label: "확인 필요", value: Number(inbox.actionRequired || 0) + "건", detail: "미확인 변화", tone: Number(inbox.actionRequired || 0) ? "danger" : "watch", target: { type: "notification", value: "action" } },
+      { label: "전체 알림", value: Number(inbox.total || state.notificationJobsTotal || 0) + "건", detail: "최신순", target: { type: "notification", value: "all" } },
+      { label: "전송 실패", value: Number(summary.failed || 0) + "건", detail: "전달 상태", tone: Number(summary.failed || 0) ? "danger" : "watch", target: { type: "notification", value: "all", scope: "failed" } }
     ];
     var toolbar = renderNotificationJobFilterToolbar(state.notificationJobItems || [], filteredNotificationJobs(state.notificationJobItems || []));
     var table = rows.length ? '<div class="oa-data-table" data-console-keyed-list="alerts-ledger"><div class="oa-table-head oa-alert-row"><span>시각</span><span>대상·유형</span><span>발송 판단</span><span>알림이 온 이유</span><span>상태</span><span></span></div>' + rows.map(renderAlertConsoleRow).join("") + '</div>' : (initialLoading ? renderConsoleListSkeleton("oa-alert-row", ["시각", "대상·유형", "발송 판단", "알림이 온 이유", "상태", ""], 5) : renderConsoleEmpty(state.notificationJobsError ? "알림 판단을 불러오지 못했습니다" : "조건에 맞는 알림이 없습니다", state.notificationJobsError || "검색어와 발송 상태를 조정하거나 알림 워커 상태를 확인하세요.", renderWorkDetailButton("notification-diagnostics-board", "", "알림 진단", "text-button compact")));
     return renderConsoleManagedPage("notifications", metrics, [
-      renderConsoleSurface({ kicker: "PERSONAL INBOX", title: "알림함", description: "상태 변화 이력을 읽지 않음과 중요 표시로 관리합니다.", actions: '<button class="text-button compact" type="button" data-action="mark-all-notifications-read">모두 읽음</button>' + renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderNotificationJobPager() })
+      '<div data-console-monitor-destination="alerts" tabindex="-1">',
+      renderConsoleSurface({ kicker: "PERSONAL INBOX", title: "알림함", description: "상태 변화 이력을 읽지 않음과 중요 표시로 관리합니다.", actions: '<button class="text-button compact" type="button" data-action="mark-all-notifications-read">모두 읽음</button>' + renderWorkDetailButton("notification-policy-board", "", "알림 정책", "text-button compact"), body: toolbar + renderConsoleLiveRegion("alerts-ledger-body", table), footer: renderNotificationJobPager() }),
+      '</div>'
     ].join(""), { loading: initialLoading });
   }
 
@@ -13857,11 +13954,11 @@
     var warningCount = rows.reduce(function (sum, row) { return sum + row.warnings; }, 0);
     var initialLoading = !state.ontologyExperimentsLoaded && !state.ontologyExperimentsError;
     var metrics = [
-      { label: "활성 실험", value: Number(experimentPayload.activeCount || rows.filter(function (row) { return row.status === "active"; }).length) + "개", detail: "샌드박스" },
-      { label: "검토 필요", value: rows.filter(function (row) { return row.warnings || row.status === "needs-review"; }).length + "건", detail: "승격 전", tone: warningCount ? "caution" : "watch" },
-      { label: "ABox", value: parts.aboxEntities.length + "개", detail: "현재 엔티티" },
-      { label: "관계", value: parts.aboxRelations.length + "개", detail: "TypeDB 투영" },
-      { label: "구조 경고", value: warningCount + "건", detail: "실험 합계", tone: warningCount ? "danger" : "watch" }
+      { label: "활성 실험", value: Number(experimentPayload.activeCount || rows.filter(function (row) { return row.status === "active"; }).length) + "개", detail: "샌드박스", target: { type: "detail", value: "experiment-validation-board" } },
+      { label: "검토 필요", value: rows.filter(function (row) { return row.warnings || row.status === "needs-review"; }).length + "건", detail: "승격 전", tone: warningCount ? "caution" : "watch", target: { type: "detail", value: "experiment-promotion-board" } },
+      { label: "ABox", value: parts.aboxEntities.length + "개", detail: "현재 엔티티", target: { type: "detail", value: "strategy-graphs-board" } },
+      { label: "관계", value: parts.aboxRelations.length + "개", detail: "TypeDB 투영", target: { type: "detail", value: "strategy-graphs-board" } },
+      { label: "구조 경고", value: warningCount + "건", detail: "실험 합계", tone: warningCount ? "danger" : "watch", target: { type: "detail", value: "experiment-validation-board" } }
     ];
     var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="validation-experiments"><div class="oa-table-head oa-validation-row"><span>실험</span><span>상태</span><span>후보</span><span>관계 변화</span><span>검증·자료</span><span>경고</span><span></span></div>' + page.items.map(renderValidationConsoleRow).join("") + '</div>' : (initialLoading ? renderConsoleListSkeleton("oa-validation-row", ["실험", "상태", "후보", "관계 변화", "검증·자료", "경고", ""], 4) : renderConsoleEmpty(state.ontologyExperimentsError ? "검증 작업을 불러오지 못했습니다" : "등록된 검증 실험이 없습니다", state.ontologyExperimentsError || "AI 실험 제안 또는 새 후보 규칙을 만든 뒤 TypeDB에서 검증하세요.", renderWorkDetailButton("experiment-validation-board", "", "검증 워크벤치", "text-button compact")));
     var graphBody = [
@@ -13909,23 +14006,23 @@
     var section = normalizeSettingsSection(state.activeSettingsSection);
     var activeAccount = activeWatchAccount();
     var metrics = section === "account" ? [
-      { label: "등록 계정", value: accounts.length + "개", detail: "계정별 원장" },
-      { label: "활성 계정", value: activeAccounts.length + "개", detail: "모니터링 대상", tone: activeAccounts.length ? "watch" : "caution" },
-      { label: "현재 계정", value: activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "미선택", detail: activeAccount ? accountIdOf(activeAccount) : "계정 등록 필요" },
-      { label: "관심 종목", value: activeAccount ? accountWatchlistSymbols(activeAccount).length + "개" : "0개", detail: "현재 계정" },
-      { label: "수정 권한", value: state.serverSettingsLocked ? "읽기전용" : "수정 가능", detail: state.serverSettingsLocked ? "공유 화면" : "로컬 소유자", tone: state.serverSettingsLocked ? "caution" : "watch" }
+      { label: "등록 계정", value: accounts.length + "개", detail: "계정별 원장", target: { type: "detail", value: "account-identity-board" } },
+      { label: "활성 계정", value: activeAccounts.length + "개", detail: "모니터링 대상", tone: activeAccounts.length ? "watch" : "caution", target: { type: "detail", value: "account-connections-board" } },
+      { label: "현재 계정", value: activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "미선택", detail: activeAccount ? accountIdOf(activeAccount) : "계정 등록 필요", target: { type: "detail", value: "account-identity-board" } },
+      { label: "관심 종목", value: activeAccount ? accountWatchlistSymbols(activeAccount).length + "개" : "0개", detail: "현재 계정", target: { type: "market", value: "mine", scope: "watchlist" } },
+      { label: "수정 권한", value: state.serverSettingsLocked ? "읽기전용" : "수정 가능", detail: state.serverSettingsLocked ? "공유 화면" : "로컬 소유자", tone: state.serverSettingsLocked ? "caution" : "watch", target: { type: "detail", value: "settings-runtime" } }
     ] : (section === "preferences" ? [
-      { label: "테마", value: appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), detail: "앱 표시" },
-      { label: "시간대", value: currentAppTimezone(), detail: "날짜·캘린더" },
-      { label: "기본 시각", value: settingValue("investmentCalendarCandidateDefaultTime") || defaultSettings.investmentCalendarCandidateDefaultTime || "09:00", detail: "캘린더 후보" },
-      { label: "투자 알림", value: settingValue("notifyProvider") || "telegram", detail: "사용자 채널" },
-      { label: "저장 상태", value: settingsStatusLabel(), detail: "앱 설정 DB", tone: settingsStatusTone() }
+      { label: "테마", value: appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), detail: "앱 표시", target: { type: "detail", value: "settings-preferences" } },
+      { label: "시간대", value: currentAppTimezone(), detail: "날짜·캘린더", target: { type: "detail", value: "settings-preferences" } },
+      { label: "기본 시각", value: settingValue("investmentCalendarCandidateDefaultTime") || defaultSettings.investmentCalendarCandidateDefaultTime || "09:00", detail: "캘린더 후보", target: { type: "detail", value: "settings-preferences" } },
+      { label: "투자 알림", value: settingValue("notifyProvider") || "telegram", detail: "사용자 채널", target: { type: "detail", value: "settings-user-notifications" } },
+      { label: "저장 상태", value: settingsStatusLabel(), detail: "앱 설정 DB", tone: settingsStatusTone(), target: { type: "detail", value: "settings-preferences" } }
     ] : [
-      { label: "데이터 소스", value: sources.filter(function (source) { return source.tone === "watch"; }).length + "/" + sources.length, detail: "정상·준비" },
-      { label: "운영 이상", value: failures + "건", detail: "확인 필요", tone: failures ? "danger" : "watch" },
-      { label: "실시간", value: state.realtime.connected ? "연결" : "폴링", detail: "WebSocket", tone: state.realtime.connected ? "watch" : "caution" },
-      { label: "외부 API", value: configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", detail: "키 준비도" },
-      { label: "설정 DB", value: state.serverSettingsLoaded ? "연결" : "확인", detail: "시스템 전체", tone: state.serverSettingsLoaded ? "watch" : "caution" }
+      { label: "데이터 소스", value: sources.filter(function (source) { return source.tone === "watch"; }).length + "/" + sources.length, detail: "정상·준비", target: { type: "detail", value: "settings-data-sources" } },
+      { label: "운영 이상", value: failures + "건", detail: "확인 필요", tone: failures ? "danger" : "watch", target: { type: "detail", value: "settings-diagnostics" } },
+      { label: "실시간", value: state.realtime.connected ? "연결" : "폴링", detail: "WebSocket", tone: state.realtime.connected ? "watch" : "caution", target: { type: "detail", value: "notification-diagnostics-board" } },
+      { label: "외부 API", value: configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", detail: "키 준비도", target: { type: "detail", value: "settings-data-sources" } },
+      { label: "설정 DB", value: state.serverSettingsLoaded ? "연결" : "확인", detail: "시스템 전체", tone: state.serverSettingsLoaded ? "watch" : "caution", target: { type: "detail", value: "settings-runtime" } }
     ]);
     var sourceList = '<div class="oa-operation-list" data-console-keyed-list="operation-sources">' + sources.map(function (source) {
       return [
@@ -14633,22 +14730,24 @@
       '</div>',
       state.investmentCalendarError ? '<p class="form-error">' + escapeHtml(state.investmentCalendarError) + '</p>' : '',
       '<div class="investment-calendar-kpis">',
-      renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold"),
-      renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold"),
-      renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold"),
-      renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold"),
+      renderCalendarKpi("전체", summary.total || 0, "등록 이벤트", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
+      renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold", { type: "anchor", value: "calendar-events" }),
+      renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold", { type: "anchor", value: "calendar-events" }),
+      renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold", next.startsAt ? { type: "detail", value: "investment-calendar-event", key: next.eventId || next.id || next.title || "" } : { type: "calendar-entry" }),
       '</div>',
       '</article>'
     ].join("");
   }
 
-  function renderCalendarKpi(label, value, detail, cardType, tone) {
+  function renderCalendarKpi(label, value, detail, cardType, tone, target) {
+    var targetAttributes = consoleMetricTargetAttributes(target);
     return [
-      '<span class="investment-calendar-kpi"' + cardTypeAttrs(cardType || "metric-cell", tone || "hold") + '>',
+      '<button type="button" class="investment-calendar-kpi is-link"' + cardTypeAttrs(cardType || "metric-cell", tone || "hold") + targetAttributes + ' aria-label="' + escapeHtml([label || "일정", value == null ? "" : value, "상세 보기"].filter(Boolean).join(" ")) + '">',
       '<em>' + escapeHtml(label) + '</em>',
       '<strong>' + escapeHtml(value) + '</strong>',
       '<b>' + escapeHtml(detail || "") + '</b>',
-      '</span>'
+      '<i class="oa-metric-arrow" aria-hidden="true">&rarr;</i>',
+      '</button>'
     ].join("");
   }
 
@@ -14692,7 +14791,7 @@
     });
     var selectedEvents = eventsByDay[selectedDayKey] || [];
     return [
-      '<article class="panel investment-calendar-list-panel investment-calendar-month-panel"' + cardTypeAttrs("process-card", events.length ? "watch" : "hold") + '>',
+      '<article class="panel investment-calendar-list-panel investment-calendar-month-panel" data-console-monitor-destination="calendar-events" tabindex="-1"' + cardTypeAttrs("process-card", events.length ? "watch" : "hold") + '>',
       '<div class="panel-head">',
       '<div><p class="label">CALENDAR</p><h2>' + escapeHtml(investmentCalendarMonthLabel(monthDate)) + ' 투자 캘린더</h2><span>각 날짜 셀에서 예정 이벤트를 바로 확인하고, 날짜를 선택해 상세 일정을 봅니다.</span></div>',
       '<div class="investment-calendar-month-controls" aria-label="캘린더 월 이동">',
@@ -31128,6 +31227,11 @@
         event.preventDefault();
         loadInstrumentTimeline(instrumentRefresh.getAttribute("data-instrument-timeline-refresh"), true);
         return;
+      }
+      var consoleMetricTarget = event.target.closest && event.target.closest("[data-console-metric-target]");
+      if (consoleMetricTarget && app.contains(consoleMetricTarget)) {
+        event.preventDefault();
+        if (activateConsoleMetricTarget(consoleMetricTarget)) return;
       }
       var detailButton = event.target.closest && event.target.closest("[data-work-detail]");
       if (detailButton && app.contains(detailButton)) {

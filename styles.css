@@ -14711,7 +14711,12 @@ body {
   min-width: 0;
   min-height: 92px;
   padding: 15px 18px;
+  border: 0;
   border-left: 1px solid var(--oa-row-border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
 }
 
 .oa-metric:first-child {
@@ -14767,6 +14772,45 @@ body {
   font-size: 11px;
   font-style: normal;
   font-weight: 700;
+}
+
+/* Linked monitoring metrics keep the dashboard density while exposing drill-downs. */
+.oa-metric.is-link,
+.investment-calendar-kpi.is-link {
+  position: relative;
+  padding-right: 42px;
+  cursor: pointer;
+  appearance: none;
+  text-align: left;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.oa-metric-arrow {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  color: var(--blue);
+  font-size: 18px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.oa-metric.is-link:hover,
+.investment-calendar-kpi.is-link:hover {
+  background: var(--oa-row-hover);
+}
+
+.oa-metric.is-link:active,
+.investment-calendar-kpi.is-link:active {
+  background: var(--blue-soft);
+}
+
+[data-console-monitor-destination]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
 }
 
 .oa-console-grid {
@@ -33171,6 +33215,11 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
     padding: 11px 12px;
   }
 
+  .investment-calendar-kpi.is-link,
+  .console-shell .investment-calendar-kpi.is-link {
+    padding-right: 38px;
+  }
+
   .investment-calendar-kpi strong,
   .console-shell .investment-calendar-kpi strong {
     font-size: 20px;
@@ -33399,6 +33448,14 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
   .oa-metric {
     min-height: 78px;
     padding: 12px;
+  }
+
+  .oa-metric.is-link {
+    padding-right: 38px;
+  }
+
+  .oa-metric-arrow {
+    right: 12px;
   }
 
   .oa-surface-head {

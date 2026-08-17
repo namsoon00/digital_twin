@@ -42,6 +42,21 @@ class FactChangeContractTests(unittest.TestCase):
         self.assertEqual("ready", contract["status"])
         self.assertEqual(["evidence"], contract["scopeFamilies"])
         self.assertEqual(["evidence"], contract["scopeFamiliesBySymbol"]["005930"])
+        self.assertTrue(contract["dependencyKeysComplete"])
+        self.assertEqual(
+            [
+                "kind:article-ai-analysis",
+                "kind:article-analysis-conflict",
+                "kind:news-event-type",
+                "kind:research-evidence",
+            ],
+            contract["dependencyKeys"],
+        )
+        self.assertEqual(
+            contract["dependencyKeys"],
+            provenance["requestedDependencyKeysBySymbol"]["005930"],
+        )
+        self.assertTrue(provenance["eventDependencyBoundaryAuthoritative"])
         self.assertEqual("EVIDENCE", event_work_class(event))
         self.assertTrue(event_has_reasoning_work(event))
         self.assertEqual(["evidence"], provenance["requestedScopeFamiliesBySymbol"]["005930"])
@@ -66,6 +81,21 @@ class FactChangeContractTests(unittest.TestCase):
             contract["unclassifiedFactTypesBySymbol"]["005930"],
         )
         self.assertFalse(event_has_reasoning_work(event))
+
+    def test_calendar_event_declares_exact_earnings_abox_dependency(self):
+        contract = fact_change_contract(
+            ["InvestmentCalendarEvent"],
+            {"NVDA": ["InvestmentCalendarEvent"]},
+        )
+
+        self.assertEqual("ready", contract["status"])
+        self.assertEqual(["evidence", "temporal"], contract["scopeFamilies"])
+        self.assertEqual(
+            ["kind:earnings-calendar-event"],
+            contract["dependencyKeys"],
+        )
+        self.assertTrue(contract["dependencyKeysComplete"])
+        self.assertTrue(contract["dependencyKeysCompleteBySymbol"]["NVDA"])
 
     def test_company_and_portfolio_facts_have_stable_scope_families(self):
         contract = fact_change_contract([

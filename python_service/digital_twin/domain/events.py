@@ -750,6 +750,20 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                 for symbol, values in dict(contract.get("scopeFamiliesBySymbol") or {}).items()
                 if _event_text(symbol, 64)
             },
+            "dependencyKeys": _event_text_list(
+                contract.get("dependencyKeys"), limit=40, item_limit=128
+            ),
+            "dependencyKeysBySymbol": {
+                _event_text(symbol, 64).upper(): _event_text_list(values, limit=40, item_limit=128)
+                for symbol, values in dict(contract.get("dependencyKeysBySymbol") or {}).items()
+                if _event_text(symbol, 64)
+            },
+            "dependencyKeysComplete": bool(contract.get("dependencyKeysComplete")),
+            "dependencyKeysCompleteBySymbol": {
+                _event_text(symbol, 64).upper(): bool(value)
+                for symbol, value in dict(contract.get("dependencyKeysCompleteBySymbol") or {}).items()
+                if _event_text(symbol, 64)
+            },
             "unclassifiedFactTypes": _event_text_list(
                 contract.get("unclassifiedFactTypes"), limit=20, item_limit=96
             ),

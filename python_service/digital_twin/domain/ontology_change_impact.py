@@ -1025,6 +1025,9 @@ def event_scoped_routing_inputs(
     explicit_target_symbols: Iterable[object],
     requested_fact_families: Iterable[object],
     requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
+    requested_dependency_keys: Iterable[object] = None,
+    requested_dependency_keys_by_symbol: Mapping[str, Iterable[object]] = None,
+    dependency_boundary_authoritative: bool = False,
 ) -> Dict[str, object]:
     """Keep a target event from reopening unrelated shared snapshot facts.
 
@@ -1048,6 +1051,19 @@ def event_scoped_routing_inputs(
         families = _expanded_family_values(values)
         if symbol and families:
             requested_by_symbol[symbol] = families
+    requested_keys = {
+        _lower(value)
+        for value in requested_dependency_keys or []
+        if _clean(value)
+    }
+    requested_keys_by_symbol: Dict[str, Set[str]] = {}
+    for raw_symbol, values in dict(
+        requested_dependency_keys_by_symbol or {}
+    ).items():
+        symbol = _clean(raw_symbol).upper()
+        keys = {_lower(value) for value in values or [] if _clean(value)}
+        if symbol and keys:
+            requested_keys_by_symbol[symbol] = keys
     if not targets or (not requested and not requested_by_symbol):
         return {
             "enabled": False,
@@ -1055,6 +1071,8 @@ def event_scoped_routing_inputs(
             "scopeFamilies": [],
             "dependencyKeys": [],
             "dependencyKeysComplete": False,
+            "eventDependencyKeyRoutingApplied": False,
+            "eventDependencyKeyNarrowed": False,
             "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
@@ -1072,6 +1090,8 @@ def event_scoped_routing_inputs(
     selected_scope_ids: List[str] = []
     selected_families: Set[str] = set()
     selected_dependency_keys: Set[str] = set()
+    selected_dependency_keys_all: Set[str] = set()
+    requested_dependency_keys_for_selected_scopes: Set[str] = set()
     deferred_shared_scope_ids: List[str] = []
     deferred_shared_families: Set[str] = set()
     target_scope_narrowed = False
@@ -1110,12 +1130,21 @@ def event_scoped_routing_inputs(
             # When a new per-symbol request intentionally narrows one scope,
             # retain safe family-level selection instead of incorrectly using
             # dependency keys from the omitted facts.
-            if not (is_target_scope and scope_target in requested_by_symbol and semantic - included_families):
-                selected_dependency_keys.update(
-                    _clean(key)
-                    for key in dependency_by_scope.get(scope_id, []) or []
-                    if _clean(key)
-                )
+            scope_dependency_keys = {
+                _lower(key)
+                for key in dependency_by_scope.get(scope_id, []) or []
+                if _clean(key)
+            }
+            selected_dependency_keys_all.update(scope_dependency_keys)
+            requested_dependency_keys_for_selected_scopes.update(
+                requested_keys_by_symbol.get(scope_target, requested_keys)
+            )
+            if not (
+                is_target_scope
+                and scope_target in requested_by_symbol
+                and semantic - included_families
+            ):
+                selected_dependency_keys.update(scope_dependency_keys)
         if not is_target_scope:
             omitted_families = semantic - included_families
             if omitted_families:
@@ -1132,16 +1161,48 @@ def event_scoped_routing_inputs(
             "scopeFamilies": [],
             "dependencyKeys": [],
             "dependencyKeysComplete": False,
+            "eventDependencyKeyRoutingApplied": False,
+            "eventDependencyKeyNarrowed": False,
             "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
         }
+    exact_event_dependency_keys = (
+        selected_dependency_keys_all
+        & requested_dependency_keys_for_selected_scopes
+    )
+    event_dependency_key_routing_applied = bool(
+        dependency_boundary_authoritative
+        and requested_dependency_keys_for_selected_scopes
+        and exact_event_dependency_keys
+    )
+    event_dependency_key_narrowed = bool(
+        event_dependency_key_routing_applied
+        and exact_event_dependency_keys != selected_dependency_keys_all
+    )
+    if event_dependency_key_routing_applied:
+        selected_dependency_keys = set(exact_event_dependency_keys)
+    dependency_keys_complete = bool(
+        event_dependency_key_routing_applied
+        or not target_scope_narrowed
+    )
+    if dependency_boundary_authoritative and requested_dependency_keys_for_selected_scopes:
+        dependency_keys_complete = event_dependency_key_routing_applied
     return {
-        "enabled": bool(deferred_shared_scope_ids or target_scope_narrowed),
+        "enabled": bool(
+            deferred_shared_scope_ids
+            or target_scope_narrowed
+            or event_dependency_key_narrowed
+        ),
         "scopeIds": sorted(set(selected_scope_ids)),
         "scopeFamilies": sorted(selected_families),
         "dependencyKeys": sorted(selected_dependency_keys),
-        "dependencyKeysComplete": not target_scope_narrowed,
+        "dependencyKeysComplete": dependency_keys_complete,
+        "eventDependencyKeyRoutingApplied": event_dependency_key_routing_applied,
+        "eventDependencyKeyNarrowed": event_dependency_key_narrowed,
+        "requestedDependencyKeys": sorted(
+            requested_dependency_keys_for_selected_scopes
+        ),
         "targetScopeNarrowed": target_scope_narrowed,
         "deferredSharedScopeIds": sorted(set(deferred_shared_scope_ids)),
         "deferredSharedScopeFamilies": sorted(deferred_shared_families),
@@ -1281,6 +1342,9 @@ def build_inference_impact_plan(
     rules: Iterable[object] = None,
     requested_fact_families: Iterable[object] = None,
     requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
+    requested_dependency_keys: Iterable[object] = None,
+    requested_dependency_keys_by_symbol: Mapping[str, Iterable[object]] = None,
+    dependency_boundary_authoritative: bool = False,
 ) -> Dict[str, object]:
     """Build a conservative routing plan for a native TypeDB inference run.
 
@@ -1297,6 +1361,9 @@ def build_inference_impact_plan(
         explicit_symbols,
         requested_fact_families,
         requested_fact_families_by_symbol,
+        requested_dependency_keys,
+        requested_dependency_keys_by_symbol,
+        dependency_boundary_authoritative,
     )
     changed_scope_ids = list(delta.get("directChangedScopeIds") or delta.get("affectedScopeIds") or [])
     snapshot_global_scope_ids = sorted({
@@ -1531,6 +1598,31 @@ def build_inference_impact_plan(
             for symbol, values in dict(requested_fact_families_by_symbol or {}).items()
             if _clean(symbol) and _clean_family_values(values)
         },
+        "requestedDependencyKeys": sorted({
+            _lower(value)
+            for value in requested_dependency_keys or []
+            if _clean(value)
+        }),
+        "requestedDependencyKeysBySymbol": {
+            _clean(symbol).upper(): sorted({
+                _lower(value)
+                for value in values or []
+                if _clean(value)
+            })
+            for symbol, values in dict(
+                requested_dependency_keys_by_symbol or {}
+            ).items()
+            if _clean(symbol)
+        },
+        "eventDependencyBoundaryAuthoritative": bool(
+            dependency_boundary_authoritative
+        ),
+        "eventDependencyKeyRoutingApplied": bool(
+            event_routing.get("eventDependencyKeyRoutingApplied")
+        ),
+        "eventDependencyKeyNarrowed": bool(
+            event_routing.get("eventDependencyKeyNarrowed")
+        ),
         "eventScopedRuleSelection": event_scoped_rule_selection,
         "eventScopedScopeIds": list(event_routing.get("scopeIds") or []),
         "deferredSharedContextScopeIds": list(event_routing.get("deferredSharedScopeIds") or []),
@@ -1630,6 +1722,25 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             for symbol, families in dict(values.get("requestedFactFamiliesBySymbol") or {}).items()
             if _clean(symbol) and isinstance(families, (list, tuple, set))
         },
+        "requestedDependencyKeys": list(
+            values.get("requestedDependencyKeys") or []
+        )[:bounded],
+        "requestedDependencyKeysBySymbol": {
+            _clean(symbol).upper(): list(keys or [])[:80]
+            for symbol, keys in dict(
+                values.get("requestedDependencyKeysBySymbol") or {}
+            ).items()
+            if _clean(symbol) and isinstance(keys, (list, tuple, set))
+        },
+        "eventDependencyBoundaryAuthoritative": bool(
+            values.get("eventDependencyBoundaryAuthoritative")
+        ),
+        "eventDependencyKeyRoutingApplied": bool(
+            values.get("eventDependencyKeyRoutingApplied")
+        ),
+        "eventDependencyKeyNarrowed": bool(
+            values.get("eventDependencyKeyNarrowed")
+        ),
         "eventScopedRuleSelection": bool(values.get("eventScopedRuleSelection")),
         "eventScopedScopeIds": list(values.get("eventScopedScopeIds") or [])[:bounded],
         "deferredSharedContextScopeIds": list(values.get("deferredSharedContextScopeIds") or [])[:bounded],

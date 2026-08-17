@@ -33,7 +33,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v8-bounded-fact-slots"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v9-evidence-64-slots"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -43,7 +43,12 @@ MACRO_SCOPE_ID = "macro:global"
 # fact in the active ABox manifest. Counts are release-versioned through the
 # scope topology so changing them requires an explicit topology migration.
 BOUNDED_SCOPE_BUCKET_COUNTS = {
-    "evidence": 16,
+    # Evidence objects carry substantially more cross-scope relations than a
+    # quote or valuation observation. Sixteen buckets made one new article
+    # roll unrelated articles that collided in the same immutable generation,
+    # which in turn recreated dozens of endpoint-bound relations. Sixty-four
+    # stays bounded while cutting the expected collision set by 75%.
+    "evidence": 64,
     "quality": 8,
     "valuation": 8,
     "company-valuation": 8,
@@ -2470,6 +2475,22 @@ def select_target_scoped_manifest_patch(
             })
         return rows
 
+    required_endpoint_rebind_scope_ids = sorted(
+        scope_id
+        for scope_id in selected
+        if _scope_type(scope_id) == "link"
+        and "persistence-dependency-rebind" in selection_reasons.get(scope_id, set())
+        and not semantic_changes_by_scope.get(scope_id)
+        and not dependency_changes_by_scope.get(scope_id)
+    )
+    deferred_persistence_rebind_scope_ids = sorted(
+        scope_id
+        for scope_id in deferred
+        if "persistence-dependency-rebind" in selection_reasons.get(scope_id, set())
+        and not semantic_changes_by_scope.get(scope_id)
+        and not dependency_changes_by_scope.get(scope_id)
+    )
+
     return {
         **base,
         "status": "ready",
@@ -2484,9 +2505,21 @@ def select_target_scoped_manifest_patch(
         "removedRelevantScopeIds": removed_relevant_scopes,
         "factSlot": fact_slot_selection,
         "scopeSelectionTrace": {
-            "version": "target-scope-selection-trace-v1",
+            "version": "target-scope-selection-trace-v2",
             "selected": selection_trace(selected, "selected"),
             "deferred": selection_trace(deferred, "deferred"),
+            "requiredEndpointRebindScopeIds": required_endpoint_rebind_scope_ids,
+            "requiredEndpointRebindScopeCount": len(
+                required_endpoint_rebind_scope_ids
+            ),
+            "deferredPersistenceRebindScopeIds": deferred_persistence_rebind_scope_ids,
+            "deferredPersistenceRebindScopeCount": len(
+                deferred_persistence_rebind_scope_ids
+            ),
+            "semanticChangedScopeCount": len(semantic_changes_by_scope),
+            "ruleDependencyChangedScopeCount": len(
+                dependency_changes_by_scope
+            ),
         },
         "scopeTopologyMigration": topology_migration,
     }

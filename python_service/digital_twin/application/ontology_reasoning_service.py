@@ -126,7 +126,11 @@ def reasoning_request_provenance(
     revision_vectors_by_symbol: Dict[str, Dict[str, str]] = {}
     changed_fields: Dict[str, set] = {}
     fact_families_by_symbol: Dict[str, set] = {}
+    dependency_keys = set()
+    dependency_keys_by_symbol: Dict[str, set] = {}
     fact_change_contracts: List[Dict[str, object]] = []
+    authoritative_fact_boundary = True
+    authoritative_dependency_boundary = True
     revisions: Dict[str, str] = {}
     crypto_transitions: Dict[str, Dict[str, object]] = {}
     scope_repair_requests_by_symbol: Dict[str, Dict[str, object]] = {}
@@ -190,13 +194,35 @@ def reasoning_request_provenance(
         fact_contract = payload.get("factChangeContract")
         fact_contract = dict(fact_contract or {}) if isinstance(fact_contract, Mapping) else {}
         if fact_contract:
+            dependency_keys.update(
+                str(value or "").strip()
+                for value in fact_contract.get("dependencyKeys") or []
+                if str(value or "").strip()
+            )
+            if (
+                str(fact_contract.get("status") or "") != "ready"
+                or fact_contract.get("unclassifiedFactTypes")
+                or fact_contract.get("unclassifiedFactTypesBySymbol")
+            ):
+                authoritative_fact_boundary = False
+            if not bool(fact_contract.get("dependencyKeysComplete")):
+                authoritative_dependency_boundary = False
             fact_change_contracts.append({
                 "requestEventId": event_id,
                 "version": str(fact_contract.get("version") or "")[:64],
                 "status": str(fact_contract.get("status") or "")[:64],
+                "dependencyKeys": list(fact_contract.get("dependencyKeys") or [])[:40],
+                "dependencyKeysBySymbol": dict(fact_contract.get("dependencyKeysBySymbol") or {}),
+                "dependencyKeysComplete": bool(fact_contract.get("dependencyKeysComplete")),
+                "dependencyKeysCompleteBySymbol": dict(
+                    fact_contract.get("dependencyKeysCompleteBySymbol") or {}
+                ),
                 "unclassifiedFactTypes": list(fact_contract.get("unclassifiedFactTypes") or [])[:20],
                 "unclassifiedFactTypesBySymbol": dict(fact_contract.get("unclassifiedFactTypesBySymbol") or {}),
             })
+        else:
+            authoritative_fact_boundary = False
+            authoritative_dependency_boundary = False
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]:
             stamp = str(payload.get(key) or "").strip()
             if stamp:
@@ -255,6 +281,10 @@ def reasoning_request_provenance(
         event_families = list(fact_contract.get("scopeFamilies") or []) or requested_scope_families_for_event_fact_types(event_fact_types)
         contract_families_by_symbol = fact_contract.get("scopeFamiliesBySymbol")
         contract_families_by_symbol = contract_families_by_symbol if isinstance(contract_families_by_symbol, Mapping) else {}
+        contract_dependency_keys_by_symbol = fact_contract.get("dependencyKeysBySymbol")
+        contract_dependency_keys_by_symbol = contract_dependency_keys_by_symbol if isinstance(contract_dependency_keys_by_symbol, Mapping) else {}
+        dependency_completeness_by_symbol = fact_contract.get("dependencyKeysCompleteBySymbol")
+        dependency_completeness_by_symbol = dependency_completeness_by_symbol if isinstance(dependency_completeness_by_symbol, Mapping) else {}
         for symbol in sorted(event_scope_symbols):
             # Retain an empty value as an explicit conservative marker for
             # an event whose fact family is unknown to this runtime.
@@ -272,6 +302,20 @@ def reasoning_request_provenance(
             if not symbol_families:
                 symbol_families = event_families
             fact_families_by_symbol.setdefault(symbol, set()).update(symbol_families)
+            symbol_dependency_keys = contract_dependency_keys_by_symbol.get(symbol)
+            symbol_dependency_keys = symbol_dependency_keys if isinstance(symbol_dependency_keys, (list, tuple, set)) else fact_contract.get("dependencyKeys") or []
+            dependency_keys_by_symbol.setdefault(symbol, set()).update(
+                str(value or "").strip()
+                for value in symbol_dependency_keys
+                if str(value or "").strip()
+            )
+            if not bool(
+                dependency_completeness_by_symbol.get(
+                    symbol,
+                    fact_contract.get("dependencyKeysComplete"),
+                )
+            ):
+                authoritative_dependency_boundary = False
         barrier = payload.get("verifiedSourceSnapshot")
         barrier = barrier if isinstance(barrier, dict) else {}
         if barrier:
@@ -332,6 +376,18 @@ def reasoning_request_provenance(
             for symbol, values in sorted(fact_families_by_symbol.items())
             if not targets or symbol in targets
         },
+        "requestedDependencyKeys": sorted(dependency_keys)[:120],
+        "requestedDependencyKeysBySymbol": {
+            symbol: sorted(values)[:80]
+            for symbol, values in sorted(dependency_keys_by_symbol.items())
+            if not targets or symbol in targets
+        },
+        "eventFactBoundaryAuthoritative": bool(
+            fact_change_contracts and authoritative_fact_boundary
+        ),
+        "eventDependencyBoundaryAuthoritative": bool(
+            fact_change_contracts and authoritative_dependency_boundary
+        ),
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": max(observed_at) if observed_at else "",
         "changedFieldsBySymbol": {

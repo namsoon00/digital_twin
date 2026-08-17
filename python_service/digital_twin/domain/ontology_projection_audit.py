@@ -188,8 +188,17 @@ def compact_reasoning_request_context(
         "requestedScopeFamiliesBySymbol": symbol_family_map(
             values.get("requestedScopeFamiliesBySymbol")
         ),
+        "requestedDependencyKeys": clean_list(
+            values.get("requestedDependencyKeys"), limit=120
+        ),
+        "requestedDependencyKeysBySymbol": symbol_family_map(
+            values.get("requestedDependencyKeysBySymbol")
+        ),
         "eventFactBoundaryAuthoritative": bool(
             values.get("eventFactBoundaryAuthoritative")
+        ),
+        "eventDependencyBoundaryAuthoritative": bool(
+            values.get("eventDependencyBoundaryAuthoritative")
         ),
         "targetSymbols": sorted(targets)[:80],
         "sourceObservedAt": str(values.get("sourceObservedAt") or "").strip()[:80],
@@ -222,6 +231,22 @@ def compact_reasoning_request_context(
                 "requestEventId": str(item.get("requestEventId") or "")[:191],
                 "version": str(item.get("version") or "")[:64],
                 "status": str(item.get("status") or "")[:64],
+                "dependencyKeys": clean_list(
+                    item.get("dependencyKeys"), limit=40
+                ),
+                "dependencyKeysBySymbol": symbol_family_map(
+                    item.get("dependencyKeysBySymbol")
+                ),
+                "dependencyKeysComplete": bool(
+                    item.get("dependencyKeysComplete")
+                ),
+                "dependencyKeysCompleteBySymbol": {
+                    str(symbol or "").upper().strip(): bool(value)
+                    for symbol, value in dict(
+                        item.get("dependencyKeysCompleteBySymbol") or {}
+                    ).items()
+                    if str(symbol or "").strip()
+                },
                 "unclassifiedFactTypes": clean_list(
                     item.get("unclassifiedFactTypes"), limit=20
                 ),

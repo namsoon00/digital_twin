@@ -410,6 +410,14 @@ class OntologyFactSlotTests(unittest.TestCase):
         }
         self.assertIn("persistence-dependency-rebind", trace[shared_link]["reasons"])
         self.assertIn("deferred-shared-persistence-rebind", trace[shared_link]["reasons"])
+        self.assertIn(
+            shared_link,
+            selection["scopeSelectionTrace"]["deferredPersistenceRebindScopeIds"],
+        )
+        self.assertEqual(
+            1,
+            selection["scopeSelectionTrace"]["deferredPersistenceRebindScopeCount"],
+        )
 
     def test_v8_online_migration_replaces_only_the_requested_subject(self):
         graph = PortfolioOntology(

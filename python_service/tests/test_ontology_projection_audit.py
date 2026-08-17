@@ -104,6 +104,36 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_rule_evaluation_namespace_survives_non_semantic_release_change(self):
+        repository = SimpleNamespace(store_key="typedb")
+        first = PortfolioOntologyProjectionRecorder(repository, settings={
+            "_reasoningEngineDeploymentId": "ontology-v2-shadow",
+            "typedbDatabase": "orbit_alpha_ontology_shadow_v2",
+            "_reasoningEngineReleaseFingerprint": "release:a",
+            "_reasoningEngineValidationCohortId": "cohort:a",
+            "typedbNativeRuleEngineVersion": "typedb-schema-function-rule-engine-v9",
+        }).execution_namespace()
+        second = PortfolioOntologyProjectionRecorder(repository, settings={
+            "_reasoningEngineDeploymentId": "ontology-v2-shadow",
+            "typedbDatabase": "orbit_alpha_ontology_shadow_v2",
+            "_reasoningEngineReleaseFingerprint": "release:b",
+            "_reasoningEngineValidationCohortId": "cohort:b",
+            "typedbNativeRuleEngineVersion": "typedb-schema-function-rule-engine-v9",
+        }).execution_namespace()
+        changed_engine = PortfolioOntologyProjectionRecorder(repository, settings={
+            "_reasoningEngineDeploymentId": "ontology-v2-shadow",
+            "typedbDatabase": "orbit_alpha_ontology_shadow_v2",
+            "_reasoningEngineReleaseFingerprint": "release:b",
+            "typedbNativeRuleEngineVersion": "typedb-schema-function-rule-engine-v10",
+        }).execution_namespace()
+
+        self.assertEqual(first["executionNamespaceId"], second["executionNamespaceId"])
+        self.assertNotEqual(first["releaseFingerprint"], second["releaseFingerprint"])
+        self.assertNotEqual(
+            first["executionNamespaceId"],
+            changed_engine["executionNamespaceId"],
+        )
+
     EXECUTION_NAMESPACE = {
         "engineDeploymentId": "ontology-v2-shadow",
         "graphDatabase": "orbit_alpha_ontology_shadow_v2",

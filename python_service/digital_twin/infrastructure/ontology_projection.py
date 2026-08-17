@@ -101,6 +101,7 @@ from .runtime_identity import runtime_identity
 
 _RULEBOX_BOOTSTRAP_CATALOG_LOCK = Lock()
 _RULEBOX_BOOTSTRAP_CATALOG: Dict[str, object] = {}
+RULE_EVALUATION_NAMESPACE_VERSION = "rule-evaluation-namespace-v2"
 
 
 def bootstrap_rule_catalog() -> Dict[str, object]:
@@ -710,6 +711,18 @@ class PortfolioOntologyProjectionRecorder:
         self.source = source or "monitoring"
 
     def execution_namespace(self) -> Dict[str, str]:
+        """Return the compatibility boundary for reusable native rule slots.
+
+        A deployment commit can change queueing, presentation, or collection
+        code without changing one TypeDB rule result. Rule slots are already
+        guarded by the exact RuleBox hash and TBox fingerprint, so binding the
+        namespace to the whole release fingerprint forced an unnecessary full
+        catalogue bootstrap after every deploy. The native engine contract is
+        the remaining executable-code boundary and must be bumped whenever
+        TypeQL generation/evaluation semantics change.
+        """
+        from .typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
+
         deployment_id = str(
             self.settings.get("_reasoningEngineDeploymentId")
             or self.settings.get("reasoningEngineActiveDeploymentId")
@@ -726,11 +739,16 @@ class PortfolioOntologyProjectionRecorder:
         validation_cohort_id = str(
             self.settings.get("_reasoningEngineValidationCohortId") or ""
         ).strip()
+        native_rule_engine_version = str(
+            self.settings.get("_reasoningEngineNativeRuleEngineVersion")
+            or self.settings.get("typedbNativeRuleEngineVersion")
+            or TYPEDB_NATIVE_RULE_ENGINE_VERSION
+        ).strip()
         material = "|".join([
+            RULE_EVALUATION_NAMESPACE_VERSION,
             deployment_id,
             graph_database,
-            release_fingerprint,
-            validation_cohort_id,
+            native_rule_engine_version,
         ])
         return {
             "executionNamespaceId": "projection-namespace:" + hashlib.sha256(
@@ -740,6 +758,8 @@ class PortfolioOntologyProjectionRecorder:
             "graphDatabase": graph_database,
             "releaseFingerprint": release_fingerprint,
             "validationCohortId": validation_cohort_id,
+            "nativeRuleEngineVersion": native_rule_engine_version,
+            "namespaceVersion": RULE_EVALUATION_NAMESPACE_VERSION,
         }
 
     def record_snapshot(
@@ -5022,7 +5042,7 @@ class PortfolioOntologyProjectionRecorder:
                 execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
                 engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
                 graph_database=str(namespace.get("graphDatabase") or ""),
-                release_fingerprint=str(namespace.get("releaseFingerprint") or ""),
+                release_fingerprint="",
             )
         except Exception:
             profile = native_rule_adaptive_target_sharding_profile([], self.settings)
@@ -5121,7 +5141,7 @@ class PortfolioOntologyProjectionRecorder:
                     execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
                     engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
                     graph_database=str(namespace.get("graphDatabase") or ""),
-                    release_fingerprint=str(namespace.get("releaseFingerprint") or ""),
+                    release_fingerprint="",
                 )
             except Exception:
                 slot_context = {}
@@ -5798,6 +5818,13 @@ class PortfolioOntologyProjectionRecorder:
             rules=self.rulebox_rules_for_impact(),
             requested_fact_families=(reasoning_context or {}).get("requestedScopeFamilies") or [],
             requested_fact_families_by_symbol=(reasoning_context or {}).get("requestedScopeFamiliesBySymbol") or {},
+            requested_dependency_keys=(reasoning_context or {}).get("requestedDependencyKeys") or [],
+            requested_dependency_keys_by_symbol=(reasoning_context or {}).get("requestedDependencyKeysBySymbol") or {},
+            dependency_boundary_authoritative=bool(
+                (reasoning_context or {}).get(
+                    "eventDependencyBoundaryAuthoritative"
+                )
+            ),
         )
 
     def rulebox_rules_for_impact(self) -> List[Dict[str, object]]:

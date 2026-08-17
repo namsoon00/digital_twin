@@ -26,6 +26,7 @@ from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_abox_repair_epochs,
     apply_scoped_abox_identity,
+    bounded_fact_scope_id,
     merge_target_scoped_abox_manifest,
     scope_requires_v8_bounded_slot,
     select_target_scoped_manifest_patch,
@@ -96,6 +97,22 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_evidence_v9_slots_split_collisions_from_the_old_16_bucket_layout(self):
+        first = bounded_fact_scope_id(
+            "symbol:005930:evidence",
+            "evidence",
+            "news-item-0",
+        )
+        second = bounded_fact_scope_id(
+            "symbol:005930:evidence",
+            "evidence",
+            "news-item-5",
+        )
+
+        self.assertEqual("symbol:005930:evidence:bucket:13", first)
+        self.assertEqual("symbol:005930:evidence:bucket:29", second)
+        self.assertEqual("granular-v9-evidence-64-slots", SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION)
+
     def test_v8_migration_does_not_treat_aggregate_temporal_link_as_window_fact(self):
         self.assertTrue(scope_requires_v8_bounded_slot("symbol:005930:temporal"))
         self.assertFalse(scope_requires_v8_bounded_slot("symbol:005930:temporal:window:15m"))

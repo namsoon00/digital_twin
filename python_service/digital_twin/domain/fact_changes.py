@@ -57,7 +57,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v2"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v3"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -103,6 +103,27 @@ FACT_TYPE_SCOPE_FAMILIES = {
     "governancechange": {"governance"},
     "capitalstructurechange": {"capital"},
     "valuationobservation": {"company-valuation"},
+}
+
+# Exact RuleBox-readable ABox kinds carried by event-style source facts.  A
+# scope family answers "which part of the world changed"; these keys answer
+# "which object inside that part changed".  The values are structural
+# identities only and never contain an investment threshold or conclusion.
+# Fact types that are not listed retain the existing family-level fallback.
+FACT_TYPE_DEPENDENCY_KEYS = {
+    "researchevidence": {"kind:research-evidence"},
+    "newsarticle": {"kind:research-evidence"},
+    "newsevent": {"kind:research-evidence", "kind:news-event-type"},
+    "newsarticleanalysis": {
+        "kind:article-ai-analysis",
+        "kind:article-analysis-conflict",
+    },
+    "evidencelifecycle": {"kind:research-evidence", "kind:verified-claim"},
+    "disclosure": {"kind:disclosure-filing"},
+    "disclosureevent": {"kind:disclosure-filing"},
+    "investmentcalendarevent": {"kind:earnings-calendar-event"},
+    "verifiedclaim": {"kind:verified-claim"},
+    "verificationrun": {"kind:verification-run"},
 }
 
 KNOWN_SCOPE_FAMILIES = {
@@ -159,6 +180,29 @@ def unclassified_fact_types(fact_types: Iterable[object]) -> List[str]:
     })
 
 
+def dependency_keys_for_fact_types(fact_types: Iterable[object]) -> List[str]:
+    """Return exact ABox dependency identities declared by source facts."""
+    keys: Set[str] = set()
+    for fact_type in fact_types or []:
+        keys.update(
+            FACT_TYPE_DEPENDENCY_KEYS.get(normalized_fact_type(fact_type), set())
+        )
+    return sorted(keys)
+
+
+def dependency_keys_complete_for_fact_types(fact_types: Iterable[object]) -> bool:
+    """Whether every supplied source fact has an exact dependency contract."""
+    values = [
+        normalized_fact_type(fact_type)
+        for fact_type in fact_types or []
+        if str(fact_type or "").strip()
+    ]
+    return bool(values) and all(
+        value in FACT_TYPE_DEPENDENCY_KEYS
+        for value in values
+    )
+
+
 def fact_change_contract(
     fact_types: Iterable[object],
     fact_types_by_symbol: Mapping[str, Iterable[object]] = None,
@@ -166,15 +210,24 @@ def fact_change_contract(
     """Build the auditable routing contract carried by a reasoning event."""
     clean_types = sorted({str(value or "").strip() for value in fact_types or [] if str(value or "").strip()})
     by_symbol = {}
+    dependency_keys_by_symbol = {}
+    dependency_keys_complete_by_symbol = {}
     unclassified_by_symbol = {}
     for raw_symbol, values in dict(fact_types_by_symbol or {}).items():
         symbol = str(raw_symbol or "").upper().strip()
         if not symbol:
             continue
-        families = scope_families_for_fact_types(values)
-        unknown = unclassified_fact_types(values)
+        symbol_types = list(values or [])
+        families = scope_families_for_fact_types(symbol_types)
+        unknown = unclassified_fact_types(symbol_types)
         if families:
             by_symbol[symbol] = families
+        symbol_dependency_keys = dependency_keys_for_fact_types(symbol_types)
+        if symbol_dependency_keys:
+            dependency_keys_by_symbol[symbol] = symbol_dependency_keys
+        dependency_keys_complete_by_symbol[symbol] = (
+            dependency_keys_complete_for_fact_types(symbol_types)
+        )
         if unknown:
             unclassified_by_symbol[symbol] = unknown
     unknown = unclassified_fact_types(clean_types)
@@ -184,6 +237,10 @@ def fact_change_contract(
         "factTypes": clean_types,
         "scopeFamilies": scope_families_for_fact_types(clean_types),
         "scopeFamiliesBySymbol": by_symbol,
+        "dependencyKeys": dependency_keys_for_fact_types(clean_types),
+        "dependencyKeysBySymbol": dependency_keys_by_symbol,
+        "dependencyKeysComplete": dependency_keys_complete_for_fact_types(clean_types),
+        "dependencyKeysCompleteBySymbol": dependency_keys_complete_by_symbol,
         "unclassifiedFactTypes": unknown,
         "unclassifiedFactTypesBySymbol": unclassified_by_symbol,
     }

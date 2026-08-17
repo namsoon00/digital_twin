@@ -293,16 +293,20 @@ def independent_reasoning_request(
     fingerprint = _hash(input_material)
     requested_scope_families = set()
     requested_scope_families_by_symbol = {}
+    requested_dependency_keys = set()
+    requested_dependency_keys_by_symbol = {}
     changed_fields_by_symbol = {}
     fact_revisions_by_symbol = {}
     revision_vectors_by_symbol = {}
     fact_change_contracts = []
     authoritative_fact_boundary = True
+    authoritative_dependency_boundary = True
     for event, scope in zip(events, scopes):
         payload = dict(event.payload or {})
         contract = payload.get("factChangeContract")
         if not isinstance(contract, Mapping):
             authoritative_fact_boundary = False
+            authoritative_dependency_boundary = False
             continue
         status = str(contract.get("status") or "").strip()
         unclassified = _texts(contract.get("unclassifiedFactTypes") or [])
@@ -317,12 +321,31 @@ def independent_reasoning_request(
             authoritative_fact_boundary = False
         families = set(_texts(contract.get("scopeFamilies") or []))
         requested_scope_families.update(families)
+        dependency_keys = set(_texts(contract.get("dependencyKeys") or []))
+        requested_dependency_keys.update(dependency_keys)
+        dependency_keys_complete = bool(contract.get("dependencyKeysComplete"))
+        if not dependency_keys_complete:
+            authoritative_dependency_boundary = False
         contract_by_symbol = {
             str(symbol or "").upper().strip(): set(_texts(values))
             for symbol, values in dict(
                 contract.get("scopeFamiliesBySymbol") or {}
             ).items()
             if str(symbol or "").strip() and _texts(values)
+        }
+        dependency_keys_by_symbol = {
+            str(symbol or "").upper().strip(): set(_texts(values))
+            for symbol, values in dict(
+                contract.get("dependencyKeysBySymbol") or {}
+            ).items()
+            if str(symbol or "").strip() and _texts(values)
+        }
+        dependency_completeness_by_symbol = {
+            str(symbol or "").upper().strip(): bool(value)
+            for symbol, value in dict(
+                contract.get("dependencyKeysCompleteBySymbol") or {}
+            ).items()
+            if str(symbol or "").strip()
         }
         event_symbols = [
             str(symbol or "").upper().strip()
@@ -333,8 +356,18 @@ def independent_reasoning_request(
             requested_scope_families_by_symbol.setdefault(symbol, set()).update(
                 contract_by_symbol.get(symbol) or families
             )
+            requested_dependency_keys_by_symbol.setdefault(symbol, set()).update(
+                dependency_keys_by_symbol.get(symbol) or dependency_keys
+            )
+            if not dependency_completeness_by_symbol.get(
+                symbol,
+                dependency_keys_complete,
+            ):
+                authoritative_dependency_boundary = False
         for symbol, values in contract_by_symbol.items():
             requested_scope_families_by_symbol.setdefault(symbol, set()).update(values)
+        for symbol, values in dependency_keys_by_symbol.items():
+            requested_dependency_keys_by_symbol.setdefault(symbol, set()).update(values)
         for symbol, values in dict(payload.get("changedFieldsBySymbol") or {}).items():
             clean_symbol = str(symbol or "").upper().strip()
             if clean_symbol:
@@ -368,11 +401,19 @@ def independent_reasoning_request(
                 symbol: sorted(values)
                 for symbol, values in sorted(contract_by_symbol.items())
             },
+            "dependencyKeys": sorted(dependency_keys),
+            "dependencyKeysBySymbol": {
+                symbol: sorted(values)
+                for symbol, values in sorted(dependency_keys_by_symbol.items())
+            },
+            "dependencyKeysComplete": dependency_keys_complete,
+            "dependencyKeysCompleteBySymbol": dependency_completeness_by_symbol,
             "unclassifiedFactTypes": list(unclassified),
             "unclassifiedFactTypesBySymbol": unclassified_by_symbol,
         })
     if len(fact_change_contracts) != len(events):
         authoritative_fact_boundary = False
+        authoritative_dependency_boundary = False
     context = {
         "sourceEventIds": [event.event_id for event in events],
         "accountIds": list(account_ids),
@@ -388,6 +429,11 @@ def independent_reasoning_request(
             symbol: sorted(values)
             for symbol, values in sorted(requested_scope_families_by_symbol.items())
         },
+        "requestedDependencyKeys": sorted(requested_dependency_keys),
+        "requestedDependencyKeysBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(requested_dependency_keys_by_symbol.items())
+        },
         "changedFieldsBySymbol": {
             symbol: sorted(values)
             for symbol, values in sorted(changed_fields_by_symbol.items())
@@ -396,6 +442,7 @@ def independent_reasoning_request(
         "revisionVectorsBySymbol": revision_vectors_by_symbol,
         "factChangeContracts": fact_change_contracts,
         "eventFactBoundaryAuthoritative": authoritative_fact_boundary,
+        "eventDependencyBoundaryAuthoritative": authoritative_dependency_boundary,
         "verifiedSourceSnapshots": [
             dict((event.payload or {}).get("verifiedSourceSnapshot") or {})
             for event in events

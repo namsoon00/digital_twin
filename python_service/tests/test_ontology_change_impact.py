@@ -997,6 +997,90 @@ class OntologyChangeImpactTests(unittest.TestCase):
             plan["ruleExecutionScope"],
         )
 
+    def test_verified_news_event_routes_only_news_kind_rules_inside_evidence_scope(self):
+        before = [{
+            "scopeId": "symbol:005930:evidence:bucket:00",
+            "generationId": "evidence-a",
+            "impactScopeFamilies": ["evidence"],
+            "semanticFingerprints": {"evidence": "evidence-a"},
+            "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+            "semanticDependencyFingerprints": {
+                "kind:research-evidence": "news-a",
+                "kind:disclosure-filing": "disclosure-a",
+                "kind:earnings-calendar-event": "earnings-a",
+                "relation:has-external-signal": "relation-a",
+            },
+        }]
+        after = [{
+            **before[0],
+            "generationId": "evidence-b",
+            "semanticFingerprints": {"evidence": "evidence-b"},
+            "semanticDependencyFingerprints": {
+                "kind:research-evidence": "news-b",
+                "kind:disclosure-filing": "disclosure-b",
+                "kind:earnings-calendar-event": "earnings-b",
+                "relation:has-external-signal": "relation-b",
+            },
+        }]
+        rules = [
+            {
+                "ruleId": "graph.test.news.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_EXTERNAL_SIGNAL",
+                    "targetKind": "research-evidence",
+                }],
+            },
+            {
+                "ruleId": "graph.test.disclosure.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_EXTERNAL_SIGNAL",
+                    "targetKind": "disclosure-filing",
+                }],
+            },
+            {
+                "ruleId": "graph.test.earnings.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_EXTERNAL_SIGNAL",
+                    "targetKind": "earnings-calendar-event",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["005930"],
+            explicit_target_symbols=["005930"],
+            rules=rules,
+            requested_fact_families=["evidence"],
+            requested_fact_families_by_symbol={"005930": ["evidence"]},
+            requested_dependency_keys=["kind:research-evidence"],
+            requested_dependency_keys_by_symbol={
+                "005930": ["kind:research-evidence"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+
+        self.assertTrue(plan["eventDependencyKeyRoutingApplied"])
+        self.assertTrue(plan["eventDependencyKeyNarrowed"])
+        self.assertEqual(
+            ["kind:research-evidence"],
+            plan["routingDependencyKeys"],
+        )
+        self.assertEqual(["graph.test.news.v1"], plan["candidateRuleIds"])
+        self.assertEqual(1, plan["candidateRuleCount"])
+        self.assertEqual(3, plan["enabledRuleCount"])
+        self.assertTrue(plan["nativeRuleSelectionEligible"])
+
+        compact = compact_inference_impact_plan(plan)
+        self.assertTrue(compact["eventDependencyKeyRoutingApplied"])
+        self.assertEqual(
+            ["kind:research-evidence"],
+            compact["requestedDependencyKeysBySymbol"]["005930"],
+        )
     def test_complete_candidate_catalog_skips_unnecessary_reuse_read_and_explains_global_context(self):
         before = [
             {"scopeId": "macro:rates", "generationId": "rates-a"},

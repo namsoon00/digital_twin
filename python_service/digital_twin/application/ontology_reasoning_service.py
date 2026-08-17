@@ -4540,6 +4540,11 @@ class OntologyReasoningRunner:
             # Hold the source request for a safe retry instead of treating it
             # as an investment-engine failure.
             "incomplete-native-coverage",
+            # The active generation remains intact when a target Manifest
+            # cannot be patched safely. This is subject-local repair work,
+            # not a database outage that should open the global circuit and
+            # block every unrelated symbol.
+            "target-scope-repair-required",
         }
         transient_failure_statuses = {
             "error",
@@ -4573,6 +4578,7 @@ class OntologyReasoningRunner:
             status: str,
             reason: object,
             retry_after_seconds: object = 0,
+            diagnostics: Mapping[str, object] = None,
         ) -> None:
             try:
                 retry_after = max(0, int(float(retry_after_seconds or 0)))
@@ -4586,6 +4592,8 @@ class OntologyReasoningRunner:
             }
             if retry_after:
                 item["retryAfterSeconds"] = retry_after
+            if isinstance(diagnostics, Mapping) and diagnostics:
+                item["diagnostics"] = dict(diagnostics)
             if is_retryable_projection_status(status):
                 retryable.append(item)
             else:
@@ -4603,6 +4611,30 @@ class OntologyReasoningRunner:
                     projection_status,
                     result.get("reason") or "TypeDB ABox 투영이 완료되지 않았습니다.",
                     result.get("recommendedRetryAfterSeconds") or result.get("retryAfterSeconds"),
+                    {
+                        "graphInput": {
+                            key: value
+                            for key, value in dict(result.get("graphInput") or {}).items()
+                            if key in {
+                                "mode", "targetSymbols", "fallback",
+                                "fallbackReason", "repairInputFallback",
+                                "repairInputMode", "repairInputStatus",
+                            }
+                        },
+                        "targetScopedManifestPatch": {
+                            key: value
+                            for key, value in dict(
+                                result.get("targetScopedManifestPatch") or {}
+                            ).items()
+                            if key in {
+                                "status", "fallbackReason", "targetSymbols",
+                                "missingEndpointScopeIds", "removedRelevantScopeIds",
+                                "sharedRemovedScopeIds", "retiredScopeIds",
+                                "retainedDependencyScopeIds", "selectedDependencyScopeIds",
+                                "repairInputFallback",
+                            }
+                        },
+                    },
                 )
                 continue
             execution = result.get("ruleboxExecution") if isinstance(result.get("ruleboxExecution"), dict) else {}

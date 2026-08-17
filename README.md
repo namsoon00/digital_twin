@@ -14,13 +14,13 @@ npm start
 GitHub Pages 정적 미리보기는 아래 URL에서 확인합니다. 빌드 시점의 로컬 DB 계정/설정 요약은 마스킹된 값으로 채우고, 실제 운영 DB 파일과 secret 원문은 포함하지 않습니다. 로컬 서버가 필요한 저장/조회 기능은 비활성화됩니다.
 
 ```text
-https://namsoon00.github.io/orbit-alpha/
+https://namsoon00.github.io/digital_twin/
 ```
 
 Python 서비스 어드민 구성 미리보기는 아래 URL에서 확인합니다. 계정, 알림 주기, 모델링 설정의 빌드 스냅샷을 secret 없이 보여주는 읽기 전용 정적 페이지입니다.
 
 ```text
-https://namsoon00.github.io/orbit-alpha/admin/
+https://namsoon00.github.io/digital_twin/admin/
 ```
 
 토스 실계좌 조회를 켜려면 `.env.local`에 아래 값을 넣습니다. 값이 없으면 로컬 서버는 연결 상태와 빈 포트폴리오를 기준으로 화면을 구성합니다.

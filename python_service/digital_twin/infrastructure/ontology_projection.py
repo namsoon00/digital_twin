@@ -42,7 +42,13 @@ from ..domain.ontology_scopes import (
     scoped_manifest_id,
     target_scope_manifest_fingerprint,
 )
-from ..domain.ontology_worlds import knowledge_world, market_world, world_from_snapshot, world_metadata
+from ..domain.ontology_worlds import (
+    knowledge_world,
+    market_world,
+    shared_premise_world,
+    world_from_snapshot,
+    world_metadata,
+)
 from ..domain.knowledge_world_projection import build_knowledge_world_graph, knowledge_world_coverage
 from ..domain.market_world_projection import (
     build_market_world_graph,
@@ -95,13 +101,24 @@ from ..domain.portfolio import AccountSnapshot
 from ..domain.investment_brain import decision_episode_ontology_context
 from ..domain.incremental_inference_equivalence import compare_incremental_rule_states
 from ..domain.hypothesis_lifecycle import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
-from .graph_store_rulebox import rulebox_rules_to_payload
+from ..domain.world_partitioned_reasoning import (
+    ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION,
+    WORLD_PARTITIONED_REASONING_VERSION,
+    account_overlay_graph,
+    compile_world_partitioned_rules,
+    shared_premise_matches,
+    shared_premise_world_graph,
+)
+from .graph_store_rulebox import (
+    rulebox_rules_from_payload,
+    rulebox_rules_to_payload,
+)
 from .runtime_identity import runtime_identity
 
 
 _RULEBOX_BOOTSTRAP_CATALOG_LOCK = Lock()
 _RULEBOX_BOOTSTRAP_CATALOG: Dict[str, object] = {}
-RULE_EVALUATION_NAMESPACE_VERSION = "rule-evaluation-namespace-v2"
+RULE_EVALUATION_NAMESPACE_VERSION = "rule-evaluation-namespace-v3"
 
 
 def bootstrap_rule_catalog() -> Dict[str, object]:
@@ -762,6 +779,232 @@ class PortfolioOntologyProjectionRecorder:
             "namespaceVersion": RULE_EVALUATION_NAMESPACE_VERSION,
         }
 
+    def world_partitioned_reasoning_enabled(self) -> bool:
+        value = self.settings.get("ontologyWorldPartitionedReasoningEnabled")
+        if value is None:
+            return str(self.settings.get("_reasoningEngineVersion") or "").strip().lower() == "v2"
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def world_rule_partition(self, rule_catalog: Dict[str, object]) -> Dict[str, object]:
+        rows = [
+            dict(item) for item in (rule_catalog or {}).get("rules") or []
+            if isinstance(item, dict)
+        ]
+        if not rows:
+            rows = [
+                dict(item) for item in self.rulebox_rules_for_impact()
+                if isinstance(item, dict)
+            ]
+        try:
+            parsed = rulebox_rules_from_payload({"rules": rows})
+        except ValueError as error:
+            return {"status": "invalid", "failures": [{"reason": str(error)}]}
+        return compile_world_partitioned_rules(parsed)
+
+    @staticmethod
+    def catalog_for_rules(
+        rule_catalog: Dict[str, object],
+        rules,
+    ) -> Dict[str, object]:
+        payloads = rulebox_rules_to_payload(rules or [])
+        relation_types = sorted({
+            str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
+            for rule in payloads
+            for condition in rule.get("conditions") or []
+            if isinstance(condition, dict)
+            and str(condition.get("kind") or "") == "relation"
+            and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
+        })
+        return {
+            **dict(rule_catalog or {}),
+            "rules": payloads,
+            "inputRelationTypes": relation_types,
+            "ruleCount": len(payloads),
+            "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
+        }
+
+    def prepare_shared_premises(
+        self,
+        snapshot: AccountSnapshot,
+        target_symbols: List[str] = None,
+        reasoning_context: Dict[str, object] = None,
+        progress_callback: Callable[[str, Dict[str, object]], None] = None,
+    ) -> Dict[str, object]:
+        """Synchronously establish shared premises before PortfolioWorld.
+
+        This is the direct V2 path. It intentionally does not wait for the
+        post-decision shared-world outbox because the account overlay cannot
+        contain raw market mirrors anymore.
+        """
+
+        if not self.world_partitioned_reasoning_enabled():
+            return {"status": "disabled", "ready": False}
+
+        def progress(stage: str, **payload) -> None:
+            if callable(progress_callback):
+                try:
+                    progress_callback("shared_premise." + stage, dict(payload or {}))
+                except Exception:
+                    return
+
+        progress("rule_catalog.start")
+        catalog = self.ensure_rulebox_ready()
+        if str(catalog.get("status") or "") not in {"ready", "seeded"}:
+            return {
+                "status": "rule-catalog-not-ready",
+                "ready": False,
+                "retryable": True,
+                "reason": str(catalog.get("reason") or "TypeDB RuleBox is unavailable.")[:220],
+            }
+        partition = self.world_rule_partition(catalog)
+        if str(partition.get("status") or "") != "ready":
+            return {
+                "status": "invalid-world-rule-partition",
+                "ready": False,
+                "retryable": False,
+                "failures": list(partition.get("failures") or [])[:40],
+                "reason": "RuleBox contains conditions without an auditable world owner.",
+            }
+        progress("graph.start", sharedRuleCount=int(partition.get("sharedRuleCount") or 0))
+        graph, _persistence_graph, assembly = self.build_graph_assembly(
+            snapshot,
+            self.catalog_for_rules(catalog, partition.get("sharedRules") or []),
+            target_symbols=target_symbols,
+            target_scoped_input=bool(target_symbols),
+        )
+        portfolio_context = world_from_snapshot(snapshot, self.settings)
+        shared_world = shared_premise_world(
+            portfolio_context.market_id,
+            self.settings.get("ontologySharedMarketTenantId") or "shared",
+        )
+        graph.worldview.update({
+            **world_metadata(portfolio_context),
+            "sharedPremiseWorldId": shared_world.world_id,
+            "asOf": str(snapshot.generated_at or ""),
+        })
+        update = shared_premise_world_graph(
+            graph,
+            partition.get("sharedRules") or [],
+            shared_world,
+        )
+        progress("projection.start", worldId=shared_world.world_id)
+        projection = self.project_shared_world_update(update, shared_world, projection_kind="premise")
+        projection_status = str(projection.get("status") or "")
+        if projection_status not in {"ok", "unchanged-material-facts", "already-projected-material"}:
+            return {
+                "status": "shared-premise-projection-failed",
+                "ready": False,
+                "retryable": bool(projection.get("retryable", True)),
+                "recommendedRetryAfterSeconds": int(projection.get("recommendedRetryAfterSeconds") or 10),
+                "projection": projection,
+                "reason": str(projection.get("reason") or projection_status)[:220],
+            }
+        try:
+            active_abox = self.repository_world_call(
+                "active_abox_metadata",
+                world_id=shared_world.world_id,
+            )
+        except Exception as error:
+            return {
+                "status": "shared-market-metadata-failed",
+                "ready": False,
+                "retryable": True,
+                "reason": str(error)[:220],
+            }
+        symbols = self.inference_symbols(snapshot, target_symbols)
+        existing = {}
+        try:
+            existing = self.repository_world_call(
+                "inferencebox_snapshot",
+                symbols=symbols,
+                limit=self.inference_snapshot_limit(),
+                world_id=shared_world.world_id,
+            )
+        except Exception:
+            existing = {}
+        existing_reusable = bool(
+            self.inference_result_is_reusable(existing, active_abox, symbols)
+            and str(existing.get("ruleExecutionPhase") or "") == "shared-premise"
+            and str(existing.get("worldPartitionedReasoningVersion") or "")
+            == WORLD_PARTITIONED_REASONING_VERSION
+        )
+        if existing_reusable:
+            inference = dict(existing)
+            execution_status = "reused-shared-premise-generation"
+        else:
+            progress("inference.start", targetSymbolCount=len(symbols))
+            execution = self.repository.run_rulebox({
+                "worldId": shared_world.world_id,
+                "worldType": str(shared_world.world_type or "MarketWorld"),
+                "tenantId": str(shared_world.tenant_id or "shared"),
+                "accountId": "",
+                "symbols": symbols,
+                "ruleExecutionPhase": "shared-premise",
+                "typedbNativeRuleSelectionEnabled": "0",
+                "pruneOldGenerations": False,
+                "inferenceSnapshotLimit": self.inference_snapshot_limit(),
+            })
+            execution_status = str((execution or {}).get("status") or "error")
+            inference = dict((execution or {}).get("inferenceBox") or {})
+        complete = bool(
+            execution_status in {"ok", "reused-shared-premise-generation"}
+            and (
+                inference.get("nativeTypeDbReasoningCompleted")
+                or inference.get("typedbNativeRuleEvaluationCompleted")
+            )
+            and inference.get("generationAligned") is not False
+            and str(inference.get("sourceAboxSnapshotId") or "")
+        )
+        if not complete:
+            return {
+                "status": "shared-premise-inference-incomplete",
+                "ready": False,
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 10,
+                "projection": projection,
+                "executionStatus": execution_status,
+                "inferenceStatus": str(inference.get("status") or ""),
+                "reason": "SharedPremiseWorld TypeDB generation did not complete.",
+            }
+        premises = shared_premise_matches(inference)
+        symbol_rows = {}
+        generation_id = str(inference.get("inferenceGenerationId") or "")
+        for symbol in symbols:
+            symbol_rows[symbol] = {
+                "snapshotId": generation_id,
+                "relations": [
+                    dict(row) for row in inference.get("relations") or []
+                    if isinstance(row, dict)
+                    and str(row.get("symbol") or "").upper().strip() == symbol
+                ],
+                "traces": [
+                    dict(row) for row in inference.get("traces") or []
+                    if isinstance(row, dict)
+                    and str(row.get("symbol") or "").upper().strip() == symbol
+                ],
+            }
+        progress("done", matchedPremiseCount=sum(len(values) for values in premises.values()))
+        return {
+            "contractVersion": WORLD_PARTITIONED_REASONING_VERSION,
+            "status": "ready",
+            "ready": True,
+            "worldId": shared_world.world_id,
+            "projectionStatus": projection_status,
+            "executionStatus": execution_status,
+            "premisesBySymbol": premises,
+            "sharedRuleIds": list(partition.get("sharedRuleIds") or []),
+            "overlayRuleIds": list(partition.get("overlayRuleIds") or []),
+            "inferenceGenerationId": generation_id,
+            "sourceAboxSnapshotId": str(inference.get("sourceAboxSnapshotId") or ""),
+            "relations": list(inference.get("relations") or [])[:480],
+            "traces": list(inference.get("traces") or [])[:480],
+            "symbols": symbol_rows,
+            "assembly": {
+                "inputMode": str(assembly.get("inputMode") or ""),
+                "targetSymbols": list(assembly.get("targetSymbols") or []),
+            },
+        }
+
     def record_snapshot(
         self,
         snapshot: AccountSnapshot,
@@ -796,6 +1039,11 @@ class PortfolioOntologyProjectionRecorder:
         compact_reasoning_context = compact_reasoning_request_context(
             reasoning_context,
             target_symbols=target_symbols,
+        )
+        shared_premise_proof = (
+            dict((reasoning_context or {}).get("sharedPremiseProof") or {})
+            if isinstance(reasoning_context, dict)
+            else {}
         )
         fresh_candidate_rebuild = str(
             self.settings.get("typedbFreshCandidateRebuild") or "0"
@@ -1009,6 +1257,7 @@ class PortfolioOntologyProjectionRecorder:
                 target_symbols=target_symbols,
                 target_scoped_input=bool(target_symbols),
                 progress_callback=emit_progress,
+                shared_premise_proof=shared_premise_proof,
             )
             graph = projection_graph["graph"]
             persistence_graph = projection_graph["persistenceGraph"]
@@ -1138,6 +1387,7 @@ class PortfolioOntologyProjectionRecorder:
                     market_world_context=market_world_context,
                     target_symbols=target_symbols,
                     target_scoped_input=False,
+                    shared_premise_proof=shared_premise_proof,
                 )
                 graph = full_projection_graph["graph"]
                 persistence_graph = full_projection_graph["persistenceGraph"]
@@ -1238,6 +1488,7 @@ class PortfolioOntologyProjectionRecorder:
                         market_world_context=market_world_context,
                         target_symbols=target_symbols,
                         target_scoped_input=False,
+                        shared_premise_proof=shared_premise_proof,
                     )
                     graph = repair_projection_graph["graph"]
                     persistence_graph = repair_projection_graph["persistenceGraph"]
@@ -3240,16 +3491,38 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
         target_scoped_input: bool = False,
         progress_callback: Callable[..., None] = None,
+        shared_premise_proof: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Assemble one immutable projection graph and its scoped identity."""
         graph_build_started = time.perf_counter()
+        partition = {}
+        assembly_catalog = rule_catalog
+        if self.world_partitioned_reasoning_enabled():
+            partition = self.world_rule_partition(rule_catalog)
+            if str(partition.get("status") or "") != "ready":
+                raise RuntimeError("RuleBox world partition is invalid; PortfolioWorld projection was blocked.")
+            assembly_catalog = self.catalog_for_rules(
+                rule_catalog,
+                partition.get("overlayRules") or [],
+            )
         graph, persistence_graph, graph_assembly = self.build_graph_assembly(
             snapshot,
-            rule_catalog,
+            assembly_catalog,
             target_symbols=target_symbols,
             target_scoped_input=target_scoped_input,
             progress_callback=progress_callback,
         )
+        if self.world_partitioned_reasoning_enabled():
+            proof = dict(shared_premise_proof or {})
+            if not bool(proof.get("ready")):
+                raise RuntimeError("SharedPremiseWorld premises are not ready; PortfolioWorld projection was blocked.")
+            persistence_graph = account_overlay_graph(
+                persistence_graph,
+                partition.get("overlayRules") or [],
+                proof.get("premisesBySymbol") or {},
+                shared_generation_id=str(proof.get("inferenceGenerationId") or ""),
+                source_abox_snapshot_id=str(proof.get("sourceAboxSnapshotId") or ""),
+            )
         runtime_stages = dict(graph_assembly.get("runtimeStages") or {})
         runtime_stages["graphAssemblyCacheHit"] = (
             1 if str(graph_assembly.get("status") or "") == "hit" else 0
@@ -3265,8 +3538,19 @@ class PortfolioOntologyProjectionRecorder:
         world_metadata_payload = {
             **world_metadata(portfolio_world_context),
             "marketWorldId": resolved_market_world.world_id,
-            "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+            "marketContextMode": (
+                "shared-premise-account-overlay"
+                if self.world_partitioned_reasoning_enabled()
+                else "shared-market-world-with-portfolio-rule-mirror"
+            ),
         }
+        if self.world_partitioned_reasoning_enabled():
+            world_metadata_payload.update({
+                "sharedPremiseWorldId": str((shared_premise_proof or {}).get("worldId") or ""),
+                "sharedPremiseInferenceGenerationId": str(
+                    (shared_premise_proof or {}).get("inferenceGenerationId") or ""
+                ),
+            })
         graph.worldview.update(world_metadata_payload)
         persistence_graph.worldview.update(world_metadata_payload)
         material_fingerprint = native_rule_planner_manifest_fingerprint(
@@ -3581,9 +3865,12 @@ class PortfolioOntologyProjectionRecorder:
         activated directly after ontology validation.
         """
         kind = str(projection_kind or "market").strip().lower()
-        if kind not in {"market", "knowledge"}:
+        if kind not in {"market", "knowledge", "premise"}:
             kind = "market"
-        world_label = "KnowledgeWorld" if kind == "knowledge" else "MarketWorld"
+        world_label = {
+            "knowledge": "KnowledgeWorld",
+            "premise": "SharedPremiseWorld",
+        }.get(kind, "MarketWorld")
         status_prefix = kind + "-world"
         shared_contract_version = str(
             (update.worldview or {}).get("sharedWorldProjectionContractVersion") or ""
@@ -3711,7 +3998,8 @@ class PortfolioOntologyProjectionRecorder:
                 "sharedWorldProjection": kind,
                 "marketWorldProjection": kind == "market",
                 "knowledgeWorldProjection": kind == "knowledge",
-                "marketContextMode": "shared-" + kind + "-world-with-portfolio-rule-mirror",
+                "sharedPremiseWorldProjection": kind == "premise",
+                "marketContextMode": "shared-" + kind + "-world-direct-premises",
                 "sharedWorldProjection": kind,
                 "sharedWorldProjectionContractVersion": shared_contract_version,
                 "sharedWorldFullRebuild": full_contract_rebuild,
@@ -3908,7 +4196,11 @@ class PortfolioOntologyProjectionRecorder:
                 "sharedWorldFullRebuild": full_contract_rebuild,
             })
             validation = validate_ontology(update)
-            coverage = knowledge_world_coverage(update) if kind == "knowledge" else market_world_coverage(update)
+            coverage = (
+                knowledge_world_coverage(update)
+                if kind == "knowledge"
+                else market_world_coverage(update)
+            )
             coverage.update({
                 "coverageScope": "incoming-" + kind + "-patch",
                 "projectionKind": kind,
@@ -4026,11 +4318,19 @@ class PortfolioOntologyProjectionRecorder:
         active_key = self.active_graph_store_key(result)
         world_id = str(world_id or result.get("worldId") or ((result.get("ontologyWorld") or {}).get("worldId") if isinstance(result.get("ontologyWorld"), dict) else "") or "").strip()
         runtime_stages = result.setdefault("runtimeStages", {})
-        catalog_rule_ids = [
-            rule_id_from_payload(rule)
-            for rule in self.rulebox_rules_for_impact()
-            if rule_id_from_payload(rule) and rule.get("enabled", True) is not False
-        ]
+        world_partition = (
+            self.world_rule_partition({"rules": self.rulebox_rules_for_impact()})
+            if self.world_partitioned_reasoning_enabled()
+            else {}
+        )
+        if self.world_partitioned_reasoning_enabled():
+            catalog_rule_ids = list(world_partition.get("overlayRuleIds") or [])
+        else:
+            catalog_rule_ids = [
+                rule_id_from_payload(rule)
+                for rule in self.rulebox_rules_for_impact()
+                if rule_id_from_payload(rule) and rule.get("enabled", True) is not False
+            ]
         # Private handoff to the MySQL execution-proof writer. This catalogue
         # never enters the ABox or the user-facing ontology snapshot.
         result["_ruleResultSlotCatalogRuleIds"] = catalog_rule_ids
@@ -4284,6 +4584,15 @@ class PortfolioOntologyProjectionRecorder:
                 "priorInferenceProofRunId": str(selection_context.get("proofRunId") or ""),
                 "nativeRuleAdaptiveTargetShardingProfile": adaptive_target_sharding_profile,
             }
+            if self.world_partitioned_reasoning_enabled():
+                payload.update({
+                    "ruleExecutionPhase": "account-overlay",
+                    "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
+                    # Candidate IDs in the legacy impact plan address the
+                    # unsplit catalogue. Run the bounded overlay catalogue in
+                    # full until its own result-slot index is established.
+                    "typedbNativeRuleSelectionEnabled": "0",
+                })
             if inference_write_lease.get("acquired"):
                 payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
             if isinstance(preflight_graph, PortfolioOntology):
@@ -5752,6 +6061,14 @@ class PortfolioOntologyProjectionRecorder:
             and str((active_metadata or {}).get("scopeTopologyVersion") or "")
             == SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION
         )
+        overlay_contract_migration_required = bool(
+            self.world_partitioned_reasoning_enabled()
+            and str((active_metadata or {}).get("status") or "").lower() == "ok"
+            and str(
+                (active_metadata or {}).get("accountOverlayProjectionContractVersion")
+                or ""
+            ) != ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION
+        )
         base = {
             "preliminaryImpactPlan": compact_inference_impact_plan(preliminary),
             "targetSymbols": list(inferred),
@@ -5761,6 +6078,7 @@ class PortfolioOntologyProjectionRecorder:
             "scopeIntegrityAuditAgeMinutes": integrity_age_minutes,
             "scopeIntegrityAuditDue": integrity_due,
             "automaticFullProjectionBlocked": active_manifest_ready,
+            "accountOverlayContractMigrationRequired": overlay_contract_migration_required,
             "queuePressure": self.reasoning_queue_pressure(reasoning_context),
             "fallbackReason": "",
             "factSlotPlan": build_fact_slot_projection_plan(
@@ -5793,6 +6111,13 @@ class PortfolioOntologyProjectionRecorder:
                 "status": "market-context-awaiting-related-subjects",
                 "eligible": True,
                 "fallbackReason": "no-related-subject-for-market-context-revision",
+            }
+        if overlay_contract_migration_required:
+            return {
+                **base,
+                "status": "account-overlay-contract-migration",
+                "eligible": False,
+                "fallbackReason": "legacy-portfolio-market-mirror-must-be-removed",
             }
         if not active_manifest_ready:
             return {

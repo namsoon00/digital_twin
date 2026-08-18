@@ -7,10 +7,9 @@ same ticker.  This module extracts the account-independent slice of an ABox
 and gives the projection service a deterministic merge operation for the
 shared ``MarketWorld``.
 
-The portfolio ABox still carries a local read mirror of market facts for the
-current native RuleBox implementation.  The mirror is explicitly labelled in
-world metadata; the shared graph is the durable cross-account source and can
-become the direct rule input without changing account ownership semantics.
+The account ABox does not carry a local read mirror. Native shared predicates
+run once in a compact SharedPremiseWorld and PortfolioWorld stores only the
+resulting premise references needed by private account rules.
 """
 
 from __future__ import annotations
@@ -74,6 +73,8 @@ ACCOUNT_RELATION_TYPES = {
 ACCOUNT_PROPERTY_KEYS = {
     "accountId",
     "portfolioId",
+    "isHolding",
+    "isWatchlist",
     "averagePrice",
     "quantity",
     "sellableQuantity",
@@ -98,7 +99,7 @@ ACCOUNT_PROPERTY_KEYS = {
 # cognitive workspace. Bump this value whenever the projection contract
 # becomes stricter so existing shared Manifests are rebuilt rather than
 # preserving a legacy property slice indefinitely.
-SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v4"
+SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v5"
 
 
 def _property_key(value: object) -> str:
@@ -565,7 +566,7 @@ def build_market_world_graph(
             "marketWorldProjection": True,
             "marketWorldProjectionMode": "shared-market-observations",
             "sharedWorldProjectionContractVersion": SHARED_WORLD_PROJECTION_CONTRACT_VERSION,
-            "marketContextMode": "shared-market-world-with-portfolio-rule-mirror",
+            "marketContextMode": "shared-market-world-direct-premises",
             "sourcePortfolioWorldId": str((source_graph.worldview or {}).get("worldId") or ""),
             "marketObservedAt": observation_time,
             "marketProjectionFilter": {

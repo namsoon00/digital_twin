@@ -1,11 +1,13 @@
 """Ontology world identity and ownership contracts.
 
-An investment ontology has two different ownership boundaries:
+An investment ontology has four explicit world boundaries:
 
 * ``MarketWorld`` contains shareable observations about instruments and the
   market environment.
 * ``KnowledgeWorld`` contains durable issuer, security-line, exposure and
   provenance relationships that outlive one quote observation.
+* ``SharedPremiseWorld`` is a compact rule-input view over the current market
+  and durable knowledge worlds. It contains no account facts.
 * ``PortfolioWorld`` contains one tenant/account's positions, policy and
   decision context.
 
@@ -28,6 +30,7 @@ DEFAULT_TENANT_ID = "local"
 SHARED_MARKET_TENANT_ID = "shared"
 MARKET_WORLD_TYPE = "market"
 KNOWLEDGE_WORLD_TYPE = "knowledge"
+SHARED_PREMISE_WORLD_TYPE = "shared-premise"
 PORTFOLIO_WORLD_TYPE = "portfolio"
 
 
@@ -60,12 +63,18 @@ def knowledge_world_id(market_id: object = "global", tenant_id: object = SHARED_
     return "knowledge:" + normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID) + ":" + normalize_market_id(market_id)
 
 
+def shared_premise_world_id(market_id: object = "global", tenant_id: object = SHARED_MARKET_TENANT_ID) -> str:
+    return "premise:" + normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID) + ":" + normalize_market_id(market_id)
+
+
 def world_type_from_id(world_id: object) -> str:
     value = str(world_id or "").strip().lower()
     if value.startswith("market:"):
         return MARKET_WORLD_TYPE
     if value.startswith("knowledge:"):
         return KNOWLEDGE_WORLD_TYPE
+    if value.startswith("premise:"):
+        return SHARED_PREMISE_WORLD_TYPE
     return PORTFOLIO_WORLD_TYPE
 
 
@@ -147,13 +156,27 @@ def knowledge_world(market_id: object = "global", tenant_id: object = SHARED_MAR
     )
 
 
+def shared_premise_world(market_id: object = "global", tenant_id: object = SHARED_MARKET_TENANT_ID) -> OntologyWorld:
+    tenant = normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID)
+    market = normalize_market_id(market_id)
+    return OntologyWorld(
+        world_id=shared_premise_world_id(market, tenant),
+        world_type=SHARED_PREMISE_WORLD_TYPE,
+        tenant_id=tenant,
+        account_id="",
+        market_id=market,
+    )
+
+
 def world_from_metadata(payload: Mapping[str, object] = None) -> OntologyWorld:
     """Rebuild a world boundary from durable projection/outbox metadata."""
     values = dict(payload or {})
     world_id = str(values.get("worldId") or values.get("world_id") or "").strip()
     world_type = str(values.get("worldType") or values.get("world_type") or world_type_from_id(world_id)).strip().lower()
     tenant_id = normalize_tenant_id(values.get("tenantId") or values.get("tenant_id") or (
-        SHARED_MARKET_TENANT_ID if world_type in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE} else DEFAULT_TENANT_ID
+        SHARED_MARKET_TENANT_ID
+        if world_type in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE, SHARED_PREMISE_WORLD_TYPE}
+        else DEFAULT_TENANT_ID
     ))
     account_id = normalize_account_id(values.get("accountId") or values.get("account_id")) if world_type == PORTFOLIO_WORLD_TYPE else ""
     market_value = values.get("marketId") or values.get("market_id") or ""
@@ -167,10 +190,21 @@ def world_from_metadata(payload: Mapping[str, object] = None) -> OntologyWorld:
             return market_world(market_id, tenant_id)
         if world_type == KNOWLEDGE_WORLD_TYPE:
             return knowledge_world(market_id, tenant_id)
+        if world_type == SHARED_PREMISE_WORLD_TYPE:
+            return shared_premise_world(market_id, tenant_id)
         return portfolio_world(account_id, tenant_id, market_id)
     return OntologyWorld(
         world_id=world_id,
-        world_type=world_type if world_type in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE, PORTFOLIO_WORLD_TYPE} else world_type_from_id(world_id),
+        world_type=(
+            world_type
+            if world_type in {
+                MARKET_WORLD_TYPE,
+                KNOWLEDGE_WORLD_TYPE,
+                SHARED_PREMISE_WORLD_TYPE,
+                PORTFOLIO_WORLD_TYPE,
+            }
+            else world_type_from_id(world_id)
+        ),
         tenant_id=tenant_id,
         account_id=account_id,
         market_id=market_id,

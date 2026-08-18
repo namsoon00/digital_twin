@@ -50,6 +50,10 @@ from ..domain.ontology_projection_fingerprint import material_graph_fingerprint
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.ontology_subject_fanout import evaluate_subject_fanout_comparison
+from ..domain.world_partitioned_reasoning import (
+    WORLD_PARTITIONED_REASONING_VERSION,
+    compile_world_partitioned_rules,
+)
 from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from_abox_rows
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
@@ -1650,7 +1654,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v10"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v11"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -4586,6 +4590,9 @@ class ScopedABoxManifestMixin:
                 "sharedWorldProjection": str(worldview.get("sharedWorldProjection") or ""),
                 "sharedWorldProjectionContractVersion": str(worldview.get("sharedWorldProjectionContractVersion") or ""),
                 "sharedWorldFullRebuild": bool(worldview.get("sharedWorldFullRebuild")),
+                "accountOverlayProjectionContractVersion": str(
+                    worldview.get("accountOverlayProjectionContractVersion") or ""
+                ),
                 "scopeDelta": dict(worldview.get("scopeDelta") or {}),
                 "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
                 "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
@@ -4941,6 +4948,7 @@ class ScopedABoxManifestMixin:
                 "sharedWorldProjection",
                 "sharedWorldProjectionContractVersion",
                 "sharedWorldFullRebuild",
+                "accountOverlayProjectionContractVersion",
             ]:
                 if key in marker and key not in properties:
                     properties[key] = marker.get(key)
@@ -4977,6 +4985,9 @@ class ScopedABoxManifestMixin:
                     properties.get("sharedWorldProjectionContractVersion") or ""
                 ),
                 "sharedWorldFullRebuild": bool(properties.get("sharedWorldFullRebuild")),
+                "accountOverlayProjectionContractVersion": str(
+                    properties.get("accountOverlayProjectionContractVersion") or ""
+                ),
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
             })
             marker_graph = PortfolioOntology(
@@ -10645,6 +10656,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "sharedWorldProjection": str(payload.get("sharedWorldProjection") or ""),
             "sharedWorldProjectionContractVersion": str(payload.get("sharedWorldProjectionContractVersion") or ""),
             "sharedWorldFullRebuild": bool(payload.get("sharedWorldFullRebuild")),
+            "accountOverlayProjectionContractVersion": str(
+                payload.get("accountOverlayProjectionContractVersion") or ""
+            ),
         }
 
     def active_abox_pointer_rows(self, world_id: str = "", limit: int = 0) -> List[Dict[str, object]]:
@@ -21032,6 +21046,42 @@ relation ontology-assertion,
         try:
             parsed_rules = rulebox_rules_from_payload({"rules": rules})
             full_parsed_rule_count = len(parsed_rules)
+            rule_execution_phase = str(
+                payload.get("ruleExecutionPhase")
+                or payload.get("worldRulePhase")
+                or ""
+            ).strip().lower()
+            world_partition = {}
+            if rule_execution_phase in {"shared-premise", "account-overlay"}:
+                world_partition = compile_world_partitioned_rules(parsed_rules)
+                if str(world_partition.get("status") or "") != "ready":
+                    return {
+                        "configured": True,
+                        "status": "invalid-world-rule-partition",
+                        "graphStore": "typedb",
+                        "source": "typedbNativeRule",
+                        "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                        "reason": "RuleBox world ownership is incomplete; no partial investment inference was produced.",
+                        "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
+                        "ruleExecutionPhase": rule_execution_phase,
+                        "worldPartitionFailures": list(world_partition.get("failures") or [])[:40],
+                        "nativeTypeDbReasoningUsed": False,
+                        "pythonCompatibilityReasonerUsed": False,
+                    }
+                parsed_rules = list((
+                    world_partition.get("sharedRules")
+                    if rule_execution_phase == "shared-premise"
+                    else world_partition.get("overlayRules")
+                ) or [])
+                rulebox_metadata.update({
+                    "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
+                    "ruleExecutionPhase": rule_execution_phase,
+                    "sourceRuleCount": int(world_partition.get("sourceRuleCount") or 0),
+                    "sharedPremiseRuleCount": int(world_partition.get("sharedRuleCount") or 0),
+                    "accountOverlayRuleCount": int(world_partition.get("overlayRuleCount") or 0),
+                    "mixedRuleCount": int(world_partition.get("mixedRuleCount") or 0),
+                    "marketReadMirrorRemoved": rule_execution_phase == "account-overlay",
+                })
             if allowed_source_kinds:
                 parsed_rules = [
                     rule
@@ -27234,6 +27284,13 @@ def inference_rulebox_metadata(
         "nativeRuleSelectionDeferredRuleIds",
         "typedbNativeRuleTimingProfile",
         "typedbNativeStageTimings",
+        "worldPartitionedReasoningVersion",
+        "ruleExecutionPhase",
+        "sourceRuleCount",
+        "sharedPremiseRuleCount",
+        "accountOverlayRuleCount",
+        "mixedRuleCount",
+        "marketReadMirrorRemoved",
     ]
     metadata: Dict[str, object] = {}
     for row in list(entity_rows or []) + list(relation_rows or []):
@@ -27269,6 +27326,10 @@ def inference_rulebox_metadata(
         "nativeRuleSelectionDeferredCount",
         "nativeRuleSelectionFullRuleCount",
         "supportingRuleFailureCount",
+        "sourceRuleCount",
+        "sharedPremiseRuleCount",
+        "accountOverlayRuleCount",
+        "mixedRuleCount",
     ]:
         if key in metadata:
             metadata[key] = int(number_or_none(metadata.get(key)) or 0)

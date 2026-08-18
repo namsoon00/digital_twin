@@ -16,6 +16,7 @@ from ..domain.independent_reasoning import (
 )
 from ..domain.investment_reasoning import FactDelta
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
+from ..domain.world_partitioned_reasoning import attach_shared_premise_evidence
 
 
 VERIFIED_PROJECTION_STATUSES = {
@@ -399,6 +400,7 @@ class ScopedTypeDBInferenceExecutor:
         results = {}
         publication_receipts = []
         publication_elapsed_ms = 0
+        direct_shared_premise_count = 0
         for snapshot in snapshots or []:
             account_id = str(getattr(snapshot, "account_id", "") or "")
 
@@ -409,7 +411,80 @@ class ScopedTypeDBInferenceExecutor:
             reasoning_context = dict(request.context)
             reuse_proof = {"status": "not-configured", "reuseEligible": False}
             reusable_projection = {"status": "not-configured", "reuseEligible": False}
-            if self.shared_inference_service is not None:
+            premise_proof = {}
+            partitioned_reader = getattr(
+                self.projection_recorder,
+                "world_partitioned_reasoning_enabled",
+                None,
+            )
+            partitioned_mode = bool(
+                callable(partitioned_reader) and partitioned_reader()
+            )
+            if partitioned_mode:
+                premise_builder = getattr(
+                    self.projection_recorder,
+                    "prepare_shared_premises",
+                    None,
+                )
+                try:
+                    premise_proof = dict(
+                        premise_builder(
+                            snapshot,
+                            target_symbols=list(request.symbols),
+                            reasoning_context=reasoning_context,
+                            progress_callback=progress,
+                        ) or {}
+                    ) if callable(premise_builder) else {
+                        "status": "shared-premise-builder-unavailable",
+                        "ready": False,
+                        "retryable": False,
+                    }
+                except Exception as error:  # noqa: BLE001 - fail closed before private projection.
+                    premise_proof = {
+                        "status": "shared-premise-preparation-error",
+                        "ready": False,
+                        "retryable": True,
+                        "reason": str(error)[:240],
+                    }
+                if not bool(premise_proof.get("ready")):
+                    result = {
+                        "saved": False,
+                        "status": str(
+                            premise_proof.get("status")
+                            or "shared-premise-not-ready"
+                        ),
+                        "reason": str(
+                            premise_proof.get("reason")
+                            or "SharedPremiseWorld must complete before account inference."
+                        )[:240],
+                        "retryable": bool(premise_proof.get("retryable", True)),
+                        "recommendedRetryAfterSeconds": int(
+                            premise_proof.get("recommendedRetryAfterSeconds") or 10
+                        ),
+                        "preservedActiveGeneration": True,
+                        "worldPartitionedReasoning": premise_proof,
+                    }
+                    snapshot.metadata.setdefault("ontology", {})["projection"] = result
+                    results[account_id] = result
+                    progress(
+                        "ontology_projection.shared_premise_blocked",
+                        {"status": result["status"]},
+                    )
+                    continue
+                reasoning_context["sharedPremiseProof"] = premise_proof
+                reuse_proof = {
+                    "status": "ready-direct-shared-premise-world",
+                    "reuseEligible": True,
+                    "symbols": dict(premise_proof.get("symbols") or {}),
+                    "targetSymbols": list(request.symbols),
+                    "marketRuleCatalogIds": list(premise_proof.get("sharedRuleIds") or []),
+                    "matchedMarketRuleIds": sorted({
+                        str(trace.get("ruleId") or "")
+                        for trace in premise_proof.get("traces") or []
+                        if isinstance(trace, dict) and str(trace.get("ruleId") or "")
+                    }),
+                }
+            elif self.shared_inference_service is not None:
                 reuse_reader = getattr(
                     self.shared_inference_service,
                     "reusable_portfolio_projection",
@@ -462,7 +537,7 @@ class ScopedTypeDBInferenceExecutor:
                         "reuseEligible": False,
                         "reason": str(error)[:180],
                     }
-            if bool(reuse_proof.get("reuseEligible")):
+            if bool(reuse_proof.get("reuseEligible")) and not partitioned_mode:
                 reasoning_context["sharedInferenceReuseProof"] = reuse_proof
 
             recorder = self.projection_recorder.record_snapshot
@@ -484,7 +559,10 @@ class ScopedTypeDBInferenceExecutor:
                     "recommendedRetryAfterSeconds": 15,
                 }
                 snapshot.metadata.setdefault("ontology", {})["projection"] = result
-            if bool(reuse_proof.get("reuseEligible")) and self.shared_inference_service is not None:
+            if partitioned_mode and bool(premise_proof.get("ready")):
+                result = attach_shared_premise_evidence(result, premise_proof)
+                direct_shared_premise_count += 1
+            elif bool(reuse_proof.get("reuseEligible")) and self.shared_inference_service is not None:
                 evidence_composer = getattr(
                     self.shared_inference_service,
                     "attach_shared_market_evidence",
@@ -493,7 +571,16 @@ class ScopedTypeDBInferenceExecutor:
                 if callable(evidence_composer):
                     result = dict(evidence_composer(result, reuse_proof) or result)
             results[account_id] = result
-            if self.shared_inference_service is not None:
+            if partitioned_mode:
+                result["sharedInferenceExecution"] = {
+                    "status": "direct-shared-premise-world",
+                    "reuseProofStatus": str(reuse_proof.get("status") or ""),
+                    "reuseEligible": bool(reuse_proof.get("reuseEligible")),
+                    "publicationStatus": "not-required",
+                    "portfolioProjectionReused": False,
+                    "decisionPathAffected": True,
+                }
+            elif self.shared_inference_service is not None:
                 try:
                     account_publication_started = time.perf_counter()
                     publication = dict(
@@ -521,7 +608,14 @@ class ScopedTypeDBInferenceExecutor:
                 }
                 publication_receipts.append(publication)
         self.last_shared_publication_ms = publication_elapsed_ms
-        if publication_receipts:
+        if direct_shared_premise_count:
+            self.last_shared_publication = {
+                "status": "direct-shared-premise-world",
+                "publicationCount": 0,
+                "directAccountCount": direct_shared_premise_count,
+                "decisionPathAffected": True,
+            }
+        elif publication_receipts:
             self.last_shared_publication = {
                 "status": (
                     "error"

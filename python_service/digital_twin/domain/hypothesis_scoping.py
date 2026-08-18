@@ -18,7 +18,7 @@ import re
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 
-HYPOTHESIS_SCOPE_VERSION = "typedb-hypothesis-scope-v1"
+HYPOTHESIS_SCOPE_VERSION = "typedb-hypothesis-scope-v2"
 
 MARKET_SHARED_SCOPE = "market-shared"
 ACCOUNT_ONLY_SCOPE = "account-only"
@@ -81,6 +81,17 @@ ACCOUNT_FIELDS = {
     "decisionstage",
     "allowedactions",
     "blockedactions",
+    "positiontotradingvaluepct",
+    "exitdaysattenpctadv",
+    "tradingslippagerisk",
+    "policydeltaratio",
+    "volatilitypolicydeltapct",
+    "drawdownpolicydeltapct",
+    "correlationpolicydelta",
+    "increasecount20d",
+    "reentered",
+    "correspondence",
+    "classification",
 }
 
 MARKET_FIELDS = {
@@ -143,6 +154,14 @@ ACCOUNT_RELATION_TYPES = {
     "BLOCKS_ACTION",
     "HAS_ACTION_CANDIDATE",
     "CREATES_NOTIFICATION_INTENT",
+    "HAS_EXECUTION_METRIC",
+    "HAS_RISK_SNAPSHOT",
+    "HAS_REBALANCE_STATE",
+    "HAS_PORTFOLIO_STATE",
+    "OBSERVES_ACCOUNT_ACTION",
+    "HAS_EXPOSURE",
+    "HAS_PORTFOLIO_ACTIVITY",
+    "HAS_SHARED_MARKET_PREMISE",
 }
 
 MARKET_RELATION_TYPES = {
@@ -179,6 +198,13 @@ MARKET_RELATION_TYPES = {
     "HAS_VALUATION",
     "HAS_VALUATION_OPPORTUNITY",
     "HAS_VALUATION_RISK",
+    "HAS_PRICE_PATH",
+    "HAS_FINANCIAL_STATE",
+    "HAS_VALUATION_SNAPSHOT",
+    "HAS_VALUATION_METRIC",
+    "HAS_GOVERNANCE_STATE",
+    "HAS_COVERAGE_GAP",
+    "HAS_FX_EXPOSURE",
     "RECLAIMS_LEVEL",
     "RETESTS_LEVEL",
     "SUPPORTS_THESIS",
@@ -204,6 +230,17 @@ ACCOUNT_TARGET_KINDS = {
     "loss-defense-evidence",
     "strategy-fit-assessment",
     "strategy-mismatch-risk",
+    "portfolio-risk-snapshot",
+    "rebalance-state",
+    "portfolio-state",
+    "decision-action-observation",
+    "position-exposure",
+    "sector-exposure",
+    "currency-exposure",
+    "cash-exposure",
+    "portfolio-activity-episode",
+    "shared-market-premise",
+    "execution-metric",
 }
 
 MARKET_TARGET_KINDS = {
@@ -251,6 +288,11 @@ MARKET_TARGET_KINDS = {
     "trend-transition",
     "validation-assessment",
     "valuation-assumption",
+    "price-path",
+    "company-financial-state",
+    "company-valuation-state",
+    "company-governance-state",
+    "fx-rate",
 }
 
 
@@ -319,7 +361,10 @@ def _scope_override(condition: Mapping[str, object]) -> str:
         "account": "account",
         "accountonly": "account",
         "mixed": "mixed",
-        "unverified": "unverified",
+        # ``unverified`` was persisted by the old bootstrap classifier. It is
+        # a request to reclassify against the current ownership vocabulary,
+        # not an operator assertion that ambiguity must remain forever.
+        "unverified": "",
     }.get(value, "")
 
 
@@ -353,7 +398,17 @@ def condition_scope_profile(condition: Mapping[str, object], index: int = 0) -> 
         or relation_type in MARKET_RELATION_TYPES
         or target_kind in MARKET_TARGET_KINDS
     )
-    if explicit_scope == "mixed":
+    # A fact-change about account P/L is an account overlay even though the
+    # underlying quote is shared. PortfolioWorld stores the derived P/L, not
+    # the raw market observation that produced it.
+    account_derived_change = bool(
+        target_kind == "factchange"
+        and normalized_fields.intersection(ACCOUNT_FIELDS)
+    )
+    if account_derived_change:
+        scope = "account"
+        source = "account-derived-overlay"
+    elif explicit_scope == "mixed":
         scope = "mixed"
         source = "rulebox-explicit"
     elif explicit_scope == "market" and has_account_structure:

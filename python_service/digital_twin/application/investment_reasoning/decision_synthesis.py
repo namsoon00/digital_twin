@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
+from ...domain.data_freshness import freshness_from_snapshot_subject
 from ...domain.independent_reasoning import IndependentReasoningRequest
 from ...domain.investment_reasoning import decision_synthesis_from_relation_context
 from ...domain.message_types import (
@@ -153,6 +154,14 @@ class V2GraphDecisionCandidateBuilder:
             "v2DecisionSynthesis": synthesis.to_dict(),
             "ontologyRelationContext": dict(relation),
             "ontologyPromptContext": _mapping(relation.get("promptContext")),
+            "dataFreshness": freshness_from_snapshot_subject(
+                snapshot,
+                symbol,
+                rule,
+                settings=self.settings,
+            ),
+            "dataFreshnessRequired": True,
+            "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
         }
         return AlertEvent(
             snapshot.account_id,
@@ -236,10 +245,15 @@ def build_investment_insight_events_by_snapshot(snapshots, events):
         by_account.setdefault(event.account_id, []).append(event)
     insights = []
     for snapshot in snapshots or []:
-        insights.extend(
-            build_investment_insight_events(
-                snapshot,
-                by_account.get(_text(getattr(snapshot, "account_id", ""))) or [],
-            )
+        account_insights = build_investment_insight_events(
+            snapshot,
+            by_account.get(_text(getattr(snapshot, "account_id", ""))) or [],
         )
+        generated_at = _text(getattr(snapshot, "generated_at", ""))
+        for insight in account_insights:
+            if generated_at:
+                insight.generated_at = generated_at
+            insight.metadata = dict(insight.metadata or {})
+            insight.metadata.setdefault("reasoningSourceObservedAt", generated_at)
+        insights.extend(account_insights)
     return insights

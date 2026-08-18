@@ -387,6 +387,65 @@ def freshness_from_position(position: Dict[str, object], message_type: str, sett
     return aggregate_freshness(records, message_type, settings=settings, now=now)
 
 
+def freshness_from_snapshot_subject(
+    snapshot,
+    symbol: object,
+    message_type: str,
+    settings: Dict[str, object] = None,
+    now=None,
+) -> Dict[str, object]:
+    normalized_symbol = str(symbol or "").upper().strip()
+    for position in list(getattr(snapshot, "positions", []) or []) + list(
+        getattr(snapshot, "watchlist", []) or []
+    ):
+        if isinstance(position, dict):
+            payload = dict(position)
+        elif callable(getattr(position, "to_dict", None)):
+            payload = dict(position.to_dict() or {})
+        else:
+            payload = dict(vars(position)) if hasattr(position, "__dict__") else {}
+        if str(payload.get("symbol") or "").upper().strip() == normalized_symbol:
+            return freshness_from_position(payload, message_type, settings=settings, now=now)
+
+    external_signals = getattr(snapshot, "external_signals", {})
+    crypto_freshness = (
+        external_signals.get("cryptoFreshness")
+        if isinstance(external_signals, dict)
+        and isinstance(external_signals.get("cryptoFreshness"), dict)
+        else {}
+    )
+    if normalized_symbol in {"BTC", "ETH"} and crypto_freshness:
+        record = freshness_record(
+            "CoinGecko",
+            message_type,
+            settings=settings,
+            source_fetched_at=crypto_freshness.get("fetchedAt"),
+            source_as_of=crypto_freshness.get("fetchedAt"),
+            data_quality=(
+                "actual"
+                if str(crypto_freshness.get("status") or "").lower() == "fresh"
+                else "partial"
+            ),
+            now=now,
+            require_source_as_of=True,
+        )
+        if str(crypto_freshness.get("status") or "").lower() != "fresh":
+            record["status"] = "stale"
+            record["reason"] = str(
+                crypto_freshness.get("reason") or "CoinGecko 신선도 기준 미충족"
+            )
+        return aggregate_freshness([record], message_type, settings=settings, now=now)
+
+    return freshness_record(
+        "accountSnapshot",
+        message_type,
+        settings=settings,
+        source_fetched_at=getattr(snapshot, "generated_at", ""),
+        data_quality=getattr(snapshot, "mode", ""),
+        now=now,
+    )
+
+
 def aggregate_freshness(records: Iterable[Dict[str, object]], message_type: str, settings: Dict[str, object] = None, now=None) -> Dict[str, object]:
     items = [dict(item) for item in records or [] if isinstance(item, dict)]
     if not items:

@@ -1,11 +1,16 @@
 import inspect
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from digital_twin.application.investment_reasoning import (
     InvestmentReasoningOrchestrator,
     V2GraphDecisionCandidateBuilder,
 )
+from digital_twin.application.investment_reasoning.decision_synthesis import (
+    build_investment_insight_events_by_snapshot,
+)
+from digital_twin.domain.data_freshness import evaluate_notification_data_freshness
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
 from digital_twin.domain.investment_reasoning import (
@@ -20,6 +25,7 @@ from digital_twin.domain.investment_reasoning import (
     decision_synthesis_from_relation_context,
     reasoning_rule_inventory,
 )
+from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
 
 
 class InMemoryReasoningCaseRepository:
@@ -86,6 +92,65 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
         self.assertNotIn("RealtimeMonitor", source)
         self.assertNotIn("events_for_snapshot", source)
+
+    def test_v2_candidate_preserves_source_freshness_for_notification_delivery(self):
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        snapshot = AccountSnapshot(
+            "account:1",
+            "Test",
+            "toss",
+            "live",
+            "ok",
+            observed_at,
+            PortfolioSummary(1000.0, 1000.0, 0.0, [], [], 100.0),
+            positions=[Position(
+                symbol="NVDA",
+                name="NVIDIA",
+                current_price=200.0,
+                quote_source="market-feed",
+                data_quality="actual",
+                source_as_of=observed_at,
+                source_fetched_at=observed_at,
+            )],
+        )
+        relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]
+        relation.update({
+            "subject": {"symbol": "NVDA", "name": "NVIDIA"},
+            "facts": {"source": "watchlist", "currentPrice": 200.0},
+            "source": "typedbInferenceBox",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "sourceAboxSnapshotId": "abox:1",
+            "inferenceGenerationId": "generation:1",
+            "generationAligned": True,
+            "allowedActions": ["WATCH"],
+            "decision": {
+                "candidateAction": "WATCH",
+                "selectedRuleId": "graph.price.recovery.v1",
+                "notificationSeverity": "WATCH",
+                "basis": "typedbInferenceBox",
+            },
+            "graphStoreInference": {
+                "traces": [{"id": "trace:1"}],
+                "relations": [{"ruleId": "graph.price.recovery.v1"}],
+            },
+        })
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+
+        event = builder._base_event(snapshot, relation, synthesis)
+
+        self.assertEqual("fresh", event.metadata["dataFreshness"]["status"])
+        source = event.metadata["dataFreshness"]["sources"][0]
+        self.assertEqual(observed_at, source["sourceAsOf"])
+        self.assertEqual(observed_at, event.metadata["reasoningSourceObservedAt"])
+        insight = build_investment_insight_events_by_snapshot([snapshot], [event])[0]
+        freshness = evaluate_notification_data_freshness(
+            {"messageType": insight.rule, **dict(insight.metadata or {})},
+            now=datetime.now(timezone.utc),
+        )
+        self.assertEqual(observed_at, insight.generated_at)
+        self.assertTrue(freshness.should_send)
 
     def test_typedb_relation_context_becomes_auditable_action_alternatives(self):
         relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]

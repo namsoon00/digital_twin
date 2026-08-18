@@ -60,6 +60,16 @@ class LatestMonitorSnapshotReasoningSource:
         # cadence. It is not an investment threshold or a decision rule.
         return max(60, min(3600, self.monitor_interval_seconds() * 2))
 
+    def exact_boundary_required(self, reasoning_context: Dict[str, object] = None) -> bool:
+        context = reasoning_context if isinstance(reasoning_context, dict) else {}
+        is_v2_request = bool(
+            str(context.get("reasoningEngineDeploymentId") or "").strip()
+            or str(context.get("reasoningRequestContractVersion") or "").strip()
+        )
+        return is_v2_request and str(
+            self.settings.get("reasoningEngineV2RequireSourceBoundary") or "1"
+        ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
     @staticmethod
     def target_symbols(reasoning_context: Dict[str, object] = None):
         context = reasoning_context if isinstance(reasoning_context, dict) else {}
@@ -125,6 +135,11 @@ class LatestMonitorSnapshotReasoningSource:
                 state = None
             if isinstance(state, dict) and state:
                 return copy.deepcopy(state)
+            # A named historical boundary is immutable. Falling through to a
+            # newer mutable snapshot would make replay results non-reproducible.
+            return {}
+        if boundary_generated_at:
+            return {}
         reader = getattr(self.monitor_store, "reasoning_snapshot_state", None)
         if callable(reader):
             try:
@@ -189,6 +204,22 @@ class LatestMonitorSnapshotReasoningSource:
                 "mode": "missing",
                 "status": "Point-in-time monitor snapshot is unavailable",
                 "generatedAt": boundary_generated_at,
+                "permanentMissing": True,
+            }
+        if boundary_generated_at:
+            return {
+                "accountId": str(account_id or ""),
+                "mode": "missing",
+                "status": "Point-in-time monitor snapshot reader is unavailable",
+                "generatedAt": boundary_generated_at,
+                "permanentMissing": True,
+            }
+        if self.exact_boundary_required(reasoning_context):
+            return {
+                "accountId": str(account_id or ""),
+                "mode": "missing",
+                "status": "An exact reasoning source boundary is required",
+                "generatedAt": "",
                 "permanentMissing": True,
             }
         reader = getattr(self.monitor_store, "snapshot_metadata", None)

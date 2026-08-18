@@ -34,6 +34,7 @@ from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_operational_helpers import _json_loads
 from .mysql_notification_jobs import MySQLNotificationJobStore
+from .mysql_reasoning_ingress import ingress_reasoning_event_with_connection
 from .operational_common import json_dumps
 from .settings import utc_now
 
@@ -134,12 +135,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 return False
             insert_domain_event_with_connection(connection, domain_event)
             insert_domain_event_with_connection(connection, reasoning_event)
-            from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
-
-            MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(
-                connection,
-                reasoning_event,
-            )
+            ingress_reasoning_event_with_connection(connection, reasoning_event)
             return True
 
         return bool(self.transaction_with_deadlock_retry("rebalance-review-window", operation))
@@ -214,9 +210,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             insert_domain_event_with_connection(connection, domain_event)
         if accepted and reasoning_event:
             insert_domain_event_with_connection(connection, reasoning_event)
-            from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
-
-            MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+            ingress_reasoning_event_with_connection(connection, reasoning_event)
         return accepted
 
     def lifecycle_trace(self, decision_episode_id: str) -> Dict[str, object]:
@@ -629,9 +623,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 insert_domain_event_with_connection(connection, domain_event)
             if reasoning_event:
                 insert_domain_event_with_connection(connection, reasoning_event)
-                from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
-
-                MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+                ingress_reasoning_event_with_connection(connection, reasoning_event)
             rebalance_recorded = self.record_rebalance_state_with_connection(
                 connection,
                 rebalance_state,
@@ -877,9 +869,7 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
                 insert_domain_event_with_connection(connection, domain_event)
             if risk_changed and reasoning_event:
                 insert_domain_event_with_connection(connection, reasoning_event)
-                from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
-
-                MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
+                ingress_reasoning_event_with_connection(connection, reasoning_event)
             rebalance_recorded = self.record_rebalance_state_with_connection(
                 connection,
                 rebalance_state,

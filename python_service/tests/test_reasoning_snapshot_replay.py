@@ -188,6 +188,18 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertTrue(result["permanent"])
         self.assertEqual("rejected-source-snapshot", result["status"])
 
+    def test_v2_request_without_an_exact_source_boundary_is_rejected(self):
+        source = LatestMonitorSnapshotReasoningSource(SnapshotStore(monitor_state()))
+
+        result = source.preflight([account()], {
+            "reasoningEngineDeploymentId": "ontology-v2-production-r4",
+            "sourceObservedAt": "2026-07-29T00:02:00Z",
+        })
+
+        self.assertFalse(result["ready"])
+        self.assertTrue(result["permanent"])
+        self.assertEqual("rejected-source-snapshot", result["status"])
+
     def test_portfolio_scope_keeps_symbol_less_insight_for_the_matching_account(self):
         runner = MonitorRunner.__new__(MonitorRunner)
         portfolio_event = AlertEvent("acct", "Test", "warning", "portfolioOntologySignal", "portfolio", "Portfolio", [])

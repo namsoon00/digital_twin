@@ -14,10 +14,14 @@ from ...domain.investment_reasoning import (
     CASE_CREATED,
     CASE_DEFERRED,
     CASE_DECISION_SYNTHESIZED,
+    CASE_EXPIRED,
+    CASE_FAILED,
     CASE_HYPOTHESES_READY,
     CASE_INFERENCE_COMPLETED,
     CASE_INPUT_READY,
     CASE_PUBLISHED,
+    CASE_SUPPRESSED,
+    CASE_SUPERSEDED,
     CASE_VALIDATED,
     FinalDecision,
     GraphHypothesisManager,
@@ -343,6 +347,45 @@ class InvestmentReasoningOrchestrator:
             reasoning_case.transition(CASE_PUBLISHED, "notification-delivery-completed")
         self.repository.save(reasoning_case)
         return reasoning_case
+
+    def notification_suppressed(
+        self,
+        context: Mapping[str, object],
+        reason: str,
+        disposition: str = CASE_SUPPRESSED,
+    ) -> Optional[ReasoningCase]:
+        case_id = self.case_id_from_context(context)
+        if not case_id:
+            return None
+        reasoning_case = self.required(case_id)
+        target = str(disposition or CASE_SUPPRESSED).upper()
+        if target not in {CASE_SUPPRESSED, CASE_SUPERSEDED, CASE_EXPIRED}:
+            target = CASE_SUPPRESSED
+        if reasoning_case.stage not in {
+            CASE_COMPLETED,
+            CASE_PUBLISHED,
+            CASE_BLOCKED,
+            CASE_FAILED,
+            CASE_SUPPRESSED,
+            CASE_SUPERSEDED,
+            CASE_EXPIRED,
+        }:
+            reasoning_case.transition(
+                target,
+                str(reason or "notification-delivery-suppressed"),
+                {"published": False},
+            )
+            self.repository.save(reasoning_case)
+        return reasoning_case
+
+    def case_superseded(self, case_id: str, reason: str) -> Optional[ReasoningCase]:
+        if not str(case_id or "").strip():
+            return None
+        return self.notification_suppressed(
+            {"investmentReasoningCaseId": str(case_id or "").strip()},
+            reason,
+            CASE_SUPERSEDED,
+        )
 
     def ai_failed(self, context: Mapping[str, object], reason: str) -> Optional[ReasoningCase]:
         case_id = str(_mapping(context).get("investmentReasoningCaseId") or "")

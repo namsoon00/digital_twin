@@ -430,6 +430,7 @@ class NotificationQueueRunner:
             self.apply_account_delivery_context(job, account)
             if not self.dry_run and account and account.quiet_hours_active(self.now_provider(), job.message_type):
                 self.mark_quiet_hours_suppressed(job, account)
+                self.mark_reasoning_case_suppressed(job, "account quiet hours")
                 self.record_operational_delivery(job, "suppressed", "quiet hours")
                 self.last_run_details.append(self.job_detail(job, "suppressed", "quiet hours"))
                 processed += 1
@@ -539,6 +540,17 @@ class NotificationQueueRunner:
         except Exception:  # noqa: BLE001 - delivery completion remains authoritative.
             return
 
+    def mark_reasoning_case_suppressed(self, job: NotificationJob, reason: str) -> None:
+        if self.reasoning_orchestrator is None:
+            return
+        try:
+            self.reasoning_orchestrator.notification_suppressed(
+                dict(job.context or {}),
+                str(reason or "notification suppressed"),
+            )
+        except Exception:  # noqa: BLE001 - queue disposition remains authoritative.
+            return
+
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:
             return False
@@ -568,6 +580,7 @@ class NotificationQueueRunner:
         else:
             self.queue.mark_failed(job, reason)
         self.record_operational_delivery(job, "suppressed", reason)
+        self.mark_reasoning_case_suppressed(job, reason)
         self.last_run_details.append(self.job_detail(job, "suppressed", "final AI action unchanged"))
         return False
 
@@ -580,6 +593,8 @@ class NotificationQueueRunner:
         return True
 
     def record_eligibility_outcome(self, job: NotificationJob, status: str, reason: str = "") -> None:
+        if str(status or "").strip().lower() == "suppressed":
+            self.mark_reasoning_case_suppressed(job, reason)
         self.last_run_details.append(self.job_detail(job, status, reason))
 
     def record_lifecycle(

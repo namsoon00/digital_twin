@@ -19,6 +19,8 @@ from digital_twin.domain.investment_reasoning import (
     CASE_BLOCKED,
     CASE_DECISION_SYNTHESIZED,
     CASE_PUBLISHED,
+    CASE_SUPPRESSED,
+    CASE_SUPERSEDED,
     CASE_VALIDATED,
     FactDelta,
     GraphHypothesisManager,
@@ -46,6 +48,28 @@ class InMemoryReasoningCaseRepository:
             (item for item in self.cases.values() if item.request_id == request_id),
             None,
         )
+
+
+class ReasoningCaseDispositionTests(unittest.TestCase):
+    def test_suppressed_and_superseded_are_terminal_explained_outcomes(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        first = orchestrator.start(reasoning_request())
+
+        suppressed = orchestrator.notification_suppressed(
+            {"investmentReasoningCaseId": first.case_id},
+            "delivery cooldown",
+        )
+
+        self.assertEqual(CASE_SUPPRESSED, suppressed.stage)
+        self.assertTrue(suppressed.completed_at)
+
+        second_request = reasoning_request(["FUNDAMENTAL_OBSERVATION"])
+        second = orchestrator.start(second_request)
+        superseded = orchestrator.case_superseded(second.case_id, "newer subject revision")
+
+        self.assertEqual(CASE_SUPERSEDED, superseded.stage)
+        self.assertTrue(superseded.completed_at)
 
 
 def reasoning_request(fact_types=None):

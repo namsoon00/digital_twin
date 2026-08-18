@@ -1437,6 +1437,8 @@ MYSQL_SCHEMA = [
         source_event_id VARCHAR(191) NOT NULL,
         source_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
         source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
+        source_boundary_json LONGTEXT NOT NULL,
+        source_payload_hash CHAR(64) NOT NULL DEFAULT '',
         scope_key VARCHAR(191) NOT NULL,
         input_fingerprint VARCHAR(64) NOT NULL,
         request_json LONGTEXT NOT NULL,

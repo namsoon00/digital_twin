@@ -144,6 +144,16 @@ class NotificationAIRequestEnqueuer:
                     str(outcome.get("requestId") or request.request_id),
                     request.notification_job_id,
                 )
+            elif status in {"coalesced-identical", "superseded"}:
+                self.reasoning_orchestrator.case_superseded(
+                    reasoning_case_id,
+                    "A newer or identical AI request owns this subject decision.",
+                )
+            for superseded_case_id in outcome.get("supersededReasoningCaseIds") or []:
+                self.reasoning_orchestrator.case_superseded(
+                    str(superseded_case_id or ""),
+                    "A newer AI request replaced this subject decision.",
+                )
         return outcome
 
 

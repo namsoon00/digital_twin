@@ -215,9 +215,21 @@ class ReasoningEnginePlatformService:
                 configured_v2 = str(self.settings.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow")
                 candidate = configured_v2 if configured_v2 not in {active, delivery} else ""
             control = self.registry.set_control(active, delivery, candidate)
+        retirement = {}
+        retire = getattr(self.registry, "retire_unselected", None)
+        if callable(retire):
+            retirement = dict(retire(
+                "v2",
+                [
+                    control.active_deployment_id,
+                    control.delivery_deployment_id,
+                    control.candidate_deployment_id,
+                ],
+            ) or {})
         response = {
             "control": control.to_dict(),
             "deployments": self.registry.list(),
+            "deploymentRetirement": retirement,
         }
         candidate_id = str(control.candidate_deployment_id or "")
         candidate_release = self.release_identity(candidate_id) if candidate_id else {}

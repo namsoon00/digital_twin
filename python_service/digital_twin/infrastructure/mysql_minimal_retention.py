@@ -223,7 +223,7 @@ class MySQLMinimalRetentionRepository:
             "investmentReasoningCases": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `investment_reasoning_cases` WHERE "
-                "((stage IN ('COMPLETED', 'PUBLISHED', 'BLOCKED', 'FAILED') "
+                "((stage IN ('COMPLETED', 'PUBLISHED', 'BLOCKED', 'FAILED', 'SUPPRESSED', 'SUPERSEDED', 'EXPIRED') "
                 "AND completed_at <> '' AND completed_at < " + _cutoff_sql() + ") "
                 "OR (stage = 'VALIDATED' AND updated_at < " + _cutoff_sql() + "))",
                 (cutoffs["investmentReasoningCases"], cutoffs["investmentReasoningCases"]),
@@ -622,7 +622,7 @@ class MySQLMinimalRetentionRepository:
         return self._result("reasoning_engine_comparisons", deleted, bytes_deleted)
 
     def _delete_investment_reasoning_cases(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        statuses = ("COMPLETED", "PUBLISHED", "BLOCKED", "FAILED")
+        statuses = ("COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED")
         candidates = self._byte_bounded_candidates(
             "SELECT case_id, OCTET_LENGTH(payload_json) AS payload_bytes "
             "FROM `investment_reasoning_cases` WHERE ((stage IN ("

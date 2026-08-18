@@ -444,10 +444,17 @@ def independent_reasoning_request(
         "eventFactBoundaryAuthoritative": authoritative_fact_boundary,
         "eventDependencyBoundaryAuthoritative": authoritative_dependency_boundary,
         "verifiedSourceSnapshots": [
-            dict((event.payload or {}).get("verifiedSourceSnapshot") or {})
+            boundary
             for event in events
-            if isinstance((event.payload or {}).get("verifiedSourceSnapshot"), Mapping)
-            and (event.payload or {}).get("verifiedSourceSnapshot")
+            for boundary in (
+                [dict((event.payload or {}).get("verifiedSourceSnapshot") or {})]
+                + [
+                    dict(value)
+                    for value in (event.payload or {}).get("verifiedSourceSnapshots") or []
+                    if isinstance(value, Mapping)
+                ]
+            )
+            if boundary and str(boundary.get("snapshotId") or boundary.get("generatedAt") or "").strip()
         ],
         "reasoningEngineDeploymentId": str(deployment_id or ""),
         "reasoningEngineReleaseManifest": release,

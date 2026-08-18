@@ -1977,6 +1977,8 @@ def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> Indepen
     store_settings = dict(configured)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    from .mysql_reasoning_ingress import MySQLReasoningIngressRouter
+
     return IndependentReasoningJobRunner(
         queue=stores.reasoning_engine_job_store(configured),
         engine=build_v2_reasoning_engine(configured),
@@ -1989,6 +1991,7 @@ def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> Indepen
             "reasoning-v2",
             stores.operational_storage_capacity_state_store(store_settings),
         ),
+        route_reconciler=MySQLReasoningIngressRouter(store_settings).reconcile,
     )
 
 

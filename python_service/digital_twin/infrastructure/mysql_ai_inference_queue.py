@@ -56,11 +56,19 @@ def _compact_notification_payload(job: NotificationJob) -> Dict[str, object]:
     return payload
 
 
+def _reasoning_case_id_from_context(value: object) -> str:
+    context = _json_loads(value, {})
+    embedded = context.get("investmentReasoningCase")
+    embedded = embedded if isinstance(embedded, dict) else {}
+    return _clean(context.get("investmentReasoningCaseId") or embedded.get("caseId"))
+
+
 class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
     """Atomically coordinate AI work and its source notification outbox row."""
 
     def enqueue(self, job: NotificationJob, request: AIInferenceRequest) -> Dict[str, object]:
         stamp = utc_now()
+        superseded_case_ids = []
         with self.transaction() as connection:
             source = connection.execute(
                 "SELECT status, text, payload_json FROM notification_jobs WHERE job_id = %s FOR UPDATE",
@@ -222,7 +230,14 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
 
             self.insert_request_with_connection(connection, request)
             if latest:
-                self.supersede_request_with_connection(connection, latest, request.request_id, stamp)
+                superseded_case_id = self.supersede_request_with_connection(
+                    connection,
+                    latest,
+                    request.request_id,
+                    stamp,
+                )
+                if superseded_case_id:
+                    superseded_case_ids.append(superseded_case_id)
             connection.execute(
                 """
                 UPDATE ai_inference_subject_heads
@@ -271,6 +286,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "notificationJobId": request.notification_job_id,
             "subjectKey": request.subject_key,
             "existing": False,
+            "supersededReasoningCaseIds": superseded_case_ids,
         }
 
     def insert_request_with_connection(self, connection, request: AIInferenceRequest) -> None:
@@ -324,10 +340,11 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         row: Mapping[str, object],
         superseded_by: str,
         stamp: str,
-    ) -> None:
+    ) -> str:
         request_id = _clean(row.get("request_id"))
         notification_job_id = _clean(row.get("notification_job_id"))
         status = _clean(row.get("status"))
+        reasoning_case_id = _reasoning_case_id_from_context(row.get("context_json"))
         if status in ACTIVE_STATES:
             connection.execute(
                 """
@@ -368,6 +385,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 superseded_by=superseded_by,
             ),
         )
+        return reasoning_case_id
 
     def claim(self, worker_id: str, limit: int = 1, lease_seconds: int = 360) -> List[AIInferenceRequest]:
         worker = _clean(worker_id) or "notification-ai"

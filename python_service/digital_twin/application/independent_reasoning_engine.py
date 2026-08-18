@@ -772,6 +772,7 @@ class IndependentReasoningJobRunner:
         worker_id: str = "",
         event_reader=None,
         execution_guard=None,
+        route_reconciler=None,
     ):
         import os
         import socket
@@ -783,6 +784,9 @@ class IndependentReasoningJobRunner:
         self.settings = dict(settings or {})
         self.event_reader = event_reader
         self.execution_guard = execution_guard
+        self.route_reconciler = route_reconciler
+        self.route_reconciliation = None
+        self.route_reconciled_at = 0.0
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
 
     def enabled(self) -> bool:
@@ -792,6 +796,7 @@ class IndependentReasoningJobRunner:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
+        route_reconciliation = self.reconcile_ingress_route()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
         guard = self.execution_readiness()
@@ -820,6 +825,7 @@ class IndependentReasoningJobRunner:
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
                 "queue": health["queue"],
+                "routeReconciliation": route_reconciliation,
             }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
@@ -852,6 +858,7 @@ class IndependentReasoningJobRunner:
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
                 "queue": self.queue_summary(descriptor.deployment_id),
+                "routeReconciliation": route_reconciliation,
             }
         jobs, resharded = self.reshard_oversized_jobs(jobs)
         if not jobs:
@@ -949,6 +956,8 @@ class IndependentReasoningJobRunner:
             })
             if str(health.get("status") or "") == "ready":
                 health.pop("lastError", None)
+                health.pop("executionGuard", None)
+            health["routeReconciliation"] = route_reconciliation
             self.registry.update_health(descriptor.deployment_id, health)
             return {
                 "status": outcome,
@@ -960,6 +969,7 @@ class IndependentReasoningJobRunner:
                 "jobIds": job_ids,
                 "result": result,
                 "queue": health["queue"],
+                "routeReconciliation": route_reconciliation,
             }
         except Exception as error:  # noqa: BLE001 - durable retry owns recovery.
             retries = [
@@ -994,7 +1004,29 @@ class IndependentReasoningJobRunner:
                 "jobIds": job_ids,
                 "reason": str(error)[:300],
                 "retries": retries,
+                "routeReconciliation": route_reconciliation,
             }
+
+    def reconcile_ingress_route(self) -> Dict[str, object]:
+        interval = _int_setting(
+            self.settings,
+            "reasoningEngineIngressReconcileSeconds",
+            60,
+            5,
+            3600,
+        )
+        now = time.monotonic()
+        if self.route_reconciliation is not None and now - self.route_reconciled_at < interval:
+            return dict(self.route_reconciliation)
+        if not callable(self.route_reconciler):
+            self.route_reconciliation = {"status": "not-configured"}
+            return dict(self.route_reconciliation)
+        try:
+            self.route_reconciliation = dict(self.route_reconciler() or {"status": "unchanged"})
+            self.route_reconciled_at = now
+        except Exception as error:  # The active V2 queue remains independently recoverable.
+            return {"status": "error", "reason": str(error)[:240]}
+        return dict(self.route_reconciliation)
 
     def execution_readiness(self) -> Dict[str, object]:
         if not callable(self.execution_guard):
@@ -1029,11 +1061,25 @@ class IndependentReasoningJobRunner:
         }))
         boundary = payload.get("verifiedSourceSnapshot")
         boundary = dict(boundary or {}) if isinstance(boundary, Mapping) else {}
+        boundaries = [
+            dict(value)
+            for value in payload.get("verifiedSourceSnapshots") or []
+            if isinstance(value, Mapping) and value
+        ]
+        boundary_key = tuple(sorted(
+            (
+                str(value.get("accountId") or ""),
+                str(value.get("snapshotId") or ""),
+                str(value.get("generatedAt") or ""),
+            )
+            for value in boundaries
+        ))
         return (
             account_ids,
             str(boundary.get("accountId") or ""),
             str(boundary.get("snapshotId") or ""),
             str(boundary.get("generatedAt") or ""),
+            boundary_key,
             IndependentReasoningJobRunner.reasoning_lane(job),
         )
 
@@ -1046,7 +1092,7 @@ class IndependentReasoningJobRunner:
 
     def lane_batch_limit(self, lane: str) -> int:
         key, fallback = {
-            "REALTIME": ("reasoningEngineV2RealtimeBatchSize", 1),
+            "REALTIME": ("reasoningEngineV2RealtimeBatchSize", 2),
             "CONTEXT": ("reasoningEngineV2ContextBatchSize", 3),
             "RECONCILIATION": ("reasoningEngineV2ReconciliationBatchSize", 6),
         }.get(str(lane or "CONTEXT"), ("reasoningEngineV2ContextBatchSize", 3))

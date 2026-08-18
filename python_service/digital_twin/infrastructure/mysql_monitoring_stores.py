@@ -66,8 +66,7 @@ from .settings import read_json, settings_path, utc_now
 from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy, MySQLOperationalConnection
 from .mysql_operational_events import domain_event_from_row, insert_domain_event_with_connection
-from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
-from .mysql_versioned_runtime import MySQLReasoningEngineJobStore
+from .mysql_reasoning_ingress import ingress_reasoning_event_with_connection
 from .mysql_operational_helpers import (
     _is_duplicate_key_error,
     _json_loads,
@@ -1053,20 +1052,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 if not reasoning_event:
                     continue
                 insert_domain_event_with_connection(connection, reasoning_event)
-                try:
-                    MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, reasoning_event)
-                except Exception:
-                    # The event remains durable and the bounded repair path
-                    # can recreate its mailbox row after an interrupted
-                    # operational write.
-                    pass
-                try:
-                    MySQLReasoningEngineJobStore.ingress_event_with_connection(connection, reasoning_event)
-                except Exception:
-                    # The append-only source event remains available for
-                    # bounded ingress repair if the independent queue is
-                    # temporarily unavailable.
-                    pass
+                ingress_reasoning_event_with_connection(connection, reasoning_event)
                 self.market_observation_anchor_store.mark_pending_with_connection(
                     connection,
                     snapshot.account_id,
@@ -1099,19 +1085,7 @@ class MySQLEventLog(MySQLOperationalConnection):
         with self.transaction() as connection:
             insert_domain_event_with_connection(connection, event)
             if str(getattr(event, "name", "") or "") == ONTOLOGY_REASONING_REQUESTED:
-                try:
-                    MySQLOntologyReasoningMailboxStore.ingress_event_with_connection(connection, event)
-                except Exception:
-                    # The event remains durable and the runner's bounded
-                    # reconciliation query will recover it.  A queue-summary
-                    # migration must never reject a source fact.
-                    pass
-                try:
-                    MySQLReasoningEngineJobStore.ingress_event_with_connection(connection, event)
-                except Exception:
-                    # V2 ingestion is isolated from the source transaction.
-                    # The durable domain event remains the repair boundary.
-                    pass
+                ingress_reasoning_event_with_connection(connection, event)
 
     def research_evidence_events_after(
         self,

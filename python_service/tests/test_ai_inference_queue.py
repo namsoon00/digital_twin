@@ -134,6 +134,24 @@ class AIInferenceQueueTests(unittest.TestCase):
         row = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_requests")
         self.assertEqual(1, int(row[0]))
 
+    def test_superseding_request_reports_the_replaced_reasoning_case(self):
+        first_job = self.create_job(100, "generation-case-1")
+        first_job.context["investmentReasoningCaseId"] = "reasoning-case:first"
+        self.notifications.upsert_job(first_job)
+        first = AIInferenceRequest.create(first_job, first_job.context)
+        self.queue.enqueue(first_job, first)
+
+        second_job = self.create_job(101, "generation-case-2")
+        second_job.context["investmentReasoningCaseId"] = "reasoning-case:second"
+        self.notifications.upsert_job(second_job)
+        second = AIInferenceRequest.create(second_job, second_job.context)
+        outcome = self.queue.enqueue(second_job, second)
+
+        self.assertEqual(
+            ["reasoning-case:first"],
+            outcome["supersededReasoningCaseIds"],
+        )
+
     def test_validated_result_releases_only_latest_notification_to_delivery(self):
         job = self.create_job()
         request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")

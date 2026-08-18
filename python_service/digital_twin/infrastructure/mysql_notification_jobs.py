@@ -127,6 +127,41 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             ).fetchall()
         return [self.job_from_row(row) for row in rows or []]
 
+    def delivered_cadence_timestamps(
+        self,
+        cadence_keys: Iterable[str],
+    ) -> Dict[str, str]:
+        """Return cooldown clocks only for investment insights actually delivered."""
+
+        keys = list(dict.fromkeys(
+            str(value or "").strip()
+            for value in cadence_keys or []
+            if str(value or "").strip()
+        ))[:100]
+        if not keys:
+            return {}
+        cadence_path = "$.context.ontologyInsight.cadenceKey"
+        placeholders = ",".join(["%s"] * len(keys))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, %s)) AS cadence_key,
+                       MAX(updated_at) AS delivered_at
+                FROM notification_jobs
+                WHERE message_type = %s
+                  AND status IN ('done', 'sent')
+                  AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, %s)) IN ("""
+                + placeholders
+                + ") GROUP BY cadence_key",
+                [cadence_path, INVESTMENT_INSIGHT, cadence_path, *keys],
+            ).fetchall()
+        return {
+            str(row.get("cadence_key") or ""): str(row.get("delivered_at") or "")
+            for row in rows or []
+            if str(row.get("cadence_key") or "").strip()
+            and str(row.get("delivered_at") or "").strip()
+        }
+
     def recent_page(
         self,
         limit: int = 40,

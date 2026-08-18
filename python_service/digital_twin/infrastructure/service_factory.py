@@ -1953,6 +1953,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         candidate_builder=V2GraphDecisionCandidateBuilder(
             candidate_settings,
             monitor_store,
+            delivery_history_store=stores.notification_job_store(store_settings),
         ),
         cycle_recorder=stores.monitoring_cycle_recorder(
             store_settings,

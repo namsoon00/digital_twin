@@ -44,9 +44,15 @@ def _float_text(value: object) -> str:
 class V2NotificationCadence:
     """Delivery-only cooldown; it never scores or changes an investment action."""
 
-    def __init__(self, settings: Mapping[str, object], monitor_store):
+    def __init__(
+        self,
+        settings: Mapping[str, object],
+        monitor_store,
+        delivery_history_store=None,
+    ):
         self.settings = dict(settings or {})
         self.monitor_store = monitor_store
+        self.delivery_history_store = delivery_history_store
         self.cadence = parse_assignments(
             _text(self.settings.get("alertCadenceMinutes")),
             DEFAULT_CADENCE,
@@ -63,11 +69,25 @@ class V2NotificationCadence:
             value = MIN_CADENCE_MINUTES
         return max(MIN_CADENCE_MINUTES, value)
 
+    def delivered_at_by_cadence_key(self, events: Iterable[AlertEvent]):
+        candidates = list(events or [])
+        provider = getattr(
+            self.delivery_history_store,
+            "delivered_cadence_timestamps",
+            None,
+        )
+        if callable(provider):
+            try:
+                return dict(provider([event.cadence_key() for event in candidates]) or {})
+            except Exception:  # noqa: BLE001 - retain the conservative legacy gate on storage failure.
+                pass
+        return dict(getattr(self.monitor_store, "sent", {}) or {})
+
     def ready(self, events: Iterable[AlertEvent], force: bool = False):
         candidates = list(events or [])
         if force:
             return candidates
-        sent = getattr(self.monitor_store, "sent", {}) or {}
+        sent = self.delivered_at_by_cadence_key(candidates)
         now = datetime.now(timezone.utc).timestamp()
         ready = []
         for event in candidates:
@@ -88,9 +108,18 @@ class V2NotificationCadence:
 class V2GraphDecisionCandidateBuilder:
     """Package TypeDB output for AI without invoking V1 monitoring logic."""
 
-    def __init__(self, settings: Mapping[str, object], monitor_store):
+    def __init__(
+        self,
+        settings: Mapping[str, object],
+        monitor_store,
+        delivery_history_store=None,
+    ):
         self.settings = dict(settings or {})
-        self.cadence = V2NotificationCadence(self.settings, monitor_store)
+        self.cadence = V2NotificationCadence(
+            self.settings,
+            monitor_store,
+            delivery_history_store=delivery_history_store,
+        )
 
     @staticmethod
     def _requested(request: IndependentReasoningRequest, symbol: str) -> bool:

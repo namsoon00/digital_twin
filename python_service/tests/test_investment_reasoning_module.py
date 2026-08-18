@@ -8,6 +8,7 @@ from digital_twin.application.investment_reasoning import (
     V2GraphDecisionCandidateBuilder,
 )
 from digital_twin.application.investment_reasoning.decision_synthesis import (
+    V2NotificationCadence,
     build_investment_insight_events_by_snapshot,
 )
 from digital_twin.domain.data_freshness import evaluate_notification_data_freshness
@@ -92,6 +93,30 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
         self.assertNotIn("RealtimeMonitor", source)
         self.assertNotIn("events_for_snapshot", source)
+
+    def test_v2_cooldown_starts_only_after_successful_delivery(self):
+        event = SimpleNamespace(
+            rule="investmentInsight",
+            cadence_key=lambda: "cadence:typedb:NVDA",
+        )
+        queued_only = SimpleNamespace(sent={
+            "cadence:typedb:NVDA": datetime.now(timezone.utc).isoformat(),
+        })
+        delivery_history = SimpleNamespace(
+            delivered_cadence_timestamps=lambda _keys: {},
+        )
+        cadence = V2NotificationCadence(
+            {"notificationCooldownMinutes": "60"},
+            queued_only,
+            delivery_history_store=delivery_history,
+        )
+
+        self.assertEqual([event], cadence.ready([event]))
+
+        delivery_history.delivered_cadence_timestamps = lambda _keys: {
+            "cadence:typedb:NVDA": datetime.now(timezone.utc).isoformat(),
+        }
+        self.assertEqual([], cadence.ready([event]))
 
     def test_v2_candidate_preserves_source_freshness_for_notification_delivery(self):
         observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -1164,7 +1164,7 @@ def compact_investment_notification(rendered: str, context: Dict[str, object], m
     notification_number = footer_value_from_context(context, "notificationNumber", "notificationNo", "debugNotificationNumber")
     if not notification_number:
         notification_number = notification_debug_number(footer_value_from_context(context, "jobId"))
-    detail_url = str((context or {}).get("notifyLinkUrl") or (context or {}).get("notificationDetailUrl") or "").strip()
+    detail_url = str((context or {}).get("notificationDetailUrl") or (context or {}).get("notifyLinkUrl") or "").strip()
     suffix_rows = ["상세 근거는 서비스 알림 상세에서 확인하세요."]
     if detail_url:
         suffix_rows.append("상세 링크: " + detail_url)

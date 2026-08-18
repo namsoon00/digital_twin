@@ -309,6 +309,7 @@ class NotificationQueueRunner:
         reasoning_orchestrator=None,
         news_digest_reconciler=None,
         fresh_data_recheck_requester=None,
+        link_base_resolver: Callable = None,
     ):
         self.queue = queue
         self.account_repository = account_repository
@@ -335,6 +336,7 @@ class NotificationQueueRunner:
             template_renderer=template_renderer,
             context_enricher=context_enricher,
             now_provider=self.now_provider,
+            link_base_resolver=link_base_resolver,
         )
         self.dispatch_service = NotificationDispatchService(
             queue=queue,

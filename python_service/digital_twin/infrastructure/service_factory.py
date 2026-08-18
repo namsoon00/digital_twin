@@ -115,6 +115,7 @@ from ..domain.reasoning_engine_versions import reasoning_release_identity
 from ..domain.investment_reasoning import reasoning_rule_inventory
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
+from .share_notification_links import ActiveShareNotificationLinkResolver
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .opendart_calendar_source import OpenDartEarningsCalendarSource
 from .samsung_ir_calendar_source import SamsungIrEarningsCalendarSource
@@ -532,6 +533,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         reasoning_orchestrator=reasoning_orchestrator,
         news_digest_reconciler=news_digest_reconciler,
         fresh_data_recheck_requester=request_fresh_data_recheck,
+        link_base_resolver=ActiveShareNotificationLinkResolver(),
     )
 
 

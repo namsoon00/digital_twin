@@ -17,10 +17,12 @@ class NotificationRenderingService:
         template_renderer: Callable = None,
         context_enricher: Callable = None,
         now_provider: Callable = None,
+        link_base_resolver: Callable = None,
     ):
         self.template_renderer = template_renderer
         self.context_enricher = context_enricher
         self.now_provider = now_provider or (lambda: datetime.now(ZoneInfo("UTC")))
+        self.link_base_resolver = link_base_resolver
 
     def render(self, job: NotificationJob) -> str:
         self.apply_send_time_context(job)
@@ -54,6 +56,11 @@ class NotificationRenderingService:
         sent_time = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
         context = dict(job.context or {})
         base_url = str(context.get("notifyLinkUrl") or "").strip()
+        if self.link_base_resolver:
+            try:
+                base_url = str(self.link_base_resolver(base_url) or base_url).strip()
+            except Exception:  # noqa: BLE001 - a link override must not block notification delivery.
+                pass
         detail_url = ""
         if base_url:
             parts = urlsplit(base_url)

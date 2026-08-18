@@ -8,6 +8,7 @@ const requestedPort = Number(process.env.PORT || 3000);
 const requestedProvider = String(process.env.TUNNEL_PROVIDER || "").trim().toLowerCase();
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
 const credentialsPath = path.resolve(process.env.SHARE_CREDENTIALS_PATH || path.join(rootDir, "data", "share-access.json"));
+const runtimeStatePath = path.resolve(process.env.SHARE_RUNTIME_STATE_PATH || path.join(rootDir, "data", "share-runtime.json"));
 const shareCredentials = loadOrCreateShareCredentials();
 
 let serverProcess = null;
@@ -15,6 +16,7 @@ let tunnelProcess = null;
 let printedShareUrl = false;
 let serverRestartTimer = null;
 let shuttingDown = false;
+let activeProvider = "";
 
 function randomToken(bytes) {
   return crypto
@@ -150,10 +152,12 @@ function startServer() {
 function printShareUrl(rawUrl) {
   if (printedShareUrl) return;
   const baseUrl = rawUrl.replace(/[),.]+$/, "").replace(/\/$/, "");
+  const viewerUrl = baseUrl + "/?share_token=" + encodeURIComponent(shareCredentials.viewToken);
+  writeShareRuntimeState(baseUrl, viewerUrl);
   printedShareUrl = true;
   console.log("");
   console.log("External viewer URL:");
-  console.log(baseUrl + "/?share_token=" + encodeURIComponent(shareCredentials.viewToken));
+  console.log(viewerUrl);
   console.log("");
   console.log("External owner URL:");
   console.log(baseUrl + "/?owner_token=" + encodeURIComponent(shareCredentials.ownerToken));
@@ -161,6 +165,32 @@ function printShareUrl(rawUrl) {
   console.log("Share credentials: " + credentialsPath);
   console.log("Signed browser session: " + shareCredentials.sessionDays + " days");
   console.log("Local Codex is disabled for this shared session. Press Ctrl+C to stop.");
+}
+
+function writeShareRuntimeState(baseUrl, viewerUrl) {
+  const state = {
+    version: 1,
+    provider: activeProvider,
+    baseUrl: baseUrl,
+    viewerUrl: viewerUrl,
+    ownerPid: process.pid,
+    tunnelPid: tunnelProcess && tunnelProcess.pid ? tunnelProcess.pid : 0,
+    updatedAt: new Date().toISOString()
+  };
+  fs.mkdirSync(path.dirname(runtimeStatePath), { recursive: true, mode: 0o700 });
+  const temporaryPath = runtimeStatePath + ".tmp-" + process.pid;
+  fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, runtimeStatePath);
+  fs.chmodSync(runtimeStatePath, 0o600);
+}
+
+function clearShareRuntimeState() {
+  try {
+    const state = JSON.parse(fs.readFileSync(runtimeStatePath, "utf8"));
+    if (Number(state.ownerPid || 0) === process.pid) fs.unlinkSync(runtimeStatePath);
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") console.error("공유 URL 런타임 상태를 정리하지 못했습니다: " + (error.message || error));
+  }
 }
 
 function tunnelArgs(provider, port) {
@@ -211,6 +241,7 @@ function startTunnel(provider, port) {
 
 function shutdown(code) {
   shuttingDown = true;
+  clearShareRuntimeState();
   if (serverRestartTimer) {
     clearTimeout(serverRestartTimer);
     serverRestartTimer = null;
@@ -229,6 +260,7 @@ function shutdown(code) {
 
 async function main() {
   const provider = providerName();
+  activeProvider = provider;
   const port = await startServer();
   console.log("Starting " + provider + " tunnel for http://127.0.0.1:" + port);
   startTunnel(provider, port);

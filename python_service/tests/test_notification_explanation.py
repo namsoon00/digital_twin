@@ -116,6 +116,7 @@ class NotificationExplanationTests(unittest.TestCase):
             account_repository=None,
             notifier_factory=lambda account: None,
             now_provider=lambda: datetime(2026, 8, 14, 1, 0, tzinfo=timezone.utc),
+            link_base_resolver=lambda _configured: "https://evidence.trycloudflare.com/?share_token=test-viewer",
         )
         job = NotificationJob.create(
             "test",
@@ -127,6 +128,8 @@ class NotificationExplanationTests(unittest.TestCase):
         runner.apply_send_time_context(job)
 
         detail_url = job.context["notificationDetailUrl"]
+        self.assertTrue(detail_url.startswith("https://evidence.trycloudflare.com/"))
+        self.assertIn("share_token=test-viewer", detail_url)
         self.assertIn("tab=notifications", detail_url)
         self.assertIn("detail=notification-job", detail_url)
         self.assertIn("detailKey=" + job.job_id, detail_url)

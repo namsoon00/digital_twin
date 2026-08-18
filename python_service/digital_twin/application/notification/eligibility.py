@@ -110,6 +110,22 @@ class NotificationDispatchEligibilityService:
         job.context = sanitize_notification_context_for_freshness(context, decision, now=now)
         if decision.should_send:
             return True
+        if str(job.message_type or "") == INVESTMENT_INSIGHT:
+            context = dict(job.context or {})
+            context["dataFreshnessDecision"] = "advisory"
+            context["investmentInsightFreshnessAdvisory"] = {
+                "version": "investment-insight-freshness-advisory-v1",
+                "blockingDisabled": True,
+                "stage": stage,
+                "status": str(decision.status or ""),
+                "reason": str(decision.reason or ""),
+                "ageMinutes": decision.age_minutes,
+                "maxAgeMinutes": decision.max_age_minutes,
+                "staleSources": list(decision.stale_sources or []),
+            }
+            context.pop("deliverySuppressionReason", None)
+            job.context = context
+            return True
         reason = stage + " 데이터 신선도 기준 미통과: " + str(decision.reason or decision.status)
         recheck = self.request_fresh_data_recheck(job, stage, reason)
         job.context["deliverySuppressionReason"] = (
@@ -122,6 +138,16 @@ class NotificationDispatchEligibilityService:
         if not self.ai_defer_predicate(job):
             return True
         context = dict(job.context or {})
+        if str(job.message_type or "") == INVESTMENT_INSIGHT:
+            context["aiFreshnessHeadroomGate"] = {
+                "version": "ai-freshness-headroom-v1",
+                "decision": "advisory",
+                "blockingDisabled": True,
+                "reason": "투자 인사이트는 AI 처리시간 여유 부족만으로 차단하지 않습니다.",
+            }
+            context.pop("deliverySuppressionReason", None)
+            job.context = context
+            return True
         try:
             age = float(context.get("dataFreshnessAgeMinutes"))
             maximum = float(context.get("dataFreshnessMaxAgeMinutes"))

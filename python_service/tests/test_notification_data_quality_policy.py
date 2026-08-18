@@ -601,7 +601,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("stale", decision.status)
         self.assertEqual(["KIS price"], decision.stale_sources)
 
-    def test_notification_runner_suppresses_job_that_expired_while_waiting(self):
+    def test_notification_runner_sends_investment_insight_with_stale_data_advisory(self):
         job = NotificationJob.create(
             "오래된 투자 알림",
             account_id="main",
@@ -633,12 +633,18 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                 target.status = "failed"
                 target.last_error = reason
 
+            def mark_done(self, target):
+                target.status = "done"
+                target.last_error = ""
+
         sent = []
         rechecks = []
         runner = NotificationQueueRunner(
             Queue(),
             SimpleNamespace(load_all=lambda: []),
-            lambda _account: SimpleNamespace(send=lambda message: sent.append(message)),
+            lambda _account: SimpleNamespace(
+                send=lambda message: sent.append(message) or SimpleNamespace(delivered=True, label="test")
+            ),
             settings={"dataFreshnessEnabled": "1"},
             now_provider=lambda: datetime(2026, 7, 20, 0, 4, tzinfo=timezone.utc),
             fresh_data_recheck_requester=lambda account_id, symbol, job_id: rechecks.append(
@@ -647,12 +653,14 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once())
-        self.assertEqual([], sent)
-        self.assertEqual("suppressed", job.status)
-        self.assertIn("AI 판단 전", job.last_error)
-        self.assertEqual([("main", "", job.job_id)], rechecks)
-        self.assertTrue(job.context["freshDataRecheck"]["requested"])
-        self.assertEqual("stale_data_recheck_requested", job.context["deliverySuppressionReason"])
+        self.assertEqual(1, len(sent))
+        self.assertEqual("done", job.status)
+        self.assertEqual([], rechecks)
+        advisory = job.context["investmentInsightFreshnessAdvisory"]
+        self.assertTrue(advisory["blockingDisabled"])
+        self.assertEqual("발송 직전", advisory["stage"])
+        self.assertEqual("stale", advisory["status"])
+        self.assertNotIn("deliverySuppressionReason", job.context)
 
     def test_operational_delivery_types_are_separate_from_investment_messages(self):
         self.assertTrue(is_operations_delivery_message_type(WORK_HANDOFF))

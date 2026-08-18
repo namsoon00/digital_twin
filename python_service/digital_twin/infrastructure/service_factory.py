@@ -985,6 +985,32 @@ def typedb_projection_recovery_health(ontology_repository, world_id: str) -> Dic
     }
 
 
+def active_versioned_reasoning_queue_state(registry, job_store) -> Dict[str, object]:
+    """Read the active independent engine's live TypeDB-writer backlog."""
+
+    try:
+        control = registry.control()
+        deployment_id = str(control.active_deployment_id or "").strip()
+        deployment = dict(registry.get(deployment_id) or {}) if deployment_id else {}
+        engine_version = str(
+            deployment.get("engineVersion") or deployment.get("engine_version") or ""
+        ).strip().lower()
+        if not deployment_id or engine_version != "v2":
+            return {
+                "status": "not-active-v2",
+                "deploymentId": deployment_id,
+                "effectivePendingCount": 0,
+            }
+        return dict(job_store.live_queue_state(deployment_id) or {})
+    except Exception as error:  # Fail closed so background writes cannot race an unknown V2 state.
+        return {
+            "status": "error",
+            "effectivePendingCount": 1,
+            "pendingCount": 1,
+            "reason": str(error)[:180],
+        }
+
+
 def build_ontology_reasoning_queue_probe(settings=None):
     """Build a low-cost read-only signal for lower-priority workers.
 
@@ -1002,6 +1028,8 @@ def build_ontology_reasoning_queue_probe(settings=None):
     event_reader = stores.event_log(store_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(store_settings)
     mailbox_store = stores.ontology_reasoning_mailbox_store(store_settings)
+    reasoning_registry = stores.reasoning_engine_registry_store(store_settings)
+    versioned_job_store = stores.reasoning_engine_job_store(store_settings)
     try:
         cache_seconds = float(str(configured_settings.get("ontologyReasoningQueueProbeCacheSeconds") or "5").strip())
     except ValueError:
@@ -1019,12 +1047,31 @@ def build_ontology_reasoning_queue_probe(settings=None):
             value["probeCacheAgeMs"] = int(age * 1000)
             return value
         try:
-            value = lightweight_ontology_reasoning_queue_state(
+            legacy_value = lightweight_ontology_reasoning_queue_state(
                 event_reader,
                 cursor_store,
                 mailbox_store=mailbox_store,
                 settings=configured_settings,
             )
+            versioned_value = active_versioned_reasoning_queue_state(
+                reasoning_registry,
+                versioned_job_store,
+            )
+            if str(versioned_value.get("status") or "") != "not-active-v2":
+                value = {
+                    **dict(legacy_value or {}),
+                    "status": str(versioned_value.get("status") or "unknown"),
+                    "probeMode": "active-engine-composite-queue-v1",
+                    "effectivePendingCount": int(
+                        versioned_value.get("effectivePendingCount") or 0
+                    ),
+                    "pendingCount": int(versioned_value.get("pendingCount") or 0),
+                    "oldestRequestAt": str(versioned_value.get("oldestRequestAt") or ""),
+                    "activeReasoningEngineQueue": versioned_value,
+                    "legacyReasoningQueue": legacy_value,
+                }
+            else:
+                value = dict(legacy_value or {})
             cache["at"] = time.monotonic()
             cache["value"] = dict(value or {})
             return value

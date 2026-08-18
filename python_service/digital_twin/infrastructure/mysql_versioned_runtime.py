@@ -1410,6 +1410,46 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             ).fetchone()
         return self.row_payload(row) if row else {}
 
+    def live_queue_state(self, deployment_id: str) -> Dict[str, object]:
+        """Return the small TypeDB-writer queue view used by background jobs."""
+
+        clean_deployment_id = str(deployment_id or "").strip()
+        if not clean_deployment_id:
+            return {
+                "status": "not-configured",
+                "deploymentId": "",
+                "effectivePendingCount": 0,
+            }
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT job_status, COUNT(*) AS row_count, MIN(created_at) AS oldest "
+                "FROM reasoning_engine_jobs WHERE deployment_id = %s "
+                "AND job_status IN ('queued', 'retry', 'processing') "
+                "GROUP BY job_status",
+                (clean_deployment_id,),
+            ).fetchall()
+        counts = {
+            str(row.get("job_status") or ""): int(row.get("row_count") or 0)
+            for row in rows or []
+        }
+        oldest_values = [
+            str(row.get("oldest") or "")
+            for row in rows or []
+            if str(row.get("oldest") or "")
+        ]
+        pending = sum(counts.get(status, 0) for status in ["queued", "retry", "processing"])
+        return {
+            "status": "active" if pending else "idle",
+            "probeMode": "versioned-reasoning-live-queue-v1",
+            "deploymentId": clean_deployment_id,
+            "effectivePendingCount": pending,
+            "pendingCount": pending,
+            "queuedCount": counts.get("queued", 0),
+            "retryingCount": counts.get("retry", 0),
+            "processingCount": counts.get("processing", 0),
+            "oldestRequestAt": min(oldest_values) if oldest_values else "",
+        }
+
     @staticmethod
     def percentile(values: Iterable[int], percentile: float = 0.95) -> int:
         ordered = sorted(max(0, int(value or 0)) for value in values or [])

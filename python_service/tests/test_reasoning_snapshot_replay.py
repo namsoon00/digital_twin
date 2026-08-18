@@ -18,6 +18,7 @@ from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorS
 from digital_twin.infrastructure.service_factory import (
     ActiveDeploymentWorldProjectionSink,
     FrozenReasoningSnapshotSource,
+    active_versioned_reasoning_queue_state,
 )
 
 
@@ -94,6 +95,29 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 
 
 class ReasoningSnapshotReplayTests(unittest.TestCase):
+    def test_background_workers_observe_active_v2_writer_backlog(self):
+        class Registry:
+            def control(self):
+                return SimpleNamespace(active_deployment_id="v2-production")
+
+            def get(self, _deployment_id):
+                return {"engineVersion": "v2", "status": "active"}
+
+        class Jobs:
+            def live_queue_state(self, deployment_id):
+                return {
+                    "status": "active",
+                    "deploymentId": deployment_id,
+                    "effectivePendingCount": 3,
+                    "processingCount": 1,
+                    "queuedCount": 2,
+                }
+
+        state = active_versioned_reasoning_queue_state(Registry(), Jobs())
+
+        self.assertEqual("v2-production", state["deploymentId"])
+        self.assertEqual(3, state["effectivePendingCount"])
+
     def test_only_active_delivery_deployment_can_advance_shared_worlds(self):
         class Outbox:
             def __init__(self):

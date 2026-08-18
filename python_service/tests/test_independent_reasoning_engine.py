@@ -128,6 +128,26 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(("", 0), reasoning_worker_process_owner("worker:test"))
         self.assertEqual(("", 0), reasoning_worker_process_owner("worker-host:not-a-pid:v2"))
 
+    def test_mysql_live_queue_state_counts_only_typedb_writer_jobs(self):
+        class Connection:
+            def execute(self, _sql, _params=()):
+                return SimpleNamespace(fetchall=lambda: [
+                    {"job_status": "queued", "row_count": 2, "oldest": "2026-08-18T00:00:00Z"},
+                    {"job_status": "processing", "row_count": 1, "oldest": "2026-08-18T00:01:00Z"},
+                ])
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+        state = object.__new__(Store).live_queue_state("v2-production")
+
+        self.assertEqual(3, state["effectivePendingCount"])
+        self.assertEqual(2, state["queuedCount"])
+        self.assertEqual(1, state["processingCount"])
+        self.assertEqual("2026-08-18T00:00:00Z", state["oldestRequestAt"])
+
     def test_mysql_queue_recovers_only_confirmed_dead_local_worker_leases(self):
         class Connection:
             def __init__(self):

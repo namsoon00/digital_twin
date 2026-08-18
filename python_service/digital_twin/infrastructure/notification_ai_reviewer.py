@@ -146,6 +146,11 @@ class FallbackNotificationAIReviewer(NotificationAIReviewer):
             fallback.validation_warnings.append("AI 응답 실패로 로컬 검증 의견을 사용했습니다: " + error_detail[:320])
             return fallback
 
+    def stop(self) -> None:
+        stopper = getattr(self.primary, "stop", None)
+        if callable(stopper):
+            stopper()
+
 
 def notification_ai_reviewer_from_settings(
     settings: Dict[str, str] = None,

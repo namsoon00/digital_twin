@@ -466,6 +466,9 @@ class AIInferenceQueueRunner:
                 continue
             if not alive:
                 lease_lost.set()
+                stopper = getattr(self.reviewer, "stop", None)
+                if callable(stopper):
+                    stopper()
                 return
 
     def recover_request(self, request: AIInferenceRequest, error: Exception) -> str:

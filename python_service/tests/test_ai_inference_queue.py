@@ -40,6 +40,36 @@ class FakeReviewer:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
+    def test_superseded_lease_stops_the_active_ai_process(self):
+        class Queue:
+            def heartbeat(self, *_args):
+                return False
+
+        class Reviewer:
+            stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        class ImmediateEvent:
+            def wait(self, _seconds):
+                return False
+
+        class LeaseState:
+            lost = False
+
+            def set(self):
+                self.lost = True
+
+        reviewer = Reviewer()
+        lease_state = LeaseState()
+        runner = AIInferenceQueueRunner(Queue(), reviewer, worker_id="worker-cancel")
+
+        runner.heartbeat_loop("request:superseded", ImmediateEvent(), lease_state)
+
+        self.assertTrue(lease_state.lost)
+        self.assertTrue(reviewer.stopped)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.seed = test_store_seed(self.temp.name)

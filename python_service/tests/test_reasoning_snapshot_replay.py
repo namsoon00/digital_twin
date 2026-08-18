@@ -15,7 +15,10 @@ from digital_twin.domain.reasoning_source_snapshot import build_reasoning_source
 from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitoringCycleRecorder
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
-from digital_twin.infrastructure.service_factory import FrozenReasoningSnapshotSource
+from digital_twin.infrastructure.service_factory import (
+    ActiveDeploymentWorldProjectionSink,
+    FrozenReasoningSnapshotSource,
+)
 
 
 class SnapshotStore:
@@ -91,6 +94,44 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 
 
 class ReasoningSnapshotReplayTests(unittest.TestCase):
+    def test_only_active_delivery_deployment_can_advance_shared_worlds(self):
+        class Outbox:
+            def __init__(self):
+                self.calls = []
+
+            def enqueue(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                return {"status": "queued", "saved": True}
+
+        class Registry:
+            def __init__(self, active):
+                self.active = active
+
+            def control(self):
+                deployment_id = "v2" if self.active else "v1"
+                return SimpleNamespace(
+                    active_deployment_id=deployment_id,
+                    delivery_deployment_id=deployment_id,
+                )
+
+            def get(self, _deployment_id):
+                return {"status": "active"}
+
+        world = SimpleNamespace(world_id="market:shared:us")
+        outbox = Outbox()
+        active = ActiveDeploymentWorldProjectionSink(outbox, Registry(True), "v2")
+        inactive = ActiveDeploymentWorldProjectionSink(outbox, Registry(False), "v2")
+
+        self.assertEqual(
+            "queued",
+            active.enqueue("market", world, {"entities": []})["status"],
+        )
+        self.assertEqual(
+            "inactive-deployment-isolated",
+            inactive.enqueue("market", world, {"entities": []})["status"],
+        )
+        self.assertEqual(1, len(outbox.calls))
+
     def test_cycle_recorder_does_not_rewrite_time_series_for_source_replay(self):
         recorder = object.__new__(MySQLMonitoringCycleRecorder)
         recorder.runtime_settings = {}

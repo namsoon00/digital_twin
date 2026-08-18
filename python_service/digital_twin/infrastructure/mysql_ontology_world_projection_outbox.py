@@ -70,10 +70,64 @@ def _projection_payload_symbols(payload: Mapping[str, object]) -> set:
 class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
     """Queue only verified shared-world projection inputs.
 
-    The queue is intentionally per source PortfolioWorld. A newer snapshot
-    from the same account replaces an unclaimed duplicate, while an update
-    from another account remains queued so its symbol slice cannot be lost.
+    Different symbol slices remain isolated by their material fingerprint.
+    An exact shared-world material match is deduplicated across source
+    PortfolioWorlds so adding accounts does not multiply identical work.
     """
+
+    @staticmethod
+    def _material_receipt(connection, kind: str, world_id: str, fingerprint: str):
+        return connection.execute(
+            """
+            SELECT job_id, status, completed_at
+            FROM ontology_world_projection_outbox
+            WHERE projection_kind = %s AND world_id = %s
+              AND material_fingerprint = %s
+              AND status IN (%s, %s, %s)
+            ORDER BY
+              CASE status WHEN %s THEN 0 WHEN %s THEN 1 ELSE 2 END,
+              updated_at DESC
+            LIMIT 1
+            """,
+            (
+                kind,
+                world_id,
+                fingerprint,
+                COMPLETED,
+                PROCESSING,
+                PENDING,
+                COMPLETED,
+                PROCESSING,
+            ),
+        ).fetchone()
+
+    @staticmethod
+    def _material_receipt_response(target, kind: str, fingerprint: str, row, graph):
+        if not row:
+            return None
+        status = _clean(row.get("status")) or COMPLETED
+        completed = status == COMPLETED
+        return {
+            **target,
+            "status": (
+                "already-projected-material"
+                if completed
+                else "already-queued-identical-material"
+            ),
+            "saved": False,
+            "eventuallyConsistent": True,
+            "projectionKind": kind,
+            "jobId": _clean(row.get("job_id")),
+            "materialFingerprint": fingerprint,
+            "completedAt": _clean(row.get("completed_at")),
+            "existingJobStatus": status,
+            "payloadBytes": 0,
+            "entityCount": len(getattr(graph, "entities", []) or []),
+            "relationCount": len(getattr(graph, "relations", []) or []),
+            "evidenceCount": len(getattr(graph, "evidence", []) or []),
+            "payloadSerializationSkipped": True,
+            "deduplicatedAcrossPortfolioWorlds": True,
+        }
 
     def max_payload_bytes(self) -> int:
         try:
@@ -105,30 +159,21 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         if kind != "scope-repair":
             fingerprint = material_graph_fingerprint(graph)
             with self.connect() as connection:
-                completed = connection.execute(
-                    """
-                    SELECT job_id, completed_at FROM ontology_world_projection_outbox
-                    WHERE dedupe_key = %s AND material_fingerprint = %s AND status = %s
-                    ORDER BY updated_at DESC LIMIT 1
-                    """,
-                    (dedupe_key, fingerprint, COMPLETED),
-                ).fetchone()
-            if completed:
-                return {
-                    **target,
-                    "status": "already-projected-material",
-                    "saved": False,
-                    "eventuallyConsistent": True,
-                    "projectionKind": kind,
-                    "jobId": _clean(completed.get("job_id")),
-                    "materialFingerprint": fingerprint,
-                    "completedAt": _clean(completed.get("completed_at")),
-                    "payloadBytes": 0,
-                    "entityCount": len(getattr(graph, "entities", []) or []),
-                    "relationCount": len(getattr(graph, "relations", []) or []),
-                    "evidenceCount": len(getattr(graph, "evidence", []) or []),
-                    "payloadSerializationSkipped": True,
-                }
+                receipt = self._material_receipt(
+                    connection,
+                    kind,
+                    world.world_id,
+                    fingerprint,
+                )
+            response = self._material_receipt_response(
+                target,
+                kind,
+                fingerprint,
+                receipt,
+                graph,
+            )
+            if response:
+                return response
 
         payload = serialize_portfolio_ontology(graph)
         payload_json = json_dumps(payload)
@@ -162,26 +207,23 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         job_id = "world-projection:" + payload_hash[:48]
         stamp = utc_now()
         with self.transaction() as connection:
-            completed = connection.execute(
-                """
-                SELECT job_id, completed_at FROM ontology_world_projection_outbox
-                WHERE dedupe_key = %s AND material_fingerprint = %s AND status = %s
-                ORDER BY updated_at DESC LIMIT 1
-                """,
-                (dedupe_key, fingerprint, COMPLETED),
-            ).fetchone()
-            if completed:
-                return {
-                    **target,
-                    "status": "already-projected-material",
-                    "saved": False,
-                    "eventuallyConsistent": True,
-                    "projectionKind": kind,
-                    "jobId": _clean(completed.get("job_id")),
-                    "materialFingerprint": fingerprint,
-                    "completedAt": _clean(completed.get("completed_at")),
-                    **payload_summary,
-                }
+            receipt = self._material_receipt(
+                connection,
+                kind,
+                world.world_id,
+                fingerprint,
+            )
+            response = self._material_receipt_response(
+                target,
+                kind,
+                fingerprint,
+                receipt,
+                graph,
+            )
+            if response:
+                response.update(payload_summary)
+                response["payloadSerializationSkipped"] = False
+                return response
             pending = connection.execute(
                 """
                 SELECT job_id FROM ontology_world_projection_outbox

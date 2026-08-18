@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import json
 from typing import Dict, Iterable, Mapping
 
 from ..domain.shared_instrument_inference import (
+    SHARED_EXECUTION_REUSE_VERSION,
+    SHARED_INSTRUMENT_INFERENCE_VERSION,
+    account_overlay_input_fingerprint,
     build_shared_instrument_inference,
+    decision_input_fingerprint,
     market_shared_rule_ids,
     market_snapshot_input_fingerprint,
     market_source_revision_fingerprint,
@@ -131,10 +137,20 @@ class SharedInstrumentInferenceService:
                     for value in payload.get("matchedMarketRuleIds") or []
                     if _text(value) in set(catalog)
                 }),
+                "relations": [
+                    dict(value)
+                    for value in payload.get("relations") or []
+                    if isinstance(value, Mapping)
+                ][:240],
+                "traces": [
+                    dict(value)
+                    for value in payload.get("traces") or []
+                    if isinstance(value, Mapping)
+                ][:240],
             }
         ready = bool(symbol_proofs) and set(symbol_proofs) == set(selected)
         return {
-            "contractVersion": "shared-instrument-execution-reuse-v1",
+            "contractVersion": SHARED_EXECUTION_REUSE_VERSION,
             "status": "ready" if ready else "revision-miss",
             "reuseEligible": ready,
             "deploymentId": self.deployment_id,
@@ -148,6 +164,238 @@ class SharedInstrumentInferenceService:
             }) if ready else [],
             "symbols": symbol_proofs,
         }
+
+    @staticmethod
+    def _deduplicate_rows(rows: Iterable[Mapping[str, object]]) -> list:
+        selected = []
+        seen = set()
+        for row in rows or []:
+            if not isinstance(row, Mapping):
+                continue
+            value = dict(row)
+            identity = _text(
+                value.get("id")
+                or value.get("traceId")
+                or value.get("inferenceTraceId")
+                or value.get("relationId")
+            )
+            if not identity:
+                identity = json.dumps(
+                    value,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            selected.append(value)
+        return selected[:480]
+
+    def reusable_portfolio_projection(
+        self,
+        reasoning_context: Mapping[str, object],
+        symbols: Iterable[str],
+        snapshot: object,
+    ) -> Dict[str, object]:
+        """Return a private prior TypeDB result for the exact same inputs.
+
+        This is not a Python inference fallback. The packet was produced by a
+        completed TypeDB generation and is reusable only when the release,
+        market revision, market input and complete projection source all
+        match. Any mismatch falls through to a fresh TypeDB execution.
+        """
+
+        selected = sorted({_symbol(value) for value in symbols or [] if _symbol(value)})
+        account_id = _text(getattr(snapshot, "account_id", ""))
+        overlay_reader = getattr(self.store, "latest_overlay", None)
+        if not selected or not account_id or not callable(overlay_reader):
+            return {"status": "unavailable", "reuseEligible": False}
+        proof = self.execution_reuse_proof(reasoning_context, selected, snapshot=snapshot)
+        if not proof.get("reuseEligible"):
+            return {
+                "status": _text(proof.get("status")) or "market-proof-miss",
+                "reuseEligible": False,
+                "marketProof": proof,
+            }
+        expected_decision_input = decision_input_fingerprint(snapshot)
+        if not expected_decision_input:
+            return {
+                "status": "decision-input-unavailable",
+                "reuseEligible": False,
+                "marketProof": proof,
+            }
+        overlays = {}
+        replays = []
+        for symbol in selected:
+            try:
+                overlay = dict(overlay_reader(self.deployment_id, account_id, symbol) or {})
+            except Exception:
+                overlay = {}
+            payload = dict(overlay.get("payload") or {}) if isinstance(
+                overlay.get("payload"), Mapping
+            ) else {}
+            proof_symbol = dict((proof.get("symbols") or {}).get(symbol) or {})
+            shared_ids = sorted({
+                _text(value)
+                for value in overlay.get("sharedSnapshotIds") or []
+                if _text(value)
+            })
+            expected_shared_id = _text(proof_symbol.get("snapshotId"))
+            replay = dict(payload.get("projectionReplay") or {}) if isinstance(
+                payload.get("projectionReplay"), Mapping
+            ) else {}
+            if (
+                not overlay
+                or _text(overlay.get("overlay_status") or overlay.get("status")) != "ready"
+                or _text(payload.get("releaseFingerprint")) != self.release_fingerprint
+                or _text(payload.get("decisionInputFingerprint")) != expected_decision_input
+                or not expected_shared_id
+                or expected_shared_id not in shared_ids
+                or not replay
+            ):
+                return {
+                    "status": "account-overlay-miss",
+                    "reuseEligible": False,
+                    "marketProof": proof,
+                    "missingSymbol": symbol,
+                }
+            overlays[symbol] = overlay
+            replays.append(replay)
+        identities = {
+            (
+                _text((replay.get("inferenceBox") or {}).get("sourceAboxSnapshotId")),
+                _text((replay.get("inferenceBox") or {}).get("inferenceGenerationId")),
+            )
+            for replay in replays
+            if isinstance(replay.get("inferenceBox"), Mapping)
+        }
+        if len(identities) != 1 or not next(iter(identities))[0]:
+            return {
+                "status": "incoherent-account-overlay",
+                "reuseEligible": False,
+                "marketProof": proof,
+            }
+        projection = deepcopy(replays[0])
+        inference = dict(projection.get("inferenceBox") or {})
+        relation_rows = []
+        trace_rows = []
+        for replay in replays:
+            replay_inference = dict(replay.get("inferenceBox") or {})
+            relation_rows.extend(replay_inference.get("relations") or [])
+            trace_rows.extend(replay_inference.get("traces") or [])
+        inference.update({
+            "status": "ok",
+            "graphStore": "typedb",
+            "source": "typedbInferenceBox",
+            "nativeTypeDbReasoningUsed": True,
+            "nativeTypeDbReasoningCompleted": True,
+            "typedbNativeRuleEvaluationCompleted": True,
+            "generationAligned": True,
+            "relations": self._deduplicate_rows(relation_rows),
+            "traces": self._deduplicate_rows(trace_rows),
+            "reusedExactInference": True,
+            "reuseContractVersion": SHARED_EXECUTION_REUSE_VERSION,
+        })
+        inference["relationCount"] = len(inference["relations"])
+        inference["traceCount"] = len(inference["traces"])
+        projection.update({
+            "saved": False,
+            "status": "reused-shared-account-inference",
+            "graphStore": "typedb",
+            "accountId": account_id,
+            "inferenceBox": inference,
+            "preservedActiveGeneration": True,
+            "reason": "Exact shared market and private account TypeDB inference inputs were reused.",
+        })
+        context_by_symbol = {
+            symbol: {
+                "contractVersion": SHARED_INSTRUMENT_INFERENCE_VERSION,
+                "executionMode": "shared-head-account-overlay-replay",
+                "decisionAuthority": "typedb-shared-market-plus-portfolio-overlay",
+                "overlayId": _text(overlays[symbol].get("overlay_id")),
+                "overlayStatus": _text(
+                    overlays[symbol].get("overlay_status") or overlays[symbol].get("status")
+                ),
+                "sharedSnapshotIds": list(overlays[symbol].get("sharedSnapshotIds") or []),
+                "sharedSemanticFingerprints": [
+                    _text(((proof.get("symbols") or {}).get(symbol) or {}).get("semanticFingerprint"))
+                ],
+                "sharedSourceAsOf": _text(
+                    ((proof.get("symbols") or {}).get(symbol) or {}).get("sourceAsOf")
+                ),
+                "sharedMarketRuleIds": list(proof.get("matchedMarketRuleIds") or []),
+                "accountRuleIds": list(
+                    (overlays[symbol].get("payload") or {}).get("accountRuleIds") or []
+                ),
+                "reuseEligible": True,
+                "inferenceGenerationId": _text(inference.get("inferenceGenerationId")),
+                "sourceAboxSnapshotId": _text(inference.get("sourceAboxSnapshotId")),
+            }
+            for symbol in selected
+        }
+        self.attach_context(
+            {account_id: projection},
+            [snapshot],
+            {account_id: context_by_symbol},
+        )
+        return {
+            "status": "ready",
+            "reuseEligible": True,
+            "projection": projection,
+            "marketProof": proof,
+            "contextByAccount": {account_id: context_by_symbol},
+        }
+
+    def attach_shared_market_evidence(
+        self,
+        projection: Mapping[str, object],
+        proof: Mapping[str, object],
+    ) -> Dict[str, object]:
+        """Compose exact TypeDB-authored shared evidence into a private result."""
+
+        result = dict(projection or {})
+        if not bool((proof or {}).get("reuseEligible")):
+            return result
+        inference = dict(result.get("inferenceBox") or {})
+        if not inference:
+            return result
+        shared_relations = [
+            dict(row)
+            for symbol_proof in dict((proof or {}).get("symbols") or {}).values()
+            for row in (symbol_proof or {}).get("relations") or []
+            if isinstance(row, Mapping)
+        ]
+        shared_traces = [
+            dict(row)
+            for symbol_proof in dict((proof or {}).get("symbols") or {}).values()
+            for row in (symbol_proof or {}).get("traces") or []
+            if isinstance(row, Mapping)
+        ]
+        relations = self._deduplicate_rows(
+            list(inference.get("relations") or []) + shared_relations
+        )
+        traces = self._deduplicate_rows(
+            list(inference.get("traces") or []) + shared_traces
+        )
+        inference.update({
+            "relations": relations,
+            "traces": traces,
+            "relationCount": len(relations),
+            "traceCount": len(traces),
+            "sharedMarketEvidenceReused": True,
+            "sharedMarketEvidenceContractVersion": SHARED_EXECUTION_REUSE_VERSION,
+            "sharedMarketRelationCount": len(shared_relations),
+            "sharedMarketTraceCount": len(shared_traces),
+            "sharedMarketSnapshotIds": sorted({
+                _text(symbol_proof.get("snapshotId"))
+                for symbol_proof in dict((proof or {}).get("symbols") or {}).values()
+                if _text(symbol_proof.get("snapshotId"))
+            }),
+        })
+        result["inferenceBox"] = inference
+        return result
 
     def account_ids_for_symbols(self, symbols: Iterable[str]):
         reader = getattr(self.store, "account_ids_for_symbols", None)
@@ -290,6 +538,21 @@ class SharedInstrumentInferenceService:
             }
             for account_id, snapshot in snapshots_by_account.items()
         }
+        account_input_fingerprints = {
+            account_id: {
+                symbol: fingerprint
+                for symbol in {_symbol(value) for value in symbols or [] if _symbol(value)}
+                for fingerprint in [account_overlay_input_fingerprint(snapshot, symbol)]
+                if fingerprint
+            }
+            for account_id, snapshot in snapshots_by_account.items()
+        }
+        decision_input_fingerprints = {
+            account_id: fingerprint
+            for account_id, snapshot in snapshots_by_account.items()
+            for fingerprint in [decision_input_fingerprint(snapshot)]
+            if fingerprint
+        }
         report = build_shared_instrument_inference(
             projection_results,
             symbols,
@@ -298,6 +561,8 @@ class SharedInstrumentInferenceService:
             observed_at=observed_at,
             market_rule_ids=self.market_rule_catalog_ids(),
             market_input_fingerprints=market_input_fingerprints,
+            account_input_fingerprints=account_input_fingerprints,
+            decision_input_fingerprints=decision_input_fingerprints,
         )
         persistence = dict(self.store.publish(report) or {})
         overlays = list(report.get("overlays") or [])
@@ -314,8 +579,8 @@ class SharedInstrumentInferenceService:
             ]
             context_by_account.setdefault(overlay.account_id, {})[overlay.symbol] = {
                 "contractVersion": overlay.payload.get("contractVersion"),
-                "executionMode": "dual-run-published",
-                "decisionAuthority": "none",
+                "executionMode": "shared-head-account-overlay-refresh",
+                "decisionAuthority": "typedb-shared-market-plus-portfolio-overlay",
                 "overlayId": overlay.overlay_id,
                 "overlayStatus": overlay.status,
                 "sharedSnapshotIds": list(overlay.shared_snapshot_ids),
@@ -351,9 +616,9 @@ class SharedInstrumentInferenceService:
                     continue
                 account_context = dict(context_by_account.get(_text(account_id)) or {})
                 summary = {
-                    "contractVersion": "shared-instrument-inference-v1",
-                    "executionMode": "dual-run-published",
-                    "decisionAuthority": "none",
+                    "contractVersion": SHARED_INSTRUMENT_INFERENCE_VERSION,
+                    "executionMode": "shared-head-account-overlay-refresh",
+                    "decisionAuthority": "typedb-shared-market-plus-portfolio-overlay",
                     "symbols": account_context,
                     "sharedSymbolCount": len([
                         value for value in account_context.values() if value.get("reuseEligible")

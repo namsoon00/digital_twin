@@ -1544,6 +1544,51 @@ class ShadowWorldProjectionSink:
         }
 
 
+class ActiveDeploymentWorldProjectionSink:
+    """Allow only the active delivery deployment to advance shared worlds."""
+
+    def __init__(self, outbox, registry, deployment_id: str):
+        self.outbox = outbox
+        self.registry = registry
+        self.deployment_id = str(deployment_id or "").strip()
+
+    def enqueue(self, projection_kind, shared_world, projection_input, **kwargs):
+        try:
+            control = self.registry.control()
+            deployment = self.registry.get(self.deployment_id)
+        except Exception as error:  # Shared projection must not invalidate private inference.
+            return {
+                "status": "deployment-authorization-unavailable",
+                "saved": False,
+                "projectionKind": str(projection_kind or ""),
+                "worldId": str(getattr(shared_world, "world_id", "") or ""),
+                "preservedActiveGeneration": True,
+                "deploymentId": self.deployment_id,
+                "reason": str(error)[:180],
+            }
+        authorized = bool(
+            str(control.active_deployment_id or "") == self.deployment_id
+            and str(control.delivery_deployment_id or "") == self.deployment_id
+            and str(deployment.get("status") or "") == "active"
+        )
+        if not authorized:
+            return {
+                "status": "inactive-deployment-isolated",
+                "saved": False,
+                "projectionKind": str(projection_kind or ""),
+                "worldId": str(getattr(shared_world, "world_id", "") or ""),
+                "preservedActiveGeneration": True,
+                "deploymentId": self.deployment_id,
+                "reason": "Only the active delivery deployment may advance shared worlds.",
+            }
+        return self.outbox.enqueue(
+            projection_kind,
+            shared_world,
+            projection_input,
+            **kwargs,
+        )
+
+
 class ShadowNotificationSink:
     """Block transport while retaining an auditable delivery-attempt count."""
 
@@ -1872,6 +1917,12 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     # V2 reads temporal features from QuestDB. Notification bookkeeping owns
     # a MySQL transaction and therefore receives the versioned write boundary.
     delivery_time_series_store = stores.market_time_series_store(store_settings)
+    registry_store = stores.reasoning_engine_registry_store(store_settings)
+    shared_world_projection_outbox = ActiveDeploymentWorldProjectionSink(
+        stores.ontology_world_projection_outbox_store(store_settings),
+        registry_store,
+        descriptor.deployment_id,
+    )
     projection_recorder = PortfolioOntologyProjectionRecorder(
         repository,
         quality_store=stores.ontology_quality_sample_store(store_settings),
@@ -1882,13 +1933,12 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         data_pipeline_health_store=stores.data_pipeline_health_store(store_settings),
         market_time_series_store=reasoning_time_series_store,
         investment_domain_store=stores.investment_domain_store(store_settings),
-        world_projection_outbox=None,
+        world_projection_outbox=shared_world_projection_outbox,
         inference_detail_outbox=V2InferenceDetailReceiptSink(),
         graph_assembly_cache_store=None,
         settings=candidate_settings,
         source="reasoning-engine-v2-independent",
     )
-    registry_store = stores.reasoning_engine_registry_store(store_settings)
     shared_inference_store = stores.shared_instrument_inference_store(store_settings)
     shared_inference_service = SharedInstrumentInferenceService(
         shared_inference_store,

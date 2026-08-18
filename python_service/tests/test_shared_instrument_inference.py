@@ -128,6 +128,21 @@ class FakeStore:
                 return values
         return {}
 
+    def latest_overlay(self, deployment_id, account_id, symbol):
+        for overlay in reversed((self.report or {}).get("overlays") or []):
+            values = overlay.to_dict()
+            if (
+                values["deployment_id"] == deployment_id
+                and values["account_id"] == account_id
+                and values["symbol"] == symbol
+            ):
+                return {
+                    **values,
+                    "overlay_status": values["status"],
+                    "sharedSnapshotIds": values["shared_snapshot_ids"],
+                }
+        return {}
+
 
 def rule_catalog():
     return [
@@ -164,7 +179,7 @@ def rule_catalog():
     ]
 
 
-def account_snapshot(price=226.17):
+def account_snapshot(price=226.17, quantity=0.0):
     return AccountSnapshot(
         account_id="a-1",
         account_label="Account",
@@ -179,6 +194,8 @@ def account_snapshot(price=226.17):
             market="US",
             currency="USD",
             current_price=price,
+            quantity=quantity,
+            average_price=200.0 if quantity else 0.0,
             source="watchlist",
         )],
         external_signals={},
@@ -265,7 +282,10 @@ class SharedInstrumentInferenceTest(unittest.TestCase):
         self.assertEqual("ready", receipt["status"])
         self.assertEqual(("a-1", ["NVDA"], ["TSLA"]), store.reconciled[0][:3])
         shared = projection_results["a-1"]["inferenceBox"]["sharedInstrumentInference"]
-        self.assertEqual("none", shared["decisionAuthority"])
+        self.assertEqual(
+            "typedb-shared-market-plus-portfolio-overlay",
+            shared["decisionAuthority"],
+        )
         self.assertTrue(shared["symbols"]["NVDA"]["reuseEligible"])
         self.assertEqual(
             shared,
@@ -351,6 +371,95 @@ class SharedInstrumentInferenceTest(unittest.TestCase):
         )
         self.assertEqual(["graph.market.recovery.v1"], ready["matchedMarketRuleIds"])
         self.assertFalse(changed["reuseEligible"])
+
+    def test_shared_identity_is_independent_of_account_count(self):
+        one = build_shared_instrument_inference(
+            {"a-1": projection("a-1")},
+            ["NVDA"],
+            deployment_id="ontology-v2-shadow",
+        )
+        two = build_shared_instrument_inference(
+            {"a-1": projection("a-1"), "a-2": projection("a-2")},
+            ["NVDA"],
+            deployment_id="ontology-v2-shadow",
+        )
+
+        self.assertEqual(one["snapshots"][0].snapshot_id, two["snapshots"][0].snapshot_id)
+        self.assertEqual(one["snapshots"][0].source_fingerprint, two["snapshots"][0].source_fingerprint)
+
+    def test_exact_shared_and_account_inputs_reuse_private_typedb_projection(self):
+        store = FakeStore()
+        service = SharedInstrumentInferenceService(
+            store,
+            "ontology-v2-shadow",
+            "release-1",
+            rule_catalog_provider=rule_catalog,
+        )
+        source = account_snapshot(quantity=3)
+        source_projection = projection("a-1")
+        source_projection["reasoningContext"] = authoritative_context()
+
+        service.publish_verified_results(
+            {"a-1": source_projection},
+            ["NVDA"],
+            snapshots=[source],
+            observed_at="2026-08-17T01:01:00Z",
+        )
+        reused = service.reusable_portfolio_projection(
+            authoritative_context(),
+            ["NVDA"],
+            account_snapshot(quantity=3),
+        )
+        changed_account = service.reusable_portfolio_projection(
+            authoritative_context(),
+            ["NVDA"],
+            account_snapshot(quantity=4),
+        )
+
+        self.assertTrue(reused["reuseEligible"])
+        self.assertEqual(
+            "reused-shared-account-inference",
+            reused["projection"]["status"],
+        )
+        self.assertTrue(
+            reused["projection"]["inferenceBox"]["reusedExactInference"]
+        )
+        self.assertFalse(changed_account["reuseEligible"])
+        self.assertEqual("account-overlay-miss", changed_account["status"])
+
+    def test_exact_shared_market_evidence_is_composed_without_duplicate_rows(self):
+        service = SharedInstrumentInferenceService(FakeStore(), "ontology-v2-shadow")
+        result = service.attach_shared_market_evidence(
+            {
+                "status": "ok",
+                "inferenceBox": {
+                    "relations": [{"id": "relation:account", "type": "ACCOUNT"}],
+                    "traces": [{"id": "trace:account", "ruleId": "account.rule"}],
+                },
+            },
+            {
+                "reuseEligible": True,
+                "symbols": {
+                    "NVDA": {
+                        "snapshotId": "shared:NVDA:1",
+                        "relations": [
+                            {"id": "relation:market", "type": "MARKET"},
+                            {"id": "relation:market", "type": "MARKET"},
+                        ],
+                        "traces": [
+                            {"id": "trace:market", "ruleId": "market.rule"},
+                            {"id": "trace:market", "ruleId": "market.rule"},
+                        ],
+                    }
+                },
+            },
+        )
+
+        inference = result["inferenceBox"]
+        self.assertTrue(inference["sharedMarketEvidenceReused"])
+        self.assertEqual(2, inference["relationCount"])
+        self.assertEqual(2, inference["traceCount"])
+        self.assertEqual(["shared:NVDA:1"], inference["sharedMarketSnapshotIds"])
 
     def test_recorder_turns_shared_proof_into_a_smaller_native_rule_set(self):
         recorder = PortfolioOntologyProjectionRecorder.__new__(

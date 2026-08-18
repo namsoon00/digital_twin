@@ -52,7 +52,7 @@ TBox / RuleBox (shared definitions)
 - `MarketHypothesis`는 `MarketWorld`에 쓰는 새로운 투자 판단이 아니다. TypeDB가 성립시킨 경로 중 시장 공통 입력만 가진 경우에만 `marketHypothesisId`를 만들고, 각 `PortfolioWorld`의 판단 에피소드가 그 공통 식별자를 참조한다. 따라서 같은 시장 인과 설명은 계정마다 같은 식별자를 쓰되, 공유 세계에는 계정 판단이나 행동이 저장되지 않는다.
 - `AccountHypothesisOverlay`는 보유 여부, 손익, 비중, 위험 한도, 투자 성향, 허용/차단 행동처럼 계정 전용 입력을 별도 ABox 개체로 남긴다. 조건 구조가 시장 입력과 계정 입력을 섞었거나 소유권을 판별할 수 없으면 공통 시장 가설을 만들지 않고 `mixed` 또는 `unverified`로 보수적으로 남긴다.
 - `RuleBox`: 규칙 정의는 전역으로 한 번만 배포하지만, TypeDB schema function 실행은 반드시 `PortfolioWorld.worldId`를 인자로 받는다. 계정이나 세계가 지정되지 않은 RuleBox 실행은 차단한다. 공유 `MarketWorld`는 직접 투자 판단을 수행하는 대상이 아니므로 그 세계에서 InferenceBox를 만들 수 없다.
-- 현재 native RuleBox는 포트폴리오 사실과 시장 사실을 한 ABox generation 안에서 결합한다. 따라서 `PortfolioWorld`에는 실행을 위한 시장 사실 read mirror가 존재하고, `MarketWorld`는 공유·보존되는 기준 원본이다. 이는 계정 사실을 공유하지 않는 경계를 유지한다. 두 세계를 하나의 native query에서 직접 조합하는 최적화는 이후 RuleBox schema 계약을 확장할 때 별도 이행한다.
+- 현재 native RuleBox 가운데 시장 조건과 계정 조건을 함께 쓰는 혼합 규칙은 두 사실을 한 ABox generation 안에서 결합한다. 따라서 혼합 규칙을 새로 계산할 때만 `PortfolioWorld`에 실행용 시장 사실 read mirror가 존재하고, `MarketWorld`는 공유·보존되는 기준 원본이다. 시장 전용 규칙은 정확한 shared head가 있으면 계정 세계에서 다시 실행하지 않는다. 동일한 전체 입력으로 이미 완료한 계정 추론은 이전 TypeDB InferenceBox를 재생하므로 ABox도 다시 쓰지 않는다. read mirror를 완전히 제거하려면 혼합 규칙을 `공유 시장 전제`와 `계정 오버레이 판정`의 두 schema function으로 분리해야 하며, 이 분리를 거치지 않고 사실을 삭제하는 것은 허용하지 않는다.
 
 ### Shared Instrument Inference fan-out
 
@@ -60,7 +60,7 @@ TBox / RuleBox (shared definitions)
 
 검증된 PortfolioWorld InferenceBox 결과는 `hypothesisScope`와 조건 구조를 기준으로 다시 분리한다. 가격·수급·공시·뉴스·재무처럼 계정과 무관함이 증명된 경로만 `shared_instrument_inference_snapshots`에 기록하고, 활성 결과는 `shared_instrument_inference_heads`가 가리킨다. 보유 여부·평단가·손익·비중·계정 정책을 사용한 규칙은 `portfolio_inference_overlays`에만 남는다. 공유 결과에는 계정 id, PortfolioWorld id, 계정 ABox id, 계정별 trace/relation id를 기록하지 않는다.
 
-같은 시장 시점의 결과가 계정마다 서로 다른 공통 fingerprint를 만들면 `conflict`로 저장하고 활성 shared head로 승격하지 않는다. 같은 fingerprint가 반복되면 `equivalent`로 표시한다. 현재 계약은 `dual-run-published`다. 기존 PortfolioWorld TypeDB 판단이 계속 실행 권한을 가지며 공유 결과는 AI 계보, 재사용 가능성, 동등성 측정에 사용된다. 공유 cache가 장애여도 검증된 TypeDB 판단은 바뀌지 않는다. 계정 간 동등성이 운영 데이터로 확인된 뒤에만 다음 계약에서 시장 규칙 실행 자체를 한 번으로 줄일 수 있다.
+같은 시장 시점의 결과가 계정마다 서로 다른 공통 fingerprint를 만들면 `conflict`로 저장하고 활성 shared head로 승격하지 않는다. 같은 fingerprint가 반복되면 `equivalent`로 표시한다. 공유 snapshot identity는 계정 id·계정 수·PortfolioWorld generation을 포함하지 않으므로 같은 시장 사실은 항상 같은 shared head가 된다. 현재 계약은 `shared-head-account-overlay-refresh`다. 첫 TypeDB 결과가 시장 전용 규칙의 공유 근거를 발행하고, 뒤따르는 계정은 정확한 시장 리비전일 때 그 규칙을 재실행하지 않고 TypeDB가 만든 공유 관계·trace를 계정 결과에 합성한다. 계정 입력과 전체 source snapshot까지 동일하면 `portfolio_inference_overlays`의 제한된 TypeDB 재생 패킷을 사용해 ABox 투영 자체를 생략한다. 시장·계정·릴리스 fingerprint 중 하나라도 다르면 재사용하지 않고 새 TypeDB 세대를 만든다.
 
 ```text
 시장 변경 1건
@@ -71,7 +71,7 @@ TBox / RuleBox (shared definitions)
    -> AI: 공통 시장 설명 + 해당 계정 overlay
 ```
 
-운영 흐름은 `계정별 원본 스냅샷 -> PortfolioWorld ABox 검증/RuleBox materialization -> 시장·지식 slice 생성 -> MySQL durable projection outbox -> 독립 worker -> MarketWorld/KnowledgeWorld scoped Manifest 활성화 -> 해당 PortfolioWorld AI/알림`이다. 공유 세계 투영은 알림 지연 경로가 아니며, 계정 ABox 전체를 큐에 넣지 않고 대상 세계별 축약 패킷만 넣는다. TypeDB는 쓰기를 직렬화하므로 worker는 기본적으로 한 실행에 한 shared world만 처리한다. 패킷은 크기 상한, source observation clock, lease, 재시도, 최신 스냅샷 coalescing, 완료 이력 retention을 가진다. 새 공통 규칙을 배포한 직후에는 대상 계정의 다음 투영이 해당 규칙을 적용한다. 전 계정에 즉시 실행이 필요할 때도 무범위 전역 실행 대신, 계정 목록을 대상으로 한 명시적 world fan-out 작업만 허용한다.
+운영 흐름은 `변경 종목 -> 종목/계정 역색인 -> 계정별 원본 스냅샷 -> shared head 정확성 검사 -> PortfolioWorld ABox 검증/RuleBox materialization 또는 정확 재생 -> 시장·지식 slice 생성 -> MySQL durable projection outbox -> 독립 worker -> MarketWorld/KnowledgeWorld scoped Manifest 활성화 -> 해당 PortfolioWorld AI/알림`이다. 공유 세계 투영은 알림 지연 경로가 아니며, 계정 ABox 전체를 큐에 넣지 않고 대상 세계별 축약 패킷만 넣는다. 활성·발송 배포만 공유 월드를 전진시킬 수 있고 shadow/비활성 배포는 차단한다. 동일한 shared-world material은 출처 계정이 달라도 하나의 큐 작업으로 중복 제거한다. TypeDB는 쓰기를 직렬화하므로 worker는 기본적으로 한 실행에 한 shared world만 처리한다. 패킷은 크기 상한, source observation clock, lease, 재시도, 최신 스냅샷 coalescing, 완료 이력 retention을 가진다. 새 공통 규칙을 배포한 직후에는 대상 계정의 다음 투영이 해당 규칙을 적용한다. 전 계정에 즉시 실행이 필요할 때도 무범위 전역 실행 대신, 계정 목록을 대상으로 한 명시적 world fan-out 작업만 허용한다.
 
 공유 투영 계약은 `shared-world-projection-v3`으로 버전 관리한다. 계약이 바뀌면 기존 shared Manifest를 병합하지 않고 새 계약의 slice로 완전 재구축한다. `accountId`는 공유 세계 자체의 기술적 소유자 값만 허용하며, 계정·전략·손익·알림·의사결정·가설·AI 프롬프트·raw payload 필드는 투영 전에 제거한다. 계약 재구축 뒤에는 비활성 Manifest와 참조되지 않는 scope generation을 같은 세계의 lease 아래에서 즉시 정리한다. PortfolioWorld의 deferred maintenance와 shared-world projection maintenance는 서로의 writer lease를 잡지 않도록 분리하며, 일반 갱신은 live projection lease를 오래 점유하지 않는 bounded cleanup만 수행한다.
 

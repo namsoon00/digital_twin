@@ -114,6 +114,8 @@ class MySQLSharedInstrumentInferenceStore(MySQLOperationalConnection):
         overlays = list((report or {}).get("overlays") or [])
         stamp = utc_now()
         head_updates = 0
+        changed_head_symbols = set()
+        unchanged_head_symbols = set()
         with self.transaction() as connection:
             for item in snapshots:
                 values = item.to_dict() if hasattr(item, "to_dict") else dict(item or {})
@@ -148,7 +150,29 @@ class MySQLSharedInstrumentInferenceStore(MySQLOperationalConnection):
                 )
                 if _text(values.get("consistency_status")) != "equivalent":
                     continue
-                cursor = connection.execute(
+                existing_head = connection.execute(
+                    "SELECT snapshot_id, source_as_of FROM shared_instrument_inference_heads "
+                    "WHERE deployment_id = %s AND symbol = %s",
+                    (
+                        _text(values.get("deployment_id"))[:191],
+                        _symbol(values.get("symbol"))[:64],
+                    ),
+                ).fetchone() or {}
+                incoming_snapshot_id = _text(values.get("snapshot_id"))[:191]
+                incoming_source_as_of = _text(values.get("source_as_of"))[:40]
+                existing_snapshot_id = _text(existing_head.get("snapshot_id"))
+                existing_source_as_of = _text(existing_head.get("source_as_of"))
+                should_advance = bool(
+                    not existing_snapshot_id
+                    or (
+                        existing_snapshot_id != incoming_snapshot_id
+                        and (not existing_source_as_of or existing_source_as_of <= incoming_source_as_of)
+                    )
+                )
+                if not should_advance:
+                    unchanged_head_symbols.add(_symbol(values.get("symbol")))
+                    continue
+                connection.execute(
                     """
                     INSERT INTO shared_instrument_inference_heads (
                         deployment_id, symbol, snapshot_id, semantic_fingerprint,
@@ -169,7 +193,8 @@ class MySQLSharedInstrumentInferenceStore(MySQLOperationalConnection):
                         stamp,
                     ),
                 )
-                head_updates += int(getattr(cursor, "rowcount", 0) or 0) > 0
+                head_updates += 1
+                changed_head_symbols.add(_symbol(values.get("symbol")))
             for item in overlays:
                 values = item.to_dict() if hasattr(item, "to_dict") else dict(item or {})
                 connection.execute(
@@ -206,6 +231,8 @@ class MySQLSharedInstrumentInferenceStore(MySQLOperationalConnection):
             "snapshotCount": len(snapshots),
             "overlayCount": len(overlays),
             "headUpdateCount": head_updates,
+            "changedHeadSymbols": sorted(changed_head_symbols),
+            "unchangedHeadSymbols": sorted(unchanged_head_symbols),
             "sharedSymbolCount": int((report or {}).get("sharedSymbolCount") or 0),
             "verifiedAccountCount": int((report or {}).get("verifiedAccountCount") or 0),
             "consistencyBySymbol": dict((report or {}).get("consistencyBySymbol") or {}),

@@ -23,6 +23,7 @@ VERIFIED_PROJECTION_STATUSES = {
     "partial",
     "unchanged-material-facts",
     "unchanged-material-facts-reasoning-retry",
+    "reused-shared-account-inference",
 }
 
 
@@ -391,9 +392,13 @@ class ScopedTypeDBInferenceExecutor:
     def __init__(self, projection_recorder, shared_inference_service=None):
         self.projection_recorder = projection_recorder
         self.shared_inference_service = shared_inference_service
+        self.last_shared_publication = {"status": "not-configured"}
+        self.last_shared_publication_ms = 0
 
     def execute(self, request: IndependentReasoningRequest, snapshots, progress_callback=None):
         results = {}
+        publication_receipts = []
+        publication_elapsed_ms = 0
         for snapshot in snapshots or []:
             account_id = str(getattr(snapshot, "account_id", "") or "")
 
@@ -403,7 +408,46 @@ class ScopedTypeDBInferenceExecutor:
 
             reasoning_context = dict(request.context)
             reuse_proof = {"status": "not-configured", "reuseEligible": False}
+            reusable_projection = {"status": "not-configured", "reuseEligible": False}
             if self.shared_inference_service is not None:
+                reuse_reader = getattr(
+                    self.shared_inference_service,
+                    "reusable_portfolio_projection",
+                    None,
+                )
+                if callable(reuse_reader):
+                    try:
+                        reusable_projection = dict(
+                            reuse_reader(
+                                reasoning_context,
+                                request.symbols,
+                                snapshot,
+                            ) or {}
+                        )
+                    except Exception as error:
+                        reusable_projection = {
+                            "status": "error",
+                            "reuseEligible": False,
+                            "reason": str(error)[:180],
+                        }
+                if bool(reusable_projection.get("reuseEligible")):
+                    result = dict(reusable_projection.get("projection") or {})
+                    result["sharedInferenceExecution"] = {
+                        "reuseProofStatus": "ready",
+                        "reuseEligible": True,
+                        "portfolioProjectionReused": True,
+                        "publicationStatus": "not-required-existing-head",
+                        "publishedSharedSymbolCount": 0,
+                    }
+                    results[account_id] = result
+                    progress(
+                        "ontology_projection.reused_exact_inference",
+                        {
+                            "status": "ready",
+                            "targetSymbolCount": len(request.symbols),
+                        },
+                    )
+                    continue
                 try:
                     reuse_proof = dict(
                         self.shared_inference_service.execution_reuse_proof(
@@ -440,9 +484,18 @@ class ScopedTypeDBInferenceExecutor:
                     "recommendedRetryAfterSeconds": 15,
                 }
                 snapshot.metadata.setdefault("ontology", {})["projection"] = result
+            if bool(reuse_proof.get("reuseEligible")) and self.shared_inference_service is not None:
+                evidence_composer = getattr(
+                    self.shared_inference_service,
+                    "attach_shared_market_evidence",
+                    None,
+                )
+                if callable(evidence_composer):
+                    result = dict(evidence_composer(result, reuse_proof) or result)
             results[account_id] = result
             if self.shared_inference_service is not None:
                 try:
+                    account_publication_started = time.perf_counter()
                     publication = dict(
                         self.shared_inference_service.publish_verified_results(
                             {account_id: result},
@@ -453,6 +506,10 @@ class ScopedTypeDBInferenceExecutor:
                     )
                 except Exception as error:
                     publication = {"status": "error", "reason": str(error)[:180]}
+                finally:
+                    publication_elapsed_ms += int(
+                        (time.perf_counter() - account_publication_started) * 1000
+                    )
                 result["sharedInferenceExecution"] = {
                     "reuseProofStatus": str(reuse_proof.get("status") or ""),
                     "reuseEligible": bool(reuse_proof.get("reuseEligible")),
@@ -460,7 +517,48 @@ class ScopedTypeDBInferenceExecutor:
                     "publishedSharedSymbolCount": int(
                         publication.get("sharedSymbolCount") or 0
                     ),
+                    "portfolioProjectionReused": False,
                 }
+                publication_receipts.append(publication)
+        self.last_shared_publication_ms = publication_elapsed_ms
+        if publication_receipts:
+            self.last_shared_publication = {
+                "status": (
+                    "error"
+                    if any(str(item.get("status") or "").lower() == "error" for item in publication_receipts)
+                    else "ready"
+                ),
+                "publicationCount": len(publication_receipts),
+                "snapshotCount": sum(int(item.get("snapshotCount") or 0) for item in publication_receipts),
+                "overlayCount": sum(int(item.get("overlayCount") or 0) for item in publication_receipts),
+                "headUpdateCount": sum(int(item.get("headUpdateCount") or 0) for item in publication_receipts),
+                "sharedSymbolCount": len({
+                    symbol
+                    for item in publication_receipts
+                    for symbol in list(item.get("changedHeadSymbols") or [])
+                    + list((item.get("consistencyBySymbol") or {}).keys())
+                }),
+                "changedHeadSymbols": sorted({
+                    str(symbol or "").upper().strip()
+                    for item in publication_receipts
+                    for symbol in item.get("changedHeadSymbols") or []
+                    if str(symbol or "").strip()
+                }),
+                "decisionPathAffected": False,
+            }
+        elif any(
+            bool((value.get("sharedInferenceExecution") or {}).get("portfolioProjectionReused"))
+            for value in results.values()
+            if isinstance(value, Mapping)
+        ):
+            self.last_shared_publication = {
+                "status": "reused-existing-head",
+                "publicationCount": 0,
+                "headUpdateCount": 0,
+                "decisionPathAffected": False,
+            }
+        else:
+            self.last_shared_publication = {"status": "not-configured"}
         return results
 
 
@@ -565,28 +663,22 @@ class V2ReasoningEngine:
             reasoning_case = self.reasoning_orchestrator.input_ready(reasoning_case.case_id)
         projection_started = time.perf_counter()
         projection_results = self.inference_executor.execute(request, snapshots)
-        stages["projectionAndInferenceMs"] = int((time.perf_counter() - projection_started) * 1000)
-        shared_publication = {"status": "not-configured"}
-        if self.shared_inference_service is not None:
-            shared_started = time.perf_counter()
-            try:
-                shared_publication = dict(
-                    self.shared_inference_service.publish_verified_results(
-                        projection_results,
-                        request.symbols,
-                        snapshots=snapshots,
-                        observed_at=request.source_observed_at,
-                    ) or {}
-                )
-            except Exception as error:  # noqa: BLE001 - dual-run publication cannot alter the verified decision.
-                shared_publication = {
-                    "status": "error",
-                    "reason": str(error)[:240],
-                    "decisionPathAffected": False,
-                }
-            stages["sharedInferencePublicationMs"] = int(
-                (time.perf_counter() - shared_started) * 1000
-            )
+        projection_total_ms = int((time.perf_counter() - projection_started) * 1000)
+        # The scoped executor publishes after each successful leader account
+        # so following accounts in the same batch can reuse the exact market
+        # head. Publishing the whole batch again here previously doubled the
+        # MySQL work and advanced equivalent shared heads unnecessarily.
+        shared_publication = dict(
+            getattr(self.inference_executor, "last_shared_publication", {})
+            or {"status": "not-configured"}
+        )
+        stages["sharedInferencePublicationMs"] = int(
+            getattr(self.inference_executor, "last_shared_publication_ms", 0) or 0
+        )
+        stages["projectionAndInferenceMs"] = max(
+            0,
+            projection_total_ms - stages["sharedInferencePublicationMs"],
+        )
         identities = {
             account_id: projection_inference_identity(value)
             for account_id, value in projection_results.items()

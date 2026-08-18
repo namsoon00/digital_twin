@@ -218,6 +218,45 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertTrue(recorder.contexts[1]["sharedInferenceReuseProof"]["reuseEligible"])
         self.assertEqual("ready", results["a-2"]["sharedInferenceExecution"]["reuseProofStatus"])
 
+    def test_scoped_executor_skips_typedb_for_exact_private_overlay_replay(self):
+        class Recorder:
+            def record_snapshot(self, *_args, **_kwargs):
+                raise AssertionError("TypeDB projection must not run for an exact replay")
+
+        class SharedInference:
+            def reusable_portfolio_projection(self, _context, _symbols, snapshot):
+                return {
+                    "status": "ready",
+                    "reuseEligible": True,
+                    "projection": {
+                        "status": "reused-shared-account-inference",
+                        "inferenceBox": {
+                            "nativeTypeDbReasoningCompleted": True,
+                            "generationAligned": True,
+                            "sourceAboxSnapshotId": "abox:" + snapshot.account_id,
+                            "inferenceGenerationId": "generation:" + snapshot.account_id,
+                            "relations": [],
+                            "traces": [],
+                        },
+                    },
+                }
+
+        executor = ScopedTypeDBInferenceExecutor(Recorder(), SharedInference())
+        request = independent_reasoning_request(
+            "ontology-v2-shadow",
+            [source_event("NVDA", ["a-1"])],
+        )
+
+        results = executor.execute(
+            request,
+            [SimpleNamespace(account_id="a-1", metadata={})],
+        )
+
+        self.assertEqual("reused-shared-account-inference", results["a-1"]["status"])
+        self.assertTrue(
+            results["a-1"]["sharedInferenceExecution"]["portfolioProjectionReused"]
+        )
+
     def test_request_scope_is_deterministic_and_symbol_bounded(self):
         event = source_event()
         first = independent_reasoning_request("ontology-v2-shadow", [event])

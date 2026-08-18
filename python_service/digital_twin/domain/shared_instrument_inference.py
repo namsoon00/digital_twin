@@ -20,15 +20,18 @@ from .hypothesis_scoping import (
     inference_scope_assessment,
 )
 from .ontology_projection_input import compact_external_signals_for_ontology
+from .ontology_projection_audit import projection_source_snapshot_fingerprint
 
 
-SHARED_INSTRUMENT_INFERENCE_VERSION = "shared-instrument-inference-v1"
-PORTFOLIO_INFERENCE_OVERLAY_VERSION = "portfolio-inference-overlay-v1"
+SHARED_INSTRUMENT_INFERENCE_VERSION = "shared-instrument-inference-v2"
+PORTFOLIO_INFERENCE_OVERLAY_VERSION = "portfolio-inference-overlay-v2"
+SHARED_EXECUTION_REUSE_VERSION = "shared-instrument-execution-reuse-v2"
 VERIFIED_PROJECTION_STATUSES = frozenset({
     "ok",
     "partial",
     "unchanged-material-facts",
     "unchanged-material-facts-reasoning-retry",
+    "reused-shared-account-inference",
 })
 
 
@@ -106,6 +109,106 @@ MARKET_POSITION_FIELDS = (
     "ma20_slope", "ma60_slope", "ma5_distance", "ma20_distance", "ma60_distance",
     "sector",
 )
+
+ACCOUNT_POSITION_FIELDS = (
+    "symbol", "market", "currency", "quantity", "sellable_quantity",
+    "average_price", "source",
+)
+
+
+def account_overlay_input_fingerprint(snapshot: object, symbol: object) -> str:
+    """Hash account-owned facts without copying current market observations.
+
+    This fingerprint is the private overlay identity. Price, volume, moving
+    averages and other market-owned values deliberately stay out of it; the
+    exact shared market snapshot is a separate component of the overlay key.
+    """
+
+    clean_symbol = _symbol(symbol)
+    if not clean_symbol or snapshot is None:
+        return ""
+    positions = []
+    for position in list(getattr(snapshot, "positions", []) or []) + list(
+        getattr(snapshot, "watchlist", []) or []
+    ):
+        value = (
+            position.to_dict()
+            if callable(getattr(position, "to_dict", None))
+            else dict(position or {}) if isinstance(position, Mapping) else {}
+        )
+        if _symbol(value.get("symbol")) != clean_symbol:
+            continue
+        positions.append({key: value.get(key) for key in ACCOUNT_POSITION_FIELDS})
+    portfolio = getattr(snapshot, "portfolio", None)
+    account_state = {
+        "accountId": _text(getattr(snapshot, "account_id", "")),
+        "symbol": clean_symbol,
+        "positions": positions,
+        "cash": getattr(portfolio, "cash", None),
+    }
+    return _hash(account_state) if positions else ""
+
+
+def decision_input_fingerprint(snapshot: object) -> str:
+    """Identify the complete immutable ABox source consumed by TypeDB."""
+
+    if snapshot is None:
+        return ""
+    try:
+        return projection_source_snapshot_fingerprint(snapshot)
+    except Exception:
+        return ""
+
+
+def _symbol_projection_replay(
+    projection: Mapping[str, object],
+    symbol: str,
+) -> Dict[str, object]:
+    """Keep the private TypeDB result required for an exact-input replay.
+
+    Shared rows never receive this packet. It is stored only in the private
+    account overlay and remains bounded to one symbol.
+    """
+
+    values = dict(projection or {}) if isinstance(projection, Mapping) else {}
+    inference = dict(values.get("inferenceBox") or {}) if isinstance(
+        values.get("inferenceBox"), Mapping
+    ) else {}
+    if not inference:
+        return {}
+    replay_inference_keys = (
+        "configured", "status", "graphStore", "source", "reasoningMode",
+        "nativeTypeDbReasoningUsed", "nativeTypeDbReasoningCompleted",
+        "typedbNativeRuleEvaluationCompleted", "generationAligned",
+        "inferenceGenerationId", "inferenceGenerationAt",
+        "sourceAboxSnapshotId", "activeAboxSnapshotId", "worldId",
+        "ruleboxRulesHash", "ruleboxShortHash", "ruleboxRuleCount",
+        "ruleboxConditionCount", "ruleboxDerivationCount",
+        "nativeRelationCount", "hypothesisCalibration",
+    )
+    relations = _rows_for_symbol(inference.get("relations") or [], symbol)
+    traces = _rows_for_symbol(inference.get("traces") or [], symbol)
+    replay_inference = {
+        key: inference.get(key)
+        for key in replay_inference_keys
+        if key in inference
+    }
+    replay_inference.update({
+        "relations": relations[:240],
+        "traces": traces[:240],
+        "relationCount": len(relations[:240]),
+        "traceCount": len(traces[:240]),
+    })
+    return {
+        "status": _text(values.get("status")) or "ok",
+        "graphStore": _text(values.get("graphStore") or inference.get("graphStore")),
+        "worldId": _text(values.get("worldId") or inference.get("worldId")),
+        "accountId": _text(values.get("accountId")),
+        "ontologyWorld": dict(values.get("ontologyWorld") or {}) if isinstance(
+            values.get("ontologyWorld"), Mapping
+        ) else {},
+        "inferenceBox": replay_inference,
+    }
 
 
 def market_snapshot_input_fingerprint(snapshot: object, symbol: object) -> str:
@@ -305,6 +408,8 @@ def build_shared_instrument_inference(
     observed_at: str = "",
     market_rule_ids: Iterable[str] = (),
     market_input_fingerprints: Mapping[str, Mapping[str, str]] = None,
+    account_input_fingerprints: Mapping[str, Mapping[str, str]] = None,
+    decision_input_fingerprints: Mapping[str, str] = None,
 ) -> Dict[str, object]:
     """Split verified TypeDB output into reusable market facts and overlays.
 
@@ -363,6 +468,9 @@ def build_shared_instrument_inference(
                 reasoning_context,
                 symbol,
             )
+            market_input_fingerprint = _text(
+                ((market_input_fingerprints or {}).get(_text(account_id)) or {}).get(symbol)
+            )
             market_payload = {
                 "contractVersion": SHARED_INSTRUMENT_INFERENCE_VERSION,
                 "symbol": symbol,
@@ -375,9 +483,7 @@ def build_shared_instrument_inference(
                 "matchedMarketRuleIds": sorted(market_rule_ids),
                 "marketRuleCatalogIds": list(market_rule_catalog),
                 "sourceRevisionFingerprint": source_revision_fingerprint,
-                "marketInputFingerprint": _text(
-                    ((market_input_fingerprints or {}).get(_text(account_id)) or {}).get(symbol)
-                ),
+                "marketInputFingerprint": market_input_fingerprint,
                 "scopeState": MARKET_SHARED_SCOPE,
                 "decisionAuthority": "none",
             }
@@ -392,11 +498,15 @@ def build_shared_instrument_inference(
                 if market_traces or (market_rule_catalog and source_revision_fingerprint)
                 else ""
             )
+            # The shared identity must not depend on the account that happened
+            # to execute the market rules first. Otherwise every account
+            # advances the shared head even when it observed the same facts.
             source_identity = {
                 "deploymentId": _text(deployment_id),
-                "accountId": _text(account_id),
-                "inferenceGenerationId": _text(inference.get("inferenceGenerationId")),
-                "sourceAboxSnapshotId": _text(inference.get("sourceAboxSnapshotId")),
+                "releaseFingerprint": _text(release_fingerprint),
+                "symbol": symbol,
+                "sourceRevisionFingerprint": source_revision_fingerprint,
+                "marketInputFingerprint": market_input_fingerprint,
                 "semanticFingerprint": semantic_fingerprint,
             }
             candidate = {
@@ -410,6 +520,13 @@ def build_shared_instrument_inference(
                 "sourceAsOf": _text(inference.get("inferenceGenerationAt")) or created_at,
                 "ruleboxHash": _text(inference.get("ruleboxRulesHash")),
                 "localRuleIds": sorted(local_rule_ids),
+                "accountInputFingerprint": _text(
+                    ((account_input_fingerprints or {}).get(_text(account_id)) or {}).get(symbol)
+                ),
+                "decisionInputFingerprint": _text(
+                    (decision_input_fingerprints or {}).get(_text(account_id))
+                ),
+                "projectionReplay": _symbol_projection_replay(projection, symbol),
             }
             account_rows.append(candidate)
             if semantic_fingerprint:
@@ -425,7 +542,9 @@ def build_shared_instrument_inference(
         for fingerprint in fingerprints:
             equivalent_rows = [row for row in rows if row["semanticFingerprint"] == fingerprint]
             lead = max(equivalent_rows, key=lambda row: row["sourceAsOf"])
-            source_fingerprint = _hash(sorted(row["sourceFingerprint"] for row in equivalent_rows))
+            source_fingerprint = _hash(sorted({
+                row["sourceFingerprint"] for row in equivalent_rows
+            }))
             shared_generation_id = "shared-generation:" + source_fingerprint[:32]
             shared_source_id = "shared-source:" + _hash({
                 "symbol": symbol,
@@ -475,7 +594,15 @@ def build_shared_instrument_inference(
             "symbol": row["symbol"],
             "sharedSnapshotIds": shared_ids,
             "accountRuleIds": row["localRuleIds"],
-            "sourceAboxSnapshotId": row["sourceAboxSnapshotId"],
+            "accountInputFingerprint": row["accountInputFingerprint"],
+            "decisionInputFingerprint": row["decisionInputFingerprint"],
+            "releaseFingerprint": _text(release_fingerprint),
+        })
+        overlay_payload.update({
+            "releaseFingerprint": _text(release_fingerprint),
+            "accountInputFingerprint": row["accountInputFingerprint"],
+            "decisionInputFingerprint": row["decisionInputFingerprint"],
+            "projectionReplay": row["projectionReplay"],
         })
         overlay_id = "portfolio-overlay:" + account_fingerprint[:32]
         overlays.append(PortfolioInferenceOverlay(

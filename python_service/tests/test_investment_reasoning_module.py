@@ -14,6 +14,7 @@ from digital_twin.application.investment_reasoning.decision_synthesis import (
 from digital_twin.domain.data_freshness import evaluate_notification_data_freshness
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
+from digital_twin.domain.notification_ai_gate_validation import normalized_hypothesis_comparison
 from digital_twin.domain.investment_reasoning import (
     CASE_BLOCKED,
     CASE_DECISION_SYNTHESIZED,
@@ -304,6 +305,27 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             ["hypothesis:canonical"],
             enriched["investmentReasoningCase"]["hypothesisIds"],
         )
+        self.assertEqual(
+            ["hypothesis:canonical"],
+            [
+                item["hypothesisId"]
+                for item in enriched["ontologyRelationContext"]["investmentBrain"]
+                ["hypothesisSet"]["hypotheses"]
+            ],
+        )
+        prompt_hypothesis = enriched["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0]
+        comparison = normalized_hypothesis_comparison(enriched, {
+            "hypotheses": [{
+                "hypothesisId": "hypothesis:canonical",
+                "verdict": "supported",
+                "reasoning": "TypeDB 근거가 현재 판단을 지지합니다.",
+                "supportingEvidenceIds": prompt_hypothesis["supportingEvidenceIds"],
+                "counterEvidenceIds": prompt_hypothesis["counterEvidenceIds"],
+            }],
+            "selectedHypothesisId": "hypothesis:canonical",
+        })
+        self.assertEqual("completed", comparison["hypothesisComparisonState"])
+        self.assertEqual("hypothesis:canonical", comparison["selectedHypothesisId"])
 
     def test_rule_inventory_exposes_unroutable_rules_before_release(self):
         inventory = reasoning_rule_inventory([{

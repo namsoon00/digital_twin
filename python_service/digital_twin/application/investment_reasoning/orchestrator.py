@@ -31,6 +31,74 @@ def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
 
 
+def _hypothesis_rule_ids(value: Mapping[str, object]) -> tuple:
+    payload = _mapping(value)
+    values = payload.get("supportingRuleIds") or payload.get("supporting_rule_ids") or []
+    return tuple(sorted({str(item or "").strip() for item in values if str(item or "").strip()}))
+
+
+def _candidate_action(reasoning_case: ReasoningCase, hypothesis_id: str) -> str:
+    for synthesis in reasoning_case.decision_syntheses:
+        for alternative in synthesis.alternatives:
+            if hypothesis_id in alternative.hypothesis_ids:
+                return str(alternative.action or "").upper()
+    return ""
+
+
+def _prompt_hypotheses(reasoning_case: ReasoningCase, relation: Mapping[str, object]):
+    brain = _mapping(_mapping(relation).get("investmentBrain"))
+    display_set = _mapping(brain.get("hypothesisSet")) or _mapping(_mapping(relation).get("hypothesisSet"))
+    display_rows = [
+        dict(item)
+        for item in display_set.get("hypotheses") or []
+        if isinstance(item, Mapping)
+    ]
+    eligible_ids = {
+        hypothesis_id
+        for synthesis in reasoning_case.decision_syntheses
+        for hypothesis_id in synthesis.eligible_hypothesis_ids
+    }
+    rows = []
+    for hypothesis in reasoning_case.hypotheses:
+        if hypothesis.hypothesis_id not in eligible_ids:
+            continue
+        rule_ids = tuple(sorted(hypothesis.supporting_rule_ids))
+        display = next(
+            (item for item in display_rows if rule_ids and _hypothesis_rule_ids(item) == rule_ids),
+            {},
+        )
+        action = hypothesis.candidate_action or _candidate_action(reasoning_case, hypothesis.hypothesis_id)
+        row = deepcopy(display)
+        row.update({
+            "hypothesisId": hypothesis.hypothesis_id,
+            "familyId": hypothesis.family_id,
+            "claim": hypothesis.label,
+            "label": hypothesis.label,
+            "candidateAction": action,
+            "supportingRuleIds": list(hypothesis.supporting_rule_ids),
+            "supportingEvidenceIds": list(hypothesis.supporting_evidence_ids),
+            "counterEvidenceIds": list(hypothesis.counter_evidence_ids),
+            "causalTraceIds": list(hypothesis.causal_trace_ids),
+            "assumptions": list(hypothesis.assumptions),
+            "invalidationConditions": list(hypothesis.invalidation_conditions),
+            "horizon": hypothesis.horizon,
+            "validationState": hypothesis.validation_state,
+            "evidenceState": "supported",
+            "approvalStatus": "approved-active",
+            "verificationStatus": hypothesis.validation_state or "verified",
+            "status": "active",
+            "decisionEligibilitySource": "investmentReasoningCase.decisionSyntheses",
+        })
+        if not str(row.get("stance") or "").strip():
+            row["stance"] = (
+                "support" if action in {"BUY", "ADD"}
+                else "risk" if action in {"TRIM", "SELL", "AVOID"}
+                else "context"
+            )
+        rows.append(row)
+    return rows
+
+
 class InvestmentReasoningOrchestrator:
     """One public lifecycle over replaceable TypeDB and AI worker stages."""
 
@@ -183,6 +251,21 @@ class InvestmentReasoningOrchestrator:
                 "ai-context-graph-hypotheses-captured",
                 {"hypothesisCount": len(reasoning_case.hypotheses)},
             )
+        if reasoning_case.decision_syntheses:
+            relation = _mapping(enriched.get("ontologyRelationContext"))
+            if relation:
+                prompt_hypotheses = _prompt_hypotheses(reasoning_case, relation)
+                brain = _mapping(relation.get("investmentBrain"))
+                hypothesis_set = _mapping(brain.get("hypothesisSet")) or _mapping(relation.get("hypothesisSet"))
+                hypothesis_set["hypotheses"] = prompt_hypotheses
+                hypothesis_set["eligibleHypothesisIds"] = [
+                    item["hypothesisId"] for item in prompt_hypotheses
+                ]
+                brain["hypothesisSet"] = hypothesis_set
+                relation["investmentBrain"] = brain
+                if isinstance(relation.get("hypothesisSet"), Mapping):
+                    relation["hypothesisSet"] = deepcopy(hypothesis_set)
+                enriched["ontologyRelationContext"] = relation
         enriched["investmentReasoningCaseId"] = reasoning_case.case_id
         enriched["investmentReasoningCase"] = self.compact_context(reasoning_case)
         self.repository.save(reasoning_case)

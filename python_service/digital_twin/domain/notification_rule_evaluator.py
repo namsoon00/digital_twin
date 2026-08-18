@@ -1121,6 +1121,17 @@ def apply_state_cooldown_rule(
                 decision.similarity_bypass_reason = reason
                 decision.reasons.append("상태 정책: " + decision.state_reason)
                 return decision
+    if decision.state_recent_sent_count > 0 and not decision.state_last_sent_at:
+        decision.state_decision = "in-flight"
+        decision.state_suppressed = True
+        decision.state_reason = "같은 대상의 앞선 투자 인사이트가 AI 판단 또는 발송 대기 중입니다."
+        decision.should_send = False
+        decision.delivery_state = "suppressed"
+        decision.gate_state = "blocked"
+        decision.gate_reason = decision.state_reason
+        decision.suppression_reason = "in_flight_duplicate"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
     if decision.state_cooldown_minutes and decision.state_last_sent_age_minutes >= decision.state_cooldown_minutes:
         decision.state_decision = "scheduled-summary"
         decision.state_reason = "지속 상태 요약 " + str(decision.state_cooldown_minutes) + "분 경과"

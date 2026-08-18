@@ -282,6 +282,36 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertEqual(delivered.created_at, found["_relationPredecessorSentAt"])
         self.assertEqual("done", found["_relationPredecessorSentStatus"])
 
+    def test_relation_predecessor_does_not_treat_awaiting_ai_as_delivered(self):
+        current = self.job(self.context())
+        awaiting = self.job(self.context())
+        awaiting.status = "awaiting_ai"
+        row = {
+            "text": awaiting.text,
+            "payload_json": json.dumps(MySQLNotificationJobStore.compact_job_payload(awaiting)),
+            "created_at": awaiting.created_at,
+            "status": awaiting.status,
+        }
+
+        class Result:
+            def fetchall(self):
+                return [row]
+
+        class Connection:
+            def execute(self, *_args, **_kwargs):
+                return Result()
+
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+
+        found = store.relation_predecessor_with_connection(
+            Connection(),
+            current,
+            default_notification_rule("investmentInsight"),
+        )
+
+        self.assertEqual("awaiting_ai", found["_relationPredecessorStatus"])
+        self.assertNotIn("_relationPredecessorSentAt", found)
+
     def test_suppressed_predecessor_does_not_restart_state_cooldown(self):
         previous_context = self.context()
         previous_context["deliverySuppressionReason"] = "state_cooldown"

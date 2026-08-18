@@ -1201,11 +1201,9 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 and previous_fingerprint == current_fingerprint
             ):
                 baseline_observed_at = created_at
-            if status != "suppressed" and not cooldown_boundary_at:
+            if status == "done" and not cooldown_boundary_at:
                 # Suppressed candidates remain useful for semantic diffs, but
-                # only a delivered or still in-flight job may start cooldown.
-                # Otherwise frequent suppressed candidates move the boundary
-                # forever and the subject can never become eligible again.
+                # only a successfully delivered job may start cooldown.
                 cooldown_boundary_at = created_at
                 cooldown_boundary_status = status
             if not selected_context:

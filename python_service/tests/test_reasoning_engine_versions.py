@@ -308,6 +308,115 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("independent-v2", readiness["mode"])
         self.assertEqual([], readiness["blockers"])
 
+    def test_independent_v2_gate_can_approve_only_a_drained_historical_queue_wait(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": {"status": "ready", "independentExecution": True},
+                    "releaseBundle": {},
+                }
+
+        class Jobs:
+            def __init__(self, pending_count=0):
+                self.pending_count = pending_count
+
+            def summary(self, deployment_id, lookback=200):
+                del deployment_id, lookback
+                return {
+                    "sampleCount": 8,
+                    "successfulRunCount": 8,
+                    "traceCompleteRunCount": 8,
+                    "candidateEventRunCount": 3,
+                    "distinctSymbolCount": 4,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "durationP95Ms": 1200,
+                    "queueWaitP95Ms": 180000,
+                    "latestCompletedAt": "2099-01-01T00:00:00Z",
+                    "pendingCount": self.pending_count,
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(),
+        )
+
+        blocked = platform.promotion_readiness("ontology-v2-shadow")
+        approved = platform.promotion_readiness(
+            "ontology-v2-shadow",
+            allow_recovered_queue_wait=True,
+        )
+
+        self.assertIn("candidate-queue-wait-slo-breached", blocked["blockers"])
+        self.assertTrue(approved["ready"])
+        self.assertTrue(approved["recoveredQueueWaitOverrideApplied"])
+        self.assertIn(
+            "historical-queue-wait-slo-breached-but-current-queue-drained",
+            approved["warnings"],
+        )
+
+        active_backlog = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(pending_count=1),
+        ).promotion_readiness(
+            "ontology-v2-shadow",
+            allow_recovered_queue_wait=True,
+        )
+        self.assertIn("candidate-queue-wait-slo-breached", active_backlog["blockers"])
+
+    def test_mark_candidate_advances_a_healthy_provisioning_release(self):
+        class Registry:
+            def __init__(self):
+                self.status = "provisioning"
+
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": self.status,
+                    "health": {"status": "ready", "independentExecution": True},
+                    "releaseBundle": {},
+                }
+
+            def transition(self, deployment_id, status):
+                del deployment_id
+                self.status = status
+                return self.get("ontology-v2-shadow")
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200):
+                del deployment_id, lookback
+                return {
+                    "sampleCount": 8,
+                    "successfulRunCount": 8,
+                    "traceCompleteRunCount": 8,
+                    "candidateEventRunCount": 3,
+                    "distinctSymbolCount": 4,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "durationP95Ms": 1200,
+                    "queueWaitP95Ms": 50,
+                    "latestCompletedAt": "2099-01-01T00:00:00Z",
+                    "pendingCount": 0,
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        registry = Registry()
+        platform = ReasoningEnginePlatformService(
+            registry,
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(),
+        )
+
+        result = platform.mark_candidate("ontology-v2-shadow")
+
+        self.assertEqual("candidate", result["status"])
+        self.assertEqual("candidate", registry.status)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1219,7 +1219,17 @@ def reasoning_engine_platform_command(args) -> int:
         }, ensure_ascii=False))
         return 0
     if args.reasoning_engine_action == "candidate":
-        result = platform.mark_candidate(args.deployment_id)
+        allow_recovered_queue_wait = bool(
+            getattr(args, "allow_recovered_queue_wait", False)
+        )
+        result = (
+            platform.mark_candidate(
+                args.deployment_id,
+                allow_recovered_queue_wait=True,
+            )
+            if allow_recovered_queue_wait
+            else platform.mark_candidate(args.deployment_id)
+        )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") == "candidate" else 2
     if args.reasoning_engine_action == "promote":
@@ -1231,7 +1241,17 @@ def reasoning_engine_platform_command(args) -> int:
         )
         previous_active_version = platform.engine_version_for(previous_active_id)
         previous_graph_database = str(configured.get("typedbDatabase") or "").strip()
-        result = platform.promote_from_history(args.deployment_id)
+        allow_recovered_queue_wait = bool(
+            getattr(args, "allow_recovered_queue_wait", False)
+        )
+        result = (
+            platform.promote_from_history(
+                args.deployment_id,
+                allow_recovered_queue_wait=True,
+            )
+            if allow_recovered_queue_wait
+            else platform.promote_from_history(args.deployment_id)
+        )
         if result.get("status") == "promoted":
             control = dict(result.get("control") or {})
             active_id = str(
@@ -2156,6 +2176,14 @@ def build_parser() -> argparse.ArgumentParser:
     for action_name in ["candidate", "promote"]:
         action = reasoning_engine_actions.add_parser(action_name)
         action.add_argument("--deployment-id", default="ontology-v2-shadow")
+        action.add_argument(
+            "--allow-recovered-queue-wait",
+            action="store_true",
+            help=(
+                "Allow historical queue-wait SLO samples only when the current "
+                "independent V2 queue is completely drained"
+            ),
+        )
     reasoning_engine_actions.add_parser("rollback")
     reasoning_engine.set_defaults(func=reasoning_engine_platform_command)
 

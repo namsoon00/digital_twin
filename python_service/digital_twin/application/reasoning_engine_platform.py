@@ -253,9 +253,16 @@ class ReasoningEnginePlatformService:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
-    def promotion_readiness(self, deployment_id: str) -> Dict[str, object]:
+    def promotion_readiness(
+        self,
+        deployment_id: str,
+        allow_recovered_queue_wait: bool = False,
+    ) -> Dict[str, object]:
         if self.independent_v2_enabled() and self.independent_job_store is not None:
-            return self.independent_promotion_readiness(deployment_id)
+            return self.independent_promotion_readiness(
+                deployment_id,
+                allow_recovered_queue_wait=allow_recovered_queue_wait,
+            )
         row = self.registry.get(deployment_id)
         release = self.release_identity(deployment_id)
         summary = (
@@ -356,7 +363,11 @@ class ReasoningEnginePlatformService:
             "maximumComparisonAgeSeconds": maximum_age,
         }
 
-    def independent_promotion_readiness(self, deployment_id: str) -> Dict[str, object]:
+    def independent_promotion_readiness(
+        self,
+        deployment_id: str,
+        allow_recovered_queue_wait: bool = False,
+    ) -> Dict[str, object]:
         row = self.registry.get(deployment_id)
         health = dict(row.get("health") or {})
         release = self.release_identity(deployment_id)
@@ -365,6 +376,7 @@ class ReasoningEnginePlatformService:
             release,
         )
         blockers = []
+        warnings = []
         if str(row.get("status") or "") not in {"shadow", "candidate"}:
             blockers.append("engine-not-shadow-or-candidate")
         if str(health.get("status") or "").lower() not in {"ready", "healthy"}:
@@ -403,8 +415,18 @@ class ReasoningEnginePlatformService:
         maximum_queue_wait_p95 = self.int_setting(
             "reasoningEnginePromotionMaximumQueueWaitP95Ms", 60000, 1000, 3600000
         )
-        if queue_wait_p95 > maximum_queue_wait_p95:
+        pending_count = int(summary.get("pendingCount") or 0)
+        oldest_pending_age_seconds = int(summary.get("oldestPendingAgeSeconds") or 0)
+        recovered_queue_wait = bool(
+            allow_recovered_queue_wait
+            and queue_wait_p95 > maximum_queue_wait_p95
+            and pending_count == 0
+            and oldest_pending_age_seconds == 0
+        )
+        if queue_wait_p95 > maximum_queue_wait_p95 and not recovered_queue_wait:
             blockers.append("candidate-queue-wait-slo-breached")
+        elif recovered_queue_wait:
+            warnings.append("historical-queue-wait-slo-breached-but-current-queue-drained")
 
         latest = self.timestamp(summary.get("latestCompletedAt"))
         maximum_age = self.int_setting(
@@ -417,7 +439,7 @@ class ReasoningEnginePlatformService:
         )
         if age_seconds is None or age_seconds > maximum_age:
             blockers.append("independent-run-window-stale")
-        if int(summary.get("oldestPendingAgeSeconds") or 0) > max(
+        if oldest_pending_age_seconds > max(
             1, maximum_queue_wait_p95 // 1000
         ):
             blockers.append("independent-queue-stale")
@@ -426,6 +448,7 @@ class ReasoningEnginePlatformService:
             "mode": "independent-v2",
             "deploymentId": str(deployment_id or ""),
             "blockers": list(dict.fromkeys(blockers)),
+            "warnings": list(dict.fromkeys(warnings)),
             "independentExecution": summary,
             "health": health,
             "release": release,
@@ -434,10 +457,23 @@ class ReasoningEnginePlatformService:
             "maximumQueueWaitP95Ms": maximum_queue_wait_p95,
             "latestRunAgeSeconds": age_seconds,
             "maximumRunAgeSeconds": maximum_age,
+            "recoveredQueueWaitOverrideApplied": recovered_queue_wait,
         }
 
-    def mark_candidate(self, deployment_id: str) -> Dict[str, object]:
-        readiness = self.promotion_readiness(deployment_id)
+    def mark_candidate(
+        self,
+        deployment_id: str,
+        allow_recovered_queue_wait: bool = False,
+    ) -> Dict[str, object]:
+        row = self.registry.get(deployment_id)
+        status = str(row.get("status") or "")
+        health_status = str((row.get("health") or {}).get("status") or "").lower()
+        if status in {"provisioning", "replaying"} and health_status in {"ready", "healthy"}:
+            self.registry.transition(deployment_id, "shadow")
+        readiness = self.promotion_readiness(
+            deployment_id,
+            allow_recovered_queue_wait=allow_recovered_queue_wait,
+        )
         if not readiness.get("ready"):
             return {
                 "status": "blocked",
@@ -450,8 +486,15 @@ class ReasoningEnginePlatformService:
             row = self.registry.transition(deployment_id, "candidate")
         return {"status": "candidate", "deployment": row, "promotionReadiness": readiness}
 
-    def promote_from_history(self, deployment_id: str) -> Dict[str, object]:
-        readiness = self.promotion_readiness(deployment_id)
+    def promote_from_history(
+        self,
+        deployment_id: str,
+        allow_recovered_queue_wait: bool = False,
+    ) -> Dict[str, object]:
+        readiness = self.promotion_readiness(
+            deployment_id,
+            allow_recovered_queue_wait=allow_recovered_queue_wait,
+        )
         if not readiness.get("ready"):
             return {
                 "status": "blocked",

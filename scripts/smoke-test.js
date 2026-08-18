@@ -2097,6 +2097,18 @@ function checkFrontendAdminRender() {
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];') >= 0, "하단 핵심 6탭 구성이 역할과 맞지 않습니다.");
     assertOk(code.indexOf('var managementTabIds = ["experiments"];') >= 0, "검증 관리 메뉴 구성이 역할과 맞지 않습니다.");
+    assertOk(
+      modelingHtml.indexOf('class="oa-decision-workspace-nav"') >= 0
+        && modelingHtml.indexOf('data-tab="experiments"') >= 0
+        && experimentsHtml.indexOf('class="oa-decision-workspace-nav"') >= 0
+        && experimentsHtml.indexOf('data-tab="modeling"') >= 0
+        && styles.indexOf(".oa-decision-workspace-nav") >= 0,
+      "판단과 검증을 오가는 모바일 친화적 업무 전환이 없습니다."
+    );
+    assertOk(
+      code.indexOf('tab.id === "modeling" && state.activeTab === "experiments"') >= 0,
+      "검증 화면에서 하단 판단 탭이 활성 상태를 유지하지 않습니다."
+    );
     assertOk(styles.indexOf(".app-nav-tab.active") >= 0 && styles.indexOf(".app-nav-menu") >= 0, "앱 네비게이션 활성 탭과 모바일 관리 메뉴 스타일 규칙이 없습니다.");
     assertOk(styles.indexOf("@media (min-width: 861px)") >= 0 && styles.indexOf(".tab-bar {\n    display: none;") >= 0, "데스크톱에서 하단 탭을 숨기는 규칙이 없습니다.");
     assertOk(styles.indexOf("position: sticky") >= 0 && styles.indexOf("bottom: 0;") >= 0 && styles.indexOf("backdrop-filter: blur(18px)") >= 0 && styles.indexOf(".app-nav.is-hidden") >= 0, "모바일 앱바 접힘/하단탭 고정 반응형 규칙이 없습니다.");

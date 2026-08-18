@@ -518,18 +518,22 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 return {"status": "ready", "monitorRunnerUsed": False}
 
         class Registry:
-            def get(self, _deployment_id):
-                return {"health": {}}
+            def __init__(self):
+                self.health = {"lastError": "stale delivery error"}
 
-            def update_health(self, _deployment_id, _health):
-                return None
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
 
         queue = Queue()
         engine = Engine()
+        registry = Registry()
         runner = IndependentReasoningJobRunner(
             queue,
             engine,
-            Registry(),
+            registry,
             settings={
                 "reasoningEngineV2BatchSize": "6",
                 "reasoningEngineV2RealtimeBatchSize": "2",
@@ -542,6 +546,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(1, len(engine.calls))
         self.assertEqual(2, len(engine.calls[0]))
         self.assertEqual(2, len(queue.completed))
+        self.assertNotIn("lastError", registry.health)
 
     def test_runner_does_not_claim_jobs_when_typedb_execution_guard_is_blocked(self):
         class Queue:

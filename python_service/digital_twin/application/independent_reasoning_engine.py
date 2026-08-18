@@ -947,6 +947,8 @@ class IndependentReasoningJobRunner:
                 "lastRunAt": utc_now_iso(),
                 "queue": self.queue_summary(descriptor.deployment_id),
             })
+            if str(health.get("status") or "") == "ready":
+                health.pop("lastError", None)
             self.registry.update_health(descriptor.deployment_id, health)
             return {
                 "status": outcome,

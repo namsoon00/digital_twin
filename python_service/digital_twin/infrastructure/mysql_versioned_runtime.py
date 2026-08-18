@@ -378,7 +378,7 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
                 "UPDATE reasoning_engine_jobs SET job_status = 'superseded', completed_at = %s, "
                 "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
                 "last_error = %s, updated_at = %s WHERE deployment_id IN (" + placeholders + ") "
-                "AND job_status IN ('queued', 'retry', 'processing')",
+                "AND job_status IN ('queued', 'retry', 'processing', 'awaiting_source')",
                 (stamp, "The reasoning deployment was retired after control-plane promotion.", stamp, *retired),
             )
             shadow = connection.execute(
@@ -678,6 +678,24 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
     """Direct source-event queue for independently executable engines."""
 
     @staticmethod
+    def required_source_boundary_at(event) -> str:
+        payload = dict(getattr(event, "payload", {}) or {})
+        source_at = str(
+            payload.get("sourceObservedAt")
+            or payload.get("sourceAsOf")
+            or ""
+        ).strip()
+        occurred_at = str(getattr(event, "occurred_at", "") or "").strip()
+        work_class = str(payload.get("workClass") or "").strip().upper()
+        # Monitor-owned market/portfolio events are emitted immediately after
+        # their verified snapshot. Other facts need the first monitor packet
+        # created after collection so the new fact cannot be paired with an
+        # older world state.
+        if work_class in {"MARKET", "PORTFOLIO"} and source_at:
+            return source_at
+        return max(source_at, occurred_at) if source_at and occurred_at else source_at or occurred_at or iso_utc()
+
+    @staticmethod
     def native_target_symbol_limit_with_connection(connection) -> int:
         try:
             row = connection.execute(
@@ -735,9 +753,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             }.values())
         scope = reasoning_event_scope(event)
         account_ids = [str(value or "").strip() for value in scope.get("accountIds") or [] if str(value or "").strip()]
-        cutoff = str(getattr(event, "occurred_at", "") or iso_utc())
+        required_at = MySQLReasoningEngineJobStore.required_source_boundary_at(event)
         account_filter = ""
-        params: List[object] = [cutoff]
+        params: List[object] = [required_at]
         if account_ids:
             account_filter = " AND source.account_id IN (" + ",".join(["%s"] * len(account_ids)) + ")"
             params.extend(account_ids)
@@ -747,9 +765,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                    source.contract_version, source.fingerprint
             FROM verified_reasoning_source_snapshots source
             INNER JOIN (
-                SELECT account_id, MAX(generated_at) AS generated_at
+                SELECT account_id, MIN(generated_at) AS generated_at
                 FROM verified_reasoning_source_snapshots
-                WHERE generated_at <= %s
+                WHERE generated_at >= %s
                 GROUP BY account_id
             ) latest
               ON latest.account_id = source.account_id
@@ -794,14 +812,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         """Upgrade queued pre-cutover jobs to immutable point-in-time inputs."""
 
         rows = connection.execute(
-            "SELECT job_id, request_json FROM reasoning_engine_jobs "
-            "WHERE deployment_id = %s AND job_status IN ('queued', 'retry') "
-            "AND (source_boundary_json IS NULL OR source_boundary_json = '' OR source_boundary_json = '[]') "
+            "SELECT job_id, request_json, source_boundary_json FROM reasoning_engine_jobs "
+            "WHERE deployment_id = %s AND job_status IN ('queued', 'retry', 'awaiting_source') "
             "ORDER BY created_at, job_id LIMIT %s FOR UPDATE SKIP LOCKED",
             (str(deployment_id or ""), max(1, min(1000, int(limit or 200)))),
         ).fetchall()
         updated = 0
-        unreplayable = 0
+        waiting = 0
         stamp = iso_utc()
         for row in rows or []:
             job_id = str(row.get("job_id") or "")
@@ -811,30 +828,53 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 boundaries = []
                 bounded_event = None
             else:
+                source_event = DomainEvent.from_dict(dict(source_payload))
+                required_at = cls.required_source_boundary_at(source_event)
+                current_boundaries = json_value(row.get("source_boundary_json"), [])
+                current_boundaries = current_boundaries if isinstance(current_boundaries, list) else []
+                if current_boundaries and all(
+                    str(value.get("generatedAt") or "") >= required_at
+                    for value in current_boundaries
+                    if isinstance(value, Mapping)
+                ):
+                    continue
+                clean_payload = dict(source_event.payload or {})
+                clean_payload.pop("verifiedSourceSnapshot", None)
+                clean_payload.pop("verifiedSourceSnapshots", None)
+                source_event = DomainEvent(
+                    name=source_event.name,
+                    aggregate_id=source_event.aggregate_id,
+                    schema_version=source_event.schema_version,
+                    payload=clean_payload,
+                    occurred_at=source_event.occurred_at,
+                    event_id=source_event.event_id,
+                    correlation_id=source_event.correlation_id,
+                )
                 bounded_event = cls.bind_source_boundaries_with_connection(
                     connection,
-                    DomainEvent.from_dict(dict(source_payload)),
+                    source_event,
                 )
                 boundaries = cls.source_boundaries_with_connection(connection, bounded_event)
             if not boundaries or bounded_event is None:
                 connection.execute(
-                    "UPDATE reasoning_engine_jobs SET job_status = 'superseded', completed_at = %s, "
+                    "UPDATE reasoning_engine_jobs SET job_status = 'awaiting_source', source_boundary_json = '[]', "
+                    "source_snapshot_id = '', source_snapshot_at = '', source_payload_hash = '', "
                     "last_error = %s, updated_at = %s WHERE job_id = %s",
                     (
-                        stamp,
-                        "The pre-cutover source snapshot is outside the immutable replay window.",
+                        "Waiting for the first verified source snapshot that covers this fact revision.",
                         stamp,
                         job_id,
                     ),
                 )
-                unreplayable += 1
+                waiting += 1
                 continue
             request = independent_reasoning_request(str(deployment_id or ""), [bounded_event])
             primary = boundaries[0]
             connection.execute(
-                "UPDATE reasoning_engine_jobs SET source_snapshot_id = %s, source_snapshot_at = %s, "
+                "UPDATE reasoning_engine_jobs SET job_status = 'queued', source_snapshot_id = %s, source_snapshot_at = %s, "
                 "source_boundary_json = %s, source_payload_hash = %s, scope_key = %s, "
-                "input_fingerprint = %s, request_json = %s, reasoning_lane = %s, updated_at = %s "
+                "input_fingerprint = %s, request_json = %s, reasoning_lane = %s, available_at = %s, "
+                "last_error = '', updated_at = %s "
                 "WHERE job_id = %s",
                 (
                     str(primary.get("snapshotId") or "")[:191],
@@ -849,6 +889,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     }),
                     FactDelta.from_request(request).lane,
                     stamp,
+                    stamp,
                     job_id,
                 ),
             )
@@ -856,7 +897,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         return {
             "scannedCount": len(rows or []),
             "updatedCount": updated,
-            "unreplayableCount": unreplayable,
+            "waitingCount": waiting,
         }
 
     @staticmethod
@@ -904,7 +945,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                         source_snapshot_at, source_boundary_json, source_payload_hash, scope_key,
                         input_fingerprint, request_json, result_json, job_status,
                         priority, supersedable, reasoning_lane, available_at, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}', 'queued', %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}', %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         job_id,
@@ -920,6 +961,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                             "request": request.to_dict(),
                             "sourceEvent": source_event.to_dict(),
                         }),
+                        "queued" if source_boundaries else "awaiting_source",
                         cls.event_priority(source_event),
                         1 if request.supersedable else 0,
                         FactDelta.from_request(request).lane,
@@ -941,7 +983,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                             last_error = 'A newer direct source revision owns this scope.'
                         WHERE deployment_id = %s AND scope_key = %s
                           AND job_id <> %s AND supersedable = 1
-                          AND job_status IN ('queued', 'retry')
+                          AND job_status IN ('queued', 'retry', 'awaiting_source')
                         """,
                         (stamp, stamp, deployment_id, request.scope_id, job_id),
                     )
@@ -1151,10 +1193,17 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         except (TypeError, ValueError):
             maximum_wait = 120
         aged_cutoff = iso_utc(utc_now() - timedelta(seconds=max(30, min(1800, maximum_wait))))
+        boundary_filter = (
+            " AND source_boundary_json IS NOT NULL AND source_boundary_json NOT IN ('', '[]') "
+            if str(self.runtime_settings.get("reasoningEngineV2RequireSourceBoundary") or "1").strip().lower()
+            not in {"0", "false", "no", "off", "disabled"}
+            else ""
+        )
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT reasoning_lane FROM reasoning_engine_jobs WHERE deployment_id = %s "
                 "AND job_status IN ('queued', 'retry') AND (available_at = '' OR available_at <= %s) "
+                + boundary_filter +
                 "ORDER BY CASE WHEN created_at <= %s THEN 0 ELSE 1 END, "
                 "CASE WHEN created_at <= %s THEN created_at ELSE '' END, "
                 "priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0 "
@@ -1174,6 +1223,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         stamp = iso_utc()
         lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 600))))
         bounded = max(1, min(20, int(limit or 1)))
+        boundary_filter = (
+            " AND source_boundary_json IS NOT NULL AND source_boundary_json NOT IN ('', '[]')"
+            if str(self.runtime_settings.get("reasoningEngineV2RequireSourceBoundary") or "1").strip().lower()
+            not in {"0", "false", "no", "off", "disabled"}
+            else ""
+        )
         with self.transaction() as connection:
             connection.execute(
                 """
@@ -1197,7 +1252,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                   AND job_status IN ('queued', 'retry')
                   AND (available_at = '' OR available_at <= %s)
                   AND (lease_expires_at = '' OR lease_expires_at < %s)
-                """ + lane_filter + """
+                """ + boundary_filter + lane_filter + """
                 ORDER BY priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0
                     WHEN 'CONTEXT' THEN 1 ELSE 2 END, created_at, job_id
                 LIMIT %s FOR UPDATE SKIP LOCKED
@@ -1507,6 +1562,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             },
             "failureCount": int(cohort_count_map.get("failed") or 0),
             "pendingCount": sum(int(count_map.get(status) or 0) for status in ["queued", "retry", "processing"]),
+            "awaitingSourceCount": int(count_map.get("awaiting_source") or 0),
             "oldestPendingAgeSeconds": oldest_pending_age,
             "pendingByLane": pending_by_lane,
             "oldestPendingByLane": oldest_pending_by_lane,

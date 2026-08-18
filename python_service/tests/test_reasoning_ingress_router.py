@@ -73,7 +73,7 @@ class ReasoningIngressRouterTests(unittest.TestCase):
         self.assertTrue(result["legacyV1"]["saved"])
         self.assertTrue(result["independentV2"]["saved"])
 
-    def test_source_boundary_is_selected_at_or_before_event_time(self):
+    def test_source_boundary_is_the_first_snapshot_covering_event_time(self):
         class BoundaryConnection:
             def execute(self, sql, params=()):
                 self.sql = sql
@@ -81,7 +81,7 @@ class ReasoningIngressRouterTests(unittest.TestCase):
                 return Cursor(many=[{
                     "snapshot_id": "reasoning-source:1",
                     "account_id": "account:1",
-                    "generated_at": "2026-08-18T00:59:00Z",
+                    "generated_at": "2026-08-18T01:01:00Z",
                     "contract_version": "reasoning-source-v1",
                     "fingerprint": "abc",
                 }])
@@ -97,6 +97,18 @@ class ReasoningIngressRouterTests(unittest.TestCase):
         self.assertEqual(
             "reasoning-source:1",
             bounded.payload["verifiedSourceSnapshot"]["snapshotId"],
+        )
+
+    def test_market_event_uses_its_verified_observation_time(self):
+        market_event = event()
+        market_event.payload.update({
+            "workClass": "MARKET",
+            "sourceObservedAt": "2026-08-18T00:59:30Z",
+        })
+
+        self.assertEqual(
+            "2026-08-18T00:59:30Z",
+            MySQLReasoningEngineJobStore.required_source_boundary_at(market_event),
         )
 
 

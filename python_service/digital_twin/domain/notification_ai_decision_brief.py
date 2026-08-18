@@ -1150,6 +1150,153 @@ def _minimum_driver_rows(value: object, *, emergency: bool = False) -> List[Dict
     ]
 
 
+def _minimum_market_evidence_profile(value: object) -> Dict[str, object]:
+    profile = _mapping(value)
+    capability_states = {}
+    for key, capability in sorted(_mapping(profile.get("capabilities")).items()):
+        state = _selected_fields(
+            capability,
+            ("state", "freshnessStatus", "latencyStatus", "judgementEvidenceUsable"),
+        )
+        if state:
+            capability_states[str(key)] = state
+    payload = _selected_fields(
+        profile,
+        (
+            "profileKey", "label", "market", "currency", "dataState",
+            "judgementEvidenceUsable", "requiredCapabilities",
+            "confirmationCapabilities", "observableFollowUpFields",
+        ),
+    )
+    if capability_states:
+        payload["capabilities"] = capability_states
+    unavailable = _compact_dict_rows(
+        profile.get("unavailableCapabilities"),
+        ("capability", "label", "state", "reason"),
+        3,
+    )
+    if unavailable:
+        payload["unavailableCapabilities"] = unavailable
+    return _bounded_value(payload, string_limit=72, list_limit=20, dict_limit=16)
+
+
+def _minimum_relation_facts(value: object, limit: int = 24) -> Dict[str, object]:
+    facts = _mapping(value)
+    compact: Dict[str, object] = {}
+    market_profile = _minimum_market_evidence_profile(facts.get("marketEvidenceProfile"))
+    if market_profile:
+        compact["marketEvidenceProfile"] = market_profile
+    for key in RELATION_FACT_PRIORITY:
+        if key == "marketEvidenceProfile" or len(compact) >= max(1, int(limit or 1)):
+            continue
+        item = facts.get(key)
+        if item not in (None, "", [], {}):
+            compact[key] = item
+    for key in sorted(facts):
+        if key in compact or len(compact) >= max(1, int(limit or 1)):
+            continue
+        item = facts.get(key)
+        if isinstance(item, (str, int, float, bool)) and item not in (None, ""):
+            compact[key] = item
+    return compact
+
+
+def _minimum_decision_continuity(value: object) -> Dict[str, object]:
+    packet = _mapping(value)
+    payload = _selected_fields(packet, ("contractVersion", "status", "capturedAt"))
+    previous = _selected_fields(
+        packet.get("previousDecision"),
+        (
+            "action", "decisionReadiness", "decidedAt", "referenceDate",
+            "decisionSummary", "invalidationCondition",
+        ),
+    )
+    if previous:
+        payload["previousDecision"] = _bounded_value(previous, string_limit=96, list_limit=1, dict_limit=8)
+    selected = _selected_fields(
+        packet.get("selectedHypothesis"),
+        (
+            "hypothesisId", "claim", "stance", "verificationStatus", "verdict",
+            "supportingEvidenceIds", "counterEvidenceIds",
+        ),
+    )
+    if selected:
+        payload["selectedHypothesis"] = _bounded_value(selected, string_limit=72, list_limit=1, dict_limit=8)
+    row_specs = (
+        (
+            "followUpConditions",
+            ("conditionId", "field", "operator", "threshold", "purpose", "status", "currentValue"),
+            2,
+        ),
+        (
+            "observedOutcomes",
+            (
+                "outcomeId", "observedAt", "price", "profitLossRate",
+                "priceChangeFromDecisionPct", "selectedHypothesisStatus",
+            ),
+            2,
+        ),
+        (
+            "actionObservations",
+            (
+                "observationId", "observedAt", "priorAction", "observedDirection",
+                "previousQuantity", "observedQuantity", "quantityDelta", "causalityClaimed",
+            ),
+            1,
+        ),
+    )
+    for key, fields, limit in row_specs:
+        rows = _compact_dict_rows(packet.get(key), fields, limit)
+        if rows:
+            payload[key] = _bounded_value(rows, string_limit=72, list_limit=limit, dict_limit=8)
+    current_position = _selected_fields(
+        packet.get("currentPosition"),
+        (
+            "symbol", "quantity", "sellableQuantity", "averagePrice", "currentPrice",
+            "profitLossRate", "observationState",
+        ),
+    )
+    if current_position:
+        payload["currentPosition"] = current_position
+    observation = _selected_fields(
+        packet.get("observationState"),
+        ("userAction", "outcome", "followUp", "noActionMeansHold", "causalityClaimed"),
+    )
+    if observation:
+        payload["observationState"] = observation
+    summary = _selected_fields(
+        packet.get("summary"),
+        (
+            "followUpCount", "pendingFollowUpCount", "transitionedFollowUpCount",
+            "outcomeCount", "actionObservationCount", "executionRecorded",
+        ),
+    )
+    if summary:
+        payload["summary"] = summary
+    return payload
+
+
+def _minimum_temporal_evidence_summary(value: object) -> Dict[str, object]:
+    return _selected_fields(
+        value,
+        (
+            "loadedWindowCount", "loadedWindowKeys", "sufficientWindowCount",
+            "matchedWindowCount", "matchedWindowKeys", "temporalEvidenceFamilyCount",
+            "interpretation",
+        ),
+    )
+
+
+def _minimum_decision_evidence_summary(value: object) -> Dict[str, object]:
+    return _selected_fields(
+        value,
+        (
+            "totalHypothesisCount", "eligibleHypothesisCount",
+            "eligibleFamilyCount", "referenceHypothesisCount",
+        ),
+    )
+
+
 def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = False) -> Dict[str, object]:
     decision_state = _mapping(critical.get("decisionState"))
     envelope = _mapping(decision_state.get("actionEnvelope"))
@@ -1372,16 +1519,24 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
                 ),
             ),
         },
-        "decisionContinuity": _bounded_value(
-            critical.get("decisionContinuity") or {},
-            string_limit=80 if emergency else 120,
-            list_limit=2 if emergency else 4,
-            dict_limit=14 if emergency else 20,
+        "decisionContinuity": (
+            _minimum_decision_continuity(critical.get("decisionContinuity"))
+            if emergency
+            else _bounded_value(
+                critical.get("decisionContinuity") or {},
+                string_limit=120,
+                list_limit=4,
+                dict_limit=20,
+            )
         ),
         "assessmentBundle": assessment_payload,
         "currentSituation": {
             "relationFacts": _bounded_value(
-                _compact_relation_facts(current.get("relationFacts"), 14 if emergency else 24),
+                (
+                    _minimum_relation_facts(current.get("relationFacts"), 20)
+                    if emergency
+                    else _compact_relation_facts(current.get("relationFacts"), 24)
+                ),
                 string_limit=80 if emergency else 120,
                 list_limit=14 if emergency else 24,
                 dict_limit=14 if emergency else 24,
@@ -1390,7 +1545,11 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
                 current.get("temporalWindows"), emergency=emergency,
             ),
             "temporalEvidenceSummary": _bounded_value(
-                current.get("temporalEvidenceSummary") or {},
+                (
+                    _minimum_temporal_evidence_summary(current.get("temporalEvidenceSummary"))
+                    if emergency
+                    else current.get("temporalEvidenceSummary") or {}
+                ),
                 string_limit=80 if emergency else 120,
                 list_limit=8,
                 dict_limit=16,
@@ -1419,17 +1578,25 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
                     (
                         "hypothesisSetId", "questionId", "subjectSymbol",
                         "inferenceGenerationId", "minimumComparisonCount",
-                        "decisionEvidenceSummary",
                     ),
+                ),
+                "decisionEvidenceSummary": (
+                    _minimum_decision_evidence_summary(hypothesis_set.get("decisionEvidenceSummary"))
+                    if emergency
+                    else hypothesis_set.get("decisionEvidenceSummary") or {}
                 ),
                 "hypotheses": _minimum_hypotheses(
                     hypothesis_set.get("hypotheses"), emergency=emergency,
                 ),
-                "referenceHypotheses": _bounded_value(
-                    list(hypothesis_set.get("referenceHypotheses") or [])[:2],
-                    string_limit=80,
-                    list_limit=2,
-                    dict_limit=6,
+                "referenceHypotheses": (
+                    []
+                    if emergency
+                    else _bounded_value(
+                        list(hypothesis_set.get("referenceHypotheses") or [])[:2],
+                        string_limit=80,
+                        list_limit=2,
+                        dict_limit=6,
+                    )
                 ),
             },
         },

@@ -364,6 +364,82 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual(hypothesis_ids, [item["hypothesisId"] for item in payload["inference"]["hypothesisSet"]["hypotheses"]])
         self.assertEqual(rule_ids, [item["ruleId"] for item in payload["inference"]["activeRules"]])
 
+    def test_market_evidence_and_continuity_fit_deep_prompt_budget(self):
+        context = decision_context("act", "new-condition")
+        relation = context["ontologyRelationContext"]
+        relation["conflictState"] = "mixed"
+        relation["facts"]["marketEvidenceProfile"] = {
+            "profileKey": "KR_EQUITY",
+            "label": "국내 주식 증거 프로필",
+            "market": "KR",
+            "currency": "KRW",
+            "dataState": "sufficient",
+            "judgementEvidenceUsable": True,
+            "observableFollowUpFields": ["currentPrice", "volumeRatio", "tradeStrength"] * 8,
+            "capabilities": {
+                "capability-" + str(index): {
+                    "state": "fresh",
+                    "reason": "상세 공급자 상태 " + ("x" * 500),
+                    "observedFields": ["field-" + str(item) for item in range(20)],
+                }
+                for index in range(12)
+            },
+            "unavailableCapabilities": [{
+                "capability": "missing-" + str(index),
+                "label": "누락 자료",
+                "reason": "공급자 제약 " + ("y" * 500),
+            } for index in range(12)],
+        }
+        context["decisionContinuityPacket"] = {
+            "contractVersion": "decision-continuity-packet-v2",
+            "status": "available",
+            "capturedAt": "2026-08-18T01:00:00Z",
+            "previousDecision": {
+                "action": "HOLD",
+                "decisionReadiness": "conditional",
+                "decisionSummary": "직전 판단 " + ("p" * 3000),
+            },
+            "selectedHypothesis": {
+                "hypothesisId": "hypothesis:hold",
+                "claim": "직전 가설 " + ("h" * 3000),
+                "supportingEvidenceIds": ["evidence:" + str(index) for index in range(20)],
+            },
+            "observedOutcomes": [{
+                "outcomeId": "outcome:" + str(index),
+                "observedAt": "2026-08-18T01:00:00Z",
+                "priceChangeFromDecisionPct": index,
+                "unused": "o" * 2000,
+            } for index in range(10)],
+            "actionObservations": [{
+                "observationId": "observation:" + str(index),
+                "observedDirection": "unchanged",
+                "unused": "a" * 2000,
+            } for index in range(10)],
+            "observationState": {
+                "userAction": "not-observed",
+                "outcome": "observed",
+                "causalityClaimed": False,
+            },
+        }
+
+        prompt = build_notification_ai_decision_prompt(
+            context,
+            {},
+            max_prompt_bytes=20 * 1024,
+        )
+        payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+
+        self.assertLessEqual(len(prompt.encode("utf-8")), 20 * 1024)
+        self.assertEqual(
+            "KR_EQUITY",
+            payload["currentSituation"]["relationFacts"]["marketEvidenceProfile"]["profileKey"],
+        )
+        self.assertEqual("HOLD", payload["decisionContinuity"]["previousDecision"]["action"])
+        self.assertEqual(
+            "hypothesis:hold",
+            payload["inference"]["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
+        )
+
     def test_ordinary_symbol_decision_excludes_rebalance_policy_but_scheduled_review_keeps_it(self):
         context = decision_context()
         context["rawLines"] = [

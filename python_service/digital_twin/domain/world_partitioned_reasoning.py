@@ -31,7 +31,7 @@ from .ontology_worlds import world_metadata
 
 
 WORLD_PARTITIONED_REASONING_VERSION = "world-partitioned-reasoning-v1"
-ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION = "account-overlay-projection-v1"
+ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION = "account-overlay-projection-v2"
 SHARED_PREMISE_RULE_PREFIX = "shared.premise."
 SHARED_PREMISE_RELATION = "HAS_SHARED_MARKET_PREMISE"
 SHARED_PREMISE_KIND = "shared-market-premise"
@@ -627,12 +627,17 @@ def account_overlay_graph(
     """
 
     rules = list(overlay_rules or [])
-    required_relations = {
-        _text(condition.relation_type).upper()
+    relation_patterns = [
+        {
+            "relationType": _text(condition.relation_type).upper(),
+            "sourceKind": _text(rule.source_kind).lower(),
+            "targetKind": _text(condition.target_kind).lower(),
+            "direction": _text(condition.direction or "out").lower(),
+        }
         for rule in rules
         for condition in rule.conditions or []
         if _text(condition.kind) == "relation" and _text(condition.relation_type)
-    }
+    ]
     required_stock_properties = {
         _property_key(condition.field)
         for rule in rules
@@ -646,11 +651,42 @@ def account_overlay_graph(
         if _text(condition.target_kind).lower() == "stock"
         for key in dict(condition.target_property_filters or {})
     }
-    allowed_relations = required_relations | ACCOUNT_TOPOLOGY_RELATIONS
+    entity_by_id = {
+        entity.entity_id: entity
+        for entity in source_graph.entities or []
+    }
+
+    def relation_matches_overlay_condition(relation: OntologyRelation) -> bool:
+        relation_type = _text(relation.relation_type).upper()
+        if relation_type in ACCOUNT_TOPOLOGY_RELATIONS:
+            return True
+        source_kind = _text(getattr(entity_by_id.get(relation.source), "kind", "")).lower()
+        target_kind = _text(getattr(entity_by_id.get(relation.target), "kind", "")).lower()
+        for pattern in relation_patterns:
+            if relation_type != pattern["relationType"]:
+                continue
+            forward = bool(
+                (not pattern["sourceKind"] or source_kind == pattern["sourceKind"])
+                and (not pattern["targetKind"] or target_kind == pattern["targetKind"])
+            )
+            reverse = bool(
+                (not pattern["sourceKind"] or target_kind == pattern["sourceKind"])
+                and (not pattern["targetKind"] or source_kind == pattern["targetKind"])
+            )
+            if pattern["direction"] in {"in", "incoming", "target-to-source"}:
+                matched = reverse
+            elif pattern["direction"] in {"both", "either", "any", "undirected"}:
+                matched = forward or reverse
+            else:
+                matched = forward
+            if matched:
+                return True
+        return False
+
     relations = [
         relation
         for relation in source_graph.relations or []
-        if _text(relation.relation_type).upper() in allowed_relations
+        if relation_matches_overlay_condition(relation)
         and _text((relation.properties or {}).get("ontologyBox") or "ABox") == "ABox"
     ]
     endpoint_ids = {

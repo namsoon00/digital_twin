@@ -4593,6 +4593,20 @@ class ScopedABoxManifestMixin:
                 "accountOverlayProjectionContractVersion": str(
                     worldview.get("accountOverlayProjectionContractVersion") or ""
                 ),
+                "worldPartitionedReasoningVersion": str(
+                    worldview.get("worldPartitionedReasoningVersion") or ""
+                ),
+                "marketContextMode": str(worldview.get("marketContextMode") or ""),
+                "marketReadMirrorRemoved": bool(worldview.get("marketReadMirrorRemoved")),
+                "sharedPremiseWorldId": str(worldview.get("sharedPremiseWorldId") or ""),
+                "sharedPremiseInferenceGenerationId": str(
+                    worldview.get("sharedPremiseInferenceGenerationId")
+                    or worldview.get("sharedInferenceGenerationId")
+                    or ""
+                ),
+                "sharedPremiseSourceAboxSnapshotId": str(
+                    worldview.get("sharedSourceAboxSnapshotId") or ""
+                ),
                 "scopeDelta": dict(worldview.get("scopeDelta") or {}),
                 "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
                 "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
@@ -4949,6 +4963,12 @@ class ScopedABoxManifestMixin:
                 "sharedWorldProjectionContractVersion",
                 "sharedWorldFullRebuild",
                 "accountOverlayProjectionContractVersion",
+                "worldPartitionedReasoningVersion",
+                "marketContextMode",
+                "marketReadMirrorRemoved",
+                "sharedPremiseWorldId",
+                "sharedPremiseInferenceGenerationId",
+                "sharedPremiseSourceAboxSnapshotId",
             ]:
                 if key in marker and key not in properties:
                     properties[key] = marker.get(key)
@@ -4987,6 +5007,18 @@ class ScopedABoxManifestMixin:
                 "sharedWorldFullRebuild": bool(properties.get("sharedWorldFullRebuild")),
                 "accountOverlayProjectionContractVersion": str(
                     properties.get("accountOverlayProjectionContractVersion") or ""
+                ),
+                "worldPartitionedReasoningVersion": str(
+                    properties.get("worldPartitionedReasoningVersion") or ""
+                ),
+                "marketContextMode": str(properties.get("marketContextMode") or ""),
+                "marketReadMirrorRemoved": bool(properties.get("marketReadMirrorRemoved")),
+                "sharedPremiseWorldId": str(properties.get("sharedPremiseWorldId") or ""),
+                "sharedPremiseInferenceGenerationId": str(
+                    properties.get("sharedPremiseInferenceGenerationId") or ""
+                ),
+                "sharedPremiseSourceAboxSnapshotId": str(
+                    properties.get("sharedPremiseSourceAboxSnapshotId") or ""
                 ),
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
             })
@@ -10658,6 +10690,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "sharedWorldFullRebuild": bool(payload.get("sharedWorldFullRebuild")),
             "accountOverlayProjectionContractVersion": str(
                 payload.get("accountOverlayProjectionContractVersion") or ""
+            ),
+            "worldPartitionedReasoningVersion": str(
+                payload.get("worldPartitionedReasoningVersion") or ""
+            ),
+            "marketContextMode": str(payload.get("marketContextMode") or ""),
+            "marketReadMirrorRemoved": bool(payload.get("marketReadMirrorRemoved")),
+            "sharedPremiseWorldId": str(payload.get("sharedPremiseWorldId") or ""),
+            "sharedPremiseInferenceGenerationId": str(
+                payload.get("sharedPremiseInferenceGenerationId") or ""
+            ),
+            "sharedPremiseSourceAboxSnapshotId": str(
+                payload.get("sharedPremiseSourceAboxSnapshotId") or ""
             ),
         }
 

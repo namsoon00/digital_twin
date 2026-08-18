@@ -207,6 +207,48 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         self.assertIn(SHARED_PREMISE_RELATION, [item.relation_type for item in overlay.relations])
         self.assertEqual(0, len(overlay.evidence))
 
+    def test_account_overlay_filters_generic_relation_by_rule_endpoint_kinds(self):
+        account_rule = GraphInferenceRule(
+            rule_id="graph.test.account-observation.v1",
+            label="account observation",
+            version="1",
+            source_kind="stock",
+            conditions=[GraphRuleCondition(
+                "account-change",
+                "relation",
+                "account fact change",
+                relation_type="HAS_OBSERVATION",
+                target_kind="fact-change",
+                hypothesis_scope="account",
+            )],
+            derivations=[derivation()],
+            action_group="risk",
+            action_level="check",
+            prompt_hint="test",
+        )
+        partition = compile_world_partitioned_rules([account_rule])
+        stock_id = entity_id("stock", "NVDA")
+        fact_id = entity_id("fact-change", "NVDA:profit-loss")
+        price_id = entity_id("price-metric", "NVDA:current")
+        graph = PortfolioOntology(
+            "acct",
+            entities=[
+                OntologyEntity(stock_id, "NVIDIA", "stock", {"ontologyBox": "ABox", "symbol": "NVDA"}),
+                OntologyEntity(fact_id, "P/L change", "fact-change", {"ontologyBox": "ABox"}),
+                OntologyEntity(price_id, "Price", "price-metric", {"ontologyBox": "ABox"}),
+            ],
+            relations=[
+                OntologyRelation(stock_id, fact_id, "HAS_OBSERVATION", properties={"ontologyBox": "ABox"}),
+                OntologyRelation(stock_id, price_id, "HAS_OBSERVATION", properties={"ontologyBox": "ABox"}),
+            ],
+        )
+
+        overlay = account_overlay_graph(graph, partition["overlayRules"], {})
+
+        self.assertIn(fact_id, {item.entity_id for item in overlay.entities})
+        self.assertNotIn(price_id, {item.entity_id for item in overlay.entities})
+        self.assertEqual(1, len(overlay.relations))
+
     def test_shared_premise_world_combines_market_and_company_rule_inputs(self):
         market_rule = mixed_rule()
         company_rule = GraphInferenceRule(

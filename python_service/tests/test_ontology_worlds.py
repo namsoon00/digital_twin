@@ -8,6 +8,7 @@ from digital_twin.domain.ontology_worlds import (
     market_world,
     portfolio_world,
     portfolio_world_id,
+    shared_premise_world,
     world_scope_suffix,
     world_from_snapshot,
 )
@@ -560,6 +561,7 @@ class MultiAccountProjectionTests(unittest.TestCase):
                     "marketScopeObservedAt": dict(worldview.get("marketScopeObservedAt") or {}),
                     "marketScopeObservedAtVersion": worldview.get("marketScopeObservedAtVersion"),
                     "sharedWorldProjectionContractVersion": worldview.get("sharedWorldProjectionContractVersion"),
+                    "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
                     "materialFingerprint": worldview.get("materialFingerprint"),
                     "aboxSnapshotId": worldview.get("aboxSnapshotId"),
                     "worldviewManifestId": worldview.get("worldviewManifestId"),
@@ -759,6 +761,43 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertEqual("unchanged-material-facts", second["status"])
         self.assertFalse(second["saved"])
         self.assertEqual(1, len(repository.activations))
+
+    def test_shared_premise_world_persists_and_merges_native_planner_topology(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        world = shared_premise_world("kr", "tenant-a")
+
+        first_graph = sample_graph("005930")
+        first_graph.worldview.update({
+            "sharedWorldProjectionContractVersion": "test-premise-v1",
+            "targetScopedManifestPatch": {
+                "status": "applied",
+                "targetSymbols": ["005930"],
+            },
+        })
+        first = recorder.project_shared_world_update(first_graph, world, "premise")
+        second_graph = sample_graph("MSTR")
+        second_graph.worldview.update({
+            "sharedWorldProjectionContractVersion": "test-premise-v1",
+            "targetScopedManifestPatch": {
+                "status": "applied",
+                "targetSymbols": ["MSTR"],
+            },
+        })
+        second = recorder.project_shared_world_update(second_graph, world, "premise")
+
+        topology = repository.saved_markets[world.world_id].worldview["nativeRulePlannerTopology"]
+        self.assertEqual("ok", first["status"])
+        self.assertEqual("ok", second["status"])
+        self.assertTrue(
+            {"005930", "MSTR"}.issubset(
+                set((topology.get("sourceIdsBySymbol") or {}).keys())
+            )
+        )
+        self.assertTrue(topology["fingerprint"])
 
     def test_market_world_contract_bump_replaces_legacy_shared_manifest(self):
         repository = self.FakeRepository()

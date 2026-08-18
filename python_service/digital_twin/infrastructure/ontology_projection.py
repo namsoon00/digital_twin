@@ -887,6 +887,13 @@ class PortfolioOntologyProjectionRecorder:
             partition.get("sharedRules") or [],
             shared_world,
         )
+        symbols = self.inference_symbols(snapshot, target_symbols)
+        if target_symbols:
+            update.worldview["targetScopedManifestPatch"] = {
+                "status": "applied",
+                "mode": "shared-premise-target-scoped-input",
+                "targetSymbols": symbols,
+            }
         progress("projection.start", worldId=shared_world.world_id)
         projection = self.project_shared_world_update(update, shared_world, projection_kind="premise")
         projection_status = str(projection.get("status") or "")
@@ -911,7 +918,6 @@ class PortfolioOntologyProjectionRecorder:
                 "retryable": True,
                 "reason": str(error)[:220],
             }
-        symbols = self.inference_symbols(snapshot, target_symbols)
         existing = {}
         try:
             existing = self.repository_world_call(
@@ -4004,6 +4010,10 @@ class PortfolioOntologyProjectionRecorder:
                 "sharedWorldProjectionContractVersion": shared_contract_version,
                 "sharedWorldFullRebuild": full_contract_rebuild,
             })
+            incoming_planner_topology = {}
+            if kind == "premise":
+                incoming_planner_topology = native_rule_planner_topology(update)
+                update.worldview["nativeRulePlannerTopology"] = incoming_planner_topology
             incoming_fingerprint = material_graph_fingerprint(update)
             apply_material_graph_identity(
                 update,
@@ -4093,6 +4103,47 @@ class PortfolioOntologyProjectionRecorder:
                 world_id=shared_world.world_id,
             )
             fingerprint = str(manifest_state.get("materialFingerprint") or incoming_fingerprint)
+            if kind == "premise":
+                planner_topology = incoming_planner_topology
+                if (
+                    active_status == "ok"
+                    and not full_contract_rebuild
+                    and str(market_target_patch.get("status") or "") == "applied"
+                ):
+                    topology_merge = merge_native_rule_planner_topology(
+                        dict(active_market.get("nativeRulePlannerTopology") or {}),
+                        incoming_planner_topology,
+                        market_target_patch.get("targetSymbols") or [],
+                    )
+                    if str(topology_merge.get("status") or "") != "ok":
+                        return {
+                            **world_metadata(shared_world),
+                            "status": "deferred-premise-world-planner-topology",
+                            "saved": False,
+                            "preservedActiveGeneration": True,
+                            "projectionKind": kind,
+                            "retryable": True,
+                            "recommendedRetryAfterSeconds": 10,
+                            "reason": str(
+                                topology_merge.get("reason")
+                                or "SharedPremiseWorld planner topology could not be merged."
+                            )[:220],
+                            "nativeRulePlannerTopologyMerge": topology_merge,
+                        }
+                    planner_topology = dict(topology_merge.get("topology") or {})
+                    update.worldview["nativeRulePlannerTopologyIncoming"] = incoming_planner_topology
+                    update.worldview["nativeRulePlannerTopologyMerge"] = {
+                        key: topology_merge.get(key)
+                        for key in [
+                            "status", "reason", "replacedSymbols", "retainedSymbols",
+                            "activeSymbolCount", "incomingSymbolCount", "mergedSymbolCount",
+                        ]
+                    }
+                update.worldview["nativeRulePlannerTopology"] = planner_topology
+                fingerprint = native_rule_planner_manifest_fingerprint(
+                    fingerprint,
+                    planner_topology,
+                )
             # A selected link can still point to an untouched active market
             # fact. Rebind every in-memory endpoint to the merged manifest so
             # TypeDB writes the link against that active generation rather than

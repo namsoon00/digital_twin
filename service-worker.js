@@ -1,4 +1,4 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260818-investment-flow-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260818-decision-validation-nav-v1";
 const APP_SHELL = [
   "./",
   "./index.html",

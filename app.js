@@ -1912,7 +1912,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260818-investment-flow-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260818-decision-validation-nav-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -13059,7 +13059,7 @@
     return [
       '<nav class="tab-bar" aria-label="주요 탭" style="--tab-count:' + bottomTabs.length + '">',
       bottomTabs.map(function (tab) {
-        var active = state.activeTab === tab.id;
+        var active = state.activeTab === tab.id || (tab.id === "modeling" && state.activeTab === "experiments");
         return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-icon" data-tab-icon="' + escapeHtml(tab.id) + '" aria-hidden="true"></span><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
       }).join(""),
       '</nav>'
@@ -13957,7 +13957,7 @@
       renderConsoleSurface({ kicker: "CURRENT DECISIONS", title: "현재 투자 판단", description: "보유·관심 종목별로 지금 검토할 행동과 이유를 보여줍니다. 자동 주문은 하지 않습니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", table), footer: renderConsolePager("decision", page) }),
       renderConsoleSurface({ kicker: "READINESS", title: "판단 준비 상태", description: "지금 투자 행동을 막는 핵심 요인만 보여줍니다.", actions: validationAction, body: renderConsoleLiveRegion("decision-blocker-body", blockers), footer: reviewRows.length > 3 ? "영향도가 높은 3건을 먼저 표시합니다." : "" }),
       '</div>'
-    ].join(""));
+    ].join(""), { leading: renderDecisionWorkspaceNavigation("modeling") });
   }
 
   function renderAlertConsoleRow(row) {
@@ -14067,6 +14067,16 @@
       : { summary: {}, items: [], operatorView: { stages: [], issues: [] } };
   }
 
+  function renderDecisionWorkspaceNavigation(activeTab) {
+    var active = activeTab === "experiments" ? "experiments" : "modeling";
+    return [
+      '<nav class="oa-decision-workspace-nav" role="tablist" aria-label="판단 업무 보기">',
+      '<button type="button" role="tab" data-tab="modeling" aria-selected="' + (active === "modeling" ? "true" : "false") + '"' + (active === "modeling" ? ' class="active" aria-current="page"' : '') + '><strong>현재 판단</strong><span>행동·근거</span></button>',
+      '<button type="button" role="tab" data-tab="experiments" aria-selected="' + (active === "experiments" ? "true" : "false") + '"' + (active === "experiments" ? ' class="active" aria-current="page"' : '') + '><strong>검증</strong><span>계보·준비</span></button>',
+      '</nav>'
+    ].join("");
+  }
+
   function investmentFlowStateTone(value) {
     var stateValue = String(value || "warning");
     if (stateValue === "pass") return "watch";
@@ -14141,7 +14151,10 @@
     return renderConsoleManagedPage("experiments", metrics, [
       renderValidationAudienceSwitch(),
       renderConsoleSurface({ kicker: "DECISION ASSURANCE", title: "종목별 판단 검증", description: "데이터가 어떤 근거·관계·가설·추론을 거쳐 판단이 되었는지 확인합니다.", meta: items.length + "건", body: renderConsoleLiveRegion("validation-subject-body", body), footer: renderConsolePager("validation", page) })
-    ].join(""), { loading: state.investmentFlowLoading && !state.investmentFlowLoaded });
+    ].join(""), {
+      leading: renderDecisionWorkspaceNavigation("experiments"),
+      loading: state.investmentFlowLoading && !state.investmentFlowLoaded
+    });
   }
 
   function renderValidationOperatorConsole(snapshot) {
@@ -14192,7 +14205,7 @@
       renderConsoleSurface({ kicker: "TYPE DB", title: "온톨로지 운영 상태", description: "구조와 추론 원장의 기술 정보를 확인합니다.", body: graphBody }),
       '</div>',
       renderHypothesisDevelopmentConsoleSurface()
-    ].join(""));
+    ].join(""), { leading: renderDecisionWorkspaceNavigation("experiments") });
   }
 
   function renderValidationConsole(snapshot) {

@@ -194,6 +194,19 @@ class AIInferenceQueueRunner:
             12 * 1024,
             24 * 1024,
         )
+        repair_effort = str(
+            self.settings.get("notificationAiComparisonRepairReasoningEffort") or "low"
+        ).strip().lower()
+        self.comparison_repair_reasoning_effort = (
+            repair_effort if repair_effort in {"low", "medium", "high", "max"} else "low"
+        )
+        self.comparison_repair_timeout_seconds = _int_setting(
+            self.settings,
+            "notificationAiComparisonRepairTimeoutSeconds",
+            60,
+            10,
+            120,
+        )
         self.last_run_details = []
         self.stopping = False
 
@@ -276,6 +289,14 @@ class AIInferenceQueueRunner:
                     response,
                 )
                 repair_context["_notificationAiPreparedPrompt"] = executed_prompt
+                repair_context["notificationAiExecutionProfile"] = {
+                    **execution_profile,
+                    "name": "contractRepair",
+                    "reasoningEffort": self.comparison_repair_reasoning_effort,
+                }
+                repair_context["_notificationAiTimeoutSecondsOverride"] = (
+                    self.comparison_repair_timeout_seconds
+                )
                 try:
                     repaired = self.reviewer.review(repair_context)
                 except Exception as error:  # noqa: BLE001 - a failed repair becomes an explicit abstention.
@@ -385,6 +406,8 @@ class AIInferenceQueueRunner:
                 "attempted": comparison_repair_attempted,
                 "succeeded": comparison_repair_succeeded,
                 "error": comparison_repair_error,
+                "reasoningEffort": self.comparison_repair_reasoning_effort,
+                "timeoutSeconds": self.comparison_repair_timeout_seconds,
                 "finalState": str(response.hypothesis_comparison_state or ""),
                 "selectedHypothesisId": str(response.selected_hypothesis_id or ""),
             },

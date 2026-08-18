@@ -46,6 +46,13 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
     def review(self, context: Dict[str, object]) -> NotificationAIValidatedResponse:
         execution_profile = context.get("notificationAiExecutionProfile") if isinstance(context.get("notificationAiExecutionProfile"), dict) else {}
         reasoning_effort = str(execution_profile.get("reasoningEffort") or "").strip().lower()
+        try:
+            timeout_seconds = int(
+                context.get("_notificationAiTimeoutSecondsOverride") or self.timeout_seconds
+            )
+        except (TypeError, ValueError):
+            timeout_seconds = self.timeout_seconds
+        timeout_seconds = max(5, min(self.timeout_seconds, timeout_seconds))
         command = (
             self.command_factory(reasoning_effort=reasoning_effort)
             if self.command_factory and reasoning_effort
@@ -81,7 +88,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         )
         self.process = process
         try:
-            stdout, stderr = process.communicate(input=prompt, timeout=self.timeout_seconds)
+            stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
         except subprocess.TimeoutExpired as error:
             self.terminate_process(process, force=False)
             try:
@@ -89,7 +96,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             except subprocess.TimeoutExpired:
                 self.terminate_process(process, force=True)
                 process.wait(timeout=2)
-            raise TimeoutError("notification AI command exceeded " + str(self.timeout_seconds) + " seconds") from error
+            raise TimeoutError("notification AI command exceeded " + str(timeout_seconds) + " seconds") from error
         finally:
             if self.process is process:
                 self.process = None

@@ -143,6 +143,8 @@ TEXT_SETTING_KEYS = [
     "notificationAiInternalDataCacheMaxEntries",
     "notificationAiTimeoutSeconds",
     "notificationAiDeliveryDeadlineSeconds",
+    "notificationAiComparisonRepairReasoningEffort",
+    "notificationAiComparisonRepairTimeoutSeconds",
     "notificationAiQueueWorkerCount",
     "notificationAiQueueBatchSize",
     "notificationAiQueueIntervalSeconds",
@@ -867,6 +869,8 @@ DEFAULT_STRATEGY_SETTINGS = {
     # AI work is leased in a separate queue, so the delivery worker no longer
     # waits synchronously for this deadline.
     "notificationAiDeliveryDeadlineSeconds": "300",
+    "notificationAiComparisonRepairReasoningEffort": "low",
+    "notificationAiComparisonRepairTimeoutSeconds": "60",
     "notificationAiQueueWorkerCount": "2",
     "notificationAiQueueBatchSize": "1",
     "notificationAiQueueIntervalSeconds": "5",
@@ -1490,6 +1494,8 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "notificationAiInternalDataCacheMaxEntries": value("notificationAiInternalDataCacheMaxEntries", "NOTIFICATION_AI_INTERNAL_DATA_CACHE_MAX_ENTRIES", DEFAULT_STRATEGY_SETTINGS["notificationAiInternalDataCacheMaxEntries"]),
         "notificationAiTimeoutSeconds": value("notificationAiTimeoutSeconds", "NOTIFICATION_AI_TIMEOUT_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiTimeoutSeconds"]),
         "notificationAiDeliveryDeadlineSeconds": value("notificationAiDeliveryDeadlineSeconds", "NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiDeliveryDeadlineSeconds"]),
+        "notificationAiComparisonRepairReasoningEffort": value("notificationAiComparisonRepairReasoningEffort", "NOTIFICATION_AI_COMPARISON_REPAIR_REASONING_EFFORT", DEFAULT_STRATEGY_SETTINGS["notificationAiComparisonRepairReasoningEffort"]),
+        "notificationAiComparisonRepairTimeoutSeconds": value("notificationAiComparisonRepairTimeoutSeconds", "NOTIFICATION_AI_COMPARISON_REPAIR_TIMEOUT_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiComparisonRepairTimeoutSeconds"]),
         "notificationAiQueueWorkerCount": value("notificationAiQueueWorkerCount", "NOTIFICATION_AI_QUEUE_WORKER_COUNT", DEFAULT_STRATEGY_SETTINGS["notificationAiQueueWorkerCount"]),
         "notificationAiQueueBatchSize": value("notificationAiQueueBatchSize", "NOTIFICATION_AI_QUEUE_BATCH_SIZE", DEFAULT_STRATEGY_SETTINGS["notificationAiQueueBatchSize"]),
         "notificationAiQueueIntervalSeconds": value("notificationAiQueueIntervalSeconds", "NOTIFICATION_AI_QUEUE_INTERVAL_SECONDS", DEFAULT_STRATEGY_SETTINGS["notificationAiQueueIntervalSeconds"]),

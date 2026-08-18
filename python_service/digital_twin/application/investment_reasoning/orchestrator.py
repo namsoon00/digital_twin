@@ -169,7 +169,13 @@ class InvestmentReasoningOrchestrator:
         enriched = deepcopy(dict(context or {}))
         reasoning_case = self.required(case_id)
         hypotheses = self.hypothesis_manager.from_ai_context(enriched)
-        if hypotheses:
+        # Once TypeDB action alternatives have been synthesized, their
+        # hypothesis IDs are an immutable decision contract. Notification
+        # enrichment may attach research and rebuild a display hypothesis set
+        # with new IDs; replacing the persisted set here would make it
+        # impossible for any AI selection to belong to both the hypothesis set
+        # and the synthesis eligibility set.
+        if hypotheses and not reasoning_case.decision_syntheses:
             reasoning_case.hypotheses = hypotheses
         if reasoning_case.stage == CASE_INFERENCE_COMPLETED:
             reasoning_case.transition(

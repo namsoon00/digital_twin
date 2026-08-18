@@ -234,9 +234,13 @@ class AIInferenceQueueTests(unittest.TestCase):
         class RepairReviewer:
             def __init__(self):
                 self.calls = []
+                self.profiles = []
+                self.timeouts = []
 
             def review(self, context):
                 self.calls.append(str(context.get("_notificationAiPreparedPrompt") or ""))
+                self.profiles.append(dict(context.get("notificationAiExecutionProfile") or {}))
+                self.timeouts.append(context.get("_notificationAiTimeoutSecondsOverride"))
                 if len(self.calls) == 1:
                     return NotificationAIValidatedResponse(
                         action="HOLD",
@@ -258,7 +262,15 @@ class AIInferenceQueueTests(unittest.TestCase):
                 )
 
         reviewer = RepairReviewer()
-        runner = AIInferenceQueueRunner(self.queue, reviewer, worker_id="worker-repair")
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            reviewer,
+            {
+                "notificationAiComparisonRepairReasoningEffort": "low",
+                "notificationAiComparisonRepairTimeoutSeconds": "45",
+            },
+            worker_id="worker-repair",
+        )
 
         self.assertEqual(1, runner.run_once(limit=1))
 
@@ -267,6 +279,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(2, len(reviewer.calls))
         self.assertTrue(repair["attempted"])
         self.assertTrue(repair["succeeded"])
+        self.assertEqual("low", repair["reasoningEffort"])
+        self.assertEqual(45, repair["timeoutSeconds"])
+        self.assertEqual("low", reviewer.profiles[1]["reasoningEffort"])
+        self.assertEqual(45, reviewer.timeouts[1])
         self.assertIn("unreviewedHypothesisIds", reviewer.calls[1])
         self.assertEqual("hypothesis:risk", delivered.context["notificationAiValidatedResponse"]["selectedHypothesisId"])
 

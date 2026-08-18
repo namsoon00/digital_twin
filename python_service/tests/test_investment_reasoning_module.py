@@ -249,6 +249,62 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             orchestrator.compact_context(synthesized)["decisionSyntheses"][0]["graphCandidateAction"],
         )
 
+    def test_ai_context_enrichment_cannot_replace_synthesized_hypothesis_ids(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(
+            reasoning_case.case_id,
+            [hypothesis_candidate("hypothesis:canonical")],
+        )
+        orchestrator.decisions_synthesized(
+            reasoning_case.case_id,
+            [DecisionSynthesis(
+                synthesis_id="synthesis:canonical",
+                account_id="account:1",
+                symbol="NVDA",
+                source_abox_snapshot_id="abox:1",
+                inference_generation_id="generation:1",
+                graph_candidate_action="BUY",
+                alternatives=(ActionAlternative(
+                    action="BUY",
+                    hypothesis_ids=("hypothesis:canonical",),
+                    decision_eligible=True,
+                ),),
+                eligible_hypothesis_ids=("hypothesis:canonical",),
+            )],
+        )
+        enriched = orchestrator.capture_ai_context(
+            reasoning_case.case_id,
+            {
+                "ontologyRelationContext": hypothesis_candidate(
+                    "hypothesis:display-enrichment"
+                )["metadata"]["ontologyRelationContext"],
+            },
+        )
+
+        persisted = repository.get(reasoning_case.case_id)
+
+        self.assertEqual(
+            ["hypothesis:canonical"],
+            [item.hypothesis_id for item in persisted.hypotheses],
+        )
+        self.assertEqual(
+            ["hypothesis:canonical"],
+            enriched["investmentReasoningCase"]["hypothesisIds"],
+        )
+
     def test_rule_inventory_exposes_unroutable_rules_before_release(self):
         inventory = reasoning_rule_inventory([{
             "rule_id": "graph.complete.v1",

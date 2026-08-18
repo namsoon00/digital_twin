@@ -467,13 +467,29 @@ def aggregate_freshness(records: Iterable[Dict[str, object]], message_type: str,
     else:
         status = "fresh"
         reason = "모든 소스 신선도 기준 통과"
-    ages = [item.get("ageMinutes") for item in items if isinstance(item.get("ageMinutes"), int)]
+    freshness_budgets = []
+    for item in items:
+        age = item.get("ageMinutes")
+        maximum = item.get("maxAgeMinutes")
+        if isinstance(age, bool) or not isinstance(age, (int, float)):
+            continue
+        if isinstance(maximum, bool) or not isinstance(maximum, (int, float)) or maximum <= 0:
+            continue
+        freshness_budgets.append((float(maximum) - float(age), age, maximum))
+    limiting_budget = min(freshness_budgets, key=lambda value: value[0]) if freshness_budgets else None
     max_ages = [int(item.get("maxAgeMinutes") or 0) for item in items if int(item.get("maxAgeMinutes") or 0)]
     return {
         "status": status,
         "reason": reason,
-        "ageMinutes": max(ages) if ages else None,
-        "maxAgeMinutes": min(max_ages) if max_ages else max_age_minutes_for_message_type(message_type, settings),
+        # Age and maximum age must come from the same source. Combining the
+        # oldest age with the shortest TTL can report an impossible negative
+        # headroom even when every source is still fresh.
+        "ageMinutes": limiting_budget[1] if limiting_budget else None,
+        "maxAgeMinutes": (
+            limiting_budget[2]
+            if limiting_budget
+            else min(max_ages) if max_ages else max_age_minutes_for_message_type(message_type, settings)
+        ),
         "sources": items,
         "checkedAt": utc_iso(now),
     }

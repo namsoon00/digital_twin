@@ -354,6 +354,38 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("stale", decision.status)
         self.assertEqual(4, decision.age_minutes)
 
+    def test_dispatch_freshness_keeps_age_and_ttl_from_limiting_source(self):
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": INVESTMENT_INSIGHT,
+                "dataFreshness": {
+                    "sources": [
+                        {
+                            "source": "KIS realtime quote",
+                            "stage": "price",
+                            "status": "fresh",
+                            "sourceAsOf": "2026-08-18T01:47:00Z",
+                            "maxAgeMinutes": 10,
+                        },
+                        {
+                            "source": "KIS investor scheduled estimate",
+                            "stage": "investor",
+                            "status": "fresh",
+                            "sourceFetchedAt": "2026-08-18T01:00:00Z",
+                            "maxAgeMinutes": 91,
+                        },
+                    ],
+                },
+            },
+            settings={"dataFreshnessEnabled": "1"},
+            now=datetime(2026, 8, 18, 1, 48, tzinfo=timezone.utc),
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("fresh", decision.status)
+        self.assertEqual(1, decision.age_minutes)
+        self.assertEqual(10, decision.max_age_minutes)
+
     def test_news_digest_is_suppressed_when_article_is_stale_at_dispatch(self):
         decision = evaluate_notification_data_freshness(
             {

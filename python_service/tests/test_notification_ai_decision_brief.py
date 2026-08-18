@@ -1,5 +1,6 @@
 import json
 import unittest
+from copy import deepcopy
 
 from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from digital_twin.domain.notification_ai_decision_brief import (
@@ -438,6 +439,38 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual(
             "hypothesis:hold",
             payload["inference"]["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
+        )
+
+    def test_v2_ai_brief_uses_relation_matching_decision_synthesis_hypotheses(self):
+        context = decision_context("act", "new-condition")
+        authoritative = deepcopy(context["ontologyRelationContext"])
+        authoritative_hypothesis = deepcopy(
+            authoritative["investmentBrain"]["hypothesisSet"]["hypotheses"][0]
+        )
+        authoritative_hypothesis["hypothesisId"] = "hypothesis:v2-authoritative"
+        authoritative["investmentBrain"]["hypothesisSet"]["hypotheses"] = [
+            authoritative_hypothesis
+        ]
+        authoritative["hypothesisSet"] = deepcopy(
+            authoritative["investmentBrain"]["hypothesisSet"]
+        )
+        authoritative["inferenceGenerationId"] = "inference:v2"
+        authoritative["hypothesisSet"]["inferenceGenerationId"] = "inference:v2"
+        context["ontologyRelationContext"]["inferenceGenerationId"] = "inference:v2"
+        context["metadata"] = {"ontologyRelationContext": authoritative}
+        context["v2DecisionSynthesis"] = {
+            "inference_generation_id": "inference:v2",
+            "eligible_hypothesis_ids": ["hypothesis:v2-authoritative"],
+        }
+
+        brief = notification_ai_decision_brief(context, {})
+
+        self.assertEqual(
+            ["hypothesis:v2-authoritative"],
+            [
+                item["hypothesisId"]
+                for item in brief["inference"]["hypothesisSet"]["hypotheses"]
+            ],
         )
 
     def test_ordinary_symbol_decision_excludes_rebalance_policy_but_scheduled_review_keeps_it(self):

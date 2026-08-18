@@ -75,6 +75,52 @@ def _reasoning_effort(value: object, fallback: str) -> str:
     return normalized if normalized in VALID_REASONING_EFFORTS else fallback
 
 
+def _relation_hypothesis_ids(value: object) -> set:
+    relation = _mapping(value)
+    hypothesis_set = _mapping(relation.get("hypothesisSet")) or _mapping(
+        _mapping(relation.get("investmentBrain")).get("hypothesisSet")
+    )
+    return {
+        str(item.get("hypothesisId") or "").strip()
+        for item in hypothesis_set.get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+
+
+def _authoritative_v2_relation_context(context: Dict[str, object]) -> Dict[str, object]:
+    current = _mapping(context.get("ontologyRelationContext"))
+    metadata = _mapping(context.get("metadata"))
+    synthesis = _mapping(context.get("v2DecisionSynthesis")) or _mapping(
+        metadata.get("v2DecisionSynthesis")
+    )
+    eligible_ids = {
+        str(value or "").strip()
+        for value in synthesis.get("eligible_hypothesis_ids") or synthesis.get("eligibleHypothesisIds") or []
+        if str(value or "").strip()
+    }
+    if not eligible_ids:
+        return current
+    expected_generation = str(
+        synthesis.get("inference_generation_id") or synthesis.get("inferenceGenerationId") or ""
+    ).strip()
+    candidates = [
+        _mapping(metadata.get("ontologyRelationContext")),
+        current,
+    ]
+    for candidate in candidates:
+        if not candidate or not eligible_ids.issubset(_relation_hypothesis_ids(candidate)):
+            continue
+        candidate_generation = str(
+            candidate.get("inferenceGenerationId")
+            or _mapping(candidate.get("hypothesisSet")).get("inferenceGenerationId")
+            or ""
+        ).strip()
+        if expected_generation and candidate_generation and candidate_generation != expected_generation:
+            continue
+        return candidate
+    return current
+
+
 def notification_ai_execution_profile(
     context: Dict[str, object],
     settings: Dict[str, object] = None,
@@ -161,9 +207,10 @@ def notification_ai_decision_brief(
     policy_scope = decision_policy_scope_contract(merged)
     include_rebalance = includes_portfolio_rebalance_policy(merged)
     decision_context = dict(merged)
+    decision_context["ontologyRelationContext"] = _authoritative_v2_relation_context(decision_context)
     if not include_rebalance:
         decision_context["ontologyRelationContext"] = market_decision_relation_context(
-            merged.get("ontologyRelationContext")
+            decision_context.get("ontologyRelationContext")
         )
         decision_context["rawLines"] = market_decision_raw_lines(context_raw_lines(merged))
         decision_context["lines"] = market_decision_raw_lines(merged.get("lines") or [])

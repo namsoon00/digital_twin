@@ -1,6 +1,9 @@
 import unittest
+from contextlib import nullcontext
 from copy import deepcopy
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
@@ -9,6 +12,7 @@ from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
 from digital_twin.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
+from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitoringCycleRecorder
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from digital_twin.infrastructure.service_factory import FrozenReasoningSnapshotSource
@@ -87,6 +91,31 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 
 
 class ReasoningSnapshotReplayTests(unittest.TestCase):
+    def test_cycle_recorder_does_not_rewrite_time_series_for_source_replay(self):
+        recorder = object.__new__(MySQLMonitoringCycleRecorder)
+        recorder.runtime_settings = {}
+        recorder.monitor_store = SimpleNamespace(previous={}, sent={})
+        recorder.market_time_series_store = object()
+        recorder.market_observation_anchor_store = SimpleNamespace()
+        recorder.notification_ingress = SimpleNamespace()
+        recorder.transaction = lambda: nullcontext(object())
+
+        with patch(
+            "digital_twin.infrastructure.mysql_monitoring_stores.MySQLNotificationJobStore"
+        ), patch(
+            "digital_twin.infrastructure.mysql_monitoring_stores.MySQLModelReviewJobStore"
+        ), patch(
+            "digital_twin.infrastructure.mysql_monitoring_stores.insert_domain_event_with_connection"
+        ):
+            result = recorder.record_cycle(
+                ["acct"],
+                [SimpleNamespace(account_id="acct")],
+                [],
+                source_snapshot_replay=True,
+            )
+
+        self.assertEqual("queued=0", result.reason)
+
     def test_reasoning_source_packet_is_deterministic_and_detached_from_live_state(self):
         state = monitor_state()
         first = build_reasoning_source_snapshot("acct", state)

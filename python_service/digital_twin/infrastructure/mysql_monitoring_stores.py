@@ -863,6 +863,10 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             from .time_series_factory import build_versioned_time_series_store
 
             self.market_time_series_store = build_versioned_time_series_store(settings)
+        if not callable(getattr(self.market_time_series_store, "record_snapshots_with_connection", None)):
+            raise TypeError(
+                "Monitoring cycle recorder requires a transaction-compatible market time-series store"
+            )
         self.market_observation_anchor_store = MySQLMarketObservationReasoningAnchorStore(
             self.runtime_settings
         )
@@ -982,7 +986,8 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     ) from error
             delivered = bool(guarded_events)
             alert_source_event = alerts_detected_event(guarded_events) if guarded_events else None
-            self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
+            if live_snapshots:
+                self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
             for snapshot in live_snapshots:
                 insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             outboxed_events: List[AlertEvent] = []

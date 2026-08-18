@@ -1863,10 +1863,13 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     candidate_settings["_reasoningEngineValidationCohortId"] = str(
         release_identity.get("validationCohortId") or ""
     )
-    time_series_store = QuestDBTimeSeriesAdapter(
+    reasoning_time_series_store = QuestDBTimeSeriesAdapter(
         candidate_settings,
         descriptor.time_series_backend_id,
     )
+    # V2 reads temporal features from QuestDB. Notification bookkeeping owns
+    # a MySQL transaction and therefore receives the versioned write boundary.
+    delivery_time_series_store = stores.market_time_series_store(store_settings)
     projection_recorder = PortfolioOntologyProjectionRecorder(
         repository,
         quality_store=stores.ontology_quality_sample_store(store_settings),
@@ -1875,7 +1878,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         hypothesis_proposal_store=stores.investment_research_store(store_settings),
         hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(store_settings),
         data_pipeline_health_store=stores.data_pipeline_health_store(store_settings),
-        market_time_series_store=time_series_store,
+        market_time_series_store=reasoning_time_series_store,
         investment_domain_store=stores.investment_domain_store(store_settings),
         world_projection_outbox=None,
         inference_detail_outbox=V2InferenceDetailReceiptSink(),
@@ -1954,7 +1957,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         cycle_recorder=stores.monitoring_cycle_recorder(
             store_settings,
             monitor_store,
-            time_series_store,
+            delivery_time_series_store,
         ),
         delivery_authorized_provider=delivery_authorized,
         settings=candidate_settings,

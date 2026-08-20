@@ -207,6 +207,56 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         self.assertIn(SHARED_PREMISE_RELATION, [item.relation_type for item in overlay.relations])
         self.assertEqual(0, len(overlay.evidence))
 
+    def test_account_overlay_binds_pure_shared_crypto_premise_to_crypto_asset(self):
+        crypto_rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.crypto.market.24h.up.major.v1"
+        )
+        partition = compile_world_partitioned_rules([crypto_rule])
+        asset_id = entity_id("crypto-asset", "BTC")
+        path_id = entity_id("price-path", "BTC:crypto:1h-24h-7d")
+        graph = PortfolioOntology(
+            "acct",
+            entities=[
+                OntologyEntity(asset_id, "Bitcoin", "crypto-asset", {
+                    "ontologyBox": "ABox",
+                    "tboxClass": "CryptoAsset",
+                    "symbol": "BTC",
+                    "provider": "CoinGecko",
+                }),
+                OntologyEntity(path_id, "Bitcoin price path", "price-path", {
+                    "ontologyBox": "ABox",
+                    "change24h": 11.5,
+                }),
+            ],
+            relations=[
+                OntologyRelation(
+                    asset_id,
+                    path_id,
+                    "HAS_PRICE_PATH",
+                    properties={"ontologyBox": "ABox"},
+                ),
+            ],
+        )
+
+        overlay = account_overlay_graph(
+            graph,
+            partition["overlayRules"],
+            {"BTC": [crypto_rule.rule_id]},
+            shared_generation_id="generation:crypto:1",
+            source_abox_snapshot_id="abox:crypto:1",
+        )
+
+        asset = next(item for item in overlay.entities if item.entity_id == asset_id)
+        premise_relation = next(
+            item for item in overlay.relations
+            if item.relation_type == SHARED_PREMISE_RELATION
+        )
+        self.assertEqual(asset_id, premise_relation.source)
+        self.assertEqual("BTC", asset.properties["symbol"])
+        self.assertNotIn("provider", asset.properties)
+        self.assertNotIn(path_id, {item.entity_id for item in overlay.entities})
+
     def test_account_overlay_filters_generic_relation_by_rule_endpoint_kinds(self):
         account_rule = GraphInferenceRule(
             rule_id="graph.test.account-observation.v1",

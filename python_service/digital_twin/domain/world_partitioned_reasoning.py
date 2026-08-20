@@ -566,8 +566,15 @@ def add_shared_premise_references(
     known_entities = {item.entity_id for item in graph.entities}
     for symbol, rule_ids in dict(premises_by_symbol or {}).items():
         clean_symbol = _text(symbol).upper()
-        stock_id = entity_id("stock", clean_symbol)
-        if stock_id not in known_entities:
+        subject_id = next((
+            candidate_id
+            for candidate_id in (
+                entity_id("stock", clean_symbol),
+                entity_id("crypto-asset", clean_symbol),
+            )
+            if candidate_id in known_entities
+        ), "")
+        if not subject_id:
             continue
         for rule_id in sorted({_text(value) for value in rule_ids or [] if _text(value)}):
             premise_id = entity_id(SHARED_PREMISE_KIND, clean_symbol + ":" + rule_id)
@@ -589,7 +596,7 @@ def add_shared_premise_references(
                 ))
                 known_entities.add(premise_id)
             graph.relations.append(OntologyRelation(
-                stock_id,
+                subject_id,
                 premise_id,
                 SHARED_PREMISE_RELATION,
                 properties={
@@ -695,12 +702,22 @@ def account_overlay_graph(
         for endpoint in (relation.source, relation.target)
         if _text(endpoint)
     }
+    # A market-only rule has no private relation endpoint before its compact
+    # shared-premise edge is added. Retain the requested instrument identity so
+    # pure shared rules can bind both listed stocks and BTC/ETH crypto assets in
+    # the account overlay without copying their raw market observations.
+    for symbol in premises_by_symbol:
+        clean_symbol = _text(symbol).upper()
+        for subject_kind in ("stock", "crypto-asset"):
+            candidate_id = entity_id(subject_kind, clean_symbol)
+            if candidate_id in entity_by_id:
+                endpoint_ids.add(candidate_id)
     entities = []
     for entity in source_graph.entities or []:
         if entity.entity_id not in endpoint_ids:
             continue
         properties = dict(entity.properties or {})
-        if _text(entity.kind).lower() == "stock":
+        if _text(entity.kind).lower() in {"stock", "crypto-asset"}:
             properties = {
                 key: value
                 for key, value in properties.items()

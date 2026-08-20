@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import hashlib
+from datetime import datetime, timezone
 from typing import Dict
 
 from ..domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
@@ -37,6 +38,57 @@ def _int_setting(settings: Dict[str, object], key: str, fallback: int, minimum: 
     except (TypeError, ValueError):
         value = fallback
     return max(minimum, min(maximum, value))
+
+
+def _bool_setting(settings: Dict[str, object], key: str, fallback: bool = False) -> bool:
+    value = (settings or {}).get(key)
+    if value is None:
+        return bool(fallback)
+    return str(value).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
+
+
+def _timestamp(value: object):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def typedb_inference_fallback_response(context: Dict[str, object], reason: object):
+    """Build a customer-safe TypeDB-only alert when the optional AI stage fails."""
+
+    response = local_validated_ai_response(
+        context,
+        source="TypeDB inference fallback",
+    )
+    detail = str(reason or "AI judgment unavailable").strip()
+    lowered = detail.lower()
+    if "timeout" in lowered or "exceeded" in lowered or "deadline" in lowered:
+        notice = (
+            "AI 판단을 설정한 시간 안에 완료하지 못해 검증된 TypeDB 관계 추론만 먼저 전달합니다. "
+            "아래 내용은 AI 최종 의견이 아니라 현재 추론 결과와 확인 조건입니다."
+        )
+    elif "hypothesis" in lowered or "contract" in lowered or "action envelope" in lowered:
+        notice = (
+            "AI 응답이 TypeDB 가설·행동 계약을 통과하지 못해 검증된 TypeDB 관계 추론만 먼저 전달합니다. "
+            "검증되지 않은 AI 의견은 알림에서 제외했습니다."
+        )
+    else:
+        notice = (
+            "AI 판단을 사용할 수 없어 검증된 TypeDB 관계 추론만 먼저 전달합니다. "
+            "아래 내용에는 AI 최종 의견이 포함되지 않았습니다."
+        )
+    response.summary = notice
+    response.investment_view = notice
+    response.source = "TypeDB inference fallback"
+    response.selected_hypothesis_id = ""
+    response.hypothesis_selection_source = "typedb-fallback-no-ai-selection"
+    response.validation_warnings.append("AI stage fallback: " + detail[:320])
+    return response
 
 
 def hypothesis_comparison_needs_repair(
@@ -239,6 +291,23 @@ class AIInferenceQueueRunner:
         self.heartbeat_seconds = _int_setting(self.settings, "notificationAiQueueHeartbeatSeconds", 10, 2, 120)
         self.max_attempts = _int_setting(self.settings, "notificationAiQueueMaxAttempts", 2, 1, 8)
         self.retry_seconds = _int_setting(self.settings, "notificationAiQueueRetrySeconds", 30, 5, 900)
+        self.delivery_deadline_seconds = _int_setting(
+            self.settings,
+            "notificationAiDeliveryDeadlineSeconds",
+            120,
+            15,
+            600,
+        )
+        self.fallback_enabled = _bool_setting(
+            self.settings,
+            "notificationAiTypeDbFallbackEnabled",
+            True,
+        )
+        self.fallback_on_first_failure = _bool_setting(
+            self.settings,
+            "notificationAiFallbackOnFirstFailure",
+            True,
+        )
         self.storage_retry_attempts = _int_setting(
             self.settings,
             "notificationAiQueueStorageRetryAttempts",
@@ -301,30 +370,35 @@ class AIInferenceQueueRunner:
 
     def process_request(self, request: AIInferenceRequest) -> str:
         context = dict(request.context or {})
-        if request.message_type == INVESTMENT_INSIGHT:
-            context = context_with_previous_investment_decision(
+        try:
+            if request.message_type == INVESTMENT_INSIGHT:
+                context = context_with_previous_investment_decision(
+                    context,
+                    self.decision_episode_store,
+                    self.continuity_service,
+                    account_id=request.account_id,
+                    symbol=request.symbol,
+                )
+            execution_profile = dict(context.get("notificationAiExecutionProfile") or {})
+            if not execution_profile:
+                execution_profile = notification_ai_execution_profile(context, self.settings)
+                context["notificationAiExecutionProfile"] = execution_profile
+            execution_profile["reasoningEffort"] = request.reasoning_effort
+            decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
+            prompt = build_notification_ai_decision_prompt(
                 context,
-                self.decision_episode_store,
-                self.continuity_service,
-                account_id=request.account_id,
-                symbol=request.symbol,
+                self.settings,
+                max_prompt_bytes=min(
+                    self.max_prompt_bytes,
+                    int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
+                ),
+                profile=execution_profile,
+                decision_brief=decision_brief,
             )
-        execution_profile = dict(context.get("notificationAiExecutionProfile") or {})
-        if not execution_profile:
-            execution_profile = notification_ai_execution_profile(context, self.settings)
-            context["notificationAiExecutionProfile"] = execution_profile
-        execution_profile["reasoningEffort"] = request.reasoning_effort
-        decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
-        prompt = build_notification_ai_decision_prompt(
-            context,
-            self.settings,
-            max_prompt_bytes=min(
-                self.max_prompt_bytes,
-                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
-            ),
-            profile=execution_profile,
-            decision_brief=decision_brief,
-        )
+        except Exception as error:  # noqa: BLE001 - TypeDB inference remains publishable without AI preparation.
+            if self.fallback_enabled:
+                return self.publish_preparation_fallback(request, context, error)
+            raise
         executed_prompt = prompt
         prompt_bytes = len(executed_prompt.encode("utf-8"))
         prompt_hash = hashlib.sha256(executed_prompt.encode("utf-8")).hexdigest()
@@ -344,10 +418,19 @@ class AIInferenceQueueRunner:
         comparison_repair_error = ""
         comparison_repair_contract_error = ""
         comparison_repair_initial_contract_error = ""
+        fallback_reason = ""
+        ai_attempted = False
         review_context = dict(context)
         review_context["_notificationAiPreparedPrompt"] = prompt
         review_context["_notificationAiPreparedDecisionBrief"] = decision_brief
         try:
+            remaining_seconds = self.remaining_delivery_seconds(request)
+            if remaining_seconds < 5:
+                raise TimeoutError(
+                    "notification AI delivery deadline exceeded before model execution"
+                )
+            review_context["_notificationAiTimeoutSecondsOverride"] = remaining_seconds
+            ai_attempted = True
             response = self.reviewer.review(review_context)
             comparison_repair_contract_error = ai_response_contract_error(context, response)
             comparison_repair_initial_contract_error = comparison_repair_contract_error
@@ -368,10 +451,16 @@ class AIInferenceQueueRunner:
                     "name": "contractRepair",
                     "reasoningEffort": self.comparison_repair_reasoning_effort,
                 }
-                repair_context["_notificationAiTimeoutSecondsOverride"] = (
-                    self.comparison_repair_timeout_seconds
+                repair_remaining = self.remaining_delivery_seconds(request)
+                repair_context["_notificationAiTimeoutSecondsOverride"] = min(
+                    self.comparison_repair_timeout_seconds,
+                    repair_remaining,
                 )
                 try:
+                    if repair_remaining < 5:
+                        raise TimeoutError(
+                            "notification AI delivery deadline exceeded before contract repair"
+                        )
                     repaired = self.reviewer.review(repair_context)
                 except Exception as error:  # noqa: BLE001 - a failed repair becomes an explicit abstention.
                     comparison_repair_error = str(error)[:320]
@@ -410,7 +499,11 @@ class AIInferenceQueueRunner:
 
         if lease_lost.is_set():
             return request.request_id[:8] + " superseded-during-review"
-        if review_error is not None and (self.stopping or request.attempts < self.max_attempts):
+        if (
+            review_error is not None
+            and not self.fallback_on_first_failure
+            and (self.stopping or request.attempts < self.max_attempts)
+        ):
             outcome = self.queue.retry(
                 request,
                 self.worker_id,
@@ -419,19 +512,15 @@ class AIInferenceQueueRunner:
             )
             return request.request_id[:8] + " " + str(outcome.get("status") or "retry")
         if review_error is not None:
-            reasoning_case_id = str(context.get("investmentReasoningCaseId") or "")
-            if reasoning_case_id and self.reasoning_orchestrator is not None:
+            if not self.fallback_enabled:
                 failed = self.storage_call_with_retry(
                     lambda: self.queue.fail(request, self.worker_id, review_error)
                 )
-                if failed:
+                if failed and self.reasoning_orchestrator is not None:
                     self.reasoning_orchestrator.ai_failed(context, str(review_error))
                 return request.request_id[:8] + (" failed" if failed else " lease-lost")
-            response = local_validated_ai_response(context, source="local fallback after max retries")
-            response.validation_warnings.append(
-                "AI 추론이 " + str(request.attempts) + "회 실패해 TypeDB 근거 기반 로컬 설명을 사용했습니다: "
-                + str(review_error)[:240]
-            )
+            fallback_reason = str(review_error)
+            response = typedb_inference_fallback_response(context, review_error)
 
         quality_gate = context.get("ontologyQualityGate")
         if not isinstance(quality_gate, dict):
@@ -446,9 +535,9 @@ class AIInferenceQueueRunner:
             if isinstance(context.get("decisionContinuityPacket"), dict)
             else {}
         )
-        enriched["notificationAiExecutionAudit"] = {
+        execution_audit = {
             "version": "notification-ai-execution-audit-v2",
-            "status": "fallback" if "fallback" in str(response.source or "").lower() else "completed",
+            "status": "typedb-fallback" if fallback_reason else "completed",
             "requestId": request.request_id,
             "notificationJobId": request.notification_job_id,
             "promptVersion": request.prompt_version,
@@ -479,6 +568,12 @@ class AIInferenceQueueRunner:
             ),
             "responseSource": str(response.source or ""),
             "validationState": str(response.validation_state or ""),
+            "aiAttempted": ai_attempted,
+            "fallback": {
+                "used": bool(fallback_reason),
+                "reason": fallback_reason[:500],
+                "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
+            },
             "hypothesisComparisonRepair": {
                 "attempted": comparison_repair_attempted,
                 "succeeded": comparison_repair_succeeded,
@@ -492,6 +587,7 @@ class AIInferenceQueueRunner:
             },
             "latencyMs": latency_ms,
         }
+        enriched["notificationAiExecutionAudit"] = execution_audit
         result = AIInferenceResult.create(
             request,
             response.to_dict(),
@@ -500,19 +596,45 @@ class AIInferenceQueueRunner:
             latency_ms=latency_ms,
             prompt_bytes=prompt_bytes,
         )
-        if self.reasoning_orchestrator is not None:
+        if self.reasoning_orchestrator is not None and not fallback_reason:
             valid, validation_reason = self.reasoning_orchestrator.validate_ai_result(
                 enriched,
                 result,
             )
             if not valid:
-                failed = self.storage_call_with_retry(
-                    lambda: self.queue.fail(request, self.worker_id, validation_reason)
-                )
-                if failed:
-                    self.reasoning_orchestrator.ai_failed(enriched, validation_reason)
-                return request.request_id[:8] + (
-                    " blocked-invalid-reasoning-contract" if failed else " lease-lost"
+                if not self.fallback_enabled:
+                    failed = self.storage_call_with_retry(
+                        lambda: self.queue.fail(request, self.worker_id, validation_reason)
+                    )
+                    if failed:
+                        self.reasoning_orchestrator.ai_failed(enriched, validation_reason)
+                    return request.request_id[:8] + (
+                        " blocked-invalid-reasoning-contract" if failed else " lease-lost"
+                    )
+                fallback_reason = str(validation_reason)
+                response = typedb_inference_fallback_response(context, validation_reason)
+                apply_ontology_quality_gate_to_response(response, quality_gate)
+                episode = None
+                action_plan = None
+                enriched = context_with_validated_ai_response(context, response, self.settings)
+                execution_audit.update({
+                    "status": "typedb-fallback",
+                    "responseSource": str(response.source or ""),
+                    "validationState": str(response.validation_state or ""),
+                    "fallback": {
+                        "used": True,
+                        "reason": fallback_reason[:500],
+                        "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
+                    },
+                })
+                enriched["notificationAiExecutionAudit"] = execution_audit
+                result = AIInferenceResult.create(
+                    request,
+                    response.to_dict(),
+                    source=response.source,
+                    validation_state=response.validation_state,
+                    latency_ms=latency_ms,
+                    prompt_bytes=prompt_bytes,
                 )
         published = self.storage_call_with_retry(
             lambda: self.queue.complete(request, self.worker_id, result, enriched)
@@ -521,13 +643,24 @@ class AIInferenceQueueRunner:
             return request.request_id[:8] + " superseded-before-publish"
         if self.reasoning_orchestrator is not None:
             try:
-                self.storage_call_with_retry(
-                    lambda: self.reasoning_orchestrator.ai_completed(request, enriched, result)
-                )
+                if fallback_reason:
+                    self.storage_call_with_retry(
+                        lambda: self.reasoning_orchestrator.ai_fallback_completed(
+                            request,
+                            enriched,
+                            result,
+                            fallback_reason,
+                        )
+                    )
+                else:
+                    self.storage_call_with_retry(
+                        lambda: self.reasoning_orchestrator.ai_completed(request, enriched, result)
+                    )
             except Exception:  # noqa: BLE001 - notification publication remains authoritative.
                 pass
-        self.persist_decision_episode(request, context, episode, action_plan)
-        fallback = " fallback" if "fallback" in str(response.source or "").lower() else ""
+        if not fallback_reason:
+            self.persist_decision_episode(request, context, episode, action_plan)
+        fallback = " typedb-fallback" if fallback_reason else ""
         return (
             request.request_id[:8]
             + " completed"
@@ -537,6 +670,82 @@ class AIInferenceQueueRunner:
             + " promptBytes="
             + str(prompt_bytes)
         )
+
+    def remaining_delivery_seconds(self, request: AIInferenceRequest) -> int:
+        created_at = _timestamp(getattr(request, "created_at", ""))
+        if created_at is None:
+            return self.delivery_deadline_seconds
+        elapsed = max(0, int((datetime.now(timezone.utc) - created_at).total_seconds()))
+        return max(0, self.delivery_deadline_seconds - elapsed)
+
+    def publish_preparation_fallback(
+        self,
+        request: AIInferenceRequest,
+        context: Dict[str, object],
+        reason: object,
+    ) -> str:
+        """Release graph inference when AI context or prompt preparation fails."""
+
+        response = typedb_inference_fallback_response(context, reason)
+        quality_gate = context.get("ontologyQualityGate")
+        if not isinstance(quality_gate, dict):
+            quality_gate = ontology_quality_gate_context(context, self.settings)
+            context["ontologyQualityGate"] = quality_gate
+        apply_ontology_quality_gate_to_response(response, quality_gate)
+        enriched = context_with_validated_ai_response(context, response, self.settings)
+        fallback_reason = str(reason or "AI preparation failed")
+        enriched["notificationAiExecutionAudit"] = {
+            "version": "notification-ai-execution-audit-v2",
+            "status": "typedb-fallback",
+            "requestId": request.request_id,
+            "notificationJobId": request.notification_job_id,
+            "promptVersion": request.prompt_version,
+            "model": request.model,
+            "reasoningEffort": request.reasoning_effort,
+            "promptHash": "",
+            "promptBytes": 0,
+            "prompt": "",
+            "decisionBriefVersion": "",
+            "decisionBrief": {},
+            "executionProfile": dict(context.get("notificationAiExecutionProfile") or {}),
+            "responseSource": str(response.source or ""),
+            "validationState": str(response.validation_state or ""),
+            "aiAttempted": False,
+            "fallback": {
+                "used": True,
+                "stage": "ai-preparation",
+                "reason": fallback_reason[:500],
+                "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
+            },
+            "latencyMs": 0,
+        }
+        result = AIInferenceResult.create(
+            request,
+            response.to_dict(),
+            source=response.source,
+            validation_state=response.validation_state,
+            latency_ms=0,
+            prompt_bytes=0,
+        )
+        published = self.storage_call_with_retry(
+            lambda: self.queue.complete(request, self.worker_id, result, enriched)
+        )
+        if not published:
+            return request.request_id[:8] + " superseded-before-publish"
+        if self.reasoning_orchestrator is not None:
+            try:
+                self.storage_call_with_retry(
+                    lambda: self.reasoning_orchestrator.ai_fallback_completed(
+                        request,
+                        enriched,
+                        result,
+                        fallback_reason,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - notification publication remains authoritative.
+                pass
+        return request.request_id[:8] + " completed typedb-fallback preparation"
+
     def heartbeat_loop(self, request_id: str, stop_event: threading.Event, lease_lost: threading.Event) -> None:
         while not stop_event.wait(self.heartbeat_seconds):
             try:

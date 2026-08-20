@@ -716,6 +716,18 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("[관계 추론]", message)
         self.assertNotIn("[AI]", message)
 
+    def test_typedb_fallback_is_labeled_as_typedb_not_ai(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+
+        message = execution_telegram_message(
+            context,
+            local_validated_ai_response(context, source="TypeDB inference fallback"),
+        )
+
+        self.assertIn("[TypeDB 추론]", message)
+        self.assertNotIn("[AI]", message)
+
     def test_notification_ai_prompt_excludes_copied_full_evidence_payloads(self):
         context = entry_context()
         oversized_evidence = {

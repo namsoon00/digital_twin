@@ -42,10 +42,10 @@ class AiModelPolicyTests(unittest.TestCase):
             planning_command,
         ]:
             command.assert_called_once_with()
-            notification_command.assert_called_once_with(reasoning_effort="max")
+            notification_command.assert_called_once_with(reasoning_effort="high")
         notification_reviewer.primary.command_factory(reasoning_effort="max")
         self.assertEqual(
-            [call(reasoning_effort="max"), call(reasoning_effort="max")],
+            [call(reasoning_effort="high"), call(reasoning_effort="max")],
             notification_command.call_args_list,
         )
 

@@ -3198,7 +3198,9 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
         response.hypotheses
         and str(response.hypothesis_comparison_state or "").strip().lower() != "completed"
     )
-    if source.startswith("local"):
+    if "typedb" in source and "fallback" in source:
+        marker = "[TypeDB 추론]"
+    elif source.startswith("local"):
         marker = "[관계 추론]"
     elif comparison_incomplete:
         marker = "[AI 안전 보류]" if str(response.action or "").upper() == "HOLD" else "[AI 조건부]"

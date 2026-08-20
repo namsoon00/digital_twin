@@ -153,19 +153,22 @@ def notification_ai_execution_profile(
         "0", "false", "no", "off", "disabled",
     }
     profile = AI_PROFILE_DEEP_RESEARCH if deep_enabled and deep_reasons else AI_PROFILE_STANDARD
+    configured_effort = settings.get("notificationAiReasoningEffort")
     if profile == AI_PROFILE_DEEP_RESEARCH:
-        effort = _reasoning_effort(settings.get("notificationAiDeepReasoningEffort"), "max")
-        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 20 * 1024, 16 * 1024, 20 * 1024)
+        effort = _reasoning_effort(
+            configured_effort or settings.get("notificationAiDeepReasoningEffort"),
+            "high",
+        )
+        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 16 * 1024, 16 * 1024, 20 * 1024)
     else:
         effort = _reasoning_effort(
-            settings.get("notificationAiReasoningEffort")
-            or settings.get("notificationAiStandardReasoningEffort"),
-            "max",
+            configured_effort or settings.get("notificationAiStandardReasoningEffort"),
+            "high",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 16 * 1024, 12 * 1024, 16 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 14 * 1024, 12 * 1024, 16 * 1024)
     queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 24 * 1024, 12 * 1024, 24 * 1024)
     return {
-        "version": "notification-ai-execution-profile-v1",
+        "version": "notification-ai-execution-profile-v2",
         "name": profile,
         "reasoningEffort": effort,
         "maxPromptBytes": min(prompt_bytes, queue_limit),

@@ -703,6 +703,8 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "notificationAiReasoningEffort",
         "notificationAiTimeoutSeconds",
         "notificationAiDeliveryDeadlineSeconds",
+        "notificationAiTypeDbFallbackEnabled",
+        "notificationAiFallbackOnFirstFailure",
         "notificationAiComparisonRepairReasoningEffort",
         "notificationAiComparisonRepairTimeoutSeconds",
         "notificationAiQueueWorkerCount",

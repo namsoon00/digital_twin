@@ -484,6 +484,47 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual(CASE_BLOCKED, blocked.stage)
         self.assertIn("hypothesis set is empty", blocked.errors[-1]["reason"])
 
+    def test_ai_failure_can_publish_the_existing_typedb_inference(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+                "relationCount": 3,
+                "traceCount": 2,
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [hypothesis_candidate()])
+        orchestrator.ai_queued(reasoning_case.case_id, "ai-request:fallback", "notification:fallback")
+
+        validated = orchestrator.ai_fallback_completed(
+            SimpleNamespace(
+                request_id="ai-request:fallback",
+                notification_job_id="notification:fallback",
+            ),
+            {"investmentReasoningCaseId": reasoning_case.case_id},
+            SimpleNamespace(response={"action": "WATCH"}),
+            "AI request timed out",
+        )
+
+        self.assertEqual(CASE_VALIDATED, validated.stage)
+        self.assertEqual("WATCH", validated.final_decision.action)
+        self.assertEqual("typedb-inference-fallback", validated.final_decision.source)
+        self.assertEqual("reference-only", validated.final_decision.validation_state)
+        self.assertFalse(validated.final_decision.published)
+        published = orchestrator.notification_published({
+            "investmentReasoningCaseId": reasoning_case.case_id,
+        })
+        self.assertEqual(CASE_PUBLISHED, published.stage)
+        self.assertTrue(published.final_decision.published)
+
 
 if __name__ == "__main__":
     unittest.main()

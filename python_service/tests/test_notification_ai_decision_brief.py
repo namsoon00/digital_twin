@@ -129,10 +129,10 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         deep = notification_ai_execution_profile(decision_context("act", "new-condition"), {})
 
         self.assertEqual("standard", standard["name"])
-        self.assertEqual("max", standard["reasoningEffort"])
-        self.assertEqual(16 * 1024, standard["maxPromptBytes"])
+        self.assertEqual("high", standard["reasoningEffort"])
+        self.assertEqual(14 * 1024, standard["maxPromptBytes"])
         self.assertEqual("deepResearch", deep["name"])
-        self.assertEqual("max", deep["reasoningEffort"])
+        self.assertEqual("high", deep["reasoningEffort"])
         self.assertGreater(deep["maxPromptBytes"], standard["maxPromptBytes"])
 
     def test_mixed_competing_evidence_uses_deep_research_profile(self):

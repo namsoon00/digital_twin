@@ -398,6 +398,50 @@ class InvestmentReasoningOrchestrator:
         self.repository.save(reasoning_case)
         return reasoning_case
 
+    def ai_fallback_completed(
+        self,
+        request,
+        context: Mapping[str, object],
+        result,
+        reason: str,
+    ) -> Optional[ReasoningCase]:
+        """Complete the case with a TypeDB-only publication when AI is unavailable."""
+
+        case_id = self.case_id_from_context(context)
+        if not case_id:
+            return None
+        reasoning_case = self.required(case_id)
+        payload = dict(getattr(result, "response", {}) or {})
+        action = str(payload.get("action") or "HOLD").upper()
+        if action not in {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID", "WATCH"}:
+            action = "HOLD"
+        reasoning_case.ai_request_id = str(getattr(request, "request_id", "") or "")
+        reasoning_case.notification_job_id = str(
+            getattr(request, "notification_job_id", "") or ""
+        )
+        reasoning_case.record_error(CASE_AI_PENDING, str(reason or "AI unavailable"), False)
+        reasoning_case.final_decision = FinalDecision(
+            action=action,
+            source="typedb-inference-fallback",
+            selected_hypothesis_id="",
+            validation_state="reference-only",
+            reason="AI를 사용하지 못해 TypeDB 추론 결과만 발송했습니다.",
+            notification_job_id=reasoning_case.notification_job_id,
+            published=False,
+        )
+        if reasoning_case.stage in {
+            CASE_HYPOTHESES_READY,
+            CASE_DECISION_SYNTHESIZED,
+            CASE_AI_PENDING,
+        }:
+            reasoning_case.transition(
+                CASE_VALIDATED,
+                "typedb-inference-fallback-ready",
+                {"aiAvailable": False},
+            )
+        self.repository.save(reasoning_case)
+        return reasoning_case
+
     def complete_without_ai(self, case_id: str, reason: str, source: str = "typedb-shadow") -> ReasoningCase:
         reasoning_case = self.required(case_id)
         if reasoning_case.stage == CASE_INFERENCE_COMPLETED:

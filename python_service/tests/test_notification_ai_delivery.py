@@ -45,6 +45,15 @@ def watchlist_context(ai_kind="unchanged", material_sources=None):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
+    def test_typedb_fallback_is_sent_even_when_final_action_is_unchanged(self):
+        context = watchlist_context()
+        context["notificationAiExecutionAudit"] = {"status": "typedb-fallback"}
+
+        decision = final_ai_delivery_decision(context)
+
+        self.assertEqual("send", decision["decision"])
+        self.assertTrue(decision["typedbFallback"])
+
     def test_candidate_only_watchlist_change_is_suppressed(self):
         decision = final_ai_delivery_decision(watchlist_context())
 

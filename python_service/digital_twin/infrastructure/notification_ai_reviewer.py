@@ -160,11 +160,11 @@ def notification_ai_reviewer_from_settings(
     settings = settings or runtime_settings()
     use_codex = str(settings.get("notificationAiUseCodex") or os.environ.get("NOTIFICATION_AI_USE_CODEX") or "1").strip() != "0"
     reasoning_effort = str(
-        settings.get("notificationAiStandardReasoningEffort")
-        or os.environ.get("NOTIFICATION_AI_STANDARD_REASONING_EFFORT")
-        or settings.get("notificationAiReasoningEffort")
+        settings.get("notificationAiReasoningEffort")
         or os.environ.get("NOTIFICATION_AI_REASONING_EFFORT")
-        or "max"
+        or settings.get("notificationAiStandardReasoningEffort")
+        or os.environ.get("NOTIFICATION_AI_STANDARD_REASONING_EFFORT")
+        or "high"
     ).strip().lower()
     try:
         configured_timeout = int(

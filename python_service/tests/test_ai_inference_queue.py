@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.ai_inference_queue_service import AIInferenceQueueRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
@@ -218,6 +219,137 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
+
+    def test_ai_timeout_releases_typedb_fallback_without_retry(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        self.queue.enqueue(job, request)
+
+        class TimeoutReviewer:
+            calls = 0
+
+            def review(self, _context):
+                self.calls += 1
+                raise TimeoutError("notification AI command exceeded 120 seconds")
+
+        reviewer = TimeoutReviewer()
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            reviewer,
+            {
+                "notificationAiTypeDbFallbackEnabled": "1",
+                "notificationAiFallbackOnFirstFailure": "1",
+                "notificationAiQueueMaxAttempts": "2",
+                "notificationAiDeliveryDeadlineSeconds": "120",
+            },
+            worker_id="worker-timeout-fallback",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+
+        delivered = self.notifications.get(job.job_id)
+        self.assertEqual(1, reviewer.calls)
+        self.assertEqual("pending", delivered.status)
+        self.assertEqual("completed", delivered.context["notificationAiQueue"]["status"])
+        self.assertEqual("typedb-fallback", delivered.context["notificationAiExecutionAudit"]["status"])
+        self.assertEqual(
+            "TypeDB inference fallback",
+            delivered.context["notificationAiValidatedResponse"]["source"],
+        )
+        self.assertIn("typedb-fallback", runner.last_run_details[0])
+
+    def test_expired_queue_deadline_skips_ai_and_releases_typedb_fallback(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        request.created_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=5)
+        ).isoformat().replace("+00:00", "Z")
+        request.updated_at = request.created_at
+        request.available_at = request.created_at
+        self.queue.enqueue(job, request)
+
+        class UnexpectedReviewer:
+            def review(self, _context):
+                raise AssertionError("expired work must not start an AI process")
+
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            UnexpectedReviewer(),
+            {
+                "notificationAiTypeDbFallbackEnabled": "1",
+                "notificationAiDeliveryDeadlineSeconds": "60",
+            },
+            worker_id="worker-expired-fallback",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        delivered = self.notifications.get(job.job_id)
+        self.assertEqual("pending", delivered.status)
+        self.assertFalse(delivered.context["notificationAiExecutionAudit"]["aiAttempted"])
+        self.assertIn("deadline", delivered.context["notificationAiExecutionAudit"]["fallback"]["reason"])
+
+    def test_invalid_ai_contract_releases_typedb_fallback(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        self.queue.enqueue(job, request)
+
+        class RejectingOrchestrator:
+            fallback_calls = 0
+
+            def validate_ai_result(self, _context, _result):
+                return False, "AI selected hypothesis is not present in the TypeDB hypothesis set."
+
+            def ai_fallback_completed(self, *_args):
+                self.fallback_calls += 1
+
+        orchestrator = RejectingOrchestrator()
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            FakeReviewer(),
+            {"notificationAiTypeDbFallbackEnabled": "1"},
+            reasoning_orchestrator=orchestrator,
+            worker_id="worker-contract-fallback",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        delivered = self.notifications.get(job.job_id)
+        self.assertEqual("pending", delivered.status)
+        self.assertEqual(1, orchestrator.fallback_calls)
+        self.assertEqual("typedb-fallback", delivered.context["notificationAiExecutionAudit"]["status"])
+        self.assertIn(
+            "가설·행동 계약",
+            delivered.context["notificationAiValidatedResponse"]["summary"],
+        )
+
+    def test_prompt_preparation_failure_releases_typedb_fallback(self):
+        job = self.create_job()
+        job.context["notificationAiExecutionProfile"] = {
+            "name": "standard",
+            "reasoningEffort": "high",
+            "maxPromptBytes": "invalid",
+        }
+        self.notifications.upsert_job(job)
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        self.queue.enqueue(job, request)
+
+        class UnexpectedReviewer:
+            def review(self, _context):
+                raise AssertionError("AI must not run after prompt preparation fails")
+
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            UnexpectedReviewer(),
+            {"notificationAiTypeDbFallbackEnabled": "1"},
+            worker_id="worker-preparation-fallback",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        delivered = self.notifications.get(job.job_id)
+        audit = delivered.context["notificationAiExecutionAudit"]
+        self.assertEqual("pending", delivered.status)
+        self.assertEqual("typedb-fallback", audit["status"])
+        self.assertEqual("ai-preparation", audit["fallback"]["stage"])
+        self.assertFalse(audit["aiAttempted"])
 
     def test_result_publication_retries_storage_timeout_without_repeating_ai_review(self):
         job = self.create_job()

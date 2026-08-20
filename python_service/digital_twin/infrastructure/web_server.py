@@ -3473,8 +3473,16 @@ def investment_calendar_service():
     return build_investment_calendar_service(runtime_settings(), event_publisher=RealtimeEventBridge())
 
 
+def investment_calendar_read_service():
+    return build_investment_calendar_service(operational_read_settings(), event_publisher=EventBus())
+
+
 def investment_calendar_candidate_service():
     return build_investment_calendar_candidate_service(runtime_settings(), event_publisher=RealtimeEventBridge())
+
+
+def investment_calendar_candidate_read_service():
+    return build_investment_calendar_candidate_service(operational_read_settings(), event_publisher=EventBus())
 
 
 def investment_calendar_research_service():
@@ -3498,7 +3506,7 @@ def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, 
 
 
 def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    return investment_calendar_service().list_events(investment_calendar_query_payload(query))
+    return investment_calendar_read_service().list_events(investment_calendar_query_payload(query))
 
 
 def save_investment_calendar_event_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -3530,7 +3538,7 @@ def investment_calendar_candidates_query_payload(query: Dict[str, List[str]]) ->
 
 
 def investment_calendar_candidates_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    return investment_calendar_candidate_service().list_candidates(investment_calendar_candidates_query_payload(query))
+    return investment_calendar_candidate_read_service().list_candidates(investment_calendar_candidates_query_payload(query))
 
 
 def research_investment_calendar_candidates_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -6141,7 +6149,15 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         data = file_path.read_bytes()
         etag = '"' + hashlib.sha256(data).hexdigest()[:20] + '"'
-        cache_control = "no-cache" if file_path.name in {"index.html", "service-worker.js", "manifest.webmanifest"} else "public, max-age=31536000, immutable"
+        mutable_app_assets = {
+            "index.html",
+            "service-worker.js",
+            "manifest.webmanifest",
+            "app.js",
+            "app-default-settings.js",
+            "styles.css",
+        }
+        cache_control = "no-cache" if file_path.name in mutable_app_assets else "public, max-age=31536000, immutable"
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)
             self.send_header("ETag", etag)

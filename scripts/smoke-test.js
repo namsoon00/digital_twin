@@ -287,6 +287,24 @@ function checkWorkflowConsoleContract() {
       && serviceWorker.indexOf('SKIP_WAITING') >= 0,
     "앱 셸 오프라인 재진입, API 캐시 제외 또는 업데이트 적용 계약이 없습니다."
   );
+  const appAssetVersion = (indexHtml.match(/app\.js\?v=([^"']+)/) || [])[1] || "";
+  const serviceWorkerVersion = (code.match(/service-worker\.js\?v=([^"']+)/) || [])[1] || "";
+  assertOk(
+    appAssetVersion
+      && appAssetVersion === serviceWorkerVersion
+      && serviceWorker.indexOf("isMutableAppAsset") >= 0
+      && serviceWorker.indexOf('cache.put(request, copy)') >= 0
+      && webServer.indexOf('"app.js",') >= 0
+      && webServer.indexOf('"styles.css",') >= 0,
+    "앱 셸 핵심 자산의 버전 동기화 또는 네트워크 우선 갱신 계약이 없습니다."
+  );
+  assertOk(
+    webServer.indexOf("def investment_calendar_read_service") >= 0
+      && webServer.indexOf("def investment_calendar_candidate_read_service") >= 0
+      && webServer.indexOf("investment_calendar_read_service().list_events") >= 0
+      && webServer.indexOf("investment_calendar_candidate_read_service().list_candidates") >= 0,
+    "캘린더 GET API가 읽기 전용 운영 경로를 사용하지 않습니다."
+  );
   assertOk(
     code.indexOf("function registerOrbitAlphaServiceWorker") >= 0
       && code.indexOf('window.addEventListener("beforeinstallprompt"') >= 0

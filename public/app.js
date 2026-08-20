@@ -1913,7 +1913,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260818-decision-validation-nav-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260820-calendar-recovery-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -9199,7 +9199,11 @@
     render();
     var promise = isStaticPreviewHost()
       ? Promise.resolve(staticInvestmentCalendarPayload("정적 미리보기"))
-      : requestJson("/api/investment-calendar/events" + investmentCalendarQueryString());
+      : requestJson("/api/investment-calendar/events" + investmentCalendarQueryString(), {
+          key: "investment-calendar-events",
+          timeoutMs: 8000,
+          force: Boolean(force)
+        });
     return promise
       .then(function (payload) {
         state.investmentCalendar = payload;
@@ -9226,7 +9230,11 @@
     if (!incrementalLoad) render();
     var promise = isStaticPreviewHost()
       ? Promise.resolve(staticInvestmentCalendarCandidatesPayload())
-      : requestJson("/api/investment-calendar/candidates" + investmentCalendarCandidateQueryString());
+      : requestJson("/api/investment-calendar/candidates" + investmentCalendarCandidateQueryString(), {
+          key: "investment-calendar-candidates",
+          timeoutMs: 8000,
+          force: Boolean(force)
+        });
     return promise
       .then(function (payload) {
         var requestedPage = requestedCandidatePage;

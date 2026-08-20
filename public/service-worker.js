@@ -1,12 +1,12 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260818-decision-validation-nav-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260820-calendar-recovery-v1";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css",
-  "./app-default-settings.js",
-  "./app.js",
+  "./styles.css?v=20260820-calendar-recovery-v1",
+  "./app-default-settings.js?v=20260820-calendar-recovery-v1",
+  "./app.js?v=20260820-calendar-recovery-v1",
   "./vendor/lightweight-charts.standalone.production.js",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",
@@ -65,6 +65,24 @@ self.addEventListener("fetch", function (event) {
         return caches.match("./index.html").then(function (response) {
           return response || caches.match("./");
         });
+      })
+    );
+    return;
+  }
+
+  const isMutableAppAsset = ["/app.js", "/app-default-settings.js", "/styles.css"].some(function (pathname) {
+    return url.pathname.endsWith(pathname);
+  });
+  if (isMutableAppAsset) {
+    event.respondWith(
+      fetch(request).then(function (response) {
+        if (response && response.ok) {
+          var copy = response.clone();
+          caches.open(SHELL_CACHE).then(function (cache) { cache.put(request, copy); });
+        }
+        return response;
+      }).catch(function () {
+        return caches.match(request);
       })
     );
     return;

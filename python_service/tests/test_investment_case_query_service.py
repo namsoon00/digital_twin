@@ -11,6 +11,7 @@ from digital_twin.domain.investment_case import (
 def episode(
     episode_id="decision-episode:1",
     *,
+    account_id="default",
     action="HOLD",
     validation_state="ready",
     decided_at="2026-08-20T02:00:00Z",
@@ -18,7 +19,7 @@ def episode(
 ):
     return {
         "episodeId": episode_id,
-        "accountId": "default",
+        "accountId": account_id,
         "symbol": "AAPL",
         "subjectName": "Apple",
         "action": action,
@@ -58,13 +59,13 @@ class FakeDecisionStore:
         self.head_reads += 1
         rows = self.rows
         if account_id:
-            rows = [row for row in rows if row["accountId"] == account_id]
+            rows = [row for row in rows if row.get("accountId", "") == account_id]
         if symbol:
             rows = [row for row in rows if row["symbol"] == symbol]
         seen = set()
         result = []
         for row in rows:
-            key = (row["accountId"], row["symbol"])
+            key = (row.get("accountId", ""), row["symbol"])
             if key in seen:
                 continue
             seen.add(key)
@@ -75,7 +76,7 @@ class FakeDecisionStore:
         self.history_reads += 1
         rows = self.rows
         if account_id:
-            rows = [row for row in rows if row["accountId"] == account_id]
+            rows = [row for row in rows if row.get("accountId", "") == account_id]
         if symbol:
             rows = [row for row in rows if row["symbol"] == symbol]
         return rows[:limit]
@@ -151,6 +152,34 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             result["evidence"]["missingData"],
         )
         self.assertEqual("generation:1", result["traceRefs"]["inferenceGenerationId"])
+
+    def test_detail_resolves_default_case_for_legacy_empty_account_rows(self):
+        row = episode(account_id="")
+        store = FakeDecisionStore([row])
+        service = InvestmentCaseQueryService(store)
+
+        result = service.detail(investment_case_id("default", "AAPL"))
+        history = service.history(investment_case_id("default", "AAPL"))
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("default", result["accountId"])
+        self.assertEqual(1, history["count"])
+
+    def test_detail_resolves_legacy_flow_link(self):
+        row = episode()
+        row["flowId"] = "flow:legacy-link"
+        service = InvestmentCaseQueryService(FakeDecisionStore([row]))
+
+        result = service.detail("flow:legacy-link")
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(investment_case_id("default", "AAPL"), result["caseId"])
+
+    def test_missing_case_returns_actionable_error(self):
+        result = InvestmentCaseQueryService(FakeDecisionStore([])).detail("case:missing")
+
+        self.assertEqual("not-found", result["status"])
+        self.assertIn("목록을 새로고침", result["error"])
 
     def test_history_reports_action_and_validation_transitions_latest_first(self):
         latest = episode("decision-episode:new", action="BUY", validation_state="ready", decided_at="2026-08-20T03:00:00Z")

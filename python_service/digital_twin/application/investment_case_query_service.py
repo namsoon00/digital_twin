@@ -131,18 +131,15 @@ class InvestmentCaseQueryService:
         episode, head = self._resolve(case_id)
         if not episode or not head:
             return self._not_found(case_id)
-        reader = getattr(self.decision_episode_store, "list", None)
-        if not callable(reader):
+        bounded_limit = max(1, min(200, int(limit or 30)))
+        rows = self._history_rows(head.account_id, head.symbol, bounded_limit)
+        if not rows and head.account_id == "default":
+            rows = [
+                row for row in self._history_rows("", head.symbol, bounded_limit)
+                if investment_case_snapshot(row).account_id == "default"
+            ]
+        if not rows:
             rows = [episode]
-        else:
-            try:
-                rows = list(reader(
-                    account_id=head.account_id,
-                    symbol=head.symbol,
-                    limit=max(1, min(200, int(limit or 30))),
-                ) or [])
-            except TypeError:
-                rows = list(reader(head.account_id, head.symbol, max(1, min(200, int(limit or 30)))) or [])
         snapshots = [investment_case_snapshot(row) for row in rows]
         snapshots.sort(key=lambda item: (item.decided_at, item.episode_id), reverse=True)
         items = [
@@ -188,15 +185,46 @@ class InvestmentCaseQueryService:
             return None, None
         if key.startswith("decision-episode:") or key.startswith("episode:"):
             episode = self.flow_service._episode(key)
-            return (episode, investment_case_snapshot(episode)) if episode else (None, None)
+            return self._resolved_pair(episode)
         identity = parse_investment_case_id(key)
         if identity:
             rows = self.flow_service._episodes(identity["accountId"], identity["symbol"], 1)
-            if rows:
-                snapshot = investment_case_snapshot(rows[0])
-                episode = self.flow_service._episode(snapshot.episode_id) or rows[0]
-                return episode, investment_case_snapshot(episode)
+            for row in rows:
+                if investment_case_snapshot(row).case_id == key:
+                    return self._resolved_pair(row)
+
+            # "default" is the public account label, while older persisted rows
+            # may still contain an empty account id. Resolve by the canonical id
+            # instead of making a stale link fail after a read-model migration.
+            rows = self.flow_service._episodes("", identity["symbol"], 500)
+            for row in rows:
+                if investment_case_snapshot(row).case_id == key:
+                    return self._resolved_pair(row)
+
+        # Investment-flow links existed before the stable case contract. Keep
+        # those URLs usable so an open mobile tab survives an app deployment.
+        if key.startswith("flow:"):
+            for row in self.flow_service._episodes("", "", 500):
+                payload = item_dict(row)
+                if text(payload.get("flowId") or payload.get("flow_id")) == key:
+                    return self._resolved_pair(row)
         return None, None
+
+    def _resolved_pair(self, row: object) -> Tuple[object, object]:
+        if not row:
+            return None, None
+        snapshot = investment_case_snapshot(row)
+        episode = self.flow_service._episode(snapshot.episode_id) or row
+        return episode, investment_case_snapshot(episode)
+
+    def _history_rows(self, account_id: str, symbol: str, limit: int) -> List[object]:
+        reader = getattr(self.decision_episode_store, "list", None)
+        if not callable(reader):
+            return []
+        try:
+            return list(reader(account_id=account_id, symbol=symbol, limit=limit) or [])
+        except TypeError:
+            return list(reader(account_id, symbol, limit) or [])
 
     def _operator_view(self, flow_items: Iterable[Dict[str, object]]) -> Dict[str, object]:
         stage_counts = defaultdict(Counter)
@@ -244,4 +272,5 @@ class InvestmentCaseQueryService:
             "status": "not-found",
             "readOnly": True,
             "caseId": text(case_id),
+            "error": "투자 케이스가 갱신되었거나 현재 목록에 없습니다. 목록을 새로고침해 주세요.",
         }

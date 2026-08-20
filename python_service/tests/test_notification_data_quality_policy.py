@@ -601,13 +601,14 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("stale", decision.status)
         self.assertEqual(["KIS price"], decision.stale_sources)
 
-    def test_notification_runner_sends_investment_insight_with_stale_data_advisory(self):
+    def test_notification_runner_suppresses_stale_investment_insight_and_requests_refresh(self):
         job = NotificationJob.create(
             "오래된 투자 알림",
             account_id="main",
             message_type=INVESTMENT_INSIGHT,
             context={
                 "messageType": INVESTMENT_INSIGHT,
+                "rawSymbol": "005930",
                 "dataFreshness": {
                     "source": "KIS price",
                     "stage": "price",
@@ -653,14 +654,11 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertEqual(1, runner.run_once())
-        self.assertEqual(1, len(sent))
-        self.assertEqual("done", job.status)
-        self.assertEqual([], rechecks)
-        advisory = job.context["investmentInsightFreshnessAdvisory"]
-        self.assertTrue(advisory["blockingDisabled"])
-        self.assertEqual("발송 직전", advisory["stage"])
-        self.assertEqual("stale", advisory["status"])
-        self.assertNotIn("deliverySuppressionReason", job.context)
+        self.assertEqual([], sent)
+        self.assertEqual("suppressed", job.status)
+        self.assertEqual([("main", "005930", job.job_id)], rechecks)
+        self.assertEqual("stale_data_recheck_requested", job.context["deliverySuppressionReason"])
+        self.assertEqual("stale", job.context["dataFreshnessStatus"])
 
     def test_operational_delivery_types_are_separate_from_investment_messages(self):
         self.assertTrue(is_operations_delivery_message_type(WORK_HANDOFF))

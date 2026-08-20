@@ -9,6 +9,7 @@ from .decision_evidence_contract import (
     decision_readiness_contract,
     hypothesis_set_evidence_summary,
     material_action_transition_contract,
+    minimum_hypothesis_comparison_count,
     temporal_evidence_summary,
 )
 from .decision_follow_up import normalize_follow_up_conditions
@@ -2141,12 +2142,11 @@ def validated_response_from_payload(
     epistemic_summary = str(hypothesis_comparison.get("epistemicSummary") or "")
     evidence_summary = dict(hypothesis_comparison.get("decisionEvidenceSummary") or {})
     hypothesis_set = hypothesis_context_payload(context)
-    try:
-        minimum_comparison_count = int(float(str(hypothesis_set.get("minimumComparisonCount") or 3)))
-    except (TypeError, ValueError):
-        minimum_comparison_count = 3
-    minimum_comparison_count = max(1, min(6, minimum_comparison_count))
-    if int(evidence_summary.get("eligibleFamilyCount") or len(hypotheses)) < minimum_comparison_count:
+    minimum_comparison_count = minimum_hypothesis_comparison_count(hypothesis_set)
+    if (
+        minimum_comparison_count > 0
+        and int(evidence_summary.get("eligibleFamilyCount") or len(hypotheses)) < minimum_comparison_count
+    ):
         warnings.append(
             "판단 가능한 독립 경쟁 가설군이 "
             + str(minimum_comparison_count)

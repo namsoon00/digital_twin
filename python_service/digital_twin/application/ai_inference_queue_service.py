@@ -136,6 +136,20 @@ def ai_response_contract_error(context: Dict[str, object], response) -> str:
         }
         if allowed_actions and action not in allowed_actions:
             return "The selected action is outside the routed TypeDB action envelope."
+        explicit_abstention = (
+            not hypothesis_ids
+            and hypothesis_set.get("comparisonRequired") is False
+            and str(hypothesis_set.get("minimumComparisonCount") or "0") == "0"
+        )
+        if explicit_abstention:
+            if selected_id:
+                return "selectedHypothesisId is not present in the empty routed TypeDB hypothesis set."
+            if getattr(response, "hypotheses", None):
+                return "AI returned hypotheses when the routed TypeDB hypothesis set is empty."
+            # The compact routed DecisionCore is authoritative. An empty set
+            # is a valid abstention contract, not a reason to fall through to
+            # a legacy synthesis that requires a selected hypothesis.
+            return ""
         if hypothesis_ids and (allowed_actions or blocked_actions):
             return ""
 

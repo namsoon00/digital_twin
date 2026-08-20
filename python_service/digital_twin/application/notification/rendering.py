@@ -1,12 +1,23 @@
 """Notification document rendering orchestration."""
 
+import html
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Callable, Dict
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
+from ...domain.context_observation_notifications import (
+    is_typedb_context_observation_notification,
+    typedb_context_observation_contract,
+)
+from ...domain.message_types import INVESTMENT_INSIGHT
+from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from ...domain.notification_ai_gate_validation import local_validated_ai_response
+from ...domain.notification_explanation import INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
 from ...domain.notifications import NotificationJob, notification_debug_number
+from ..notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
 
 
 class NotificationRenderingService:
@@ -28,6 +39,7 @@ class NotificationRenderingService:
         self.apply_send_time_context(job)
         if self.context_enricher:
             self.context_enricher(job)
+        self.apply_investment_presentation_contract(job)
         rendered = (
             str(self.template_renderer(job) or "").strip()
             if self.template_renderer
@@ -36,15 +48,86 @@ class NotificationRenderingService:
         if rendered:
             job.text = rendered
             context = dict(job.context or {})
+            is_investment = str(job.message_type or "") == INVESTMENT_INSIGHT
             context["notificationPresentationAudit"] = {
-                "version": "notification-presentation-v2",
-                "detailLevel": str(context.get("notificationDetailLevel") or "full"),
+                "version": (
+                    INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
+                    if is_investment
+                    else "notification-presentation-v2"
+                ),
+                "detailLevel": str(
+                    context.get("notificationDetailLevel")
+                    or ("concise" if is_investment else "full")
+                ),
+                "decisionContractVersion": str(
+                    ((context.get("notificationAiPromptAudit") or {}).get("promptRelease") or {}).get("contractVersion")
+                    or ""
+                ),
+                "promptVersion": str(
+                    ((context.get("notificationAiExecutionAudit") or {}).get("promptRelease") or {}).get("version")
+                    or (context.get("notificationAiExecutionAudit") or {}).get("promptVersion")
+                    or ""
+                ),
                 "renderedBytes": len(rendered.encode("utf-8")),
                 "renderedSha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
                 "detailUrl": str(context.get("notificationDetailUrl") or ""),
             }
             job.context = context
         return rendered
+
+    @staticmethod
+    def apply_investment_presentation_contract(job: NotificationJob) -> None:
+        """Render every investment insight through one versioned document contract."""
+
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return
+        context = dict(job.context or {})
+        context.setdefault("messageType", INVESTMENT_INSIGHT)
+        context.setdefault("notificationDetailLevel", "concise")
+        validated = context.get("notificationAiValidatedResponse")
+        if isinstance(validated, dict) and validated:
+            response = NotificationAIValidatedResponse.from_dict(validated)
+            mode = "ai-or-typedb-validated"
+        else:
+            observation = typedb_context_observation_contract(context)
+            response = local_validated_ai_response(
+                context,
+                source=(
+                    "TypeDB context observation"
+                    if observation
+                    else "TypeDB deterministic presentation"
+                ),
+            )
+            if observation:
+                label = str(observation.get("selectedRuleLabel") or "참고 관계").strip()
+                response.investment_view = (
+                    "TypeDB가 '" + label
+                    + "' 관계를 참고 신호로 확인했습니다. 이 알림 자체는 매수·매도 판단이 아닙니다."
+                )
+                response.summary = "TypeDB 참고 관계가 새로 확인됐습니다. 투자 행동은 변경하지 않습니다."
+                response.current_action_plan = "현재 주문 행동은 변경하지 않고 관계의 다음 변화를 관찰합니다."
+                response.execution_decision = response.current_action_plan
+                response.hypotheses = []
+                response.selected_hypothesis_id = ""
+                response.hypothesis_comparison_state = "not-required"
+                response.hypothesis_selection_source = "not-required"
+                response.decision_abstention = {}
+            mode = (
+                "typedb-context-observation"
+                if observation
+                else "typedb-deterministic"
+            )
+        rendered = prepend_execution_start_badge(
+            execution_telegram_message(context, response),
+            context,
+        )
+        context.update({
+            "telegramMessage": rendered,
+            "readableMessage": html.unescape(re.sub(r"<[^>]+>", "", rendered)),
+            "notificationPresentationContractVersion": INVESTMENT_NOTIFICATION_PRESENTATION_VERSION,
+            "notificationPresentationMode": mode,
+        })
+        job.context = context
 
     def apply_send_time_context(self, job: NotificationJob) -> None:
         now = self.now_provider()

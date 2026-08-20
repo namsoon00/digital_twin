@@ -3,7 +3,10 @@ import unittest
 import json
 from datetime import datetime, timedelta, timezone
 
-from digital_twin.application.ai_inference_queue_service import AIInferenceQueueRunner
+from digital_twin.application.ai_inference_queue_service import (
+    AIInferenceQueueRunner,
+    ai_response_contract_error,
+)
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.ai_inference_queue import AIInferenceRequest
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
@@ -42,6 +45,48 @@ class FakeReviewer:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
+    def test_empty_routed_hypothesis_set_is_a_valid_abstention_contract(self):
+        context = {
+            "_notificationAiPreparedDecisionCore": {
+                "hypothesisSet": {
+                    "hypotheses": [],
+                    "comparisonRequired": False,
+                    "minimumComparisonCount": 0,
+                },
+                "decision": {
+                    "actionEnvelope": {
+                        "allowedActions": ["HOLD", "AVOID"],
+                        "blockedActions": ["BUY", "ADD", "TRIM", "SELL"],
+                    }
+                },
+            }
+        }
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            selected_hypothesis_id="",
+            hypotheses=[],
+        )
+
+        self.assertEqual("", ai_response_contract_error(context, response))
+
+    def test_empty_routed_hypothesis_set_rejects_invented_hypothesis(self):
+        context = {
+            "_notificationAiPreparedDecisionCore": {
+                "hypothesisSet": {
+                    "hypotheses": [],
+                    "comparisonRequired": False,
+                    "minimumComparisonCount": 0,
+                },
+                "decision": {"actionEnvelope": {"allowedActions": ["HOLD"]}},
+            }
+        }
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            selected_hypothesis_id="hypothesis:invented",
+        )
+
+        self.assertIn("empty routed TypeDB hypothesis set", ai_response_contract_error(context, response))
+
     def test_superseded_lease_stops_the_active_ai_process(self):
         class Queue:
             def heartbeat(self, *_args):
@@ -446,6 +491,16 @@ class AIInferenceQueueTests(unittest.TestCase):
             "hypothesisSetId": "set:1",
             "hypotheses": hypotheses,
         }
+        job.context["ontologyRelationContext"]["activeRules"] = [
+            {
+                "ruleId": rule_id,
+                "evidenceState": {
+                    "evidenceUsableForJudgement": True,
+                    "inferenceEligibilityStatus": "eligible",
+                },
+            }
+            for rule_id in ["rule:risk", "rule:support"]
+        ]
         self.notifications.upsert_job(job)
         request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
         self.queue.enqueue(job, request)
@@ -508,11 +563,26 @@ class AIInferenceQueueTests(unittest.TestCase):
     def test_completed_comparison_with_invalid_action_envelope_is_repaired(self):
         job = self.create_job()
         hypotheses = [
-            {"hypothesisId": "hypothesis:risk"},
-            {"hypothesisId": "hypothesis:support"},
+            {"hypothesisId": "hypothesis:risk", "supportingRuleIds": ["rule:risk"]},
+            {"hypothesisId": "hypothesis:support", "supportingRuleIds": ["rule:support"]},
         ]
         job.context["ontologyRelationContext"]["hypothesisSet"] = {
             "hypotheses": hypotheses,
+        }
+        job.context["ontologyRelationContext"]["activeRules"] = [
+            {
+                "ruleId": rule_id,
+                "evidenceState": {
+                    "evidenceUsableForJudgement": True,
+                    "inferenceEligibilityStatus": "eligible",
+                },
+            }
+            for rule_id in ["rule:risk", "rule:support"]
+        ]
+        job.context["ontologyRelationContext"]["actionEnvelope"] = {
+            "allowedActions": ["HOLD"],
+            "blockedActions": ["BUY"],
+            "drivingRuleIds": ["rule:risk", "rule:support"],
         }
         job.context["investmentReasoningCase"] = {
             "caseId": "case:envelope",

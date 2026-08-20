@@ -751,7 +751,11 @@ class DecisionEpisode:
             question_id=str(hypothesis_payload.get("questionId") or hypothesis_payload.get("question_id") or question.question_id),
             hypotheses=hypotheses,
             comparison_required=bool(hypothesis_payload.get("comparisonRequired", True)),
-            minimum_comparison_count=int(hypothesis_payload.get("minimumComparisonCount") or 3),
+            minimum_comparison_count=int(
+                hypothesis_payload.get("minimumComparisonCount")
+                if hypothesis_payload.get("minimumComparisonCount") not in (None, "")
+                else (0 if hypothesis_payload.get("comparisonRequired") is False else 3)
+            ),
             inference_generation_id=str(hypothesis_payload.get("inferenceGenerationId") or ""),
             families=families,
             market_hypotheses=market_hypotheses,

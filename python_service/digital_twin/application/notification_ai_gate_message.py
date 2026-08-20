@@ -10,6 +10,10 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
 from ..domain.alert_formatting import compact_number, price_money, signed_pct, trade_strength_label
 from ..domain.company_knowledge import active_company_valuation_rule_ids
+from ..domain.context_observation_notifications import (
+    is_typedb_context_observation_notification,
+    typedb_context_observation_contract,
+)
 from ..domain.notification_ai import criterion_lines, notification_ai_prompt_context, relation_context_value
 from ..domain.notification_ai_context import active_rule_items, relation_facts
 from ..domain.notification_ai_context import is_watchlist_context
@@ -886,6 +890,12 @@ def action_headline(response: NotificationAIValidatedResponse, context: Dict[str
     return investment_action_title(response.action, is_watchlist_context(context or {})) or response.action_label or "대응 기준 점검"
 
 def execution_headline(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    observation = typedb_context_observation_contract(context or {})
+    if observation:
+        target = target_name_for_headline(
+            context.get("displayTarget") or context.get("target") or context.get("title") or ""
+        )
+        return " ".join(part for part in ["🔎", ((target + " · ") if target else "") + "관계 변화 관찰"] if part)
     presentation_context = dict(context or {})
     presentation_context["notificationAiValidatedResponse"] = response.to_dict()
     headline = investment_notification_title(
@@ -3003,6 +3013,8 @@ def _notification_selected_inference_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
 ) -> List[str]:
+    if is_typedb_context_observation_notification(context or {}):
+        return full_typedb_competing_inference_rows(context, response)[:2]
     relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
     envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
     readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
@@ -3050,7 +3062,6 @@ def execution_telegram_message_progressive(
     unsupported = compact_provider_unsupported_line(context)
     if unsupported:
         warnings.append(unsupported)
-    section_labels = compact_decision_section_labels(context, response)
     packet = build_notification_explanation_packet(
         detail_level=detail_level,
         action=compact_sentence_count(compact_current_action_line(context, response), 1),
@@ -3083,9 +3094,9 @@ def execution_telegram_message_progressive(
     if packet.current_flow:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in packet.current_flow]])
     if packet.evidence:
-        parts.extend(["", "<b>" + section_labels["support"] + "</b>", *[_html_bullet(row, level) for row in packet.evidence]])
+        parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in packet.evidence]])
     if packet.counter_evidence:
-        parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
+        parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
     if packet.inference:
         parts.extend(["", "<b>TypeDB 핵심 추론</b>", *[_html_bullet(row, level) for row in packet.inference]])
     if packet.company_value:
@@ -3145,9 +3156,9 @@ def execution_telegram_message_compact_beginner(
     if reasons:
         parts.extend(["", "<b>" + section_labels["reason"] + "</b>", *[_html_bullet(item, level) for item in reasons]])
     evidence_rows = full_decision_evidence_rows(context, response)
-    parts.extend(["", "<b>" + section_labels["support"] + "</b>", *[_html_bullet(row, level) for row in evidence_rows]])
+    parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
     counter_rows = full_decision_evidence_rows(context, response, counter=True)
-    parts.extend(["", "<b>" + section_labels["counter"] + "</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
     assessment_rows = typedb_decision_assessment_rows(context)
@@ -3200,7 +3211,9 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
         response.hypotheses
         and str(response.hypothesis_comparison_state or "").strip().lower() != "completed"
     )
-    if "typedb" in source and "fallback" in source:
+    if is_typedb_context_observation_notification(context or {}):
+        marker = "[TypeDB 관찰]"
+    elif source.startswith("typedb"):
         marker = "[TypeDB 추론]"
     elif source.startswith("local"):
         marker = "[관계 추론]"
@@ -3208,6 +3221,8 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
         marker = "[AI 안전 보류]" if str(response.action or "").upper() == "HOLD" else "[AI 조건부]"
     else:
         marker = "[AI]"
+    if is_typedb_context_observation_notification(context or {}):
+        return marker + " 매수·매도 행동은 변경하지 않고 관계의 다음 변화를 관찰합니다."
     action = str(response.action or "").strip().upper()
     watchlist = is_watchlist_context(context)
     explicit_actions = {
@@ -3492,8 +3507,11 @@ def compact_execution_flow_line(context: Dict[str, object]) -> str:
 
 
 def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
-    current = _plain_value(context, "현재가")
-    pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
+    facts = relation_facts(context or {})
+    current_price = _number(facts.get("currentPrice"))
+    currency = str(facts.get("currency") or ("USD" if str(facts.get("market") or "").upper() == "US" else "KRW"))
+    current = price_money(current_price, currency) if current_price > 0 else _plain_value(context, "현재가")
+    pnl = "" if is_watchlist_context(context or {}) else (_plain_value(context, "수익률") or _plain_value(context, "손익"))
     trend = _plain_value(context, "추세") or _compact_trend_from_facts(context)
     rows = []
     if current:
@@ -3502,7 +3520,6 @@ def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
         rows.append("수익률 " + pnl)
     if trend:
         rows.append("가격 흐름: " + compact_sentence_count(trend, 1))
-    facts = relation_facts(context or {})
     volume = _number(facts.get("volume"))
     volume_ratio = _number(facts.get("volumeRatio"))
     if volume > 0:
@@ -3988,6 +4005,13 @@ def full_typedb_competing_inference_rows(
     limit: int = 6,
 ) -> List[str]:
     relation = relation_context_value(context or {})
+    observation = typedb_context_observation_contract(context or {})
+    if observation:
+        label = str(observation.get("selectedRuleLabel") or "참고 관계").strip()
+        return [
+            "TypeDB 참고 규칙: " + label,
+            "이 규칙은 관계 변화를 설명하지만 매수·매도 행동을 선택하지 않습니다.",
+        ]
     rows: List[str] = []
     comparison_labels = {
         "completed": "대안 판단 비교 완료",

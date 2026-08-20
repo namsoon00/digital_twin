@@ -110,7 +110,10 @@ class NotificationDispatchEligibilityService:
         job.context = sanitize_notification_context_for_freshness(context, decision, now=now)
         if decision.should_send:
             return True
-        if str(job.message_type or "") == INVESTMENT_INSIGHT:
+        stale_investment_blocking = str(
+            self.settings.get("notificationInvestmentInsightStaleBlockingEnabled", "1")
+        ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        if str(job.message_type or "") == INVESTMENT_INSIGHT and not stale_investment_blocking:
             context = dict(job.context or {})
             context["dataFreshnessDecision"] = "advisory"
             context["investmentInsightFreshnessAdvisory"] = {
@@ -138,7 +141,10 @@ class NotificationDispatchEligibilityService:
         if not self.ai_defer_predicate(job):
             return True
         context = dict(job.context or {})
-        if str(job.message_type or "") == INVESTMENT_INSIGHT:
+        stale_investment_blocking = str(
+            self.settings.get("notificationInvestmentInsightStaleBlockingEnabled", "1")
+        ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        if str(job.message_type or "") == INVESTMENT_INSIGHT and not stale_investment_blocking:
             context["aiFreshnessHeadroomGate"] = {
                 "version": "ai-freshness-headroom-v1",
                 "decision": "advisory",

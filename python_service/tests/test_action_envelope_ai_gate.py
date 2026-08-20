@@ -529,11 +529,11 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertIn("[AI] 지금은 매수하지 않고 관심종목으로 유지합니다.", message)
         self.assertIn("<b>후보와 최종 판단</b>", message)
         self.assertIn("진입 후보는 성립했지만 추가 확인 조건을 반영한 최종 행동은 관심 유지입니다.", message)
-        self.assertIn("<b>진입 후보를 지지한 근거</b>", message)
-        self.assertIn("<b>관심 유지를 선택한 근거</b>", message)
+        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("<b>반대 근거</b>", message)
         self.assertLess(
-            message.index("<b>관심 유지를 선택한 근거</b>"),
-            message.index("<b>진입 후보를 지지한 근거</b>"),
+            message.index("<b>핵심 근거</b>"),
+            message.index("<b>반대 근거</b>"),
         )
         self.assertIn("TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
         self.assertNotIn("TypeDB 행동 후보 관심 유지 · AI 최종 의견 관심 유지", message)

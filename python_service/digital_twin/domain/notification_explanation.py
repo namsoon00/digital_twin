@@ -4,6 +4,7 @@ from typing import Dict, Iterable, Tuple
 
 
 DEFAULT_NOTIFICATION_DETAIL_LEVEL = "concise"
+INVESTMENT_NOTIFICATION_PRESENTATION_VERSION = "investment-notification-presentation-v1"
 NOTIFICATION_DETAIL_LEVELS = {
     "concise": {
         "label": "간결",

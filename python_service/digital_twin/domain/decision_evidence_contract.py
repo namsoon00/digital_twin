@@ -284,6 +284,20 @@ def _hypothesis_set_from_relation(relation: Mapping[str, object]) -> Dict[str, o
     return _mapping(brain.get("hypothesisSet")) or _mapping(relation.get("hypothesisSet"))
 
 
+def minimum_hypothesis_comparison_count(hypothesis_set: Mapping[str, object]) -> int:
+    """Preserve an explicit zero for observation or abstention contracts."""
+
+    payload = _mapping(hypothesis_set)
+    raw = payload.get("minimumComparisonCount")
+    if raw in (None, ""):
+        raw = 0 if payload.get("comparisonRequired") is False else 3
+    try:
+        value = int(float(str(raw)))
+    except (TypeError, ValueError):
+        value = 0 if payload.get("comparisonRequired") is False else 3
+    return max(0, min(6, value))
+
+
 def decision_readiness_contract(context_or_relation: Mapping[str, object]) -> Dict[str, object]:
     """Compute the maximum executable readiness from graph-owned evidence."""
 
@@ -298,11 +312,7 @@ def decision_readiness_contract(context_or_relation: Mapping[str, object]) -> Di
             "reasons": ["current context has no versioned hypothesis set"],
         }
     evidence = hypothesis_set_evidence_summary(hypothesis_set)
-    try:
-        minimum = int(float(str(hypothesis_set.get("minimumComparisonCount") or 3)))
-    except (TypeError, ValueError):
-        minimum = 3
-    minimum = max(1, min(6, minimum))
+    minimum = minimum_hypothesis_comparison_count(hypothesis_set)
     envelope = _action_envelope(relation)
     data_readiness = _mapping(envelope.get("dataReadiness"))
     eligible_rule_ids = _eligible_rule_ids(relation)

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.application.notification_ai_gate_message import execution_telegram_message
+from digital_twin.application.notification.rendering import NotificationRenderingService
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_explanation import build_notification_explanation_packet
@@ -82,6 +83,117 @@ class NotificationExplanationTests(unittest.TestCase):
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("네 번째 이후 근거", message)
         self.assertEqual(1, message.count("현재가가 20일 평균 위에 있습니다."))
+
+    def test_dispatch_rebuilds_legacy_investment_message_with_stable_contract(self):
+        job = NotificationJob.create(
+            "legacy message that must not be sent",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "title": "NVIDIA 알림",
+                "displayTarget": "NVIDIA / NVDA",
+                "telegramMessage": "<b>관계 규칙</b>\nlegacy duplicate",
+                "rawLines": ["현재가: 226.17", "수익률: 0%"],
+                "ontologyRelationContext": {
+                    "targetRole": "watchlist",
+                    "subject": {"symbol": "NVDA", "name": "NVIDIA"},
+                    "facts": {"currentPrice": 226.17, "currency": "USD", "market": "US"},
+                    "matchedRules": [{"label": "기간 회복이 유지됨"}],
+                },
+            },
+        )
+        renderer = NotificationRenderingService(
+            template_renderer=lambda target: target.context["telegramMessage"],
+            now_provider=lambda: datetime(2026, 8, 14, 1, 0, tzinfo=timezone.utc),
+        )
+
+        message = renderer.render(job)
+
+        self.assertIn("<b>지금 행동</b>", message)
+        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("$226.17", message)
+        self.assertNotIn("수익률 0%", message)
+        self.assertNotIn("<b>관계 규칙</b>", message)
+        self.assertEqual(
+            "investment-notification-presentation-v1",
+            job.context["notificationPresentationAudit"]["version"],
+        )
+        self.assertEqual("typedb-deterministic", job.context["notificationPresentationMode"])
+
+    def test_operational_message_keeps_operational_presentation_audit(self):
+        job = NotificationJob.create(
+            "운영 알림",
+            account_id="main",
+            message_type="workHandoff",
+            context={},
+        )
+        renderer = NotificationRenderingService(
+            now_provider=lambda: datetime(2026, 8, 14, 1, 0, tzinfo=timezone.utc),
+        )
+
+        renderer.render(job)
+
+        self.assertEqual("notification-presentation-v2", job.context["notificationPresentationAudit"]["version"])
+        self.assertEqual("full", job.context["notificationPresentationAudit"]["detailLevel"])
+
+    def test_context_observation_is_presented_as_typedb_reference_not_ai_failure(self):
+        rule = {
+            "ruleId": "graph.context.observation.v1",
+            "label": "가격 관계 변화 관찰",
+            "knowledgeBasis": {
+                "ruleKind": "context-observation",
+                "decisionEligibility": "reference-only",
+                "requiresHypothesis": False,
+            },
+        }
+        job = NotificationJob.create(
+            "legacy observation",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "title": "NAVER",
+                "displayTarget": "NAVER / 035420",
+                "rawLines": ["현재가: 219500"],
+                "ontologyRelationContext": {
+                    "subject": {"symbol": "035420", "name": "NAVER", "market": "KR"},
+                    "facts": {"currentPrice": 219500, "currency": "KRW", "market": "KR"},
+                    "source": "typedbInferenceBox",
+                    "graphStore": "typedb",
+                    "graphStoreUsed": True,
+                    "sourceAboxSnapshotId": "abox:1",
+                    "inferenceGenerationId": "generation:1",
+                    "generationAligned": True,
+                    "activeRules": [rule],
+                    "matchedRules": [rule],
+                    "decision": {
+                        "selectedRuleId": rule["ruleId"],
+                        "basis": "typedbInferenceBox",
+                    },
+                    "graphStoreInference": {
+                        "graphStore": "typedb",
+                        "sourceAboxSnapshotId": "abox:1",
+                        "inferenceGenerationId": "generation:1",
+                        "relations": [rule],
+                        "traces": [{"id": "trace:1", **rule}],
+                    },
+                },
+            },
+        )
+        renderer = NotificationRenderingService(
+            template_renderer=lambda target: target.context["telegramMessage"],
+            now_provider=lambda: datetime(2026, 8, 14, 1, 0, tzinfo=timezone.utc),
+        )
+
+        message = renderer.render(job)
+
+        self.assertIn("관계 변화 관찰", message)
+        self.assertIn("[TypeDB 관찰]", message)
+        self.assertIn("매수·매도 판단이 아닙니다", message)
+        self.assertIn("TypeDB 참고 규칙: 가격 관계 변화 관찰", message)
+        self.assertNotIn("AI 안전 보류", message)
+        self.assertNotIn("AI 설명 비교", message)
 
     def test_concise_notification_keeps_foreign_and_institution_flow(self):
         context = {

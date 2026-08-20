@@ -107,7 +107,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("suppress", decision["decision"])
         self.assertEqual("graph_candidate_only_change", decision["suppressionReason"])
 
-    def test_nearly_expired_investment_snapshot_is_advisory_before_ai_queue(self):
+    def test_nearly_expired_investment_snapshot_is_refreshed_before_ai_queue(self):
         queue = SuppressionQueue()
         requested = []
         runner = NotificationQueueRunner(
@@ -135,11 +135,11 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         allowed = runner.apply_ai_freshness_headroom_gate(job)
 
-        self.assertTrue(allowed)
-        self.assertEqual([], requested)
-        self.assertEqual("advisory", job.context["aiFreshnessHeadroomGate"]["decision"])
-        self.assertTrue(job.context["aiFreshnessHeadroomGate"]["blockingDisabled"])
-        self.assertNotIn("deliverySuppressionReason", job.context)
+        self.assertFalse(allowed)
+        self.assertEqual(["005930"], requested)
+        self.assertEqual("refresh", job.context["aiFreshnessHeadroomGate"]["decision"])
+        self.assertEqual("ai_freshness_headroom_recheck", job.context["deliverySuppressionReason"])
+        self.assertIn("데이터 유효시간", queue.reason)
 
 
 if __name__ == "__main__":

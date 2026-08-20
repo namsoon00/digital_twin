@@ -576,6 +576,7 @@
     strategyProposals: null,
     strategyProposalsLoading: false,
     strategyProposalsLoaded: false,
+    strategyProposalsDetailLevel: "",
     strategyProposalsError: "",
     strategyProposalAction: "",
     activeStrategyProposalId: "",
@@ -3266,6 +3267,7 @@
       if (!state.serverSettingsLoaded && !state.serverSettingsLoading) loadServerSettings();
       if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
       if (!state.ontologyReasoningStatusLoaded && !state.ontologyReasoningStatusLoading) loadOntologyReasoningStatus(false);
+      if (!state.portfolioLifecycle && !state.portfolioLifecycleLoading) loadPortfolioLifecycle(false);
     }
     if (active === "experiments" && state.validationAudience === "operator") {
       if (!state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) loadOntologyExperiments(false);
@@ -3274,7 +3276,7 @@
     }
     if (active === "modeling" || active === "experiments") {
       if ((!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) loadInvestmentFlow(false);
-      if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) loadStrategyProposals(false);
+      if (shouldLoadStrategyProposals() && strategyProposalsNeedLoad() && !state.strategyProposalsLoading) loadStrategyProposals(false);
       if (shouldLoadHypothesisWorkspace() && !state.hypothesisWorkspaceLoaded && !state.hypothesisWorkspaceLoading) loadHypothesisWorkspace(false);
       if (shouldLoadOntologyInferenceLedger() && !state.ontologyInferenceLedgerLoaded && !state.ontologyInferenceLedgerLoading) loadOntologyInferenceLedger(false);
       if (shouldLoadOntologyStrategyDetail() && !snapshotHasFullOntologyDetail(state.snapshot) && !state.ontologyStrategyDetailLoading) loadOntologyStrategyDetail(false);
@@ -6045,10 +6047,25 @@
   }
 
   function shouldLoadStrategyProposals() {
-    if (state.activeTab === "experiments") return true;
+    if (state.activeTab === "experiments") return state.validationAudience === "operator";
     if (state.activeTab !== "modeling") return false;
     var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
     return section === "overview" || section === "graphs" || section === "proposals";
+  }
+
+  function strategyProposalsDesiredDetailLevel() {
+    if (state.activeTab === "experiments" && state.validationAudience === "operator") return "full";
+    if (state.workDetailLayer && state.workDetailLayer.type === "strategy-proposals-board") return "full";
+    if (state.activeTab === "modeling") {
+      var section = activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection));
+      if (section === "proposals") return "full";
+    }
+    return "summary";
+  }
+
+  function strategyProposalsNeedLoad() {
+    if (!state.strategyProposalsLoaded) return true;
+    return strategyProposalsDesiredDetailLevel() === "full" && state.strategyProposalsDetailLevel !== "full";
   }
 
   function shouldLoadHypothesisWorkspace() {
@@ -6834,17 +6851,24 @@
   }
 
   function loadStrategyProposals(force) {
+    var detailLevel = strategyProposalsDesiredDetailLevel();
     if (isStaticPreviewHost()) {
       state.strategyProposals = { proposals: [], count: 0, summary: { count: 0, statuses: {} } };
       state.strategyProposalsLoaded = true;
+      state.strategyProposalsDetailLevel = detailLevel;
       state.strategyProposalsError = "";
       return Promise.resolve(state.strategyProposals);
     }
     if (state.strategyProposalsLoading && !force) return Promise.resolve(state.strategyProposals);
     state.strategyProposalsLoading = true;
     state.strategyProposalsError = "";
+    var listPath = "/api/investment-strategy-proposals?limit=200"
+      + (detailLevel === "summary" ? "&summary=1" : "");
     return Promise.all([
-      requestJson("/api/investment-strategy-proposals"),
+      requestJson(listPath, {
+        key: "investment-strategy-proposals:" + detailLevel,
+        force: Boolean(force)
+      }),
       requestJson("/api/investment-strategy-proposals/status")
     ])
       .then(function (results) {
@@ -6857,6 +6881,7 @@
           summary: statusPayload
         });
         state.strategyProposalsLoaded = true;
+        state.strategyProposalsDetailLevel = listPayload.detailLevel || detailLevel;
         if (!strategyProposalById(state.activeStrategyProposalId) && proposals.length) {
           state.activeStrategyProposalId = proposals[0].id || "";
         }
@@ -11020,7 +11045,6 @@
         state.error = "";
         writeCachedSnapshot(snapshot);
         primeActiveTabData(state.activeTab);
-        loadPortfolioLifecycle(false);
       })
       .catch(function (error) {
         state.error = error.message;
@@ -11468,13 +11492,16 @@
     if (state.activeTab === "settings" && !state.ontologyReasoningStatusLoaded && !state.ontologyReasoningStatusLoading) {
       loadOntologyReasoningStatus(false);
     }
+    if (state.activeTab === "settings" && !state.portfolioLifecycle && !state.portfolioLifecycleLoading) {
+      loadPortfolioLifecycle(false);
+    }
     if (state.activeTab === "experiments" && state.validationAudience === "operator" && !state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) {
       loadOntologyExperiments(false);
     }
     if (state.activeTab === "experiments" && state.validationAudience === "operator" && !state.hypothesisDevelopmentLoaded && !state.hypothesisDevelopmentLoading) {
       loadHypothesisDevelopment(false);
     }
-    if (shouldLoadStrategyProposals() && !state.strategyProposalsLoaded && !state.strategyProposalsLoading) {
+    if (shouldLoadStrategyProposals() && strategyProposalsNeedLoad() && !state.strategyProposalsLoading) {
       loadStrategyProposals(false);
     }
     if ((state.activeTab === "modeling" || state.activeTab === "experiments") && (!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) {

@@ -35,6 +35,41 @@ class ProjectionRunStore:
 
 
 class OntologyInferenceLedgerApiTests(unittest.TestCase):
+    def test_execution_history_summary_keeps_visible_fields_and_omits_raw_detail(self):
+        history = web_server.compact_reasoning_execution_history({
+            "status": "ok",
+            "runCount": 1,
+            "runs": [{
+                "runId": "run-1",
+                "lane": "CORE_REASONING",
+                "privateAudit": {"large": [1, 2, 3]},
+                "stages": [{
+                    "stageKey": "rulebox-selection",
+                    "status": "ok",
+                    "durationMs": 12,
+                    "detail": {
+                        "candidateRuleCount": 10,
+                        "executedRuleCount": 8,
+                        "deferredRuleCount": 2,
+                        "rawCandidates": [{"large": True}],
+                    },
+                }],
+                "rules": [{
+                    "ruleId": "rule-1",
+                    "status": "ok",
+                    "durationMs": 4,
+                    "detail": {"large": [1, 2, 3]},
+                }],
+            }],
+        })
+
+        self.assertEqual("summary", history["detailLevel"])
+        run = history["runs"][0]
+        self.assertNotIn("privateAudit", run)
+        self.assertEqual(10, run["stages"][0]["detail"]["candidateRuleCount"])
+        self.assertNotIn("rawCandidates", run["stages"][0]["detail"])
+        self.assertNotIn("detail", run["rules"][0])
+
     def test_default_request_returns_mysql_read_model_without_waiting_for_typedb(self):
         cache = FakeReadModelCache({
             "payload": {},

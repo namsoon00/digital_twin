@@ -1502,7 +1502,7 @@ def ontology_inference_graph_read_model(
     limit: int,
     world_id: str,
 ) -> Dict[str, object]:
-    settings = runtime_settings()
+    settings = runtime_settings(fast_operational_read=True)
     repo = ontology_repository_from_settings(settings)
     errors = []
     try:
@@ -1545,10 +1545,85 @@ def ontology_inference_graph_read_model(
     }
 
 
+def compact_reasoning_stage_detail(stage_key: str, detail: object) -> Dict[str, object]:
+    value = detail if isinstance(detail, dict) else {}
+    key = str(stage_key or "")
+    if key == "source-fact-capture":
+        return {
+            "changedFieldsBySymbol": dict(value.get("changedFieldsBySymbol") or {}),
+            "factTypes": list(value.get("factTypes") or []),
+        }
+    if key == "abox-scope-selection":
+        return {
+            "selectedScopeCount": value.get("selectedScopeCount"),
+            "deferredScopeCount": value.get("deferredScopeCount"),
+            "factSlotFamilies": list(value.get("factSlotFamilies") or []),
+            "selectedScopes": [{
+                field: scope.get(field)
+                for field in ("symbol", "scopeFamily", "scopeId", "reasons")
+                if field in scope
+            } for scope in value.get("selectedScopes") or [] if isinstance(scope, dict)],
+        }
+    if key == "abox-persistence":
+        return {
+            "scopeCount": value.get("scopeCount"),
+            "scopes": [{
+                field: scope.get(field)
+                for field in ("symbol", "scopeFamily", "scopeId", "requested", "inserted", "reused")
+                if field in scope
+            } for scope in value.get("scopes") or [] if isinstance(scope, dict)],
+        }
+    if key == "rulebox-selection":
+        return {
+            field: value.get(field)
+            for field in ("candidateRuleCount", "executedRuleCount", "deferredRuleCount")
+            if field in value
+        }
+    return {}
+
+
+def compact_reasoning_execution_history(history: object) -> Dict[str, object]:
+    payload = dict(history or {}) if isinstance(history, dict) else {}
+    compact_runs = []
+    for raw_run in payload.get("runs") or []:
+        if not isinstance(raw_run, dict):
+            continue
+        stages = []
+        for raw_stage in raw_run.get("stages") or []:
+            if not isinstance(raw_stage, dict):
+                continue
+            stage_key = str(raw_stage.get("stageKey") or "")
+            stages.append({
+                field: raw_stage.get(field)
+                for field in (
+                    "stageKey", "status", "durationMs",
+                )
+                if field in raw_stage
+            } | {"detail": compact_reasoning_stage_detail(stage_key, raw_stage.get("detail"))})
+        rules = [{
+            field: raw_rule.get(field)
+            for field in (
+                "ruleId", "status", "selectedReason", "durationMs", "failureReason",
+            )
+            if field in raw_rule
+        } for raw_rule in raw_run.get("rules") or [] if isinstance(raw_rule, dict)]
+        compact_runs.append({
+            field: raw_run.get(field)
+            for field in (
+                "runId", "worldId", "accountId", "inferenceGenerationId", "lane", "updatedAt",
+            )
+            if field in raw_run
+        } | {"stages": stages, "rules": rules})
+    payload["runs"] = compact_runs
+    payload["detailLevel"] = "summary"
+    payload["fullDetailAvailable"] = True
+    return payload
+
+
 def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     from ..domain.ontology_rule_audit import rule_audit_payload
 
-    settings = runtime_settings()
+    settings = operational_read_settings()
     symbols = ontology_audit_symbols(query)
     limit = safe_int(first_query(query, "limit"), 80, 1, 300)
     world_id = ontology_world_id_from_query(query)
@@ -1583,12 +1658,17 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
     payload["worldId"] = world_id
     try:
         execution_store = stores.ontology_projection_run_store(settings)
-        payload["executionHistory"] = execution_store.execution_trace(
+        execution_history = execution_store.execution_trace(
             run_id=str(first_query(query, "runId") or ""),
             account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
             world_id=world_id,
             limit=safe_int(first_query(query, "runLimit"), 12, 1, 50),
         )
+        if str(first_query(query, "historyDetail") or "summary").strip().lower() != "full":
+            execution_history = compact_reasoning_execution_history(execution_history)
+        elif isinstance(execution_history, dict):
+            execution_history["detailLevel"] = "full"
+        payload["executionHistory"] = execution_history
         payload["ruleRuntimeSummary"] = execution_store.rule_runtime_summary(
             account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
             world_id=world_id,

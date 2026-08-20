@@ -6302,7 +6302,8 @@
   }
 
   function shouldLoadOntologyInferenceLedger() {
-    return state.activeTab === "modeling" || state.activeTab === "experiments";
+    if (state.activeTab !== "modeling") return false;
+    return activeSectionForPageMode("modeling", strategySections, normalizeStrategySection(state.activeStrategySection)) === "trace";
   }
 
   function ontologyInferenceLedgerPath() {

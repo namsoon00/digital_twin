@@ -29,6 +29,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
     for rule in rules:
         execution_profile = rule_execution_profile(rule)
         domain_manifest = rule_domain_manifest(rule, execution=execution_profile)
+        knowledge_basis = rule.resolved_knowledge_basis.to_dict()
         rule_id = entity_id("rule", rule.rule_id)
         graph.entities.append(OntologyEntity(rule_id, rule.label, "rule", rulebox_properties({
             "tboxClass": "GraphInferenceRule",
@@ -48,6 +49,11 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "costHint": execution_profile["costHint"],
             "executionProfile": execution_profile,
             "domainManifest": domain_manifest,
+            "knowledgeBasis": knowledge_basis,
+            "ruleKind": knowledge_basis["ruleKind"],
+            "theoryFamily": knowledge_basis["theoryFamily"],
+            "thesisFamily": knowledge_basis["thesisFamily"],
+            "knowledgeValidationStatus": knowledge_basis["validationStatus"],
             "assessmentScope": domain_manifest["assessmentScope"],
             "triggerFamilies": domain_manifest["triggerFamilies"],
             "requiredFacts": domain_manifest["requiredFacts"],

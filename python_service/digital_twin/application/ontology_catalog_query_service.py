@@ -9,6 +9,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..domain.ontology_rule_manifest import rule_domain_manifest
 from ..domain.ontology_schema import ontology_tbox
+from ..domain.ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_knowledge_basis, rule_knowledge_basis_from_rows
 
 
 ONTOLOGY_CATALOG_VERSION = "ontology-catalog-v1"
@@ -256,6 +257,7 @@ class OntologyCatalogQueryService:
         manifest = item_dict(raw.get("domain_manifest") or raw.get("domainManifest"))
         if not manifest:
             manifest = rule_domain_manifest(raw)
+        knowledge_basis = resolved_rule_knowledge_basis(raw).to_dict()
         return {
             "id": rule_id,
             "type": "rule",
@@ -279,6 +281,13 @@ class OntologyCatalogQueryService:
             "assessmentScope": text(manifest.get("assessmentScope")),
             "triggerFamilies": list_values(manifest.get("triggerFamilies")),
             "lifecycleClass": text(manifest.get("lifecycleClass")),
+            "knowledgeBasis": knowledge_basis,
+            "ruleKind": text(knowledge_basis.get("ruleKind")),
+            "theoryFamily": text(knowledge_basis.get("theoryFamily")),
+            "thesisFamily": text(knowledge_basis.get("thesisFamily")),
+            "knowledgeValidationStatus": text(knowledge_basis.get("validationStatus")),
+            "decisionEligibility": text(knowledge_basis.get("decisionEligibility")),
+            "requiresHypothesis": bool(knowledge_basis.get("requiresHypothesis")),
             "conditions": conditions,
             "derivations": derivations,
         }
@@ -372,6 +381,10 @@ class OntologyCatalogQueryService:
         ]
         deployment = self.tbox_deployment()
         rulebox_meta, rules = self.rulebox()
+        rule_knowledge_summary = knowledge_basis_summary([
+            resolved_rule_knowledge_basis(item)
+            for item in rules
+        ])
         relation_ids = {text(item.get("id")) for item in relations}
         undefined_rule_relations = sorted({
             relation_type
@@ -433,6 +446,7 @@ class OntologyCatalogQueryService:
             },
             "deployedTBox": deployment,
             "rulebox": rulebox_meta,
+            "ruleKnowledge": rule_knowledge_summary,
             "hypotheses": hypotheses,
             "inferencebox": inference,
             "counts": {
@@ -471,6 +485,9 @@ class OntologyCatalogQueryService:
         account_id: str = "",
         market_id: str = "",
         world_id: str = "",
+        rule_kind: str = "",
+        theory_family: str = "",
+        validation_status: str = "",
     ) -> Dict[str, object]:
         section_id = lower(section)
         if section_id not in CATALOG_SECTIONS:
@@ -486,6 +503,12 @@ class OntologyCatalogQueryService:
             if enabled in {"true", "false"}:
                 expected = enabled == "true"
                 rows = [row for row in rows if bool(row.get("enabled")) is expected]
+            if rule_kind:
+                rows = [row for row in rows if text(row.get("ruleKind")) == rule_kind]
+            if theory_family:
+                rows = [row for row in rows if text(row.get("theoryFamily")) == theory_family]
+            if validation_status:
+                rows = [row for row in rows if text(row.get("knowledgeValidationStatus")) == validation_status]
             payload = self._paged_static(section_id, rows, query, offset, page_limit)
             payload["items"] = [
                 {key: value for key, value in row.items() if key not in {"conditions", "derivations"}}
@@ -554,6 +577,7 @@ class OntologyCatalogQueryService:
         row = item_dict(raw)
         lifecycle_key = text(row.get("lifecycleKey") or row.get("lifecycle_key"))
         source_rule_ids = list_values(row.get("sourceRuleIds") or row.get("source_rule_ids"))
+        knowledge_basis = rule_knowledge_basis_from_rows(source_rule_ids[0], [row]).to_dict() if source_rule_ids else {}
         return {
             "id": lifecycle_key,
             "type": "hypothesis",
@@ -572,6 +596,10 @@ class OntologyCatalogQueryService:
             "inferenceGenerationId": text(row.get("inferenceGenerationId") or row.get("inference_generation_id")),
             "sourceRuleIds": source_rule_ids,
             "linkStatus": "linked" if source_rule_ids else "detail-required",
+            "knowledgeBasis": knowledge_basis,
+            "theoryFamily": text(knowledge_basis.get("theoryFamily")),
+            "thesisFamily": text(knowledge_basis.get("thesisFamily")),
+            "knowledgeValidationStatus": text(knowledge_basis.get("validationStatus")),
         }
 
     def _inference_page(self, query: str, offset: int, limit: int, world_id: str, symbol: str) -> Dict[str, object]:
@@ -605,6 +633,10 @@ class OntologyCatalogQueryService:
                 "decisionStages": list_values([item.get("decisionStage") for item in linked_relations]),
                 "validationState": text(trace.get("validationState")),
                 "freshnessStatus": text(trace.get("freshnessStatus")),
+                "knowledgeBasis": item_dict(trace.get("knowledgeBasis")),
+                "ruleKind": text(trace.get("ruleKind")),
+                "theoryFamily": text(trace.get("theoryFamily")),
+                "thesisFamily": text(trace.get("thesisFamily")),
                 "updatedAt": text(trace.get("updatedAt")),
             })
         if query:

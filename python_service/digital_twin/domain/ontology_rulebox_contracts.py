@@ -4,6 +4,7 @@ from functools import cached_property
 from typing import Dict, Iterable, List, Optional
 
 from .hypothesis_outcome_contract import HypothesisOutcomeContract
+from .ontology_rule_knowledge import RuleKnowledgeBasis, resolved_rule_knowledge_basis
 
 
 GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
@@ -324,6 +325,10 @@ class GraphInferenceRule:
     # into one current-situation hypothesis family. Empty keeps the rule on
     # the conservative structural-signature path.
     hypothesis_family_key: str = ""
+    # Human-auditable theory, provenance and hypothesis eligibility.  The
+    # resolved value is metadata for governance and AI evidence boundaries;
+    # TypeDB remains the only evaluator of the market conditions above.
+    knowledge_basis: RuleKnowledgeBasis = dataclass_field(default_factory=RuleKnowledgeBasis)
     # Lifecycle configuration is part of the editable RuleBox contract. The
     # TypeDB native rule still decides whether a condition is active; this
     # policy only records how a materialized path changes over generations.
@@ -369,6 +374,10 @@ class GraphInferenceRule:
         )
 
     @cached_property
+    def resolved_knowledge_basis(self) -> RuleKnowledgeBasis:
+        return resolved_rule_knowledge_basis(self)
+
+    @cached_property
     def resolved_execution_profile(self) -> Dict[str, object]:
         from .ontology_rule_execution_policy import rule_execution_profile
 
@@ -382,6 +391,7 @@ class GraphInferenceRule:
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
+        payload["knowledge_basis"] = self.resolved_knowledge_basis.to_dict()
         payload["hypothesis_lifecycle"] = self.resolved_hypothesis_lifecycle().to_dict()
         payload["execution_profile"] = dict(self.resolved_execution_profile)
         payload["domain_manifest"] = dict(self.resolved_domain_manifest)
@@ -438,6 +448,11 @@ class GraphInferenceRule:
                 or payload.get("hypothesisFamilyKey")
                 or ""
             ).strip(),
+            knowledge_basis=RuleKnowledgeBasis.from_dict(
+                payload.get("knowledge_basis")
+                or payload.get("knowledgeBasis")
+                or {}
+            ),
             hypothesis_lifecycle=HypothesisLifecyclePolicy.from_dict(
                 payload.get("hypothesis_lifecycle")
                 or payload.get("hypothesisLifecycle")

@@ -6,9 +6,10 @@ from typing import Dict, Iterable, List
 from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_rule_manifest import rule_domain_manifest
+from .ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_knowledge_basis
 
 
-RULE_AUDIT_VERSION = "ontology-rule-audit-v2"
+RULE_AUDIT_VERSION = "ontology-rule-audit-v3"
 
 
 def _text(value: object) -> str:
@@ -33,18 +34,20 @@ def rule_audit_payload(
     """Build a read-only audit view; it never changes RuleBox governance."""
 
     runtime = dict(runtime_summary or {})
+    authored_rules = list(rules or [])
     runtime_by_id = {
         _text(item.get("ruleId")): dict(item)
         for item in runtime.get("rules") or []
         if isinstance(item, dict) and _text(item.get("ruleId"))
     }
     rows = []
-    for rule in rules or []:
+    for rule in authored_rules:
         rule_id = _text(_rule_value(rule, "rule_id", "ruleId"))
         if not rule_id:
             continue
         profile = rule_execution_profile(rule)
         manifest = rule_domain_manifest(rule, execution=profile)
+        knowledge_basis = resolved_rule_knowledge_basis(rule)
         sample = runtime_by_id.get(rule_id) or {}
         sample_count = int(sample.get("sampleCount") or 0)
         matched_count = int(sample.get("matchedCount") or 0)
@@ -107,6 +110,11 @@ def rule_audit_payload(
             "status": status,
             "executionProfile": profile,
             "domainManifest": manifest,
+            "knowledgeBasis": knowledge_basis.to_dict(),
+            "ruleKind": knowledge_basis.rule_kind,
+            "theoryFamily": knowledge_basis.theory_family,
+            "thesisFamily": knowledge_basis.thesis_family,
+            "knowledgeValidationStatus": knowledge_basis.validation_status,
             "assessmentScope": manifest.get("assessmentScope"),
             "triggerFamilies": list(manifest.get("triggerFamilies") or []),
             "requiredFacts": list(manifest.get("requiredFacts") or []),
@@ -162,6 +170,11 @@ def rule_audit_payload(
     )
     scope_counts = Counter(str(item.get("assessmentScope") or "unknown") for item in rows)
     lifecycle_counts = Counter(str(item.get("lifecycleClass") or "unknown") for item in rows)
+    knowledge_summary = knowledge_basis_summary([
+        resolved_rule_knowledge_basis(rule)
+        for rule in authored_rules
+        if _text(_rule_value(rule, "rule_id", "ruleId"))
+    ])
     rows.sort(key=lambda item: (
         {"failing": 0, "slow": 1, "routing-gap-review": 2, "observed-no-match": 3}.get(item["status"], 4),
         -int(item.get("p95DurationMs") or 0),
@@ -176,6 +189,7 @@ def rule_audit_payload(
         "executionStageCounts": dict(sorted(stage_counts.items())),
         "assessmentScopeCounts": dict(sorted(scope_counts.items())),
         "lifecycleClassCounts": dict(sorted(lifecycle_counts.items())),
+        "knowledgeBasisSummary": knowledge_summary,
         "duplicateCandidateGroups": duplicate_groups,
         "retirementCandidateCount": len([item for item in rows if item.get("retirementCandidate")]),
         "rules": rows,

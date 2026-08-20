@@ -13,6 +13,7 @@ from .ontology_rulebox_contracts import (
     GraphRuleCondition,
     GraphRuleDerivation,
 )
+from .ontology_rule_knowledge import knowledge_basis_violations
 
 
 RULEBOX_EVIDENCE_ROLES = frozenset({"risk", "support", "counter", "context", "blocking"})
@@ -32,6 +33,7 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
     signatures: Dict[tuple, List[str]] = {}
     for rule in enabled_rules:
         rule_id = str(rule.rule_id or "").strip() or "<missing-rule-id>"
+        violations.extend(knowledge_basis_violations(rule.resolved_knowledge_basis, rule_id))
         if not str(rule.hypothesis_family_key or "").strip():
             violations.append(rule_id + ": hypothesis_family_key is required")
         lifecycle = rule.resolved_hypothesis_lifecycle()

@@ -83,6 +83,7 @@ class OntologyRuleMatch:
     context_completeness_policy: Dict[str, object] = field(default_factory=dict)
     rule_dependency_contract_version: str = ""
     rule_output_contract: Dict[str, object] = field(default_factory=dict)
+    knowledge_basis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -123,6 +124,7 @@ class OntologyRuleMatch:
         payload["contextCompletenessPolicy"] = payload.pop("context_completeness_policy")
         payload["ruleDependencyContractVersion"] = payload.pop("rule_dependency_contract_version")
         payload["ruleOutputContract"] = payload.pop("rule_output_contract")
+        payload["knowledgeBasis"] = payload.pop("knowledge_basis")
         return payload
 
 

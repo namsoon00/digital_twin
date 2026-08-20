@@ -7,9 +7,10 @@ from typing import Dict, Iterable, List
 
 from .ontology_change_impact import rule_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
+from .ontology_rule_knowledge import resolved_rule_knowledge_basis
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v4"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v5"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v2"
 RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v1"
 
@@ -281,6 +282,7 @@ def rule_domain_manifest(
     })
     lifecycle = _value(rule, "hypothesis_lifecycle", "hypothesisLifecycle")
     lifecycle_payload = lifecycle.to_dict() if hasattr(lifecycle, "to_dict") else dict(lifecycle or {}) if isinstance(lifecycle, dict) else {}
+    knowledge_basis = resolved_rule_knowledge_basis(rule).to_dict()
     condition_contracts = rule_condition_contracts(dependency)
     invalidation_contract = rule_invalidation_contract(condition_contracts, lifecycle_payload)
     derived_outputs = rule_derived_outputs(rule)
@@ -322,6 +324,12 @@ def rule_domain_manifest(
         "outputContract": assessment_output_contract(assessment_scope, effects),
         "conflictGroup": str(_value(rule, "action_group", "actionGroup") or module),
         "outcomeContract": dict(lifecycle_payload.get("outcomeContract") or {}),
+        "knowledgeBasis": knowledge_basis,
+        "ruleKind": knowledge_basis.get("ruleKind"),
+        "theoryFamily": knowledge_basis.get("theoryFamily"),
+        "thesisFamily": knowledge_basis.get("thesisFamily"),
+        "decisionEligibility": knowledge_basis.get("decisionEligibility"),
+        "requiresHypothesis": bool(knowledge_basis.get("requiresHypothesis")),
         "executionStage": execution.get("executionStage"),
         "failurePolicy": execution.get("failurePolicy"),
         "costHint": execution.get("costHint"),
@@ -353,6 +361,9 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("invalidationContract")
         or not item.get("derivedOutputs")
         or item.get("dependencyContractVersion") != RULE_DEPENDENCY_CONTRACT_VERSION
+        or not item.get("knowledgeBasis")
+        or not item.get("ruleKind")
+        or not item.get("theoryFamily")
     ]
     conservative = [item["ruleId"] for item in manifests if item.get("conservativeRouting")]
     return {

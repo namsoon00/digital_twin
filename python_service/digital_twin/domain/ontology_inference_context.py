@@ -763,6 +763,10 @@ def matches_from_inference(
                 dict(relation.get("ruleOutputContract") or {})
                 if isinstance(relation.get("ruleOutputContract"), dict) else {}
             ),
+            knowledge_basis=(
+                dict(relation.get("knowledgeBasis") or {})
+                if isinstance(relation.get("knowledgeBasis"), dict) else {}
+            ),
         ))
     if matches:
         return sorted(matches, key=lambda item: semantic_relation_sort_key(relation_for_match(item, primary_relations)))
@@ -802,6 +806,10 @@ def matches_from_inference(
                 "freshnessGateReason": str(trace.get("freshnessGateReason") or ""),
                 "drivers": ["TypeDB 조건 추적은 있으나 판단 관계가 없습니다."],
             },
+            knowledge_basis=(
+                dict(trace.get("knowledgeBasis") or {})
+                if isinstance(trace.get("knowledgeBasis"), dict) else {}
+            ),
         ))
     return matches
 

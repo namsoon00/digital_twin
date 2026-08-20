@@ -1331,6 +1331,9 @@ def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> D
         account_id=account_id,
         market_id=str(first_query(query, "marketId") or first_query(query, "market") or ""),
         world_id=world_id,
+        rule_kind=str(first_query(query, "ruleKind") or ""),
+        theory_family=str(first_query(query, "theoryFamily") or ""),
+        validation_status=str(first_query(query, "validationStatus") or ""),
     )
 
 

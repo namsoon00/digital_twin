@@ -74,6 +74,19 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
     ).lower()
     status = _text(item.get("status")).lower()
     reasons: List[str] = []
+    knowledge_basis = _mapping(item.get("knowledgeBasis") or item.get("knowledge_basis"))
+    knowledge_eligibility = _text(
+        knowledge_basis.get("decisionEligibility")
+        or knowledge_basis.get("decision_eligibility")
+    ).lower()
+    if knowledge_eligibility in {"guardrail-only", "reference-only"}:
+        reasons.append("knowledge-eligibility:" + knowledge_eligibility)
+    if knowledge_basis and not bool(
+        knowledge_basis.get("requiresHypothesis")
+        if "requiresHypothesis" in knowledge_basis
+        else knowledge_basis.get("requires_hypothesis")
+    ):
+        reasons.append("knowledge-boundary:not-a-hypothesis")
     rule_ids = item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []
     if not rule_ids:
         reasons.append("missing-rule-evidence")
@@ -113,7 +126,9 @@ def hypothesis_set_evidence_summary(hypothesis_set: Mapping[str, object]) -> Dic
         return _text(item.get("hypothesisId") or item.get("hypothesis_id"))
 
     eligible_families = _unique_texts(
-        item.get("familyId")
+        _mapping(item.get("knowledgeBasis") or item.get("knowledge_basis")).get("evidenceIndependenceKey")
+        or _mapping(item.get("knowledgeBasis") or item.get("knowledge_basis")).get("evidence_independence_key")
+        or item.get("familyId")
         or item.get("family_id")
         or item.get("causalSignature")
         or item.get("causal_signature")

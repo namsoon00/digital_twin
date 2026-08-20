@@ -14,6 +14,7 @@ from .ontology_rulebox_contracts import (
     GraphRuleDerivation,
     HypothesisLifecyclePolicy,
 )
+from .ontology_rule_knowledge import resolved_rule_knowledge_basis
 
 
 WATCHLIST_ENTRY_POLICY = {
@@ -714,12 +715,16 @@ def with_rulebox_v3_governance(rules: List[GraphInferenceRule]) -> List[GraphInf
         for derivation in rule.derivations or []:
             evidence_role = str(derivation.evidence_role or derivation.polarity or "context").strip().lower()
             derivations.append(replace(derivation, evidence_role=evidence_role))
-        normalized.append(replace(
+        candidate = replace(
             rule,
             conditions=conditions,
             derivations=derivations,
             hypothesis_family_key=_rulebox_v3_family_key(rule),
             hypothesis_lifecycle=_rulebox_v3_lifecycle(rule, conditions),
+        )
+        normalized.append(replace(
+            candidate,
+            knowledge_basis=resolved_rule_knowledge_basis(candidate),
         ))
     return normalized
 

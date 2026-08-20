@@ -46,6 +46,7 @@ def materialize_rule_inference(
     family_properties = {"hypothesisFamilyKey": hypothesis_family_key} if hypothesis_family_key else {}
     dependency_profile = rule_dependency_profile(rule)
     domain_manifest = rule_domain_manifest(rule, dependency=dependency_profile)
+    knowledge_basis = rule.resolved_knowledge_basis.to_dict()
     rule_contract_properties = {
         "ruleSourceKind": str(rule.source_kind or ""),
         "ruleScopeFamilies": list(dependency_profile.get("scopeFamilies") or []),
@@ -60,6 +61,11 @@ def materialize_rule_inference(
         "ruleDependencyContractVersion": domain_manifest["dependencyContractVersion"],
         "ruleLifecycleClass": domain_manifest["lifecycleClass"],
         "ruleOutputContract": domain_manifest["outputContract"],
+        "knowledgeBasis": knowledge_basis,
+        "ruleKind": knowledge_basis["ruleKind"],
+        "theoryFamily": knowledge_basis["theoryFamily"],
+        "thesisFamily": knowledge_basis["thesisFamily"],
+        "knowledgeValidationStatus": knowledge_basis["validationStatus"],
     }
     lifecycle_policy = (
         rule.resolved_hypothesis_lifecycle()

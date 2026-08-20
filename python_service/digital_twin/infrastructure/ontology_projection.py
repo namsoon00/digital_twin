@@ -162,6 +162,16 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         return True
     if rulebox_rules_missing_decision_stage(rules):
         return True
+    if any(
+        not isinstance(item.get("knowledge_basis") or item.get("knowledgeBasis"), dict)
+        or not str(
+            (item.get("knowledge_basis") or item.get("knowledgeBasis") or {}).get("ruleKind")
+            or ""
+        ).strip()
+        for item in rules
+        if item.get("enabled") is not False
+    ):
+        return True
     for item in rules:
         rule_id = rule_id_from_payload(item)
         expected_version = RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS.get(rule_id)
@@ -605,6 +615,7 @@ def migrate_typedb_rule_catalog(
     migrated = []
     removed = []
     updated = []
+    knowledge_basis_updated = []
     added = []
     runtime_shape_updated = []
     stored_rule_ids = set()
@@ -639,6 +650,18 @@ def migrate_typedb_rule_catalog(
             continue
         default_derivations = default_rule.get("derivations") or []
         changed = False
+        if not isinstance(rule.get("knowledge_basis") or rule.get("knowledgeBasis"), dict):
+            default_knowledge_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis")
+            if isinstance(default_knowledge_basis, dict):
+                rule["knowledge_basis"] = deepcopy(default_knowledge_basis)
+                changed = True
+                knowledge_basis_updated.append(rule_id)
+        elif not str((rule.get("knowledge_basis") or rule.get("knowledgeBasis") or {}).get("ruleKind") or "").strip():
+            default_knowledge_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis")
+            if isinstance(default_knowledge_basis, dict):
+                rule["knowledge_basis"] = deepcopy(default_knowledge_basis)
+                changed = True
+                knowledge_basis_updated.append(rule_id)
         for index, derivation in enumerate(rule.get("derivations") or []):
             if not isinstance(derivation, dict):
                 continue
@@ -676,6 +699,7 @@ def migrate_typedb_rule_catalog(
         "removedRuleIds": sorted(set(removed)),
         "addedRuleIds": sorted(set(added)),
         "decisionPolicyUpdatedRuleIds": sorted(set(updated)),
+        "knowledgeBasisUpdatedRuleIds": sorted(set(knowledge_basis_updated)),
         "rawAboxRuntimeUpdatedRuleIds": sorted(set(runtime_shape_updated)),
     }
 

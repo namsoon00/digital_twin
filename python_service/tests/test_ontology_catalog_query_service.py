@@ -229,7 +229,24 @@ class OntologyCatalogQueryServiceTests(unittest.TestCase):
         self.assertEqual(1, payload["counts"]["executableRules"])
         self.assertEqual(1, payload["counts"]["hypotheses"])
         self.assertEqual("aligned", payload["deployedTBox"]["alignment"])
+        self.assertEqual(1, payload["ruleKnowledge"]["hypothesisRuleCount"])
         self.assertTrue(all(item["status"] == "ok" for item in payload["diagnostics"]))
+
+    def test_rule_catalog_exposes_and_filters_theory_governance(self):
+        service = self.service()
+        all_rules = service.list_section("rules")
+        rule = all_rules["items"][0]
+
+        filtered = service.list_section(
+            "rules",
+            rule_kind=rule["ruleKind"],
+            theory_family=rule["theoryFamily"],
+            validation_status=rule["knowledgeValidationStatus"],
+        )
+
+        self.assertEqual("predictive-hypothesis", rule["ruleKind"])
+        self.assertTrue(rule["knowledgeBasis"]["requiresHypothesis"])
+        self.assertEqual(["rule.signal.v1"], [item["ruleId"] for item in filtered["items"]])
 
     def test_rulebox_defaults_are_blocked_when_typedb_is_unavailable(self):
         payload = self.service(FakeRepository(fallback=True)).list_section("rules")

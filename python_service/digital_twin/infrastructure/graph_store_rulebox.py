@@ -308,6 +308,11 @@ def build_rulebox_rules_from_rows(
                 or props.get("hypothesis_lifecycle")
                 or {}
             ),
+            "knowledge_basis": (
+                props.get("knowledgeBasis")
+                or props.get("knowledge_basis")
+                or {}
+            ),
             "any_condition_min_count": int(row.get("anyConditionMinCount") or props.get("anyConditionMinCount") or 1),
             "execution_stage": str(
                 row.get("executionStageOverride")

@@ -26,6 +26,7 @@ from .hypothesis_outcome_contract import (
     outcome_contract_fingerprint,
 )
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
+from .ontology_rule_knowledge import rule_knowledge_basis_from_rows
 from .ontology_schema import tbox_fingerprint
 from .ontology_worlds import market_world
 
@@ -235,6 +236,9 @@ class HypothesisTemplate:
     causal_path_pattern: List[str] = field(default_factory=list)
     approval_status: str = "approved-active"
     source: str = "typedb-native-rule"
+    theory_family: str = ""
+    thesis_family: str = ""
+    knowledge_basis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -261,6 +265,8 @@ class HypothesisFamily:
     scope_state: str = UNVERIFIED_SCOPE
     market_hypothesis_id: str = ""
     account_overlay_ids: List[str] = field(default_factory=list)
+    theory_family: str = ""
+    thesis_family: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -371,6 +377,9 @@ class InvestmentHypothesis:
     action_policies: List[str] = field(default_factory=list)
     allowed_actions: List[str] = field(default_factory=list)
     blocked_actions: List[str] = field(default_factory=list)
+    theory_family: str = ""
+    thesis_family: str = ""
+    knowledge_basis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = camelize(asdict(self))
@@ -393,6 +402,8 @@ class DecisionGuardrail:
     missing_data: List[str] = field(default_factory=list)
     blocked_actions: List[str] = field(default_factory=list)
     source: str = "system-safety-policy"
+    source_rule_ids: List[str] = field(default_factory=list)
+    knowledge_basis: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -624,6 +635,9 @@ class DecisionEpisode:
                 action_policies=list(item.get("actionPolicies") or item.get("action_policies") or []),
                 allowed_actions=list(item.get("allowedActions") or item.get("allowed_actions") or []),
                 blocked_actions=list(item.get("blockedActions") or item.get("blocked_actions") or []),
+                theory_family=str(item.get("theoryFamily") or item.get("theory_family") or ""),
+                thesis_family=str(item.get("thesisFamily") or item.get("thesis_family") or ""),
+                knowledge_basis=dict(item.get("knowledgeBasis") or item.get("knowledge_basis") or {}),
             ))
         families = []
         for item in hypothesis_payload.get("families") or []:
@@ -654,6 +668,8 @@ class DecisionEpisode:
                 scope_state=str(item.get("scopeState") or item.get("scope_state") or UNVERIFIED_SCOPE),
                 market_hypothesis_id=str(item.get("marketHypothesisId") or item.get("market_hypothesis_id") or ""),
                 account_overlay_ids=list(item.get("accountOverlayIds") or item.get("account_overlay_ids") or []),
+                theory_family=str(item.get("theoryFamily") or item.get("theory_family") or ""),
+                thesis_family=str(item.get("thesisFamily") or item.get("thesis_family") or ""),
             ))
         if not families:
             families = hypothesis_families_from_hypotheses(hypotheses)
@@ -726,6 +742,8 @@ class DecisionEpisode:
                 missing_data=list(item.get("missingData") or item.get("missing_data") or []),
                 blocked_actions=list(item.get("blockedActions") or item.get("blocked_actions") or []),
                 source=str(item.get("source") or "system-safety-policy"),
+                source_rule_ids=list(item.get("sourceRuleIds") or item.get("source_rule_ids") or []),
+                knowledge_basis=dict(item.get("knowledgeBasis") or item.get("knowledge_basis") or {}),
             ))
         hypothesis_set = HypothesisSet(
             hypothesis_set_id=str(hypothesis_payload.get("hypothesisSetId") or hypothesis_payload.get("hypothesis_set_id") or ""),
@@ -1496,6 +1514,13 @@ def build_competing_hypotheses(
         signal_conflicts,
         minimum_count,
     )
+    decision_guardrails = rule_guardrails_for_matches(
+        rule_keys,
+        relation_rows,
+        trace_rows,
+        match_rows,
+        question,
+    ) + decision_guardrails
     research_plan = research_plan_for_hypotheses(question, hypotheses, missing_data, signal_conflicts)
     return HypothesisSet(
         hypothesis_set_id=hypothesis_seed,
@@ -1626,6 +1651,9 @@ def hypothesis_from_inference_rule(
 ) -> Optional[InvestmentHypothesis]:
     if not rule_id or not (rows or traces or matches):
         return None
+    knowledge_basis = rule_knowledge_basis_from_rows(rule_id, rows, traces, matches)
+    if not knowledge_basis.requires_hypothesis:
+        return None
     stance = hypothesis_stance(rows, matches)
     evidence_rows = primary_inference_rows(rows)
     evidence_ids = relation_ids(evidence_rows)
@@ -1728,6 +1756,9 @@ def hypothesis_from_inference_rule(
         action_policies=list(overlay_metadata.get("actionPolicies") or []),
         allowed_actions=list(overlay_metadata.get("allowedActions") or []),
         blocked_actions=list(overlay_metadata.get("blockedActions") or []),
+        theory_family=knowledge_basis.theory_family,
+        thesis_family=knowledge_basis.thesis_family,
+        knowledge_basis=knowledge_basis.to_dict(),
     )
 
 
@@ -2043,6 +2074,9 @@ def compact_hypotheses_by_causal_family(
                 [value for item in ordered for value in item.blocked_actions],
                 12,
             ),
+            theory_family=primary.theory_family,
+            thesis_family=primary.thesis_family,
+            knowledge_basis=dict(primary.knowledge_basis or {}),
         ))
     return compacted
 
@@ -2123,6 +2157,8 @@ def hypothesis_families_from_hypotheses(
                 for item in members
                 if item.account_hypothesis_overlay_id
             }),
+            theory_family=primary.theory_family,
+            thesis_family=primary.thesis_family,
         ))
     return families
 
@@ -2239,6 +2275,57 @@ def diverse_hypotheses(hypotheses: List[InvestmentHypothesis], maximum_count: in
     return selected[:maximum_count]
 
 
+def rule_guardrails_for_matches(
+    rule_ids: Iterable[str],
+    relations: Iterable[Dict[str, object]],
+    traces: Iterable[Dict[str, object]],
+    matches: Iterable[Dict[str, object]],
+    question: InvestmentQuestion,
+) -> List[DecisionGuardrail]:
+    """Project matched non-predictive rules as constraints, not theses.
+
+    TypeDB already decided that each source rule matched. This function only
+    applies the RuleBox-owned knowledge boundary so policy, execution, data
+    quality and context rows cannot consume a competing-hypothesis slot.
+    """
+
+    relation_rows = [dict(item) for item in relations or [] if isinstance(item, dict)]
+    trace_rows = [dict(item) for item in traces or [] if isinstance(item, dict)]
+    match_rows = [dict(item) for item in matches or [] if isinstance(item, dict)]
+    result: List[DecisionGuardrail] = []
+    for rule_id in rule_ids or []:
+        rule_relations = relations_for_rule(relation_rows, rule_id)
+        rule_traces = traces_for_rule(trace_rows, rule_id)
+        rule_matches = matches_for_rule(match_rows, rule_id)
+        basis = rule_knowledge_basis_from_rows(rule_id, rule_relations, rule_traces, rule_matches)
+        if basis.requires_hypothesis:
+            continue
+        rows = rule_relations + rule_traces + rule_matches
+        label = causal_label("", rule_relations, rule_traces, rule_matches)
+        blocked_actions = unique_texts([
+            action
+            for row in rows
+            for action in row.get("blockedActions") or row.get("blocked_actions") or []
+        ], 12)
+        next_checks = unique_texts([
+            check
+            for row in rows
+            for check in row.get("nextChecks") or row.get("next_checks") or []
+        ], 12)
+        result.append(DecisionGuardrail(
+            guardrail_id=stable_id("decision-guardrail", question.question_id, rule_id),
+            guardrail_type=basis.rule_kind,
+            label=label or basis.thesis_family or rule_id,
+            reason=basis.plain_language_basis,
+            required_checks=next_checks,
+            blocked_actions=blocked_actions,
+            source="typedb-rulebox-guardrail",
+            source_rule_ids=[rule_id],
+            knowledge_basis=basis.to_dict(),
+        ))
+    return result
+
+
 def decision_guardrails_for_context(
     hypotheses: List[InvestmentHypothesis],
     name: str,
@@ -2254,13 +2341,28 @@ def decision_guardrails_for_context(
         item for item in hypotheses
         if decision_eligible_hypothesis_payload(item.to_dict())
     ]
+    independent_evidence_keys = {
+        str(
+            (item.knowledge_basis or {}).get("evidenceIndependenceKey")
+            or (item.knowledge_basis or {}).get("evidence_independence_key")
+            or item.family_id
+            or item.hypothesis_id
+        ).strip()
+        for item in eligible_hypotheses
+        if str(
+            (item.knowledge_basis or {}).get("evidenceIndependenceKey")
+            or (item.knowledge_basis or {}).get("evidence_independence_key")
+            or item.family_id
+            or item.hypothesis_id
+        ).strip()
+    }
     missing = unique_texts(missing_data)
     has_conflict = bool((conflicts or {}).get("hasConflict"))
-    if hypotheses and (len(eligible_hypotheses) < minimum_count or missing or has_conflict):
+    if hypotheses and (len(independent_evidence_keys) < minimum_count or missing or has_conflict):
         reasons = []
-        if len(eligible_hypotheses) < minimum_count:
+        if len(independent_evidence_keys) < minimum_count:
             reasons.append(
-                "판단 가능한 독립 TypeDB 규칙 가설이 "
+                "판단 가능한 독립 근거 계열이 "
                 + str(minimum_count)
                 + "개보다 적습니다."
             )
@@ -2420,6 +2522,9 @@ def hypothesis_templates_from_hypotheses(hypotheses: Iterable[InvestmentHypothes
             causal_path_pattern=list(item.causal_path_ids),
             approval_status=item.approval_status,
             source="typedb-native-rule" if item.supporting_rule_ids else "system-safety-policy",
+            theory_family=item.theory_family,
+            thesis_family=item.thesis_family,
+            knowledge_basis=dict(item.knowledge_basis or {}),
         ).to_dict())
     return rows
 
@@ -2431,6 +2536,9 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
             continue
         rule_id = row_rule_id(rule)
         if not rule_id:
+            continue
+        knowledge_basis = rule_knowledge_basis_from_rows(rule_id, [rule])
+        if not knowledge_basis.requires_hypothesis:
             continue
         derivations = [item for item in rule.get("derivations") or [] if isinstance(item, dict)]
         polarities = {
@@ -2463,6 +2571,9 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
             causal_path_pattern=causal_path,
             approval_status="approved-active",
             source="typedb-native-rule",
+            theory_family=knowledge_basis.theory_family,
+            thesis_family=knowledge_basis.thesis_family,
+            knowledge_basis=knowledge_basis.to_dict(),
         ).to_dict())
     return rows
 

@@ -498,6 +498,13 @@ def ensure_mysql_operational_schema(spec: Dict[str, object]) -> bool:
     settings = dict(spec.get("operationalSettings") or {})
     settings["_skipOperationalHistoryRetention"] = "1"
     settings.pop("_skipOperationalSchemaBootstrap", None)
+    # A cold 5GB+ InnoDB store can need longer than the ordinary interactive
+    # query deadline to inspect and migrate its schema. Do not turn that normal
+    # recovery into a stop/start loop that repeatedly discards the warm cache.
+    settings["mysqlOperationTimeoutSeconds"] = str(max(
+        60,
+        int_value(settings.get("mysqlOperationTimeoutSeconds"), 10, 1),
+    ))
     attempts = int_value(spec.get("schemaBootstrapAttempts"), 3, 1)
     retry_seconds = int_value(spec.get("schemaBootstrapRetrySeconds"), 5, 0)
     for attempt in range(1, attempts + 1):
@@ -653,11 +660,23 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     )
     workers.update(notification_ai_worker_specs(ai_worker_count))
     background_nice = str((settings or {}).get("managedBackgroundProcessNice") or "5")
+    local_ai_environment = {
+        "ORBIT_LOCAL_AI_MAX_CONCURRENT": str(
+            (settings or {}).get("localAiMaxConcurrentProcesses") or "2"
+        ),
+        "ORBIT_LOCAL_AI_CAPACITY_WAIT_SECONDS": str(
+            (settings or {}).get("localAiCapacityWaitSeconds") or "300"
+        ),
+    }
     for name, spec in list(workers.items()):
+        environment = dict(spec.get("env") or {})
+        environment.update(local_ai_environment)
+        spec = {**dict(spec), "env": environment}
         if name in {"mysql", "web"}:
+            workers[name] = spec
             continue
         workers[name] = {
-            **dict(spec),
+            **spec,
             "processNice": str(spec.get("processNice") or background_nice),
         }
     return workers
@@ -1919,53 +1938,79 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             append_log(spec["log"], "seed skipped for prevalidated blue-green cutover")
             print(str(spec["label"]) + " reused prevalidated blue-green seed.")
             return True
-    command = typedb_seed_command(spec)
-    timeout_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1)
-    attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
-    for attempt in range(1, attempts + 1):
-        append_log(spec["log"], "seed start attempt=" + str(attempt))
-        print(str(spec["label"]) + " seeding ontology RuleBox. attempt=" + str(attempt))
-        try:
-            result = subprocess.run(
-                low_priority_command(spec, command),
-                cwd=str(ROOT_DIR),
-                env=typedb_subprocess_environment(spec),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as error:
-            output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
-            append_log_text(spec["log"], "seed timeout attempt=" + str(attempt), output)
-            print(str(spec["label"]) + " RuleBox seed timed out after " + str(timeout_seconds) + "s.")
-        else:
-            output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
-            if result.returncode == 0:
-                append_log_text(spec["log"], "seed ok attempt=" + str(attempt), output)
-                print(str(spec["label"]) + " RuleBox seed ok.")
-                return True
-            append_log_text(
-                spec["log"],
-                "seed failed attempt=" + str(attempt) + " exit=" + str(result.returncode),
-                output,
-            )
-            print(str(spec["label"]) + " RuleBox seed failed. exit=" + str(result.returncode))
-        if attempt < attempts:
-            # A TypeDB schema commit may continue compiling after the Python
-            # driver times out or is terminated. Starting another seed client
-            # against that server only queues behind the detached transaction.
-            # A blue-green candidate is isolated, so restart only that server;
-            # committed schema batches remain durable and the next attempt
-            # resumes from schema inspection. The active graph is untouched.
-            if str(spec.get("role") or "") == "typedb-stage":
-                if not restart_typedb_stage_for_seed_retry(spec):
-                    append_log(spec["log"], "seed retry candidate restart failed")
-                    return False
+    maintenance_lock = dict(spec.get("_typedbMaintenanceLock") or {})
+    acquired_here = False
+    if not typedb_maintenance_lock_owned(maintenance_lock):
+        maintenance_lock = acquire_typedb_maintenance_lock(
+            "candidate-seed" if str(spec.get("role") or "") == "typedb-stage" else "active-seed",
+            max_age_seconds=(
+                int_value(spec.get("seedTimeoutSeconds"), 180, 1)
+                * (int_value(spec.get("seedRetryCount"), 2, 0) + 1)
+                + 300
+            ),
+        )
+        if not bool(maintenance_lock.get("acquired")):
+            owner = str(maintenance_lock.get("ownerOperation") or "maintenance")
+            message = "seed deferred; TypeDB maintenance lock owned by " + owner
+            append_log(spec["log"], message)
+            print(str(spec["label"]) + " " + message + ".")
+            # The active store remains the serving generation while a validated
+            # candidate is prepared. Keep the web/read side available instead
+            # of starting a second full seed. An isolated candidate without the
+            # parent fencing token must fail closed.
+            return str(spec.get("role") or "") == "typedb"
+        acquired_here = True
+    try:
+        command = typedb_seed_command(spec)
+        timeout_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1)
+        attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
+        for attempt in range(1, attempts + 1):
+            append_log(spec["log"], "seed start attempt=" + str(attempt))
+            print(str(spec["label"]) + " seeding ontology RuleBox. attempt=" + str(attempt))
+            try:
+                result = subprocess.run(
+                    low_priority_command(spec, command),
+                    cwd=str(ROOT_DIR),
+                    env=typedb_subprocess_environment(spec),
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as error:
+                output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
+                append_log_text(spec["log"], "seed timeout attempt=" + str(attempt), output)
+                print(str(spec["label"]) + " RuleBox seed timed out after " + str(timeout_seconds) + "s.")
             else:
-                time.sleep(1.0)
-    print(str(spec["label"]) + " RuleBox seed failed after " + str(attempts) + " attempts.")
-    return False
+                output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
+                if result.returncode == 0:
+                    append_log_text(spec["log"], "seed ok attempt=" + str(attempt), output)
+                    print(str(spec["label"]) + " RuleBox seed ok.")
+                    return True
+                append_log_text(
+                    spec["log"],
+                    "seed failed attempt=" + str(attempt) + " exit=" + str(result.returncode),
+                    output,
+                )
+                print(str(spec["label"]) + " RuleBox seed failed. exit=" + str(result.returncode))
+            if attempt < attempts:
+                # A TypeDB schema commit may continue compiling after the Python
+                # driver times out or is terminated. Starting another seed client
+                # against that server only queues behind the detached transaction.
+                # A blue-green candidate is isolated, so restart only that server;
+                # committed schema batches remain durable and the next attempt
+                # resumes from schema inspection. The active graph is untouched.
+                if str(spec.get("role") or "") == "typedb-stage":
+                    if not restart_typedb_stage_for_seed_retry(spec):
+                        append_log(spec["log"], "seed retry candidate restart failed")
+                        return False
+                else:
+                    time.sleep(1.0)
+        print(str(spec["label"]) + " RuleBox seed failed after " + str(attempts) + " attempts.")
+        return False
+    finally:
+        if acquired_here:
+            release_typedb_rotation_lock(maintenance_lock)
 
 
 def validate_typedb_candidate_inference_runtime(spec: Dict[str, object]) -> Dict[str, object]:
@@ -3068,6 +3113,7 @@ def typedb_rotate(
     services_stopped = False
     restart_attempted = False
     try:
+        spec["_typedbMaintenanceLock"] = dict(rotation_lock)
         # Manual and supervisor-owned rotations share one cooldown/status
         # contract. Omitting a successful manual cutover here lets the
         # supervisor immediately launch another expensive candidate because
@@ -3102,6 +3148,20 @@ def typedb_rotate(
                     spec,
                     decision,
                     alert_kind="typedb-auto-rotation-failed",
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            if not typedb_maintenance_lock_owned(rotation_lock):
+                cleanup_typedb_candidate(candidate, remove_data=False)
+                result = {
+                    "status": "cutover-fenced-active-preserved",
+                    "reason": "TypeDB maintenance ownership changed before cutover.",
+                    "activeStorePreserved": True,
+                }
+                record_typedb_auto_rotation_state(
+                    lastAutoRotationFinishedAt=iso_now(),
+                    lastAutoRotationStatus="cutover-fenced-active-preserved",
+                    lastAutoRotationResult=result,
                 )
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1

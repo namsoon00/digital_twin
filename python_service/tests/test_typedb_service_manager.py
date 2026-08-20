@@ -10,6 +10,90 @@ from digital_twin import service_manager
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_maintenance_lock_fences_seed_and_rotation_with_one_token(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "typedb-maintenance.lock"
+            with patch.object(service_manager, "typedb_rotation_lock_path", return_value=path):
+                first = service_manager.acquire_typedb_maintenance_lock("candidate-seed")
+                second = service_manager.acquire_typedb_rotation_lock()
+
+                self.assertTrue(first["acquired"])
+                self.assertFalse(second["acquired"])
+                self.assertEqual("candidate-seed", second["ownerOperation"])
+
+                replacement = {
+                    "pid": os.getpid(),
+                    "operation": "new-owner",
+                    "token": "replacement-token",
+                }
+                path.write_text(json.dumps(replacement), encoding="utf-8")
+                service_manager.release_typedb_rotation_lock(first)
+
+                self.assertTrue(path.exists())
+                self.assertEqual("replacement-token", json.loads(path.read_text(encoding="utf-8"))["token"])
+
+    def test_active_seed_defers_while_rotation_owns_maintenance_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "1",
+            }
+            lock = {
+                "acquired": False,
+                "ownerOperation": "blue-green-rotation",
+                "ownerPid": 123,
+            }
+            with patch.object(service_manager, "acquire_typedb_maintenance_lock", return_value=lock), \
+                    patch.object(service_manager.subprocess, "run") as run:
+                self.assertTrue(service_manager.ensure_typedb_seeded(spec))
+
+            run.assert_not_called()
+            self.assertIn("seed deferred", spec["log"].read_text(encoding="utf-8"))
+
+    def test_candidate_seed_fails_closed_without_parent_maintenance_token(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "1",
+            }
+            with patch.object(service_manager, "acquire_typedb_maintenance_lock", return_value={
+                "acquired": False,
+                "ownerOperation": "active-seed",
+            }), patch.object(service_manager.subprocess, "run") as run:
+                self.assertFalse(service_manager.ensure_typedb_seeded(spec))
+
+            run.assert_not_called()
+
+    def test_mysql_schema_bootstrap_uses_recovery_timeout_floor(self):
+        spec = {
+            "label": "MySQL operational store",
+            "log": Path("/tmp/mysql-schema-test.log"),
+            "operationalSettings": {"mysqlOperationTimeoutSeconds": "10"},
+            "schemaBootstrapAttempts": "1",
+        }
+        with patch.object(service_manager, "MySQLOperationalConnection") as connection, \
+                patch.object(service_manager, "MySQLMonitorAccountJobStore"):
+            self.assertTrue(service_manager.ensure_mysql_operational_schema(spec))
+
+        self.assertEqual("60", connection.call_args.args[0]["mysqlOperationTimeoutSeconds"])
+
+    def test_web_is_started_before_optional_graph_dependencies(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "mysqlRuntimeManaged": "1",
+            "ontologyTypeDbEnabled": "1",
+            "timeSeriesQuestDbEnabled": "1",
+            "notificationAiQueueWorkerCount": "0",
+        }):
+            names = list(service_manager.worker_specs())
+
+        self.assertLess(names.index("mysql"), names.index("web"))
+        self.assertLess(names.index("web"), names.index("typedb"))
+        self.assertLess(names.index("web"), names.index("questdb"))
+
     def test_typedb_worker_rotates_only_active_database_by_default(self):
         spec = service_manager.typedb_worker_spec({
             "typedbPassword": "test-strong-password",
@@ -435,6 +519,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
                 patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
                 patch.object(service_manager, "acquire_typedb_rotation_lock", return_value={"acquired": True}), \
+                patch.object(service_manager, "typedb_maintenance_lock_owned", return_value=True), \
                 patch.object(service_manager, "release_typedb_rotation_lock"), \
                 patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "stop") as stop, \
@@ -454,6 +539,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
                 patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
                 patch.object(service_manager, "acquire_typedb_rotation_lock", return_value={"acquired": True}), \
+                patch.object(service_manager, "typedb_maintenance_lock_owned", return_value=True), \
                 patch.object(service_manager, "release_typedb_rotation_lock"), \
                 patch.object(service_manager, "supervisor_running", return_value=False), \
                 patch.object(service_manager, "stop") as stop, \

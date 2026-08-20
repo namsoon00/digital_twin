@@ -10612,7 +10612,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             workers = service_manager.worker_specs()
 
         self.assertIn("typedb", workers)
-        self.assertEqual(["mysql", "typedb"], list(workers.keys())[:2])
+        self.assertEqual(["mysql", "web", "typedb"], list(workers.keys())[:3])
         command = workers["typedb"]["command"]
         self.assertIn("server", command)
         self.assertIn("--server.listen-address", command)

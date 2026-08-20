@@ -13,6 +13,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -105,6 +106,7 @@ from ..infrastructure.model_reviewer import codex_cli_arguments
 from ..infrastructure.ontology_graph_store import ontology_repository_from_settings
 from ..infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from ..infrastructure.runtime_identity import runtime_identity
+from ..infrastructure.stale_read_model import StaleReadModelCache
 from ..infrastructure import operational_store as stores
 from ..infrastructure.operational_error_reporting import operational_error_reporter, report_runtime_error
 from ..infrastructure.service_factory import (
@@ -158,6 +160,11 @@ MAX_BODY_BYTES = 1024 * 1024
 WEB_PROXY_API_GUARD_STATE: Dict[str, object] = {}
 FLOW_LENS_READ_MODEL = None
 FLOW_LENS_READ_MODEL_LOCK = threading.Lock()
+ONTOLOGY_INFERENCE_LEDGER_READ_MODEL = StaleReadModelCache(
+    "ontology-inference-ledger",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
 WATCHLIST_REFRESH_LOCK = threading.Lock()
 WATCHLIST_REFRESH_STATE: Dict[str, object] = {
     "running": False,
@@ -207,8 +214,9 @@ def operational_read_settings() -> Dict[str, object]:
     screen is opening turns a simple read into an unbounded write path and can
     leave the first Flow Lens response waiting on a busy MySQL connection.
     """
-    settings = dict(runtime_settings())
+    settings = dict(runtime_settings(fast_operational_read=True))
     settings["_skipOperationalHistoryRetention"] = "1"
+    settings["_skipOperationalSchemaBootstrap"] = "1"
     return settings
 
 
@@ -698,6 +706,8 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "notificationAiComparisonRepairReasoningEffort",
         "notificationAiComparisonRepairTimeoutSeconds",
         "notificationAiQueueWorkerCount",
+        "localAiMaxConcurrentProcesses",
+        "localAiCapacityWaitSeconds",
         "notificationAiQueueBatchSize",
         "notificationAiQueueIntervalSeconds",
         "notificationAiQueueLeaseSeconds",
@@ -1479,17 +1489,26 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
     ).status(symbols=symbols, limit=limit, world_id=world_id)
 
 
-def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    from ..domain.ontology_rule_audit import rule_audit_payload
+def ontology_inference_ledger_cache_key(symbols: List[str], limit: int, world_id: str) -> str:
+    return json.dumps({
+        "symbols": sorted(str(item or "").upper() for item in symbols or []),
+        "limit": int(limit or 0),
+        "worldId": str(world_id or ""),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
+
+def ontology_inference_graph_read_model(
+    symbols: List[str],
+    limit: int,
+    world_id: str,
+) -> Dict[str, object]:
     settings = runtime_settings()
     repo = ontology_repository_from_settings(settings)
-    symbols = ontology_audit_symbols(query)
-    limit = safe_int(first_query(query, "limit"), 80, 1, 300)
-    world_id = ontology_world_id_from_query(query)
+    errors = []
     try:
         rulebox = repo.rulebox_snapshot() if hasattr(repo, "rulebox_snapshot") else {}
-    except Exception as error:  # noqa: BLE001 - ledger can still expose raw InferenceBox rows.
+    except Exception as error:  # noqa: BLE001 - a partial graph snapshot can still be retained.
+        errors.append("RuleBox: " + str(error)[:220])
         rulebox = {"status": "error", "reason": str(error)[:220], "rules": []}
     try:
         inferencebox = ontology_repository_world_call(
@@ -1499,7 +1518,8 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             limit=limit,
             world_id=world_id,
         ) if hasattr(repo, "inferencebox_snapshot") else {}
-    except Exception as error:  # noqa: BLE001 - return a structured diagnostic payload.
+    except Exception as error:  # noqa: BLE001 - the prior durable read model remains usable.
+        errors.append("InferenceBox: " + str(error)[:220])
         inferencebox = {
             "status": "error",
             "reason": str(error)[:220],
@@ -1509,6 +1529,54 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             "relations": [],
             "traces": [],
         }
+    rulebox_usable = bool((rulebox or {}).get("rules")) or str((rulebox or {}).get("status") or "").lower() in {"ok", "ready", "current"}
+    inference_usable = bool(
+        (inferencebox or {}).get("entities")
+        or (inferencebox or {}).get("relations")
+        or (inferencebox or {}).get("traces")
+    ) or str((inferencebox or {}).get("status") or "").lower() in {"ok", "ready", "current"}
+    if not rulebox_usable and not inference_usable:
+        raise RuntimeError("; ".join(errors) or "TypeDB inference read model is unavailable")
+    return {
+        "rulebox": rulebox,
+        "inferencebox": inferencebox,
+        "generatedAt": now(),
+        "worldId": world_id,
+    }
+
+
+def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    from ..domain.ontology_rule_audit import rule_audit_payload
+
+    settings = runtime_settings()
+    symbols = ontology_audit_symbols(query)
+    limit = safe_int(first_query(query, "limit"), 80, 1, 300)
+    world_id = ontology_world_id_from_query(query)
+    cache_key = ontology_inference_ledger_cache_key(symbols, limit, world_id)
+    loader = lambda: ontology_inference_graph_read_model(symbols, limit, world_id)
+    direct = request_bool(first_query(query, "direct"), False)
+    if direct:
+        read_model = ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.refresh(cache_key, loader)
+    else:
+        read_model = ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.snapshot(cache_key)
+        if not read_model.get("hasData") or read_model.get("stale"):
+            ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.refresh_async(cache_key, loader)
+            read_model = ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.snapshot(cache_key)
+    graph_payload = read_model.get("payload") if isinstance(read_model.get("payload"), dict) else {}
+    rulebox = graph_payload.get("rulebox") if isinstance(graph_payload.get("rulebox"), dict) else {
+        "status": "deferred",
+        "reason": str(read_model.get("lastError") or "TypeDB snapshot refresh is pending."),
+        "rules": [],
+    }
+    inferencebox = graph_payload.get("inferencebox") if isinstance(graph_payload.get("inferencebox"), dict) else {
+        "status": "deferred",
+        "reason": str(read_model.get("lastError") or "TypeDB snapshot refresh is pending."),
+        "graphStore": "typedb",
+        "source": "persistentReadModel",
+        "entities": [],
+        "relations": [],
+        "traces": [],
+    }
     payload = inference_trace_ledger_payload(inferencebox, rulebox=rulebox, symbols=symbols, limit=limit)
     payload["ruleboxStatus"] = rulebox.get("status")
     payload["ruleboxReason"] = rulebox.get("reason")
@@ -1524,13 +1592,13 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
         payload["ruleRuntimeSummary"] = execution_store.rule_runtime_summary(
             account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
             world_id=world_id,
-            limit=safe_int(first_query(query, "ruleSampleLimit"), 5000, 100, 10000),
+            limit=safe_int(first_query(query, "ruleSampleLimit"), 500, 100, 10000),
         )
         payload["ruleResultSlots"] = execution_store.rule_result_slot_summary(
             account_id=str(first_query(query, "accountId") or first_query(query, "account") or ""),
             world_id=world_id,
             symbols=symbols,
-            limit=safe_int(first_query(query, "slotLimit"), 5000, 100, 10000),
+            limit=safe_int(first_query(query, "slotLimit"), 500, 100, 10000),
             execution_namespace_id=str(first_query(query, "executionNamespaceId") or ""),
         )
         payload["ruleAudit"] = rule_audit_payload(
@@ -1559,6 +1627,51 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             "symbols": [],
         }
         payload["ruleAudit"] = rule_audit_payload(rulebox.get("rules") or [], {})
+    operational_count = sum([
+        int((payload.get("executionHistory") or {}).get("runCount") or 0),
+        int((payload.get("ruleRuntimeSummary") or {}).get("sampleCount") or 0),
+        int((payload.get("ruleResultSlots") or {}).get("slotCount") or 0),
+    ])
+    has_graph = bool(read_model.get("hasData"))
+    stale_graph = bool(read_model.get("stale"))
+    refreshing = bool(read_model.get("refreshing"))
+    usable = has_graph or operational_count > 0
+    status = (
+        "stale" if has_graph and stale_graph
+        else "ok" if has_graph
+        else "degraded" if operational_count > 0
+        else "refreshing" if refreshing
+        else "unavailable"
+    )
+    dependency_status = (
+        "stale" if has_graph and stale_graph
+        else "available" if has_graph
+        else "refreshing" if refreshing
+        else "unavailable"
+    )
+    payload.update({
+        "status": status,
+        "usable": usable,
+        "retryable": not has_graph,
+        "generatedAt": now(),
+        "dataFreshness": {
+            "status": "stale" if stale_graph else "fresh" if has_graph else "unavailable",
+            "ageSeconds": int(read_model.get("ageSeconds") or 0),
+            "lastSuccessAt": str(read_model.get("lastSuccessAt") or ""),
+            "source": "persistent-read-model" if has_graph else "mysql-execution-history",
+        },
+        "dependencyStatus": {
+            "typedb": {
+                "status": dependency_status,
+                "refreshing": refreshing,
+                "lastAttemptAt": str(read_model.get("lastAttemptAt") or ""),
+                "lastError": str(read_model.get("lastError") or ""),
+                "retryAfterSeconds": int(read_model.get("retryAfterSeconds") or 0),
+            }
+        },
+    })
+    if direct and not usable:
+        payload["error"] = str(read_model.get("lastError") or "TypeDB inference API is unavailable.")
     return payload
 
 
@@ -2251,16 +2364,29 @@ def investment_strategy_proposal_service():
     return build_investment_strategy_proposal_service(runtime_settings())
 
 
-def list_investment_strategy_proposals_payload() -> Dict[str, object]:
-    return investment_strategy_proposal_service().list()
+def investment_strategy_proposal_read_service():
+    # Read projections never publish lifecycle events. Avoid constructing the
+    # durable event bus, whose schema checks belong to write/service startup.
+    return build_investment_strategy_proposal_service(
+        operational_read_settings(),
+        event_publisher=EventBus(),
+    )
+
+
+def list_investment_strategy_proposals_payload(query: Dict[str, List[str]] = None) -> Dict[str, object]:
+    query = query or {}
+    return investment_strategy_proposal_read_service().list(
+        limit=safe_int(first_query(query, "limit"), 100, 1, 500),
+        detail="summary" if request_bool(first_query(query, "summary"), False) else "full",
+    )
 
 
 def investment_strategy_proposals_status_payload() -> Dict[str, object]:
-    return investment_strategy_proposal_service().status()
+    return investment_strategy_proposal_read_service().status()
 
 
 def investment_strategy_proposal_payload(proposal_id: str) -> Dict[str, object]:
-    return investment_strategy_proposal_service().get(proposal_id)
+    return investment_strategy_proposal_read_service().get(proposal_id)
 
 
 def validate_investment_strategy_proposal_payload(proposal_id: str, payload: Dict[str, object]) -> Dict[str, object]:
@@ -2272,7 +2398,7 @@ def approve_investment_strategy_proposal_payload(proposal_id: str, payload: Dict
 
 
 def investment_strategy_proposal_performance_payload(proposal_id: str) -> Dict[str, object]:
-    return investment_strategy_proposal_service().performance(proposal_id)
+    return investment_strategy_proposal_read_service().performance(proposal_id)
 
 
 def record_investment_strategy_proposal_performance_payload(proposal_id: str, payload: Dict[str, object]) -> Dict[str, object]:
@@ -4889,6 +5015,17 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", cache_control)
             self.send_header("Vary", "Accept-Encoding")
+            request_id = str(getattr(self, "_request_id", "") or "")
+            if request_id:
+                self.send_header("X-Request-ID", request_id)
+            started_at = getattr(self, "_request_started_at", None)
+            if started_at is not None:
+                self.send_header("Server-Timing", "app;dur=" + ("%.1f" % ((time.monotonic() - started_at) * 1000.0)))
+            if status in {429, 502, 503, 504}:
+                retry_after = 5
+                if isinstance(payload, dict):
+                    retry_after = max(1, safe_int(payload.get("retryAfterSeconds"), 5, 1, 3600))
+                self.send_header("Retry-After", str(retry_after))
             if compressed:
                 self.send_header("Content-Encoding", "gzip")
             if cors:
@@ -4955,6 +5092,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         return getattr(self, "_share_access", local_owner_access() if not share_mode_enabled() else anonymous_access())
 
     def handle_request(self):
+        supplied_request_id = str(self.headers.get("X-Request-ID") or "").strip()
+        self._request_id = supplied_request_id[:80] if re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", supplied_request_id) else uuid.uuid4().hex
+        self._request_started_at = time.monotonic()
         if not self.authorize_share():
             return
         path = self.path_name()
@@ -4972,13 +5112,30 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
         except ValueError as error:
-            self.send_payload(400, {"error": str(error) or "잘못된 요청입니다."})
+            self.send_payload(400, {
+                "status": "error",
+                "error": str(error) or "잘못된 요청입니다.",
+                "retryable": False,
+                "requestId": self._request_id,
+            })
         except (urllib.error.URLError, TimeoutError, ExternalCircuitOpen, ExternalRateLimited) as error:
             report_runtime_error(operational_error_reporter(), "Python web server", error, "HTTP 502 " + path)
-            self.send_payload(502, {"error": str(error) or "외부 데이터 요청 실패"})
+            self.send_payload(502, {
+                "status": "unavailable",
+                "error": str(error) or "외부 데이터 요청 실패",
+                "retryable": True,
+                "retryAfterSeconds": 5,
+                "requestId": self._request_id,
+                "dependencyStatus": {"externalApi": "unavailable"},
+            })
         except Exception as error:
             report_runtime_error(operational_error_reporter(), "Python web server", error, "HTTP 500 " + path)
-            self.send_payload(500, {"error": str(error) or "서버 오류"})
+            self.send_payload(500, {
+                "status": "error",
+                "error": str(error) or "서버 오류",
+                "retryable": False,
+                "requestId": self._request_id,
+            })
 
     def ensure_writable(self, message: str) -> bool:
         if not self.share_access().writable:
@@ -5088,7 +5245,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, ontology_diagnostics_payload(query))
 
         if path == "/api/ontology/inference-ledger" and self.command == "GET":
-            return self.send_payload(200, ontology_inference_ledger_api_payload(query))
+            payload = ontology_inference_ledger_api_payload(query)
+            status = 503 if request_bool(first_query(query, "direct"), False) and not payload.get("usable") else 200
+            return self.send_payload(status, payload)
 
         if path == "/api/ontology/audit" and self.command == "GET":
             return self.send_payload(200, ontology_audit_payload(query))
@@ -5178,7 +5337,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, ontology_experiment_payload(urllib.parse.unquote(ontology_experiment_match.group(1))))
 
         if path == "/api/investment-strategy-proposals" and self.command == "GET":
-            return self.send_payload(200, list_investment_strategy_proposals_payload())
+            return self.send_payload(200, list_investment_strategy_proposals_payload(query))
 
         if path == "/api/investment-strategy-proposals/status" and self.command == "GET":
             return self.send_payload(200, investment_strategy_proposals_status_payload())

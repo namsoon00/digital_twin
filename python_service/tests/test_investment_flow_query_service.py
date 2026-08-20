@@ -65,6 +65,36 @@ class FakeNotificationStore:
         return [row for row in self.rows if row.get("decisionEpisodeId") in set(episode_ids)][:limit]
 
 
+class FakeCompactNotificationStore(FakeNotificationStore):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.summary_reads = 0
+        self.full_reads = 0
+
+    def job_summaries_for_decision_episodes(self, episode_ids, limit=200):
+        self.summary_reads += 1
+        return [row for row in self.rows if row.get("decisionEpisodeId") in set(episode_ids)][:limit]
+
+    def jobs_for_decision_episodes(self, episode_ids, limit=200):
+        self.full_reads += 1
+        return super().jobs_for_decision_episodes(episode_ids, limit)
+
+
+class FakeFlowHeadStore(FakeDecisionStore):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.head_reads = 0
+        self.history_reads = 0
+
+    def list_flow_heads(self, account_id="", symbol="", limit=200):
+        self.head_reads += 1
+        return super().list(account_id, symbol, limit)
+
+    def list(self, account_id="", symbol="", limit=50):
+        self.history_reads += 1
+        return super().list(account_id, symbol, limit)
+
+
 class InvestmentFlowQueryServiceTests(unittest.TestCase):
     def test_projection_keeps_the_complete_judgement_chain(self):
         result = decision_flow_projection(
@@ -105,6 +135,33 @@ class InvestmentFlowQueryServiceTests(unittest.TestCase):
         self.assertEqual("episode:new", result["items"][0]["episodeId"])
         self.assertEqual("BUY", result["items"][0]["action"])
         self.assertEqual(0, result["summary"]["attentionRequired"])
+
+    def test_summary_prefers_compact_flow_head_reader(self):
+        store = FakeFlowHeadStore([
+            episode(episode_id="episode:new", action="BUY"),
+        ])
+        service = InvestmentFlowQueryService(store, FakeNotificationStore([]))
+
+        result = service.summary(account_id="account-1")
+
+        self.assertEqual(1, result["count"])
+        self.assertEqual(1, store.head_reads)
+        self.assertEqual(0, store.history_reads)
+
+    def test_summary_prefers_compact_notification_reader(self):
+        notifications = FakeCompactNotificationStore([
+            {"jobId": "job:new", "decisionEpisodeId": "episode:new", "status": "done"},
+        ])
+        service = InvestmentFlowQueryService(
+            FakeDecisionStore([episode(episode_id="episode:new")]),
+            notifications,
+        )
+
+        result = service.summary()
+
+        self.assertEqual(1, len(result["items"][0]["notifications"]))
+        self.assertEqual(1, notifications.summary_reads)
+        self.assertEqual(0, notifications.full_reads)
 
     def test_detail_returns_nodes_links_and_validation_gaps(self):
         row = episode(validation_state="conditional", data_state="partial", selected=False)

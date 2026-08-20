@@ -66,6 +66,16 @@ class MySQLInvestmentStrategyProposalStore(MySQLOperationalConnection):
             self.rewrite_retired_score_fields(connection, rows)
         return [strategy_proposal_from_row(row) for row in rows]
 
+    def status_counts(self):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM investment_strategy_proposals GROUP BY status"
+            ).fetchall()
+        return {
+            str(row.get("status") or "unknown"): int(row.get("count") or 0)
+            for row in rows or []
+        }
+
     def get(self, proposal_id: str):
         with self.transaction() as connection:
             row = connection.execute(

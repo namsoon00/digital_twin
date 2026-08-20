@@ -94,6 +94,27 @@ class FakeNotificationStore:
         ]
 
 
+class FakeCompactNotificationStore(FakeNotificationStore):
+    def __init__(self):
+        self.timeline_reads = 0
+        self.legacy_reads = 0
+
+    def timeline_for_symbol(self, symbol, account_id="", limit=100):
+        self.timeline_reads += 1
+        return [{
+            "jobId": "notification-compact",
+            "messageType": "investmentInsight",
+            "text": "삼성전자 판단 변경",
+            "context": {"symbol": symbol},
+            "status": "sent",
+            "updatedAt": "2026-08-15T04:00:00Z",
+        }]
+
+    def recent(self, limit=200):
+        self.legacy_reads += 1
+        return super().recent(limit)
+
+
 class FakeSymbolStore:
     def get(self, symbol, market=""):
         return SimpleNamespace(to_dict=lambda: {
@@ -149,6 +170,25 @@ class InstrumentTimelineQueryServiceTest(unittest.TestCase):
     def test_structured_symbol_match_does_not_accept_partial_code(self):
         self.assertTrue(mentions_symbol({"symbol": "005930"}, "005930"))
         self.assertFalse(mentions_symbol({"symbol": "10059300"}, "005930"))
+
+    def test_uses_compact_notification_timeline_without_legacy_scan(self):
+        notifications = FakeCompactNotificationStore()
+        service = InstrumentTimelineQueryService(
+            FakeTimeSeriesStore([]),
+            FakeEvidenceStore(),
+            FakeCalendarStore(),
+            FakeDecisionStore(),
+            FakeHypothesisStore(),
+            notifications,
+            FakeSymbolStore(),
+        )
+
+        result = service.query(InstrumentTimelineQuery("005930"))
+
+        notification = next(item for item in result["events"] if item["type"] == "notification")
+        self.assertEqual("notification-compact", notification["id"])
+        self.assertEqual(1, notifications.timeline_reads)
+        self.assertEqual(0, notifications.legacy_reads)
 
 
 if __name__ == "__main__":

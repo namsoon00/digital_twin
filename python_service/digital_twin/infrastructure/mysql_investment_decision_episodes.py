@@ -394,6 +394,60 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
 
+    def list_flow_heads(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, object]]:
+        """Return one compact latest decision payload per account instrument.
+
+        The investment-flow list does not need mutable outcomes or follow-up
+        hydration. Selecting the latest head in SQL avoids loading hundreds of
+        nested dataclasses only to discard older episodes in Python.
+        """
+
+        clauses = []
+        params: List[object] = []
+        if account_id:
+            clauses.append("account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            clauses.append("symbol = %s")
+            params.append(str(symbol).upper())
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(500, int(limit or 200))))
+        sql = (
+            "SELECT ranked.flow_id, ranked.account_id, ranked.symbol, ranked.updated_at AS flow_updated_at, "
+            "episodes.payload_json, episodes.status, episodes.decided_at "
+            "FROM ("
+            "SELECT flow_id, account_id, symbol, decision_episode_id, updated_at, "
+            "ROW_NUMBER() OVER (PARTITION BY account_id, symbol "
+            "ORDER BY decided_at DESC, decision_episode_id DESC) AS flow_rank "
+            "FROM investment_flow_heads"
+            + where
+            + ") AS ranked JOIN investment_decision_episodes AS episodes "
+            "ON episodes.episode_id = ranked.decision_episode_id "
+            "WHERE ranked.flow_rank = 1 "
+            "ORDER BY ranked.updated_at DESC, ranked.flow_id DESC LIMIT %s"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        result = []
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if not isinstance(payload, dict):
+                continue
+            payload = dict(payload)
+            payload["flowId"] = str(row.get("flow_id") or payload.get("flowId") or "")
+            payload["accountId"] = str(row.get("account_id") or payload.get("accountId") or "")
+            payload["symbol"] = str(row.get("symbol") or payload.get("symbol") or "").upper()
+            payload["status"] = str(row.get("status") or payload.get("status") or "active")
+            payload["decidedAt"] = canonical_investment_timestamp(row.get("decided_at")) or str(payload.get("decidedAt") or "")
+            payload["updatedAt"] = str(row.get("flow_updated_at") or payload.get("updatedAt") or payload.get("decidedAt") or "")
+            result.append(payload)
+        return result
+
     def list_replay_records(
         self,
         account_id: str = "",

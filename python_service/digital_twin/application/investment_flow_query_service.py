@@ -30,17 +30,17 @@ class InvestmentFlowQueryService:
             if not key[1] or key in seen:
                 continue
             seen.add(key)
-            latest.append(episode)
+            latest.append((episode, payload))
         jobs_by_episode = self._jobs_by_episode([
-            text(item_dict(episode).get("episodeId") or item_dict(episode).get("episode_id"))
-            for episode in latest
+            text(payload.get("episodeId") or payload.get("episode_id"))
+            for _episode, payload in latest
         ])
         items = [
             decision_flow_projection(
-                episode,
-                jobs_by_episode.get(text(item_dict(episode).get("episodeId") or item_dict(episode).get("episode_id")), []),
+                payload,
+                jobs_by_episode.get(text(payload.get("episodeId") or payload.get("episode_id")), []),
             )
-            for episode in latest
+            for _episode, payload in latest
         ]
         items.sort(key=lambda item: (text(item.get("updatedAt")), text(item.get("episodeId"))), reverse=True)
         validation_counts = Counter(text(item.get("validationState")) or "warning" for item in items)
@@ -136,6 +136,12 @@ class InvestmentFlowQueryService:
         }
 
     def _episodes(self, account_id: str, symbol: str, limit: int) -> List[object]:
+        head_reader = getattr(self.decision_episode_store, "list_flow_heads", None)
+        if callable(head_reader):
+            try:
+                return list(head_reader(account_id=account_id, symbol=symbol.upper(), limit=limit) or [])
+            except TypeError:
+                return list(head_reader(account_id, symbol.upper(), limit) or [])
         reader = getattr(self.decision_episode_store, "list", None)
         if not callable(reader):
             return []
@@ -162,7 +168,10 @@ class InvestmentFlowQueryService:
         result: Dict[str, List[object]] = {item: [] for item in ids}
         if not ids or not self.notification_job_store:
             return result
-        batch_reader = getattr(self.notification_job_store, "jobs_for_decision_episodes", None)
+        batch_reader = (
+            getattr(self.notification_job_store, "job_summaries_for_decision_episodes", None)
+            or getattr(self.notification_job_store, "jobs_for_decision_episodes", None)
+        )
         if callable(batch_reader):
             try:
                 jobs = batch_reader(ids, limit=max(100, len(ids) * 4)) or []

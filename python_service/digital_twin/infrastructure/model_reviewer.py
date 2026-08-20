@@ -2,10 +2,12 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 from typing import Dict
 
 from ..domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
-from .settings import ROOT_DIR, runtime_settings
+from .settings import ROOT_DIR, data_dir, runtime_settings
 
 
 ENFORCED_CODEX_MODEL = "gpt-5.6-sol"
@@ -93,7 +95,25 @@ def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str
     executable = shutil.which("codex")
     if not executable:
         return ""
+    try:
+        maximum = max(1, min(8, int(os.environ.get("ORBIT_LOCAL_AI_MAX_CONCURRENT") or 2)))
+    except (TypeError, ValueError):
+        maximum = 2
+    try:
+        wait_seconds = max(1, min(900, int(os.environ.get("ORBIT_LOCAL_AI_CAPACITY_WAIT_SECONDS") or 300)))
+    except (TypeError, ValueError):
+        wait_seconds = 300
+    guard = Path(__file__).with_name("local_ai_process_guard.py")
     parts = [
+        shlex.quote(sys.executable),
+        shlex.quote(str(guard)),
+        "--lock-dir",
+        shlex.quote(str(data_dir() / "local-ai-capacity")),
+        "--max-concurrent",
+        str(maximum),
+        "--wait-seconds",
+        str(wait_seconds),
+        "--",
         shlex.quote(executable),
     ]
     for argument in codex_cli_arguments(reasoning_effort):

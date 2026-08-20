@@ -239,20 +239,24 @@ class InstrumentTimelineQueryService:
                     "materialChange": bool(payload.get("materialChange")),
                 },
             ))
+        timeline_reader = getattr(self.notification_job_store, "timeline_for_symbol", None)
+        compact_notification_rows = callable(timeline_reader)
         symbol_reader = getattr(self.notification_job_store, "recent_for_symbol", None)
         notification_jobs = (
-            symbol_reader(request.symbol, request.account_id, limit=100)
+            timeline_reader(request.symbol, request.account_id, limit=100)
+            if compact_notification_rows
+            else symbol_reader(request.symbol, request.account_id, limit=100)
             if callable(symbol_reader)
             else []
         )
         # Legacy jobs can predate the indexed symbol projection. Keep the
         # common path indexed, and use one bounded compatibility read only
         # when no projected row exists for the instrument.
-        if not notification_jobs:
+        if not notification_jobs and not compact_notification_rows:
             notification_jobs = self.notification_job_store.recent(limit=200)
         for job in notification_jobs:
             payload = object_payload(job)
-            if not mentions_symbol(payload.get("context"), request.symbol) and not mentions_symbol(payload.get("text"), request.symbol):
+            if not compact_notification_rows and not mentions_symbol(payload.get("context"), request.symbol) and not mentions_symbol(payload.get("text"), request.symbol):
                 continue
             result.append(marker(
                 payload.get("jobId"),

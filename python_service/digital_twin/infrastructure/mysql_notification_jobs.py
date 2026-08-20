@@ -60,7 +60,10 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         from .mysql_operational import MySQLNotificationRuleStore
 
         MySQLNotificationRuleStore(self.runtime_settings)
-        self.ensure_sent_article_delivery_ledger_backfill()
+        # Read-side stores are constructed by several HTTP projections. Do not
+        # scan and rewrite historical article delivery rows on construction;
+        # duplicate checks already merge the durable ledger with bounded live
+        # history and opportunistically repair it inside their write boundary.
 
     def sent_article_delivery_ledger_backfill_key(self) -> Tuple[str, str, str, str]:
         return (
@@ -126,6 +129,77 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params,
             ).fetchall()
         return [self.job_from_row(row) for row in rows or []]
+
+    def timeline_for_symbol(
+        self,
+        symbol: str,
+        account_id: str = "",
+        limit: int = 100,
+    ) -> List[Dict[str, object]]:
+        """Return notification timeline markers without hydrating full jobs.
+
+        Current rows use the indexed symbol column. A bounded compatibility
+        query covers historical rows whose symbol still exists only in the JSON
+        context, avoiding a Python recursive scan of every notification body.
+        """
+
+        clean_symbol = str(symbol or "").upper().strip()[:64]
+        safe_limit = max(1, min(200, int(limit or 100)))
+        if not clean_symbol:
+            return []
+
+        def select_rows(connection, clauses, params, row_limit):
+            return connection.execute(
+                "SELECT job_id, account_id, message_type, source_event_name, symbol, "
+                "api_source, data_quality, status, created_at, updated_at, text "
+                "FROM notification_jobs WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY updated_at DESC, job_id DESC LIMIT %s",
+                [*params, row_limit],
+            ).fetchall()
+
+        account = str(account_id or "").strip()[:191]
+        with self.connect() as connection:
+            indexed_clauses = ["symbol = %s"]
+            indexed_params: List[object] = [clean_symbol]
+            if account:
+                indexed_clauses.append("account_id = %s")
+                indexed_params.append(account)
+            rows = list(select_rows(connection, indexed_clauses, indexed_params, safe_limit) or [])
+            remaining = safe_limit - len(rows)
+            if remaining > 0:
+                legacy_clauses = [
+                    "symbol = ''",
+                    "UPPER(CASE WHEN JSON_VALID(payload_json) THEN COALESCE("
+                    "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.context.symbol')), "
+                    "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.context.rawSymbol')), ''"
+                    ") ELSE '' END) = %s",
+                ]
+                legacy_params: List[object] = [clean_symbol]
+                if account:
+                    legacy_clauses.append("account_id = %s")
+                    legacy_params.append(account)
+                rows.extend(select_rows(connection, legacy_clauses, legacy_params, remaining) or [])
+
+        payloads = [{
+            "jobId": str(row.get("job_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "messageType": str(row.get("message_type") or "notification"),
+            "sourceEventName": str(row.get("source_event_name") or ""),
+            "symbol": str(row.get("symbol") or clean_symbol).upper(),
+            "apiSource": str(row.get("api_source") or "notification_jobs"),
+            "dataQuality": str(row.get("data_quality") or "actual"),
+            "status": str(row.get("status") or "pending"),
+            "createdAt": str(row.get("created_at") or ""),
+            "updatedAt": str(row.get("updated_at") or ""),
+            "text": str(row.get("text") or ""),
+            "context": {"symbol": str(row.get("symbol") or clean_symbol).upper()},
+        } for row in rows]
+        return sorted(
+            payloads,
+            key=lambda item: (str(item.get("updatedAt") or item.get("createdAt") or ""), str(item.get("jobId") or "")),
+            reverse=True,
+        )[:safe_limit]
 
     def delivered_cadence_timestamps(
         self,
@@ -204,6 +278,38 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 params,
             ).fetchall()
         return [self.job_from_row(row) for row in rows or []]
+
+    def job_summaries_for_decision_episodes(
+        self,
+        episode_ids: Iterable[str],
+        limit: int = 200,
+    ) -> List[Dict[str, object]]:
+        """Return flow-stage metadata without decoding immutable AI traces."""
+
+        ids = list(dict.fromkeys(
+            str(item or "").strip()
+            for item in episode_ids or []
+            if str(item or "").strip()
+        ))
+        if not ids:
+            return []
+        placeholders = ",".join(["%s"] * len(ids))
+        params = ids + [max(1, min(1000, int(limit or 200)))]
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT job_id, decision_episode_id, message_type, status, created_at, updated_at "
+                "FROM notification_jobs WHERE decision_episode_id IN (" + placeholders + ") "
+                "ORDER BY updated_at DESC, job_id DESC LIMIT %s",
+                params,
+            ).fetchall()
+        return [{
+            "jobId": str(row.get("job_id") or ""),
+            "decisionEpisodeId": str(row.get("decision_episode_id") or ""),
+            "messageType": str(row.get("message_type") or ""),
+            "status": str(row.get("status") or ""),
+            "createdAt": str(row.get("created_at") or ""),
+            "updatedAt": str(row.get("updated_at") or ""),
+        } for row in rows or []]
 
     def recent_page_with_summary(
         self,

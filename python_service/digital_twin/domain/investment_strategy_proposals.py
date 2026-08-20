@@ -98,6 +98,41 @@ class InvestmentStrategyProposal:
         payload["contract"] = "investment-strategy-proposal-v1"
         return payload
 
+    def to_summary_dict(self) -> Dict[str, object]:
+        """Return the list/read-dashboard contract without audit-sized detail."""
+
+        performance_summary = (
+            self.performance.get("summary")
+            if isinstance(self.performance, dict) and isinstance(self.performance.get("summary"), dict)
+            else {}
+        )
+        validation = self.validation if isinstance(self.validation, dict) else {}
+        materialization = validation.get("materialization") if isinstance(validation.get("materialization"), dict) else validation
+        return {
+            "id": self.proposal_id,
+            "title": self.title,
+            "thesis": self.thesis,
+            "symbols": list(self.symbols),
+            "ruleIds": list(self.rule_ids),
+            "sourceExperimentId": self.source_experiment_id,
+            "sourceTrigger": self.source_trigger,
+            "inferenceGenerationId": self.inference_generation_id,
+            "status": self.status,
+            "validation": {
+                key: materialization.get(key)
+                for key in ("status", "ready", "matchedCount", "baselineRelationCount", "candidateMatchedCount")
+                if key in materialization
+            },
+            "performance": {"summary": dict(performance_summary)},
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+            "approvedAt": self.approved_at,
+            "deployedAt": self.deployed_at,
+            "retiredAt": self.retired_at,
+            "detailAvailable": True,
+            "contract": "investment-strategy-proposal-summary-v1",
+        }
+
     @staticmethod
     def from_dict(payload: Dict[str, object]):
         payload = dict(without_retired_strategy_score_fields(dict(payload or {})))

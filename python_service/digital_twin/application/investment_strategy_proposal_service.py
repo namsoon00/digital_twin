@@ -41,20 +41,28 @@ class InvestmentStrategyProposalService:
         self.event_publisher = event_publisher
         self.settings = dict(settings or {})
 
-    def list(self) -> Dict[str, object]:
-        proposals = self.proposal_store.list() if self.proposal_store else []
+    def list(self, limit: int = 100, detail: str = "full") -> Dict[str, object]:
+        safe_limit = max(1, min(500, int(limit or 100)))
+        proposals = self.proposal_store.list(limit=safe_limit) if self.proposal_store else []
+        summary_only = str(detail or "full").lower() == "summary"
         return {
-            "proposals": [item.to_dict() for item in proposals],
+            "proposals": [item.to_summary_dict() if summary_only else item.to_dict() for item in proposals],
             "count": len(proposals),
+            "detailLevel": "summary" if summary_only else "full",
+            "limit": safe_limit,
         }
 
     def status(self) -> Dict[str, object]:
-        proposals = self.proposal_store.list() if self.proposal_store else []
-        statuses: Dict[str, int] = {}
-        for proposal in proposals:
-            statuses[proposal.status] = statuses.get(proposal.status, 0) + 1
+        counter = getattr(self.proposal_store, "status_counts", None) if self.proposal_store else None
+        if callable(counter):
+            statuses = dict(counter() or {})
+        else:
+            proposals = self.proposal_store.list() if self.proposal_store else []
+            statuses: Dict[str, int] = {}
+            for proposal in proposals:
+                statuses[proposal.status] = statuses.get(proposal.status, 0) + 1
         return {
-            "count": len(proposals),
+            "count": sum(int(value or 0) for value in statuses.values()),
             "proposedCount": statuses.get(STRATEGY_STATUS_PROPOSED, 0),
             "validatedCount": statuses.get(STRATEGY_STATUS_VALIDATED, 0),
             "approvedCount": statuses.get(STRATEGY_STATUS_APPROVED, 0),

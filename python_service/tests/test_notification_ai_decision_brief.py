@@ -130,10 +130,10 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
         self.assertEqual("standard", standard["name"])
         self.assertEqual("high", standard["reasoningEffort"])
-        self.assertEqual(14 * 1024, standard["maxPromptBytes"])
+        self.assertEqual(16 * 1024, standard["maxPromptBytes"])
         self.assertEqual("deepResearch", deep["name"])
         self.assertEqual("high", deep["reasoningEffort"])
-        self.assertGreater(deep["maxPromptBytes"], standard["maxPromptBytes"])
+        self.assertEqual(20 * 1024, deep["maxPromptBytes"])
 
     def test_mixed_competing_evidence_uses_deep_research_profile(self):
         context = decision_context()

@@ -56,6 +56,19 @@ def _relation_for_match(match: object, relations: Iterable[Mapping[str, object]]
 
 
 def relation_assessment_scope(relation: Mapping[str, object], match: object = None) -> str:
+    knowledge_basis = _mapping(
+        relation.get("knowledgeBasis") or relation.get("knowledge_basis")
+    )
+    if not knowledge_basis:
+        knowledge_basis = _mapping(_values(match, "knowledge_basis", "knowledgeBasis"))
+    governed_scope = {
+        "data-quality-gate": "evidence-quality",
+        "execution-gate": "execution-readiness",
+        "policy-constraint": "portfolio-fit",
+        "predictive-hypothesis": "investment-opinion",
+    }.get(_text(knowledge_basis.get("ruleKind") or knowledge_basis.get("rule_kind")))
+    if governed_scope:
+        return governed_scope
     explicit = _text(relation.get("assessmentScope") or relation.get("assessment_scope"))
     if not explicit:
         explicit = _text(_values(match, "assessment_scope", "assessmentScope"))

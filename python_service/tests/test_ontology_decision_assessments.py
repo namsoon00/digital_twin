@@ -97,6 +97,23 @@ class OntologyDecisionAssessmentTests(unittest.TestCase):
         self.assertEqual("HOLD", bundle["investmentOpinion"]["candidateAction"])
         self.assertEqual(["rule.stale"], bundle["evidenceQuality"]["excludedRuleIds"])
 
+    def test_governed_policy_role_overrides_legacy_investment_opinion_scope(self):
+        policy_relation = relation("graph.strategy.fit", "investment-opinion", "HOLD", "defer")
+        policy_relation["knowledgeBasis"] = {
+            "ruleKind": "policy-constraint",
+            "decisionEligibility": "guardrail-only",
+            "requiresHypothesis": False,
+        }
+
+        bundle = decision_assessment_bundle(
+            [match("graph.strategy.fit", "HOLD", "defer")],
+            [policy_relation],
+        )
+
+        self.assertEqual("not-evaluated", bundle["investmentOpinion"]["status"])
+        self.assertEqual("deferred", bundle["portfolioFit"]["status"])
+        self.assertEqual(["graph.strategy.fit"], bundle["portfolioFit"]["ruleIds"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ from digital_twin.domain.data_freshness import evaluate_notification_data_freshn
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
 from digital_twin.domain.notification_ai_gate_validation import normalized_hypothesis_comparison
+from digital_twin.domain.notification_ai_decision_brief import notification_ai_decision_brief
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.investment_reasoning import (
     CASE_BLOCKED,
@@ -102,6 +103,16 @@ def reasoning_request(fact_types=None):
 
 
 def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
+    knowledge_basis = {
+        "ruleKind": "predictive-hypothesis",
+        "theoryFamily": "behavioral-momentum-and-trend",
+        "thesisFamily": "trend-recovery",
+        "validationStatus": "replay-required",
+        "decisionEligibility": "conditional",
+        "requiresHypothesis": True,
+        "evidenceIndependenceKey": "trend-recovery",
+        "plainLanguageBasis": "가격 회복이 이어질 수 있다는 검증 대상 가설입니다.",
+    }
     return {
         "metadata": {
             "ontologyRelationContext": {
@@ -116,6 +127,9 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
                             "supportingEvidenceIds": ["evidence:price-window"],
                             "counterEvidenceIds": ["evidence:weak-volume"],
                             "invalidationConditions": ["price recovery fails"],
+                            "theoryFamily": knowledge_basis["theoryFamily"],
+                            "thesisFamily": knowledge_basis["thesisFamily"],
+                            "knowledgeBasis": knowledge_basis,
                         }],
                     },
                 },
@@ -271,6 +285,53 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         )
         self.assertEqual(observed_at, insight.generated_at)
         self.assertTrue(freshness.should_send)
+
+    def test_guardrail_only_relation_does_not_create_investment_notification(self):
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]
+        relation["investmentBrain"]["hypothesisSet"]["hypotheses"] = []
+        guardrail = {
+            "ruleId": "graph.instrument_profile.strategy_fit.support.v1",
+            "label": "종목 성격·투자 성향 적합",
+            "candidateAction": "HOLD",
+            "notificationSeverity": "WATCH",
+            "knowledgeBasis": {
+                "ruleKind": "policy-constraint",
+                "decisionEligibility": "guardrail-only",
+                "requiresHypothesis": False,
+            },
+        }
+        relation.update({
+            "subject": {"symbol": "NVDA", "name": "NVIDIA", "market": "US"},
+            "facts": {"source": "watchlist", "currentPrice": 200.0},
+            "source": "typedbInferenceBox",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "sourceAboxSnapshotId": "abox:guardrail:1",
+            "inferenceGenerationId": "generation:guardrail:1",
+            "generationAligned": True,
+            "activeRules": [guardrail],
+            "matchedRules": [guardrail],
+            "decision": {
+                "candidateAction": "HOLD",
+                "selectedRuleId": guardrail["ruleId"],
+                "notificationSeverity": "WATCH",
+                "basis": "typedbInferenceBox",
+            },
+            "graphStoreInference": {
+                "relations": [guardrail],
+                "traces": [{"id": "trace:guardrail:1", **guardrail}],
+            },
+        })
+        snapshot = AccountSnapshot(
+            "account:1", "Test", "toss", "live", "ok", observed_at,
+            PortfolioSummary(1000.0, 1000.0, 0.0, [], [], 100.0),
+        )
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+
+        self.assertEqual((), synthesis.eligible_hypothesis_ids)
+        self.assertIsNone(builder._base_event(snapshot, relation, synthesis))
 
     def test_reference_only_crypto_relation_becomes_information_notification(self):
         observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -543,6 +604,15 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             ],
         )
         prompt_hypothesis = enriched["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0]
+        self.assertEqual("behavioral-momentum-and-trend", prompt_hypothesis["theoryFamily"])
+        self.assertEqual("trend-recovery", prompt_hypothesis["evidenceIndependenceKey"])
+        self.assertEqual("predictive-hypothesis", prompt_hypothesis["knowledgeBasis"]["ruleKind"])
+        persisted_hypothesis = persisted.to_dict()["hypotheses"][0]
+        self.assertEqual("behavioral-momentum-and-trend", persisted_hypothesis["theory_family"])
+        self.assertEqual("trend-recovery", persisted_hypothesis["evidence_independence_key"])
+        brief_hypothesis = notification_ai_decision_brief(enriched)["inference"]["hypothesisSet"]["hypotheses"][0]
+        self.assertEqual("behavioral-momentum-and-trend", brief_hypothesis["theoryFamily"])
+        self.assertEqual("trend-recovery", brief_hypothesis["knowledgeBasis"]["evidenceIndependenceKey"])
         comparison = normalized_hypothesis_comparison(enriched, {
             "hypotheses": [{
                 "hypothesisId": "hypothesis:canonical",

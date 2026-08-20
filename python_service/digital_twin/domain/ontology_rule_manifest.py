@@ -106,6 +106,18 @@ def rule_assessment_scope(
 ) -> str:
     """Return the owned decision area without evaluating investment facts."""
 
+    rule_id = str(_value(rule, "rule_id", "ruleId") or "").strip()
+    if rule_id:
+        rule_kind = resolved_rule_knowledge_basis(rule).rule_kind
+        governed_scope = {
+            "data-quality-gate": "evidence-quality",
+            "execution-gate": "execution-readiness",
+            "policy-constraint": "portfolio-fit",
+            "predictive-hypothesis": "investment-opinion",
+        }.get(rule_kind)
+        if governed_scope:
+            return governed_scope
+
     tokens = _family_tokens(families)
     action_group = str(_value(rule, "action_group", "actionGroup") or "").strip().lower()
     module = str(module or "").strip().lower()

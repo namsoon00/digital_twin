@@ -163,6 +163,8 @@ class V2GraphDecisionCandidateBuilder:
         if not severity:
             return None
         context_observation = typedb_context_observation_contract(relation)
+        if not context_observation and not synthesis.eligible_hypothesis_ids:
+            return None
         symbol = synthesis.symbol
         name = _text(subject.get("name")) or symbol
         action = "NO_ACTION" if context_observation else synthesis.graph_candidate_action or "NO_ACTION"

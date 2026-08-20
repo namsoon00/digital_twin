@@ -42,6 +42,16 @@ class OntologyRuleManifestTests(unittest.TestCase):
 
         self.assertEqual("portfolio-fit", payload["manifests"][0]["assessmentScope"])
 
+    def test_strategy_fit_policy_is_portfolio_fit_not_investment_opinion(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.instrument_profile.strategy_fit.support.v1"
+        )
+        payload = validate_rule_domain_manifests([rule])
+
+        self.assertEqual("policy-constraint", payload["manifests"][0]["ruleKind"])
+        self.assertEqual("portfolio-fit", payload["manifests"][0]["assessmentScope"])
+
     def test_dependency_reverse_index_separates_trigger_context_and_invalidation(self):
         rule = {
             "ruleId": "graph.test.routed.v1",

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, Mapping, Tuple
 
+from ..ontology_rule_knowledge import rule_knowledge_basis_from_rows
+
 from ..ontology_change_impact import requested_scope_families_for_event_fact_types
 
 
@@ -125,16 +127,30 @@ class HypothesisRecord:
     invalidation_conditions: Tuple[str, ...] = ()
     horizon: str = ""
     validation_state: str = ""
+    theory_family: str = ""
+    thesis_family: str = ""
+    evidence_independence_key: str = ""
+    knowledge_basis: Dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "HypothesisRecord":
         payload = dict(value or {})
+        supporting_rule_ids = _texts(
+            payload.get("supportingRuleIds") or payload.get("supporting_rule_ids")
+        )
+        primary_rule_id = supporting_rule_ids[0] if supporting_rule_ids else ""
+        knowledge_basis = rule_knowledge_basis_from_rows(
+            primary_rule_id,
+            [payload],
+        ).to_dict() if primary_rule_id else dict(
+            payload.get("knowledgeBasis") or payload.get("knowledge_basis") or {}
+        )
         return cls(
             hypothesis_id=str(payload.get("hypothesisId") or payload.get("hypothesis_id") or ""),
             family_id=str(payload.get("familyId") or payload.get("family_id") or ""),
             label=str(payload.get("label") or payload.get("claim") or payload.get("title") or ""),
             candidate_action=str(payload.get("candidateAction") or payload.get("candidate_action") or "").upper(),
-            supporting_rule_ids=_texts(payload.get("supportingRuleIds") or payload.get("supporting_rule_ids")),
+            supporting_rule_ids=supporting_rule_ids,
             supporting_evidence_ids=_texts(payload.get("supportingEvidenceIds") or payload.get("supporting_evidence_ids")),
             counter_evidence_ids=_texts(payload.get("counterEvidenceIds") or payload.get("counter_evidence_ids")),
             causal_trace_ids=_texts(payload.get("causalTraceIds") or payload.get("causal_trace_ids")),
@@ -144,6 +160,25 @@ class HypothesisRecord:
             ),
             horizon=str(payload.get("horizon") or ""),
             validation_state=str(payload.get("validationState") or payload.get("validation_state") or ""),
+            theory_family=str(
+                payload.get("theoryFamily")
+                or payload.get("theory_family")
+                or knowledge_basis.get("theoryFamily")
+                or ""
+            ),
+            thesis_family=str(
+                payload.get("thesisFamily")
+                or payload.get("thesis_family")
+                or knowledge_basis.get("thesisFamily")
+                or ""
+            ),
+            evidence_independence_key=str(
+                payload.get("evidenceIndependenceKey")
+                or payload.get("evidence_independence_key")
+                or knowledge_basis.get("evidenceIndependenceKey")
+                or ""
+            ),
+            knowledge_basis=knowledge_basis,
         )
 
     def to_dict(self) -> Dict[str, object]:

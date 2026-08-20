@@ -230,10 +230,15 @@ def _enriched_prompt_hypothesis_set(
         hypothesis_id = str(item.get("hypothesisId") or "").strip()
         if not hypothesis_id:
             continue
-        hypotheses.append({
+        enriched = {
             **canonical_by_id.get(hypothesis_id, {}),
             **dict(item),
-        })
+        }
+        knowledge_basis = _mapping(enriched.get("knowledgeBasis"))
+        for key in ("theoryFamily", "thesisFamily", "evidenceIndependenceKey"):
+            if not enriched.get(key) and knowledge_basis.get(key):
+                enriched[key] = knowledge_basis[key]
+        hypotheses.append(enriched)
     return {
         **selected,
         "hypotheses": hypotheses,
@@ -511,6 +516,7 @@ HYPOTHESIS_DECISION_FIELDS = (
     "evidenceState", "supportingRuleIds", "supportingEvidenceIds",
     "counterEvidenceIds", "causalPathIds", "assumptions", "invalidationConditions",
     "horizon", "scopeState", "verificationStatus", "approvalStatus",
+    "theoryFamily", "thesisFamily", "evidenceIndependenceKey", "knowledgeBasis",
 )
 
 DECISION_FIELDS = (
@@ -625,6 +631,19 @@ def _compact_hypotheses(value: object) -> List[Dict[str, object]]:
         ):
             if isinstance(row.get(key), list):
                 row[key] = list(row[key])[:8]
+        knowledge_basis = _mapping(row.get("knowledgeBasis"))
+        if knowledge_basis:
+            row["knowledgeBasis"] = _selected_fields(
+                knowledge_basis,
+                (
+                    "ruleKind", "theoryFamily", "thesisFamily", "validationStatus",
+                    "decisionEligibility", "requiresHypothesis",
+                    "evidenceIndependenceKey", "plainLanguageBasis",
+                ),
+            )
+            for key in ("theoryFamily", "thesisFamily", "evidenceIndependenceKey"):
+                if not row.get(key) and row["knowledgeBasis"].get(key):
+                    row[key] = row["knowledgeBasis"][key]
         rows.append(row)
     return rows[:12]
 
@@ -1124,12 +1143,30 @@ def _minimum_hypotheses(value: object, *, emergency: bool = False) -> List[Dict[
             (
                 "hypothesisId", "templateId", "familyId", "claim", "stance",
                 "evidenceState", "verificationStatus", "approvalStatus", "scopeState",
+                "theoryFamily", "thesisFamily", "evidenceIndependenceKey",
             ),
         )
         compact["claim"] = _clean(compact.get("claim"), 48 if emergency else 120)
         if emergency:
-            for key in ("templateId", "familyId", "evidenceState", "approvalStatus", "scopeState"):
+            for key in (
+                "templateId", "familyId", "evidenceState", "approvalStatus", "scopeState",
+                "theoryFamily", "thesisFamily", "evidenceIndependenceKey",
+            ):
                 compact.pop(key, None)
+        else:
+            knowledge_basis = _mapping(row.get("knowledgeBasis"))
+            if knowledge_basis:
+                compact["knowledgeBasis"] = _selected_fields(
+                    knowledge_basis,
+                    (
+                        "ruleKind", "theoryFamily", "thesisFamily", "validationStatus",
+                        "decisionEligibility", "requiresHypothesis",
+                        "evidenceIndependenceKey", "plainLanguageBasis",
+                    ),
+                )
+                for key in ("theoryFamily", "thesisFamily", "evidenceIndependenceKey"):
+                    if not compact.get(key) and compact["knowledgeBasis"].get(key):
+                        compact[key] = compact["knowledgeBasis"][key]
         id_limit = 1 if emergency else 3
         id_fields = (
             ("supportingEvidenceIds", "counterEvidenceIds")

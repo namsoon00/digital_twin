@@ -138,6 +138,26 @@ class FakeTimeSeriesStore:
 
 
 class NotificationAIDecisionBriefTests(unittest.TestCase):
+    def test_brief_promotes_nested_hypothesis_knowledge_for_legacy_executions(self):
+        context = decision_context()
+        hypothesis = context["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0]
+        hypothesis["knowledgeBasis"] = {
+            "ruleKind": "predictive-hypothesis",
+            "theoryFamily": "behavioral-momentum-and-trend",
+            "thesisFamily": "trend-continuation",
+            "evidenceIndependenceKey": "trend-continuation",
+            "validationStatus": "replay-required",
+            "decisionEligibility": "conditional",
+            "requiresHypothesis": True,
+        }
+
+        brief = notification_ai_decision_brief(context, {})
+        routed = brief["inference"]["hypothesisSet"]["hypotheses"][0]
+
+        self.assertEqual("behavioral-momentum-and-trend", routed["theoryFamily"])
+        self.assertEqual("trend-continuation", routed["thesisFamily"])
+        self.assertEqual("trend-continuation", routed["evidenceIndependenceKey"])
+
     def test_standard_and_deep_profiles_use_different_effort_and_budget(self):
         standard = notification_ai_execution_profile(decision_context(), {})
         deep = notification_ai_execution_profile(decision_context("act", "new-condition"), {})

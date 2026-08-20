@@ -1633,10 +1633,10 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
     if direct:
         read_model = ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.refresh(cache_key, loader)
     else:
+        # HTTP reads must never run a TypeDB graph scan inside the web process.
+        # A direct diagnostic can refresh the durable snapshot explicitly;
+        # ordinary screens keep serving the last good graph plus MySQL history.
         read_model = ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.snapshot(cache_key)
-        if not read_model.get("hasData") or read_model.get("stale"):
-            ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.refresh_async(cache_key, loader)
-            read_model = ONTOLOGY_INFERENCE_LEDGER_READ_MODEL.snapshot(cache_key)
     graph_payload = read_model.get("payload") if isinstance(read_model.get("payload"), dict) else {}
     rulebox = graph_payload.get("rulebox") if isinstance(graph_payload.get("rulebox"), dict) else {
         "status": "deferred",
@@ -1747,6 +1747,7 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
                 "lastAttemptAt": str(read_model.get("lastAttemptAt") or ""),
                 "lastError": str(read_model.get("lastError") or ""),
                 "retryAfterSeconds": int(read_model.get("retryAfterSeconds") or 0),
+                "refreshMode": "direct-diagnostic",
             }
         },
     })

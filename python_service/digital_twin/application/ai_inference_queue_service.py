@@ -294,7 +294,7 @@ class AIInferenceQueueRunner:
         self.delivery_deadline_seconds = _int_setting(
             self.settings,
             "notificationAiDeliveryDeadlineSeconds",
-            120,
+            180,
             15,
             600,
         )

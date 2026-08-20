@@ -31029,8 +31029,8 @@
       renderSettingSelect("notificationAiDeliveryDeadlineSeconds", "알림 AI 제한시간", [
         { value: "60", label: "60초" },
         { value: "90", label: "90초" },
-        { value: "120", label: "120초 (권장)" },
-        { value: "180", label: "180초" },
+        { value: "120", label: "120초" },
+        { value: "180", label: "180초 (권장)" },
         { value: "300", label: "300초" }
       ]),
       renderSettingSelect("notificationAiTypeDbFallbackEnabled", "AI 실패 시 TypeDB 알림", [

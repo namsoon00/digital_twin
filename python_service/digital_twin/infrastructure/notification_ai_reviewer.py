@@ -170,18 +170,18 @@ def notification_ai_reviewer_from_settings(
         configured_timeout = int(
             settings.get("notificationAiTimeoutSeconds")
             or os.environ.get("NOTIFICATION_AI_TIMEOUT_SECONDS")
-            or 300
+            or 180
         )
     except (TypeError, ValueError):
-        configured_timeout = 300
+        configured_timeout = 180
     try:
         delivery_deadline = int(
             settings.get("notificationAiDeliveryDeadlineSeconds")
             or os.environ.get("NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS")
-            or 300
+            or 180
         )
     except (TypeError, ValueError):
-        delivery_deadline = 300
+        delivery_deadline = 180
     timeout = max(5, min(max(5, configured_timeout), max(5, delivery_deadline)))
     try:
         max_prompt_bytes = int(

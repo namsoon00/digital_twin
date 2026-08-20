@@ -889,10 +889,10 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiFreshnessReserveMinutes": "4",
     "notificationAiInternalDataEnabled": "1",
     "notificationAiInternalDataCacheMaxEntries": "256",
-    "notificationAiTimeoutSeconds": "120",
+    "notificationAiTimeoutSeconds": "180",
     # AI work is leased in a separate queue, so the delivery worker no longer
     # waits synchronously for this deadline.
-    "notificationAiDeliveryDeadlineSeconds": "120",
+    "notificationAiDeliveryDeadlineSeconds": "180",
     "notificationAiTypeDbFallbackEnabled": "1",
     "notificationAiFallbackOnFirstFailure": "1",
     "notificationAiComparisonRepairReasoningEffort": "low",

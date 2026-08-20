@@ -7,6 +7,10 @@ from typing import Dict, Iterable, List, Optional
 from ..application.notification.intake import NotificationIngressService
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.data_freshness import evaluate_notification_data_freshness
+from ..domain.crypto_market_signals import (
+    CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
+    crypto_transition_baseline,
+)
 from ..domain.events import (
     DomainEvent,
     ONTOLOGY_REASONING_REQUESTED,
@@ -89,6 +93,22 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
     still count consecutive failures and report recovery.
     """
     current = snapshot.to_monitor_state()
+    current_metadata = dict(current.get("metadata") or {})
+    previous_metadata = (
+        dict((previous or {}).get("metadata") or {})
+        if isinstance(previous, dict)
+        else {}
+    )
+    crypto_baseline = crypto_transition_baseline(snapshot.external_signals)
+    if crypto_baseline:
+        current_metadata[CRYPTO_TRANSITION_BASELINE_METADATA_KEY] = crypto_baseline
+    elif isinstance(previous_metadata.get(CRYPTO_TRANSITION_BASELINE_METADATA_KEY), dict):
+        # A stale or failed CoinGecko request must not erase the last
+        # transition boundary. The next fresh observation compares with it.
+        current_metadata[CRYPTO_TRANSITION_BASELINE_METADATA_KEY] = copy.deepcopy(
+            previous_metadata[CRYPTO_TRANSITION_BASELINE_METADATA_KEY]
+        )
+    current["metadata"] = current_metadata
     if snapshot.has_live_account_data():
         current = hydrate_market_observation_baselines(current, previous or {})
     if snapshot.has_live_account_data() or not monitor_state_has_live_account_data(previous or {}):

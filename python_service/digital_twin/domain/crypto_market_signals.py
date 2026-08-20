@@ -29,6 +29,8 @@ DEFAULT_CHANGE_THRESHOLDS = {
 }
 ESCALATION_MULTIPLIER = 2.0
 CRYPTO_MARKET_SNAPSHOT_SCHEMA_VERSION = 1
+CRYPTO_TRANSITION_BASELINE_METADATA_KEY = "cryptoTransitionBaseline"
+CRYPTO_TRANSITION_BASELINE_SCHEMA_VERSION = 1
 
 
 def _clean_symbol(value: object) -> str:
@@ -237,6 +239,38 @@ def crypto_freshness_is_usable(external_signals: Mapping[str, object] = None) ->
     if not freshness:
         return bool(crypto_markets_by_symbol(external_signals))
     return str(freshness.get("status") or "").strip().lower() == "fresh"
+
+
+def crypto_transition_baseline(external_signals: Mapping[str, object] = None) -> Dict[str, object]:
+    """Return the compact fresh state used only to detect the next transition."""
+
+    if not crypto_freshness_is_usable(external_signals):
+        return {}
+    markets: Dict[str, Dict[str, object]] = {}
+    for symbol, item in crypto_markets_by_symbol(external_signals).items():
+        coin_id = str(item.get("coinId") or COIN_ID_BY_SYMBOL[symbol]).lower().strip()
+        markets[coin_id] = {
+            key: deepcopy(item.get(key))
+            for key in (
+                "coinId",
+                "symbol",
+                "name",
+                "price",
+                "change24h",
+                "change7d",
+                "lastUpdated",
+                "fetchedAt",
+                "provider",
+            )
+            if item.get(key) is not None
+        }
+    if not markets:
+        return {}
+    return {
+        "schemaVersion": CRYPTO_TRANSITION_BASELINE_SCHEMA_VERSION,
+        "cryptoMarkets": markets,
+        "cryptoFreshness": deepcopy(crypto_freshness(external_signals)),
+    }
 
 
 def crypto_market_positions(external_signals: Mapping[str, object] = None) -> List[Position]:

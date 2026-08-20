@@ -19,7 +19,11 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 from .events import DomainEvent, ontology_reasoning_requested_event, snapshot_collected_event
 from .evidence_delta import evidence_inference_signature, inference_eligible
 from .fact_changes import changed_fields, fact_revision_id, fact_signature
-from .crypto_market_signals import crypto_market_transitions, crypto_transition_targets
+from .crypto_market_signals import (
+    CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
+    crypto_market_transitions,
+    crypto_transition_targets,
+)
 from .investment_research import research_evidence_from_payload
 from .materiality import market_change_materiality
 from .ontology_projection_input import compact_external_signals_for_ontology
@@ -554,9 +558,18 @@ def verified_monitor_snapshot_reasoning_event(
     current_portfolio = _portfolio_context(snapshot)
     previous_portfolio = _previous_portfolio_context(previous)
     portfolio_changed = fact_signature(previous_portfolio) != fact_signature(current_portfolio)
-    previous_raw_external = previous.get("externalSignals") if isinstance(previous, Mapping) and isinstance(previous.get("externalSignals"), Mapping) else {}
+    previous_metadata = previous.get("metadata") if isinstance(previous.get("metadata"), Mapping) else {}
+    previous_crypto_baseline = previous_metadata.get(CRYPTO_TRANSITION_BASELINE_METADATA_KEY)
+    # A missing marker means this account has never evaluated crypto market
+    # transitions. Bootstrap once from neutral even if an older raw snapshot
+    # already happened to contain the same above-threshold CoinGecko values.
+    previous_crypto_signals = (
+        previous_crypto_baseline
+        if isinstance(previous_crypto_baseline, Mapping)
+        else {}
+    )
     crypto_transitions = crypto_market_transitions(
-        previous_raw_external,
+        previous_crypto_signals,
         snapshot.external_signals,
         settings=settings,
     )

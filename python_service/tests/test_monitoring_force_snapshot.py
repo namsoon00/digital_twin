@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.monitoring_service import MonitorRunner
 from digital_twin.domain.accounts import AccountConfig
+from digital_twin.domain.crypto_market_signals import CRYPTO_TRANSITION_BASELINE_METADATA_KEY
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.market_observations import (
     MARKET_OBSERVATION_CANDIDATES_KEY,
@@ -61,6 +62,40 @@ class MemoryMonitorStore:
 
 
 class MonitoringForceSnapshotTests(unittest.TestCase):
+    def test_snapshot_persists_fresh_crypto_transition_baseline_and_retains_it_when_stale(self):
+        position = normalize_position({
+            "symbol": "AAPL", "name": "Apple", "market": "US", "currency": "USD",
+            "quantity": 1, "currentPrice": 100.0, "updatedAt": utc_now_iso(),
+        })
+        fresh = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([position]), [position], [],
+            external_signals={
+                "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-08-20T00:00:00Z"},
+                "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 6.2}},
+            },
+            metadata={},
+        )
+        fresh_state = snapshot_state_for_persistence(fresh)
+        stale = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([position]), [position], [],
+            external_signals={
+                "cryptoFreshness": {"status": "stale", "fetchedAt": "2026-08-20T00:10:00Z"},
+                "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": -8.0}},
+            },
+            metadata={},
+        )
+
+        stale_state = snapshot_state_for_persistence(stale, fresh_state)
+
+        fresh_baseline = fresh_state["metadata"][CRYPTO_TRANSITION_BASELINE_METADATA_KEY]
+        self.assertEqual(6.2, fresh_baseline["cryptoMarkets"]["bitcoin"]["change24h"])
+        self.assertEqual(
+            fresh_baseline,
+            stale_state["metadata"][CRYPTO_TRANSITION_BASELINE_METADATA_KEY],
+        )
+
     def test_market_observation_is_deferred_to_typedb_by_default(self):
         previous_position = normalize_position({
             "symbol": "000660",

@@ -10,6 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
 from digital_twin.domain.events import DomainEvent, MARKET_DATA_COLLECTED, ontology_reasoning_requested_event
+from digital_twin.domain.crypto_market_signals import (
+    CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
+    crypto_transition_baseline,
+)
 from digital_twin.domain.ontology_reasoning_queue import (
     OBSERVATION_FOLLOWUP_PRIORITY_HINT,
     REALTIME_LATEST_STATE_SLOT,
@@ -569,7 +573,29 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 4.8}},
         })
 
-        self.assertIsNone(verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state()))
+        previous_state = previous.to_monitor_state()
+        previous_state["metadata"][CRYPTO_TRANSITION_BASELINE_METADATA_KEY] = crypto_transition_baseline(
+            previous.external_signals
+        )
+
+        self.assertIsNone(verified_monitor_snapshot_reasoning_event(current, previous_state))
+
+    def test_missing_crypto_baseline_bootstraps_an_existing_threshold_move_once(self):
+        previous = snapshot(external_signals={
+            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:00:00Z"},
+            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 6.2}},
+        })
+        current = snapshot(external_signals={
+            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:10:00Z"},
+            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 6.2}},
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["BTC"], event.payload["symbols"])
+        transition = event.payload["verifiedSourceSnapshot"]["cryptoTransitions"][0]
+        self.assertEqual("threshold-crossed", transition["transition"])
+        self.assertEqual("major", transition["severity"])
 
     def test_snapshot_barrier_reuses_the_latest_realtime_slot_from_raw_kis_ticks(self):
         current = snapshot()

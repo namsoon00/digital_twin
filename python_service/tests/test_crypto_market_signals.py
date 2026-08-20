@@ -8,6 +8,7 @@ from digital_twin.domain.crypto_market_signals import (
     combine_crypto_market_snapshots,
     crypto_market_snapshot,
     crypto_market_transitions,
+    crypto_transition_baseline,
     crypto_transition_targets,
 )
 from digital_twin.domain.portfolio import Position
@@ -115,6 +116,20 @@ class CryptoMarketSignalTests(unittest.TestCase):
             [],
             crypto_market_transitions(signals(btc_24h=0.0), signals(btc_24h=-8.0, freshness="stale")),
         )
+
+    def test_transition_baseline_only_records_fresh_supported_assets(self):
+        source = signals(btc_24h=3.2, eth_7d=-4.1)
+        source["cryptoMarkets"]["dogecoin"] = {
+            "symbol": "DOGE",
+            "change24h": 20.0,
+        }
+
+        baseline = crypto_transition_baseline(source)
+
+        self.assertEqual({"bitcoin", "ethereum"}, set(baseline["cryptoMarkets"]))
+        self.assertEqual(3.2, baseline["cryptoMarkets"]["bitcoin"]["change24h"])
+        self.assertEqual("fresh", baseline["cryptoFreshness"]["status"])
+        self.assertEqual({}, crypto_transition_baseline(signals(btc_24h=8.0, freshness="stale")))
 
     def test_transition_targets_are_direct_assets_and_sensitive_positions_only(self):
         transitions = crypto_market_transitions(signals(btc_24h=0.0), signals(btc_24h=-3.2))

@@ -543,6 +543,8 @@ TEXT_SETTING_KEYS = [
     "reasoningEngineV1DeploymentId",
     "reasoningEngineV2DeploymentId",
     "reasoningEngineActiveVersion",
+    "reasoningEngineActiveReleaseId",
+    "reasoningEngineCandidateReleaseId",
     "reasoningEngineV1TypeDbDatabase",
     "reasoningEngineV2TypeDbDatabase",
     "reasoningEngineShadowEnabled",

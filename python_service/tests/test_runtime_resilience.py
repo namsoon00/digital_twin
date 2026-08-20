@@ -67,6 +67,10 @@ class RuntimeResilienceTests(unittest.TestCase):
         self.assertEqual("America/New_York", public["appTimezone"])
         self.assertEqual("08:30", public["investmentCalendarCandidateDefaultTime"])
 
+    def test_reasoning_release_ids_are_persistable_runtime_settings(self):
+        self.assertIn("reasoningEngineActiveReleaseId", TEXT_SETTING_KEYS)
+        self.assertIn("reasoningEngineCandidateReleaseId", TEXT_SETTING_KEYS)
+
     def test_cache_only_reasoning_path_reuses_stale_external_signals_without_fetching(self):
         class MemoryCache:
             def __init__(self):

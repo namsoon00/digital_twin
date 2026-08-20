@@ -10,7 +10,7 @@ from digital_twin import service_manager
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
-    def test_typedb_worker_manages_every_reasoning_database_for_rotation(self):
+    def test_typedb_worker_rotates_only_active_database_by_default(self):
         spec = service_manager.typedb_worker_spec({
             "typedbPassword": "test-strong-password",
             "typedbDatabase": "ontology_primary",
@@ -20,16 +20,84 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         })
 
         self.assertEqual(
-            ["ontology_primary", "ontology_v2"],
+            ["ontology_primary"],
             spec["managedTypeDbDatabases"],
         )
         database_specs = service_manager.typedb_blue_green_database_specs(
             service_manager.typedb_blue_green_stage_spec(spec)
         )
         self.assertEqual(
-            ["ontology_primary", "ontology_v2"],
+            ["ontology_primary"],
             [item["typedbDatabase"] for item in database_specs],
         )
+
+    def test_typedb_worker_can_explicitly_rotate_compatibility_databases(self):
+        spec = service_manager.typedb_worker_spec({
+            "typedbPassword": "test-strong-password",
+            "typedbDatabase": "ontology_primary",
+            "reasoningEngineV1TypeDbDatabase": "ontology_primary",
+            "reasoningEngineV2TypeDbDatabase": "ontology_v2",
+            "reasoningEngineShadowTypeDbDatabase": "ontology_v2",
+            "typedbBlueGreenSeedCompatibilityDatabasesEnabled": "1",
+        })
+
+        self.assertEqual(
+            ["ontology_primary", "ontology_v2"],
+            spec["managedTypeDbDatabases"],
+        )
+        self.assertEqual(
+            ["ontology_primary", "ontology_v2"],
+            [
+                item["typedbDatabase"]
+                for item in service_manager.typedb_blue_green_database_specs(
+                    service_manager.typedb_blue_green_stage_spec(spec)
+                )
+            ],
+        )
+
+    def test_typedb_rotation_resource_guard_blocks_saturated_host(self):
+        result = service_manager.typedb_rotation_resource_preflight(
+            {
+                "blueGreenResourceGuardEnabled": "1",
+                "blueGreenMaxLoadPerCpu": "1.25",
+                "blueGreenMinimumAvailableMemoryPercent": "15",
+            },
+            loadavg_provider=lambda: (24.0, 10.0, 5.0),
+            cpu_count_provider=lambda: 8,
+            memory_percent_provider=lambda: 10.0,
+        )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(["system-load", "available-memory"], result["blockers"])
+        self.assertEqual(3.0, result["loadPerCpu"])
+
+    def test_typedb_rotation_resource_guard_allows_healthy_host(self):
+        result = service_manager.typedb_rotation_resource_preflight(
+            {
+                "blueGreenResourceGuardEnabled": "1",
+                "blueGreenMaxLoadPerCpu": "1.25",
+                "blueGreenMinimumAvailableMemoryPercent": "15",
+            },
+            loadavg_provider=lambda: (4.0, 3.0, 2.0),
+            cpu_count_provider=lambda: 8,
+            memory_percent_provider=lambda: 40.0,
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual([], result["blockers"])
+
+    def test_candidate_commands_run_with_lower_os_priority(self):
+        command = service_manager.low_priority_command(
+            {"processNice": "10"},
+            ["typedb", "server"],
+        )
+
+        if os.name == "nt" or not service_manager.shutil.which("nice"):
+            self.assertEqual(["typedb", "server"], command)
+        else:
+            self.assertEqual("-n", command[1])
+            self.assertEqual("10", command[2])
+            self.assertEqual(["typedb", "server"], command[3:])
 
     def test_blue_green_candidate_validates_each_reasoning_database(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -477,6 +545,48 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         bootstrap_settings = connection.call_args.args[0]
         self.assertEqual("1", bootstrap_settings["_skipOperationalHistoryRetention"])
         self.assertNotIn("_skipOperationalSchemaBootstrap", bootstrap_settings)
+
+    def test_mysql_schema_bootstrap_retries_transient_startup_failure(self):
+        spec = {
+            "label": "MySQL operational store",
+            "log": Path("/tmp/orbit-alpha-mysql-schema-bootstrap-retry.log"),
+            "operationalSettings": {},
+            "schemaBootstrapAttempts": "3",
+            "schemaBootstrapRetrySeconds": "0",
+        }
+        with patch.object(
+            service_manager,
+            "MySQLOperationalConnection",
+            side_effect=[TimeoutError("recovering"), object()],
+        ) as connection, patch.object(
+            service_manager,
+            "MySQLMonitorAccountJobStore",
+        ) as monitor_store, patch.object(service_manager, "append_log"):
+            self.assertTrue(service_manager.ensure_mysql_operational_schema(spec))
+
+        self.assertEqual(2, connection.call_count)
+        monitor_store.assert_called_once()
+
+    def test_running_mysql_rechecks_schema_after_a_prior_bootstrap_timeout(self):
+        spec = {
+            "label": "MySQL operational store",
+            "role": "mysql",
+            "pid": Path("/tmp/orbit-alpha-running-mysql.pid"),
+            "log": Path("/tmp/orbit-alpha-running-mysql.log"),
+            "command": ["mysqld"],
+        }
+        with patch.object(service_manager, "read_pid", return_value=123), patch.object(
+            service_manager,
+            "is_running",
+            return_value=True,
+        ), patch.object(
+            service_manager,
+            "ensure_mysql_operational_schema",
+            return_value=True,
+        ) as bootstrap, patch.object(service_manager, "status_worker", return_value=0):
+            self.assertEqual(0, service_manager.start_worker(spec))
+
+        bootstrap.assert_called_once_with(spec)
 
     def test_typedb_restart_maintenance_window_covers_full_bounded_startup(self):
         window = service_manager.typedb_restart_maintenance_window_seconds({

@@ -72,9 +72,15 @@ class FakeOutbox:
             "requeuedJobIds": [],
         })
 
+    def requeue_latest_replayable(self, limit):
+        return self.requeue_latest_completed(limit)
+
     def latest_completed(self, limit):
         self.rebuild_requeue_limits.append(limit)
         return list(self.jobs)
+
+    def latest_replayable(self, limit):
+        return self.latest_completed(limit)
 
 
 class FakeRecorder:
@@ -280,7 +286,7 @@ class OntologyWorldProjectionRunnerTests(unittest.TestCase):
             "status": "ok",
             "requeuedCount": 1,
             "requeuedJobIds": [job["jobId"]],
-            "selection": "latest-completed-per-dedupe-key",
+            "selection": "latest-replayable-per-dedupe-key",
         }
         recorder = FakeRecorder({"status": "ok", "saved": True})
         runner = OntologyWorldProjectionRunner(

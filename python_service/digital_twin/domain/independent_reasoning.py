@@ -165,6 +165,183 @@ def shard_reasoning_event(event: object, max_symbols: int) -> Tuple[DomainEvent,
     return tuple(shards)
 
 
+def reasoning_queue_slot_key(event: object, reasoning_lane: str) -> str:
+    """Return the stable latest-state queue slot for a supersedable event.
+
+    A reasoning scope includes changed fact families, so it is intentionally
+    different for every kind of change. The execution queue instead needs one
+    stable slot per account, symbol and lane. Pending changes in that slot are
+    merged before the newest verified source snapshot is evaluated.
+    """
+
+    scope = reasoning_event_scope(event)
+    material = {
+        "accounts": list(scope.get("accountIds") or []) or ["market"],
+        "symbols": list(scope.get("symbols") or []) or ["global"],
+        "lane": str(reasoning_lane or "CONTEXT").upper().strip() or "CONTEXT",
+    }
+    return "reasoning-slot:" + _hash(material)[:32]
+
+
+def _merged_texts(events: Iterable[DomainEvent], key: str) -> List[str]:
+    return list(_texts(
+        value
+        for event in events
+        for value in (event.payload or {}).get(key) or []
+    ))
+
+
+def _merge_symbol_text_maps(events: Iterable[DomainEvent], key: str) -> Dict[str, List[str]]:
+    merged: Dict[str, set] = {}
+    for event in events:
+        values = (event.payload or {}).get(key)
+        if not isinstance(values, Mapping):
+            continue
+        for symbol, items in values.items():
+            clean_symbol = str(symbol or "").upper().strip()
+            if clean_symbol:
+                merged.setdefault(clean_symbol, set()).update(_texts(items))
+    return {
+        symbol: sorted(items)
+        for symbol, items in sorted(merged.items())
+        if items
+    }
+
+
+def _event_recency(event: DomainEvent) -> Tuple[str, str, str]:
+    payload = dict(event.payload or {})
+    boundaries = [
+        dict(value)
+        for value in payload.get("verifiedSourceSnapshots") or []
+        if isinstance(value, Mapping)
+    ]
+    singular = payload.get("verifiedSourceSnapshot")
+    if isinstance(singular, Mapping):
+        boundaries.append(dict(singular))
+    boundary_at = max(
+        [str(value.get("generatedAt") or "") for value in boundaries] or [""]
+    )
+    observed_at = str(payload.get("sourceObservedAt") or payload.get("sourceAsOf") or "")
+    return max(boundary_at, observed_at, str(event.occurred_at or "")), str(event.occurred_at or ""), str(event.event_id or "")
+
+
+def merge_reasoning_events(events: Iterable[object]) -> DomainEvent:
+    """Losslessly coalesce pending deltas onto the newest source boundary.
+
+    The verified snapshot is a complete point-in-time world. Older pending
+    events therefore do not need their old snapshots, but their changed fact
+    families and dependency keys must survive so impact routing cannot miss a
+    rule. Non-fungible events are never passed to this function by the queue.
+    """
+
+    source_events = tuple(_event(value) for value in events or [])
+    if not source_events:
+        raise ValueError("At least one reasoning event is required for coalescing")
+    ordered = tuple(sorted(source_events, key=_event_recency))
+    newest = ordered[-1]
+    payload = deepcopy(newest.payload or {})
+
+    for key in ("factTypes", "affectedSymbols", "symbols", "targetSymbols"):
+        values = _merged_texts(ordered, key)
+        if values:
+            payload[key] = [value.upper() for value in values] if key != "factTypes" else values
+    for key in ("factTypesBySymbol", "changedFieldsBySymbol"):
+        values = _merge_symbol_text_maps(ordered, key)
+        if values:
+            payload[key] = values
+
+    contracts = [
+        dict((event.payload or {}).get("factChangeContract") or {})
+        for event in ordered
+        if isinstance((event.payload or {}).get("factChangeContract"), Mapping)
+    ]
+    if contracts:
+        merged_contract = deepcopy(contracts[-1])
+        merged_contract["version"] = str(merged_contract.get("version") or "fact-change-contract-v3")
+        merged_contract["status"] = (
+            "ready" if len(contracts) == len(ordered)
+            and all(str(value.get("status") or "") == "ready" for value in contracts)
+            else "incomplete"
+        )
+        for key in ("factTypes", "scopeFamilies", "dependencyKeys", "unclassifiedFactTypes"):
+            merged_contract[key] = sorted({
+                item
+                for contract in contracts
+                for item in _texts(contract.get(key) or [])
+            })
+        for key in (
+            "scopeFamiliesBySymbol",
+            "dependencyKeysBySymbol",
+            "unclassifiedFactTypesBySymbol",
+        ):
+            merged: Dict[str, set] = {}
+            for contract in contracts:
+                for symbol, items in dict(contract.get(key) or {}).items():
+                    clean_symbol = str(symbol or "").upper().strip()
+                    if clean_symbol:
+                        merged.setdefault(clean_symbol, set()).update(_texts(items))
+            merged_contract[key] = {
+                symbol: sorted(items) for symbol, items in sorted(merged.items()) if items
+            }
+        merged_contract["dependencyKeysComplete"] = bool(contracts) and all(
+            bool(value.get("dependencyKeysComplete")) for value in contracts
+        )
+        completeness: Dict[str, List[bool]] = {}
+        for contract in contracts:
+            for symbol, value in dict(contract.get("dependencyKeysCompleteBySymbol") or {}).items():
+                completeness.setdefault(str(symbol or "").upper().strip(), []).append(bool(value))
+        merged_contract["dependencyKeysCompleteBySymbol"] = {
+            symbol: all(values)
+            for symbol, values in sorted(completeness.items())
+            if symbol
+        }
+        payload["factChangeContract"] = merged_contract
+
+    # Revision maps represent the latest known revision for each symbol/key.
+    for key in ("factRevisionsBySymbol", "revisionVectorsBySymbol"):
+        merged = {}
+        for event in ordered:
+            values = (event.payload or {}).get(key)
+            if isinstance(values, Mapping):
+                merged.update(deepcopy(dict(values)))
+        if merged:
+            payload[key] = merged
+
+    assessments = []
+    seen_assessments = set()
+    for event in reversed(ordered):
+        for item in (event.payload or {}).get("materialityAssessments") or []:
+            identity = _canonical_json(item)
+            if identity not in seen_assessments:
+                assessments.append(deepcopy(item))
+                seen_assessments.add(identity)
+    if assessments:
+        payload["materialityAssessments"] = assessments[:100]
+
+    payload["coalescedReasoningChanges"] = {
+        "contractVersion": "reasoning-change-coalescing-v1",
+        "eventCount": len(ordered),
+        "sourceEventIds": [str(event.event_id or "") for event in ordered],
+        "oldestObservedAt": min(
+            str((event.payload or {}).get("sourceObservedAt") or event.occurred_at or "")
+            for event in ordered
+        ),
+        "newestObservedAt": max(
+            str((event.payload or {}).get("sourceObservedAt") or event.occurred_at or "")
+            for event in ordered
+        ),
+    }
+    return DomainEvent(
+        name=newest.name,
+        aggregate_id=newest.aggregate_id,
+        schema_version=newest.schema_version,
+        payload=payload,
+        occurred_at=newest.occurred_at,
+        event_id=newest.event_id,
+        correlation_id=newest.correlation_id,
+    )
+
+
 @dataclass(frozen=True)
 class IndependentReasoningRequest:
     request_id: str

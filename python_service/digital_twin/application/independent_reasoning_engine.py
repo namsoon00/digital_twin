@@ -985,6 +985,7 @@ class IndependentReasoningJobRunner:
         route_reconciliation = self.reconcile_ingress_route()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
+        backlog_compaction = self.compact_backlog(descriptor.deployment_id)
         guard = self.execution_readiness()
         if not bool(guard.get("ready", True)):
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
@@ -1010,6 +1011,7 @@ class IndependentReasoningJobRunner:
                 "executionGuard": guard,
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
+                "backlogCompaction": backlog_compaction,
                 "queue": health["queue"],
                 "routeReconciliation": route_reconciliation,
             }
@@ -1043,6 +1045,7 @@ class IndependentReasoningJobRunner:
                 "processedCount": 0,
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
+                "backlogCompaction": backlog_compaction,
                 "queue": self.queue_summary(descriptor.deployment_id),
                 "routeReconciliation": route_reconciliation,
             }
@@ -1055,6 +1058,7 @@ class IndependentReasoningJobRunner:
                 "reshardedJobs": resharded,
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
+                "backlogCompaction": backlog_compaction,
                 "queue": self.queue_summary(descriptor.deployment_id),
             }
         batch_key = self.batch_compatibility_key(jobs[0])
@@ -1151,6 +1155,7 @@ class IndependentReasoningJobRunner:
                 "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
+                "backlogCompaction": backlog_compaction,
                 "jobId": job_ids[-1],
                 "jobIds": job_ids,
                 "result": result,
@@ -1186,6 +1191,7 @@ class IndependentReasoningJobRunner:
                 "reshardedJobCount": len(resharded),
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
+                "backlogCompaction": backlog_compaction,
                 "jobId": job_ids[-1],
                 "jobIds": job_ids,
                 "reason": str(error)[:300],
@@ -1411,6 +1417,19 @@ class IndependentReasoningJobRunner:
                 "reason": str(error)[:180],
             }
         return dict(result or {"status": "unchanged", "recoveredCount": 0})
+
+    def compact_backlog(self, deployment_id: str) -> Dict[str, object]:
+        callback = getattr(self.queue, "compact_supersedable_backlog", None)
+        if not callable(callback):
+            return {"status": "unsupported", "compactedCount": 0}
+        try:
+            return dict(callback(deployment_id) or {"status": "unchanged"})
+        except Exception as error:  # The durable queue remains claimable without compaction.
+            return {
+                "status": "error",
+                "compactedCount": 0,
+                "reason": str(error)[:180],
+            }
 
     def repair_ingress(self, deployment_id: str) -> int:
         reader = getattr(self.event_reader, "unmaterialized_reasoning_engine_events", None)

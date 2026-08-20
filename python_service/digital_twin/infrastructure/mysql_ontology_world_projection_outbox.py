@@ -477,6 +477,15 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
     def complete(self, job_id: str, worker_id: str, result: Mapping[str, object] = None) -> bool:
         stamp = utc_now()
         with self.transaction() as connection:
+            current = connection.execute(
+                """
+                SELECT dedupe_key FROM ontology_world_projection_outbox
+                WHERE job_id = %s AND status = %s AND lease_owner = %s
+                LIMIT 1 FOR UPDATE
+                """,
+                (_clean(job_id), PROCESSING, _clean(worker_id)),
+            ).fetchone()
+            dedupe_key = _clean((current or {}).get("dedupe_key"))
             cursor = connection.execute(
                 """
                 UPDATE ontology_world_projection_outbox
@@ -486,7 +495,22 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
                 """,
                 (COMPLETED, json_dumps(dict(result or {})), stamp, stamp, _clean(job_id), PROCESSING, _clean(worker_id)),
             )
-        return int(getattr(cursor, "rowcount", 0) or 0) == 1
+            completed = int(getattr(cursor, "rowcount", 0) or 0) == 1
+            if completed and dedupe_key:
+                # Terminal packets from an older projection contract are not
+                # replay sources once the same boundary succeeds. Keep their
+                # compact audit row but release the potentially large graph.
+                connection.execute(
+                    """
+                    UPDATE ontology_world_projection_outbox
+                    SET status = %s, payload_json = '{}',
+                        last_error = CONCAT('superseded by successful projection: ', last_error),
+                        updated_at = %s, completed_at = %s
+                    WHERE dedupe_key = %s AND job_id != %s AND status = %s
+                    """,
+                    (SUPERSEDED, stamp, stamp, dedupe_key, _clean(job_id), FAILED),
+                )
+        return completed
 
     def yield_claimed(self, job_id: str, worker_id: str, reason: object = "") -> bool:
         """Return a just-claimed background write without charging a retry.
@@ -638,15 +662,38 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
-    def requeue_latest_completed(self, limit: int = 100) -> Dict[str, object]:
-        """Replay one newest durable projection per source after a TypeDB reset.
+    @staticmethod
+    def _payload_is_replayable(value: object) -> bool:
+        payload = _json_loads(value, {})
+        if not isinstance(payload, dict):
+            return False
+        return bool(payload.get("entities") or payload.get("relations") or payload.get("evidence"))
+
+    @classmethod
+    def _latest_replayable_rows(cls, rows, limit: int) -> List[Dict[str, object]]:
+        selected = []
+        seen_dedupe_keys = set()
+        for raw in rows or []:
+            row = dict(raw or {})
+            dedupe_key = _clean(row.get("dedupe_key")) or _clean(row.get("job_id"))
+            if not dedupe_key or dedupe_key in seen_dedupe_keys:
+                continue
+            if not cls._payload_is_replayable(row.get("payload_json")):
+                continue
+            seen_dedupe_keys.add(dedupe_key)
+            selected.append(row)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    def requeue_latest_replayable(self, limit: int = 100) -> Dict[str, object]:
+        """Replay the newest valid packet per source after a TypeDB reset.
 
         TypeDB stores the materialized shared worlds, while this outbox is the
-        durable source for their verified inputs.  A fresh TypeDB data
-        directory therefore needs the latest completed packet for every
-        source-world boundary replayed once.  Replaying every historical job
-        would be slow and could resurrect expired market observations, so the
-        newest completed job for each dedupe key is the only safe candidate.
+        durable source for their verified inputs. A projection-contract defect
+        can prevent a valid packet from ever reaching COMPLETED, so recovery
+        selects the newest nonempty completed, pending, or failed packet per
+        source boundary. Historical packets are never replayed in bulk.
         """
         bounded = max(1, min(5000, int(limit or 100)))
         stamp = utc_now()
@@ -654,24 +701,17 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             rows = connection.execute(
                 """
-                SELECT job_id, dedupe_key
+                SELECT job_id, dedupe_key, payload_json, status
                 FROM ontology_world_projection_outbox
-                WHERE status = %s
+                WHERE status IN (%s, %s, %s)
+                  AND projection_kind IN ('market', 'knowledge')
                 ORDER BY updated_at DESC, job_id DESC
                 FOR UPDATE
                 """,
-                (COMPLETED,),
+                (COMPLETED, PENDING, FAILED),
             ).fetchall()
-            seen_dedupe_keys = set()
-            for row in rows or []:
-                dedupe_key = _clean(row.get("dedupe_key")) or _clean(row.get("job_id"))
-                job_id = _clean(row.get("job_id"))
-                if not job_id or dedupe_key in seen_dedupe_keys:
-                    continue
-                seen_dedupe_keys.add(dedupe_key)
-                selected.append(job_id)
-                if len(selected) >= bounded:
-                    break
+            replayable = self._latest_replayable_rows(rows, bounded)
+            selected = [_clean(row.get("job_id")) for row in replayable if _clean(row.get("job_id"))]
             for job_id in selected:
                 connection.execute(
                     """
@@ -688,11 +728,15 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             "status": "ok",
             "requeuedCount": len(selected),
             "requeuedJobIds": selected,
-            "selection": "latest-completed-per-dedupe-key",
+            "selection": "latest-replayable-per-dedupe-key",
         }
 
-    def latest_completed(self, limit: int = 100) -> List[Dict[str, object]]:
-        """Read the latest durable packet per source without changing queue state.
+    def requeue_latest_completed(self, limit: int = 100) -> Dict[str, object]:
+        """Compatibility alias for reset tooling deployed before replay v2."""
+        return self.requeue_latest_replayable(limit)
+
+    def latest_replayable(self, limit: int = 100) -> List[Dict[str, object]]:
+        """Read the newest valid packet per source without changing queue state.
 
         Blue/green TypeDB preparation runs while the active projection worker
         is still online. Requeueing completed rows in that phase would let the
@@ -705,22 +749,17 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
             rows = connection.execute(
                 """
                 SELECT * FROM ontology_world_projection_outbox
-                WHERE status = %s AND projection_kind IN ('market', 'knowledge')
+                WHERE status IN (%s, %s, %s)
+                  AND projection_kind IN ('market', 'knowledge')
                 ORDER BY updated_at DESC, job_id DESC
                 """,
-                (COMPLETED,),
+                (COMPLETED, PENDING, FAILED),
             ).fetchall()
-        selected = []
-        seen_dedupe_keys = set()
-        for row in rows or []:
-            dedupe_key = _clean(row.get("dedupe_key")) or _clean(row.get("job_id"))
-            if not dedupe_key or dedupe_key in seen_dedupe_keys:
-                continue
-            seen_dedupe_keys.add(dedupe_key)
-            selected.append(self.row_payload(row))
-            if len(selected) >= bounded:
-                break
-        return selected
+        return [self.row_payload(row) for row in self._latest_replayable_rows(rows, bounded)]
+
+    def latest_completed(self, limit: int = 100) -> List[Dict[str, object]]:
+        """Compatibility alias for read-only candidate rebuild tooling."""
+        return self.latest_replayable(limit)
 
     def supersede_oversized_pending(self, limit: int = 500) -> int:
         """Retire packets produced by an older unbounded projection shape."""

@@ -60,6 +60,7 @@ from ..domain.ontology_scopes import (
     SCOPED_ABOX_PERSISTENCE_MODE,
     support_relation_key,
 )
+from ..domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE
 from .graph_store_inferencebox import (
     inferencebox_entity_payload,
     inferencebox_relation_payload,
@@ -176,6 +177,25 @@ def typedb_world_kwargs(world_id: str = "") -> Dict[str, str]:
 def typedb_call_for_world(callback, *args, world_id: str = "", **kwargs):
     """Invoke a world-aware repository method without mutating legacy calls."""
     return callback(*args, **kwargs, **typedb_world_kwargs(world_id))
+
+
+def native_rule_manifest_index_required(worldview: Dict[str, object] = None) -> bool:
+    """Require physical rule indexes only in worlds that execute RuleBox rules.
+
+    MarketWorld and KnowledgeWorld are durable source-of-fact projections.
+    They are read while SharedPremiseWorld is assembled, but native investment
+    rules never execute against their manifests directly. Requiring planner
+    topology there made every otherwise valid source projection fail closed.
+    """
+
+    values = dict(worldview or {})
+    world_type = str(values.get("worldType") or values.get("world_type") or "").strip().lower()
+    world_id = str(values.get("worldId") or values.get("world_id") or "").strip().lower()
+    if world_type in {MARKET_WORLD_TYPE, KNOWLEDGE_WORLD_TYPE, "marketworld", "knowledgeworld"}:
+        return False
+    if world_id.startswith("market:") or world_id.startswith("knowledge:"):
+        return False
+    return True
 
 
 def typedb_projection_coordinator_summary(lease: Dict[str, object] = None) -> Dict[str, object]:
@@ -4533,33 +4553,33 @@ class ScopedABoxManifestMixin:
             "tenantId": str(worldview.get("tenantId") or ""),
             "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
         }
-        # Target-scoped graphs contain only the current mailbox subject. Their
-        # index is prepared against the retained active Manifest before this
-        # marker is written. A full graph can still derive the same index here.
-        all_node_rows, all_relation_rows = self.graph_persistence_rows(graph)
-        local_evidence_read_index = native_rule_evidence_read_index_from_rows(
-            all_node_rows,
-            all_relation_rows,
-        )
-        planner_topology = dict(worldview.get("nativeRulePlannerTopology") or {})
-        prepared_index = dict(worldview.get("nativeRuleEvidenceReadIndex") or {})
-        prepared = normalize_native_rule_evidence_read_index(
-            prepared_index,
-            planner_topology=planner_topology,
-        )
-        local = normalize_native_rule_evidence_read_index(
-            local_evidence_read_index,
-            planner_topology=planner_topology,
-        )
-        if str(prepared.get("status") or "") == "ok":
-            evidence_read_index = prepared_index
-        elif str(local.get("status") or "") == "ok":
-            evidence_read_index = local_evidence_read_index
-        else:
-            # Do not persist a self-consistent partial index against a merged
-            # Manifest. The next execution uses active-membership recovery
-            # rather than treating omitted subjects as absent facts.
-            evidence_read_index = {}
+        rule_index_required = native_rule_manifest_index_required(worldview)
+        evidence_read_index = {}
+        if rule_index_required:
+            # Target-scoped graphs contain only the current mailbox subject.
+            # Their index is prepared against the retained active Manifest
+            # before this marker is written. A full graph can derive it here.
+            all_node_rows, all_relation_rows = self.graph_persistence_rows(graph)
+            local_evidence_read_index = native_rule_evidence_read_index_from_rows(
+                all_node_rows,
+                all_relation_rows,
+            )
+            planner_topology = dict(worldview.get("nativeRulePlannerTopology") or {})
+            prepared_index = dict(worldview.get("nativeRuleEvidenceReadIndex") or {})
+            prepared = normalize_native_rule_evidence_read_index(
+                prepared_index,
+                planner_topology=planner_topology,
+            )
+            local = normalize_native_rule_evidence_read_index(
+                local_evidence_read_index,
+                planner_topology=planner_topology,
+            )
+            if str(prepared.get("status") or "") == "ok":
+                evidence_read_index = prepared_index
+            elif str(local.get("status") or "") == "ok":
+                evidence_read_index = local_evidence_read_index
+            # Never persist a self-consistent partial index against a merged
+            # inference Manifest. Runtime recovery must verify membership.
         marker_scope_id = "manifest:" + manifest_id
         marker = OntologyEntity(
             entity_id="worldview-manifest-marker:" + manifest_id,
@@ -4611,6 +4631,12 @@ class ScopedABoxManifestMixin:
                 "inferenceImpactPlan": dict(worldview.get("inferenceImpactPlan") or {}),
                 "nativeRulePlannerTopology": dict(worldview.get("nativeRulePlannerTopology") or {}),
                 "nativeRuleEvidenceReadIndex": evidence_read_index,
+                "nativeRuleEvidenceReadIndexRequired": rule_index_required,
+                "nativeRuleEvidenceReadIndexStatus": (
+                    str((worldview.get("nativeRuleEvidenceReadIndexMerge") or {}).get("status") or "")
+                    if rule_index_required
+                    else "not-required-source-world"
+                ),
                 "nativeRulePlannerTopologyMerge": dict(
                     worldview.get("nativeRulePlannerTopologyMerge") or {}
                 ),
@@ -4637,6 +4663,16 @@ class ScopedABoxManifestMixin:
         runtime falls back to active-membership reads for correctness.
         """
         worldview = dict(getattr(graph, "worldview", {}) or {})
+        if not native_rule_manifest_index_required(worldview):
+            graph.worldview.pop("nativeRuleEvidenceReadIndex", None)
+            graph.worldview["nativeRuleEvidenceReadIndexRequired"] = False
+            graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                "status": "not-required-source-world",
+                "worldType": str(worldview.get("worldType") or ""),
+                "reason": "Source worlds persist facts but do not execute native investment rules.",
+            }
+            return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+        graph.worldview["nativeRuleEvidenceReadIndexRequired"] = True
         topology = dict(worldview.get("nativeRulePlannerTopology") or {})
         incoming_topology = dict(
             worldview.get("nativeRulePlannerTopologyIncoming")
@@ -4955,6 +4991,8 @@ class ScopedABoxManifestMixin:
                 "inferenceImpactPlan",
                 "nativeRulePlannerTopology",
                 "nativeRuleEvidenceReadIndex",
+                "nativeRuleEvidenceReadIndexRequired",
+                "nativeRuleEvidenceReadIndexStatus",
                 "changedScopeIds",
                 "projectionStatus",
                 "scopedAboxManifestVersion",
@@ -5683,7 +5721,7 @@ class ScopedABoxManifestMixin:
         active_generations = dict(active_before.get("scopeGenerationIds") or {})
         scoped_active = str(active_before.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
         active_manifest_index_repair: Dict[str, object] = {}
-        if scoped_active:
+        if scoped_active and native_rule_manifest_index_required(active_before):
             active_index = normalize_native_rule_evidence_read_index(
                 active_before.get("nativeRuleEvidenceReadIndex"),
                 planner_topology=active_before.get("nativeRulePlannerTopology"),
@@ -5760,7 +5798,11 @@ class ScopedABoxManifestMixin:
             graph,
             active_before,
         )
-        if str(native_manifest_index.get("status") or "") not in {"local-complete", "merged"}:
+        if str(native_manifest_index.get("status") or "") not in {
+            "local-complete",
+            "merged",
+            "not-required-source-world",
+        }:
             release = release_write_lease()
             return {
                 "configured": True,
@@ -10680,6 +10722,14 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "inferenceImpactPlan": dict(payload.get("inferenceImpactPlan") or {}),
             "nativeRulePlannerTopology": dict(payload.get("nativeRulePlannerTopology") or {}),
             "nativeRuleEvidenceReadIndex": dict(payload.get("nativeRuleEvidenceReadIndex") or {}),
+            "nativeRuleEvidenceReadIndexRequired": bool(
+                payload.get("nativeRuleEvidenceReadIndexRequired")
+                if "nativeRuleEvidenceReadIndexRequired" in payload
+                else native_rule_manifest_index_required(payload)
+            ),
+            "nativeRuleEvidenceReadIndexStatus": str(
+                payload.get("nativeRuleEvidenceReadIndexStatus") or ""
+            ),
             "activeScopeCount": len(generations),
             "manifestMarkerId": str(payload.get("id") or ""),
             "marketScopeObservedAt": dict(payload.get("marketScopeObservedAt") or {}),

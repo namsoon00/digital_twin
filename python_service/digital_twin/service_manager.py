@@ -231,13 +231,18 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         or os.environ.get("TYPEDB_DATABASE")
         or "orbit_alpha_ontology"
     ).strip() or "orbit_alpha_ontology"
+    compatibility_databases_enabled = truthy(
+        (settings or {}).get("typedbBlueGreenSeedCompatibilityDatabasesEnabled")
+    )
+    database_candidates = [primary_database]
+    if compatibility_databases_enabled:
+        database_candidates.extend([
+            (settings or {}).get("reasoningEngineV1TypeDbDatabase"),
+            (settings or {}).get("reasoningEngineV2TypeDbDatabase"),
+            (settings or {}).get("reasoningEngineShadowTypeDbDatabase"),
+        ])
     managed_databases = []
-    for database in [
-        primary_database,
-        (settings or {}).get("reasoningEngineV1TypeDbDatabase"),
-        (settings or {}).get("reasoningEngineV2TypeDbDatabase"),
-        (settings or {}).get("reasoningEngineShadowTypeDbDatabase"),
-    ]:
+    for database in database_candidates:
         clean = str(database or "").strip()
         if clean and clean not in managed_databases:
             managed_databases.append(clean)
@@ -304,6 +309,21 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         ),
         "blueGreenEstimatedCandidateMaxMb": str(
             (settings or {}).get("typedbBlueGreenEstimatedCandidateMaxMb") or "4096"
+        ),
+        "blueGreenResourceGuardEnabled": str(
+            (settings or {}).get("typedbBlueGreenResourceGuardEnabled") or "1"
+        ),
+        "blueGreenMaxLoadPerCpu": str(
+            (settings or {}).get("typedbBlueGreenMaxLoadPerCpu") or "1.25"
+        ),
+        "blueGreenMinimumAvailableMemoryPercent": str(
+            (settings or {}).get("typedbBlueGreenMinimumAvailableMemoryPercent") or "15"
+        ),
+        "blueGreenProcessNice": str(
+            (settings or {}).get("typedbBlueGreenProcessNice") or "10"
+        ),
+        "blueGreenSeedCompatibilityDatabasesEnabled": (
+            "1" if compatibility_databases_enabled else "0"
         ),
         "ageResetEnabled": str((settings or {}).get("typedbAgeResetEnabled") or "0"),
         "healthAddress": address,
@@ -450,6 +470,12 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "dataPath": data_path,
         "healthAddress": "127.0.0.1:" + str(port),
         "startupWaitSeconds": str((settings or {}).get("mysqlStartupWaitSeconds") or "60"),
+        "schemaBootstrapAttempts": str(
+            (settings or {}).get("mysqlOperationalSchemaBootstrapAttempts") or "3"
+        ),
+        "schemaBootstrapRetrySeconds": str(
+            (settings or {}).get("mysqlOperationalSchemaBootstrapRetrySeconds") or "5"
+        ),
         # Used only after this manager initializes a brand-new local data
         # directory. Never log these values or apply them to an existing DB.
         "mysqlUser": str(connection_settings.get("user") or ""),
@@ -470,17 +496,31 @@ def ensure_mysql_operational_schema(spec: Dict[str, object]) -> bool:
     settings = dict(spec.get("operationalSettings") or {})
     settings["_skipOperationalHistoryRetention"] = "1"
     settings.pop("_skipOperationalSchemaBootstrap", None)
-    try:
-        MySQLOperationalConnection(settings)
-        MySQLMonitorAccountJobStore(settings)
-    except Exception as error:  # noqa: BLE001 - dependent workers cannot safely run without their tables.
-        message = "operational schema bootstrap failed: " + str(error)[:300]
-        append_log(spec["log"], message)
-        print(str(spec["label"]) + " " + message)
-        return False
-    append_log(spec["log"], "operational schema bootstrap ready")
-    print(str(spec["label"]) + " operational schema ready.")
-    return True
+    attempts = int_value(spec.get("schemaBootstrapAttempts"), 3, 1)
+    retry_seconds = int_value(spec.get("schemaBootstrapRetrySeconds"), 5, 0)
+    for attempt in range(1, attempts + 1):
+        try:
+            MySQLOperationalConnection(settings)
+            MySQLMonitorAccountJobStore(settings)
+        except Exception as error:  # noqa: BLE001 - startup can race MySQL recovery after reboot.
+            message = (
+                "operational schema bootstrap failed attempt="
+                + str(attempt)
+                + "/"
+                + str(attempts)
+                + ": "
+                + str(error)[:300]
+            )
+            append_log(spec["log"], message)
+            print(str(spec["label"]) + " " + message)
+            if attempt < attempts:
+                time.sleep(retry_seconds)
+                continue
+            return False
+        append_log(spec["log"], "operational schema bootstrap ready attempt=" + str(attempt))
+        print(str(spec["label"]) + " operational schema ready.")
+        return True
+    return False
 
 
 def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
@@ -716,6 +756,113 @@ def int_value(value: object, fallback: int, lower: int = 0) -> int:
     except ValueError:
         parsed = fallback
     return max(lower, parsed)
+
+
+def float_value(value: object, fallback: float, lower: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = float(fallback)
+    return max(float(lower), parsed)
+
+
+def system_available_memory_percent() -> float:
+    """Return an OS-level memory-pressure estimate without adding a dependency."""
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["memory_pressure"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return -1.0
+        prefix = "System-wide memory free percentage:"
+        for line in str(result.stdout or "").splitlines():
+            if line.strip().startswith(prefix):
+                return float_value(line.split(":", 1)[-1].strip().rstrip("%"), -1.0, -1.0)
+        return -1.0
+    meminfo = Path("/proc/meminfo")
+    if meminfo.exists():
+        values = {}
+        try:
+            for line in meminfo.read_text(encoding="utf-8").splitlines():
+                key, raw = line.split(":", 1)
+                values[key] = float(raw.strip().split()[0])
+        except (OSError, ValueError, IndexError):
+            return -1.0
+        total = float(values.get("MemTotal") or 0.0)
+        available = float(values.get("MemAvailable") or 0.0)
+        return round(available * 100.0 / total, 2) if total > 0 else -1.0
+    return -1.0
+
+
+def typedb_rotation_resource_preflight(
+    spec: Dict[str, object],
+    loadavg_provider=None,
+    cpu_count_provider=None,
+    memory_percent_provider=None,
+) -> Dict[str, object]:
+    """Keep a cold TypeDB build from competing with an already saturated host."""
+    if not truthy((spec or {}).get("blueGreenResourceGuardEnabled")):
+        return {"ready": True, "status": "disabled", "blockers": []}
+    loadavg_provider = loadavg_provider or os.getloadavg
+    cpu_count_provider = cpu_count_provider or os.cpu_count
+    memory_percent_provider = memory_percent_provider or system_available_memory_percent
+    try:
+        one_minute_load = float((loadavg_provider() or (0.0,))[0])
+    except (AttributeError, OSError, TypeError, ValueError):
+        one_minute_load = 0.0
+    cpu_count = max(1, int(cpu_count_provider() or 1))
+    load_per_cpu = round(one_minute_load / cpu_count, 3)
+    memory_available_percent = float(memory_percent_provider())
+    maximum_load_per_cpu = float_value(spec.get("blueGreenMaxLoadPerCpu"), 1.25, 0.1)
+    minimum_memory_percent = min(
+        100.0,
+        float_value(spec.get("blueGreenMinimumAvailableMemoryPercent"), 15.0, 0.0),
+    )
+    blockers = []
+    if load_per_cpu > maximum_load_per_cpu:
+        blockers.append("system-load")
+    if 0.0 <= memory_available_percent < minimum_memory_percent:
+        blockers.append("available-memory")
+    reason_parts = []
+    if "system-load" in blockers:
+        reason_parts.append(
+            "load per CPU " + str(load_per_cpu) + " exceeds " + str(maximum_load_per_cpu)
+        )
+    if "available-memory" in blockers:
+        reason_parts.append(
+            "available memory "
+            + str(round(memory_available_percent, 1))
+            + "% is below "
+            + str(minimum_memory_percent)
+            + "%"
+        )
+    return {
+        "ready": not blockers,
+        "status": "ready" if not blockers else "resource-pressure",
+        "blockers": blockers,
+        "reason": "; ".join(reason_parts),
+        "oneMinuteLoad": round(one_minute_load, 2),
+        "cpuCount": cpu_count,
+        "loadPerCpu": load_per_cpu,
+        "maximumLoadPerCpu": maximum_load_per_cpu,
+        "availableMemoryPercent": round(memory_available_percent, 1),
+        "minimumAvailableMemoryPercent": minimum_memory_percent,
+    }
+
+
+def low_priority_command(spec: Dict[str, object], command: List[str]) -> List[str]:
+    """Run expensive candidate work below interactive desktop processes."""
+    nice_value = min(19, int_value((spec or {}).get("processNice"), 0, 0))
+    nice_command = shutil.which("nice") if os.name != "nt" else ""
+    if nice_value <= 0 or not nice_command:
+        return list(command)
+    return [nice_command, "-n", str(nice_value), *list(command)]
 
 
 def directory_size_bytes(path: Path) -> int:
@@ -1586,7 +1733,7 @@ def launch_typedb_stage_process(spec: Dict[str, object], log_label: str) -> bool
     output = Path(spec["log"]).open("a", encoding="utf-8")
     try:
         process = subprocess.Popen(
-            spec["command"],
+            low_priority_command(spec, spec["command"]),
             cwd=str(ROOT_DIR),
             env=managed_process_environment(spec),
             stdin=subprocess.DEVNULL,
@@ -1716,7 +1863,7 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
         print(str(spec["label"]) + " seeding ontology RuleBox. attempt=" + str(attempt))
         try:
             result = subprocess.run(
-                command,
+                low_priority_command(spec, command),
                 cwd=str(ROOT_DIR),
                 env=typedb_subprocess_environment(spec),
                 stdin=subprocess.DEVNULL,
@@ -1767,7 +1914,7 @@ def validate_typedb_candidate_inference_runtime(spec: Dict[str, object]) -> Dict
     """
     try:
         result = subprocess.run(
-            typedb_rulebox_prewarm_status_command(spec),
+            low_priority_command(spec, typedb_rulebox_prewarm_status_command(spec)),
             cwd=str(ROOT_DIR),
             env=typedb_subprocess_environment(spec),
             stdin=subprocess.DEVNULL,
@@ -1828,7 +1975,7 @@ def ensure_typedb_shared_world_projection_rebuilt(
     print(str(spec["label"]) + " rebuilding shared MarketWorld/KnowledgeWorld from durable outbox.")
     try:
         result = subprocess.run(
-            command,
+            low_priority_command(spec, command),
             cwd=str(ROOT_DIR),
             env=typedb_subprocess_environment(spec),
             stdin=subprocess.DEVNULL,
@@ -1869,7 +2016,7 @@ def ensure_typedb_portfolio_world_projection_rebuilt(spec: Dict[str, object]) ->
     environment["TYPEDB_FRESH_CANDIDATE_REBUILD"] = "1"
     try:
         result = subprocess.run(
-            command,
+            low_priority_command(spec, command),
             cwd=str(ROOT_DIR),
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -1945,20 +2092,25 @@ def start_worker(spec: Dict[str, object]) -> int:
         return 1 if str(spec.get("role") or "") in {"mysql", "typedb", "questdb", "web"} else 0
     pid_path = spec["pid"]
     log_path = spec["log"]
+    role = str(spec.get("role") or "")
     existing = read_pid(pid_path)
     if is_running(existing, spec):
         print(str(spec["label"]) + " already running.")
-        if str(spec.get("role") or "") == "typedb":
+        if role == "typedb":
             if not wait_for_typedb_ready(spec):
                 return 1
             # A healthy TypeDB server may be serving an ABox staging write.
             # Seeding is only required after this manager starts a new server;
             # repeating it on every generic worker restart can interrupt that
             # write and needlessly rewrites the static ontology boxes.
+        elif role == "mysql" and not ensure_mysql_operational_schema(spec):
+            # The previous supervisor attempt may have started MySQL but lost
+            # its first schema query while InnoDB was still recovering. Keep
+            # the healthy server and retry the idempotent bootstrap boundary.
+            return 1
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
-    role = str(spec.get("role") or "")
     if role == "questdb":
         recovered = recover_project_questdb_pid(spec)
         if recovered and is_running(recovered, spec):
@@ -2559,6 +2711,7 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
         **dict(spec or {}),
         "label": "TypeDB ontology graph store candidate",
         "role": "typedb-stage",
+        "processNice": str(spec.get("blueGreenProcessNice") or "10"),
         "pid": candidate_pid,
         "log": candidate_log,
         "needle": "typedb_server_bin",
@@ -2803,6 +2956,24 @@ def typedb_rotate(
     decision = typedb_reset_needed(spec, ignore_auto_reset=True)
     if not force and not decision.get("needed"):
         print(json.dumps({"status": "skipped", **decision}, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    resource_preflight = typedb_rotation_resource_preflight(spec)
+    if not bool(resource_preflight.get("ready")):
+        result = {
+            "status": "deferred-resource-pressure",
+            "reason": str(resource_preflight.get("reason") or "host resource pressure"),
+            "resourcePreflight": resource_preflight,
+            "activeStorePreserved": True,
+        }
+        record_typedb_auto_rotation_state(
+            lastAutoRotationAttemptAt=iso_now(),
+            lastAutoRotationAttemptEpoch=time.time(),
+            lastAutoRotationReason=str(rotation_reason or decision.get("reason") or "manual"),
+            lastAutoRotationStatus="deferred-resource-pressure",
+            lastAutoRotationResult=result,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
     rotation_lock = acquire_typedb_rotation_lock()

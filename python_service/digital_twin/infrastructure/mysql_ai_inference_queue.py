@@ -63,6 +63,49 @@ def _reasoning_case_id_from_context(value: object) -> str:
     return _clean(context.get("investmentReasoningCaseId") or embedded.get("caseId"))
 
 
+def compact_ai_queue_context(context: Mapping[str, object]) -> Dict[str, object]:
+    """Persist only execution identity; the source notification owns facts.
+
+    ``notification_jobs.payload_json`` remains the canonical immutable input
+    for the AI decision. Duplicating that megabyte-scale context in every
+    retry row increased MySQL I/O without giving the model more information.
+    Claim joins the source notification and rehydrates the full context.
+    """
+
+    values = dict(context or {})
+    embedded_case = (
+        dict(values.get("investmentReasoningCase") or {})
+        if isinstance(values.get("investmentReasoningCase"), Mapping)
+        else {}
+    )
+    compact = {
+        key: values.get(key)
+        for key in [
+            "messageType",
+            "accountId",
+            "accountLabel",
+            "jobId",
+            "rawSymbol",
+            "symbol",
+            "investmentReasoningCaseId",
+            "notificationAiDecisionContractVersion",
+            "notificationAiExecutionProfile",
+            "notificationAiReplayManifest",
+        ]
+        if values.get(key) not in (None, "", [], {})
+    }
+    case_id = _clean(values.get("investmentReasoningCaseId") or embedded_case.get("caseId"))
+    if case_id:
+        compact["investmentReasoningCaseId"] = case_id
+        compact["investmentReasoningCase"] = {
+            key: embedded_case.get(key)
+            for key in ["caseId", "state", "inferenceGenerationId", "sourceAboxSnapshotId"]
+            if embedded_case.get(key) not in (None, "", [], {})
+        }
+        compact["investmentReasoningCase"].setdefault("caseId", case_id)
+    return compact
+
+
 class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
     """Atomically coordinate AI work and its source notification outbox row."""
 
@@ -290,6 +333,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         }
 
     def insert_request_with_connection(self, connection, request: AIInferenceRequest) -> None:
+        durable_context = compact_ai_queue_context(request.context)
         connection.execute(
             """
             INSERT INTO ai_inference_requests (
@@ -330,7 +374,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 request.started_at,
                 request.completed_at,
                 request.last_error,
-                json_dumps(request.context),
+                json_dumps(durable_context),
             ),
         )
 
@@ -429,11 +473,14 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
 
             rows = connection.execute(
                 """
-                SELECT request.*
+                SELECT request.*, notification.payload_json AS notification_payload_json,
+                       notification.text AS notification_text
                 FROM ai_inference_requests request
                 JOIN ai_inference_subject_heads head
                   ON head.subject_key = request.subject_key
                  AND head.latest_request_id = request.request_id
+                JOIN notification_jobs notification
+                  ON notification.job_id = request.notification_job_id
                 WHERE request.status IN (%s, %s) AND request.available_at <= %s
                 ORDER BY request.priority DESC, request.created_at ASC, request.request_id ASC
                 LIMIT %s FOR UPDATE SKIP LOCKED
@@ -755,7 +802,14 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
     def get(self, request_id: str) -> Optional[AIInferenceRequest]:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM ai_inference_requests WHERE request_id = %s",
+                """
+                SELECT request.*, notification.payload_json AS notification_payload_json,
+                       notification.text AS notification_text
+                FROM ai_inference_requests request
+                LEFT JOIN notification_jobs notification
+                  ON notification.job_id = request.notification_job_id
+                WHERE request.request_id = %s
+                """,
                 (_clean(request_id),),
             ).fetchone()
         return self.request_from_row(row) if row else None
@@ -818,5 +872,17 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
     @staticmethod
     def request_from_row(row: Mapping[str, object]) -> AIInferenceRequest:
         values = dict(row or {})
-        values["context"] = _json_loads(values.pop("context_json", "{}"), {})
+        queue_context = _json_loads(values.pop("context_json", "{}"), {})
+        notification_payload = _json_loads(values.pop("notification_payload_json", "{}"), {})
+        notification_context = (
+            dict(notification_payload.get("context") or {})
+            if isinstance(notification_payload.get("context"), dict)
+            else {}
+        )
+        values.pop("notification_text", None)
+        # The notification payload is the canonical immutable AI input. Queue
+        # metadata only fills identities missing from old notification rows;
+        # its compact reasoning-case stub must never replace the full TypeDB
+        # hypothesis and action-envelope contract.
+        values["context"] = {**queue_context, **notification_context}
         return AIInferenceRequest.from_dict(values)

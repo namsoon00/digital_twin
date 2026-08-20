@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 from digital_twin.infrastructure.schedulers import (
     IsolatedOntologyReasoningCycle,
@@ -8,7 +9,20 @@ from digital_twin.infrastructure.schedulers import (
     OntologyReasoningScheduler,
     OntologyWorldProjectionScheduler,
     PersistentIsolatedOntologyReasoningCycle,
+    wait_until_running,
 )
+
+
+class SchedulerWaitTests(unittest.TestCase):
+    def test_wait_does_not_pass_negative_duration_after_clock_advances(self):
+        sleeps = []
+        with patch(
+            "digital_twin.infrastructure.schedulers.time.monotonic",
+            side_effect=[1.0, 2.0],
+        ):
+            wait_until_running(lambda: True, 1.5, sleep_fn=sleeps.append)
+
+        self.assertEqual([], sleeps)
 
 
 class FakeTimeoutProcess:

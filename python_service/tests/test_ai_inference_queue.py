@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 
 from digital_twin.application.ai_inference_queue_service import AIInferenceQueueRunner
 from digital_twin.application.notification_service import NotificationQueueRunner
@@ -133,6 +134,40 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("superseded", self.notifications.get(second_job.job_id).status)
         row = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_requests")
         self.assertEqual(1, int(row[0]))
+
+    def test_ai_request_row_stores_compact_identity_and_claim_rehydrates_full_context(self):
+        job = self.create_job()
+        job.context["largeCanonicalEvidence"] = [
+            {"evidenceId": "evidence:" + str(index), "text": "x" * 4000}
+            for index in range(80)
+        ]
+        job.context["investmentReasoningCaseId"] = "reasoning-case:compact"
+        job.context["investmentReasoningCase"] = {
+            "caseId": "reasoning-case:compact",
+            "state": "AI_QUEUED",
+            "hypotheses": [{"hypothesisId": "hypothesis:" + str(index)} for index in range(40)],
+        }
+        self.notifications.upsert_job(job)
+        request = AIInferenceRequest.create(job, job.context)
+
+        self.queue.enqueue(job, request)
+
+        stored = mysql_fetchone(
+            self.seed,
+            "SELECT context_json FROM ai_inference_requests WHERE request_id = %s",
+            (request.request_id,),
+        )
+        stored_context = json.loads(stored[0])
+        self.assertLess(len(stored[0].encode("utf-8")), 4096)
+        self.assertNotIn("largeCanonicalEvidence", stored_context)
+        self.assertEqual("reasoning-case:compact", stored_context["investmentReasoningCaseId"])
+
+        claimed = self.queue.claim("worker-compact", 1, 60)[0]
+        self.assertEqual(80, len(claimed.context["largeCanonicalEvidence"]))
+        self.assertEqual(
+            "reasoning-case:compact",
+            claimed.context["investmentReasoningCase"]["caseId"],
+        )
 
     def test_superseding_request_reports_the_replaced_reasoning_case(self):
         first_job = self.create_job(100, "generation-case-1")
@@ -333,6 +368,69 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(45, reviewer.timeouts[1])
         self.assertIn("unreviewedHypothesisIds", reviewer.calls[1])
         self.assertEqual("hypothesis:risk", delivered.context["notificationAiValidatedResponse"]["selectedHypothesisId"])
+
+    def test_completed_comparison_with_invalid_action_envelope_is_repaired(self):
+        job = self.create_job()
+        hypotheses = [
+            {"hypothesisId": "hypothesis:risk"},
+            {"hypothesisId": "hypothesis:support"},
+        ]
+        job.context["ontologyRelationContext"]["hypothesisSet"] = {
+            "hypotheses": hypotheses,
+        }
+        job.context["investmentReasoningCase"] = {
+            "caseId": "case:envelope",
+            "hypothesisIds": ["hypothesis:risk", "hypothesis:support"],
+            "decisionSyntheses": [{
+                "eligibleHypothesisIds": ["hypothesis:risk", "hypothesis:support"],
+                "allowedActions": ["HOLD"],
+                "blockedActions": ["BUY"],
+            }],
+        }
+        self.notifications.upsert_job(job)
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
+        self.queue.enqueue(job, request)
+
+        class EnvelopeReviewer:
+            def __init__(self):
+                self.calls = 0
+
+            def review(self, context):
+                self.calls += 1
+                if self.calls == 1:
+                    return NotificationAIValidatedResponse(
+                        action="BUY",
+                        hypotheses=hypotheses,
+                        selected_hypothesis_id="hypothesis:risk",
+                        hypothesis_comparison_state="completed",
+                    )
+                self.assert_contract_prompt = "decisionContractError" in str(
+                    context.get("_notificationAiPreparedPrompt") or ""
+                )
+                return NotificationAIValidatedResponse(
+                    action="HOLD",
+                    hypotheses=hypotheses,
+                    selected_hypothesis_id="hypothesis:risk",
+                    hypothesis_comparison_state="completed",
+                )
+
+        reviewer = EnvelopeReviewer()
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            reviewer,
+            {"notificationAiComparisonRepairReasoningEffort": "max"},
+            worker_id="worker-envelope-repair",
+        )
+
+        self.assertEqual(1, runner.run_once(limit=1))
+        delivered = self.notifications.get(job.job_id)
+        repair = delivered.context["notificationAiExecutionAudit"]["hypothesisComparisonRepair"]
+        self.assertEqual(2, reviewer.calls)
+        self.assertTrue(reviewer.assert_contract_prompt)
+        self.assertTrue(repair["attempted"])
+        self.assertTrue(repair["succeeded"])
+        self.assertIn("blocked", repair["initialContractError"])
+        self.assertEqual("HOLD", delivered.context["notificationAiValidatedResponse"]["action"])
 
     def test_runner_loads_previous_final_decision_and_never_marks_it_initial(self):
         job = self.create_job()

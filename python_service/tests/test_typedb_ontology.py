@@ -63,6 +63,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
     native_rule_evidence_read_index_from_rows,
+    native_rule_manifest_index_required,
     merge_native_rule_evidence_read_index,
     normalize_native_rule_evidence_read_index,
     ontology_storage_id,
@@ -6597,6 +6598,49 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual({scope_id: "2026-07-23T00:00:00Z"}, properties["marketScopeObservedAt"])
         self.assertEqual("source-item-v1", properties["marketScopeObservedAtVersion"])
         self.assertEqual("2026-07-23T00:00:00Z", properties["scopePlan"][0]["observedAt"])
+        self.assertFalse(properties["nativeRuleEvidenceReadIndexRequired"])
+        self.assertEqual("not-required-source-world", properties["nativeRuleEvidenceReadIndexStatus"])
+        self.assertEqual({}, properties["nativeRuleEvidenceReadIndex"])
+
+    def test_source_world_manifest_does_not_require_native_rule_planner_topology(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("market:shared:global", worldview={
+            "worldId": "market:shared:global",
+            "worldType": "market",
+        })
+        graph.entities.append(OntologyEntity(
+            "stock:005930",
+            "Samsung Electronics",
+            "stock",
+            {"ontologyBox": "ABox", "symbol": "005930"},
+        ))
+
+        result = repository.prepare_scoped_manifest_native_rule_indexes(graph)
+
+        self.assertEqual("not-required-source-world", result["status"])
+        self.assertFalse(graph.worldview["nativeRuleEvidenceReadIndexRequired"])
+        self.assertNotIn("nativeRuleEvidenceReadIndex", graph.worldview)
+        self.assertFalse(native_rule_manifest_index_required(graph.worldview))
+
+    def test_inference_world_manifest_still_fails_closed_without_planner_topology(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology("portfolio:local:default", worldview={
+            "worldId": "portfolio:local:default",
+            "worldType": "portfolio",
+        })
+        graph.entities.append(OntologyEntity(
+            "stock:005930",
+            "Samsung Electronics",
+            "stock",
+            {"ontologyBox": "ABox", "symbol": "005930"},
+        ))
+
+        result = repository.prepare_scoped_manifest_native_rule_indexes(graph)
+
+        self.assertEqual("local-index-topology-mismatch", result["status"])
+        self.assertTrue(graph.worldview["nativeRuleEvidenceReadIndexRequired"])
+        self.assertNotIn("nativeRuleEvidenceReadIndex", graph.worldview)
+        self.assertTrue(native_rule_manifest_index_required(graph.worldview))
 
     def test_market_scope_observation_refresh_preserves_manifest_generations(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

@@ -21,7 +21,10 @@ def install_stop_handlers(stop_callback) -> None:
 
 def wait_until_running(running, end_at: float, sleep_fn=time.sleep) -> None:
     while running() and time.monotonic() < end_at:
-        sleep_fn(min(1.0, end_at - time.monotonic()))
+        remaining = end_at - time.monotonic()
+        if remaining <= 0:
+            return
+        sleep_fn(min(1.0, remaining))
 
 
 def _output_text(value) -> str:

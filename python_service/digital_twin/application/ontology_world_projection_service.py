@@ -350,11 +350,13 @@ class OntologyWorldProjectionRunner:
         replays only the newest completed packet for each source boundary and
         bypasses that one scheduling preference until the worlds exist again.
         """
-        requeue = getattr(self.outbox, "requeue_latest_completed", None)
+        requeue = getattr(self.outbox, "requeue_latest_replayable", None)
+        if not callable(requeue):
+            requeue = getattr(self.outbox, "requeue_latest_completed", None)
         if not callable(requeue):
             return {
                 "status": "unsupported",
-                "reason": "The shared-world outbox cannot replay its latest completed projections.",
+                "reason": "The shared-world outbox cannot replay its latest valid projections.",
             }
         bounded = max(1, min(5000, int(limit or 100)))
         try:
@@ -370,7 +372,7 @@ class OntologyWorldProjectionRunner:
             return {
                 "status": "empty",
                 "replay": replay,
-                "reason": "No completed shared-world projection packet is available to replay.",
+                "reason": "No valid shared-world projection packet is available to replay.",
             }
 
         completed_ids = set()
@@ -407,7 +409,9 @@ class OntologyWorldProjectionRunner:
 
     def rebuild_candidate_from_completed(self, limit: int = 0) -> Dict[str, object]:
         """Populate an isolated TypeDB candidate without mutating the live outbox."""
-        reader = getattr(self.outbox, "latest_completed", None)
+        reader = getattr(self.outbox, "latest_replayable", None)
+        if not callable(reader):
+            reader = getattr(self.outbox, "latest_completed", None)
         if not callable(reader):
             return {
                 "status": "unsupported",

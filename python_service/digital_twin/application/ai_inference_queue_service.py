@@ -50,7 +50,62 @@ def hypothesis_comparison_needs_repair(
     )
 
 
-def hypothesis_comparison_repair_prompt(prompt: str, response) -> str:
+def ai_response_contract_error(context: Dict[str, object], response) -> str:
+    """Preflight the AI selection against the compact TypeDB decision contract."""
+
+    reasoning_case = context.get("investmentReasoningCase")
+    if not isinstance(reasoning_case, dict) or not reasoning_case:
+        return ""
+    selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
+    hypothesis_ids = {
+        str(value or "") for value in reasoning_case.get("hypothesisIds") or [] if str(value or "")
+    }
+    if hypothesis_ids and selected_id not in hypothesis_ids:
+        return "selectedHypothesisId is not present in the TypeDB hypothesis set."
+    syntheses = [
+        dict(value) for value in reasoning_case.get("decisionSyntheses") or [] if isinstance(value, dict)
+    ]
+    if not syntheses:
+        return ""
+    eligible_ids = {
+        str(value or "")
+        for synthesis in syntheses
+        for value in synthesis.get("eligibleHypothesisIds") or []
+        if str(value or "")
+    }
+    if selected_id not in eligible_ids:
+        return "selectedHypothesisId is reference-only in the TypeDB decision synthesis."
+    action = str(getattr(response, "action", "") or "").upper()
+    blocked_actions = {
+        str(value or "").upper()
+        for synthesis in syntheses
+        for value in synthesis.get("blockedActions") or []
+        if str(value or "")
+    }
+    if action in blocked_actions:
+        return "The selected action is blocked by the TypeDB action envelope."
+    applicable = [
+        synthesis for synthesis in syntheses
+        if selected_id in {
+            str(value or "") for value in synthesis.get("eligibleHypothesisIds") or []
+        }
+    ]
+    allowed_actions = {
+        str(value or "").upper()
+        for synthesis in applicable
+        for value in synthesis.get("allowedActions") or []
+        if str(value or "")
+    }
+    if allowed_actions and action not in allowed_actions:
+        return "The selected action is outside the TypeDB action envelope."
+    return ""
+
+
+def hypothesis_comparison_repair_prompt(
+    prompt: str,
+    response,
+    contract_error: str = "",
+) -> str:
     abstention = dict(getattr(response, "decision_abstention", {}) or {})
     audit = {
         "reason": abstention.get("reason") or "가설 비교 계약 미충족",
@@ -58,6 +113,7 @@ def hypothesis_comparison_repair_prompt(prompt: str, response) -> str:
         "invalidHypothesisIds": abstention.get("invalidHypothesisIds") or [],
         "invalidEvidenceIds": abstention.get("invalidEvidenceIds") or [],
         "duplicateHypothesisIds": abstention.get("duplicateHypothesisIds") or [],
+        "decisionContractError": str(contract_error or ""),
     }
     return (
         str(prompt or "")
@@ -286,17 +342,25 @@ class AIInferenceQueueRunner:
         comparison_repair_attempted = False
         comparison_repair_succeeded = False
         comparison_repair_error = ""
+        comparison_repair_contract_error = ""
+        comparison_repair_initial_contract_error = ""
         review_context = dict(context)
         review_context["_notificationAiPreparedPrompt"] = prompt
         review_context["_notificationAiPreparedDecisionBrief"] = decision_brief
         try:
             response = self.reviewer.review(review_context)
-            if hypothesis_comparison_needs_repair(request.message_type, response):
+            comparison_repair_contract_error = ai_response_contract_error(context, response)
+            comparison_repair_initial_contract_error = comparison_repair_contract_error
+            if (
+                hypothesis_comparison_needs_repair(request.message_type, response)
+                or comparison_repair_contract_error
+            ):
                 comparison_repair_attempted = True
                 repair_context = dict(review_context)
                 executed_prompt = hypothesis_comparison_repair_prompt(
                     prompt,
                     response,
+                    comparison_repair_contract_error,
                 )
                 repair_context["_notificationAiPreparedPrompt"] = executed_prompt
                 repair_context["notificationAiExecutionProfile"] = {
@@ -317,9 +381,12 @@ class AIInferenceQueueRunner:
                     )
                 else:
                     response = repaired
-                    comparison_repair_succeeded = not hypothesis_comparison_needs_repair(
-                        request.message_type,
-                        response,
+                    comparison_repair_contract_error = ai_response_contract_error(
+                        context, response
+                    )
+                    comparison_repair_succeeded = bool(
+                        not hypothesis_comparison_needs_repair(request.message_type, response)
+                        and not comparison_repair_contract_error
                     )
                     if not comparison_repair_succeeded:
                         response.validation_warnings.append(
@@ -416,6 +483,8 @@ class AIInferenceQueueRunner:
                 "attempted": comparison_repair_attempted,
                 "succeeded": comparison_repair_succeeded,
                 "error": comparison_repair_error,
+                "initialContractError": comparison_repair_initial_contract_error,
+                "contractError": comparison_repair_contract_error,
                 "reasoningEffort": self.comparison_repair_reasoning_effort,
                 "timeoutSeconds": self.comparison_repair_timeout_seconds,
                 "finalState": str(response.hypothesis_comparison_state or ""),

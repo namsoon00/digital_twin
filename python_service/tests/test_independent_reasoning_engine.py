@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -12,7 +13,9 @@ from digital_twin.application.independent_reasoning_engine import (
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import (
     independent_reasoning_request,
+    merge_reasoning_events,
     reasoning_event_scope,
+    reasoning_queue_slot_key,
     shard_reasoning_event,
 )
 from digital_twin.domain.portfolio import AlertEvent
@@ -182,6 +185,97 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("recovered", result["status"])
         self.assertEqual(["job:dead"], result["recoveredJobIds"])
         self.assertEqual("job:dead", connection.update_params[-1])
+
+    def test_mysql_queue_compacts_old_scopes_without_losing_fact_changes(self):
+        old = source_event("NVDA")
+        old.payload.update({
+            "factTypes": ["PriceObservation"],
+            "sourceObservedAt": "2026-08-16T00:00:00Z",
+            "verifiedSourceSnapshot": {
+                "snapshotId": "snapshot:1",
+                "generatedAt": "2026-08-16T00:00:01Z",
+            },
+            "factChangeContract": {
+                "status": "ready",
+                "scopeFamilies": ["market"],
+                "scopeFamiliesBySymbol": {"NVDA": ["market"]},
+                "dependencyKeys": [],
+                "dependencyKeysComplete": False,
+            },
+        })
+        newest = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id="company:NVDA",
+            occurred_at="2026-08-16T00:02:00Z",
+            event_id="event:newest",
+            payload={
+                "accountIds": ["acct"],
+                "affectedSymbols": ["NVDA"],
+                "factTypes": ["ValuationObservation"],
+                "sourceObservedAt": "2026-08-16T00:01:00Z",
+                "verifiedSourceSnapshot": {
+                    "snapshotId": "snapshot:2",
+                    "generatedAt": "2026-08-16T00:02:01Z",
+                },
+                "factChangeContract": {
+                    "status": "ready",
+                    "scopeFamilies": ["company-valuation"],
+                    "scopeFamiliesBySymbol": {"NVDA": ["company-valuation"]},
+                    "dependencyKeys": [],
+                    "dependencyKeysComplete": False,
+                },
+            },
+        )
+        rows = [
+            {
+                "job_id": "job:old",
+                "scope_key": "reasoning-scope:old",
+                "source_snapshot_at": "2026-08-16T00:00:01Z",
+                "reasoning_lane": "CONTEXT",
+                "priority": 60,
+                "created_at": "2026-08-16T00:00:02Z",
+                "request_json": json.dumps({"sourceEvent": old.to_dict()}),
+            },
+            {
+                "job_id": "job:new",
+                "scope_key": "reasoning-scope:new",
+                "source_snapshot_at": "2026-08-16T00:02:01Z",
+                "reasoning_lane": "CONTEXT",
+                "priority": 70,
+                "created_at": "2026-08-16T00:02:02Z",
+                "request_json": json.dumps({"sourceEvent": newest.to_dict()}),
+            },
+        ]
+
+        class Connection:
+            def __init__(self):
+                self.survivor_update = ()
+
+            def execute(self, sql, params=()):
+                if sql.lstrip().startswith("SELECT"):
+                    return SimpleNamespace(fetchall=lambda: rows)
+                if "source_snapshot_id = %s" in sql:
+                    self.survivor_update = tuple(params)
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        result = object.__new__(Store).compact_supersedable_backlog("ontology-v2-shadow")
+        stored = json.loads(connection.survivor_update[6])
+
+        self.assertEqual("compacted", result["status"])
+        self.assertEqual(1, result["compactedCount"])
+        self.assertEqual("snapshot:2", connection.survivor_update[0])
+        self.assertEqual(
+            ["PriceObservation", "ValuationObservation"],
+            stored["sourceEvent"]["payload"]["factTypes"],
+        )
+        self.assertTrue(str(connection.survivor_update[4]).startswith("reasoning-slot:"))
 
     def test_scoped_executor_reuses_verified_market_inference_within_batch(self):
         class Recorder:
@@ -358,6 +452,96 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             [shard.to_dict() for shard in first],
             [shard.to_dict() for shard in second],
         )
+
+    def test_queue_slot_is_stable_across_different_fact_families(self):
+        price = source_event("NVDA")
+        price.payload["factTypes"] = ["PriceObservation"]
+        valuation = source_event("NVDA")
+        valuation.payload["factTypes"] = ["ValuationObservation"]
+        valuation = DomainEvent(
+            **{**valuation.__dict__, "event_id": "event:valuation"}
+        )
+
+        self.assertNotEqual(
+            independent_reasoning_request("v2", [price]).scope_id,
+            independent_reasoning_request("v2", [valuation]).scope_id,
+        )
+        self.assertEqual(
+            reasoning_queue_slot_key(price, "REALTIME"),
+            reasoning_queue_slot_key(valuation, "REALTIME"),
+        )
+
+    def test_pending_changes_merge_onto_latest_verified_snapshot(self):
+        price = source_event("NVDA")
+        price.payload.update({
+            "factTypes": ["PriceObservation"],
+            "changedFieldsBySymbol": {"NVDA": ["price"]},
+            "factRevisionsBySymbol": {"NVDA": "price:7"},
+            "verifiedSourceSnapshot": {
+                "snapshotId": "snapshot:7",
+                "generatedAt": "2026-08-16T00:00:01Z",
+            },
+            "factChangeContract": {
+                "version": "fact-change-contract-v3",
+                "status": "ready",
+                "factTypes": ["PriceObservation"],
+                "scopeFamilies": ["market"],
+                "scopeFamiliesBySymbol": {"NVDA": ["market"]},
+                "dependencyKeys": ["market.price"],
+                "dependencyKeysBySymbol": {"NVDA": ["market.price"]},
+                "dependencyKeysComplete": True,
+                "dependencyKeysCompleteBySymbol": {"NVDA": True},
+                "unclassifiedFactTypes": [],
+                "unclassifiedFactTypesBySymbol": {},
+            },
+        })
+        valuation = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id="company:NVDA",
+            occurred_at="2026-08-16T00:02:00Z",
+            event_id="event:valuation",
+            payload={
+                "accountIds": ["acct"],
+                "affectedSymbols": ["NVDA"],
+                "factTypes": ["ValuationObservation"],
+                "sourceObservedAt": "2026-08-16T00:01:00Z",
+                "changedFieldsBySymbol": {"NVDA": ["peRatio"]},
+                "factRevisionsBySymbol": {"NVDA": "valuation:3"},
+                "verifiedSourceSnapshot": {
+                    "snapshotId": "snapshot:8",
+                    "generatedAt": "2026-08-16T00:02:01Z",
+                },
+                "factChangeContract": {
+                    "version": "fact-change-contract-v3",
+                    "status": "ready",
+                    "factTypes": ["ValuationObservation"],
+                    "scopeFamilies": ["company-valuation"],
+                    "scopeFamiliesBySymbol": {"NVDA": ["company-valuation"]},
+                    "dependencyKeys": ["company.valuation"],
+                    "dependencyKeysBySymbol": {"NVDA": ["company.valuation"]},
+                    "dependencyKeysComplete": True,
+                    "dependencyKeysCompleteBySymbol": {"NVDA": True},
+                    "unclassifiedFactTypes": [],
+                    "unclassifiedFactTypesBySymbol": {},
+                },
+            },
+        )
+
+        merged = merge_reasoning_events([price, valuation])
+        request = independent_reasoning_request("v2", [merged])
+
+        self.assertEqual("event:valuation", merged.event_id)
+        self.assertEqual("snapshot:8", merged.payload["verifiedSourceSnapshot"]["snapshotId"])
+        self.assertEqual(
+            ["PriceObservation", "ValuationObservation"],
+            merged.payload["factTypes"],
+        )
+        self.assertEqual(["peRatio", "price"], merged.payload["changedFieldsBySymbol"]["NVDA"])
+        self.assertEqual(
+            ["company-valuation", "market"],
+            request.context["requestedScopeFamiliesBySymbol"]["NVDA"],
+        )
+        self.assertEqual(2, merged.payload["coalescedReasoningChanges"]["eventCount"])
 
     def test_request_preserves_the_authoritative_source_fact_boundary(self):
         event = source_event("NVDA")

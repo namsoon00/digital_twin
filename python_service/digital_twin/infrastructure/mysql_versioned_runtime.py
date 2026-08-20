@@ -17,7 +17,9 @@ from ..domain.reasoning_engine_versions import (
 from ..domain.reasoning_shadow import reasoning_comparison_summary
 from ..domain.independent_reasoning import (
     independent_reasoning_request,
+    merge_reasoning_events,
     reasoning_event_scope,
+    reasoning_queue_slot_key,
     shard_reasoning_event,
 )
 from ..domain.events import DomainEvent
@@ -906,6 +908,74 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         level = str(payload.get("reviewLevel") or payload.get("materialityReviewLevel") or "").lower()
         return {"critical": 100, "urgent": 90, "caution": 80, "check": 70, "observe": 50}.get(level, 60)
 
+    @staticmethod
+    def stored_source_event(row: Mapping[str, object]):
+        stored = json_value(dict(row or {}).get("request_json"), {})
+        source = stored.get("sourceEvent") if isinstance(stored, Mapping) else {}
+        return DomainEvent.from_dict(dict(source)) if isinstance(source, Mapping) and source else None
+
+    @staticmethod
+    def source_boundaries(event) -> List[Dict[str, object]]:
+        payload = dict(getattr(event, "payload", {}) or {})
+        singular = payload.get("verifiedSourceSnapshot")
+        boundaries = [
+            dict(value)
+            for value in payload.get("verifiedSourceSnapshots") or []
+            if isinstance(value, Mapping) and value
+        ]
+        if not boundaries and isinstance(singular, Mapping) and singular:
+            boundaries = [dict(singular)]
+        return list({
+            str(value.get("accountId") or "") + "|" + str(value.get("snapshotId") or value.get("generatedAt") or ""): value
+            for value in boundaries
+            if str(value.get("snapshotId") or value.get("generatedAt") or "").strip()
+        }.values())
+
+    @classmethod
+    def queued_job_material(cls, deployment_id: str, event):
+        request = independent_reasoning_request(str(deployment_id or ""), [event])
+        lane = FactDelta.from_request(request).lane
+        boundaries = cls.source_boundaries(event)
+        primary = max(
+            boundaries,
+            key=lambda value: str(value.get("generatedAt") or ""),
+            default={},
+        )
+        scope_key = (
+            reasoning_queue_slot_key(event, lane)
+            if request.supersedable
+            else request.scope_id
+        )
+        return {
+            "request": request,
+            "lane": lane,
+            "boundaries": boundaries,
+            "primary": primary,
+            "scopeKey": scope_key,
+            "requestJson": canonical_json({
+                "request": request.to_dict(),
+                "sourceEvent": event.to_dict(),
+            }),
+        }
+
+    @classmethod
+    def pending_slot_events_with_connection(
+        cls,
+        connection,
+        deployment_id: str,
+        scope_key: str,
+    ) -> List[object]:
+        rows = connection.execute(
+            "SELECT request_json FROM reasoning_engine_jobs "
+            "WHERE deployment_id = %s AND scope_key = %s AND supersedable = 1 "
+            "AND job_status IN ('queued', 'retry', 'awaiting_source') "
+            "ORDER BY source_snapshot_at, created_at, job_id FOR UPDATE",
+            (str(deployment_id or ""), str(scope_key or "")),
+        ).fetchall()
+        return [
+            event for event in (cls.stored_source_event(row) for row in rows or []) if event is not None
+        ]
+
     @classmethod
     def ingress_event_with_connection(cls, connection, event) -> Dict[str, object]:
         deployments = cls.target_deployments_with_connection(connection)
@@ -926,17 +996,20 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         superseded = 0
         for deployment_id in deployments:
             for source_event in source_events:
-                request = independent_reasoning_request(deployment_id, [source_event])
-                event_payload = dict(getattr(source_event, "payload", {}) or {})
-                source_boundary = event_payload.get("verifiedSourceSnapshot")
-                source_boundary = dict(source_boundary or {}) if isinstance(source_boundary, Mapping) else {}
-                source_boundaries = [
-                    dict(value)
-                    for value in event_payload.get("verifiedSourceSnapshots") or []
-                    if isinstance(value, Mapping) and value
-                ] or ([source_boundary] if source_boundary else [])
-                if not source_boundary and source_boundaries:
-                    source_boundary = source_boundaries[0]
+                material = cls.queued_job_material(deployment_id, source_event)
+                request = material["request"]
+                if request.supersedable:
+                    pending = cls.pending_slot_events_with_connection(
+                        connection,
+                        deployment_id,
+                        material["scopeKey"],
+                    )
+                    if pending:
+                        source_event = merge_reasoning_events([*pending, source_event])
+                        material = cls.queued_job_material(deployment_id, source_event)
+                        request = material["request"]
+                source_boundary = material["primary"]
+                source_boundaries = material["boundaries"]
                 job_id = "reasoning-engine-job:" + uuid.uuid4().hex
                 cursor = connection.execute(
                     """
@@ -955,16 +1028,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                         str(source_boundary.get("generatedAt") or "")[:40],
                         canonical_json(source_boundaries),
                         payload_fingerprint(source_event.to_dict()),
-                        request.scope_id[:191],
+                        str(material["scopeKey"] or "")[:191],
                         request.input_fingerprint[:64],
-                        canonical_json({
-                            "request": request.to_dict(),
-                            "sourceEvent": source_event.to_dict(),
-                        }),
+                        material["requestJson"],
                         "queued" if source_boundaries else "awaiting_source",
                         cls.event_priority(source_event),
                         1 if request.supersedable else 0,
-                        FactDelta.from_request(request).lane,
+                        material["lane"],
                         stamp,
                         stamp,
                         stamp,
@@ -985,7 +1055,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                           AND job_id <> %s AND supersedable = 1
                           AND job_status IN ('queued', 'retry', 'awaiting_source')
                         """,
-                        (stamp, stamp, deployment_id, request.scope_id, job_id),
+                        (stamp, stamp, deployment_id, material["scopeKey"], job_id),
                     )
                     superseded += int(getattr(updated, "rowcount", 0) or 0)
         return {
@@ -1123,6 +1193,130 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "status": "resharded",
             "shardCount": len(source_events),
             "jobIds": inserted_job_ids,
+        }
+
+    def compact_supersedable_backlog(
+        self,
+        deployment_id: str,
+        limit: int = 2000,
+    ) -> Dict[str, object]:
+        """Collapse historical pending deltas into one latest-state job per slot.
+
+        This is both a one-time migration for pre-slot V2 jobs and a bounded
+        recovery path after an interrupted ingress transaction. Processing and
+        non-fungible jobs are deliberately excluded.
+        """
+
+        stamp = iso_utc()
+        scanned = 0
+        compacted = 0
+        migrated = 0
+        age_resets = 0
+        groups = {}
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM reasoning_engine_jobs WHERE deployment_id = %s "
+                "AND supersedable = 1 AND job_status IN ('queued', 'retry', 'awaiting_source') "
+                "ORDER BY source_snapshot_at, created_at, job_id LIMIT %s FOR UPDATE",
+                (str(deployment_id or ""), max(1, min(10000, int(limit or 2000)))),
+            ).fetchall()
+            for row in rows or []:
+                event = self.stored_source_event(row)
+                if event is None:
+                    continue
+                lane = str(row.get("reasoning_lane") or "") or FactDelta.from_request(
+                    independent_reasoning_request(deployment_id, [event])
+                ).lane
+                slot = reasoning_queue_slot_key(event, lane)
+                groups.setdefault(slot, []).append((dict(row), event))
+                scanned += 1
+
+            for slot, items in groups.items():
+                survivor_row, survivor_event = max(
+                    items,
+                    key=lambda value: (
+                        str(value[0].get("source_snapshot_at") or ""),
+                        str((value[1].payload or {}).get("sourceObservedAt") or ""),
+                        str(value[0].get("created_at") or ""),
+                        str(value[0].get("job_id") or ""),
+                    ),
+                )
+                merged_event = merge_reasoning_events([event for _, event in items])
+                if merged_event.event_id != survivor_event.event_id:
+                    merged_event = DomainEvent(
+                        name=merged_event.name,
+                        aggregate_id=merged_event.aggregate_id,
+                        schema_version=merged_event.schema_version,
+                        payload=dict(merged_event.payload or {}),
+                        occurred_at=max(merged_event.occurred_at, survivor_event.occurred_at),
+                        event_id=survivor_event.event_id,
+                        correlation_id=survivor_event.correlation_id or merged_event.correlation_id,
+                    )
+                material = self.queued_job_material(deployment_id, merged_event)
+                survivor_id = str(survivor_row.get("job_id") or "")
+                replaced_ids = [
+                    str(row.get("job_id") or "")
+                    for row, _ in items
+                    if str(row.get("job_id") or "") != survivor_id
+                ]
+                if replaced_ids:
+                    placeholders = ",".join(["%s"] * len(replaced_ids))
+                    connection.execute(
+                        "UPDATE reasoning_engine_jobs SET job_status = 'superseded', completed_at = %s, "
+                        "available_at = '', lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                        "last_error = 'Merged into the newest durable reasoning slot.', updated_at = %s "
+                        "WHERE job_id IN (" + placeholders + ")",
+                        (stamp, stamp, *replaced_ids),
+                    )
+                    compacted += len(replaced_ids)
+                scope_migrated = str(survivor_row.get("scope_key") or "") != slot
+                if scope_migrated:
+                    migrated += 1
+                compacted_age_reset = bool(
+                    str(survivor_row.get("last_error") or "").startswith("Coalesced ")
+                    and str(survivor_row.get("created_at") or "")
+                    < str(survivor_row.get("updated_at") or "")
+                )
+                if not replaced_ids and not scope_migrated and not compacted_age_reset:
+                    continue
+                if compacted_age_reset:
+                    age_resets += 1
+                primary = material["primary"]
+                connection.execute(
+                    "UPDATE reasoning_engine_jobs SET source_snapshot_id = %s, source_snapshot_at = %s, "
+                    "source_boundary_json = %s, source_payload_hash = %s, scope_key = %s, "
+                    "input_fingerprint = %s, request_json = %s, job_status = %s, priority = %s, "
+                    "reasoning_lane = %s, available_at = %s, lease_owner = '', lease_expires_at = '', "
+                    "heartbeat_at = '', last_error = %s, completed_at = '', created_at = %s, updated_at = %s "
+                    "WHERE job_id = %s",
+                    (
+                        str(primary.get("snapshotId") or "")[:191],
+                        str(primary.get("generatedAt") or "")[:40],
+                        canonical_json(material["boundaries"]),
+                        payload_fingerprint(merged_event.to_dict()),
+                        slot[:191],
+                        material["request"].input_fingerprint[:64],
+                        material["requestJson"],
+                        "queued" if material["boundaries"] else "awaiting_source",
+                        max(int(row.get("priority") or 0) for row, _ in items),
+                        material["lane"],
+                        stamp,
+                        (
+                            "Coalesced " + str(len(items)) + " pending fact changes into the latest source snapshot."
+                            if len(items) > 1 else ""
+                        ),
+                        stamp,
+                        stamp,
+                        survivor_id,
+                    ),
+                )
+        return {
+            "status": "compacted" if compacted or migrated or age_resets else "unchanged",
+            "scannedCount": scanned,
+            "slotCount": len(groups),
+            "compactedCount": compacted,
+            "migratedCount": migrated,
+            "queueAgeResetCount": age_resets,
         }
 
     def recover_dead_local_leases(

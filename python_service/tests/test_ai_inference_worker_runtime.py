@@ -31,6 +31,22 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
 
         self.assertFalse([name for name in specs if name.startswith("notification-ai")])
 
+    def test_service_manager_manages_cloudflare_evidence_share_when_enabled(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "notificationAiQueueWorkerCount": "0",
+            "ontologyTypeDbEnabled": "0",
+            "mysqlRuntimeManaged": "0",
+            "cloudflareShareManagedEnabled": "1",
+            "cloudflareSharePort": "3101",
+        }), patch.object(service_manager.shutil, "which", side_effect=lambda command: "/usr/local/bin/" + command):
+            specs = service_manager.worker_specs()
+
+        share = specs["cloudflare-share"]
+        self.assertEqual("cloudflare-share", share["role"])
+        self.assertEqual("3101", share["env"]["PORT"])
+        self.assertEqual("cloudflared", share["env"]["TUNNEL_PROVIDER"])
+        self.assertIn("scripts/share-local.js", " ".join(share["command"]))
+
     def test_service_manager_keeps_ai_workers_off_until_runtime_settings_are_available(self):
         with patch.object(service_manager, "runtime_settings", return_value={}):
             specs = service_manager.worker_specs()

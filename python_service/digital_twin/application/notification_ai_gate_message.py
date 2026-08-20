@@ -2971,7 +2971,9 @@ def execution_telegram_message_full(context: Dict[str, object], response: Notifi
 
 
 def _notification_detail_link_row(context: Dict[str, object], level: str) -> str:
-    detail_url = str(context.get("notificationDetailUrl") or context.get("notifyLinkUrl") or "").strip()
+    # This label promises the evidence page for this exact notification. A
+    # generic notification-list URL is not an acceptable fallback.
+    detail_url = str(context.get("notificationDetailUrl") or "").strip()
     if not detail_url:
         return ""
     return (
@@ -3332,6 +3334,13 @@ def _market_signal_basis_label(context: Dict[str, object], stage: str) -> str:
         return ""
     freshness = str(payload.get("freshnessStatus") or "").strip().lower()
     latency = str(payload.get("latencyStatus") or "").strip().lower()
+    measurement = str(payload.get("measurementType") or "").strip().lower()
+    if stage == "investor" and (
+        measurement == "daily-final"
+        or freshness == "market-close-final"
+        or latency == "market-close-final"
+    ):
+        return "장 마감 확정"
     if stage == "investor" and (
         payload.get("realTime") is False
         or freshness in {"reference-only", "reference-repeat"}

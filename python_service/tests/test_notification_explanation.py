@@ -55,6 +55,7 @@ class NotificationExplanationTests(unittest.TestCase):
             "displayTarget": "카카오 / 035720",
             "rawLines": ["현재가: 39,400원", "수익률: +2.1%", "추세: 20일선보다 5.4% 높음"],
             "notifyLinkUrl": "https://example.test/?tab=notifications",
+            "notificationDetailUrl": "https://example.test/?tab=notifications&detail=notification-job&detailKey=test-job",
             "ontologyRelationContext": {
                 "matchedRules": [{
                     "ruleId": "graph.temporal.support.v1",
@@ -81,6 +82,67 @@ class NotificationExplanationTests(unittest.TestCase):
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("네 번째 이후 근거", message)
         self.assertEqual(1, message.count("현재가가 20일 평균 위에 있습니다."))
+
+    def test_concise_notification_keeps_foreign_and_institution_flow(self):
+        context = {
+            "messageDeliveryLevel": "absoluteBeginner",
+            "notificationDetailLevel": "concise",
+            "title": "LG전자 알림",
+            "displayTarget": "LG전자 / 066570",
+            "rawLines": [
+                "현재가: 202,000원",
+                "수익률: 0%",
+                "추세: 5일선보다 2.0% 낮음, 20일선보다 11.9% 높음, 60일선보다 3.2% 낮음",
+            ],
+            "notificationDetailUrl": "https://evidence.test/?detail=notification-job&detailKey=test-job",
+            "ontologyRelationContext": {
+                "facts": {
+                    "volume": 1170383,
+                    "volumeRatio": 0.49,
+                    "foreignBuyVolume": 202082,
+                    "foreignSellVolume": 137364,
+                    "foreignNetVolume": 64718,
+                    "institutionBuyVolume": 117215,
+                    "institutionSellVolume": 187359,
+                    "institutionNetVolume": -70144,
+                    "marketSignalCoverage": {
+                        "investor": {
+                            "status": "available",
+                            "judgementEvidenceUsable": True,
+                            "measurementType": "daily-final",
+                            "observedFields": [
+                                "foreignBuyVolume",
+                                "foreignSellVolume",
+                                "foreignNetVolume",
+                                "institutionBuyVolume",
+                                "institutionSellVolume",
+                                "institutionNetVolume",
+                            ],
+                        },
+                    },
+                },
+                "matchedRules": [{"label": "기간 회복 시도 에피소드"}],
+            },
+        }
+
+        message = execution_telegram_message(context, self.response())
+
+        self.assertIn("투자자 수급", message)
+        self.assertIn("외국인 순매수 64,718주", message)
+        self.assertIn("기관 순매도 70,144주", message)
+        self.assertIn("장 마감 확정", message)
+
+    def test_evidence_link_is_hidden_without_exact_notification_detail_url(self):
+        context = {
+            "messageDeliveryLevel": "absoluteBeginner",
+            "notificationDetailLevel": "concise",
+            "displayTarget": "LG전자 / 066570",
+            "notifyLinkUrl": "https://example.test/?tab=notifications",
+        }
+
+        message = execution_telegram_message(context, self.response())
+
+        self.assertNotIn("웹에서 전체 근거 보기", message)
 
     def test_standard_adds_summary_layers_without_full_diagnostics(self):
         context = {

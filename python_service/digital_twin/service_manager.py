@@ -551,6 +551,33 @@ def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def cloudflare_share_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
+    node = shutil.which("node") or ""
+    cloudflared = shutil.which("cloudflared") or ""
+    script = ROOT_DIR / "scripts" / "share-local.js"
+    port = int_value((settings or {}).get("cloudflareSharePort"), 3001, 1)
+    missing = ""
+    if not node:
+        missing = "Node.js executable was not found."
+    elif not cloudflared:
+        missing = "cloudflared executable was not found."
+    elif not script.exists():
+        missing = "Cloudflare share script was not found."
+    return {
+        "label": "Cloudflare notification evidence share",
+        "pid": data_dir() / "cloudflare-share.pid",
+        "log": data_dir() / "cloudflare-share.log",
+        "command": [node, str(script)] if not missing else [],
+        "needle": "scripts/share-local.js",
+        "role": "cloudflare-share",
+        "env": {
+            "PORT": str(port),
+            "TUNNEL_PROVIDER": "cloudflared",
+        },
+        "missingReason": missing,
+    }
+
+
 def notification_ai_worker_specs(worker_count: int) -> Dict[str, Dict[str, object]]:
     workers = {}
     for index in range(1, min(MAX_NOTIFICATION_AI_WORKERS, max(0, int(worker_count or 0))) + 1):
@@ -627,6 +654,8 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     # recover. API handlers expose dependency freshness explicitly, so the web
     # process does not need to wait behind a long TypeDB replay or seed.
     workers["web"] = web_worker_spec(settings)
+    if truthy((settings or {}).get("cloudflareShareManagedEnabled")):
+        workers["cloudflare-share"] = cloudflare_share_worker_spec(settings)
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
     if truthy((settings or {}).get("timeSeriesQuestDbEnabled")):
@@ -672,7 +701,7 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         environment = dict(spec.get("env") or {})
         environment.update(local_ai_environment)
         spec = {**dict(spec), "env": environment}
-        if name in {"mysql", "web"}:
+        if name in {"mysql", "web", "cloudflare-share"}:
             workers[name] = spec
             continue
         workers[name] = {

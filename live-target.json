@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "status": "unavailable",
+  "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "",
-  "revision": "unknown",
-  "updatedAt": ""
+  "baseUrl": "https://ata-electrical-apps-rec.trycloudflare.com",
+  "revision": "01834e88dcf6",
+  "updatedAt": "2026-08-20T21:57:16.669Z"
 }

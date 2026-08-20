@@ -1920,7 +1920,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260820-investment-case-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260820-investment-case-v2", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -6620,15 +6620,34 @@
     if (state.investmentFlowDetailLoading[key] && !force) return Promise.resolve(null);
     state.investmentFlowDetailLoading[key] = true;
     state.investmentFlowDetailErrors[key] = "";
-    return requestJson("/api/investment-cases/" + encodeURIComponent(key), {
+    var request = requestJson("/api/investment-cases/" + encodeURIComponent(key), {
       key: "investment-case-detail:" + key,
       force: Boolean(force),
       timeoutMs: 15000
+    }).catch(function (originalError) {
+      var ensureList = state.investmentFlowLoaded
+        ? Promise.resolve(state.investmentFlow)
+        : loadInvestmentFlow(false);
+      return ensureList.then(function () {
+        var items = Array.isArray((state.investmentFlow || {}).items) ? state.investmentFlow.items : [];
+        var current = items.filter(function (item) {
+          return String(item.caseId || "") === key || String(item.episodeId || "") === key;
+        })[0];
+        var alternateKey = current
+          ? String((String(current.caseId || "") === key ? current.episodeId : current.caseId) || "")
+          : "";
+        if (!alternateKey || alternateKey === key) throw originalError;
+        return requestJson("/api/investment-cases/" + encodeURIComponent(alternateKey), {
+          key: "investment-case-detail-fallback:" + key,
+          force: true,
+          timeoutMs: 15000
+        });
+      });
     }).then(function (payload) {
       state.investmentFlowDetails[key] = payload && typeof payload === "object" ? payload : {};
       return state.investmentFlowDetails[key];
     }).catch(function (error) {
-      state.investmentFlowDetailErrors[key] = error.message || "투자 케이스 상세를 읽지 못했습니다.";
+      state.investmentFlowDetailErrors[key] = error.message || "투자 케이스 상세를 읽지 못했습니다. 목록을 새로고침해 주세요.";
       return null;
     }).finally(function () {
       delete state.investmentFlowDetailLoading[key];

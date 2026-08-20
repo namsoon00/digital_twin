@@ -5686,6 +5686,9 @@
         query: "",
         boundedContext: "",
         enabled: "",
+        ruleKind: "",
+        theoryFamily: "",
+        validationStatus: "",
         scope: "",
         state: "",
         symbol: ""
@@ -5730,7 +5733,7 @@
       "limit=40",
       "cursor=" + encodeURIComponent(cursor || "offset:0")
     ];
-    ["query", "boundedContext", "enabled", "scope", "state", "symbol"].forEach(function (key) {
+    ["query", "boundedContext", "enabled", "ruleKind", "theoryFamily", "validationStatus", "scope", "state", "symbol"].forEach(function (key) {
       var value = String(filter[key] || "").trim();
       if (value) params.push(encodeURIComponent(key) + "=" + encodeURIComponent(value));
     });
@@ -12597,11 +12600,14 @@
     var rulebox = summary.rulebox || {};
     var hypotheses = summary.hypotheses || {};
     var inferencebox = summary.inferencebox || {};
+    var ruleKnowledge = summary.ruleKnowledge || {};
     var metrics = [
       ["경계 문맥", counts.boundedContexts, "업무 의미 영역"],
       ["TBox 개념", counts.classes, summary.sourceTBox && summary.sourceTBox.version],
       ["TBox 관계", counts.relations, "관계 형식"],
       ["실행 규칙", counts.executableRules, rulebox.status || "확인 대기"],
+      ["예측 가설 규칙", ruleKnowledge.hypothesisRuleCount, "결과 검증 대상"],
+      ["가드레일 규칙", ruleKnowledge.guardrailRuleCount, "정책·품질·실행 제약"],
       ["현재 가설", counts.hypotheses, hypotheses.complete === false ? "일부 집계" : "전체 집계"],
       ["추론 세대", inferencebox.inferenceGenerationId ? 1 : "-", inferencebox.status || "계정 필요"]
     ];
@@ -12657,7 +12663,17 @@
         return '<option value="' + escapeHtml(item.id) + '"' + (item.id === filter.boundedContext ? " selected" : "") + '>' + escapeHtml(item.label) + '</option>';
       }).join("") + '</select></label>';
     } else if (section === "rules") {
-      extra = '<label><span>사용 상태</span><select data-ontology-catalog-filter="enabled"><option value="">전체</option><option value="true"' + (filter.enabled === "true" ? " selected" : "") + '>사용</option><option value="false"' + (filter.enabled === "false" ? " selected" : "") + '>중지</option></select></label>';
+      var summary = ontologyCatalogSummaryPayload();
+      var knowledge = summary.ruleKnowledge || {};
+      var kinds = Object.keys(knowledge.ruleKindCounts || {});
+      var theories = Object.keys(knowledge.theoryFamilyCounts || {});
+      var statuses = Object.keys(knowledge.validationStatusCounts || {});
+      extra = [
+        '<label><span>사용 상태</span><select data-ontology-catalog-filter="enabled"><option value="">전체</option><option value="true"' + (filter.enabled === "true" ? " selected" : "") + '>사용</option><option value="false"' + (filter.enabled === "false" ? " selected" : "") + '>중지</option></select></label>',
+        '<label><span>규칙 역할</span><select data-ontology-catalog-filter="ruleKind"><option value="">전체</option>' + kinds.map(function (item) { return '<option value="' + escapeHtml(item) + '"' + (filter.ruleKind === item ? " selected" : "") + '>' + escapeHtml(item) + '</option>'; }).join("") + '</select></label>',
+        '<label><span>이론 계열</span><select data-ontology-catalog-filter="theoryFamily"><option value="">전체</option>' + theories.map(function (item) { return '<option value="' + escapeHtml(item) + '"' + (filter.theoryFamily === item ? " selected" : "") + '>' + escapeHtml(item) + '</option>'; }).join("") + '</select></label>',
+        '<label><span>검증 상태</span><select data-ontology-catalog-filter="validationStatus"><option value="">전체</option>' + statuses.map(function (item) { return '<option value="' + escapeHtml(item) + '"' + (filter.validationStatus === item ? " selected" : "") + '>' + escapeHtml(item) + '</option>'; }).join("") + '</select></label>'
+      ].join("");
     } else if (section === "hypotheses") {
       extra = '<label><span>범위</span><select data-ontology-catalog-filter="scope"><option value="">전체</option><option value="account"' + (filter.scope === "account" ? " selected" : "") + '>계정</option><option value="market"' + (filter.scope === "market" ? " selected" : "") + '>시장</option></select></label>';
     } else if (section === "inferences") {
@@ -12693,13 +12709,15 @@
       title: row.label || row.ruleId,
       detail: row.ruleId,
       meta: [
+        row.ruleKind || "역할 미지정",
+        row.theoryFamily || "이론 미지정",
         row.assessmentScope || "판단 영역 미지정",
         row.lifecycleClass || "실행군 미지정",
         "조건 " + Number(row.conditionCount || 0),
         "파생 " + Number(row.derivationCount || 0),
         (row.triggerFamilies || []).slice(0, 2).join(" / ") || "트리거 없음"
       ].join(" · "),
-      side: row.enabled === false ? "중지" : "사용"
+      side: row.enabled === false ? "중지" : (row.knowledgeValidationStatus || "사용")
     };
     if (section === "hypotheses") return {
       title: [row.symbol, row.scope === "market" ? "시장 가설" : "계정 가설"].filter(Boolean).join(" · ") || row.lifecycleId,
@@ -12765,6 +12783,24 @@
     if (state.ontologyCatalogLineageError) return '<div class="ontology-catalog-unavailable"><strong>계보 조회 실패</strong><p>' + escapeHtml(state.ontologyCatalogLineageError) + '</p></div>';
     var payload = state.ontologyCatalogLineage || {};
     var lineage = payload.lineage || {};
+    var selectedItem = (payload.selection || {}).item || {};
+    var knowledge = selectedItem.knowledgeBasis || {};
+    var references = Array.isArray(knowledge.references) ? knowledge.references : [];
+    var knowledgeDetail = knowledge.ruleKind ? [
+      '<section class="ontology-rule-knowledge">',
+      '<header><strong>규칙의 이론·검증 근거</strong><span>' + escapeHtml(knowledge.decisionEligibility || "") + '</span></header>',
+      '<div class="ontology-rule-knowledge-grid">',
+      '<p><span>역할</span><strong>' + escapeHtml(knowledge.ruleKind) + '</strong></p>',
+      '<p><span>이론 계열</span><strong>' + escapeHtml(knowledge.theoryFamily || "-") + '</strong></p>',
+      '<p><span>투자 논지</span><strong>' + escapeHtml(knowledge.thesisFamily || "-") + '</strong></p>',
+      '<p><span>검증 상태</span><strong>' + escapeHtml(knowledge.validationStatus || "-") + '</strong></p>',
+      '<p><span>임계값 출처</span><strong>' + escapeHtml(knowledge.thresholdOrigin || "-") + '</strong></p>',
+      '<p><span>가설 생성</span><strong>' + escapeHtml(knowledge.requiresHypothesis ? "예" : "아니오") + '</strong></p>',
+      '</div>',
+      '<p class="ontology-rule-knowledge-explanation">' + escapeHtml(knowledge.plainLanguageBasis || "근거 설명이 없습니다.") + '</p>',
+      references.length ? '<div class="ontology-rule-references">' + references.map(function (item) { return '<a href="' + escapeHtml(item.url || "#") + '" target="_blank" rel="noopener noreferrer"><strong>' + escapeHtml(item.title || item.referenceId) + '</strong><span>' + escapeHtml(item.claim || item.applicability || "") + '</span></a>'; }).join("") + '</div>' : '<p class="subtle">연결된 외부 연구 문헌이 없습니다. 내부 정책 또는 운영 계약 기반 규칙입니다.</p>',
+      '</section>'
+    ].join("") : "";
     var groups = [
       ["classes", "TBox 개념"], ["relations", "TBox 관계"], ["rules", "실행 규칙"],
       ["hypotheses", "가설"], ["inferences", "추론"], ["decisions", "판단"], ["notifications", "알림"]
@@ -12778,6 +12814,7 @@
         return '<section><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><span>' + escapeHtml(group[1]) + '</span><strong>' + escapeHtml(rows.length) + '</strong><div>' + (rows.length ? rows.slice(0, 3).map(function (item) { return '<em>' + escapeHtml(ontologyCatalogLineageItemLabel(group[0], item) || item.id || "-") + '</em>'; }).join("") : '<em>연결 없음</em>') + '</div></section>';
       }).join(""),
       '</div>',
+      knowledgeDetail,
       (payload.gaps || []).length ? '<div class="ontology-catalog-gaps"><strong>확인이 필요한 연결</strong>' + payload.gaps.map(function (gap) { return '<p><b>' + escapeHtml(gap.code || "gap") + '</b><span>' + escapeHtml(gap.detail || "-") + '</span></p>'; }).join("") + '</div>' : '<div class="ontology-catalog-lineage-ok">현재 조회 범위에서 누락 연결이 발견되지 않았습니다.</div>',
       '</section>'
     ].join("");
@@ -27061,11 +27098,12 @@
     var relationTypes = derivations.map(function (item) {
       return item.relation_type || item.relationType || "";
     }).filter(Boolean);
+    var knowledge = rule.knowledge_basis || rule.knowledgeBasis || {};
     return [
       '<div class="source-row rulebox-rule-row">',
       '<span>' + escapeHtml(rule.enabled === false ? "disabled" : (rule.action_group || rule.actionGroup || "enabled")) + '</span>',
       '<strong>' + escapeHtml(rule.label || rule.rule_id || rule.ruleId || "Rule") + '</strong>',
-      '<em>' + escapeHtml((rule.rule_id || rule.ruleId || "") + " · " + conditions.length + " conditions · " + (relationTypes.join(", ") || derivations.length + " derivations")) + '</em>',
+      '<em>' + escapeHtml((rule.rule_id || rule.ruleId || "") + " · " + (knowledge.ruleKind || "역할 미지정") + " · " + (knowledge.theoryFamily || "이론 미지정") + " · " + (knowledge.validationStatus || "검증 미지정") + " · " + conditions.length + " conditions · " + (relationTypes.join(", ") || derivations.length + " derivations")) + '</em>',
       renderRecordChangedAt(rule),
       '</div>'
     ].join("");

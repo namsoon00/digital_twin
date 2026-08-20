@@ -1698,9 +1698,71 @@
 
 .ontology-catalog-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) auto;
+  grid-template-columns: minmax(220px, 1fr) repeat(auto-fit, minmax(150px, 220px));
   align-items: end;
   gap: 10px;
+}
+
+.ontology-rule-knowledge {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.ontology-rule-knowledge > header,
+.ontology-rule-knowledge-grid p,
+.ontology-rule-references a {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ontology-rule-knowledge > header span,
+.ontology-rule-knowledge-grid span,
+.ontology-rule-references span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ontology-rule-knowledge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.ontology-rule-knowledge-grid p,
+.ontology-rule-knowledge-explanation {
+  margin: 0;
+}
+
+.ontology-rule-knowledge-grid p {
+  display: grid;
+  justify-content: initial;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.ontology-rule-knowledge-grid strong,
+.ontology-rule-knowledge-explanation,
+.ontology-rule-references a {
+  overflow-wrap: anywhere;
+}
+
+.ontology-rule-references {
+  display: grid;
+  gap: 6px;
+}
+
+.ontology-rule-references a {
+  padding: 9px 10px;
+  border-left: 3px solid var(--blue);
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
 }
 
 .ontology-catalog-toolbar label {

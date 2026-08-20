@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b141d">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Orbit Alpha 연결</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08111a;
+      --panel: #101b26;
+      --panel-soft: #152230;
+      --ink: #f4f7fb;
+      --muted: #98a6b7;
+      --line: #2a394a;
+      --action: #65a8f5;
+      --positive: #43c5a3;
+      --danger: #ff7a70;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    main {
+      width: min(100% - 32px, 560px);
+      min-height: 100dvh;
+      margin: 0 auto;
+      display: grid;
+      align-content: center;
+      padding: max(28px, env(safe-area-inset-top)) 0 max(28px, env(safe-area-inset-bottom));
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .brand img {
+      width: 42px;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+    }
+    .brand span { display: grid; gap: 2px; }
+    .brand strong { font-size: 18px; }
+    .brand small { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .connection {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    .connection-head {
+      padding: 22px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--action);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: 24px; line-height: 1.25; }
+    .connection-head > p:last-child,
+    .status-copy {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .status {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr);
+      gap: 12px;
+      padding: 20px 22px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      margin-top: 5px;
+      border-radius: 50%;
+      background: var(--action);
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--action) 14%, transparent);
+    }
+    .status-dot.ready { background: var(--positive); box-shadow: 0 0 0 5px color-mix(in srgb, var(--positive) 14%, transparent); }
+    .status-dot.error { background: var(--danger); box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 14%, transparent); }
+    .status-body { display: grid; gap: 5px; min-width: 0; }
+    .status-body strong { font-size: 16px; }
+    .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .access-form {
+      display: grid;
+      gap: 10px;
+      padding: 0 22px 22px;
+    }
+    label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    input {
+      width: 100%;
+      min-height: 46px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      outline: none;
+      background: var(--panel-soft);
+      color: var(--ink);
+      font: inherit;
+    }
+    input:focus { border-color: var(--action); box-shadow: 0 0 0 3px color-mix(in srgb, var(--action) 20%, transparent); }
+    .actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    button {
+      min-height: 44px;
+      padding: 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    button.primary { border-color: var(--action); background: var(--action); color: #07111b; }
+    button:disabled { cursor: wait; opacity: .55; }
+    footer { margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
+    [hidden] { display: none !important; }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f1f4f8;
+        --panel: #ffffff;
+        --panel-soft: #f7f9fc;
+        --ink: #101820;
+        --muted: #5d6878;
+        --line: #cfd7e2;
+        --action: #1457a8;
+        --positive: #137a63;
+        --danger: #b42318;
+      }
+      button.primary { color: #ffffff; }
+    }
+    @media (max-width: 420px) {
+      main { width: min(100% - 20px, 560px); }
+      .connection-head, .status { padding-left: 18px; padding-right: 18px; }
+      .access-form { padding-left: 18px; padding-right: 18px; }
+      .actions { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">
+      <img src="../icons/orbit-alpha-192.png" alt="">
+      <span><strong>Orbit Alpha</strong><small>고정 보안 진입 주소</small></span>
+    </div>
+    <section class="connection" aria-live="polite">
+      <header class="connection-head">
+        <p class="eyebrow">Secure connection</p>
+        <h1>실행 중인 앱에 연결</h1>
+        <p>현재 로컬 앱과 연결된 터널을 확인합니다.</p>
+      </header>
+      <div class="status">
+        <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+        <div class="status-body">
+          <strong id="status-title">연결 상태 확인 중</strong>
+          <p class="status-copy" id="status-copy">최신 공유 주소를 조회하고 있습니다.</p>
+          <span class="meta" id="status-meta"></span>
+        </div>
+      </div>
+      <form class="access-form" id="access-form" hidden>
+        <label>접근 키
+          <input id="access-token" type="password" inputmode="text" autocomplete="off" placeholder="공유받은 접근 키 입력">
+        </label>
+        <div class="actions">
+          <button class="primary" type="submit">앱 연결</button>
+          <button type="button" id="retry-button">다시 확인</button>
+        </div>
+      </form>
+    </section>
+    <footer>접근 키는 이 페이지 서버로 전송하거나 저장하지 않습니다.</footer>
+  </main>
+  <script>
+    (function () {
+      "use strict";
+      var target = null;
+      var hash = new URLSearchParams(window.location.hash.slice(1));
+      var tokenName = hash.has("owner_token") ? "owner_token" : "share_token";
+      var token = hash.get(tokenName) || "";
+      var form = document.getElementById("access-form");
+      var input = document.getElementById("access-token");
+      var title = document.getElementById("status-title");
+      var copy = document.getElementById("status-copy");
+      var meta = document.getElementById("status-meta");
+      var dot = document.getElementById("status-dot");
+
+      function setStatus(kind, heading, message, detail) {
+        dot.className = "status-dot" + (kind ? " " + kind : "");
+        title.textContent = heading;
+        copy.textContent = message;
+        meta.textContent = detail || "";
+      }
+
+      function validTarget(payload) {
+        if (!payload || payload.status !== "available" || !payload.baseUrl) return false;
+        try {
+          var parsed = new URL(payload.baseUrl);
+          return parsed.protocol === "https:"
+            && (/\.trycloudflare\.com$/i.test(parsed.hostname) || /\.loca\.lt$/i.test(parsed.hostname));
+        } catch (_error) {
+          return false;
+        }
+      }
+
+      function connect() {
+        if (!target || !token) {
+          form.hidden = false;
+          input.focus();
+          return;
+        }
+        setStatus("ready", "보안 연결 준비 완료", "실행 중인 Orbit Alpha로 이동합니다.", target.revision ? "연결 정보 " + target.revision : "");
+        var destination = new URL(target.baseUrl + "/");
+        var route = new URLSearchParams(window.location.search);
+        route.forEach(function (value, key) { destination.searchParams.set(key, value); });
+        destination.searchParams.set(tokenName, token);
+        window.setTimeout(function () { window.location.replace(destination.toString()); }, 120);
+      }
+
+      async function loadTarget() {
+        form.hidden = true;
+        setStatus("", "연결 상태 확인 중", "최신 공유 주소를 조회하고 있습니다.", "");
+        try {
+          var response = await fetch("../live-target.json?ts=" + Date.now(), { cache: "no-store" });
+          if (!response.ok) throw new Error("status " + response.status);
+          var payload = await response.json();
+          if (!validTarget(payload)) throw new Error("active target unavailable");
+          target = payload;
+          if (!token) {
+            setStatus("ready", "앱이 실행 중입니다", "계속하려면 공유받은 접근 키를 입력하세요.", payload.updatedAt ? "주소 갱신 " + payload.updatedAt : "");
+            form.hidden = false;
+            return;
+          }
+          connect();
+        } catch (_error) {
+          target = null;
+          setStatus("error", "현재 앱에 연결할 수 없습니다", "로컬 앱이나 공유 터널이 재시작 중일 수 있습니다.", "잠시 후 다시 확인하세요.");
+          form.hidden = false;
+        }
+      }
+
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        token = String(input.value || "").trim();
+        if (!token) {
+          input.focus();
+          return;
+        }
+        connect();
+      });
+      document.getElementById("retry-button").addEventListener("click", loadTarget);
+      loadTarget();
+    }());
+  </script>
+</body>
+</html>

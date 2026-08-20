@@ -83,6 +83,35 @@ sourceEventId
   -> notificationJobId / deliveryReceiptId
 ```
 
+## Investment Case Read Model
+
+`DecisionEpisode` remains the durable judgement source of truth. The user-facing
+read model projects the latest episode for each account and instrument into one
+stable `InvestmentCaseSnapshot`:
+
+```text
+confirmed facts -> signal set -> competing investment case -> decision -> outcome
+```
+
+The case ID is stable across new episodes for the same account and instrument.
+List reads use the indexed `investment_flow_heads` projection and never query
+TypeDB, hydrate full outcome history, or replay inference. Detail reads expose
+the complete supporting and counter evidence, assumptions, invalidation
+conditions, and guardrails. History is loaded separately from prior persisted
+episodes. The original source/evidence/relation/hypothesis/validation/inference/
+decision/notification lineage is an operator-only trace loaded on demand.
+
+The HTTP contracts are:
+
+- `GET /api/investment-cases`
+- `GET /api/investment-cases/{caseId}`
+- `GET /api/investment-cases/{caseId}/history`
+- `GET /api/investment-cases/{caseId}/trace`
+
+`/api/investment-flow` remains a compatibility and operational API. New user
+interfaces use the investment-case contract so implementation stages do not
+leak into the investor's primary decision workflow.
+
 ## Policy Reasoning
 
 Investment limits are source-backed facts, not constants embedded in rules. Python may compute raw metrics and policy deltas:

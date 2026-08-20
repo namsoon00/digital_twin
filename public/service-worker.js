@@ -1,12 +1,12 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260820-calendar-recovery-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260820-investment-case-v1";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=20260820-calendar-recovery-v1",
-  "./app-default-settings.js?v=20260820-calendar-recovery-v1",
-  "./app.js?v=20260820-calendar-recovery-v1",
+  "./styles.css?v=20260820-investment-case-v1",
+  "./app-default-settings.js?v=20260820-investment-case-v1",
+  "./app.js?v=20260820-investment-case-v1",
   "./vendor/lightweight-charts.standalone.production.js",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",

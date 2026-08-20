@@ -739,6 +739,17 @@ function checkWorkflowConsoleContract() {
       /app\.js\?v=\d{8}-[a-z0-9-]+-v\d+/.test(indexHtml),
     "정적 자산 cache key 버전 규칙이 반영되지 않았습니다."
   );
+  assertOk(
+    code.indexOf('return "/api/investment-cases?"') >= 0 &&
+      code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
+      code.indexOf('["summary", "요약"]') >= 0 &&
+      code.indexOf('["evidence", "근거"]') >= 0 &&
+      code.indexOf('["scenarios", "시나리오"]') >= 0 &&
+      code.indexOf('["history", "이력"]') >= 0 &&
+      styles.indexOf(".oa-case-detail-tabs") >= 0 &&
+      styles.indexOf(".oa-flow-stage-strip.case-stages") >= 0,
+    "투자 케이스의 사용자용 5단계와 상세 탭 UI 계약이 없습니다."
+  );
 }
 
 function checkFrontendAdminRender() {
@@ -2964,6 +2975,17 @@ async function checkNormalMode(port, context) {
   assertOk(investmentFlowPayload.version === "investment-flow-v1", "투자 판단 흐름 API 버전이 없습니다.");
   assertOk(Array.isArray(investmentFlowPayload.items), "투자 판단 흐름 API items가 배열이 아닙니다.");
   assertOk(investmentFlowPayload.operatorView && Array.isArray(investmentFlowPayload.operatorView.stages), "투자 판단 흐름 API 운영 단계가 없습니다.");
+
+  const investmentCases = await request(port, "/api/investment-cases?limit=10");
+  assertOk(investmentCases.statusCode === 200, "투자 케이스 API 응답 코드가 200이 아닙니다: " + investmentCases.statusCode + " · " + investmentCases.body.slice(0, 500));
+  const investmentCasesPayload = JSON.parse(investmentCases.body);
+  assertOk(investmentCasesPayload.version === "investment-case-v1", "투자 케이스 API 버전이 없습니다.");
+  assertOk(Array.isArray(investmentCasesPayload.items), "투자 케이스 API items가 배열이 아닙니다.");
+  assertOk(investmentCasesPayload.summary && typeof investmentCasesPayload.summary === "object", "투자 케이스 API summary가 없습니다.");
+  assertOk(investmentCasesPayload.operatorView && investmentCasesPayload.operatorView.loaded === false, "투자 케이스 사용자 목록이 운영 진단을 즉시 로드했습니다.");
+  const operatorInvestmentCases = await request(port, "/api/investment-cases?limit=10&audience=operator");
+  const operatorInvestmentCasesPayload = JSON.parse(operatorInvestmentCases.body);
+  assertOk(operatorInvestmentCasesPayload.operatorView && operatorInvestmentCasesPayload.operatorView.loaded === true && Array.isArray(operatorInvestmentCasesPayload.operatorView.stages), "투자 케이스 운영 진단이 없습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode + " · " + emptyAccounts.body.slice(0, 500));

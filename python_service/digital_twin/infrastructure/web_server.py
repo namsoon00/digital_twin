@@ -34,6 +34,7 @@ from ..application.notification_ai_gate_message import (
     prepend_execution_start_badge,
 )
 from ..application.notification_replay_service import NotificationReplayService
+from ..application.investment_case_query_service import InvestmentCaseQueryService
 from ..application.investment_flow_query_service import InvestmentFlowQueryService
 from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
@@ -1344,6 +1345,38 @@ def investment_flow_api_payload(query: Dict[str, List[str]], episode_id: str = "
         account_id=str(first_query(query, "accountId") or first_query(query, "account") or "").strip(),
         symbol=str(first_query(query, "symbol") or "").upper().strip(),
         limit=safe_int(first_query(query, "limit"), 100, 1, 500),
+    )
+
+
+def investment_case_api_payload(
+    query: Dict[str, List[str]],
+    case_id: str = "",
+    section: str = "",
+) -> Dict[str, object]:
+    """Read user-facing cases from persisted decisions without invoking TypeDB."""
+
+    settings = operational_read_settings()
+    service = InvestmentCaseQueryService(
+        decision_episode_store=stores.investment_decision_episode_store(settings),
+        notification_job_store=stores.notification_job_store(settings),
+        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
+    )
+    if case_id and section == "history":
+        return service.history(
+            str(case_id or ""),
+            limit=safe_int(first_query(query, "limit"), 30, 1, 200),
+        )
+    if case_id and section == "trace":
+        return service.trace(str(case_id or ""))
+    if case_id:
+        return service.detail(str(case_id or ""))
+    return service.list_cases(
+        account_id=str(first_query(query, "accountId") or first_query(query, "account") or "").strip(),
+        symbol=str(first_query(query, "symbol") or "").upper().strip(),
+        limit=safe_int(first_query(query, "limit"), 100, 1, 500),
+        include_operator=str(
+            first_query(query, "audience") or first_query(query, "includeOperator") or ""
+        ).strip().lower() in {"operator", "1", "true", "yes"},
     )
 
 
@@ -5666,6 +5699,28 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/flow-lens" and self.command == "GET":
             return self.send_payload(200, flow_lens_read_payload(query), cache_control="no-store")
+
+        if path == "/api/investment-cases" and self.command == "GET":
+            return self.send_payload(200, investment_case_api_payload(query), cache_control="no-store")
+
+        investment_case_section_match = re.match(
+            r"^/api/investment-cases/([^/]+)/(history|trace)$",
+            path,
+        )
+        if investment_case_section_match and self.command == "GET":
+            case_id = urllib.parse.unquote(investment_case_section_match.group(1))
+            payload = investment_case_api_payload(
+                query,
+                case_id=case_id,
+                section=investment_case_section_match.group(2),
+            )
+            return self.send_payload(200 if payload.get("status") == "ok" else 404, payload, cache_control="no-store")
+
+        investment_case_match = re.match(r"^/api/investment-cases/([^/]+)$", path)
+        if investment_case_match and self.command == "GET":
+            case_id = urllib.parse.unquote(investment_case_match.group(1))
+            payload = investment_case_api_payload(query, case_id=case_id)
+            return self.send_payload(200 if payload.get("status") == "ok" else 404, payload, cache_control="no-store")
 
         if path in {"/api/investment-flow", "/api/investment-validation"} and self.command == "GET":
             payload = investment_flow_api_payload(query)

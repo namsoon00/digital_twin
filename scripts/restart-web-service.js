@@ -8,6 +8,7 @@ const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
 const pythonBin = process.env.PYTHON_BIN || "python3";
 const logPath = path.join(rootDir, "data", "python-web.log");
+const managedPidPath = path.join(rootDir, "data", "python-web.pid");
 const restartLockPath = path.join(rootDir, "data", "python-web-restart.lock");
 const shareCredentialsPath = path.resolve(process.env.SHARE_CREDENTIALS_PATH || path.join(rootDir, "data", "share-access.json"));
 
@@ -97,6 +98,13 @@ function releaseRestartLock(descriptor) {
   } catch (_error) {}
 }
 
+function writeManagedPid(pid) {
+  const temporaryPath = managedPidPath + ".tmp-" + process.pid;
+  fs.writeFileSync(temporaryPath, String(pid) + "\n", { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, managedPidPath);
+  fs.chmodSync(managedPidPath, 0o600);
+}
+
 async function stopWebProcesses() {
   const pids = webPids();
   pids.forEach((pid) => {
@@ -157,6 +165,7 @@ async function main() {
     });
     child.unref();
     fs.closeSync(log);
+    writeManagedPid(child.pid);
     const statusCode = await waitForWeb();
     console.log(JSON.stringify({
       status: "ok",

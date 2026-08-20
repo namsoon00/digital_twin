@@ -253,6 +253,7 @@ function checkWorkflowConsoleContract() {
   const notificationStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_notification_jobs.py"), "utf8");
   const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_symbol_universe.py"), "utf8");
   const webServer = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web_server.py"), "utf8");
+  const webRestart = fs.readFileSync(path.join(rootDir, "scripts", "restart-web-service.js"), "utf8");
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
   const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
@@ -304,7 +305,8 @@ function checkWorkflowConsoleContract() {
       && code.indexOf("data-copy-share-url") >= 0
       && code.indexOf("고정 접속 전체 링크를 복사했습니다") >= 0
       && webServer.indexOf('path == "/api/share/status"') >= 0
-      && webServer.indexOf('path == "/api/version"') >= 0,
+      && webServer.indexOf('path == "/api/version"') >= 0
+      && webRestart.indexOf("writeManagedPid(child.pid)") >= 0,
     "고정 공유 주소 상태, 버전 확인 또는 전체 링크 복사 UI 계약이 없습니다."
   );
   assertOk(

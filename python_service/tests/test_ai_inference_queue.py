@@ -213,8 +213,12 @@ class AIInferenceQueueTests(unittest.TestCase):
         prompt_audit = delivered.context["notificationAiExecutionAudit"]
         self.assertEqual(request.request_id, prompt_audit["requestId"])
         self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
-        self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 검증된 근거를 비교하는"))
+        self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
         self.assertEqual("investment-ai-decision-brief-v4", prompt_audit["decisionBriefVersion"])
+        self.assertEqual("investment-ai-decision-core-v1", prompt_audit["decisionCore"]["schemaVersion"])
+        self.assertEqual("notification-ai-context-route-v1", prompt_audit["contextRouting"]["version"])
+        self.assertEqual("investment-ai-judge-v6", prompt_audit["promptRelease"]["version"])
+        self.assertTrue(prompt_audit["contextRouting"]["fullDecisionBriefRetainedForAudit"])
         self.assertEqual("deepResearch", prompt_audit["executionProfile"]["name"])
         self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
@@ -614,7 +618,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("HOLD", delivered.context["investmentNotificationState"]["action"])
         self.assertNotIn("첫 판단", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
         self.assertIn("이전 AI 최종 판단과 같은", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
-        self.assertIn('"previousFinalDecision"', delivered.context["notificationAiExecutionAudit"]["prompt"])
+        self.assertIn('"previousAction":"HOLD"', delivered.context["notificationAiExecutionAudit"]["prompt"])
 
     def test_heartbeat_requires_matching_owner_and_latest_head(self):
         job = self.create_job()

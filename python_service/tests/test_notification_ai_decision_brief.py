@@ -10,6 +10,14 @@ from digital_twin.domain.notification_ai_decision_brief import (
     notification_ai_decision_brief,
     notification_ai_execution_profile,
 )
+from digital_twin.domain.notification_ai_context_router import (
+    AI_DECISION_CORE_VERSION,
+    route_notification_ai_decision_context,
+)
+from digital_twin.domain.notification_ai_prompt_release import (
+    AI_DECISION_PROMPT_VERSION,
+    active_notification_ai_prompt_release,
+)
 from digital_twin.domain.notifications import NotificationJob
 
 
@@ -92,6 +100,10 @@ def decision_context(review_level="observe", change_state="unchanged"):
     }
 
 
+def prompt_core(prompt):
+    return json.loads(prompt.split("DecisionCore:\n", 1)[1])
+
+
 class FakeTimeSeriesStore:
     def __init__(self):
         self.calls = []
@@ -144,10 +156,26 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual("deepResearch", profile["name"])
         self.assertIn("competing-evidence", profile["selectionReasons"])
 
+    def test_prompt_release_is_versioned_and_policy_changes_its_fingerprint(self):
+        first = active_notification_ai_prompt_release({"aiPromptPolicy": "providedDataOnly=1"})
+        second = active_notification_ai_prompt_release({"aiPromptPolicy": "providedDataOnly=0"})
+
+        public = first.to_public_dict()
+        self.assertEqual("PromptRelease", public["tboxClass"])
+        self.assertEqual(AI_DECISION_PROMPT_VERSION, public["version"])
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+
     def test_brief_contains_exact_temporal_path_and_decision_changing_gap_once(self):
         context = decision_context()
         brief = notification_ai_decision_brief(context, {})
-        prompt = build_notification_ai_decision_prompt(context, {}, max_prompt_bytes=16 * 1024)
+        brief["currentSituation"]["temporalEvidenceSummary"]["matchedWindowKeys"] = ["5D"]
+        prompt = build_notification_ai_decision_prompt(
+            context,
+            {},
+            max_prompt_bytes=16 * 1024,
+            decision_brief=brief,
+        )
+        payload = prompt_core(prompt)
 
         self.assertEqual(AI_DECISION_BRIEF_VERSION, brief["schemaVersion"])
         self.assertEqual(AI_DECISION_CONTRACT_VERSION, brief["decisionContractVersion"])
@@ -158,13 +186,12 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             brief["inference"]["contextCoverage"]["aboxReadMode"],
         )
         self.assertTrue(brief["inference"]["contextCoverage"]["unchangedFactsRetained"])
-        self.assertIn('"schemaVersion":"' + AI_DECISION_BRIEF_VERSION + '"', prompt)
+        self.assertEqual(AI_DECISION_CORE_VERSION, payload["schemaVersion"])
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
-        self.assertIn("valuationReferenceOnly=true", prompt)
-        self.assertIn("시스템 수집기가", prompt)
+        self.assertIn(AI_DECISION_PROMPT_VERSION, prompt)
         self.assertIn("decisionReadiness", prompt)
         self.assertIn("causalChain", prompt)
-        self.assertIn("alternativeAction", prompt)
+        self.assertNotIn("alternativeAction", prompt)
         self.assertNotIn('"promptContext"', prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
 
@@ -266,35 +293,38 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             },
         }
 
+        brief = notification_ai_decision_brief(context, {})
+        brief["currentSituation"]["temporalEvidenceSummary"]["matchedWindowKeys"] = window_keys
         prompt = build_notification_ai_decision_prompt(
             context,
             {},
             max_prompt_bytes=16 * 1024,
+            decision_brief=brief,
         )
 
         self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
-        self.assertIn('"schemaVersion":"' + AI_DECISION_BRIEF_VERSION + '"', prompt)
-        payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+        payload = prompt_core(prompt)
+        self.assertEqual(AI_DECISION_CORE_VERSION, payload["schemaVersion"])
         self.assertEqual(
             window_keys,
-            [item["windowKey"] for item in payload["currentSituation"]["temporalWindows"]],
+            [item["windowKey"] for item in payload["temporalEvidence"]["windows"]],
         )
-        self.assertTrue(all("startPrice" in item for item in payload["currentSituation"]["temporalWindows"]))
+        self.assertTrue(all("startPrice" in item for item in payload["temporalEvidence"]["windows"]))
         self.assertEqual(
             hypothesis_ids,
-            [item["hypothesisId"] for item in payload["inference"]["hypothesisSet"]["hypotheses"]],
+            [item["hypothesisId"] for item in payload["hypothesisSet"]["hypotheses"]],
         )
         self.assertEqual(
             45,
-            payload["accountPolicy"]["portfolioLifecycle"]["mandate"]["max_position_weight_pct"],
+            payload["portfolioPolicy"]["mandate"]["max_position_weight_pct"],
         )
         self.assertEqual(
             "POLICY_BREACH",
-            payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["status"],
+            payload["portfolioPolicy"]["rebalanceState"]["status"],
         )
         self.assertEqual(
             {"MSTR": 5_000_000},
-            payload["accountPolicy"]["portfolioLifecycle"]["rebalanceState"]["maximumNotionalBySymbol"],
+            payload["portfolioPolicy"]["rebalanceState"]["maximumNotionalBySymbol"],
         )
 
     def test_production_shaped_symbol_context_preserves_ontology_contract_at_standard_limit(self):
@@ -357,13 +387,20 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             "recommendedPlan": {"status": "constrained", "investmentAction": "BUY"},
         }
 
-        prompt = build_notification_ai_decision_prompt(context, {}, max_prompt_bytes=16 * 1024)
-        payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+        brief = notification_ai_decision_brief(context, {})
+        brief["currentSituation"]["temporalEvidenceSummary"]["matchedWindowKeys"] = window_keys
+        prompt = build_notification_ai_decision_prompt(
+            context,
+            {},
+            max_prompt_bytes=16 * 1024,
+            decision_brief=brief,
+        )
+        payload = prompt_core(prompt)
 
         self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
-        self.assertEqual(window_keys, [item["windowKey"] for item in payload["currentSituation"]["temporalWindows"]])
-        self.assertEqual(hypothesis_ids, [item["hypothesisId"] for item in payload["inference"]["hypothesisSet"]["hypotheses"]])
-        self.assertEqual(rule_ids, [item["ruleId"] for item in payload["inference"]["activeRules"]])
+        self.assertEqual(window_keys, [item["windowKey"] for item in payload["temporalEvidence"]["windows"]])
+        self.assertEqual(hypothesis_ids, [item["hypothesisId"] for item in payload["hypothesisSet"]["hypotheses"]])
+        self.assertEqual(rule_ids, [item["ruleId"] for item in payload["rules"]])
 
     def test_market_evidence_and_continuity_fit_deep_prompt_budget(self):
         context = decision_context("act", "new-condition")
@@ -428,18 +465,41 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             {},
             max_prompt_bytes=20 * 1024,
         )
-        payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+        payload = prompt_core(prompt)
 
         self.assertLessEqual(len(prompt.encode("utf-8")), 20 * 1024)
         self.assertEqual(
             "KR_EQUITY",
-            payload["currentSituation"]["relationFacts"]["marketEvidenceProfile"]["profileKey"],
+            payload["facts"]["marketEvidenceProfile"]["profileKey"],
         )
-        self.assertEqual("HOLD", payload["decisionContinuity"]["previousDecision"]["action"])
+        self.assertEqual("HOLD", payload["continuityDelta"]["previousDecision"]["action"])
         self.assertEqual(
             "hypothesis:hold",
-            payload["inference"]["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
+            payload["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
         )
+
+    def test_unverified_external_evidence_is_reference_only(self):
+        brief = notification_ai_decision_brief(decision_context(), {})
+        brief["inference"]["activeRules"] = [{
+            "ruleId": "graph.disclosure.event_risk.v1",
+            "label": "공시 이벤트 원문 점검",
+            "evidenceRole": "context",
+        }]
+        brief["decisionState"]["actionEnvelope"]["selectedRuleId"] = "graph.disclosure.event_risk.v1"
+        brief["evidence"]["researchEvidence"] = [{
+            "evidenceId": "research:005930:dart:1",
+            "kind": "disclosure",
+            "title": "주요사항보고서",
+            "validationState": "ready",
+            "dataState": "partial",
+            "source": "OpenDART",
+        }]
+
+        core, audit = route_notification_ai_decision_context(brief)
+
+        self.assertEqual("rule-scoped-reference", core["externalEvidence"][0]["evidenceUse"])
+        self.assertEqual(0, audit["included"]["actionExternalEvidenceCount"])
+        self.assertEqual(1, audit["included"]["referenceExternalEvidenceCount"])
 
     def test_v2_ai_brief_uses_relation_matching_decision_synthesis_hypotheses(self):
         context = decision_context("act", "new-condition")

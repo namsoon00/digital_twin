@@ -2048,8 +2048,18 @@ def validated_response_from_payload(
     action = normalized_action_for_action_envelope(context, action)
     append_watchlist_action_warning(context, original_action, action, warnings)
     append_rulebox_action_policy_warning(context, target_normalized_action, action, warnings)
-    summary = watchlist_friendly_text(context, user_friendly_ai_text(payload.get("summary") or fallback.summary))
-    opinion = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(payload.get("opinion") or fallback.opinion)))
+    summary = watchlist_friendly_text(context, user_friendly_ai_text(
+        payload.get("summary")
+        or payload.get("investmentView")
+        or payload.get("investment_view")
+        or fallback.summary
+    ))
+    opinion = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(
+        payload.get("opinion")
+        or payload.get("executionDecision")
+        or payload.get("execution_decision")
+        or fallback.opinion
+    )))
     raw_evidence = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("evidence") or [], 5))
     raw_evidence, temporal_claim_corrected = normalize_temporal_evidence_claims(
         context,
@@ -2200,6 +2210,7 @@ def validated_response_from_payload(
         "notification-ai-decision-contract-v2",
         "notification-ai-decision-contract-v3",
         "notification-ai-decision-contract-v4",
+        "notification-ai-decision-contract-v5",
     }
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready" or not supported_causal_path

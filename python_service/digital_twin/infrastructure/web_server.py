@@ -660,6 +660,9 @@ def record_action_plan_fills_payload(plan_id: str, body: Dict[str, object]) -> D
 
 def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
     settings = runtime_settings()
+    from ..domain.notification_ai_prompt_release import active_notification_ai_prompt_release
+
+    prompt_release = active_notification_ai_prompt_release(settings).to_public_dict()
     public_keys = [
         "appTheme",
         "appTimezone",
@@ -1164,6 +1167,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
     resolved_access = access or (anonymous_access() if share_mode_enabled() else local_owner_access())
     return {
         "settings": public,
+        "notificationAiPromptRelease": prompt_release,
         "configured": {
             "tossClientId": bool(settings.get("tossClientId")),
             "tossClientSecret": bool(settings.get("tossClientSecret")),

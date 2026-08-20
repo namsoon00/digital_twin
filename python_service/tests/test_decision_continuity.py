@@ -12,9 +12,11 @@ from digital_twin.application.notification_ai_gate_message import decision_conti
 from digital_twin.application.notification_decision_memory import context_with_previous_investment_decision
 from digital_twin.domain.decision_continuity import build_decision_continuity_packet
 from digital_twin.domain.notification_ai_decision_brief import (
+    AI_DECISION_CONTRACT_VERSION,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
 )
+from digital_twin.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
 from digital_twin.domain.notifications import NotificationJob
 
 
@@ -222,11 +224,11 @@ class DecisionContinuityTests(unittest.TestCase):
             queue.request.context["decisionContinuityPacket"]["contractVersion"],
         )
         self.assertEqual(
-            "notification-ai-decision-contract-v4",
+            AI_DECISION_CONTRACT_VERSION,
             queue.request.context["notificationAiDecisionContractVersion"],
         )
         self.assertEqual(
-            "investment-ai-judge-v5",
+            AI_DECISION_PROMPT_VERSION,
             queue.request.context["notificationAiReplayManifest"]["promptVersion"],
         )
         self.assertTrue(queue.request.context["notificationAiReplayManifest"]["modelVersion"])
@@ -252,11 +254,11 @@ class DecisionContinuityTests(unittest.TestCase):
 
         brief = notification_ai_decision_brief(context, {})
         prompt = build_notification_ai_decision_prompt(context, {}, decision_brief=brief)
-        prompt_payload = json.loads(prompt.split("DecisionBrief:\n", 1)[1])
+        prompt_payload = json.loads(prompt.split("DecisionCore:\n", 1)[1])
 
         self.assertEqual("decision-continuity-packet-v2", brief["decisionContinuity"]["contractVersion"])
-        self.assertEqual("ADD", prompt_payload["decisionContinuity"]["previousDecision"]["action"])
-        self.assertIn("actionObservations가 없다고", prompt)
+        self.assertEqual("ADD", prompt_payload["continuityDelta"]["previousDecision"]["action"])
+        self.assertIn("continuityDelta", prompt)
 
     def test_notification_trace_states_quantity_change_without_claiming_causality(self):
         packet = DecisionContinuityService(EpisodeStore(prior_episode()), DomainStore()).build(

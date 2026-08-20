@@ -16,7 +16,7 @@ from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
     AI_DECISION_PROMPT_VERSION,
-    build_notification_ai_decision_prompt,
+    build_notification_ai_prompt_bundle,
     notification_ai_decision_brief,
     notification_ai_execution_profile,
 )
@@ -385,7 +385,7 @@ class AIInferenceQueueRunner:
                 context["notificationAiExecutionProfile"] = execution_profile
             execution_profile["reasoningEffort"] = request.reasoning_effort
             decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
-            prompt = build_notification_ai_decision_prompt(
+            prompt_bundle = build_notification_ai_prompt_bundle(
                 context,
                 self.settings,
                 max_prompt_bytes=min(
@@ -395,6 +395,10 @@ class AIInferenceQueueRunner:
                 profile=execution_profile,
                 decision_brief=decision_brief,
             )
+            prompt = str(prompt_bundle.get("prompt") or "")
+            decision_core = dict(prompt_bundle.get("decisionCore") or {})
+            context_routing = dict(prompt_bundle.get("contextRouting") or {})
+            prompt_release = dict(prompt_bundle.get("promptRelease") or {})
         except Exception as error:  # noqa: BLE001 - TypeDB inference remains publishable without AI preparation.
             if self.fallback_enabled:
                 return self.publish_preparation_fallback(request, context, error)
@@ -548,6 +552,9 @@ class AIInferenceQueueRunner:
             "prompt": executed_prompt,
             "decisionBriefVersion": decision_brief.get("schemaVersion"),
             "decisionBrief": decision_brief,
+            "decisionCore": decision_core,
+            "contextRouting": context_routing,
+            "promptRelease": prompt_release,
             "decisionContinuity": {
                 "contractVersion": str(continuity_packet.get("contractVersion") or ""),
                 "packetId": str(continuity_packet.get("packetId") or ""),

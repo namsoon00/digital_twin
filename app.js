@@ -5618,6 +5618,8 @@
       notificationAiReasoningEffort: settingValue("notificationAiReasoningEffort"),
       notificationAiTimeoutSeconds: settingValue("notificationAiTimeoutSeconds"),
       notificationAiDeliveryDeadlineSeconds: settingValue("notificationAiDeliveryDeadlineSeconds"),
+      notificationAiTypeDbFallbackEnabled: settingValue("notificationAiTypeDbFallbackEnabled"),
+      notificationAiFallbackOnFirstFailure: settingValue("notificationAiFallbackOnFirstFailure"),
       notificationAiQueueWorkerCount: settingValue("notificationAiQueueWorkerCount"),
       modelName: settingValue("modelName"),
       modelHypothesis: settingValue("modelHypothesis"),
@@ -9989,6 +9991,8 @@
       "notificationAiReasoningEffort",
       "notificationAiTimeoutSeconds",
       "notificationAiDeliveryDeadlineSeconds",
+      "notificationAiTypeDbFallbackEnabled",
+      "notificationAiFallbackOnFirstFailure",
       "notificationAiQueueWorkerCount",
       "modelName",
       "modelHypothesis",
@@ -30837,9 +30841,20 @@
       ]),
       renderSettingSelect("notificationAiReasoningEffort", "AI 추론 깊이", [
         { value: "max", label: "최대" },
-        { value: "high", label: "높음" },
+        { value: "high", label: "높음 (권장)" },
         { value: "medium", label: "보통" },
         { value: "low", label: "낮음" }
+      ]),
+      renderSettingSelect("notificationAiDeliveryDeadlineSeconds", "알림 AI 제한시간", [
+        { value: "60", label: "60초" },
+        { value: "90", label: "90초" },
+        { value: "120", label: "120초 (권장)" },
+        { value: "180", label: "180초" },
+        { value: "300", label: "300초" }
+      ]),
+      renderSettingSelect("notificationAiTypeDbFallbackEnabled", "AI 실패 시 TypeDB 알림", [
+        { value: "1", label: "발송 (권장)" },
+        { value: "0", label: "발송 안 함" }
       ])
     ].join(""), tone || "ai");
   }

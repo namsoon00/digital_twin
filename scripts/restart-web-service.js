@@ -9,6 +9,23 @@ const port = Number(process.env.PORT || 3000);
 const pythonBin = process.env.PYTHON_BIN || "python3";
 const logPath = path.join(rootDir, "data", "python-web.log");
 const restartLockPath = path.join(rootDir, "data", "python-web-restart.lock");
+const shareCredentialsPath = path.resolve(process.env.SHARE_CREDENTIALS_PATH || path.join(rootDir, "data", "share-access.json"));
+
+function persistedShareEnvironment() {
+  try {
+    const credentials = JSON.parse(fs.readFileSync(shareCredentialsPath, "utf8"));
+    if (!credentials.viewToken || !credentials.ownerToken || !credentials.sessionSecret) return {};
+    return {
+      SHARE_TOKEN: String(credentials.viewToken),
+      SHARE_VIEW_TOKEN: String(credentials.viewToken),
+      SHARE_OWNER_TOKEN: String(credentials.ownerToken),
+      SHARE_SESSION_SECRET: String(credentials.sessionSecret),
+      SHARE_SESSION_DAYS: String(credentials.sessionDays || 30)
+    };
+  } catch (_error) {
+    return {};
+  }
+}
 
 function commandOutput(command, args, options) {
   try {
@@ -132,7 +149,7 @@ async function main() {
       cwd: rootDir,
       detached: true,
       stdio: ["ignore", log, log],
-      env: Object.assign({}, process.env, {
+      env: Object.assign({}, persistedShareEnvironment(), process.env, {
         HOST: host,
         PORT: String(port),
         ALLOW_PORT_FALLBACK: "0",

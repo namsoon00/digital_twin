@@ -6,6 +6,7 @@ const net = require("net");
 const os = require("os");
 const path = require("path");
 const vm = require("vm");
+const { publicTargetPayload, validTunnelBaseUrl } = require("./publish-live-target");
 
 const rootDir = path.resolve(__dirname, "..");
 // A fresh smoke database creates the complete operational schema on its first
@@ -297,6 +298,14 @@ function checkWorkflowConsoleContract() {
       && webServer.indexOf('"app.js",') >= 0
       && webServer.indexOf('"styles.css",') >= 0,
     "앱 셸 핵심 자산의 버전 동기화 또는 네트워크 우선 갱신 계약이 없습니다."
+  );
+  assertOk(
+    code.indexOf("function renderShareRuntimePanel") >= 0
+      && code.indexOf("data-copy-share-url") >= 0
+      && code.indexOf("고정 접속 전체 링크를 복사했습니다") >= 0
+      && webServer.indexOf('path == "/api/share/status"') >= 0
+      && webServer.indexOf('path == "/api/version"') >= 0,
+    "고정 공유 주소 상태, 버전 확인 또는 전체 링크 복사 UI 계약이 없습니다."
   );
   assertOk(
     webServer.indexOf("def investment_calendar_read_service") >= 0
@@ -3094,6 +3103,18 @@ async function checkNormalMode(port, context) {
   assertOk(serviceWorker.headers["cache-control"] === "no-cache", "서비스 워커가 no-cache 정책으로 제공되지 않습니다.");
   assertOk(serviceWorker.body.indexOf("orbit-alpha-shell-") >= 0, "서비스 워커 앱 셸 캐시가 없습니다.");
 
+  const liveLauncher = await request(port, "/live/");
+  assertOk(liveLauncher.statusCode === 200, "고정 공유 진입 페이지를 제공하지 못합니다.");
+  assertOk(liveLauncher.body.indexOf("실행 중인 앱에 연결") >= 0, "고정 공유 진입 페이지의 연결 상태 UI가 없습니다.");
+  assertOk(liveLauncher.body.indexOf("../live-target.json?ts=") >= 0, "고정 공유 진입 페이지가 최신 터널 대상을 조회하지 않습니다.");
+
+  const liveTarget = await request(port, "/live-target.json");
+  assertOk(liveTarget.statusCode === 200, "공유 대상 상태 파일을 제공하지 못합니다.");
+  assertOk(!/token|secret|credential/i.test(liveTarget.body), "공개 공유 대상 파일에 자격 증명 필드가 있습니다.");
+  assertOk(validTunnelBaseUrl("https://example-target.trycloudflare.com"), "Cloudflare Quick Tunnel 주소 검증이 실패했습니다.");
+  const safeTarget = publicTargetPayload({ provider: "cloudflared", baseUrl: "https://example-target.trycloudflare.com" }, "abc123", "2026-08-21T00:00:00Z");
+  assertOk(safeTarget.baseUrl === "https://example-target.trycloudflare.com" && !Object.keys(safeTarget).some(function (key) { return /token|secret/i.test(key); }), "공개 공유 대상 페이로드가 안전하지 않습니다.");
+
   const appIcon = await request(port, "/icons/orbit-alpha-192.png");
   assertOk(appIcon.statusCode === 200 && appIcon.headers["content-type"] === "image/png", "PWA 192px 앱 아이콘을 제공하지 못합니다.");
 
@@ -3129,13 +3150,35 @@ async function checkNormalMode(port, context) {
 }
 
 async function checkShareMode(port) {
-  const blockedHome = await request(port, "/");
+  const forwardedHeaders = {
+    "CF-Connecting-IP": "203.0.113.10",
+    "X-Forwarded-Proto": "https"
+  };
+  function sharedRequest(pathname, options) {
+    const configured = options || {};
+    if (configured.method) {
+      return request(port, pathname, Object.assign({}, configured, {
+        headers: Object.assign({}, forwardedHeaders, configured.headers || {})
+      }));
+    }
+    return request(port, pathname, Object.assign({}, forwardedHeaders, configured));
+  }
+
+  const localHome = await request(port, "/");
+  assertOk(localHome.statusCode === 200, "공유 모드에서도 직접 로컬 홈 접근이 허용되지 않았습니다.");
+
+  const localStatus = await request(port, "/api/share/status");
+  const localStatusPayload = JSON.parse(localStatus.body);
+  assertOk(localStatus.statusCode === 200 && localStatusPayload.enabled === true, "로컬 공유 상태 API가 활성 상태를 반환하지 않았습니다.");
+  assertOk(String(localStatusPayload.fixedAccessUrl || "").indexOf("#share_token=") >= 0, "로컬 소유자용 고정 접근 링크가 없습니다.");
+
+  const blockedHome = await sharedRequest("/");
   assertOk(blockedHome.statusCode === 401, "공유 토큰 없는 홈 접근이 차단되지 않았습니다.");
 
-  const blockedApi = await request(port, "/api/bootstrap");
+  const blockedApi = await sharedRequest("/api/bootstrap");
   assertOk(blockedApi.statusCode === 401, "공유 토큰 없는 API 접근이 차단되지 않았습니다.");
 
-  const tokenRedirect = await request(port, "/?share_token=ci-viewer");
+  const tokenRedirect = await sharedRequest("/?share_token=ci-viewer");
   assertOk(tokenRedirect.statusCode === 302, "공유 토큰 URL이 쿠키 리다이렉트를 만들지 않았습니다.");
   const viewerSetCookie = String(tokenRedirect.headers["set-cookie"] || "");
   const viewerCookie = viewerSetCookie.split(";")[0];
@@ -3143,39 +3186,46 @@ async function checkShareMode(port) {
   assertOk(viewerCookie.indexOf("ci-viewer") < 0, "조회 토큰 원문이 쿠키에 저장됐습니다.");
   assertOk(viewerSetCookie.indexOf("SameSite=Lax") >= 0, "외부 앱 공유 링크용 Lax 쿠키 정책이 적용되지 않았습니다.");
 
-  const bootstrap = await request(port, "/api/bootstrap", { Cookie: viewerCookie });
+  const bootstrap = await sharedRequest("/api/bootstrap", { Cookie: viewerCookie });
   assertOk(bootstrap.statusCode === 200, "공유 토큰 쿠키로 API 접근이 허용되지 않았습니다.");
 
-  const viewerSettings = await request(port, "/api/settings", { Cookie: viewerCookie });
+  const viewerSettings = await sharedRequest("/api/settings", { Cookie: viewerCookie });
   assertOk(viewerSettings.statusCode === 200, "조회자 설정 상태를 읽을 수 없습니다.");
   const viewerSettingsPayload = JSON.parse(viewerSettings.body);
   assertOk(viewerSettingsPayload.locked === true, "조회자 설정이 쓰기 가능 상태로 노출됐습니다.");
   assertOk(viewerSettingsPayload.shareAccess && viewerSettingsPayload.shareAccess.role === "viewer", "조회자 역할이 설정 상태에 없습니다.");
 
-  const blockedWrite = await request(port, "/api/settings", {
+  const blockedWrite = await sharedRequest("/api/settings", {
     method: "PUT",
     headers: { Cookie: viewerCookie, "Content-Type": "application/json" },
     body: JSON.stringify({ settings: { appTheme: "dark" } })
   });
   assertOk(blockedWrite.statusCode === 403, "조회자가 변경 API를 호출할 수 있습니다.");
 
-  const ownerRedirect = await request(port, "/?owner_token=ci-owner");
+  const ownerRedirect = await sharedRequest("/?owner_token=ci-owner");
   assertOk(ownerRedirect.statusCode === 302, "소유자 토큰 URL이 쿠키 리다이렉트를 만들지 않았습니다.");
   const ownerCookie = String(ownerRedirect.headers["set-cookie"] || "").split(";")[0];
   assertOk(ownerCookie.indexOf("dt_share_session=") >= 0, "소유자 서명 세션 쿠키가 설정되지 않았습니다.");
   assertOk(ownerCookie.indexOf("ci-owner") < 0, "소유자 토큰 원문이 쿠키에 저장됐습니다.");
 
-  const ownerSettings = await request(port, "/api/settings", { Cookie: ownerCookie });
+  const ownerSettings = await sharedRequest("/api/settings", { Cookie: ownerCookie });
   const ownerSettingsPayload = JSON.parse(ownerSettings.body);
   assertOk(ownerSettings.statusCode === 200 && ownerSettingsPayload.locked === false, "소유자 설정이 잠겨 있습니다.");
   assertOk(ownerSettingsPayload.shareAccess && ownerSettingsPayload.shareAccess.role === "owner", "소유자 역할이 설정 상태에 없습니다.");
 
-  const ownerWrite = await request(port, "/api/settings", {
+  const ownerWrite = await sharedRequest("/api/settings", {
     method: "PUT",
     headers: { Cookie: ownerCookie, "Content-Type": "application/json" },
     body: JSON.stringify({ settings: { appTheme: "dark" } })
   });
   assertOk(ownerWrite.statusCode === 200, "소유자 세션으로 변경 API를 호출할 수 없습니다.");
+
+  const blockedSharedChat = await sharedRequest("/api/chat", {
+    method: "POST",
+    headers: { Cookie: ownerCookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "hello" })
+  });
+  assertOk(blockedSharedChat.statusCode === 403, "원격 공유 세션에서 로컬 AI 실행이 차단되지 않았습니다.");
 }
 
 async function checkLiveTossMode(port) {

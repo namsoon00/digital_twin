@@ -157,10 +157,18 @@ npm test
 ## 공유 미리보기
 
 ```bash
-npm run share
+npm run python:service:start
 ```
 
-공유 모드에서는 임시 토큰 URL을 사용합니다. `.env`, `.env.local`, MySQL 접속 정보, legacy `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
+`cloudflareShareManagedEnabled=1`이면 관리 서비스가 로컬 웹 서버 한 개와 계정 없는 Cloudflare Quick Tunnel을 함께 실행합니다. 앱 서버를 재시작해도 터널 프로세스는 유지되며, 고정 진입 주소 `https://namsoon00.github.io/digital_twin/live/`가 현재 임시 터널을 찾아갑니다. 접근 토큰이 포함된 전체 고정 링크는 로컬 앱의 `설정 > 운영 관리 > 시스템 진단`에서 복사합니다. 토큰은 URL fragment에만 포함되고 GitHub Pages의 공개 대상 파일에는 저장되지 않습니다.
+
+터널 자체를 의도적으로 다시 만들 때만 다음 명령을 사용합니다.
+
+```bash
+npm run python:service:restart -- --restart-share
+```
+
+`.env`, `.env.local`, MySQL 접속 정보, legacy `data/store.json`, API key, 토스 credentials, 개인 계좌 데이터는 이슈나 PR에 올리지 않습니다.
 
 ## Python 서비스
 

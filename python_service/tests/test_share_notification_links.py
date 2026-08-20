@@ -13,6 +13,7 @@ class ActiveShareNotificationLinkResolverTests(unittest.TestCase):
             "provider": "cloudflared",
             "baseUrl": "https://evidence.trycloudflare.com",
             "viewerUrl": "https://evidence.trycloudflare.com/?share_token=test-viewer",
+            "fixedViewerUrl": "https://example.github.io/orbit/live/#share_token=test-viewer",
             "ownerPid": 101,
             "tunnelPid": 202,
         }
@@ -29,8 +30,21 @@ class ActiveShareNotificationLinkResolverTests(unittest.TestCase):
             resolved = resolver("http://127.0.0.1:3000?tab=notifications")
 
             self.assertEqual(
-                "https://evidence.trycloudflare.com/?share_token=test-viewer",
+                "https://example.github.io/orbit/live/#share_token=test-viewer",
                 resolved,
+            )
+
+    def test_falls_back_to_active_tunnel_when_fixed_link_leaks_token_in_query(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_state(
+                directory,
+                fixedViewerUrl="https://example.github.io/orbit/live/?share_token=leaked",
+            )
+            resolver = ActiveShareNotificationLinkResolver(path, process_alive=lambda _pid: True)
+
+            self.assertEqual(
+                "https://evidence.trycloudflare.com/?share_token=test-viewer",
+                resolver("http://127.0.0.1:3000"),
             )
 
     def test_falls_back_when_share_process_is_not_alive(self):

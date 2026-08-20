@@ -37,15 +37,57 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             "ontologyTypeDbEnabled": "0",
             "mysqlRuntimeManaged": "0",
             "cloudflareShareManagedEnabled": "1",
+            "webPort": "3100",
             "cloudflareSharePort": "3101",
-        }), patch.object(service_manager.shutil, "which", side_effect=lambda command: "/usr/local/bin/" + command):
+        }), patch.object(
+            service_manager,
+            "share_credentials_environment",
+            return_value={"SHARE_VIEW_TOKEN": "private-view-token"},
+        ), patch.object(service_manager.shutil, "which", side_effect=lambda command: "/usr/local/bin/" + command):
             specs = service_manager.worker_specs()
 
         share = specs["cloudflare-share"]
         self.assertEqual("cloudflare-share", share["role"])
-        self.assertEqual("3101", share["env"]["PORT"])
+        self.assertEqual("3100", share["env"]["PORT"])
         self.assertEqual("cloudflared", share["env"]["TUNNEL_PROVIDER"])
+        self.assertEqual("private-view-token", specs["web"]["env"]["SHARE_VIEW_TOKEN"])
         self.assertIn("scripts/share-local.js", " ".join(share["command"]))
+
+    def test_normal_restart_preserves_active_cloudflare_tunnel(self):
+        share_spec = {
+            "role": "cloudflare-share",
+            "pid": Path("/tmp/cloudflare-share.pid"),
+            "label": "share",
+        }
+        with patch.object(service_manager, "worker_specs", return_value={"cloudflare-share": share_spec}), patch.object(
+            service_manager, "read_pid", return_value=123
+        ), patch.object(service_manager, "is_running", return_value=True), patch.object(
+            service_manager, "supervisor_running", return_value=False
+        ), patch.object(service_manager, "stop", return_value=0) as stop, patch.object(
+            service_manager, "start", return_value=0
+        ) as start:
+            result = service_manager.restart()
+
+        self.assertEqual(0, result)
+        self.assertIn("cloudflare-share", stop.call_args.kwargs["excluded_roles"])
+        self.assertIn("cloudflare-share", start.call_args.kwargs["excluded_roles"])
+
+    def test_explicit_share_restart_restarts_cloudflare_tunnel(self):
+        share_spec = {
+            "role": "cloudflare-share",
+            "pid": Path("/tmp/cloudflare-share.pid"),
+            "label": "share",
+        }
+        with patch.object(service_manager, "worker_specs", return_value={"cloudflare-share": share_spec}), patch.object(
+            service_manager, "supervisor_running", return_value=False
+        ), patch.object(service_manager, "stop", return_value=0) as stop, patch.object(
+            service_manager, "start", return_value=0
+        ) as start:
+            result = service_manager.restart(restart_share=True)
+
+        self.assertEqual(0, result)
+        self.assertNotIn("cloudflare-share", stop.call_args.kwargs["excluded_roles"])
+        self.assertNotIn("cloudflare-share", start.call_args.kwargs["excluded_roles"])
 
     def test_service_manager_keeps_ai_workers_off_until_runtime_settings_are_available(self):
         with patch.object(service_manager, "runtime_settings", return_value={}):

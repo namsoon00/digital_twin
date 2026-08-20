@@ -25,7 +25,7 @@ def process_is_alive(pid: int) -> bool:
 
 
 class ActiveShareNotificationLinkResolver:
-    """Prefer the live Cloudflare viewer URL without coupling application code to files."""
+    """Prefer the fixed viewer entry while its backing tunnel is alive."""
 
     def __init__(
         self,
@@ -54,7 +54,8 @@ class ActiveShareNotificationLinkResolver:
         viewer_url = str(state.get("viewerUrl") or "").strip()
         if not self._valid_cloudflare_url(base_url, viewer_url):
             return ""
-        return viewer_url
+        fixed_viewer_url = str(state.get("fixedViewerUrl") or "").strip()
+        return fixed_viewer_url if self._valid_fixed_viewer_url(fixed_viewer_url) else viewer_url
 
     @staticmethod
     def _positive_pid(value: object) -> int:
@@ -75,3 +76,13 @@ class ActiveShareNotificationLinkResolver:
             return False
         query = dict(parse_qsl(viewer.query, keep_blank_values=True))
         return bool(str(query.get("share_token") or "").strip())
+
+    @staticmethod
+    def _valid_fixed_viewer_url(viewer_url: str) -> bool:
+        viewer = urlsplit(viewer_url)
+        if viewer.scheme != "https" or not viewer.hostname:
+            return False
+        if dict(parse_qsl(viewer.query, keep_blank_values=True)).get("share_token"):
+            return False
+        fragment = dict(parse_qsl(viewer.fragment, keep_blank_values=True))
+        return bool(str(fragment.get("share_token") or "").strip())

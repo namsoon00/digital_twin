@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import ipaddress
 import os
 import time
 from dataclasses import dataclass
@@ -46,6 +47,30 @@ def owner_tokens(environment: Dict[str, str] = None) -> Tuple[str, ...]:
 
 def share_mode_enabled(environment: Dict[str, str] = None) -> bool:
     return bool(viewer_tokens(environment) or owner_tokens(environment))
+
+
+def direct_loopback_request(client_address: object, headers: object) -> bool:
+    """Recognize a direct local request while rejecting tunnel-forwarded traffic."""
+
+    try:
+        host = str(client_address[0] if isinstance(client_address, (tuple, list)) else client_address or "").strip()
+        if not ipaddress.ip_address(host).is_loopback:
+            return False
+    except ValueError:
+        return False
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return False
+    forwarded_headers = (
+        "CF-Connecting-IP",
+        "CF-Ray",
+        "CF-Visitor",
+        "Forwarded",
+        "X-Forwarded-For",
+        "X-Forwarded-Host",
+        "X-Forwarded-Proto",
+    )
+    return not any(configured(get_header(name)) for name in forwarded_headers)
 
 
 def _token_fingerprint(token: str) -> str:

@@ -575,8 +575,16 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             status = service_manager.main(["restart"])
 
         self.assertEqual(0, status)
-        restart.assert_called_once_with(restart_typedb=False, restart_mysql=False)
+        restart.assert_called_once_with(restart_typedb=False, restart_mysql=False, restart_share=False)
         restore.assert_called_once_with()
+
+    def test_cli_can_explicitly_restart_share_tunnel(self):
+        with patch.object(service_manager, "restart", return_value=0) as restart, \
+                patch.object(service_manager, "restore_configured_supervisor", return_value=0):
+            status = service_manager.main(["restart", "--restart-share"])
+
+        self.assertEqual(0, status)
+        restart.assert_called_once_with(restart_typedb=False, restart_mysql=False, restart_share=True)
 
     def test_shared_world_rebuild_runs_once_for_a_fresh_typedb_marker(self):
         with tempfile.TemporaryDirectory() as temp:

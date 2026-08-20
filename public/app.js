@@ -477,6 +477,8 @@
     serverSettingsError: "",
     serverSettingsLocked: false,
     shareAccess: { role: "local-owner", writable: true, capabilities: ["read", "write"] },
+    shareRuntime: {},
+    runtimeIdentity: {},
     serverConfigured: {},
     notificationTemplates: [],
     notificationTemplateVariables: [],
@@ -1771,6 +1773,31 @@
     render();
   }
 
+  function copyTextToClipboard(value) {
+    var text = String(value || "");
+    if (!text) return Promise.reject(new Error("복사할 링크가 없습니다."));
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var input = document.createElement("textarea");
+      input.value = text;
+      input.setAttribute("readonly", "readonly");
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      document.body.appendChild(input);
+      input.select();
+      try {
+        if (!document.execCommand("copy")) throw new Error("copy command failed");
+        resolve();
+      } catch (error) {
+        reject(error);
+      } finally {
+        document.body.removeChild(input);
+      }
+    });
+  }
+
   function renderSnackbar() {
     var snackbar = state.snackbar || {};
     var message = String(snackbar.message || "");
@@ -1921,7 +1948,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260820-investment-case-v2", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260821-stable-share-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -3435,6 +3462,8 @@
     state.shareAccess = payload.shareAccess && typeof payload.shareAccess === "object"
       ? payload.shareAccess
       : { role: state.serverSettingsLocked ? "viewer" : "local-owner", writable: !state.serverSettingsLocked, capabilities: state.serverSettingsLocked ? ["read"] : ["read", "write"] };
+    state.shareRuntime = payload.shareRuntime && typeof payload.shareRuntime === "object" ? payload.shareRuntime : {};
+    state.runtimeIdentity = payload.runtimeIdentity && typeof payload.runtimeIdentity === "object" ? payload.runtimeIdentity : {};
     state.serverSettingsLoaded = true;
     state.serverSettingsError = "";
     state.settingsSaved = true;
@@ -14394,13 +14423,15 @@
     var toss = (snapshot || {}).toss || {};
     var parts = ontologyStrategyParts(snapshot || {});
     var diagnostics = state.ontologyDiagnostics || {};
+    var shareRuntime = state.shareRuntime && typeof state.shareRuntime === "object" ? state.shareRuntime : {};
     var researchCount = consoleResearchItems().length;
     return [
       { label: "Toss Open API", state: toss.mode === "live" ? "정상" : "확인", detail: toss.status || "계정 데이터", updatedAt: snapshot.generatedAt, tone: toss.mode === "live" ? "watch" : "danger", detailType: "account-connections-board" },
       { label: "실시간 WebSocket", state: state.realtime.connected ? "연결" : "폴링", detail: state.realtime.lastEvent || "실시간 이벤트", updatedAt: state.realtime.lastEventAt, tone: state.realtime.connected ? "watch" : "caution", detailType: "notification-diagnostics-board" },
       { label: "TypeDB InferenceBox", state: parts.aboxEntities.length ? "준비" : "확인", detail: diagnostics.reason || parts.strategy.reasoningMode || "그래프 추론", updatedAt: diagnostics.updatedAt || snapshot.generatedAt, tone: parts.aboxEntities.length ? "watch" : "danger", detailType: "strategy-trace-board" },
       { label: "리서치 근거", state: researchCount ? "수집" : "대기", detail: researchCount + "건 저장", updatedAt: (currentResearchEvidence().summary || {}).latestSeenAt, tone: researchCount ? "watch" : "hold", detailType: "feed-source-board" },
-      { label: "운영 설정 DB", state: state.serverSettingsLoaded ? "연결" : "확인", detail: "MySQL 운영 설정", updatedAt: snapshot.generatedAt, tone: state.serverSettingsLoaded ? "watch" : "caution", detailType: "settings-runtime" }
+      { label: "운영 설정 DB", state: state.serverSettingsLoaded ? "연결" : "확인", detail: "MySQL 운영 설정", updatedAt: snapshot.generatedAt, tone: state.serverSettingsLoaded ? "watch" : "caution", detailType: "settings-runtime" },
+      { label: "웹 공유 연결", state: shareRuntime.active ? "연결" : (shareRuntime.enabled ? "확인" : "꺼짐"), detail: shareRuntime.targetPublishStatus === "published" ? "고정 주소 반영됨" : "고정 주소 상태 확인", updatedAt: shareRuntime.updatedAt, tone: shareRuntime.active && shareRuntime.targetPublishStatus === "published" ? "watch" : (shareRuntime.enabled ? "caution" : "hold"), detailType: "settings-diagnostics" }
     ];
   }
 
@@ -14530,6 +14561,7 @@
       { title: "외부 데이터와 API", description: "시세·수급·뉴스·공시·거시 API 키와 수집 정책", scope: "시스템 전체", tone: "operations", detailType: "settings-data-sources", action: "편집" },
       { title: "AI 추론 실행", description: "AI 사용 여부, 병렬 워커와 추론 깊이", scope: "시스템 전체", tone: "operations", detailType: "settings-ai-runtime", action: "편집" },
       { title: "운영자 알림 채널", description: "연결 장애, 파이프라인과 추론 상태 전용 채널", scope: "관리자 전용", tone: "operations", detailType: "settings-operations-notifications", action: "편집" },
+      { title: "웹 공유 연결", description: "고정 접속 주소, 현재 터널과 실행 코드 버전", scope: "관리자 전용", tone: "operations", detailType: "settings-diagnostics", action: "확인" },
       { title: "저장소와 실행 진단", description: "설정 DB, 외부 API, 추론 대기열과 최근 오류", scope: "관리자 전용", tone: "operations", detailType: "settings-diagnostics", action: "진단" }
     ];
     var governance = [
@@ -31620,6 +31652,45 @@
     ].join("");
   }
 
+  function renderShareRuntimePanel() {
+    var share = state.shareRuntime && typeof state.shareRuntime === "object" ? state.shareRuntime : {};
+    var identity = share.runtimeIdentity && typeof share.runtimeIdentity === "object" ? share.runtimeIdentity : (state.runtimeIdentity || {});
+    var active = Boolean(share.active);
+    var enabled = Boolean(share.enabled);
+    var publishStatus = String(share.targetPublishStatus || (active ? "waiting" : "inactive"));
+    var publishLabel = ({ published: "Pages 반영됨", publishing: "주소 반영 중", disabled: "자동 반영 꺼짐", failed: "반영 실패", waiting: "반영 대기" })[publishStatus] || "연결 없음";
+    var publishTone = publishStatus === "published" ? "watch" : (publishStatus === "failed" ? "danger" : "caution");
+    var accessUrl = String(share.fixedAccessUrl || "");
+    var currentUrl = String(share.currentAccessUrl || "");
+    var publicUrl = accessUrl || String(share.fixedEntryUrl || "");
+    var revision = String(identity.revision || "unknown");
+    var startedAt = String(identity.startedAt || "");
+    return [
+      '<section class="share-runtime-panel"' + cardTypeAttrs("diagnostic-card", active ? "watch" : "caution") + '>',
+      '<div class="share-runtime-head">',
+      '<div><p class="label">Stable Web Entry</p><strong>웹 공유 연결</strong><span>앱 배포와 터널을 분리하고 고정 진입 주소가 현재 실행 중인 앱을 찾습니다.</span></div>',
+      '<span class="tone-chip ' + (active ? "watch" : "caution") + '">' + escapeHtml(active ? "터널 연결됨" : (enabled ? "터널 확인 필요" : "공유 꺼짐")) + '</span>',
+      '</div>',
+      '<div class="share-runtime-status-grid">',
+      '<div><span>터널</span><strong>' + escapeHtml(active ? String(share.provider || "cloudflared") : "연결 없음") + '</strong><small>' + escapeHtml(String(share.updatedAt || "상태 기록 없음")) + '</small></div>',
+      '<div><span>고정 주소</span><strong class="' + escapeHtml(publishTone) + '">' + escapeHtml(publishLabel) + '</strong><small>' + escapeHtml(String(share.targetPublishedAt || "반영 기록 없음")) + '</small></div>',
+      '<div><span>실행 코드</span><strong>' + escapeHtml(revision) + '</strong><small>' + escapeHtml(startedAt || "시작 시각 확인 불가") + '</small></div>',
+      '</div>',
+      '<div class="share-runtime-link">',
+      '<span>고정 접속 주소</span>',
+      '<code>' + escapeHtml(publicUrl || "고정 진입 주소를 확인할 수 없습니다.") + '</code>',
+      accessUrl ? '<p>접근 키는 `#` 뒤 fragment에만 있으며 GitHub Pages 서버에는 전달되지 않습니다.</p>' : '<p>토큰이 포함된 전체 링크는 로컬 소유자에게만 표시됩니다.</p>',
+      '<div class="share-runtime-actions">',
+      accessUrl ? '<button class="text-button primary" type="button" data-copy-share-url="' + escapeHtml(accessUrl) + '">전체 링크 복사</button>' : '',
+      publicUrl ? '<a class="text-button" href="' + escapeHtml(publicUrl) + '" target="_blank" rel="noreferrer">고정 주소 열기</a>' : '',
+      currentUrl ? '<a class="text-button" href="' + escapeHtml(currentUrl) + '" target="_blank" rel="noreferrer">현재 터널 확인</a>' : '',
+      '</div>',
+      '</div>',
+      publishStatus === "failed" && share.targetPublishError ? '<p class="form-error">' + escapeHtml(share.targetPublishError) + '</p>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function renderSettingsDiagnosticsPanel() {
     var reasoning = state.ontologyReasoningStatus || {};
     var queue = reasoning.queueHealth && typeof reasoning.queueHealth === "object" ? reasoning.queueHealth : {};
@@ -31703,6 +31774,7 @@
         ].join("");
       }).join(""),
       '</div>',
+      renderShareRuntimePanel(),
       '</article>'
     ].join("");
   }
@@ -33576,6 +33648,17 @@
             state.settingsSaving = false;
             render();
           });
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-copy-share-url]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var url = button.getAttribute("data-copy-share-url") || "";
+        button.disabled = true;
+        copyTextToClipboard(url)
+          .then(function () { showSnackbar("고정 접속 전체 링크를 복사했습니다.", "success"); })
+          .catch(function () { showSnackbar("링크를 복사하지 못했습니다.", "danger"); })
+          .finally(function () { button.disabled = false; });
       });
     });
 

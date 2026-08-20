@@ -17,6 +17,7 @@ from .infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore
 from .infrastructure.mysql_operational import MySQLOntologyRuleboxPrewarmStateStore
 from .infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
+from .infrastructure.share_runtime import fixed_entry_url, share_credentials_environment
 from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
 from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
 
@@ -534,6 +535,14 @@ def ensure_mysql_operational_schema(spec: Dict[str, object]) -> bool:
 
 def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     port = int_value(os.environ.get("PORT") or (settings or {}).get("webPort"), 3000, 1)
+    environment = {
+        "HOST": "127.0.0.1",
+        "PORT": str(port),
+        "ALLOW_PORT_FALLBACK": "0",
+    }
+    if truthy((settings or {}).get("cloudflareShareManagedEnabled")):
+        environment.update(share_credentials_environment())
+        environment["SHARE_FIXED_ENTRY_URL"] = fixed_entry_url(settings)
     return {
         "label": "Orbit Alpha web server",
         "pid": data_dir() / "python-web.pid",
@@ -543,11 +552,7 @@ def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "role": "web",
         "healthAddress": "127.0.0.1:" + str(port),
         "startupWaitSeconds": str((settings or {}).get("webStartupWaitSeconds") or "30"),
-        "env": {
-            "HOST": "127.0.0.1",
-            "PORT": str(port),
-            "ALLOW_PORT_FALLBACK": "0",
-        },
+        "env": environment,
     }
 
 
@@ -555,7 +560,7 @@ def cloudflare_share_worker_spec(settings: Dict[str, object]) -> Dict[str, objec
     node = shutil.which("node") or ""
     cloudflared = shutil.which("cloudflared") or ""
     script = ROOT_DIR / "scripts" / "share-local.js"
-    port = int_value((settings or {}).get("cloudflareSharePort"), 3001, 1)
+    port = int_value(os.environ.get("PORT") or (settings or {}).get("webPort"), 3000, 1)
     missing = ""
     if not node:
         missing = "Node.js executable was not found."
@@ -573,6 +578,8 @@ def cloudflare_share_worker_spec(settings: Dict[str, object]) -> Dict[str, objec
         "env": {
             "PORT": str(port),
             "TUNNEL_PROVIDER": "cloudflared",
+            "SHARE_FIXED_ENTRY_URL": fixed_entry_url(settings),
+            "SHARE_PUBLISH_TARGET": "1" if truthy((settings or {}).get("cloudflareSharePublishTargetEnabled", "1")) else "0",
         },
         "missingReason": missing,
     }
@@ -2436,7 +2443,11 @@ def stop(excluded_roles=None, include_supervisor: bool = True) -> int:
     return 0
 
 
-def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
+def restart(
+    restart_typedb: bool = False,
+    restart_mysql: bool = False,
+    restart_share: bool = False,
+) -> int:
     """Restart application workers without disrupting an active graph store.
 
     TypeDB owns durable graph generations and can legitimately be writing an
@@ -2455,6 +2466,11 @@ def restart(restart_typedb: bool = False, restart_mysql: bool = False) -> int:
         mysql_pid_path = mysql_spec.get("pid") if isinstance(mysql_spec, dict) else None
         if mysql_spec and mysql_pid_path and is_running(read_pid(mysql_pid_path), mysql_spec):
             excluded.add("mysql")
+    if not restart_share:
+        share_spec = worker_specs().get("cloudflare-share")
+        share_pid_path = share_spec.get("pid") if isinstance(share_spec, dict) else None
+        if share_spec and share_pid_path and is_running(read_pid(share_pid_path), share_spec):
+            excluded.add("cloudflare-share")
     maintenance_window_seconds = 300
     if restart_typedb:
         typedb_spec = worker_specs().get("typedb")
@@ -3285,6 +3301,7 @@ def main(argv: List[str] = None) -> int:
         result = restart(
             restart_typedb="--restart-typedb" in args[1:],
             restart_mysql="--restart-mysql" in args[1:],
+            restart_share="--restart-share" in args[1:],
         )
         supervisor_result = restore_configured_supervisor()
         return result if result != 0 else supervisor_result
@@ -3302,5 +3319,5 @@ def main(argv: List[str] = None) -> int:
         return install_supervisor()
     if command == "supervisor-uninstall":
         return uninstall_supervisor()
-    print("Usage: python3 python_service/monitor_service.py start|stop|restart|status|supervise|supervisor-install|supervisor-uninstall|typedb-maintenance|typedb-rotate [--force]")
+    print("Usage: python3 python_service/monitor_service.py start|stop|restart [--restart-share]|status|supervise|supervisor-install|supervisor-uninstall|typedb-maintenance|typedb-rotate [--force]")
     return 1

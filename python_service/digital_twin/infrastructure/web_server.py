@@ -137,16 +137,25 @@ from ..infrastructure.service_factory import (
     investment_analysis_snapshot,
 )
 from ..infrastructure.share_access import (
+    SHARE_ROLE_LOCAL_OWNER,
     SHARE_ROLE_OWNER,
     SHARE_ROLE_VIEWER,
     ShareAccess,
     anonymous_access,
     authenticate_share_token,
+    direct_loopback_request,
     issue_share_session,
     local_owner_access,
+    owner_tokens,
     share_access_from_cookie,
     share_mode_enabled,
     share_session_cookie,
+    viewer_tokens,
+)
+from ..infrastructure.share_runtime import (
+    active_share_runtime_state,
+    fixed_access_url,
+    fixed_entry_url,
 )
 from ..infrastructure.flow_lens_read_model import FlowLensReadModel
 from ..infrastructure.settings import ROOT_DIR, read_json, runtime_settings, save_runtime_settings, write_private_json
@@ -155,6 +164,7 @@ from ..infrastructure.toss_snapshots import build_snapshot
 
 PUBLIC_DIR = ROOT_DIR / "public"
 LOCAL_APP_STORE_PATH = ROOT_DIR / "data" / "store.json"
+WEB_PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 MEMORY_CATEGORIES = ["identity", "preference", "finance", "travel", "asset", "schedule", "work", "other"]
 DOMAIN_TYPES = ["stock", "trip", "asset", "schedule", "task", "note"]
 MAX_BODY_BYTES = 1024 * 1024
@@ -656,6 +666,39 @@ def record_action_plan_fills_payload(plan_id: str, body: Dict[str, object]) -> D
         )
     except (TypeError, ValueError) as error:
         return {"status": "error", "error": str(error)}
+
+
+def share_runtime_status_payload(access: ShareAccess = None, settings: Dict[str, object] = None) -> Dict[str, object]:
+    settings = settings if isinstance(settings, dict) else {}
+    resolved_access = access or (anonymous_access() if share_mode_enabled() else local_owner_access())
+    runtime = active_share_runtime_state()
+    entry_url = str(runtime.get("fixedEntryUrl") or fixed_entry_url(settings)).strip()
+    viewer_token = next(iter(viewer_tokens()), "")
+    owner_token = next(iter(owner_tokens()), "")
+    viewer_access_url = str(runtime.get("fixedViewerUrl") or fixed_access_url(entry_url, "share_token", viewer_token)).strip()
+    owner_access_url = str(runtime.get("fixedOwnerUrl") or fixed_access_url(entry_url, "owner_token", owner_token)).strip()
+    current_viewer_url = str(runtime.get("viewerUrl") or "").strip()
+    current_owner_url = str(runtime.get("ownerUrl") or "").strip()
+    privileged = resolved_access.role in {SHARE_ROLE_LOCAL_OWNER, SHARE_ROLE_OWNER}
+    selected_access_url = owner_access_url if resolved_access.role == SHARE_ROLE_OWNER else viewer_access_url
+    selected_current_url = current_owner_url if resolved_access.role == SHARE_ROLE_OWNER else current_viewer_url
+    identity = dict(runtime_identity())
+    identity["startedAt"] = WEB_PROCESS_STARTED_AT
+    return {
+        "enabled": share_mode_enabled(),
+        "active": bool(runtime),
+        "provider": str(runtime.get("provider") or "cloudflared"),
+        "baseUrl": str(runtime.get("baseUrl") or "") if runtime else "",
+        "fixedEntryUrl": entry_url,
+        "fixedAccessUrl": selected_access_url if privileged else "",
+        "currentAccessUrl": selected_current_url if privileged else "",
+        "updatedAt": str(runtime.get("updatedAt") or ""),
+        "targetPublishStatus": str(runtime.get("targetPublishStatus") or ("waiting" if runtime else "inactive")),
+        "targetPublishedAt": str(runtime.get("targetPublishedAt") or ""),
+        "targetPublishError": str(runtime.get("targetPublishError") or "")[:500] if privileged else "",
+        "runtimeIdentity": identity,
+        "accessLinkPolicy": "fragment-only",
+    }
 
 
 def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
@@ -1188,6 +1231,11 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         },
         "locked": bool(resolved_access.shared and not resolved_access.writable),
         "shareAccess": resolved_access.to_public_dict(),
+        "shareRuntime": share_runtime_status_payload(resolved_access, settings),
+        "runtimeIdentity": {
+            **runtime_identity(),
+            "startedAt": WEB_PROCESS_STARTED_AT,
+        },
     }
 
 
@@ -5221,6 +5269,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         if not share_mode_enabled():
             self._share_access = local_owner_access()
             return True
+        if direct_loopback_request(self.client_address, self.headers):
+            self._share_access = local_owner_access()
+            return True
         parsed = self.parsed()
         query = self.parsed_query()
         supplied_owner = first_query(query, "owner_token")
@@ -5309,6 +5360,13 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
         query = self.parsed_query()
         if path == "/api/share/access" and self.command == "GET":
             return self.send_payload(200, self.share_access().to_public_dict())
+        if path == "/api/share/status" and self.command == "GET":
+            return self.send_payload(200, share_runtime_status_payload(self.share_access()))
+        if path == "/api/version" and self.command == "GET":
+            return self.send_payload(200, {
+                **runtime_identity(),
+                "startedAt": WEB_PROCESS_STARTED_AT,
+            })
 
         if path == "/api/service-accounts":
             if self.command == "GET":
@@ -5772,9 +5830,13 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, {"profile": store["profile"]})
 
         if path == "/api/chat" and self.command == "POST":
+            if self.share_access().shared:
+                return self.send_payload(403, {"error": "로컬 AI 실행은 이 컴퓨터에서 직접 접속할 때만 사용할 수 있습니다."})
             return self.send_payload(200, chat_payload(self.read_json_body()))
 
         if path == "/api/investment-brain/questions" and self.command == "POST":
+            if self.share_access().shared:
+                return self.send_payload(403, {"error": "투자 브레인 질의는 이 컴퓨터에서 직접 접속할 때만 사용할 수 있습니다."})
             return self.send_payload(200, investment_brain_question_payload(self.read_json_body()))
 
         instrument_timeline_match = re.match(r"^/api/instruments/([^/]+)/timeline$", path)
@@ -6220,6 +6282,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             "app.js",
             "app-default-settings.js",
             "styles.css",
+            "live-target.json",
         }
         cache_control = "no-cache" if file_path.name in mutable_app_assets else "public, max-age=31536000, immutable"
         if self.headers.get("If-None-Match") == etag:

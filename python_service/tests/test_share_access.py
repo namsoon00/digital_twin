@@ -1,9 +1,11 @@
 import unittest
+from email.message import Message
 
 from digital_twin.infrastructure.share_access import (
     SHARE_ROLE_OWNER,
     SHARE_ROLE_VIEWER,
     authenticate_share_token,
+    direct_loopback_request,
     issue_share_session,
     share_access_from_cookie,
     share_mode_enabled,
@@ -81,6 +83,17 @@ class ShareAccessTests(unittest.TestCase):
 
         self.assertEqual(SHARE_ROLE_VIEWER, access.role)
         self.assertFalse(access.writable)
+
+    def test_direct_loopback_request_excludes_cloudflare_forwarded_traffic(self):
+        local_headers = Message()
+        forwarded_headers = Message()
+        forwarded_headers["CF-Connecting-IP"] = "203.0.113.10"
+        forwarded_headers["X-Forwarded-Proto"] = "https"
+
+        self.assertTrue(direct_loopback_request(("127.0.0.1", 51234), local_headers))
+        self.assertTrue(direct_loopback_request(("::1", 51234), local_headers))
+        self.assertFalse(direct_loopback_request(("127.0.0.1", 51234), forwarded_headers))
+        self.assertFalse(direct_loopback_request(("203.0.113.10", 51234), local_headers))
 
 
 if __name__ == "__main__":

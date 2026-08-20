@@ -99,6 +99,22 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertEqual("10", command[2])
             self.assertEqual(["typedb", "server"], command[3:])
 
+    def test_runtime_workers_yield_cpu_to_interactive_processes(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "mysqlRuntimeManaged": "0",
+            "ontologyTypeDbEnabled": "0",
+            "timeSeriesQuestDbEnabled": "0",
+            "reasoningEngineActiveVersion": "v2",
+            "reasoningEngineV2IndependentEnabled": "1",
+            "notificationAiQueueWorkerCount": "0",
+            "managedBackgroundProcessNice": "7",
+        }):
+            workers = service_manager.worker_specs()
+
+        self.assertEqual("7", workers["reasoning-engine-shadow"]["processNice"])
+        self.assertEqual("7", workers["news"]["processNice"])
+        self.assertNotIn("processNice", workers["web"])
+
     def test_blue_green_candidate_validates_each_reasoning_database(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

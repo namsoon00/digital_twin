@@ -8,6 +8,7 @@ import time
 import json
 import calendar
 import plistlib
+import uuid
 from pathlib import Path
 from typing import Dict, List
 
@@ -322,6 +323,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "blueGreenProcessNice": str(
             (settings or {}).get("typedbBlueGreenProcessNice") or "10"
         ),
+        "processNice": str((settings or {}).get("typedbProcessNice") or "5"),
         "blueGreenSeedCompatibilityDatabasesEnabled": (
             "1" if compatibility_databases_enabled else "0"
         ),
@@ -614,6 +616,10 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     workers = {}
     if truthy((settings or {}).get("mysqlRuntimeManaged", os.environ.get("MYSQL_RUNTIME_MANAGED", "1"))):
         workers["mysql"] = mysql_worker_spec(settings)
+    # Keep the read-only console available while graph and time-series stores
+    # recover. API handlers expose dependency freshness explicitly, so the web
+    # process does not need to wait behind a long TypeDB replay or seed.
+    workers["web"] = web_worker_spec(settings)
     if typedb_requested(settings):
         workers["typedb"] = typedb_worker_spec(settings)
     if truthy((settings or {}).get("timeSeriesQuestDbEnabled")):
@@ -646,7 +652,14 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         0,
     )
     workers.update(notification_ai_worker_specs(ai_worker_count))
-    workers["web"] = web_worker_spec(settings)
+    background_nice = str((settings or {}).get("managedBackgroundProcessNice") or "5")
+    for name, spec in list(workers.items()):
+        if name in {"mysql", "web"}:
+            continue
+        workers[name] = {
+            **dict(spec),
+            "processNice": str(spec.get("processNice") or background_nice),
+        }
     return workers
 
 
@@ -892,12 +905,30 @@ def typedb_rotation_lock_path() -> Path:
     return data_dir() / "typedb-rotation.lock"
 
 
-def acquire_typedb_rotation_lock() -> Dict[str, object]:
-    """Acquire a small cross-command lock before stopping graph workers."""
+def acquire_typedb_maintenance_lock(
+    operation: str = "maintenance",
+    max_age_seconds: int = 3600,
+) -> Dict[str, object]:
+    """Fence every full-store TypeDB mutation with one process-wide lease.
+
+    Scoped ABox write leases coordinate graph transactions, but they do not
+    stop a service startup seed from racing a blue-green candidate seed. This
+    filesystem lease covers that wider process boundary and remains available
+    even while MySQL or TypeDB itself is recovering.
+    """
 
     path = typedb_rotation_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"pid": os.getpid(), "startedAt": iso_now()}
+    token = uuid.uuid4().hex
+    started_epoch = time.time()
+    payload = {
+        "pid": os.getpid(),
+        "operation": str(operation or "maintenance")[:80],
+        "token": token,
+        "startedAt": iso_now(),
+        "startedAtEpoch": started_epoch,
+        "expiresAtEpoch": started_epoch + max(60, int(max_age_seconds or 3600)),
+    }
     for _attempt in range(2):
         try:
             descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -908,7 +939,13 @@ def acquire_typedb_rotation_lock() -> Dict[str, object]:
                 existing = {}
             owner = int_value(existing.get("pid"), 0, 0)
             if owner and pid_exists(owner):
-                return {"acquired": False, "reason": "another TypeDB rotation is active", "ownerPid": owner}
+                return {
+                    "acquired": False,
+                    "reason": "another TypeDB maintenance operation is active",
+                    "ownerPid": owner,
+                    "ownerOperation": str(existing.get("operation") or "maintenance"),
+                    "ownerStartedAt": str(existing.get("startedAt") or ""),
+                }
             try:
                 path.unlink()
             except OSError:
@@ -919,11 +956,38 @@ def acquire_typedb_rotation_lock() -> Dict[str, object]:
         finally:
             os.close(descriptor)
         return {"acquired": True, "path": str(path), **payload}
-    return {"acquired": False, "reason": "TypeDB rotation lock could not be acquired"}
+    return {"acquired": False, "reason": "TypeDB maintenance lock could not be acquired"}
+
+
+def acquire_typedb_rotation_lock() -> Dict[str, object]:
+    return acquire_typedb_maintenance_lock("blue-green-rotation", max_age_seconds=7200)
+
+
+def typedb_maintenance_lock_owned(lock: Dict[str, object]) -> bool:
+    """Return true only for the current fencing token.
+
+    PID checks alone are not sufficient because a stale process can outlive a
+    lease replacement and later attempt a cutover. The token is verified again
+    immediately before swapping the active data directory.
+    """
+
+    expected = str((lock or {}).get("token") or "")
+    if not bool((lock or {}).get("acquired")) or not expected:
+        return False
+    try:
+        current = json.loads(typedb_rotation_lock_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return (
+        int_value(current.get("pid"), 0, 0) == int_value((lock or {}).get("pid"), 0, 0)
+        and str(current.get("token") or "") == expected
+    )
 
 
 def release_typedb_rotation_lock(lock: Dict[str, object]) -> None:
     if not bool((lock or {}).get("acquired")):
+        return
+    if not typedb_maintenance_lock_owned(lock):
         return
     try:
         typedb_rotation_lock_path().unlink()
@@ -2161,7 +2225,7 @@ def start_worker(spec: Dict[str, object]) -> int:
     out = log_path.open("a", encoding="utf-8")
     process_env = managed_process_environment(spec)
     process = subprocess.Popen(
-        spec["command"],
+        low_priority_command(spec, spec["command"]),
         cwd=str(ROOT_DIR),
         env=process_env,
         stdin=subprocess.DEVNULL,

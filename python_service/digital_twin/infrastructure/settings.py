@@ -438,6 +438,7 @@ TEXT_SETTING_KEYS = [
     "typedbBlueGreenMaxLoadPerCpu",
     "typedbBlueGreenMinimumAvailableMemoryPercent",
     "typedbBlueGreenProcessNice",
+    "typedbProcessNice",
     "typedbBlueGreenSeedCompatibilityDatabasesEnabled",
     "typedbPortfolioWorldProjectionRebuildLimit",
     "typedbPortfolioWorldProjectionRebuildTimeoutSeconds",
@@ -454,6 +455,7 @@ TEXT_SETTING_KEYS = [
     "mysqlConnectionPoolSize",
     "mysqlOperationalSchemaBootstrapAttempts",
     "mysqlOperationalSchemaBootstrapRetrySeconds",
+    "managedBackgroundProcessNice",
     "externalSignalCacheMaxEntries",
     "webPort",
     "dartDisclosureAiAnalysisEnabled",
@@ -2267,6 +2269,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "TYPEDB_BLUE_GREEN_PROCESS_NICE",
             "10",
         ),
+        "typedbProcessNice": value(
+            "typedbProcessNice",
+            "TYPEDB_PROCESS_NICE",
+            "5",
+        ),
         "typedbBlueGreenSeedCompatibilityDatabasesEnabled": value(
             "typedbBlueGreenSeedCompatibilityDatabasesEnabled",
             "TYPEDB_BLUE_GREEN_SEED_COMPATIBILITY_DATABASES_ENABLED",
@@ -2477,6 +2484,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlOperationalSchemaBootstrapRetrySeconds": value(
             "mysqlOperationalSchemaBootstrapRetrySeconds",
             "MYSQL_OPERATIONAL_SCHEMA_BOOTSTRAP_RETRY_SECONDS",
+            "5",
+        ),
+        "managedBackgroundProcessNice": value(
+            "managedBackgroundProcessNice",
+            "MANAGED_BACKGROUND_PROCESS_NICE",
             "5",
         ),
         "webPort": value("webPort", "WEB_PORT", "3000"),

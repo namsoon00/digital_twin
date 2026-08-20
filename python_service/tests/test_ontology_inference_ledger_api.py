@@ -35,6 +35,23 @@ class ProjectionRunStore:
 
 
 class OntologyInferenceLedgerApiTests(unittest.TestCase):
+    def test_rule_audit_summary_omits_domain_manifest(self):
+        audit = web_server.compact_rule_audit({
+            "ruleCount": 1,
+            "rules": [{
+                "ruleId": "rule-1",
+                "status": "observed",
+                "p95DurationMs": 12,
+                "executionProfile": {"executionStage": "core", "large": [1, 2, 3]},
+                "domainManifest": {"large": [1, 2, 3]},
+            }],
+        })
+
+        self.assertEqual("summary", audit["detailLevel"])
+        self.assertEqual("core", audit["rules"][0]["executionProfile"]["executionStage"])
+        self.assertNotIn("domainManifest", audit["rules"][0])
+        self.assertNotIn("large", audit["rules"][0]["executionProfile"])
+
     def test_execution_history_summary_keeps_visible_fields_and_omits_raw_detail(self):
         history = web_server.compact_reasoning_execution_history({
             "status": "ok",

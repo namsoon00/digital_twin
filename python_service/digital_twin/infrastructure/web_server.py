@@ -1620,6 +1620,31 @@ def compact_reasoning_execution_history(history: object) -> Dict[str, object]:
     return payload
 
 
+def compact_rule_audit(audit: object) -> Dict[str, object]:
+    payload = dict(audit or {}) if isinstance(audit, dict) else {}
+    payload["rules"] = [{
+        **{
+            field: rule.get(field)
+            for field in (
+                "ruleId", "label", "status", "enabled", "assessmentScope",
+                "lifecycleClass", "sampleCount", "matchedCount", "failureCount",
+                "averageDurationMs", "p95DurationMs", "maxDurationMs", "reviewReasons",
+            )
+            if field in rule
+        },
+        "executionProfile": {
+            "executionStage": (
+                rule.get("executionProfile").get("executionStage")
+                if isinstance(rule.get("executionProfile"), dict)
+                else None
+            ),
+        },
+    } for rule in payload.get("rules") or [] if isinstance(rule, dict)]
+    payload["detailLevel"] = "summary"
+    payload["fullDetailAvailable"] = True
+    return payload
+
+
 def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     from ..domain.ontology_rule_audit import rule_audit_payload
 
@@ -1685,6 +1710,10 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             rulebox.get("rules") or [],
             payload["ruleRuntimeSummary"],
         )
+        if str(first_query(query, "auditDetail") or "summary").strip().lower() != "full":
+            payload["ruleAudit"] = compact_rule_audit(payload["ruleAudit"])
+        elif isinstance(payload["ruleAudit"], dict):
+            payload["ruleAudit"]["detailLevel"] = "full"
     except Exception as error:  # noqa: BLE001 - active InferenceBox trace remains readable.
         payload["executionHistory"] = {
             "status": "error",
@@ -1707,6 +1736,8 @@ def ontology_inference_ledger_api_payload(query: Dict[str, List[str]]) -> Dict[s
             "symbols": [],
         }
         payload["ruleAudit"] = rule_audit_payload(rulebox.get("rules") or [], {})
+        if str(first_query(query, "auditDetail") or "summary").strip().lower() != "full":
+            payload["ruleAudit"] = compact_rule_audit(payload["ruleAudit"])
     operational_count = sum([
         int((payload.get("executionHistory") or {}).get("runCount") or 0),
         int((payload.get("ruleRuntimeSummary") or {}).get("sampleCount") or 0),

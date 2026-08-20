@@ -92,6 +92,9 @@ ONTOLOGY_CONTEXT_KEYS = (
     "activeInvestmentOpinion",
     "ontologyReviewContext",
     "v2DecisionSynthesis",
+    "contextObservationDecision",
+    "notificationDecisionMode",
+    "requiresAiJudgement",
 )
 PROMOTED_REFERENCE_LABELS = (
     "상태",
@@ -526,7 +529,13 @@ def source_metadata(event: AlertEvent) -> Dict[str, object]:
 def promoted_ontology_context(events: List[AlertEvent]) -> Dict[str, object]:
     promoted: Dict[str, object] = {}
     for key in ONTOLOGY_CONTEXT_KEYS:
-        values = [event.metadata.get(key) for event in events if isinstance(event.metadata, dict) and event.metadata.get(key)]
+        values = [
+            event.metadata.get(key)
+            for event in events
+            if isinstance(event.metadata, dict)
+            and key in event.metadata
+            and event.metadata.get(key) not in (None, "", [], {})
+        ]
         if not values:
             continue
         if key == "ontologyRelationContext":

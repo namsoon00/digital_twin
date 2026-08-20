@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Dict, Iterable, Mapping, Tuple
 
+from ..context_observation_notifications import typedb_context_observation_contract
 from ..decision_evidence_contract import hypothesis_decision_eligibility
 from .contracts import ActionAlternative, DecisionSynthesis
 
@@ -70,6 +71,9 @@ def decision_synthesis_from_relation_context(
         or ""
     ).upper().strip()
     selected_rule_id = str(decision.get("selectedRuleId") or envelope.get("selectedRuleId") or "")
+    context_observation = typedb_context_observation_contract(relation)
+    if context_observation:
+        graph_candidate_action = "NO_ACTION"
     actions_by_rule: Dict[str, list] = {}
     for row in [
         *[item for item in graph.get("relations") or [] if isinstance(item, Mapping)],
@@ -161,13 +165,13 @@ def decision_synthesis_from_relation_context(
         source_abox_snapshot_id=source_abox_snapshot_id,
         inference_generation_id=inference_generation_id,
         graph_candidate_action=graph_candidate_action,
-        allowed_actions=_texts(
+        allowed_actions=() if context_observation else _texts(
             relation.get("allowedActions")
             or decision.get("allowedActions")
             or envelope.get("allowedActions"),
             uppercase=True,
         ),
-        blocked_actions=_texts(
+        blocked_actions=() if context_observation else _texts(
             relation.get("blockedActions")
             or decision.get("blockedActions")
             or envelope.get("blockedActions"),

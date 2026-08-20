@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
+from ...domain.context_observation_notifications import is_typedb_context_observation_notification
 from ...domain.disclosure_analysis import local_disclosure_analysis
 from ...domain.investment_brain import decision_episode_from_context
 from ...domain.investment_flow import INVESTMENT_FLOW_VERSION, investment_flow_id
@@ -68,6 +69,8 @@ class NotificationAIOpinionEnricher:
 
     def __call__(self, job: NotificationJob) -> None:
         context = dict(job.context or {})
+        if is_typedb_context_observation_notification(context):
+            return
         context.setdefault("messageType", job.message_type)
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
@@ -183,6 +186,8 @@ class NotificationAIValidatedGateEnricher:
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
             return
         context = dict(job.context or {})
+        if is_typedb_context_observation_notification(context):
+            return
         context.setdefault("messageType", job.message_type)
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
@@ -259,6 +264,8 @@ class NotificationHypothesisResearchEnricher:
         if job.message_type != INVESTMENT_INSIGHT or not self.enabled():
             return
         context = dict(job.context or {})
+        if is_typedb_context_observation_notification(context):
+            return
         if context.get("researchCycle"):
             return
         if not self.investment_brain_service:
@@ -554,6 +561,8 @@ class NotificationQueueRunner:
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:
             return False
+        if is_typedb_context_observation_notification(job.context or {}):
+            return False
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
             return False
         return not bool((job.context or {}).get("notificationAiValidatedResponse"))
@@ -562,6 +571,8 @@ class NotificationQueueRunner:
         if str(job.message_type or "") != INVESTMENT_INSIGHT:
             return True
         context = dict(job.context or {})
+        if is_typedb_context_observation_notification(context):
+            return True
         if not context.get("notificationAiValidatedResponse"):
             return True
         decision = final_ai_delivery_decision(context)

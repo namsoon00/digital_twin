@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
+from ...domain.context_observation_notifications import typedb_context_observation_contract
 from ...domain.data_freshness import freshness_from_snapshot_subject
 from ...domain.independent_reasoning import IndependentReasoningRequest
 from ...domain.investment_reasoning import decision_synthesis_from_relation_context
 from ...domain.message_types import (
+    CRYPTO_ONTOLOGY_SIGNAL,
     DEFAULT_CADENCE,
     HOLDING_TIMING,
     INVESTMENT_INSIGHT,
@@ -127,7 +129,18 @@ class V2GraphDecisionCandidateBuilder:
 
     @staticmethod
     def _signal_rule(relation: Mapping[str, object]) -> str:
+        subject = _mapping(relation.get("subject"))
         facts = _mapping(relation.get("facts"))
+        market = _text(subject.get("market") or facts.get("market")).upper()
+        source_kind = _text(
+            next((
+                item.get("ruleSourceKind")
+                for item in relation.get("activeRules") or relation.get("matchedRules") or []
+                if isinstance(item, Mapping) and item.get("ruleSourceKind")
+            ), "")
+        ).lower()
+        if market in {"CRYPTO", "COIN"} or source_kind == "crypto-asset":
+            return CRYPTO_ONTOLOGY_SIGNAL
         source = _text(facts.get("source") or relation.get("targetRole")).lower()
         return WATCHLIST_ONTOLOGY_SIGNAL if source == "watchlist" or facts.get("isWatchlist") else HOLDING_TIMING
 
@@ -149,23 +162,36 @@ class V2GraphDecisionCandidateBuilder:
         severity = V2GraphDecisionCandidateBuilder._notification_severity(relation)
         if not severity:
             return None
+        context_observation = typedb_context_observation_contract(relation)
         symbol = synthesis.symbol
         name = _text(subject.get("name")) or symbol
-        action = synthesis.graph_candidate_action or "NO_ACTION"
+        action = "NO_ACTION" if context_observation else synthesis.graph_candidate_action or "NO_ACTION"
         label = _text(decision.get("label")) or action
-        lines = [
-            "TypeDB 판단 후보: " + label,
-            "행동 대안: " + ", ".join(
-                alternative.action
-                for alternative in synthesis.alternatives
-                if alternative.decision_eligible
-            ),
-        ]
+        if context_observation:
+            lines = [
+                "TypeDB 시장 관찰: " + label,
+                "투자 행동: 매수·매도 판단이 아닌 참고 정보",
+            ]
+        else:
+            lines = [
+                "TypeDB 판단 후보: " + label,
+                "행동 대안: " + ", ".join(
+                    alternative.action
+                    for alternative in synthesis.alternatives
+                    if alternative.decision_eligible
+                ),
+            ]
         current_price = _float_text(facts.get("currentPrice"))
         if current_price:
             lines.append("현재가: " + current_price)
+        price_change = _float_text(facts.get("priceChangeRate"))
+        if context_observation and price_change:
+            lines.append("24시간 변동: " + price_change + "%")
+        provider = _text(facts.get("quoteSource"))
+        if context_observation and provider:
+            lines.append("데이터 출처: " + provider)
         profit_loss = _float_text(facts.get("profitLossRate"))
-        if profit_loss:
+        if profit_loss and not context_observation:
             lines.append("수익률: " + profit_loss + "%")
         if synthesis.missing_data:
             lines.append("판단 한계: " + ", ".join(synthesis.missing_data[:4]))
@@ -174,7 +200,11 @@ class V2GraphDecisionCandidateBuilder:
             "dataState": synthesis.data_state,
             "changeState": synthesis.change_state,
             "conflictState": synthesis.conflict_state,
-            "validationState": "blocked" if synthesis.judgement_blocked else "conditional",
+            "validationState": (
+                "reference-only"
+                if context_observation
+                else "blocked" if synthesis.judgement_blocked else "conditional"
+            ),
             "sourceAboxSnapshotId": synthesis.source_abox_snapshot_id,
             "inferenceGenerationId": synthesis.inference_generation_id,
             "selectedRuleId": synthesis.selected_rule_id,
@@ -192,6 +222,12 @@ class V2GraphDecisionCandidateBuilder:
             "dataFreshnessRequired": True,
             "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
         }
+        if context_observation:
+            metadata.update({
+                "contextObservationDecision": context_observation,
+                "notificationDecisionMode": context_observation["decisionMode"],
+                "requiresAiJudgement": False,
+            })
         return AlertEvent(
             snapshot.account_id,
             snapshot.account_label,
@@ -206,10 +242,17 @@ class V2GraphDecisionCandidateBuilder:
             name,
             [line for line in lines if line and not line.endswith(": ")],
             symbol,
-            criteria=[
-                "설정: TypeDB 규칙이 행동 대안과 근거 가설을 생성할 때",
-                "감지: " + label + " · 검증 가능 가설 " + str(len(synthesis.eligible_hypothesis_ids)) + "개",
-            ],
+            criteria=(
+                [
+                    "설정: TypeDB 참고 관찰 규칙의 시장 상태가 변경될 때",
+                    "감지: " + label + " · 투자 행동 판단 없음",
+                ]
+                if context_observation
+                else [
+                    "설정: TypeDB 규칙이 행동 대안과 근거 가설을 생성할 때",
+                    "감지: " + label + " · 검증 가능 가설 " + str(len(synthesis.eligible_hypothesis_ids)) + "개",
+                ]
+            ),
             metadata=metadata,
         )
 

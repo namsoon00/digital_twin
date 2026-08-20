@@ -348,6 +348,48 @@ class InvestmentReasoningOrchestrator:
         self.repository.save(reasoning_case)
         return reasoning_case
 
+    def context_observation_validated(
+        self,
+        case_id: str,
+        reason: str = "TypeDB reference-only market observation validated.",
+    ) -> ReasoningCase:
+        """Validate an informational graph observation without asking AI to act."""
+
+        reasoning_case = self.required(case_id)
+        if reasoning_case.stage == CASE_VALIDATED:
+            return reasoning_case
+        inference = reasoning_case.inference_result
+        if not inference or not inference.trace_complete:
+            raise ValueError("TypeDB context observation requires a complete inference trace.")
+        if not reasoning_case.decision_syntheses:
+            raise ValueError("TypeDB context observation requires a decision synthesis.")
+        if any(
+            synthesis.graph_candidate_action != "NO_ACTION"
+            or synthesis.eligible_hypothesis_ids
+            for synthesis in reasoning_case.decision_syntheses
+        ):
+            raise ValueError("Actionable or hypothesis-backed synthesis cannot use the context observation path.")
+        if reasoning_case.stage not in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
+            raise ValueError("Context observation cannot be validated from stage " + reasoning_case.stage + ".")
+        reasoning_case.final_decision = FinalDecision(
+            action="NO_ACTION",
+            source="typedb-context-observation",
+            validation_state="reference-only",
+            reason=str(reason or ""),
+            notification_job_id=reasoning_case.notification_job_id,
+            published=False,
+        )
+        reasoning_case.transition(
+            CASE_VALIDATED,
+            "typedb-context-observation-validated",
+            {
+                "requiresAiJudgement": False,
+                "synthesisCount": len(reasoning_case.decision_syntheses),
+            },
+        )
+        self.repository.save(reasoning_case)
+        return reasoning_case
+
     def notification_suppressed(
         self,
         context: Mapping[str, object],

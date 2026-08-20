@@ -11,10 +11,22 @@ from digital_twin.application.investment_reasoning.decision_synthesis import (
     V2NotificationCadence,
     build_investment_insight_events_by_snapshot,
 )
+from digital_twin.application.notification.workflow import (
+    NotificationAIOpinionEnricher,
+    NotificationAIValidatedGateEnricher,
+    NotificationHypothesisResearchEnricher,
+    NotificationQueueRunner,
+)
+from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
+from digital_twin.domain.context_observation_notifications import (
+    CONTEXT_OBSERVATION_DECISION_MODE,
+    typedb_context_observation_contract,
+)
 from digital_twin.domain.data_freshness import evaluate_notification_data_freshness
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
 from digital_twin.domain.notification_ai_gate_validation import normalized_hypothesis_comparison
+from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.investment_reasoning import (
     CASE_BLOCKED,
     CASE_DECISION_SYNTHESIZED,
@@ -112,6 +124,64 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
     }
 
 
+def crypto_context_observation_relation():
+    rule_id = "graph.crypto.market.24h.up.major.v1"
+    knowledge_basis = {
+        "ruleKind": "context-observation",
+        "decisionEligibility": "reference-only",
+        "requiresHypothesis": False,
+        "plainLanguageBasis": "현재 코인 시장 문맥을 설명하며 단독 투자 행동 근거로 사용하지 않습니다.",
+    }
+    rule = {
+        "ruleId": rule_id,
+        "label": "BTC 24시간 상승 변동 관찰",
+        "ruleSourceKind": "crypto-asset",
+        "notificationSeverity": "ALERT",
+        "candidateAction": "BUY",
+        "knowledgeBasis": knowledge_basis,
+    }
+    return {
+        "subject": {"symbol": "BTC", "name": "Bitcoin", "market": "CRYPTO"},
+        "facts": {
+            "symbol": "BTC",
+            "name": "Bitcoin",
+            "market": "CRYPTO",
+            "source": "watchlist",
+            "isWatchlist": True,
+            "currentPrice": 65000.0,
+            "priceChangeRate": 11.5,
+            "quoteSource": "CoinGecko",
+        },
+        "source": "typedbInferenceBox",
+        "graphStore": "typedb",
+        "graphStoreUsed": True,
+        "fallbackUsed": False,
+        "sourceAboxSnapshotId": "abox:crypto:1",
+        "inferenceGenerationId": "generation:crypto:1",
+        "generationAligned": True,
+        "activeRules": [rule],
+        "matchedRules": [rule],
+        "allowedActions": ["BUY", "HOLD", "AVOID"],
+        "blockedActions": ["ADD", "TRIM", "SELL"],
+        "decision": {
+            "label": "BTC 상승 변동 확대",
+            "candidateAction": "BUY",
+            "selectedRuleId": rule_id,
+            "notificationSeverity": "ALERT",
+            "basis": "typedbInferenceBox",
+        },
+        "executionPlan": {"notificationSeverity": "ALERT"},
+        "investmentBrain": {"hypothesisSet": {"hypotheses": []}},
+        "graphStoreInference": {
+            "graphStore": "typedb",
+            "sourceAboxSnapshotId": "abox:crypto:1",
+            "inferenceGenerationId": "generation:crypto:1",
+            "relations": [rule],
+            "traces": [{"id": "trace:crypto:1", **rule}],
+        },
+    }
+
+
 class InvestmentReasoningModuleTests(unittest.TestCase):
     def test_v2_candidate_builder_has_no_v1_monitor_dependency(self):
         source = inspect.getsource(V2GraphDecisionCandidateBuilder)
@@ -201,6 +271,141 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         )
         self.assertEqual(observed_at, insight.generated_at)
         self.assertTrue(freshness.should_send)
+
+    def test_reference_only_crypto_relation_becomes_information_notification(self):
+        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        relation = crypto_context_observation_relation()
+        contract = typedb_context_observation_contract(relation)
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+        snapshot = AccountSnapshot(
+            "account:1",
+            "Test",
+            "toss",
+            "live",
+            "ok",
+            observed_at,
+            PortfolioSummary(1000.0, 1000.0, 0.0, [], [], 100.0),
+            external_signals={
+                "cryptoFreshness": {"status": "fresh", "fetchedAt": observed_at},
+                "cryptoMarkets": {
+                    "bitcoin": {
+                        "symbol": "BTC",
+                        "name": "Bitcoin",
+                        "price": 65000.0,
+                        "change24h": 11.5,
+                        "provider": "CoinGecko",
+                        "fetchedAt": observed_at,
+                    },
+                },
+            },
+        )
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+
+        event = builder._base_event(snapshot, relation, synthesis)
+
+        self.assertEqual(CONTEXT_OBSERVATION_DECISION_MODE, contract["decisionMode"])
+        self.assertEqual("NO_ACTION", synthesis.graph_candidate_action)
+        self.assertEqual((), synthesis.allowed_actions)
+        self.assertEqual((), synthesis.eligible_hypothesis_ids)
+        self.assertEqual("cryptoOntologySignal", event.rule)
+        self.assertEqual("reference-only", event.metadata["validationState"])
+        self.assertFalse(event.metadata["requiresAiJudgement"])
+        self.assertNotIn("행동 대안", "\n".join(event.lines))
+        insight = build_investment_insight_events_by_snapshot([snapshot], [event])[0]
+        self.assertEqual(["cryptoOntologySignal"], insight.metadata["sourceSignalTypes"])
+        self.assertEqual(CONTEXT_OBSERVATION_DECISION_MODE, insight.metadata["notificationDecisionMode"])
+        self.assertFalse(insight.metadata["requiresAiJudgement"])
+
+    def test_reference_only_context_observation_publishes_without_ai(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:crypto:1",
+                "inferenceGenerationId": "generation:crypto:1",
+                "relationCount": 1,
+                "traceCount": 1,
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [])
+        synthesis = decision_synthesis_from_relation_context(
+            "account:1",
+            crypto_context_observation_relation(),
+        )
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [synthesis])
+
+        validated = orchestrator.context_observation_validated(reasoning_case.case_id)
+
+        self.assertEqual(CASE_VALIDATED, validated.stage)
+        self.assertEqual("NO_ACTION", validated.final_decision.action)
+        self.assertEqual("typedb-context-observation", validated.final_decision.source)
+        self.assertEqual("reference-only", validated.final_decision.validation_state)
+        published = orchestrator.notification_published({
+            "investmentReasoningCaseId": reasoning_case.case_id,
+        })
+        self.assertEqual(CASE_PUBLISHED, published.stage)
+        self.assertTrue(published.final_decision.published)
+
+    def test_reference_only_context_observation_skips_all_ai_enrichment(self):
+        context = {
+            "messageType": "investmentInsight",
+            "ontologyRelationContext": crypto_context_observation_relation(),
+        }
+        job = NotificationJob.create(
+            "crypto observation",
+            account_id="account:1",
+            message_type="investmentInsight",
+            context=context,
+        )
+
+        class FailReviewer:
+            def review(self, _context):
+                raise AssertionError("AI reviewer must not run for a reference-only observation")
+
+        class FailResearch:
+            def enqueue_notification_research_context(self, *_args, **_kwargs):
+                raise AssertionError("Hypothesis research must not run for a reference-only observation")
+
+        class FailTimeSeriesStore:
+            def load_temporal_windows(self, *_args, **_kwargs):
+                raise AssertionError("AI time-series loading must not run for a reference-only observation")
+
+        NotificationAIOpinionEnricher({})(job)
+        NotificationAIValidatedGateEnricher(
+            FailReviewer(),
+            {"notificationAiGateEnabled": "1"},
+        )(job)
+        NotificationHypothesisResearchEnricher(FailResearch(), {})(job)
+        NotificationAIDecisionContextEnricher(FailTimeSeriesStore(), {})(job)
+        runner = NotificationQueueRunner(
+            queue=SimpleNamespace(),
+            account_repository=None,
+            notifier_factory=lambda _account: None,
+            settings={"notificationAiGateEnabled": "1"},
+            ai_request_enqueuer=object(),
+        )
+
+        self.assertFalse(runner.should_defer_ai_inference(job))
+        self.assertTrue(runner.apply_final_ai_delivery_gate(job))
+        self.assertNotIn("notificationAiValidatedResponse", job.context)
+        self.assertNotIn("notificationAiInternalData", job.context)
+
+        forged = NotificationJob.create(
+            "forged context",
+            account_id="account:1",
+            message_type="investmentInsight",
+            context={
+                "requiresAiJudgement": False,
+                "notificationDecisionMode": CONTEXT_OBSERVATION_DECISION_MODE,
+            },
+        )
+        self.assertTrue(runner.should_defer_ai_inference(forged))
 
     def test_typedb_relation_context_becomes_auditable_action_alternatives(self):
         relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]

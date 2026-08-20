@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
+from ..domain.context_observation_notifications import is_typedb_context_observation_notification
 from ..domain.events import DomainEvent
 from ..domain.independent_reasoning import (
     IndependentReasoningRequest,
@@ -115,6 +116,9 @@ def alert_event_payload(event: object) -> Dict[str, object]:
             "validationState",
             "investmentReasoningCaseId",
             "v2DecisionSynthesis",
+            "contextObservationDecision",
+            "notificationDecisionMode",
+            "requiresAiJudgement",
         ]
         if source_metadata.get(key) not in (None, "", [], {})
     }
@@ -811,6 +815,22 @@ class V2ReasoningEngine:
                 reasoning_case.case_id,
                 decision_syntheses,
             )
+            if (
+                ready_events
+                and detected_events
+                and all(
+                    is_typedb_context_observation_notification(getattr(event, "metadata", {}) or {})
+                    for event in detected_events
+                )
+                and all(
+                    is_typedb_context_observation_notification(getattr(event, "metadata", {}) or {})
+                    for event in ready_events
+                )
+            ):
+                reasoning_case = self.reasoning_orchestrator.context_observation_validated(
+                    reasoning_case.case_id,
+                    "TypeDB가 참고용 시장 상태 변화를 검증했으며 투자 행동 판단은 생성하지 않았습니다.",
+                )
             self.reasoning_orchestrator.attach_case_context(
                 reasoning_case.case_id,
                 [*detected_events, *ready_events],

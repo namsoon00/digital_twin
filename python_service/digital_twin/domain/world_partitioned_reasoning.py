@@ -30,8 +30,8 @@ from .market_world_projection import (
 from .ontology_worlds import world_metadata
 
 
-WORLD_PARTITIONED_REASONING_VERSION = "world-partitioned-reasoning-v1"
-ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION = "account-overlay-projection-v2"
+WORLD_PARTITIONED_REASONING_VERSION = "world-partitioned-reasoning-v2"
+ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION = "account-overlay-projection-v3"
 SHARED_PREMISE_RULE_PREFIX = "shared.premise."
 SHARED_PREMISE_RELATION = "HAS_SHARED_MARKET_PREMISE"
 SHARED_PREMISE_KIND = "shared-market-premise"
@@ -289,6 +289,45 @@ def _partition_mixed_rule(
     return [premise], resolver
 
 
+def _partition_market_rule(rule: GraphInferenceRule) -> Tuple[GraphInferenceRule, GraphInferenceRule]:
+    """Compile a shared-only match into a compact account-visible relation.
+
+    SharedPremiseWorld still owns every raw market predicate. PortfolioWorld
+    receives only the verified premise reference and evaluates the original
+    semantic derivation so account notifications never depend on copied market
+    facts or Python threshold logic.
+    """
+
+    market_conditions = [
+        _scoped_condition(condition, "market")
+        for condition in rule.conditions
+    ]
+    premise = replace(
+        rule,
+        rule_id=premise_rule_id(rule.rule_id),
+        label=rule.label + " · shared premise",
+        conditions=market_conditions,
+        derivations=[_premise_derivation(rule)],
+        action_group="shared-premise",
+        action_level="observe",
+        prompt_hint="Shared TypeDB premise for " + rule.rule_id,
+        hypothesis_family_key="shared-premise:" + (rule.hypothesis_family_key or rule.rule_id),
+        hypothesis_lifecycle=_lifecycle_for(rule, market_conditions),
+        execution_stage="shared-premise",
+        failure_policy="block",
+        cost_hint="bounded-shared",
+    )
+    resolver_conditions = [_premise_condition(rule.rule_id)]
+    resolver = replace(
+        rule,
+        conditions=resolver_conditions,
+        hypothesis_lifecycle=_lifecycle_for(rule, resolver_conditions),
+        any_condition_min_count=1,
+        execution_stage="account-overlay",
+    )
+    return premise, resolver
+
+
 def compile_world_partitioned_rules(rules: Iterable[GraphInferenceRule]) -> Dict[str, object]:
     shared_rules: List[GraphInferenceRule] = []
     overlay_rules: List[GraphInferenceRule] = []
@@ -301,11 +340,9 @@ def compile_world_partitioned_rules(rules: Iterable[GraphInferenceRule]) -> Dict
         scope = str(ownership.get("scope") or "unverified")
         try:
             if scope == "market":
-                shared_rules.append(replace(
-                    rule,
-                    conditions=[_scoped_condition(item, "market") for item in rule.conditions],
-                    execution_stage="shared-premise",
-                ))
+                premise, resolver = _partition_market_rule(rule)
+                shared_rules.append(premise)
+                overlay_rules.append(resolver)
             elif scope == "account":
                 overlay_rules.append(replace(
                     rule,
@@ -327,14 +364,14 @@ def compile_world_partitioned_rules(rules: Iterable[GraphInferenceRule]) -> Dict
         manifest_rows.append({
             "ruleId": rule.rule_id,
             "scope": scope,
-            "sharedRuleId": premise_rule_id(rule.rule_id) if scope == "mixed" else rule.rule_id if scope == "market" else "",
+            "sharedRuleId": premise_rule_id(rule.rule_id) if scope in {"market", "mixed"} else "",
             "sharedRuleIds": [
                 item.rule_id
                 for item in shared_rules
                 if semantic_rule_id(item.rule_id) == rule.rule_id
                 or item.rule_id == "shared.premise.any." + rule.rule_id
             ],
-            "overlayRuleId": rule.rule_id if scope in {"account", "mixed"} else "",
+            "overlayRuleId": rule.rule_id if scope in {"account", "market", "mixed"} else "",
             "marketConditionCount": len(ownership.get("marketConditionIds") or []),
             "accountConditionCount": len(ownership.get("accountConditionIds") or []),
         })

@@ -21,6 +21,7 @@ from digital_twin.domain.world_partitioned_reasoning import (
     account_overlay_graph,
     attach_shared_premise_evidence,
     compile_world_partitioned_rules,
+    shared_premise_matches,
     shared_premise_world_graph,
 )
 from digital_twin.domain.ontology_worlds import shared_premise_world
@@ -213,6 +214,30 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
             if item.rule_id == "graph.crypto.market.24h.up.major.v1"
         )
         partition = compile_world_partitioned_rules([crypto_rule])
+        self.assertEqual(
+            ["shared.premise." + crypto_rule.rule_id],
+            partition["sharedRuleIds"],
+        )
+        self.assertEqual([crypto_rule.rule_id], partition["overlayRuleIds"])
+        self.assertEqual(
+            "ESTABLISHES_SHARED_MARKET_PREMISE",
+            partition["sharedRules"][0].derivations[0].relation_type,
+        )
+        self.assertEqual(
+            ["shared-market-premise:" + crypto_rule.rule_id],
+            [item.condition_id for item in partition["overlayRules"][0].conditions],
+        )
+        self.assertEqual(
+            "reference-only",
+            partition["overlayRules"][0].resolved_knowledge_basis.decision_eligibility,
+        )
+        premises = shared_premise_matches({
+            "traces": [{
+                "ruleId": "shared.premise." + crypto_rule.rule_id,
+                "symbol": "BTC",
+            }],
+        })
+        self.assertEqual({"BTC": [crypto_rule.rule_id]}, premises)
         asset_id = entity_id("crypto-asset", "BTC")
         path_id = entity_id("price-path", "BTC:crypto:1h-24h-7d")
         graph = PortfolioOntology(
@@ -242,7 +267,7 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         overlay = account_overlay_graph(
             graph,
             partition["overlayRules"],
-            {"BTC": [crypto_rule.rule_id]},
+            premises,
             shared_generation_id="generation:crypto:1",
             source_abox_snapshot_id="abox:crypto:1",
         )

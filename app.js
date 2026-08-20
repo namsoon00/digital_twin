@@ -515,6 +515,13 @@
     investmentFlowDetails: {},
     investmentFlowDetailLoading: {},
     investmentFlowDetailErrors: {},
+    investmentCaseDetailTabs: {},
+    investmentCaseHistories: {},
+    investmentCaseHistoryLoading: {},
+    investmentCaseHistoryErrors: {},
+    investmentCaseTraces: {},
+    investmentCaseTraceLoading: {},
+    investmentCaseTraceErrors: {},
     validationAudience: "user",
     commandPaletteOpen: false,
     commandPaletteQuery: "",
@@ -1913,7 +1920,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260820-calendar-recovery-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260820-investment-case-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -6130,6 +6137,7 @@
   function appendOntologyAccountQuery(params) {
     var accountId = activeOntologyAccountId();
     if (accountId) params.set("accountId", accountId);
+    if (state.validationAudience === "operator") params.set("audience", "operator");
     return params;
   }
 
@@ -6566,12 +6574,12 @@
     var accountId = activeOntologyAccountId();
     if (accountId) params.set("accountId", accountId);
     params.set("limit", "200");
-    return "/api/investment-flow?" + params.toString();
+    return "/api/investment-cases?" + params.toString();
   }
 
   function loadInvestmentFlow(force) {
     if (isStaticPreviewHost()) {
-      state.investmentFlow = { status: "preview", count: 0, summary: { total: 0, attentionRequired: 0, validation: {}, readiness: {} }, items: [], operatorView: { stages: [], issues: [] } };
+      state.investmentFlow = { version: "investment-case-v1", status: "preview", count: 0, summary: { total: 0, attentionRequired: 0, validation: {}, readiness: {} }, items: [], operatorView: { stages: [], issues: [] } };
       state.investmentFlowLoaded = true;
       state.investmentFlowAccountId = activeOntologyAccountId();
       state.investmentFlowError = "";
@@ -6588,7 +6596,7 @@
     state.investmentFlowLoading = true;
     state.investmentFlowError = "";
     return requestJson(investmentFlowPath(), {
-      key: "investment-flow:" + activeOntologyAccountId(),
+      key: "investment-cases:" + activeOntologyAccountId(),
       force: Boolean(force),
       timeoutMs: 15000
     }).then(function (payload) {
@@ -6597,7 +6605,7 @@
       state.investmentFlowAccountId = accountId;
       return state.investmentFlow;
     }).catch(function (error) {
-      state.investmentFlowError = error.message || "판단 검증 흐름을 읽지 못했습니다.";
+      state.investmentFlowError = error.message || "투자 케이스를 읽지 못했습니다.";
       return null;
     }).finally(function () {
       state.investmentFlowLoading = false;
@@ -6605,25 +6613,71 @@
     });
   }
 
-  function loadInvestmentFlowDetail(episodeId, force) {
-    var key = String(episodeId || "").trim();
+  function loadInvestmentFlowDetail(caseId, force) {
+    var key = String(caseId || "").trim();
     if (!key || isStaticPreviewHost()) return Promise.resolve(null);
     if (state.investmentFlowDetails[key] && !force) return Promise.resolve(state.investmentFlowDetails[key]);
     if (state.investmentFlowDetailLoading[key] && !force) return Promise.resolve(null);
     state.investmentFlowDetailLoading[key] = true;
     state.investmentFlowDetailErrors[key] = "";
-    return requestJson("/api/investment-flow/" + encodeURIComponent(key), {
-      key: "investment-flow-detail:" + key,
+    return requestJson("/api/investment-cases/" + encodeURIComponent(key), {
+      key: "investment-case-detail:" + key,
       force: Boolean(force),
       timeoutMs: 15000
     }).then(function (payload) {
       state.investmentFlowDetails[key] = payload && typeof payload === "object" ? payload : {};
       return state.investmentFlowDetails[key];
     }).catch(function (error) {
-      state.investmentFlowDetailErrors[key] = error.message || "판단 계보 상세를 읽지 못했습니다.";
+      state.investmentFlowDetailErrors[key] = error.message || "투자 케이스 상세를 읽지 못했습니다.";
       return null;
     }).finally(function () {
       delete state.investmentFlowDetailLoading[key];
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadInvestmentCaseHistory(caseId, force) {
+    var key = String(caseId || "").trim();
+    if (!key || isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.investmentCaseHistories[key] && !force) return Promise.resolve(state.investmentCaseHistories[key]);
+    if (state.investmentCaseHistoryLoading[key] && !force) return Promise.resolve(null);
+    state.investmentCaseHistoryLoading[key] = true;
+    state.investmentCaseHistoryErrors[key] = "";
+    return requestJson("/api/investment-cases/" + encodeURIComponent(key) + "/history?limit=40", {
+      key: "investment-case-history:" + key,
+      force: Boolean(force),
+      timeoutMs: 15000
+    }).then(function (payload) {
+      state.investmentCaseHistories[key] = payload && typeof payload === "object" ? payload : {};
+      return state.investmentCaseHistories[key];
+    }).catch(function (error) {
+      state.investmentCaseHistoryErrors[key] = error.message || "판단 이력을 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      delete state.investmentCaseHistoryLoading[key];
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadInvestmentCaseTrace(caseId, force) {
+    var key = String(caseId || "").trim();
+    if (!key || isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.investmentCaseTraces[key] && !force) return Promise.resolve(state.investmentCaseTraces[key]);
+    if (state.investmentCaseTraceLoading[key] && !force) return Promise.resolve(null);
+    state.investmentCaseTraceLoading[key] = true;
+    state.investmentCaseTraceErrors[key] = "";
+    return requestJson("/api/investment-cases/" + encodeURIComponent(key) + "/trace", {
+      key: "investment-case-trace:" + key,
+      force: Boolean(force),
+      timeoutMs: 15000
+    }).then(function (payload) {
+      state.investmentCaseTraces[key] = payload && typeof payload === "object" ? payload : {};
+      return state.investmentCaseTraces[key];
+    }).catch(function (error) {
+      state.investmentCaseTraceErrors[key] = error.message || "운영 추적 정보를 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      delete state.investmentCaseTraceLoading[key];
       if (state.snapshot) render();
     });
   }
@@ -11547,7 +11601,7 @@
     if (state.workDetailLayer && state.workDetailLayer.type === "settings-investment-language") {
       if (!state.investmentLanguageLoaded && !state.investmentLanguageLoading) loadInvestmentLanguage(false);
     }
-    if (state.workDetailLayer && state.workDetailLayer.type === "investment-flow" && state.workDetailLayer.key) {
+    if (state.workDetailLayer && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0 && state.workDetailLayer.key) {
       if (!state.investmentFlowDetails[state.workDetailLayer.key] && !state.investmentFlowDetailLoading[state.workDetailLayer.key]) {
         loadInvestmentFlowDetail(state.workDetailLayer.key, false);
       }
@@ -11697,7 +11751,8 @@
     if (state.workDetailLayer.type === "hypothesis-governance") {
       loadHypothesisPolicyVersions(false);
     }
-    if (state.workDetailLayer.type === "investment-flow") {
+    if (["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0) {
+      if (!state.investmentCaseDetailTabs[state.workDetailLayer.key]) state.investmentCaseDetailTabs[state.workDetailLayer.key] = "summary";
       loadInvestmentFlowDetail(state.workDetailLayer.key, false);
     }
     if (state.workDetailLayer.type === "ontology-audit-section") {
@@ -11844,6 +11899,7 @@
       "ontology-audit-section",
       "hypothesis-review",
       "hypothesis-governance",
+      "investment-case",
       "investment-flow",
       "market-instrument"
     ];
@@ -11940,7 +11996,7 @@
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
     if (type === "investment-action") return investmentActionWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
-    if (type === "investment-flow") return investmentFlowWorkDetailPayload(key);
+    if (type === "investment-case" || type === "investment-flow") return investmentFlowWorkDetailPayload(key);
     if (type === "investment-calendar-event") return investmentCalendarEventWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
     if (type === "investment-reasoning-card") return investmentReasoningCardWorkDetailPayload(key);
     if (type === "ontology-experiment") return ontologyExperimentWorkDetailPayload(key);
@@ -13906,16 +13962,21 @@
   }
 
   function renderDecisionConsoleRow(row) {
+    var investmentCase = investmentCaseForSymbol(row.symbol);
     var review = decisionStateMeta("review", row.reviewLevel, "observe");
     var conflict = decisionStateMeta("conflict", row.conflictState, "context-only");
     var data = decisionStateMeta("data", row.dataState, "partial");
     var validation = decisionStateMeta("validation", row.validationState, "conditional");
+    var detailType = investmentCase && investmentCase.caseId ? "investment-case" : "investment-action";
+    var detailKey = investmentCase && investmentCase.caseId ? investmentCase.caseId : row.key;
+    var reason = investmentCase && investmentCase.headline ? investmentCase.headline : row.reason;
+    var readiness = investmentCase && investmentCase.readinessLabel ? investmentCase.readinessLabel : validation.label;
     return [
-      '<button class="oa-data-row oa-decision-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="investment-action" data-work-detail-key="' + escapeHtml(row.key) + '">',
+      '<button class="oa-data-row oa-decision-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '">',
       '<span class="oa-symbol-cell"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em>' + renderRecordChangedAt(row) + '</span>',
       '<span><strong class="' + escapeHtml(row.tone) + '">' + escapeHtml(row.actionLabel) + '</strong><em>' + escapeHtml(decisionStateMeta("change", row.changeState, "unchanged").label) + ' · ' + escapeHtml(review.label) + '</em></span>',
-      '<span class="oa-reason-cell"><strong>' + escapeHtml(row.reason) + '</strong><em>약화 조건은 상세에서 확인</em></span>',
-      '<span class="oa-open-cell ' + escapeHtml(data.tone) + '"><strong>' + escapeHtml(row.quality.label) + ' · ' + escapeHtml(validation.label) + '</strong><em>' + escapeHtml(row.apiSource) + (row.isMock ? ' · MOCK' : ' · ACTUAL') + '</em><b aria-hidden="true">&rarr;</b></span>',
+      '<span class="oa-reason-cell"><strong>' + escapeHtml(reason) + '</strong><em>근거·반대 시나리오는 상세에서 확인</em></span>',
+      '<span class="oa-open-cell ' + escapeHtml(data.tone) + '"><strong>' + escapeHtml(row.quality.label) + ' · ' + escapeHtml(readiness) + '</strong><em>' + escapeHtml(investmentCase ? "DecisionEpisode · ACTUAL" : row.apiSource + (row.isMock ? " · MOCK" : " · ACTUAL")) + '</em><b aria-hidden="true">&rarr;</b></span>',
       '</button>'
     ].join("");
   }
@@ -13980,13 +14041,13 @@
       };
     });
     var blockers = reviewRows.length ? '<div class="oa-decision-readiness-list" data-console-keyed-list="decision-blockers">' + reviewRows.slice(0, 3).map(function (item) {
-      var key = String(item.episodeId || item.key || "");
-      var detailType = item.episodeId ? "investment-flow" : "investment-action";
+      var key = String(item.caseId || item.episodeId || item.key || "");
+      var detailType = item.caseId || item.episodeId ? "investment-case" : "investment-action";
       return [
         '<article class="oa-decision-readiness-item" data-readiness-state="' + escapeHtml(item.readinessState || "warning") + '">',
         '<div class="oa-decision-readiness-head"><span><strong>' + escapeHtml(item.name || item.symbol || "종목") + '</strong><em>' + escapeHtml(item.symbol || "") + '</em></span><b>' + escapeHtml(item.readinessLabel || "확인 필요") + '</b></div>',
-        '<p><strong>' + escapeHtml(item.blockingStageLabel || "검증") + '</strong> · ' + escapeHtml(item.blockingReason || "추가 확인이 필요합니다.") + '</p>',
-        '<div class="oa-decision-readiness-foot">' + renderRecordChangedAt(item) + renderWorkDetailButton(detailType, key, "검증 보기", "text-button compact primary") + '</div>',
+        '<p><strong>' + escapeHtml(item.phaseLabel || item.blockingStageLabel || "검증") + '</strong> · ' + escapeHtml(item.headline || item.blockingReason || "추가 확인이 필요합니다.") + '</p>',
+        '<div class="oa-decision-readiness-foot">' + renderRecordChangedAt(item) + renderWorkDetailButton(detailType, key, "케이스 보기", "text-button compact primary") + '</div>',
         '</article>'
       ].join("");
     }).join("") + '</div>' : renderConsoleEmpty("판단 준비 완료", "현재 판단 후보는 필요한 자료와 검증 상태를 갖추고 있습니다.");
@@ -14107,6 +14168,15 @@
       : { summary: {}, items: [], operatorView: { stages: [], issues: [] } };
   }
 
+  function investmentCaseForSymbol(symbol) {
+    var target = String(symbol || "").toUpperCase();
+    if (!target) return null;
+    var payload = investmentFlowConsolePayload();
+    return (Array.isArray(payload.items) ? payload.items : []).filter(function (item) {
+      return String(item.symbol || "").toUpperCase() === target;
+    })[0] || null;
+  }
+
   function renderDecisionWorkspaceNavigation(activeTab) {
     var active = activeTab === "experiments" ? "experiments" : "modeling";
     return [
@@ -14125,10 +14195,15 @@
     return "caution";
   }
 
-  function renderInvestmentFlowStages(stages, compact) {
+  function renderInvestmentFlowStages(stages, compact, caseId) {
     var rows = Array.isArray(stages) ? stages : [];
-    return '<div class="oa-flow-stage-strip' + (compact ? " compact" : "") + '" aria-label="판단 생성 단계">' + rows.map(function (stage) {
+    var userCaseStages = rows.some(function (stage) { return stage.id === "fact" || stage.id === "signal" || stage.id === "case" || stage.id === "outcome"; });
+    return '<div class="oa-flow-stage-strip' + (compact ? " compact" : "") + (userCaseStages ? " case-stages" : "") + '" aria-label="판단 생성 단계">' + rows.map(function (stage) {
       var stageLabel = stage.label || stage.id || "단계";
+      if (userCaseStages && caseId) {
+        var caseTab = stage.id === "case" ? "scenarios" : (stage.id === "outcome" ? "history" : (stage.id === "fact" || stage.id === "signal" ? "evidence" : "summary"));
+        return '<button type="button" class="oa-flow-stage" data-flow-state="' + escapeHtml(stage.state || "warning") + '" data-investment-case-tab="' + escapeHtml(caseTab) + '" data-investment-case-key="' + escapeHtml(caseId) + '" title="' + escapeHtml((stage.detail || "") + " · 상세 열기") + '" aria-label="' + escapeHtml(stageLabel + " 상세 열기") + '"><i></i><strong>' + escapeHtml(stageLabel) + '</strong><em>' + escapeHtml(stage.stateLabel || "확인 필요") + '</em></button>';
+      }
       return '<button type="button" class="oa-flow-stage" data-flow-state="' + escapeHtml(stage.state || "warning") + '" data-work-detail="' + escapeHtml(validationOperatorDetailType(stage.id)) + '" title="' + escapeHtml((stage.detail || "") + " · 해당 정보 열기") + '" aria-label="' + escapeHtml(stageLabel + " 상세 열기") + '"><i></i><strong>' + escapeHtml(stageLabel) + '</strong><em>' + escapeHtml(stage.stateLabel || "확인 필요") + '</em></button>';
     }).join("") + '</div>';
   }
@@ -14144,14 +14219,15 @@
   }
 
   function renderValidationSubjectRecord(item) {
-    var action = decisionActionMeta(item.action, item.action);
+    var decision = item.decision || {};
+    var action = decisionActionMeta(decision.action, decision.action);
     var tone = investmentFlowStateTone(item.readinessState);
     return [
       '<article class="oa-validation-record" data-flow-state="' + escapeHtml(item.readinessState || "warning") + '">',
       '<header><div><strong>' + escapeHtml(item.name || item.symbol || "종목") + '</strong><span>' + escapeHtml([item.symbol, action.label].filter(Boolean).join(" · ")) + '</span></div><b class="' + escapeHtml(tone) + '">' + escapeHtml(item.readinessLabel || item.validationLabel || "확인 필요") + '</b></header>',
-      '<p><strong>' + escapeHtml(item.blockingStageLabel || "검증") + '</strong><span>' + escapeHtml(item.blockingReason || "판단 생성 과정을 확인하세요.") + '</span></p>',
-      renderInvestmentFlowStages(item.stages, true),
-      '<footer><span>' + renderRecordChangedAt(item) + '<em>' + escapeHtml(item.nextAction || "검증 상세를 확인하세요.") + '</em></span>' + renderWorkDetailButton("investment-flow", item.episodeId || "", "검증 상세", "text-button compact primary") + '</footer>',
+      '<p><strong>' + escapeHtml(item.phaseLabel || item.blockingStageLabel || "투자 케이스") + '</strong><span>' + escapeHtml(item.headline || item.blockingReason || "판단 생성 과정을 확인하세요.") + '</span></p>',
+      renderInvestmentFlowStages(item.stages, true, item.caseId || item.episodeId),
+      '<footer><span>' + renderRecordChangedAt(item) + '<em>' + escapeHtml(item.nextAction || "투자 케이스 상세를 확인하세요.") + '</em></span>' + renderWorkDetailButton("investment-case", item.caseId || item.episodeId || "", "케이스 상세", "text-button compact primary") + '</footer>',
       '</article>'
     ].join("");
   }
@@ -14190,7 +14266,7 @@
     ];
     return renderConsoleManagedPage("experiments", metrics, [
       renderValidationAudienceSwitch(),
-      renderConsoleSurface({ kicker: "DECISION ASSURANCE", title: "종목별 판단 검증", description: "데이터가 어떤 근거·관계·가설·추론을 거쳐 판단이 되었는지 확인합니다.", meta: items.length + "건", body: renderConsoleLiveRegion("validation-subject-body", body), footer: renderConsolePager("validation", page) })
+      renderConsoleSurface({ kicker: "CASE ASSURANCE", title: "종목별 투자 케이스 점검", description: "확인된 사실, 핵심 신호, 비교 시나리오, 현재 판단과 이후 결과를 한 흐름으로 확인합니다.", meta: items.length + "건", body: renderConsoleLiveRegion("validation-subject-body", body), footer: renderConsolePager("validation", page) })
     ].join(""), {
       leading: renderDecisionWorkspaceNavigation("experiments"),
       loading: state.investmentFlowLoading && !state.investmentFlowLoaded
@@ -14211,7 +14287,7 @@
       return '<article data-flow-state="' + escapeHtml(stage.state || "warning") + '"><div><strong>' + escapeHtml(stage.label || stage.id) + '</strong><span>' + escapeHtml(stage.affectedCount ? stage.affectedCount + "개 종목 영향" : "정상 처리") + '</span></div><b>' + escapeHtml(stage.stateLabel || stage.state) + '</b>' + renderWorkDetailButton(validationOperatorDetailType(stage.id), "", "진단", "text-button compact") + '</article>';
     }).join("") + '</div>' : renderConsoleEmpty("운영 단계 상태가 없습니다", "판단 계보를 읽으면 단계별 영향 범위가 표시됩니다.");
     var issueBody = issues.length ? '<div class="oa-context-list">' + issues.slice(0, 8).map(function (issue) {
-      return '<button type="button" class="oa-context-row" data-work-detail="investment-flow" data-work-detail-key="' + escapeHtml(issue.episodeId || "") + '"><span><strong>' + escapeHtml(issue.name || issue.symbol) + '</strong><em>' + escapeHtml((issue.stageLabel || "검증") + " · " + (issue.reason || "확인 필요")) + '</em></span><b class="' + escapeHtml(investmentFlowStateTone(issue.state)) + '">' + escapeHtml(issue.nextAction || "상세 확인") + '</b></button>';
+      return '<button type="button" class="oa-context-row" data-work-detail="investment-case" data-work-detail-key="' + escapeHtml(issue.caseId || issue.episodeId || "") + '"><span><strong>' + escapeHtml(issue.name || issue.symbol) + '</strong><em>' + escapeHtml((issue.stageLabel || "검증") + " · " + (issue.reason || "확인 필요")) + '</em></span><b class="' + escapeHtml(investmentFlowStateTone(issue.state)) + '">' + escapeHtml(issue.nextAction || "상세 확인") + '</b></button>';
     }).join("") + '</div>' : renderConsoleEmpty("운영 영향 없음", "현재 판단 계보에서 차단 또는 오류 상태가 발견되지 않았습니다.");
     var table = page.items.length ? '<div class="oa-data-table" data-console-keyed-list="validation-experiments"><div class="oa-table-head oa-validation-row"><span>실험</span><span>상태</span><span>후보</span><span>관계 변화</span><span>검증·자료</span><span>경고</span><span></span></div>' + page.items.map(renderValidationConsoleRow).join("") + '</div>' : renderConsoleEmpty(state.ontologyExperimentsError ? "검증 작업을 불러오지 못했습니다" : "등록된 규칙 실험이 없습니다", state.ontologyExperimentsError || "후보 규칙이 생성되면 별도 실험 공간에서 검토합니다.", renderWorkDetailButton("experiment-validation-board", "", "실험 워크벤치", "text-button compact"));
     var graphBody = [
@@ -23674,6 +23750,138 @@
     return '<section class="oa-notification-flow-change"><header><span>STATE CHANGE</span><strong>판단·검증 상태가 바뀌었습니다</strong></header><div>' + rows.join("") + '</div></section>';
   }
 
+  function renderInvestmentCaseDetailTabs(key, active) {
+    var tabs = [
+      ["summary", "요약"],
+      ["evidence", "근거"],
+      ["scenarios", "시나리오"],
+      ["history", "이력"]
+    ];
+    if (state.validationAudience === "operator") tabs.push(["trace", "운영 추적"]);
+    return '<nav class="oa-case-detail-tabs" role="tablist" aria-label="투자 케이스 상세 보기">' + tabs.map(function (item) {
+      var selected = active === item[0];
+      return '<button type="button" role="tab" data-investment-case-tab="' + item[0] + '" data-investment-case-key="' + escapeHtml(key) + '" aria-selected="' + (selected ? "true" : "false") + '"' + (selected ? ' class="active"' : '') + '>' + escapeHtml(item[1]) + '</button>';
+    }).join("") + '</nav>';
+  }
+
+  function renderInvestmentCaseSummary(detail, key) {
+    var decision = detail.decision || {};
+    var outcome = detail.outcome || {};
+    var action = decisionActionMeta(decision.action, decision.action);
+    var checks = Array.isArray(decision.requiredChecks) ? decision.requiredChecks : [];
+    var latestOutcome = outcome.latest || {};
+    var outcomeText = outcome.count
+      ? [latestOutcome.observedAt ? formatClock(latestOutcome.observedAt) : "최근 관측", latestOutcome.priceChangeFromDecisionPct !== undefined && latestOutcome.priceChangeFromDecisionPct !== null ? "판단 후 " + latestOutcome.priceChangeFromDecisionPct + "%" : "결과 저장됨"].join(" · ")
+      : "다음 관측 결과를 기다리는 중";
+    return [
+      '<section class="oa-flow-detail-summary oa-case-summary" data-flow-state="' + escapeHtml(detail.readinessState || "warning") + '">',
+      '<div><span>현재 행동</span><strong>' + escapeHtml(action.label) + '</strong></div>',
+      '<div><span>판단 준비</span><strong>' + escapeHtml(detail.readinessLabel || "확인 필요") + '</strong></div>',
+      '<p><strong>' + escapeHtml(detail.phaseLabel || "투자 케이스") + '</strong><span>' + escapeHtml(detail.headline || "판단 근거를 확인하고 있습니다.") + '</span></p>',
+      renderRecordChangedAt(detail),
+      '</section>',
+      '<section class="oa-flow-detail-section oa-case-flow"><header><div><span>CASE FLOW</span><strong>현재 케이스의 진행 위치</strong></div><em>각 단계를 눌러 관련 정보를 확인하세요.</em></header>',
+      renderInvestmentFlowStages(detail.stages, false, key),
+      '</section>',
+      '<dl class="oa-case-key-facts">',
+      '<div><dt>확인된 사실</dt><dd>' + escapeHtml((detail.facts || {}).summary || "데이터 확인 중") + '</dd></div>',
+      '<div><dt>핵심 신호</dt><dd>' + escapeHtml((detail.signals || {}).summary || "신호 비교 중") + '</dd></div>',
+      '<div><dt>선택한 이유</dt><dd>' + escapeHtml(decision.reason || detail.headline || "판단 이유 확인 중") + '</dd></div>',
+      '<div><dt>결과 추적</dt><dd>' + escapeHtml(outcomeText) + '</dd></div>',
+      '</dl>',
+      '<section class="oa-case-next-check"><header><span>NEXT CHECK</span><strong>다음에 확인할 것</strong></header>',
+      checks.length ? '<ul>' + checks.slice(0, 8).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p>' + escapeHtml(detail.nextAction || "현재 판단의 약화 조건과 다음 관측을 확인하세요.") + '</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderInvestmentCaseEvidence(detail) {
+    var evidence = detail.evidence || {};
+    var missing = Array.isArray(evidence.missingData) ? evidence.missingData : [];
+    var checks = Array.isArray(evidence.requiredChecks) ? evidence.requiredChecks : [];
+    var supportIds = Array.isArray(evidence.supportingIds) ? evidence.supportingIds : [];
+    var counterIds = Array.isArray(evidence.counterIds) ? evidence.counterIds : [];
+    return [
+      '<section class="oa-case-evidence-summary">',
+      '<div><span>지지 근거</span><strong>' + escapeHtml(Number(evidence.supportCount || 0) + "건") + '</strong></div>',
+      '<div><span>반박 근거</span><strong>' + escapeHtml(Number(evidence.counterCount || 0) + "건") + '</strong></div>',
+      '<div><span>누락 자료</span><strong>' + escapeHtml(Number(evidence.missingCount || 0) + "건") + '</strong></div>',
+      '</section>',
+      '<section class="oa-case-evidence-section"><header><span>DATA GAPS</span><strong>보완하거나 다시 확인할 자료</strong></header>',
+      missing.length ? '<ul>' + missing.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p class="oa-flow-complete">명시적으로 기록된 누락 자료가 없습니다.</p>',
+      checks.length ? '<div class="oa-case-check-list"><strong>검토 순서</strong><ol>' + checks.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ol></div>' : '',
+      '</section>',
+      '<details class="oa-flow-technical"><summary><span><strong>근거 식별자</strong><em>감사와 원문 조회에 사용하는 저장 키</em></span></summary><dl>',
+      '<div><dt>원천 스냅샷</dt><dd>' + escapeHtml(evidence.sourceSnapshotId || "연결 필요") + '</dd></div>',
+      '<div><dt>지지 근거</dt><dd>' + escapeHtml(supportIds.join(" · ") || "없음") + '</dd></div>',
+      '<div><dt>반박 근거</dt><dd>' + escapeHtml(counterIds.join(" · ") || "없음") + '</dd></div>',
+      '</dl></details>'
+    ].join("");
+  }
+
+  function renderInvestmentCaseScenarios(detail) {
+    var scenarios = Array.isArray(detail.scenarios) ? detail.scenarios : [];
+    if (!scenarios.length) return renderConsoleEmpty("비교할 시나리오가 없습니다", "다음 추론 세대에서 경쟁 가설이 만들어지면 여기에 표시합니다.");
+    return '<div class="oa-case-scenario-list">' + scenarios.map(function (item) {
+      var assumptions = Array.isArray(item.assumptions) ? item.assumptions : [];
+      var invalidations = Array.isArray(item.invalidationConditions) ? item.invalidationConditions : [];
+      return [
+        '<article class="oa-case-scenario' + (item.selected ? " selected" : "") + '">',
+        '<header><div><span>' + escapeHtml(item.selected ? "SELECTED CASE" : "ALTERNATIVE") + '</span><strong>' + escapeHtml(item.title || "투자 시나리오") + '</strong></div><b>' + escapeHtml(item.stateLabel || "확인 중") + '</b></header>',
+        '<p>' + escapeHtml(item.claim || "설명 문장이 없습니다.") + '</p>',
+        '<div class="oa-case-scenario-metrics"><span>지지 <strong>' + escapeHtml(item.supportCount || 0) + '</strong></span><span>반박 <strong>' + escapeHtml(item.counterCount || 0) + '</strong></span><span>규칙 <strong>' + escapeHtml(Array.isArray(item.ruleIds) ? item.ruleIds.length : 0) + '</strong></span><span>검증 <strong>' + escapeHtml(item.verificationStatus || "확인 중") + '</strong></span></div>',
+        (assumptions.length || invalidations.length) ? '<details><summary>전제와 무효화 조건</summary>' + (assumptions.length ? '<strong>전제</strong><ul>' + assumptions.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + (invalidations.length ? '<strong>무효화 조건</strong><ul>' + invalidations.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : '') + '</details>' : '',
+        '</article>'
+      ].join("");
+    }).join("") + '</div>';
+  }
+
+  function renderInvestmentCaseHistory(key) {
+    var payload = state.investmentCaseHistories[key] || null;
+    var loading = Boolean(state.investmentCaseHistoryLoading[key]);
+    var error = String(state.investmentCaseHistoryErrors[key] || "");
+    if (!payload) {
+      if (error) return renderConsoleEmpty("판단 이력을 불러오지 못했습니다", error, '<button class="text-button" type="button" data-investment-case-history-retry="' + escapeHtml(key) + '">다시 시도</button>');
+      return renderConsoleListSkeleton("oa-case-history-row", ["시각", "판단", "변화"], loading ? 5 : 3);
+    }
+    var items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) return renderConsoleEmpty("저장된 판단 이력이 없습니다", "새 판단이 저장되면 이전 판단과의 변화가 표시됩니다.");
+    return '<div class="oa-case-history-list">' + items.map(function (item) {
+      var action = decisionActionMeta(item.action, item.action);
+      var change = item.change || {};
+      var changes = [];
+      if (change.actionChanged) changes.push(decisionActionMeta(change.previousAction, change.previousAction).label + " → " + action.label);
+      if (change.validationChanged) changes.push("검증 상태 변경");
+      return '<article class="oa-case-history-row"><time>' + escapeHtml(formatClock(item.decidedAt)) + '</time><div><strong>' + escapeHtml(action.label) + '</strong><p>' + escapeHtml(item.summary || "판단 기록") + '</p></div><span class="' + escapeHtml(changes.length ? "caution" : "hold") + '">' + escapeHtml(changes.join(" · ") || "이전과 같은 상태") + '</span></article>';
+    }).join("") + '</div>';
+  }
+
+  function renderInvestmentCaseTrace(key) {
+    var payload = state.investmentCaseTraces[key] || null;
+    var loading = Boolean(state.investmentCaseTraceLoading[key]);
+    var error = String(state.investmentCaseTraceErrors[key] || "");
+    if (!payload) {
+      if (error) return renderConsoleEmpty("운영 추적을 불러오지 못했습니다", error, '<button class="text-button" type="button" data-investment-case-trace-retry="' + escapeHtml(key) + '">다시 시도</button>');
+      return renderConsoleListSkeleton("oa-decision-row", ["단계", "상태", "연결"], loading ? 8 : 4);
+    }
+    var trace = payload.trace || {};
+    var stages = Array.isArray(trace.stages) ? trace.stages : [];
+    var gaps = Array.isArray(trace.gaps) ? trace.gaps : [];
+    return [
+      '<section class="oa-flow-detail-section"><header><div><span>OPERATOR TRACE</span><strong>내부 처리 계보</strong></div><em>문제 복구와 감사에만 사용하는 기술 정보입니다.</em></header>',
+      renderInvestmentFlowStages(stages, false),
+      '</section>',
+      gaps.length ? '<div class="oa-flow-gap-list">' + gaps.map(function (gap) { return '<div data-flow-state="' + escapeHtml(gap.state || "warning") + '"><strong>' + escapeHtml(gap.stageLabel || gap.stage) + '</strong><span>' + escapeHtml(gap.detail || "확인 필요") + '</span></div>'; }).join("") + '</div>' : '<p class="oa-flow-complete">차단된 내부 단계가 없습니다.</p>',
+      '<details class="oa-flow-technical" open><summary><span><strong>추적 식별자</strong><em>저장·추론 세대 연결</em></span></summary><dl>',
+      '<div><dt>DecisionEpisode</dt><dd>' + escapeHtml(trace.episodeId || "-") + '</dd></div>',
+      '<div><dt>ABox 스냅샷</dt><dd>' + escapeHtml(trace.sourceAboxSnapshotId || "연결 필요") + '</dd></div>',
+      '<div><dt>InferenceBox 세대</dt><dd>' + escapeHtml(trace.inferenceGenerationId || "연결 필요") + '</dd></div>',
+      '<div><dt>선택 가설</dt><dd>' + escapeHtml(trace.selectedHypothesisId || "선택 없음") + '</dd></div>',
+      '<div><dt>적용 규칙·관계</dt><dd>' + escapeHtml((Array.isArray(trace.ruleIds) ? trace.ruleIds : []).join(" · ") || "연결 필요") + '</dd></div>',
+      '</dl></details>'
+    ].join("");
+  }
+
   function investmentFlowWorkDetailPayload(key) {
     var detail = state.investmentFlowDetails[key] && typeof state.investmentFlowDetails[key] === "object"
       ? state.investmentFlowDetails[key]
@@ -23682,57 +23890,30 @@
     var error = String(state.investmentFlowDetailErrors[key] || "");
     if (!detail) {
       return {
-        kicker: "Decision Lineage",
-        title: loading ? "판단 계보를 불러오는 중" : "판단 계보",
-        meta: error || "데이터부터 알림까지 연결 상태를 확인합니다.",
+        kicker: "Investment Case",
+        title: loading ? "투자 케이스를 불러오는 중" : "투자 케이스",
+        meta: error || "사실부터 결과까지 현재 판단의 전체 맥락을 확인합니다.",
         body: error
-          ? renderConsoleEmpty("계보 상세를 불러오지 못했습니다", error, '<button class="text-button" type="button" data-investment-flow-retry="' + escapeHtml(key) + '">다시 시도</button>')
-          : renderConsoleListSkeleton("oa-decision-row", ["단계", "상태", "근거", ""], 5)
+          ? renderConsoleEmpty("투자 케이스를 불러오지 못했습니다", error, '<button class="text-button" type="button" data-investment-flow-retry="' + escapeHtml(key) + '">다시 시도</button>')
+          : renderConsoleListSkeleton("oa-decision-row", ["현재 판단", "핵심 신호", "다음 확인"], 5)
       };
     }
-    var action = decisionActionMeta(detail.action, detail.action);
-    var stages = Array.isArray(detail.stages) ? detail.stages : [];
-    var gaps = Array.isArray(detail.gaps) ? detail.gaps : [];
-    var hypotheses = Array.isArray(detail.hypotheses) ? detail.hypotheses : [];
-    var notices = Array.isArray(detail.notifications) ? detail.notifications : [];
-    var summary = [
-      '<section class="oa-flow-detail-summary" data-flow-state="' + escapeHtml(detail.readinessState || "warning") + '">',
-      '<div><span>현재 판단</span><strong>' + escapeHtml(action.label) + '</strong></div>',
-      '<div><span>검증 상태</span><strong>' + escapeHtml(detail.readinessLabel || detail.validationLabel || "확인 필요") + '</strong></div>',
-      '<p><strong>' + escapeHtml(detail.blockingStageLabel || "판단 생성") + '</strong><span>' + escapeHtml(detail.blockingReason || detail.nextAction || "전체 단계가 연결되었습니다.") + '</span></p>',
-      renderRecordChangedAt(detail),
-      '</section>',
-      '<section class="oa-flow-detail-section"><header><div><span>FLOW</span><strong>판단이 만들어진 과정</strong></div></header>',
-      renderInvestmentFlowStages(stages, false),
-      '</section>'
-    ].join("");
-    var gapBody = gaps.length ? '<div class="oa-flow-gap-list">' + gaps.map(function (gap) {
-      return '<div data-flow-state="' + escapeHtml(gap.state || "warning") + '"><strong>' + escapeHtml(gap.stageLabel || gap.stage || "검증") + '</strong><span>' + escapeHtml(gap.detail || "확인 필요") + '</span></div>';
-    }).join("") + '</div>' : '<p class="oa-flow-complete">차단된 단계가 없습니다. 현재 판단 계보가 연결되어 있습니다.</p>';
-    var hypothesisBody = hypotheses.length ? '<div class="oa-flow-hypothesis-list">' + hypotheses.slice(0, 8).map(function (item) {
-      return '<div><strong>' + escapeHtml(item.claim || item.label || item.hypothesisId || "가설") + '</strong><span>' + escapeHtml([item.validationState, item.verificationStatus].filter(Boolean).join(" · ") || "판단 후보") + '</span></div>';
-    }).join("") + '</div>' : '<p class="oa-flow-muted">연결된 경쟁 가설이 없습니다.</p>';
-    var technical = [
-      '<details class="oa-flow-technical"><summary><span><strong>운영 추적 정보</strong><em>정확한 저장·추론 식별자</em></span></summary>',
-      '<dl>',
-      '<div><dt>Flow ID</dt><dd>' + escapeHtml(detail.flowId || "-") + '</dd></div>',
-      '<div><dt>DecisionEpisode</dt><dd>' + escapeHtml(detail.episodeId || "-") + '</dd></div>',
-      '<div><dt>원천 ABox 스냅샷</dt><dd>' + escapeHtml(detail.sourceAboxSnapshotId || "연결 필요") + '</dd></div>',
-      '<div><dt>추론 세대</dt><dd>' + escapeHtml(detail.inferenceGenerationId || "연결 필요") + '</dd></div>',
-      '<div><dt>선택 가설</dt><dd>' + escapeHtml(detail.selectedHypothesisId || "선택 없음") + '</dd></div>',
-      '<div><dt>연결 알림</dt><dd>' + escapeHtml(notices.length + "건") + '</dd></div>',
-      '</dl></details>'
-    ].join("");
+    var decision = detail.decision || {};
+    var action = decisionActionMeta(decision.action, decision.action);
+    var active = state.investmentCaseDetailTabs[key] || "summary";
+    if (active === "trace" && state.validationAudience !== "operator") active = "summary";
+    var content = active === "evidence"
+      ? renderInvestmentCaseEvidence(detail)
+      : (active === "scenarios"
+        ? renderInvestmentCaseScenarios(detail)
+        : (active === "history"
+          ? renderInvestmentCaseHistory(key)
+          : (active === "trace" ? renderInvestmentCaseTrace(key) : renderInvestmentCaseSummary(detail, key))));
     return {
-      kicker: "Decision Lineage",
-      title: detail.name || detail.symbol || "판단 검증 상세",
-      meta: [detail.symbol, action.label, detail.accountId].filter(Boolean).join(" · "),
-      body: summary
-        + '<div class="oa-console-grid oa-flow-detail-grid">'
-        + renderConsoleSurface({ kicker: "REVIEW", title: "확인할 단계", body: gapBody })
-        + renderConsoleSurface({ kicker: "HYPOTHESES", title: "가설과 비교 상태", meta: hypotheses.length + "개", body: hypothesisBody })
-        + '</div>'
-        + technical
+      kicker: "Investment Case",
+      title: detail.name || detail.symbol || "투자 케이스 상세",
+      meta: [detail.symbol, action.label, detail.accountId, detail.readinessLabel].filter(Boolean).join(" · "),
+      body: renderInvestmentCaseDetailTabs(key, active) + '<div class="oa-case-detail-content" role="tabpanel">' + content + '</div>'
     };
   }
 
@@ -31611,6 +31792,7 @@
         if (state.validationAudience === "operator") {
           if (!state.ontologyExperimentsLoaded && !state.ontologyExperimentsLoading) loadOntologyExperiments(false);
           if (!state.hypothesisDevelopmentLoaded && !state.hypothesisDevelopmentLoading) loadHypothesisDevelopment(false);
+          if (!((state.investmentFlow || {}).operatorView || {}).loaded) loadInvestmentFlow(true);
         }
         render({ transition: "section" });
         return;
@@ -31625,6 +31807,35 @@
       if (flowRetry && app.contains(flowRetry)) {
         event.preventDefault();
         loadInvestmentFlowDetail(flowRetry.getAttribute("data-investment-flow-retry"), true);
+        return;
+      }
+      var caseHistoryRetry = event.target.closest && event.target.closest("[data-investment-case-history-retry]");
+      if (caseHistoryRetry && app.contains(caseHistoryRetry)) {
+        event.preventDefault();
+        loadInvestmentCaseHistory(caseHistoryRetry.getAttribute("data-investment-case-history-retry"), true);
+        return;
+      }
+      var caseTraceRetry = event.target.closest && event.target.closest("[data-investment-case-trace-retry]");
+      if (caseTraceRetry && app.contains(caseTraceRetry)) {
+        event.preventDefault();
+        loadInvestmentCaseTrace(caseTraceRetry.getAttribute("data-investment-case-trace-retry"), true);
+        return;
+      }
+      var caseTab = event.target.closest && event.target.closest("[data-investment-case-tab]");
+      if (caseTab && app.contains(caseTab)) {
+        event.preventDefault();
+        var caseKey = String(caseTab.getAttribute("data-investment-case-key") || "");
+        var caseTabId = String(caseTab.getAttribute("data-investment-case-tab") || "summary");
+        if (!caseKey) return;
+        if (caseTabId === "trace" && state.validationAudience !== "operator") caseTabId = "summary";
+        state.investmentCaseDetailTabs[caseKey] = caseTabId;
+        var sameCase = state.workDetailLayer
+          && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0
+          && state.workDetailLayer.key === caseKey;
+        if (sameCase) render({ transition: "section" });
+        else openWorkDetailLayer("investment-case", caseKey);
+        if (caseTabId === "history") loadInvestmentCaseHistory(caseKey, false);
+        if (caseTabId === "trace") loadInvestmentCaseTrace(caseKey, false);
         return;
       }
       var detailButton = event.target.closest && event.target.closest("[data-work-detail]");

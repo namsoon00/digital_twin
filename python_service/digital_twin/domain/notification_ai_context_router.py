@@ -148,6 +148,16 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
 
 def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
     source = _mapping(inference.get("hypothesisSet"))
+    known_rule_ids = {
+        str(item.get("ruleId") or "").strip()
+        for item in inference.get("activeRules") or []
+        if (
+            isinstance(item, dict)
+            and str(item.get("ruleId") or "").strip()
+            and _mapping(item.get("evidenceState")).get("evidenceUsableForJudgement") is not False
+            and str(_mapping(item.get("evidenceState")).get("inferenceEligibilityStatus") or "eligible") == "eligible"
+        )
+    }
     rows: List[Dict[str, object]] = []
     for item in source.get("hypotheses") or []:
         if not isinstance(item, dict) or not str(item.get("hypothesisId") or "").strip():
@@ -155,30 +165,62 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
         row = _selected(
             item,
             (
-                "hypothesisId", "templateId", "stance",
-                "verificationStatus", "scopeState", "horizon",
+                "hypothesisId", "templateId", "familyId", "causalSignature",
+                "familySource", "mergedRuleCount", "stance", "evidenceState",
+                "verificationStatus", "approvalStatus", "scopeState", "horizon",
+                "marketHypothesisId", "accountHypothesisOverlayId",
             ),
         )
         row["claim"] = _sentence_text(item.get("claim"), 320)
-        for key in ("supportingRuleIds", "supportingEvidenceIds", "counterEvidenceIds"):
+        for key in (
+            "supportingRuleIds", "supportingEvidenceIds", "counterEvidenceIds",
+            "causalPathIds", "requiredEvidenceTypes", "invalidationConditions",
+        ):
             values = _unique(item.get(key) or [], 5)
             if values:
                 row[key] = values
+        if not row.get("supportingRuleIds"):
+            template_id = str(row.get("templateId") or "").strip()
+            template_rule_id = (
+                template_id.split("hypothesis-template:", 1)[1]
+                if template_id.startswith("hypothesis-template:")
+                else ""
+            )
+            if template_rule_id in known_rule_ids:
+                row["supportingRuleIds"] = [template_rule_id]
+        if not set(row.get("supportingRuleIds") or []).intersection(known_rule_ids):
+            continue
         rows.append(row)
+        if len(rows) >= 12:
+            break
+    available_count = len(rows)
+    try:
+        required_minimum = max(1, int(float(str(source.get("minimumComparisonCount") or 1))))
+    except (TypeError, ValueError):
+        required_minimum = 1
     metadata = _selected(
         source,
         (
             "hypothesisSetId", "questionId", "subjectSymbol", "inferenceGenerationId",
-            "minimumComparisonCount",
+            "scopeVersion", "createdAt",
         ),
     )
-    evidence_summary = _selected(
-        source.get("decisionEvidenceSummary"),
-        ("totalHypothesisCount", "eligibleHypothesisCount", "eligibleFamilyCount", "referenceHypothesisCount"),
-    )
-    if evidence_summary:
-        metadata["decisionEvidenceSummary"] = evidence_summary
-    return metadata, rows[:12]
+    metadata["comparisonRequired"] = bool(rows)
+    metadata["minimumComparisonCount"] = min(required_minimum, available_count) if available_count else 0
+    metadata["requiredMinimumComparisonCount"] = required_minimum
+    source_summary = _mapping(source.get("decisionEvidenceSummary"))
+    family_ids = {
+        str(item.get("familyId") or item.get("causalSignature") or item.get("hypothesisId") or "").strip()
+        for item in rows
+        if str(item.get("familyId") or item.get("causalSignature") or item.get("hypothesisId") or "").strip()
+    }
+    metadata["decisionEvidenceSummary"] = {
+        "totalHypothesisCount": available_count,
+        "eligibleHypothesisCount": available_count,
+        "eligibleFamilyCount": len(family_ids),
+        "referenceHypothesisCount": int(source_summary.get("referenceHypothesisCount") or 0),
+    }
+    return metadata, rows
 
 
 def _market_evidence_profile(value: object, facts: Dict[str, object]) -> Dict[str, object]:

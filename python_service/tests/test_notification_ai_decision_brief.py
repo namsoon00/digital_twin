@@ -6,10 +6,12 @@ from digital_twin.application.notification_ai_decision_context import Notificati
 from digital_twin.domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
     AI_DECISION_BRIEF_VERSION,
+    build_notification_ai_prompt_bundle,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
     notification_ai_execution_profile,
 )
+from digital_twin.domain.notification_ai_gate_validation import validated_response_from_payload
 from digital_twin.domain.notification_ai_context_router import (
     AI_DECISION_CORE_VERSION,
     route_notification_ai_decision_context,
@@ -167,6 +169,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
     def test_brief_contains_exact_temporal_path_and_decision_changing_gap_once(self):
         context = decision_context()
+        context["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["minimumComparisonCount"] = 3
         brief = notification_ai_decision_brief(context, {})
         brief["currentSituation"]["temporalEvidenceSummary"]["matchedWindowKeys"] = ["5D"]
         prompt = build_notification_ai_decision_prompt(
@@ -187,6 +190,12 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         )
         self.assertTrue(brief["inference"]["contextCoverage"]["unchangedFactsRetained"])
         self.assertEqual(AI_DECISION_CORE_VERSION, payload["schemaVersion"])
+        self.assertEqual(1, payload["hypothesisSet"]["minimumComparisonCount"])
+        self.assertEqual(3, payload["hypothesisSet"]["requiredMinimumComparisonCount"])
+        self.assertEqual(
+            ["graph.temporal.support.v1"],
+            payload["hypothesisSet"]["hypotheses"][0]["supportingRuleIds"],
+        )
         self.assertIn('"drawdownFromPeakPct":-4.1', prompt)
         self.assertIn(AI_DECISION_PROMPT_VERSION, prompt)
         self.assertIn("decisionReadiness", prompt)
@@ -194,6 +203,47 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertNotIn("alternativeAction", prompt)
         self.assertNotIn('"promptContext"', prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 16 * 1024)
+
+    def test_ai_validation_uses_the_exact_routed_hypothesis_set(self):
+        context = decision_context()
+        legacy = {
+            "hypothesisId": "hypothesis:legacy",
+            "templateId": "template:legacy",
+            "claim": "이전 전체 월드의 참고 가설",
+            "stance": "context",
+            "supportingRuleIds": ["graph.legacy.reference.v1"],
+            "supportingEvidenceIds": ["relation:legacy"],
+        }
+        context["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"].append(legacy)
+        bundle = build_notification_ai_prompt_bundle(context, {}, max_prompt_bytes=16 * 1024)
+        routed = dict(context)
+        routed["_notificationAiPreparedDecisionCore"] = bundle["decisionCore"]
+        candidate = bundle["decisionCore"]["hypothesisSet"]["hypotheses"][0]
+
+        response = validated_response_from_payload(routed, {
+            "action": "HOLD",
+            "investmentView": "가격 방어 가설을 유지합니다.",
+            "executionDecision": "현재 행동을 유지합니다.",
+            "evidence": ["가격 방어 관계가 확인됐습니다.", "현재 가격 사실을 확인했습니다."],
+            "counterEvidence": ["반대 수급은 다음 관측에서 확인해야 합니다."],
+            "invalidationCondition": "가격 방어 관계가 사라지면 다시 판단합니다.",
+            "hypotheses": [{
+                "hypothesisId": candidate["hypothesisId"],
+                "templateId": candidate["templateId"],
+                "claim": candidate["claim"],
+                "stance": candidate["stance"],
+                "supportingEvidenceIds": candidate["supportingEvidenceIds"],
+                "counterEvidenceIds": [],
+                "verdict": "supported",
+                "reasoning": "현재 TypeDB 근거가 이 가설을 직접 지지합니다.",
+            }],
+            "selectedHypothesisId": candidate["hypothesisId"],
+            "decisionReadiness": "conditional",
+        })
+
+        self.assertEqual("completed", response.hypothesis_comparison_state)
+        self.assertEqual(candidate["hypothesisId"], response.selected_hypothesis_id)
+        self.assertEqual([candidate["hypothesisId"]], [item["hypothesisId"] for item in response.hypotheses])
 
     def test_internal_context_enricher_loads_snapshot_bounded_windows(self):
         store = FakeTimeSeriesStore()

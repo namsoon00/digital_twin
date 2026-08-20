@@ -105,6 +105,40 @@ def hypothesis_comparison_needs_repair(
 def ai_response_contract_error(context: Dict[str, object], response) -> str:
     """Preflight the AI selection against the compact TypeDB decision contract."""
 
+    prepared_core = context.get("_notificationAiPreparedDecisionCore")
+    if isinstance(prepared_core, dict):
+        hypothesis_set = prepared_core.get("hypothesisSet")
+        hypothesis_set = hypothesis_set if isinstance(hypothesis_set, dict) else {}
+        hypothesis_ids = {
+            str(item.get("hypothesisId") or "").strip()
+            for item in hypothesis_set.get("hypotheses") or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+        }
+        selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
+        if hypothesis_ids and selected_id not in hypothesis_ids:
+            return "selectedHypothesisId is not present in the routed TypeDB hypothesis set."
+        decision = prepared_core.get("decision")
+        decision = decision if isinstance(decision, dict) else {}
+        envelope = decision.get("actionEnvelope")
+        envelope = envelope if isinstance(envelope, dict) else {}
+        action = str(getattr(response, "action", "") or "").upper()
+        blocked_actions = {
+            str(value or "").upper()
+            for value in envelope.get("blockedActions") or []
+            if str(value or "")
+        }
+        if action in blocked_actions:
+            return "The selected action is blocked by the routed TypeDB action envelope."
+        allowed_actions = {
+            str(value or "").upper()
+            for value in envelope.get("allowedActions") or []
+            if str(value or "")
+        }
+        if allowed_actions and action not in allowed_actions:
+            return "The selected action is outside the routed TypeDB action envelope."
+        if hypothesis_ids and (allowed_actions or blocked_actions):
+            return ""
+
     reasoning_case = context.get("investmentReasoningCase")
     if not isinstance(reasoning_case, dict) or not reasoning_case:
         return ""
@@ -427,6 +461,7 @@ class AIInferenceQueueRunner:
         review_context = dict(context)
         review_context["_notificationAiPreparedPrompt"] = prompt
         review_context["_notificationAiPreparedDecisionBrief"] = decision_brief
+        review_context["_notificationAiPreparedDecisionCore"] = decision_core
         try:
             remaining_seconds = self.remaining_delivery_seconds(request)
             if remaining_seconds < 5:
@@ -436,7 +471,7 @@ class AIInferenceQueueRunner:
             review_context["_notificationAiTimeoutSecondsOverride"] = remaining_seconds
             ai_attempted = True
             response = self.reviewer.review(review_context)
-            comparison_repair_contract_error = ai_response_contract_error(context, response)
+            comparison_repair_contract_error = ai_response_contract_error(review_context, response)
             comparison_repair_initial_contract_error = comparison_repair_contract_error
             if (
                 hypothesis_comparison_needs_repair(request.message_type, response)
@@ -475,7 +510,7 @@ class AIInferenceQueueRunner:
                 else:
                     response = repaired
                     comparison_repair_contract_error = ai_response_contract_error(
-                        context, response
+                        repair_context, response
                     )
                     comparison_repair_succeeded = bool(
                         not hypothesis_comparison_needs_repair(request.message_type, response)

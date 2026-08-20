@@ -572,6 +572,11 @@ def normalized_strategy_guide_payload(context: Dict[str, object], payload: Dict[
 
 
 def hypothesis_context_payload(context: Dict[str, object]) -> Dict[str, object]:
+    prepared_core = context.get("_notificationAiPreparedDecisionCore")
+    if isinstance(prepared_core, dict):
+        routed_set = prepared_core.get("hypothesisSet")
+        if isinstance(routed_set, dict):
+            return routed_set
     relation_context = relation_context_value(context or {})
     brain = relation_context.get("investmentBrain") if isinstance(relation_context.get("investmentBrain"), dict) else {}
     hypothesis_set = brain.get("hypothesisSet") if isinstance(brain.get("hypothesisSet"), dict) else relation_context.get("hypothesisSet")

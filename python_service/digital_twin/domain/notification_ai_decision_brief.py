@@ -205,6 +205,41 @@ def _decision_changing_gaps(plan: Dict[str, object]) -> List[Dict[str, object]]:
     return rows
 
 
+def _enriched_prompt_hypothesis_set(
+    selected_set: Dict[str, object],
+    canonical_set: Dict[str, object],
+) -> Dict[str, object]:
+    """Restore graph identities removed by presentation-oriented compaction.
+
+    The AI input packet already selects the hypotheses eligible for this
+    decision.  The canonical relation context owns their rule/evidence links.
+    Merge only matching IDs so reference hypotheses are never reintroduced.
+    """
+
+    selected = _mapping(selected_set)
+    canonical = _mapping(canonical_set)
+    canonical_by_id = {
+        str(item.get("hypothesisId") or "").strip(): dict(item)
+        for item in canonical.get("hypotheses") or []
+        if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
+    }
+    hypotheses = []
+    for item in selected.get("hypotheses") or []:
+        if not isinstance(item, dict):
+            continue
+        hypothesis_id = str(item.get("hypothesisId") or "").strip()
+        if not hypothesis_id:
+            continue
+        hypotheses.append({
+            **canonical_by_id.get(hypothesis_id, {}),
+            **dict(item),
+        })
+    return {
+        **selected,
+        "hypotheses": hypotheses,
+    }
+
+
 def notification_ai_decision_brief(
     context: Dict[str, object],
     settings: Dict[str, object] = None,
@@ -291,7 +326,13 @@ def notification_ai_decision_brief(
         merged.get("decisionContinuityPacket")
     )
     execution_profile = dict(profile or notification_ai_execution_profile(decision_context, settings))
-    hypothesis_set = _mapping(relation.get("hypothesisSet"))
+    canonical_hypothesis_set = _mapping(canonical_relation.get("hypothesisSet")) or _mapping(
+        canonical_brain.get("hypothesisSet")
+    )
+    hypothesis_set = _enriched_prompt_hypothesis_set(
+        _mapping(relation.get("hypothesisSet")),
+        canonical_hypothesis_set,
+    )
     research_cycle = _mapping(relation.get("researchCycle"))
     research_plan = _mapping(canonical_brain.get("researchPlan")) or _mapping(relation.get("researchPlan"))
 

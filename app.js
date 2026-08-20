@@ -457,6 +457,7 @@
     tabScrollPositions: {},
     pageViewModes: initialPageViewModes(),
     settings: loadSettings(),
+    notificationAiPromptRelease: {},
     snackbar: null,
     realtime: {
       supported: typeof window.WebSocket !== "undefined",
@@ -3426,6 +3427,9 @@
   function applyServerSettings(payload) {
     var nextSettings = settingsWithExplicitDataGaps(payload.settings || {});
     state.settings = syncedModelAlertSettings(Object.assign({}, state.settings, nextSettings));
+    state.notificationAiPromptRelease = payload.notificationAiPromptRelease && typeof payload.notificationAiPromptRelease === "object"
+      ? payload.notificationAiPromptRelease
+      : {};
     state.serverConfigured = payload.configured || {};
     state.serverSettingsLocked = Boolean(payload.locked);
     state.shareAccess = payload.shareAccess && typeof payload.shareAccess === "object"
@@ -27095,6 +27099,9 @@
 
   function renderAiPromptRegistryPanel(snapshot) {
     var prompts = promptTemplateRows();
+    var release = state.notificationAiPromptRelease || {};
+    var releaseInstructions = Array.isArray(release.instructions) ? release.instructions : [];
+    var releaseSchema = release.responseSchema && typeof release.responseSchema === "object" ? release.responseSchema : {};
     return [
       '<article class="panel model-panel prompt-registry-panel">',
       '<div class="panel-head">',
@@ -27106,8 +27113,19 @@
       '</div>',
       '<div class="settings-body">',
       '<div class="settings-note">',
-      '<strong>프롬프트는 관계 규칙을 쉽게 풀어 쓰는 설정입니다.</strong>',
-      '<p>기본 알림은 관계 규칙으로 발생하고, 저장된 템플릿은 백엔드 promptContext.promptTemplate으로 반영됩니다. AI는 성립 이유, 반대 근거, 부족 데이터, 모델 개선점을 비동기로 설명합니다.</p>',
+      '<strong>최종 투자 판단은 활성 Prompt Release로 실행됩니다.</strong>',
+      '<p>TypeDB가 연결한 판단 근거만 Decision Core로 선별하고, 아래 운영 정책과 활성 릴리스를 조합한 실제 프롬프트를 AI에 전달합니다. 전체 원본은 알림 추적에 별도로 보존됩니다.</p>',
+      '</div>',
+      '<div class="model-section">',
+      '<div class="flow-title"><div><strong>활성 최종 판단 릴리스</strong><span>실제 investmentInsight AI 요청에 사용되는 버전과 출력 계약입니다.</span></div></div>',
+      '<div class="rulebox-console-strip">',
+      '<span><strong>version</strong>' + escapeHtml(release.version || "확인 필요") + '</span>',
+      '<span><strong>contract</strong>' + escapeHtml(release.contractVersion || "-") + '</span>',
+      '<span><strong>fingerprint</strong>' + escapeHtml(String(release.fingerprint || "-").slice(0, 16)) + '</span>',
+      '<span><strong>status</strong>' + escapeHtml(release.status || "unknown") + '</span>',
+      '</div>',
+      '<label class="setting-field wide"><span>실제 최종 판단 기본 지시문</span><textarea rows="10" readonly>' + escapeHtml(releaseInstructions.join("\n")) + '</textarea></label>',
+      '<label class="setting-field wide"><span>실제 구조화 응답 계약</span><textarea rows="10" readonly>' + escapeHtml(JSON.stringify(releaseSchema, null, 2)) + '</textarea></label>',
       '</div>',
       '<div class="model-section">',
       '<div class="flow-title"><div><strong>실시간 알림 AI 검증</strong><span>알림 워커가 AI 답변을 기다린 뒤 검증된 실행 메시지만 보낼지 정합니다.</span></div></div>',
@@ -27120,11 +27138,11 @@
       '<label class="setting-field wide"><span>적용 알림 타입</span><textarea data-model-setting="notificationAiGateMessageTypes" rows="3" autocomplete="off">' + escapeHtml(settingValue("notificationAiGateMessageTypes") || defaultSettings.notificationAiGateMessageTypes) + '</textarea></label>',
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>프롬프트 정책</strong><span>AI가 데이터를 해석할 때 반드시 지켜야 하는 경계입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>최종 판단 운영 정책</strong><span>저장하면 활성 릴리스 지문에 반영되고 다음 AI 요청부터 적용됩니다.</span></div></div>',
       '<label class="setting-field wide"><textarea data-model-setting="aiPromptPolicy" rows="6" autocomplete="off">' + escapeHtml(settingValue("aiPromptPolicy") || defaultSettings.aiPromptPolicy) + '</textarea></label>',
       '</div>',
       '<div class="model-section">',
-      '<div class="flow-title"><div><strong>프롬프트 템플릿</strong><span>알림 타입별 AI 질문과 출력 계약입니다.</span></div></div>',
+      '<div class="flow-title"><div><strong>보조·호환 프롬프트 템플릿</strong><span>운영·뉴스·레거시 promptContext용이며 최종 investmentInsight 판단 릴리스와 구분됩니다.</span></div></div>',
       '<label class="setting-field wide"><textarea data-model-setting="aiPromptTemplates" rows="14" autocomplete="off">' + escapeHtml(settingValue("aiPromptTemplates") || defaultSettings.aiPromptTemplates) + '</textarea></label>',
       '</div>',
       '<div class="source-stack prompt-registry-list">',

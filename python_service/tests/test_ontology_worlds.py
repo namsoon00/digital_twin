@@ -541,6 +541,9 @@ class MultiAccountProjectionTests(unittest.TestCase):
             self.rulebox_payloads = []
             self.leases = []
             self.market_load_calls = 0
+            self.pending_abox_activation_payload = {"status": "empty"}
+            self.pending_abox_recovery_result = {"status": "skipped"}
+            self.pending_abox_recovery_calls = []
 
         def rulebox_snapshot(self):
             rules = rulebox_rules_to_payload(default_graph_inference_rules())
@@ -567,6 +570,20 @@ class MultiAccountProjectionTests(unittest.TestCase):
                     "worldviewManifestId": worldview.get("worldviewManifestId"),
                 }
             return {"status": "empty", "worldId": world_id}
+
+        def pending_abox_activation(self, world_id=""):
+            return dict(self.pending_abox_activation_payload or {})
+
+        def recover_pending_abox_activation(
+            self,
+            world_id="",
+            max_staged_target_symbols=0,
+        ):
+            self.pending_abox_recovery_calls.append({
+                "worldId": world_id,
+                "maxStagedTargetSymbols": max_staged_target_symbols,
+            })
+            return dict(self.pending_abox_recovery_result or {})
 
         def acquire_scoped_abox_write_lease(self, owner, world_id=""):
             lease = {
@@ -798,6 +815,46 @@ class MultiAccountProjectionTests(unittest.TestCase):
             )
         )
         self.assertTrue(topology["fingerprint"])
+        self.assertEqual(
+            ["MSTR"],
+            repository.saved_markets[world.world_id].worldview["inferenceTargetSymbols"],
+        )
+
+    def test_shared_premise_world_recovers_staged_projection_before_saving(self):
+        repository = self.FakeRepository()
+        repository.pending_abox_activation_payload = {
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-manifest:stale",
+        }
+        repository.pending_abox_recovery_result = {
+            "status": "discarded-staged-shared-premise",
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            repository,
+            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
+        )
+        world = shared_premise_world("kr", "tenant-a")
+        graph = sample_graph("BTC")
+        graph.worldview["targetScopedManifestPatch"] = {
+            "status": "applied",
+            "targetSymbols": ["BTC"],
+        }
+
+        result = recorder.project_shared_world_update(graph, world, "premise")
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([{
+            "worldId": world.world_id,
+            "maxStagedTargetSymbols": 0,
+        }], repository.pending_abox_recovery_calls)
+        self.assertEqual(
+            "discarded-staged-shared-premise",
+            result["pendingAboxActivationRecovery"]["status"],
+        )
+        self.assertEqual(
+            ["BTC"],
+            repository.saved_markets[world.world_id].worldview["inferenceTargetSymbols"],
+        )
 
     def test_market_world_contract_bump_replaces_legacy_shared_manifest(self):
         repository = self.FakeRepository()

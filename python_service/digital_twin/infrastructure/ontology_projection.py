@@ -3948,6 +3948,39 @@ class PortfolioOntologyProjectionRecorder:
                     },
                 }
         try:
+            pending_activation_recovery: Dict[str, object] = {}
+            if kind == "premise":
+                pending_activation_recovery = self.recover_pending_abox_activation(
+                    shared_world.world_id,
+                )
+                recovery_status = str(
+                    pending_activation_recovery.get("status") or "skipped"
+                )
+                if recovery_status not in {
+                    "skipped",
+                    "disabled",
+                    "finalized",
+                    "finalized-empty-target",
+                    "restored",
+                    "cleared-stale",
+                    "discarded-staged-shared-premise",
+                }:
+                    return {
+                        **world_metadata(shared_world),
+                        "status": "deferred-premise-world-activation-recovery",
+                        "saved": False,
+                        "preservedActiveGeneration": True,
+                        "projectionKind": kind,
+                        "retryable": True,
+                        "recommendedRetryAfterSeconds": int(
+                            pending_activation_recovery.get("recommendedRetryAfterSeconds") or 10
+                        ),
+                        "pendingAboxActivationRecovery": pending_activation_recovery,
+                        "reason": str(
+                            pending_activation_recovery.get("reason")
+                            or "SharedPremiseWorld activation recovery must complete before a new projection."
+                        )[:220],
+                    }
             observed_at = str(
                 (update.worldview or {}).get("sourceObservedAt")
                 or (update.worldview or {}).get("marketObservedAt")
@@ -4055,6 +4088,8 @@ class PortfolioOntologyProjectionRecorder:
             }
             source_patch = dict((update.worldview or {}).get("targetScopedManifestPatch") or {})
             target_symbols = list(source_patch.get("targetSymbols") or [])
+            if kind == "premise":
+                update.worldview["inferenceTargetSymbols"] = list(target_symbols)
             if str(source_patch.get("status") or "") == "applied" and target_symbols:
                 selection = select_target_scoped_manifest_patch(
                     update,
@@ -4218,6 +4253,7 @@ class PortfolioOntologyProjectionRecorder:
                     "observationRefreshedScopeIds": refreshed_scope_ids,
                     "observationMetadata": observation_refresh,
                     "targetScopedManifestPatch": market_target_patch,
+                    "pendingAboxActivationRecovery": pending_activation_recovery,
                     "scopeRepair": {
                         key: scope_repair.get(key)
                         for key in [
@@ -4312,6 +4348,7 @@ class PortfolioOntologyProjectionRecorder:
                 "reusedIncomingScopeIds": list(manifest_state.get("reusedIncomingScopeIds") or []),
                 "observationRefreshedScopeIds": list(manifest_state.get("observationRefreshedScopeIds") or []),
                 "targetScopedManifestPatch": market_target_patch,
+                "pendingAboxActivationRecovery": pending_activation_recovery,
                 "fullRebuild": full_contract_rebuild,
                 "coverage": coverage,
                 "validation": validation.to_dict(),

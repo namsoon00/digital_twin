@@ -6909,6 +6909,29 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("abox-manifest:previous", result["activeAboxSnapshotId"])
         activate.assert_not_called()
 
+    def test_typedb_pending_abox_recovery_discards_inactive_shared_premise_candidate(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "activationStatus": "staged-native-inference",
+            "candidateAboxSnapshotId": "abox-manifest:candidate",
+            "previousAboxSnapshotId": "abox-manifest:previous",
+            "targetSymbols": [],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-manifest:previous",
+                }), \
+                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as activate:
+            result = repository.recover_pending_abox_activation("premise:shared:global")
+
+        self.assertEqual("discarded-staged-shared-premise", result["status"])
+        self.assertEqual("discard-inactive-shared-premise-candidate", result["recoveryMode"])
+        activate.assert_called_once_with(
+            "abox-manifest:previous",
+            world_id="premise:shared:global",
+        )
+
     def test_typedb_pending_abox_recovery_discards_staged_batch_above_scheduler_cap(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         pending = {

@@ -60,7 +60,12 @@ from ..domain.ontology_scopes import (
     SCOPED_ABOX_PERSISTENCE_MODE,
     support_relation_key,
 )
-from ..domain.ontology_worlds import KNOWLEDGE_WORLD_TYPE, MARKET_WORLD_TYPE
+from ..domain.ontology_worlds import (
+    KNOWLEDGE_WORLD_TYPE,
+    MARKET_WORLD_TYPE,
+    SHARED_PREMISE_WORLD_TYPE,
+    world_type_from_id,
+)
 from .graph_store_inferencebox import (
     inferencebox_entity_payload,
     inferencebox_relation_payload,
@@ -13173,6 +13178,38 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             }
         if active_id != candidate_id:
             if activation_status == "staged-native-inference":
+                if (
+                    world_type_from_id(world_id) == SHARED_PREMISE_WORLD_TYPE
+                    and previous_id
+                    and active_id == previous_id
+                ):
+                    # SharedPremiseWorld is rebuilt from the current bounded
+                    # source request before its RuleBox runs. A candidate that
+                    # never replaced the verified predecessor therefore has no
+                    # observable generation to resume. Clear only its journal
+                    # so the current request can stage a fresh targeted view.
+                    control = typedb_call_for_world(
+                        self.activate_abox_generation,
+                        active_id,
+                        world_id=world_id,
+                    )
+                    cleared = str(control.get("status") or "") == "ok"
+                    return {
+                        "configured": True,
+                        "status": "discarded-staged-shared-premise" if cleared else "error",
+                        "graphStore": "typedb",
+                        "candidateAboxSnapshotId": candidate_id,
+                        "previousAboxSnapshotId": previous_id,
+                        "activeAboxSnapshotId": active_id,
+                        "targetSymbols": target_symbols,
+                        "control": control,
+                        "recoveryMode": "discard-inactive-shared-premise-candidate",
+                        "reason": (
+                            "An inactive SharedPremiseWorld candidate was discarded so the current bounded request can stage a fresh generation."
+                            if cleared
+                            else str(control.get("reason") or "SharedPremiseWorld control restoration failed.")
+                        ),
+                    }
                 if (
                     staged_target_cap
                     and len(target_symbols) > staged_target_cap

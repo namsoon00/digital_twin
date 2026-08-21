@@ -192,7 +192,89 @@ class RecordingQuestDB(QuestDBTimeSeriesAdapter):
         self.lines.extend(lines)
 
 
+class SchemaQuestDB(QuestDBTimeSeriesAdapter):
+    def __init__(self, ttl_overrides=None, missing_tables=None, metadata_error=""):
+        super().__init__({
+            "questDbHttpUrl": "http://schema-test-" + str(id(self)),
+            "marketTimeSeriesRawRetentionDays": "2",
+            "marketTimeSeries15mRetentionDays": "10",
+            "marketTimeSeries1hRetentionDays": "90",
+            "marketTimeSeriesDailyRetentionDays": "180",
+        })
+        self.statements = []
+        self.metadata_error = metadata_error
+        self.missing_tables = set(missing_tables or [])
+        self.ttl_days = {
+            "market_observations_3m": 2,
+            "market_observations_15m": 10,
+            "market_observations_1h": 90,
+            "market_observations_1d": 180,
+            "portfolio_marks": 2,
+            **dict(ttl_overrides or {}),
+        }
+
+    def execute(self, sql):
+        normalized = " ".join(str(sql).split())
+        self.statements.append(normalized)
+        if normalized.startswith("SELECT table_name, ttlValue"):
+            if self.metadata_error:
+                raise RuntimeError(self.metadata_error)
+            return {
+                "columns": [
+                    {"name": "table_name"},
+                    {"name": "ttl_value"},
+                    {"name": "ttl_unit"},
+                ],
+                "dataset": [
+                    [table_name, days, "DAY"]
+                    for table_name, days in self.ttl_days.items()
+                    if table_name not in self.missing_tables
+                ],
+            }
+        if normalized.startswith("CREATE TABLE IF NOT EXISTS"):
+            table_name = normalized.split()[5]
+            self.missing_tables.discard(table_name)
+            return {}
+        if normalized == "SELECT 1 AS ready":
+            return {"columns": [{"name": "ready"}], "dataset": [[1]]}
+        return {}
+
+
 class TimeSeriesPlatformTests(unittest.TestCase):
+    def test_questdb_schema_skips_redundant_ttl_metadata_writes(self):
+        adapter = SchemaQuestDB()
+
+        adapter.ensure_schema()
+
+        self.assertFalse(any(" SET TTL " in statement for statement in adapter.statements))
+        self.assertFalse(any(statement.startswith("CREATE TABLE") for statement in adapter.statements))
+
+    def test_questdb_schema_creates_only_missing_table(self):
+        adapter = SchemaQuestDB(missing_tables={"market_observations_1h"})
+
+        adapter.ensure_schema()
+
+        create_statements = [statement for statement in adapter.statements if statement.startswith("CREATE TABLE")]
+        self.assertEqual(1, len(create_statements))
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_observations_1h", create_statements[0])
+
+    def test_questdb_schema_changes_only_drifted_ttl(self):
+        adapter = SchemaQuestDB({"market_observations_1h": 30})
+
+        adapter.ensure_schema()
+
+        ttl_statements = [statement for statement in adapter.statements if " SET TTL " in statement]
+        self.assertEqual(["ALTER TABLE market_observations_1h SET TTL 90 DAYS"], ttl_statements)
+
+    def test_questdb_health_checks_schema_readiness_without_ddl(self):
+        adapter = SchemaQuestDB(metadata_error="metadata unavailable")
+
+        result = adapter.health()
+
+        self.assertEqual("unavailable", result["status"])
+        self.assertIn("metadata unavailable", result["error"])
+        self.assertFalse(any(statement.startswith("CREATE TABLE") for statement in adapter.statements))
+
     def test_active_write_queues_shadow_without_changing_baseline_result(self):
         baseline = FakeBaseline()
         outbox = FakeOutbox()

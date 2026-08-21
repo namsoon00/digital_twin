@@ -153,7 +153,14 @@ class QuestDBTimeSeriesAdapter:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 body = response.read().decode("utf-8")
-        except (OSError, urllib.error.URLError, urllib.error.HTTPError) as error:
+        except urllib.error.HTTPError as error:
+            try:
+                response_detail = error.read().decode("utf-8", errors="replace")[:500]
+            except Exception:  # noqa: BLE001 - retain the original HTTP failure.
+                response_detail = ""
+            detail = (" response=" + response_detail) if response_detail else ""
+            raise RuntimeError("QuestDB request failed: " + str(error) + detail) from error
+        except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("QuestDB request failed: " + str(error)) from error
         if not body.strip():
             return {}
@@ -254,6 +261,35 @@ class QuestDBTimeSeriesAdapter:
         columns = [str(item.get("name") or "") for item in payload.get("columns") or []]
         return [dict(zip(columns, values)) for values in payload.get("dataset") or []]
 
+    def expected_ttl_days(self) -> Dict[str, int]:
+        retention_days = {
+            "3m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 2))),
+            "15m": max(1, int(float(self.settings.get("marketTimeSeries15mRetentionDays") or 10))),
+            "1h": max(1, int(float(self.settings.get("marketTimeSeries1hRetentionDays") or 90))),
+            "1d": max(1, int(float(self.settings.get("marketTimeSeriesDailyRetentionDays") or 180))),
+        }
+        return {
+            **{
+                table_name: retention_days[granularity]
+                for granularity, table_name in GRANULARITY_TABLES.items()
+            },
+            "portfolio_marks": retention_days["3m"],
+        }
+
+    def schema_metadata(self) -> Dict[str, Dict[str, object]]:
+        table_names = [*GRANULARITY_TABLES.values(), "portfolio_marks"]
+        rows = self.query_rows(
+            "SELECT table_name, ttlValue AS ttl_value, ttlUnit AS ttl_unit FROM tables() "
+            "WHERE table_name IN ("
+            + ", ".join(sql_text(table_name) for table_name in table_names)
+            + ")"
+        )
+        return {
+            clean_text(row.get("table_name")): dict(row)
+            for row in rows
+            if clean_text(row.get("table_name"))
+        }
+
     def ensure_schema(self) -> None:
         cache_key = (self.base_url, self.backend_id)
         if cache_key in QuestDBTimeSeriesAdapter._schema_ready:
@@ -261,12 +297,8 @@ class QuestDBTimeSeriesAdapter:
         with QuestDBTimeSeriesAdapter._schema_lock:
             if cache_key in QuestDBTimeSeriesAdapter._schema_ready:
                 return
-            retention_days = {
-                "3m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 2))),
-                "15m": max(1, int(float(self.settings.get("marketTimeSeries15mRetentionDays") or 10))),
-                "1h": max(1, int(float(self.settings.get("marketTimeSeries1hRetentionDays") or 90))),
-                "1d": max(1, int(float(self.settings.get("marketTimeSeriesDailyRetentionDays") or 180))),
-            }
+            expected_ttl_days = self.expected_ttl_days()
+            metadata = self.schema_metadata()
             market_schema = """
                 CREATE TABLE IF NOT EXISTS {table_name} (
                     event_at TIMESTAMP,
@@ -310,11 +342,12 @@ class QuestDBTimeSeriesAdapter:
                 ) TIMESTAMP(event_at) PARTITION BY DAY WAL
                 DEDUP UPSERT KEYS(event_at, account_id, symbol, granularity, provider, source_role)
                 """
-            for granularity, table_name in GRANULARITY_TABLES.items():
-                self.execute(market_schema.format(table_name=table_name))
-                self.execute("ALTER TABLE " + table_name + " SET TTL " + str(retention_days[granularity]) + " DAYS")
-            self.execute(
-                """
+            for table_name in GRANULARITY_TABLES.values():
+                if table_name not in metadata:
+                    self.execute(market_schema.format(table_name=table_name))
+            if "portfolio_marks" not in metadata:
+                self.execute(
+                    """
                 CREATE TABLE IF NOT EXISTS portfolio_marks (
                     event_at TIMESTAMP,
                     observed_at TIMESTAMP,
@@ -328,8 +361,18 @@ class QuestDBTimeSeriesAdapter:
                 ) TIMESTAMP(event_at) PARTITION BY DAY WAL
                 DEDUP UPSERT KEYS(event_at, account_id, symbol, provider)
                 """
-            )
-            self.execute("ALTER TABLE portfolio_marks SET TTL " + str(retention_days["3m"]) + " DAYS")
+                )
+            if set(metadata) != set(expected_ttl_days):
+                metadata = self.schema_metadata()
+            current_ttl_days = {
+                table_name: int(numeric_value(row.get("ttl_value")))
+                for table_name, row in metadata.items()
+                if clean_text(row.get("ttl_unit")).upper() == "DAY"
+            }
+            for table_name, expected_days in expected_ttl_days.items():
+                if current_ttl_days.get(table_name) == expected_days:
+                    continue
+                self.execute("ALTER TABLE " + table_name + " SET TTL " + str(expected_days) + " DAYS")
             QuestDBTimeSeriesAdapter._schema_ready.add(cache_key)
 
     def market_values(self, raw: Mapping[str, object]) -> List[str]:
@@ -450,7 +493,6 @@ class QuestDBTimeSeriesAdapter:
         definitions: Iterable[object],
         as_of: str = "",
     ) -> Dict[str, Dict[str, List[Dict[str, object]]]]:
-        self.ensure_schema()
         clean_symbols = sorted({clean_text(symbol).upper() for symbol in symbols or [] if clean_text(symbol)})
         definition_rows = list(definitions or [])
         preference_by_window = {
@@ -509,7 +551,6 @@ class QuestDBTimeSeriesAdapter:
 
     def watermark(self) -> TimeSeriesWatermark:
         try:
-            self.ensure_schema()
             union_sql = " UNION ALL ".join(
                 "SELECT max(observed_at) AS observed_through FROM " + table_name
                 for table_name in GRANULARITY_TABLES.values()
@@ -523,6 +564,10 @@ class QuestDBTimeSeriesAdapter:
     def health(self) -> Dict[str, object]:
         started = datetime.now(timezone.utc)
         try:
+            expected_tables = set(self.expected_ttl_days())
+            missing_tables = sorted(expected_tables - set(self.schema_metadata()))
+            if missing_tables:
+                raise RuntimeError("QuestDB schema is missing tables: " + ", ".join(missing_tables))
             rows = self.query_rows("SELECT 1 AS ready")
             ready = bool(rows and int(rows[0].get("ready") or 0) == 1)
             status = "ready" if ready else "unhealthy"
@@ -543,7 +588,6 @@ class QuestDBTimeSeriesAdapter:
     def summary(self, account_id: str = "") -> Dict[str, object]:
         del account_id
         try:
-            self.ensure_schema()
             rows = []
             for granularity, table_name in GRANULARITY_TABLES.items():
                 result = self.query_rows(

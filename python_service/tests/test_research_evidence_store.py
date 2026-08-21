@@ -66,6 +66,21 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertEqual("entity_mismatch", rejected["relationScope"])
         self.assertEqual("blocked", rejected["validationState"])
 
+        metadata_only = merge_derived_evidence_payload(
+            {
+                "officialDocumentState": "metadata-only",
+                "documentVerified": False,
+                "analysisReady": False,
+                "dataState": "partial",
+                "validationState": "conditional",
+                "disclosureDocumentQuality": {"state": "metadata-only", "documentVerified": False},
+            },
+            {"dataState": "partial", "validationState": "ready"},
+        )
+
+        self.assertEqual("conditional", metadata_only["validationState"])
+        self.assertFalse(metadata_only["analysisReady"])
+
     @staticmethod
     def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
         return ResearchEvidence(

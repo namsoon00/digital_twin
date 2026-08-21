@@ -85,6 +85,25 @@ def merge_derived_evidence_payload(
     for key in ["officialDocumentText", "officialDocumentPreview", "officialDocumentQuality"]:
         if merged.get(key) in (None, "") and previous.get(key) not in (None, ""):
             merged[key] = previous.get(key)
+    previous_document_quality = previous.get("disclosureDocumentQuality") if isinstance(previous.get("disclosureDocumentQuality"), dict) else {}
+    incoming_document_quality = incoming.get("disclosureDocumentQuality") if isinstance(incoming.get("disclosureDocumentQuality"), dict) else {}
+    incoming_document_verified = bool(
+        incoming.get("documentVerified")
+        or incoming_document_quality.get("documentVerified")
+    )
+    if previous_document_quality and not incoming_document_verified:
+        for key in [
+            "dataState",
+            "validationState",
+            "officialDocumentState",
+            "metadataVerified",
+            "documentVerified",
+            "analysisReady",
+            "disclosureDocumentQuality",
+            "disclosureAnalysis",
+        ]:
+            if key in previous:
+                merged[key] = previous.get(key)
     terminal_rejection = bool(
         str(previous.get("validationState") or "").lower() == "blocked"
         and (

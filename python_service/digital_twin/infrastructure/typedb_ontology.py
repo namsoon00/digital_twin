@@ -13438,6 +13438,41 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "finalization": finalization,
                 "reason": "" if str(finalization.get("status") or "") == "ok" else str(finalization.get("reason") or "ABox finalization failed."),
             }
+        if (
+            active_id == candidate_id
+            and previous_id
+            and world_type_from_id(world_id) == SHARED_PREMISE_WORLD_TYPE
+        ):
+            # SharedPremiseWorld is rebuilt from the current bounded source
+            # request. After a process interruption, retaining an active
+            # candidate with no aligned InferenceBox only makes every newer
+            # request read a stale generation. Restore the last proven pair;
+            # the current request will stage fresh premises and run them under
+            # the atomic staged-ABox execution boundary.
+            rollback = typedb_call_for_world(
+                self.activate_abox_generation,
+                previous_id,
+                world_id=world_id,
+            )
+            restored = str(rollback.get("status") or "") == "ok"
+            return {
+                "configured": True,
+                "status": "restored" if restored else "error",
+                "graphStore": "typedb",
+                "candidateAboxSnapshotId": candidate_id,
+                "previousAboxSnapshotId": previous_id,
+                "activeAboxSnapshotId": active_id,
+                "targetSymbols": target_symbols,
+                "pendingActivation": pending,
+                "inferenceBox": inferencebox,
+                "rollback": rollback,
+                "recoveryMode": "rollback-interrupted-shared-premise-candidate",
+                "reason": (
+                    "Interrupted SharedPremiseWorld candidate was restored to the last aligned generation."
+                    if restored
+                    else str(rollback.get("reason") or "SharedPremiseWorld rollback failed.")
+                ),
+            }
         if active_id == candidate_id:
             # The durable pointer already proves this candidate is a complete
             # ABox generation.  A missing or stale InferenceBox must not make
@@ -20852,6 +20887,228 @@ relation ontology-assertion,
             "durationMs": int((time.perf_counter() - started_at) * 1000),
             "typedbQueryMetrics": self.query_metrics_snapshot(),
         }
+
+    @coordinated_typedb_projection_write(
+        "staged-abox-native-rule-run",
+        typedb_projection_world_from_payload,
+    )
+    def run_rulebox_for_staged_abox(
+        self,
+        payload: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Activate, infer, and finalize one staged ABox under one writer lease.
+
+        SharedPremiseWorld used to publish its candidate Manifest before native
+        inference. A timeout then left the new ABox paired with the predecessor
+        InferenceBox, making both the current attempt and every retry stale.
+        This boundary keeps the candidate journal durable, switches the pointer
+        only while the world writer lease is held, and restores the last
+        verified predecessor whenever native completion cannot be proven.
+        """
+        if not self.address:
+            return NullTypeDBOntologyGraphRepository().run_rulebox(payload)
+        values = dict(payload or {})
+        world_id = str(
+            values.get("worldId") or values.get("ontologyWorldId") or ""
+        ).strip()
+        expected_abox_snapshot_id = str(
+            values.pop("expectedAboxSnapshotId", "") or ""
+        ).strip()
+        target_symbols = clean_symbols_from_payload(
+            values.get("symbols")
+            or values.get("targetSymbols")
+            or values.get("changedSymbols")
+        )
+        lease = self.acquire_scoped_abox_write_lease(
+            "staged-abox-native-rule",
+            world_id=world_id,
+        )
+        if not lease.get("acquired"):
+            return {
+                "configured": True,
+                "status": "deferred-inference-write-lease",
+                "graphStore": "typedb",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                "nativeTypeDbReasoningUsed": False,
+                "preservedPreviousInference": True,
+                "retryable": True,
+                "recommendedRetryAfterSeconds": int(
+                    lease.get("recommendedRetryAfterSeconds") or 10
+                ),
+                "reason": (
+                    "Another ABox activation or native InferenceBox generation "
+                    "is running for this world."
+                ),
+                "inferenceWriteLease": typedb_projection_coordinator_summary(lease),
+            }
+
+        result: Dict[str, object] = {}
+        candidate_id = ""
+        previous_id = ""
+        try:
+            try:
+                preparation = self.prepare_pending_abox_activation_for_inference(
+                    world_id
+                )
+            except Exception as error:  # noqa: BLE001 - never infer against an uncertain pointer.
+                preparation = {
+                    "status": "error",
+                    "reason": "ABox activation preparation failed: " + str(error)[:180],
+                }
+            result["aboxActivationPreparation"] = preparation
+            preparation_status = str(preparation.get("status") or "")
+            candidate_id = str(
+                preparation.get("candidateAboxSnapshotId") or ""
+            ).strip()
+            previous_id = str(
+                preparation.get("previousAboxSnapshotId") or ""
+            ).strip()
+            if preparation_status not in {"skipped", "ready", "activated"}:
+                result.update({
+                    "configured": True,
+                    "status": "blocked-pending-abox-activation",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "nativeTypeDbReasoningUsed": False,
+                    "retryable": True,
+                    "recommendedRetryAfterSeconds": 10,
+                    "reason": str(
+                        preparation.get("reason")
+                        or "ABox candidate could not be prepared for native inference."
+                    )[:220],
+                })
+                return result
+
+            active = dict(self.active_abox_metadata(world_id) or {})
+            active_id = str(
+                active.get("worldviewManifestId")
+                or active.get("aboxSnapshotId")
+                or ""
+            ).strip()
+            if not candidate_id:
+                candidate_id = active_id
+            if expected_abox_snapshot_id and active_id != expected_abox_snapshot_id:
+                result.update({
+                    "configured": True,
+                    "status": "stale-staged-abox-candidate",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "nativeTypeDbReasoningUsed": False,
+                    "retryable": True,
+                    "recommendedRetryAfterSeconds": 10,
+                    "expectedAboxSnapshotId": expected_abox_snapshot_id,
+                    "activeAboxSnapshotId": active_id,
+                    "candidateAboxSnapshotId": candidate_id,
+                    "preservedPreviousInference": True,
+                    "reason": (
+                        "The staged ABox candidate changed before native inference "
+                        "could claim its writer lease."
+                    ),
+                })
+                return result
+            if not active_id:
+                result.update({
+                    "configured": True,
+                    "status": "invalid-abox-generation",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "nativeTypeDbReasoningUsed": False,
+                    "retryable": True,
+                    "reason": "No complete active ABox generation is available.",
+                })
+                return result
+
+            values["worldId"] = world_id
+            values["_nativeInferenceWriteLeaseHeld"] = True
+            try:
+                execution = self._run_rulebox_unlocked(values)
+            except Exception as error:  # noqa: BLE001 - rollback below preserves the predecessor.
+                execution = {
+                    "configured": True,
+                    "status": "error",
+                    "graphStore": "typedb",
+                    "source": "typedbNativeRule",
+                    "nativeTypeDbReasoningUsed": False,
+                    "nativeTypeDbReasoningCompleted": False,
+                    "reason": str(error)[:220],
+                }
+            result.update(dict(execution or {}))
+            result["aboxActivationPreparation"] = preparation
+            inferencebox = (
+                dict(result.get("inferenceBox") or {})
+                if isinstance(result.get("inferenceBox"), dict)
+                else {}
+            )
+            aligned = bool(
+                str(result.get("status") or "") == "ok"
+                and self.inferencebox_matches_pending_abox_activation(
+                    inferencebox,
+                    active_id,
+                    target_symbols,
+                )
+            )
+            result["stagedAboxInferenceAlignment"] = {
+                "verified": aligned,
+                "candidateAboxSnapshotId": candidate_id,
+                "activeAboxSnapshotId": active_id,
+                "sourceAboxSnapshotId": str(
+                    inferencebox.get("sourceAboxSnapshotId") or ""
+                ),
+                "targetSymbols": target_symbols,
+            }
+            pending_was_activated = preparation_status in {"ready", "activated"}
+            if aligned and pending_was_activated:
+                finalization = self.finalize_abox_generation(
+                    active_id,
+                    previous_id,
+                    world_id,
+                )
+                result["aboxActivationFinalization"] = finalization
+                if str(finalization.get("status") or "") != "ok":
+                    result.update({
+                        "status": "inference-finalization-pending",
+                        "retryable": True,
+                        "recommendedRetryAfterSeconds": 10,
+                        "preservedActiveGeneration": True,
+                        "reason": str(
+                            finalization.get("reason")
+                            or "Aligned native inference could not clear its ABox activation journal."
+                        )[:220],
+                    })
+                return result
+            if aligned:
+                return result
+
+            rollback = {
+                "status": "not-available",
+                "reason": "No verified predecessor ABox generation is available.",
+            }
+            if previous_id:
+                rollback = self.activate_abox_generation(
+                    previous_id,
+                    world_id,
+                )
+            result["activationRollback"] = rollback
+            restored = str(rollback.get("status") or "") == "ok"
+            result["preservedActiveGeneration"] = restored
+            result["retryable"] = True
+            result.setdefault("recommendedRetryAfterSeconds", 10)
+            if restored:
+                result["status"] = "inference-failed-rolled-back"
+                result["reason"] = (
+                    str(result.get("reason") or "Native inference did not complete.")[:180]
+                    + " The previous aligned SharedPremise generation was restored."
+                )
+            return result
+        finally:
+            release = self.release_scoped_abox_write_lease(lease)
+            result["inferenceWriteLease"] = {
+                key: value
+                for key, value in dict(lease or {}).items()
+                if key != "propertiesJson"
+            }
+            result["inferenceWriteLeaseRelease"] = release
 
     @coordinated_typedb_projection_write(
         "native-rule-run",

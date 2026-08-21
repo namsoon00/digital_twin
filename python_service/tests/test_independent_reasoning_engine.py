@@ -126,6 +126,65 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_partitioned_executor_reports_exact_evaluated_symbol_coverage(self):
+        class Recorder:
+            @staticmethod
+            def world_partitioned_reasoning_enabled():
+                return True
+
+            @staticmethod
+            def prepare_shared_premises(
+                _snapshot,
+                target_symbols=None,
+                reasoning_context=None,
+                progress_callback=None,
+            ):
+                del reasoning_context, progress_callback
+                return {
+                    "status": "ready",
+                    "ready": True,
+                    "worldId": "premise:shared:global",
+                    "requestedSymbols": list(target_symbols or []),
+                    "evaluatedSymbols": ["NVDA"],
+                    "notEvaluatedSymbols": ["TSLA"],
+                    "targetCoverageComplete": False,
+                    "symbols": {"NVDA": {"snapshotId": "generation:shared"}},
+                    "sharedRuleIds": [],
+                    "relations": [],
+                    "traces": [],
+                    "generationVector": {},
+                }
+
+            @staticmethod
+            def record_snapshot(_snapshot, **_kwargs):
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "nativeTypeDbReasoningCompleted": True,
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox:acct",
+                        "inferenceGenerationId": "generation:acct",
+                        "relations": [],
+                        "traces": [],
+                    },
+                }
+
+        executor = ScopedTypeDBInferenceExecutor(Recorder())
+        request = independent_reasoning_request(
+            "ontology-v2-shadow",
+            [source_event("NVDA", ["acct"]), source_event("TSLA", ["acct"])],
+        )
+
+        result = executor.execute(
+            request,
+            [SimpleNamespace(account_id="acct", metadata={})],
+        )["acct"]["sharedInferenceExecution"]
+
+        self.assertEqual(["NVDA", "TSLA"], result["requestedSymbols"])
+        self.assertEqual(["NVDA"], result["evaluatedSymbols"])
+        self.assertEqual(["TSLA"], result["notEvaluatedSymbols"])
+        self.assertFalse(result["targetCoverageComplete"])
+
     def test_reasoning_worker_process_owner_rejects_ambiguous_lease_ids(self):
         self.assertEqual(("worker-host", 1234), reasoning_worker_process_owner("worker-host:1234:v2-deadbeef"))
         self.assertEqual(("", 0), reasoning_worker_process_owner("worker:test"))
@@ -905,6 +964,72 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("job:2", queue.deferred[0][0])
         self.assertIn("target-symbol limit", queue.deferred[0][1])
         self.assertEqual(1, result["result"]["capacity_deferred_job_count"])
+
+    def test_runner_never_completes_a_job_omitted_from_evaluated_symbols(self):
+        events = [source_event("NVDA", []), source_event("TSLA", [])]
+
+        class Queue:
+            def __init__(self):
+                self.completed = []
+                self.superseded = []
+
+            def claim(self, *_args, **_kwargs):
+                return [
+                    {"jobId": "job:" + str(index), "sourceEvent": event.to_dict()}
+                    for index, event in enumerate(events)
+                ]
+
+            def complete(self, job_id, _result):
+                self.completed.append(job_id)
+
+            def supersede(self, job_id, reason):
+                self.superseded.append((job_id, reason))
+
+            def defer(self, *_args):
+                return None
+
+            @staticmethod
+            def summary(_deployment_id):
+                return {"pendingCount": 0}
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+            @staticmethod
+            def consume(_source_events):
+                return {
+                    "request_id": "request:coverage",
+                    "status": "ok",
+                    "retryable": False,
+                    "evaluated_symbols": ["NVDA"],
+                    "not_evaluated_symbols": ["TSLA"],
+                }
+
+            @staticmethod
+            def health():
+                return {"status": "ready", "monitorRunnerUsed": False}
+
+        class Registry:
+            @staticmethod
+            def get(_deployment_id):
+                return {"health": {}}
+
+            @staticmethod
+            def update_health(_deployment_id, _health):
+                return None
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(queue, Engine(), Registry())
+
+        result = runner.run_once()
+
+        self.assertEqual(["job:0"], queue.completed)
+        self.assertEqual("job:1", queue.superseded[0][0])
+        self.assertIn("TSLA", queue.superseded[0][1])
+        self.assertEqual(1, result["result"]["completed_job_count"])
+        self.assertEqual(1, result["result"]["coverage_excluded_job_count"])
 
     def test_runner_reshards_one_oversized_job_before_engine_execution(self):
         event = source_event("NVDA", [])

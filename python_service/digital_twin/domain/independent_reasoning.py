@@ -10,7 +10,7 @@ from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
-INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v2"
+INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v3"
 
 
 def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
@@ -378,6 +378,8 @@ class IndependentReasoningResult:
     duration_ms: int
     account_ids: Tuple[str, ...] = ()
     symbols: Tuple[str, ...] = ()
+    evaluated_symbols: Tuple[str, ...] = ()
+    not_evaluated_symbols: Tuple[str, ...] = ()
     source_abox_snapshot_ids: Tuple[str, ...] = ()
     inference_generation_ids: Tuple[str, ...] = ()
     projection_results: Dict[str, object] = field(default_factory=dict)
@@ -404,6 +406,8 @@ class IndependentReasoningResult:
         for key in [
             "account_ids",
             "symbols",
+            "evaluated_symbols",
+            "not_evaluated_symbols",
             "source_abox_snapshot_ids",
             "inference_generation_ids",
             "candidate_events",

@@ -7002,6 +7002,97 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             inference_target_symbols=["000660"],
         )
 
+    def test_staged_abox_rule_run_finalizes_only_an_aligned_native_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        lifecycle = []
+        inferencebox = {
+            "status": "ok",
+            "nativeTypeDbReasoningUsed": True,
+            "nativeTypeDbReasoningCompleted": True,
+            "generationAligned": True,
+            "sourceAboxSnapshotId": "abox-manifest:candidate",
+            "targetSymbols": ["000660"],
+        }
+
+        def prepare(_world_id):
+            lifecycle.append("prepare")
+            return {
+                "status": "activated",
+                "candidateAboxSnapshotId": "abox-manifest:candidate",
+                "previousAboxSnapshotId": "abox-manifest:previous",
+            }
+
+        def run(_payload):
+            lifecycle.append("infer")
+            return {"status": "ok", "inferenceBox": inferencebox}
+
+        def finalize(active_id, previous_id, world_id):
+            lifecycle.append("finalize")
+            self.assertEqual("abox-manifest:candidate", active_id)
+            self.assertEqual("abox-manifest:previous", previous_id)
+            self.assertEqual("premise:shared:global", world_id)
+            return {"status": "ok"}
+
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={
+                    "acquired": True, "leaseOwner": "test-owner",
+                }), \
+                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}), \
+                patch.object(repository, "prepare_pending_abox_activation_for_inference", side_effect=prepare), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "worldviewManifestId": "abox-manifest:candidate",
+                }), \
+                patch.object(repository, "_run_rulebox_unlocked", side_effect=run), \
+                patch.object(repository, "finalize_abox_generation", side_effect=finalize), \
+                patch.object(repository, "activate_abox_generation") as rollback:
+            result = repository.run_rulebox_for_staged_abox({
+                "worldId": "premise:shared:global",
+                "symbols": ["000660"],
+                "expectedAboxSnapshotId": "abox-manifest:candidate",
+            })
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["stagedAboxInferenceAlignment"]["verified"])
+        self.assertEqual(["prepare", "infer", "finalize"], lifecycle)
+        rollback.assert_not_called()
+
+    def test_staged_abox_rule_run_restores_predecessor_after_native_failure(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={
+                    "acquired": True, "leaseOwner": "test-owner",
+                }), \
+                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}), \
+                patch.object(repository, "prepare_pending_abox_activation_for_inference", return_value={
+                    "status": "activated",
+                    "candidateAboxSnapshotId": "abox-manifest:candidate",
+                    "previousAboxSnapshotId": "abox-manifest:previous",
+                }), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "worldviewManifestId": "abox-manifest:candidate",
+                }), \
+                patch.object(repository, "_run_rulebox_unlocked", return_value={
+                    "status": "error",
+                    "reason": "native timeout",
+                    "inferenceBox": {
+                        "status": "native-rule-failed",
+                        "nativeTypeDbReasoningCompleted": False,
+                    },
+                }), \
+                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as rollback, \
+                patch.object(repository, "finalize_abox_generation") as finalize:
+            result = repository.run_rulebox_for_staged_abox({
+                "worldId": "premise:shared:global",
+                "symbols": ["000660"],
+                "expectedAboxSnapshotId": "abox-manifest:candidate",
+            })
+
+        self.assertEqual("inference-failed-rolled-back", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        rollback.assert_called_once_with(
+            "abox-manifest:previous",
+            "premise:shared:global",
+        )
+        finalize.assert_not_called()
+
     def test_typedb_pending_abox_recovery_resumes_complete_active_generation_on_stale_inference(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         pending = {
@@ -7030,6 +7121,40 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(["000660"], result["targetSymbols"])
         full_snapshot.assert_not_called()
         restore.assert_not_called()
+
+    def test_typedb_pending_abox_recovery_restores_interrupted_shared_premise_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        pending = {
+            "status": "pending",
+            "candidateAboxSnapshotId": "abox-manifest:candidate",
+            "previousAboxSnapshotId": "abox-manifest:previous",
+            "targetSymbols": ["000660"],
+        }
+        with patch.object(repository, "pending_abox_activation", return_value=pending), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok", "aboxSnapshotId": "abox-manifest:candidate",
+                }), \
+                patch.object(repository, "inferencebox_recovery_metadata", return_value={
+                    "status": "ok",
+                    "sourceAboxSnapshotId": "abox-manifest:previous",
+                    "targetSymbols": ["000660"],
+                    "nativeTypeDbReasoningCompleted": True,
+                    "nativeInferenceOutcome": "matched",
+                }), \
+                patch.object(repository, "activate_abox_generation", return_value={"status": "ok"}) as restore:
+            result = repository.recover_pending_abox_activation(
+                "premise:shared:global"
+            )
+
+        self.assertEqual("restored", result["status"])
+        self.assertEqual(
+            "rollback-interrupted-shared-premise-candidate",
+            result["recoveryMode"],
+        )
+        restore.assert_called_once_with(
+            "abox-manifest:previous",
+            world_id="premise:shared:global",
+        )
 
     def test_scoped_manifest_metadata_reads_only_the_requested_marker(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

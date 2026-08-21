@@ -155,6 +155,16 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("sharedInstrumentInference"), Mapping)
         else {}
     )
+    shared_execution = (
+        values.get("sharedInferenceExecution")
+        if isinstance(values.get("sharedInferenceExecution"), Mapping)
+        else {}
+    )
+    partitioned_reasoning = (
+        values.get("worldPartitionedReasoning")
+        if isinstance(values.get("worldPartitionedReasoning"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -215,6 +225,29 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                 for symbol, value in dict(shared.get("symbols") or {}).items()
                 if isinstance(value, Mapping)
             },
+        },
+        "sharedInferenceExecution": {
+            key: shared_execution.get(key)
+            for key in [
+                "status", "reuseProofStatus", "reuseEligible",
+                "decisionPathAffected", "worldId", "sourceAboxSnapshotId",
+                "inferenceGenerationId", "generationVector",
+                "ruleSelection", "resultSlotWrite", "runtimeStages",
+                "activationLifecycle", "requestedSymbols",
+                "evaluatedSymbols", "notEvaluatedSymbols",
+                "targetCoverageComplete", "existingInferenceReuseMode",
+            ]
+            if key in shared_execution
+        },
+        "worldPartitionedReasoning": {
+            key: partitioned_reasoning.get(key)
+            for key in [
+                "status", "ready", "reason", "retryable",
+                "recommendedRetryAfterSeconds", "worldId",
+                "projectionStatus", "executionStatus", "inferenceStatus",
+                "generationVector", "activationLifecycle", "runtimeStages",
+            ]
+            if key in partitioned_reasoning
         },
     }
 
@@ -451,6 +484,13 @@ class ScopedTypeDBInferenceExecutor:
                         "reason": str(error)[:240],
                     }
                 if not bool(premise_proof.get("ready")):
+                    evaluated_symbols = list(
+                        premise_proof.get("evaluatedSymbols") or []
+                    )
+                    not_evaluated_symbols = list(
+                        premise_proof.get("notEvaluatedSymbols")
+                        or sorted(set(request.symbols) - set(evaluated_symbols))
+                    )
                     result = {
                         "saved": False,
                         "status": str(
@@ -467,6 +507,13 @@ class ScopedTypeDBInferenceExecutor:
                         ),
                         "preservedActiveGeneration": True,
                         "worldPartitionedReasoning": premise_proof,
+                        "sharedInferenceExecution": {
+                            "status": "shared-premise-not-ready",
+                            "requestedSymbols": list(request.symbols),
+                            "evaluatedSymbols": evaluated_symbols,
+                            "notEvaluatedSymbols": not_evaluated_symbols,
+                            "targetCoverageComplete": False,
+                        },
                     }
                     snapshot.metadata.setdefault("ontology", {})["projection"] = result
                     results[account_id] = result
@@ -576,6 +623,16 @@ class ScopedTypeDBInferenceExecutor:
                     result = dict(evidence_composer(result, reuse_proof) or result)
             results[account_id] = result
             if partitioned_mode:
+                premise_selection = (
+                    dict(premise_proof.get("ruleSelectionProof") or {})
+                    if isinstance(premise_proof.get("ruleSelectionProof"), Mapping)
+                    else {}
+                )
+                premise_slot_write = (
+                    dict(premise_proof.get("resultSlotWrite") or {})
+                    if isinstance(premise_proof.get("resultSlotWrite"), Mapping)
+                    else {}
+                )
                 result["sharedInferenceExecution"] = {
                     "status": "direct-shared-premise-world",
                     "reuseProofStatus": str(reuse_proof.get("status") or ""),
@@ -583,6 +640,62 @@ class ScopedTypeDBInferenceExecutor:
                     "publicationStatus": "not-required",
                     "portfolioProjectionReused": False,
                     "decisionPathAffected": True,
+                    "worldId": str(premise_proof.get("worldId") or ""),
+                    "sourceAboxSnapshotId": str(
+                        premise_proof.get("sourceAboxSnapshotId") or ""
+                    ),
+                    "inferenceGenerationId": str(
+                        premise_proof.get("inferenceGenerationId") or ""
+                    ),
+                    "requestedSymbols": list(
+                        premise_proof.get("requestedSymbols")
+                        or request.symbols
+                    ),
+                    "evaluatedSymbols": list(
+                        premise_proof.get("evaluatedSymbols")
+                        or (premise_proof.get("symbols") or {}).keys()
+                    ),
+                    "notEvaluatedSymbols": list(
+                        premise_proof.get("notEvaluatedSymbols") or []
+                    ),
+                    "targetCoverageComplete": bool(
+                        premise_proof.get("targetCoverageComplete", True)
+                    ),
+                    "generationVector": dict(
+                        premise_proof.get("generationVector") or {}
+                    ),
+                    "ruleSelection": {
+                        key: premise_selection.get(key)
+                        for key in [
+                            "reusable", "proofSource", "reason",
+                            "selectionRequested", "selectionApplied",
+                            "candidateRuleCount", "executedRuleCount",
+                            "deferredRuleCount", "fullRuleCount",
+                            "generationReused", "reuseMode",
+                        ]
+                        if key in premise_selection
+                    },
+                    "resultSlotWrite": {
+                        key: premise_slot_write.get(key)
+                        for key in [
+                            "status", "saved", "symbolCount",
+                            "catalogRuleCount", "slotCount", "reason", "reused",
+                        ]
+                        if key in premise_slot_write
+                    },
+                    "runtimeStages": {
+                        str(key): int(value)
+                        for key, value in dict(
+                            premise_proof.get("runtimeStages") or {}
+                        ).items()
+                        if isinstance(value, (int, float))
+                    },
+                    "activationLifecycle": dict(
+                        premise_proof.get("activationLifecycle") or {}
+                    ),
+                    "existingInferenceReuseMode": str(
+                        premise_proof.get("existingInferenceReuseMode") or ""
+                    ),
                 }
             elif self.shared_inference_service is not None:
                 try:
@@ -787,6 +900,26 @@ class V2ReasoningEngine:
             account_id: compact_projection_result(value)
             for account_id, value in projection_results.items()
         }
+        coverage_reports = [
+            dict((value or {}).get("sharedInferenceExecution") or {})
+            for value in projection_results.values()
+            if isinstance(value, Mapping)
+            and isinstance((value or {}).get("sharedInferenceExecution"), Mapping)
+        ]
+        coverage_reported = any(
+            "evaluatedSymbols" in report for report in coverage_reports
+        )
+        evaluated_symbols = tuple(sorted({
+            str(symbol or "").upper().strip()
+            for report in coverage_reports
+            for symbol in report.get("evaluatedSymbols") or []
+            if str(symbol or "").strip()
+        })) if coverage_reported else (
+            tuple(request.symbols) if verified_accounts else ()
+        )
+        not_evaluated_symbols = tuple(sorted(
+            set(request.symbols) - set(evaluated_symbols)
+        ))
         if reasoning_case is not None and verified_accounts:
             reasoning_case = self.reasoning_orchestrator.inference_completed(
                 reasoning_case.case_id,
@@ -916,6 +1049,8 @@ class V2ReasoningEngine:
             duration_ms=int((time.perf_counter() - started) * 1000),
             account_ids=tuple(str(getattr(snapshot, "account_id", "") or "") for snapshot in snapshots),
             symbols=request.symbols,
+            evaluated_symbols=evaluated_symbols,
+            not_evaluated_symbols=not_evaluated_symbols,
             source_abox_snapshot_ids=source_ids,
             inference_generation_ids=generation_ids,
             projection_results=compact_projections,
@@ -1133,6 +1268,33 @@ class IndependentReasoningJobRunner:
             result["native_target_symbol_limit"] = self.native_target_symbol_limit()
             result["capacity_deferred_job_count"] = len(capacity_deferred_jobs)
             status = str(result.get("status") or "")
+            completion_jobs = list(selected_jobs)
+            coverage_excluded_jobs = []
+            if (
+                status not in {"deferred", "rejected"}
+                and "evaluated_symbols" in result
+            ):
+                evaluated_symbols = {
+                    str(symbol or "").upper().strip()
+                    for symbol in result.get("evaluated_symbols") or []
+                    if str(symbol or "").strip()
+                }
+                completion_jobs = []
+                for job in selected_jobs:
+                    requested_symbols = set(self.job_symbols(job))
+                    if requested_symbols and not requested_symbols.issubset(evaluated_symbols):
+                        coverage_excluded_jobs.append(job)
+                    else:
+                        completion_jobs.append(job)
+            completion_job_ids = [job["jobId"] for job in completion_jobs]
+            coverage_excluded_job_ids = [
+                job["jobId"] for job in coverage_excluded_jobs
+            ]
+            result["completed_job_count"] = len(completion_job_ids)
+            result["coverage_excluded_job_count"] = len(
+                coverage_excluded_job_ids
+            )
+            result["coverage_excluded_job_ids"] = coverage_excluded_job_ids
             if status == "deferred" and result.get("retryable"):
                 for job_id in job_ids:
                     self.queue.defer(
@@ -1149,13 +1311,27 @@ class IndependentReasoningJobRunner:
                     )
                 outcome = "superseded"
             else:
-                for job_id in job_ids:
+                for job in coverage_excluded_jobs:
+                    missing = sorted(
+                        set(self.job_symbols(job))
+                        - set(result.get("evaluated_symbols") or [])
+                    )
+                    reason = (
+                        "The immutable source snapshot did not cover the requested "
+                        "reasoning symbols: " + ", ".join(missing)
+                    )[:300]
+                    supersede = getattr(self.queue, "supersede", None)
+                    if callable(supersede):
+                        supersede(job["jobId"], reason)
+                    else:
+                        self.queue.defer(job["jobId"], reason, 5)
+                for job_id in completion_job_ids:
                     parameters = inspect.signature(self.queue.complete).parameters
                     if "worker_id" in parameters:
                         self.queue.complete(job_id, result, worker_id=self.worker_id)
                     else:
                         self.queue.complete(job_id, result)
-                outcome = "completed"
+                outcome = "completed" if completion_job_ids else "superseded"
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update(self.engine.health())
             health.update({

@@ -20,7 +20,11 @@ from digital_twin.domain.ontology_projection_fingerprint import (
 )
 from digital_twin.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position
 from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
-from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
+from digital_twin.infrastructure.ontology_projection import (
+    PortfolioOntologyProjectionRecorder,
+    compact_staged_abox_activation_lifecycle,
+    shared_inference_from_result_slot_proof,
+)
 
 
 class Cursor:
@@ -104,6 +108,65 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_shared_result_slots_rehydrate_only_the_active_inference_generation(self):
+        context = {
+            "reusable": True,
+            "expectedRuleCount": 2,
+            "inferenceGenerationId": "generation:active",
+            "sourceAboxSnapshotId": "abox:active",
+            "proofRunId": "run:active",
+            "ruleStatesBySymbol": {
+                "NVDA": {
+                    "shared.premise.graph.rule.one": "matched",
+                    "shared.premise.graph.rule.two": "not-matched",
+                },
+            },
+        }
+        recovery = {
+            "status": "ok",
+            "inferenceGenerationId": "generation:active",
+            "sourceAboxSnapshotId": "abox:active",
+            "targetSymbols": ["NVDA"],
+            "nativeTypeDbReasoningCompleted": True,
+        }
+
+        result = shared_inference_from_result_slot_proof(
+            world_id="premise:shared:global",
+            active_abox={"aboxSnapshotId": "abox:active"},
+            recovery_metadata=recovery,
+            selection_context=context,
+            symbols=["NVDA"],
+        )
+        rejected = shared_inference_from_result_slot_proof(
+            world_id="premise:shared:global",
+            active_abox={"aboxSnapshotId": "abox:newer"},
+            recovery_metadata=recovery,
+            selection_context=context,
+            symbols=["NVDA"],
+        )
+
+        self.assertEqual("typedb-result-slot-generation-reuse", result["reasoningMode"])
+        self.assertEqual(1, result["traceCount"])
+        self.assertEqual(
+            "shared.premise.graph.rule.one",
+            result["traces"][0]["ruleId"],
+        )
+        self.assertTrue(result["resultSlotProofReused"])
+        self.assertEqual({}, rejected)
+
+    def test_inference_symbols_does_not_replace_a_missing_requested_subject(self):
+        recorder = PortfolioOntologyProjectionRecorder.__new__(
+            PortfolioOntologyProjectionRecorder
+        )
+        snapshot = source_snapshot()
+
+        self.assertEqual(
+            ["005930"],
+            recorder.inference_symbols(snapshot, ["005930", "035420"]),
+        )
+        self.assertEqual([], recorder.inference_symbols(snapshot, ["035420"]))
+        self.assertEqual(["005930"], recorder.inference_symbols(snapshot))
+
     def test_rule_evaluation_namespace_survives_non_semantic_release_change(self):
         repository = SimpleNamespace(store_key="typedb")
         first = PortfolioOntologyProjectionRecorder(repository, settings={
@@ -1138,6 +1201,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertFalse(context["reusable"])
         self.assertEqual("result-slot-generation-incoherent", context["reason"])
         self.assertIn("execution_namespace_id = %s", connection.calls[0][0])
+        self.assertIn("engine_deployment_id = %s", connection.calls[0][0])
+        self.assertIn("graph_database = %s", connection.calls[0][0])
+        self.assertNotIn("release_fingerprint = %s", connection.calls[0][0])
 
     def test_incremental_slot_write_inherits_one_generation_and_replaces_executed_rules(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
@@ -1195,6 +1261,107 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertTrue(all(row[14] == 1 for row in inserts))
         self.assertEqual({"generation:current"}, {row[16] for row in inserts})
         self.assertEqual(1, len({row[19] for row in inserts}))
+
+    def test_staged_abox_lifecycle_compacts_active_manifest_metadata(self):
+        compact = compact_staged_abox_activation_lifecycle({
+            "aboxActivationPreparation": {
+                "status": "activated",
+                "candidateAboxSnapshotId": "abox:candidate",
+                "previousAboxSnapshotId": "abox:previous",
+                "activeAbox": {
+                    "status": "ok",
+                    "aboxSnapshotId": "abox:candidate",
+                    "worldviewManifestId": "abox:candidate",
+                    "worldId": "premise:shared:global",
+                    "scopePlan": [{"scopeId": "large"}] * 1000,
+                    "marketScopeObservedAt": {"large": "payload"},
+                },
+            },
+            "stagedAboxInferenceAlignment": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:candidate",
+                "targetSymbols": ["NVDA"],
+            },
+        })
+
+        self.assertEqual("activated", compact["preparation"]["status"])
+        self.assertEqual(
+            "abox:candidate",
+            compact["preparation"]["activeAbox"]["aboxSnapshotId"],
+        )
+        self.assertNotIn("scopePlan", compact["preparation"]["activeAbox"])
+        self.assertNotIn(
+            "marketScopeObservedAt",
+            compact["preparation"]["activeAbox"],
+        )
+
+    def test_shared_world_can_persist_a_direct_coherent_result_slot_generation(self):
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.transaction = lambda: ConnectionContext(connection)
+
+        result = store.record_rule_result_slots(
+            world_id="premise:shared:us",
+            account_id="",
+            symbols=["NVDA"],
+            catalog_rule_ids=[
+                "shared.premise.graph.rule.one",
+                "shared.premise.graph.rule.two",
+            ],
+            rulebox_rules_hash="shared-rules:1",
+            tbox_fingerprint="tbox:1",
+            scope_plan_fingerprint={
+                "fingerprint": "scope:shared:1",
+                "scopeManifest": {"symbol:NVDA:market": "large-payload"},
+            },
+            source_abox_snapshot_id="abox:shared:2",
+            source_snapshot_fingerprint="facts:shared:2",
+            execution={
+                "status": "ok",
+                "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionFullRuleCount": 2,
+                "nativeRuleSelectionExecutedRuleIds": [
+                    "shared.premise.graph.rule.two",
+                ],
+                "typedbNativeRuleMatchedRuleIds": [
+                    "shared.premise.graph.rule.two",
+                ],
+            },
+            inference={
+                "status": "ok",
+                "generationAligned": True,
+                "inferenceGenerationId": "generation:shared:2",
+                "sourceAboxSnapshotId": "abox:shared:2",
+                "traces": [{
+                    "ruleId": "shared.premise.graph.rule.two",
+                    "symbol": "NVDA",
+                }],
+            },
+            execution_namespace_id="namespace:v2",
+            engine_deployment_id="ontology-v2-production-r14",
+            graph_database="orbit_alpha_ontology",
+            release_fingerprint="release:r14",
+            prior_rule_states_by_symbol={"NVDA": {
+                "shared.premise.graph.rule.one": "matched",
+                "shared.premise.graph.rule.two": "not-matched",
+            }},
+            revision_vectors_by_symbol={"NVDA": {"price": "revision:2"}},
+        )
+
+        inserts = [
+            params
+            for sql, params in connection.calls
+            if "INSERT INTO ontology_reasoning_rule_result_slots" in sql
+        ]
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["slotCount"])
+        self.assertEqual(2, len(inserts))
+        self.assertEqual({"scope:shared:1"}, {row[12] for row in inserts})
+        self.assertEqual({"premise:shared:us"}, {row[5] for row in inserts})
+        self.assertEqual({""}, {row[6] for row in inserts})
+        self.assertEqual({"NVDA"}, {row[7] for row in inserts})
+        self.assertEqual({"generation:shared:2"}, {row[16] for row in inserts})
+        self.assertTrue(all(row[14] == 1 for row in inserts))
 
     def test_projection_audit_keeps_runtime_identity_and_patch_fallback(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()

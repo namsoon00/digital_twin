@@ -3,7 +3,10 @@ import hashlib
 from typing import Dict, List, Mapping
 
 from ..domain.ontology_execution_trace import reasoning_execution_trace_payload
-from ..domain.ontology_projection_audit import OntologyProjectionRun
+from ..domain.ontology_projection_audit import (
+    OntologyProjectionRun,
+    projection_run_from_payload,
+)
 from ..domain.ontology_runtime_operations import summarize_projection_runtime_observations
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
@@ -269,6 +272,212 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             )
         return run
 
+    def record_rule_result_slots(
+        self,
+        *,
+        world_id: str,
+        account_id: str,
+        symbols: List[str],
+        catalog_rule_ids: List[str],
+        rulebox_rules_hash: str,
+        tbox_fingerprint: str,
+        scope_plan_fingerprint: str,
+        source_abox_snapshot_id: str,
+        source_snapshot_fingerprint: str,
+        execution: Mapping[str, object],
+        inference: Mapping[str, object],
+        execution_namespace_id: str,
+        engine_deployment_id: str,
+        graph_database: str,
+        release_fingerprint: str,
+        validation_cohort_id: str = "",
+        prior_rule_states_by_symbol: Mapping[str, object] = None,
+        revision_vectors_by_symbol: Mapping[str, object] = None,
+        source_run_id: str = "",
+        tbox_version: str = "",
+    ) -> Dict[str, object]:
+        """Persist a coherent result-slot generation outside Portfolio audit.
+
+        SharedPremiseWorld has its own factual and inference generations, so
+        tying its result slots to a private Portfolio projection row would
+        create a false ownership dependency. This method writes the same
+        full-catalog proof format directly while reusing the established slot
+        reconciliation and one-transaction bulk upsert implementation.
+        """
+
+        target_symbols = sorted({
+            str(symbol or "").upper().strip()
+            for symbol in symbols or []
+            if str(symbol or "").strip()
+        })
+        catalog = sorted({
+            str(rule_id or "").strip()
+            for rule_id in catalog_rule_ids or []
+            if str(rule_id or "").strip()
+        })
+        execution_values = dict(execution or {})
+        inference_values = dict(inference or {})
+        scope_fingerprint = str(
+            (
+                scope_plan_fingerprint.get("fingerprint")
+                if isinstance(scope_plan_fingerprint, Mapping)
+                else scope_plan_fingerprint
+            )
+            or ""
+        ).strip()
+        generation_id = str(
+            inference_values.get("inferenceGenerationId") or ""
+        ).strip()
+        source_abox_id = str(
+            inference_values.get("sourceAboxSnapshotId")
+            or source_abox_snapshot_id
+            or ""
+        ).strip()
+        required_identity = [
+            world_id,
+            target_symbols,
+            catalog,
+            rulebox_rules_hash,
+            tbox_fingerprint,
+            scope_fingerprint,
+            source_abox_id,
+            generation_id,
+            execution_namespace_id,
+            engine_deployment_id,
+            graph_database,
+            release_fingerprint,
+        ]
+        if (
+            any(not value for value in required_identity)
+            or str(execution_values.get("status") or "").lower() != "ok"
+            or not bool(inference_values.get("generationAligned"))
+        ):
+            return {
+                "status": "skipped-incomplete-result-slot-generation",
+                "saved": False,
+                "worldId": str(world_id or ""),
+                "symbolCount": len(target_symbols),
+                "catalogRuleCount": len(catalog),
+            }
+        full_rule_count = int(
+            execution_values.get("nativeRuleSelectionFullRuleCount") or 0
+        )
+        if full_rule_count != len(catalog):
+            return {
+                "status": "skipped-result-slot-catalog-mismatch",
+                "saved": False,
+                "worldId": str(world_id or ""),
+                "reportedRuleCount": full_rule_count,
+                "catalogRuleCount": len(catalog),
+            }
+        prior_states = (
+            dict(prior_rule_states_by_symbol or {})
+            if isinstance(prior_rule_states_by_symbol, Mapping)
+            else {}
+        )
+        if bool(execution_values.get("nativeRuleSelectionApplied")) and not prior_states:
+            return {
+                "status": "skipped-missing-prior-result-slot-proof",
+                "saved": False,
+                "worldId": str(world_id or ""),
+            }
+
+        run_id = str(source_run_id or "").strip() or (
+            "world-rule-slots:" + generation_id
+        )
+        run = projection_run_from_payload({
+            "runId": run_id,
+            "portfolioId": str(world_id or ""),
+            "accountId": str(account_id or ""),
+            "tenantId": "shared" if not str(account_id or "").strip() else "local",
+            "worldId": str(world_id or ""),
+            "worldType": "SharedPremiseWorld" if not str(account_id or "").strip() else "PortfolioWorld",
+            "sourceSnapshotFingerprint": str(
+                source_snapshot_fingerprint or source_abox_id
+            ),
+            "status": "ok",
+            "graphStore": "typedb",
+            "executionNamespaceId": str(execution_namespace_id or ""),
+            "engineDeploymentId": str(engine_deployment_id or ""),
+            "graphDatabase": str(graph_database or ""),
+            "releaseFingerprint": str(release_fingerprint or ""),
+            "validationCohortId": str(validation_cohort_id or ""),
+            "projectionMode": "direct-world-rule-result-slots",
+            "materialFingerprint": str(source_snapshot_fingerprint or source_abox_id),
+            "aboxSnapshotId": source_abox_id,
+            "activeAboxSnapshotId": source_abox_id,
+            "tboxVersion": str(tbox_version or ""),
+            "tboxFingerprint": str(tbox_fingerprint or ""),
+            "ruleboxRulesHash": str(rulebox_rules_hash or ""),
+            "inferenceGenerationId": generation_id,
+            "inferenceStatus": str(inference_values.get("status") or "ok"),
+            "sourceSymbols": target_symbols,
+            "context": {
+                "scopeTopology": {
+                    "inferenceReuseScopePlanFingerprint": str(
+                        scope_fingerprint
+                    ),
+                },
+                "reasoningRequest": {
+                    "revisionVectorsBySymbol": dict(
+                        revision_vectors_by_symbol or {}
+                    ),
+                },
+            },
+        })
+        rule_outcomes = []
+        for trace in inference_values.get("traces") or []:
+            if not isinstance(trace, Mapping):
+                continue
+            rule_id = str(
+                trace.get("ruleId") or trace.get("sourceRuleId") or ""
+            ).strip()
+            if rule_id not in catalog:
+                continue
+            symbol = str(trace.get("symbol") or "").upper().strip()
+            rule_outcomes.append({
+                "ruleId": rule_id,
+                "ruleVersion": str(trace.get("ruleVersion") or ""),
+                "matched": True,
+                "matchedTargetSymbols": [symbol] if symbol else target_symbols,
+            })
+        result = {
+            "status": "ok",
+            "ruleboxExecution": execution_values,
+            "inferenceBox": inference_values,
+            "inferenceReuseProof": {
+                "scopePlanFingerprint": scope_fingerprint,
+            },
+            "_ruleResultSlotCatalogRuleIds": catalog,
+            "_priorRuleStatesBySymbol": prior_states,
+        }
+        trace = {
+            "inferenceGenerationId": generation_id,
+            "ruleOutcomes": rule_outcomes,
+        }
+        stamp = utc_now()
+        with self.transaction() as connection:
+            self._upsert_rule_result_slots_with_connection(
+                connection,
+                run,
+                result,
+                trace,
+                stamp,
+            )
+        return {
+            "status": "ok",
+            "saved": True,
+            "worldId": str(world_id or ""),
+            "inferenceGenerationId": generation_id,
+            "sourceAboxSnapshotId": source_abox_id,
+            "symbolCount": len(target_symbols),
+            "catalogRuleCount": len(catalog),
+            "slotCount": len(target_symbols) * len(catalog),
+            "selectionApplied": bool(
+                execution_values.get("nativeRuleSelectionApplied")
+            ),
+        }
+
     @staticmethod
     def _bulk_execute(connection, sql: str, rows: List[tuple]) -> None:
         if not rows:
@@ -405,6 +614,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             if isinstance(result.get("ruleboxExecution"), Mapping)
             else {}
         )
+        slot_rulebox_rules_hash = str(
+            result.get("_ruleResultSlotRulesHash")
+            or run.rulebox_rules_hash
+            or ""
+        ).strip()
         generation_id = str(
             inference.get("inferenceGenerationId")
             or trace.get("inferenceGenerationId")
@@ -415,7 +629,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or str(execution.get("status") or "").lower() != "ok"
             or not bool(inference.get("generationAligned"))
             or not generation_id
-            or not str(run.rulebox_rules_hash or "").strip()
+            or not slot_rulebox_rules_hash
             or not str(run.tbox_fingerprint or "").strip()
         ):
             return
@@ -429,7 +643,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             0,
             int(execution.get("nativeRuleSelectionFullRuleCount") or 0),
         )
-        if not catalog_rule_count or not reported_rule_count or reported_rule_count > catalog_rule_count:
+        if not catalog_rule_count or reported_rule_count != catalog_rule_count:
             return
         namespace_id = str(run.execution_namespace_id or "").strip()
         deployment_id = str(run.engine_deployment_id or "").strip()
@@ -565,7 +779,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             source_abox_snapshot_id,
             generation_id,
             scope_fingerprint,
-            str(run.rulebox_rules_hash or ""),
+            slot_rulebox_rules_hash,
             str(run.tbox_fingerprint or ""),
         ]).encode("utf-8")).hexdigest()
         slot_rows = []
@@ -588,7 +802,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     symbol,
                     rule_id,
                     rule_versions.get(rule_id, ""),
-                    str(run.rulebox_rules_hash or ""),
+                    slot_rulebox_rules_hash,
                     str(run.tbox_fingerprint or ""),
                     scope_fingerprint,
                     "matched" if symbol_matched else "not-matched",
@@ -675,10 +889,14 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 str(account_id or ""), str(rulebox_rules_hash or ""),
                 str(tbox_fingerprint or ""),
             ]
+            # The application release is provenance, not executable rule
+            # identity. Queue/UI/collector-only releases may reuse slots when
+            # the deployment, graph, TBox, RuleBox and native-engine namespace
+            # remain compatible. Native evaluation changes must instead bump
+            # the execution namespace version.
             for column, value in [
                 ("engine_deployment_id", engine_deployment_id),
                 ("graph_database", graph_database),
-                ("release_fingerprint", release_fingerprint),
             ]:
                 if str(value or "").strip():
                     clauses.append(column + " = %s")

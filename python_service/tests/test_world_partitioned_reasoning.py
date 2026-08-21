@@ -21,6 +21,7 @@ from digital_twin.domain.world_partitioned_reasoning import (
     account_overlay_graph,
     attach_shared_premise_evidence,
     compile_world_partitioned_rules,
+    partitioned_phase_impact_plan,
     shared_premise_matches,
     shared_premise_world_graph,
 )
@@ -110,6 +111,91 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         self.assertEqual(
             ["account-return", "shared-market-premise:graph.test.mixed.v1"],
             [condition.condition_id for condition in result["overlayRules"][0].conditions],
+        )
+
+    def test_impact_plan_is_translated_to_each_physical_world_catalog(self):
+        partition = compile_world_partitioned_rules([mixed_rule()])
+        source_plan = {
+            "version": "impact-v1",
+            "candidateRuleIds": ["graph.test.mixed.v1"],
+            "triggerRuleIds": ["graph.test.mixed.v1"],
+            "invalidationRuleIds": [],
+            "deferredRuleIds": [],
+            "ruleRoutingComplete": True,
+            "nativeRuleSelectionEligible": False,
+            "diagnostics": {},
+        }
+
+        shared = partitioned_phase_impact_plan(
+            source_plan,
+            partition,
+            "shared-premise",
+        )
+        overlay = partitioned_phase_impact_plan(
+            source_plan,
+            partition,
+            "account-overlay",
+        )
+
+        self.assertEqual(
+            ["shared.premise.graph.test.mixed.v1"],
+            shared["candidateRuleIds"],
+        )
+        self.assertEqual(
+            ["graph.test.mixed.v1"],
+            overlay["candidateRuleIds"],
+        )
+        self.assertEqual("shared-premise", shared["ruleExecutionPhase"])
+        self.assertEqual("account-overlay", overlay["ruleExecutionPhase"])
+
+    def test_phase_plan_expands_one_cross_world_rule_to_all_shared_rules(self):
+        base = mixed_rule()
+        rule = GraphInferenceRule(
+            **{
+                **base.__dict__,
+                "rule_id": "graph.test.cross-or-impact.v1",
+                "conditions": [
+                    base.conditions[0],
+                    GraphRuleCondition(
+                        "market-flow",
+                        "property",
+                        "market flow",
+                        field="tradeStrength",
+                        operator=">",
+                        value=100,
+                        role="any",
+                        hypothesis_scope="market",
+                    ),
+                    GraphRuleCondition(
+                        "account-profile",
+                        "property",
+                        "account profile",
+                        field="investmentStrategyProfile",
+                        operator="==",
+                        value="aggressive",
+                        role="any",
+                        hypothesis_scope="account",
+                    ),
+                ],
+                "any_condition_min_count": 1,
+            }
+        )
+        partition = compile_world_partitioned_rules([rule, mixed_rule()])
+        plan = partitioned_phase_impact_plan({
+            "candidateRuleIds": [rule.rule_id],
+            "triggerRuleIds": [rule.rule_id],
+            "invalidationRuleIds": [],
+            "ruleRoutingComplete": True,
+        }, partition, "shared-premise")
+
+        self.assertEqual([
+            "shared.premise.graph.test.cross-or-impact.v1",
+            "shared.premise.any.graph.test.cross-or-impact.v1",
+        ], plan["candidateRuleIds"])
+        self.assertTrue(plan["nativeRuleSelectionEligible"])
+        self.assertEqual(
+            ["shared.premise.graph.test.mixed.v1"],
+            plan["deferredRuleIds"],
         )
 
     def test_cross_world_or_keeps_required_market_and_either_optional_path(self):

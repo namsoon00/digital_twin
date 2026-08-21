@@ -391,6 +391,136 @@ def compile_world_partitioned_rules(rules: Iterable[GraphInferenceRule]) -> Dict
     }
 
 
+def partitioned_phase_impact_plan(
+    source_plan: Mapping[str, object],
+    partition: Mapping[str, object],
+    phase: str,
+) -> Dict[str, object]:
+    """Translate one source RuleBox impact plan to an executable world phase.
+
+    Dependency routing is authored against stable semantic rule IDs. The
+    world compiler can expand one semantic rule into multiple shared premise
+    rules, while account-overlay rule IDs remain stable. This adapter keeps
+    the routing decision auditable and prevents either native phase from
+    falling back to the complete catalogue merely because its physical rule
+    IDs differ from the source RuleBox.
+    """
+
+    plan = deepcopy(dict(source_plan or {}))
+    compiled = dict(partition or {})
+    clean_phase = _text(phase).lower()
+    if clean_phase not in {"shared-premise", "account-overlay"}:
+        raise ValueError("Unknown world-partitioned inference phase: " + clean_phase)
+    if _text(compiled.get("status")).lower() != "ready":
+        return {
+            **plan,
+            "ruleExecutionPhase": clean_phase,
+            "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
+            "candidateRuleIds": [],
+            "triggerRuleIds": [],
+            "invalidationRuleIds": [],
+            "deferredRuleIds": [],
+            "candidateRuleCount": 0,
+            "enabledRuleCount": 0,
+            "ruleRoutingComplete": False,
+            "nativeRuleSelectionEligible": False,
+            "nativeRuleSelectionEligibilityReason": "invalid-world-rule-partition",
+        }
+
+    catalog_key = "sharedRuleIds" if clean_phase == "shared-premise" else "overlayRuleIds"
+    catalog_ids = [
+        _text(value)
+        for value in compiled.get(catalog_key) or []
+        if _text(value)
+    ]
+    catalog_set = set(catalog_ids)
+    mapping: Dict[str, List[str]] = {}
+    for row in compiled.get("rules") or []:
+        if not isinstance(row, Mapping):
+            continue
+        source_rule_id = _text(row.get("ruleId"))
+        if not source_rule_id:
+            continue
+        if clean_phase == "shared-premise":
+            physical_ids = [
+                _text(value)
+                for value in row.get("sharedRuleIds") or []
+                if _text(value) in catalog_set
+            ]
+        else:
+            overlay_rule_id = _text(row.get("overlayRuleId"))
+            physical_ids = [overlay_rule_id] if overlay_rule_id in catalog_set else []
+        mapping[source_rule_id] = physical_ids
+
+    def translated(values: object) -> List[str]:
+        selected = {
+            physical_rule_id
+            for source_rule_id in values or []
+            for physical_rule_id in mapping.get(_text(source_rule_id), [])
+            if physical_rule_id
+        }
+        return [rule_id for rule_id in catalog_ids if rule_id in selected]
+
+    source_candidates = [
+        _text(value)
+        for value in plan.get("candidateRuleIds") or []
+        if _text(value)
+    ]
+    candidate_ids = translated(source_candidates)
+    trigger_ids = translated(plan.get("triggerRuleIds") or [])
+    invalidation_ids = translated(plan.get("invalidationRuleIds") or [])
+    deferred_ids = [rule_id for rule_id in catalog_ids if rule_id not in set(candidate_ids)]
+    routing_complete = bool(plan.get("ruleRoutingComplete", True))
+    selection_eligible = bool(
+        routing_complete
+        and candidate_ids
+        and len(candidate_ids) < len(catalog_ids)
+    )
+    if not routing_complete:
+        eligibility_reason = "source-rule-routing-incomplete"
+    elif not catalog_ids:
+        eligibility_reason = "phase-rule-catalog-empty"
+    elif not candidate_ids:
+        eligibility_reason = "phase-candidate-rules-unavailable"
+    elif len(candidate_ids) >= len(catalog_ids):
+        eligibility_reason = "phase-candidates-cover-complete-catalog"
+    else:
+        eligibility_reason = "phase-candidate-subset-within-safe-context"
+
+    diagnostics = dict(plan.get("diagnostics") or {})
+    diagnostics.update({
+        "ruleExecutionPhase": clean_phase,
+        "sourceCandidateRuleCount": len(source_candidates),
+        "phaseCandidateRuleCount": len(candidate_ids),
+        "phaseEnabledRuleCount": len(catalog_ids),
+        "phaseDeferredRuleCount": len(deferred_ids),
+        "phaseCandidateRatioPct": round(
+            (len(candidate_ids) / max(1, len(catalog_ids))) * 100,
+            1,
+        ),
+        "phaseRuleMappingComplete": routing_complete,
+        "selectionEligibilityReason": eligibility_reason,
+    })
+    return {
+        **plan,
+        "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
+        "ruleExecutionPhase": clean_phase,
+        "sourceCandidateRuleIds": source_candidates,
+        "candidateRuleIds": candidate_ids,
+        "triggerRuleIds": trigger_ids,
+        "invalidationRuleIds": invalidation_ids,
+        "deferredRuleIds": deferred_ids,
+        "candidateRuleCount": len(candidate_ids),
+        "enabledRuleCount": len(catalog_ids),
+        "ruleDependencyCount": len(catalog_ids),
+        "ruleRoutingComplete": routing_complete,
+        "nativeRuleSelectionEligible": selection_eligible,
+        "nativeRuleSelectionEligibilityReason": eligibility_reason,
+        "nativeRuleSelectionApplied": False,
+        "diagnostics": diagnostics,
+    }
+
+
 def shared_premise_matches(inference: Mapping[str, object]) -> Dict[str, List[str]]:
     result: Dict[str, List[str]] = {}
     for trace in inference.get("traces") or []:

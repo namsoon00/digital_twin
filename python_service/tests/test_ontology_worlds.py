@@ -807,8 +807,11 @@ class MultiAccountProjectionTests(unittest.TestCase):
         second = recorder.project_shared_world_update(second_graph, world, "premise")
 
         topology = repository.saved_markets[world.world_id].worldview["nativeRulePlannerTopology"]
-        self.assertEqual("ok", first["status"])
-        self.assertEqual("ok", second["status"])
+        self.assertEqual("staged-scoped-manifest", first["status"])
+        self.assertEqual("staged-scoped-manifest", second["status"])
+        self.assertTrue(first["activationDeferred"])
+        self.assertTrue(second["activationDeferred"])
+        self.assertEqual([], repository.activations)
         self.assertTrue(
             {"005930", "MSTR"}.issubset(
                 set((topology.get("sourceIdsBySymbol") or {}).keys())
@@ -842,7 +845,8 @@ class MultiAccountProjectionTests(unittest.TestCase):
 
         result = recorder.project_shared_world_update(graph, world, "premise")
 
-        self.assertEqual("ok", result["status"])
+        self.assertEqual("staged-scoped-manifest", result["status"])
+        self.assertTrue(result["activationDeferred"])
         self.assertEqual([{
             "worldId": world.world_id,
             "maxStagedTargetSymbols": 0,

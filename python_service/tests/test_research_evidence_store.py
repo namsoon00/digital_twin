@@ -81,6 +81,19 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertEqual("conditional", metadata_only["validationState"])
         self.assertFalse(metadata_only["analysisReady"])
 
+        authoritative = merge_derived_evidence_payload(
+            metadata_only,
+            {
+                "evidenceQualityAuthority": "revalidation-v1",
+                "dataState": "partial",
+                "validationState": "conditional",
+                "documentVerified": False,
+            },
+        )
+
+        self.assertEqual("conditional", authoritative["validationState"])
+        self.assertEqual("revalidation-v1", authoritative["evidenceQualityAuthority"])
+
     @staticmethod
     def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
         return ResearchEvidence(

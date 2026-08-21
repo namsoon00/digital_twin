@@ -125,6 +125,10 @@ class ResearchEvidenceGovernanceService:
                 item,
                 self.settings.get("researchClaimSourceRegistry") or "",
             )
+        for item in written_items:
+            payload = dict(item.raw_payload or {})
+            payload["evidenceQualityAuthority"] = "revalidation-v1"
+            item.raw_payload = payload
         provenance_complete_count = 0
         duplicate_publication_count = 0
         unresolved_publisher_count = 0

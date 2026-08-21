@@ -130,6 +130,7 @@ class RevalidateNewsIntelligenceService:
                 quality_gate["reason"] = payload["excludedReason"]
                 blocked_subject += 1
             payload["qualityGate"] = quality_gate
+            payload["evidenceQualityAuthority"] = "revalidation-v1"
             item.raw_payload = payload
             annotate_evidence_eligibility(item, self.source_registry)
             eligibility = item.raw_payload.get("newsEligibility") if isinstance(item.raw_payload, dict) else {}

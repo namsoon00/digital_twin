@@ -23,6 +23,7 @@ from .mysql_operational_events import insert_domain_event_with_connection
 
 
 DERIVED_EVIDENCE_PAYLOAD_KEYS = {
+    "evidenceQualityAuthority",
     "aiAnalysis",
     "articleAiAnalysisVersion",
     "articleSummaryKo",
@@ -69,6 +70,8 @@ def merge_derived_evidence_payload(
     """Keep verified enrichment when another collector replays the same source row."""
     previous = dict(previous_payload or {})
     incoming = dict(incoming_payload or {})
+    if str(incoming.get("evidenceQualityAuthority") or "") == "revalidation-v1":
+        return incoming
     previous_text = _payload_source_text(previous)
     incoming_text = _payload_source_text(incoming)
     if previous_text and incoming_text and previous_text != incoming_text:

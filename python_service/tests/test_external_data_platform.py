@@ -268,7 +268,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         without_contact = adapter.partitions(subjects, {"externalSecUserAgent": "OrbitAlpha/1.0 local-contact"})
         with_contact = adapter.partitions(subjects, {"externalSecUserAgent": "OrbitAlpha/1.0 owner@example.com"})
 
-        self.assertEqual(["AAPL"], [item.partition_key for item in without_contact])
+        self.assertEqual(["AAPL", "PLTR"], [item.partition_key for item in without_contact])
         self.assertEqual(["AAPL", "PLTR"], [item.partition_key for item in with_contact])
 
     def test_optional_yfinance_profiles_store_legitimate_empty_results(self):

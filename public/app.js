@@ -29776,6 +29776,12 @@
           { value: "0", label: "사용 안 함" }
         ]),
         renderSettingField("externalDartLookbackDays", "공시 조회 기간(일)", "number", "14"),
+        renderSettingSelect("externalDartDocumentTextEnabled", "OpenDART 원문 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalDartDocumentTextMaxChars", "공시 원문 최대 글자", "number", "6000"),
+        renderSettingField("externalDartDocumentMaxPerSymbol", "종목별 중요 공시 원문 수", "number", "3"),
         renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
@@ -30074,6 +30080,7 @@
       '<span>재게시 중복 <strong>' + escapeHtml(Number(quality.syndicatedDuplicateCount || 0)) + '건</strong></span>',
       '<span>미검증 <strong>' + escapeHtml(Number(quality.ungovernedEvidenceCount || 0)) + '건</strong></span>',
       '<span>원문 공시 <strong>' + escapeHtml(Number(quality.officialDocumentContentCount || 0)) + '건</strong></span>',
+      '<span>메타데이터 공시 <strong>' + escapeHtml(Number(quality.officialMetadataOnlyCount || 0)) + '건</strong></span>',
       '</div>'
     ].join("");
   }
@@ -30664,6 +30671,8 @@
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
+    var isDisclosure = ["disclosure", "filing", "sec-filing"].indexOf(String(item.kind || "").toLowerCase()) >= 0;
+    var documentLabel = item.documentVerified ? "공식 원문 확인" : (isDisclosure ? "공식 메타데이터만" : "");
     return [
       '<div class="research-evidence-item compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + cardFormatAttrs("document-card", "compact") + ' role="button" tabindex="0" data-research-evidence-toggle="' + escapeHtml(key) + '" aria-label="' + escapeHtml((translation.displayTitle || "저장 근거") + " 상세 보기") + '">',
       '<div class="research-evidence-main">',
@@ -30672,7 +30681,7 @@
       '<span>' + escapeHtml(displayName) + (symbol && displayName !== symbol ? ' <em>' + escapeHtml(symbol) + '</em>' : '') + '</span>',
       '<span>' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</span>',
       '</div>',
-      '<p><strong>기사 요약</strong> ' + escapeHtml(summary) + '</p>',
+      '<p><strong>' + (isDisclosure ? "공시 요약" : "기사 요약") + '</strong> ' + escapeHtml(summary) + '</p>',
       '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(impact.materialityLabel) + '</h3>',
       '<div class="research-evidence-metrics">',
       '<span>방향 <strong>' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</strong></span>',
@@ -30682,6 +30691,7 @@
       '<span>검증 <strong>' + escapeHtml(claimMeta.label) + '</strong></span>',
       '<span>번역 <strong class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</strong></span>',
       '<span>요약 <strong class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</strong></span>',
+      isDisclosure ? '<span>문서 <strong>' + escapeHtml(documentLabel) + '</strong></span>' : '',
       '</div>',
       '<footer class="research-evidence-article">',
       '<span>기사</span>',
@@ -31520,7 +31530,13 @@
           { value: "0", label: "사용 안 함" }
         ]),
         renderSettingField("externalSecMaxSymbols", "SEC 조회 종목 수", "number", "3"),
+        renderSettingField("externalSecContactEmail", "SEC 연락처 이메일", "text", "SEC 정책 준수용 이메일", { preserveConfigured: true }),
         renderSettingField("externalSecUserAgent", "SEC User-Agent", "text", "DigitalTwin/1.0 local-contact"),
+        renderSettingSelect("externalSecDocumentTextEnabled", "SEC 원문 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalSecDocumentTextMaxChars", "SEC 원문 최대 글자", "number", "6000"),
         renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

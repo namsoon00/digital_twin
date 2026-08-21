@@ -1063,10 +1063,13 @@ def clean_article_summary_noise(value: object, limit: int = 1200) -> str:
     return " ".join(cleaned).strip() if cleaned else ("" if is_news_boilerplate_sentence(text) else text)
 
 
-def article_body_quality(article_text: object, minimum_chars: int = 280) -> Dict[str, object]:
+def article_body_quality(article_text: object, minimum_chars: int = 280, target: object = "") -> Dict[str, object]:
     """Classify extraction adequacy before the text becomes investment evidence."""
-    text = clean_article_body_text(article_text, 5000)
-    return inspect_article_body(text, minimum_chars).to_dict()
+    return inspect_article_body(
+        article_text,
+        minimum_chars,
+        target_aliases(target) if str(target or "").strip() else (),
+    ).to_dict()
 
 
 def article_quality_gate(article_facts: Dict[str, object]) -> Dict[str, object]:
@@ -1799,7 +1802,7 @@ def article_analysis_facts(
     feed_text = clean_article_summary_noise(compact_text(feed_summary, 1600))
     source_text = body_text or feed_text or title_text
     status = str(read_status or ("body" if body_text else "feed-summary")).strip()
-    body_quality = article_body_quality(body_text, body_minimum_chars)
+    body_quality = article_body_quality(article_text, body_minimum_chars, target)
     event_type = str(analysis.get("eventType") or classify_news_event_type(title_text, source_text))
     summary_text = str(summary_ko or "").strip() or korean_article_summary(
         target,
@@ -1832,6 +1835,7 @@ def article_analysis_facts(
         "bodyQualityState": body_quality["state"],
         "bodyQualityPassed": body_quality["passed"],
         "bodyQualityReason": body_quality["reason"],
+        "bodyQualityIssues": list(body_quality.get("issues") or []),
         "feedSummaryAvailable": bool(feed_text),
         "eventType": event_type,
         "eventTypeLabel": event_type_label(event_type),

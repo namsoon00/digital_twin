@@ -554,11 +554,16 @@ class NewsCollectionQualityTests(unittest.TestCase):
                     "articleReadStatus": "body",
                     "articleText": "Apple announced a $1 billion share buyback plan on Tuesday.",
                     "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+                    "bodyQualityPassed": True,
+                    "articleSummaryKo": "애플이 10억 달러 규모의 자사주 매입 계획을 발표했습니다.",
+                    "summaryQualityState": "ready",
+                    "articleSummaryQuality": {"state": "ready", "issues": []},
+                    "aiAnalysis": {"status": "ok", "needsReview": False},
                 },
             )
 
-        retained = claim("research:AAPL:news:retained", "Reuters", "https://reuters.example.test/apple-buyback")
-        current = claim("research:AAPL:news:current", "Bloomberg", "https://bloomberg.example.test/apple-buyback")
+        retained = claim("research:AAPL:news:retained", "Reuters", "https://www.reuters.com/technology/apple-buyback")
+        current = claim("research:AAPL:news:current", "Bloomberg", "https://www.bloomberg.com/news/articles/apple-buyback")
 
         class Store:
             def __init__(self):

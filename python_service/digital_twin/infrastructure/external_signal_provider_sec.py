@@ -3,6 +3,7 @@ import re
 from html.parser import HTMLParser
 from typing import Dict, List
 
+from ..domain.disclosure_quality import assess_disclosure_document
 from ..domain.market_data import number
 from ..domain.portfolio import Position
 from .external_signal_utils import symbol_assignments
@@ -15,6 +16,7 @@ DEFAULT_SEC_COMPANY_CIKS = {
     "MSTR": "0001050446",
     "MSFT": "0000789019",
     "NVDA": "0001045810",
+    "PLTR": "0001321655",
     "STRC": "0001050446",
     "TSLA": "0001318605",
 }
@@ -210,10 +212,12 @@ class ExternalSignalSecMixin:
 
                             raw_document = self.guarded_call("SEC EDGAR", "filing-document:" + symbol, fetch_filing_document)
                             document_text = sec_document_text(raw_document, self.sec_document_text_max_chars())
+                            assessment = assess_disclosure_document(document_text, "body")
                             filing.update({
-                                "documentText": document_text,
-                                "documentTextPreview": document_text[:700],
-                                "documentTextQuality": "body" if len(document_text) >= 120 else "insufficient",
+                                "documentText": assessment.document_text,
+                                "documentTextPreview": assessment.document_text[:700],
+                                "documentTextQuality": "body" if assessment.document_verified else "insufficient",
+                                "documentTextStatus": assessment.state,
                             })
                         except Exception as error:  # noqa: BLE001 - retain filing metadata and surface document fallback.
                             filing.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})

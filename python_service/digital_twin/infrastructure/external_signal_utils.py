@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Callable, Dict, List, Optional
 
 from ..domain.market_data import number
@@ -34,6 +35,29 @@ SENSITIVE_QUERY_KEYS = {
     "token",
 }
 GLOBAL_EXTERNAL_API_GUARD_STATE: Dict[str, object] = {}
+
+
+class ReadableDocumentParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.skip_depth = 0
+        self.parts: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        normalized = str(tag or "").lower().split(":")[-1]
+        if normalized in {"script", "style", "noscript", "svg", "iframe"}:
+            self.skip_depth += 1
+
+    def handle_endtag(self, tag):
+        normalized = str(tag or "").lower().split(":")[-1]
+        if normalized in {"script", "style", "noscript", "svg", "iframe"}:
+            self.skip_depth = max(0, self.skip_depth - 1)
+
+    def handle_data(self, data):
+        if not self.skip_depth:
+            value = str(data or "").strip()
+            if value:
+                self.parts.append(value)
 
 
 def default_json_fetcher(url: str, headers: Dict[str, str] = None, timeout: float = 12.0) -> Dict[str, object]:
@@ -79,7 +103,14 @@ def dart_document_text(raw: object, limit: int) -> str:
                 break
             except UnicodeDecodeError:
                 continue
-        plain = html.unescape(re.sub(r"<[^>]+>", " ", decoded))
+        parser = ReadableDocumentParser()
+        try:
+            parser.feed(decoded)
+        except Exception:  # noqa: BLE001 - malformed disclosure markup still has readable fragments.
+            pass
+        plain = html.unescape(" ".join(parser.parts))
+        if not plain:
+            plain = html.unescape(re.sub(r"<[^>]+>", " ", decoded))
         plain = re.sub(r"\s+", " ", plain).strip()
         if plain:
             fragments.append(plain)

@@ -40,6 +40,8 @@
     "python:reasoning-engine:comparisons": "python3 python_service/service.py reasoning-engine comparisons",
     "python:news:once": "python3 python_service/service.py news once",
     "python:news:status": "python3 python_service/service.py news status",
+    "python:news:revalidate": "python3 python_service/service.py news revalidate --limit 5000",
+    "python:research-evidence:revalidate": "python3 python_service/service.py research-evidence revalidate --limit 5000",
     "python:news:watch": "python3 python_service/service.py news watch",
     "python:investment-research:once": "python3 python_service/service.py investment-research once",
     "python:investment-research:status": "python3 python_service/service.py investment-research status",

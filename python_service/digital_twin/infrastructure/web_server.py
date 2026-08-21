@@ -1056,6 +1056,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "externalDartCompanyFundamentalsEnabled",
         "externalDartDocumentTextEnabled",
         "externalDartDocumentTextMaxChars",
+        "externalDartDocumentMaxPerSymbol",
         "externalNewsEnabled",
         "externalNewsProvider",
         "externalNewsMaxSymbols",
@@ -3316,10 +3317,16 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         "unresolvedPublisherCount": 0,
         "duplicatePublicationCount": 0,
         "independentConfirmationCount": 0,
+        "sameStoryCount": 0,
+        "followUpCount": 0,
+        "contentInvalidReviewCount": 0,
+        "bodyQualityBlockedCount": 0,
+        "eventClusterCount": 0,
         "publisherTierCounts": {},
         "contentTypeCounts": {},
         "distributionChannelCounts": {},
     }
+    event_clusters = set()
     for item in rows:
         eligibility = evidence_eligibility(item)
         counts["displayEligibleCount"] += int(bool(eligibility.get("displayEligible")))
@@ -3334,6 +3341,12 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         relationship = str(provenance.get("evidenceRelationship") or raw.get("evidenceRelationship") or "")
         counts["duplicatePublicationCount"] += int(relationship in {"exact-duplicate", "syndicated-copy"})
         counts["independentConfirmationCount"] += int(relationship == "independent-confirmation")
+        counts["sameStoryCount"] += int(relationship == "same-story")
+        counts["followUpCount"] += int(relationship == "follow-up")
+        cluster_id = str(raw.get("storyClusterId") or "")
+        if cluster_id:
+            event_clusters.add(cluster_id)
+        counts["contentInvalidReviewCount"] += int(str(eligibility.get("reviewState") or "") == "content-invalid")
         tier = str(source_identity.get("publisherTier") or original.get("tier") or "D")
         content_type = str(source_identity.get("contentType") or provenance.get("contentType") or "unknown")
         channel = str(source_identity.get("distributionChannel") or provenance.get("distributionChannel") or "direct")
@@ -3341,6 +3354,7 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         counts["contentTypeCounts"][content_type] = int(counts["contentTypeCounts"].get(content_type) or 0) + 1
         counts["distributionChannelCounts"][channel] = int(counts["distributionChannelCounts"].get(channel) or 0) + 1
         facts = raw.get("articleFacts") if isinstance(raw.get("articleFacts"), dict) else {}
+        counts["bodyQualityBlockedCount"] += int(facts.get("bodyQualityPassed") is False or raw.get("bodyQualityPassed") is False)
         if str(raw.get("articleReadStatus") or facts.get("readStatus") or "") == "body" or bool(facts.get("bodyAvailable")):
             counts["bodyReadCount"] += 1
         language = str(raw.get("sourceLanguage") or "").strip().lower()
@@ -3366,6 +3380,7 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
             counts["analysisFallbackCount"] += 1
         elif status == "deferred":
             counts["analysisDeferredCount"] += 1
+    counts["eventClusterCount"] = len(event_clusters)
     return counts
 
 
@@ -3449,6 +3464,15 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else True,
         "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else False,
         "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(governance.get("investmentJudgmentEligible")),
+        "reviewState": str(news_eligibility.get("reviewState") or "") if news_eligibility else "",
+        "reviewReasonCodes": list(news_eligibility.get("reviewReasonCodes") or []) if news_eligibility else [],
+        "storyClusterId": str(raw.get("storyClusterId") or ""),
+        "storyRootEvidenceId": str(source_provenance.get("storyRootEvidenceId") or raw.get("storyRootEvidenceId") or ""),
+        "officialDocumentState": str(raw.get("officialDocumentState") or ""),
+        "documentVerified": bool(raw.get("documentVerified")),
+        "analysisReady": bool(raw.get("analysisReady")),
+        "disclosureCategory": str(raw.get("disclosureCategory") or ""),
+        "disclosureTaxonomyVersion": str(raw.get("version") or "") if str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"} else "",
         "publisher": str(source_identity.get("publisher") or original_publisher.get("name") or raw.get("articlePublisher") or item.source),
         "publisherId": str(source_identity.get("publisherId") or original_publisher.get("publisherId") or raw.get("sourceOrigin") or ""),
         "publisherDomain": str(source_identity.get("publisherDomain") or original_publisher.get("domain") or ""),

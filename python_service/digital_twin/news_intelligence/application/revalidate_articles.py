@@ -1,10 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from typing import Dict, List
 
 from .analyze_article import annotate_evidence_eligibility
 from .normalize_sources import normalize_evidence_sources
 from ..domain.article_quality import inspect_article_body
+from ..domain.entity import target_aliases
 from ..domain.entity_resolution import resolve_target_entity
 from ..domain.version import NEWS_INTELLIGENCE_VERSION
 
@@ -22,6 +23,12 @@ class NewsRevalidationResult:
     unresolved_publisher_count: int
     duplicate_publication_count: int
     independent_confirmation_count: int
+    same_story_count: int
+    follow_up_count: int
+    content_invalid_review_count: int
+    event_cluster_count: int
+    changed_evidence_ids: List[str] = field(default_factory=list)
+    dry_run: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -36,7 +43,13 @@ class NewsRevalidationResult:
             "unresolvedPublisherCount": self.unresolved_publisher_count,
             "duplicatePublicationCount": self.duplicate_publication_count,
             "independentConfirmationCount": self.independent_confirmation_count,
+            "sameStoryCount": self.same_story_count,
+            "followUpCount": self.follow_up_count,
+            "contentInvalidReviewCount": self.content_invalid_review_count,
+            "eventClusterCount": self.event_cluster_count,
+            "changedEvidenceIds": list(self.changed_evidence_ids),
             "notificationReplay": False,
+            "dryRun": self.dry_run,
         }
 
 
@@ -45,7 +58,7 @@ class RevalidateNewsIntelligenceService:
         self.repository = repository
         self.source_registry = source_registry
 
-    def revalidate(self, symbol: str = "", limit: int = 500) -> NewsRevalidationResult:
+    def revalidate(self, symbol: str = "", limit: int = 500, dry_run: bool = False) -> NewsRevalidationResult:
         items = list(self.repository.latest(symbol=symbol, kind="news", limit=max(1, int(limit or 500))) or [])
         before_payloads = {
             str(getattr(item, "evidence_id", "") or id(item)): json.dumps(
@@ -66,13 +79,23 @@ class RevalidateNewsIntelligenceService:
         unresolved_publisher = 0
         duplicate_publication = 0
         independent_confirmation = 0
+        same_story = 0
+        follow_up = 0
+        content_invalid_review = 0
+        event_clusters = set()
         for item in items:
             payload = dict(getattr(item, "raw_payload", {}) or {})
             before = before_payloads.get(str(getattr(item, "evidence_id", "") or id(item)), "")
             facts = dict(payload.get("articleFacts") or {}) if isinstance(payload.get("articleFacts"), dict) else {}
             body = str(payload.get("articleText") or facts.get("articleText") or facts.get("bodyPreview") or "")
             if body:
-                quality = inspect_article_body(body).to_dict()
+                quality = inspect_article_body(
+                    body,
+                    target_terms=target_aliases(
+                        getattr(item, "symbol", ""),
+                        payload.get("name") or payload.get("companyName") or "",
+                    ),
+                ).to_dict()
                 facts.update({
                     "bodyQualityState": quality["state"],
                     "bodyQualityPassed": quality["passed"],
@@ -119,10 +142,16 @@ class RevalidateNewsIntelligenceService:
             relationship = str(provenance.get("evidenceRelationship") or "")
             duplicate_publication += int(relationship in {"exact-duplicate", "syndicated-copy"})
             independent_confirmation += int(relationship == "independent-confirmation")
+            same_story += int(relationship == "same-story")
+            follow_up += int(relationship == "follow-up")
+            content_invalid_review += int(str(eligibility.get("reviewState") or "") == "content-invalid")
+            cluster_id = str(payload.get("storyClusterId") or "")
+            if cluster_id:
+                event_clusters.add(cluster_id)
             after = json.dumps(item.raw_payload, ensure_ascii=False, sort_keys=True, default=str)
             if before != after:
                 changed.append(item)
-        saved = int(self.repository.upsert_many(changed) or 0) if changed else 0
+        saved = int(self.repository.upsert_many(changed) or 0) if changed and not dry_run else 0
         return NewsRevalidationResult(
             len(items),
             len(changed),
@@ -135,4 +164,10 @@ class RevalidateNewsIntelligenceService:
             unresolved_publisher,
             duplicate_publication,
             independent_confirmation,
+            same_story,
+            follow_up,
+            content_invalid_review,
+            len(event_clusters),
+            [str(getattr(item, "evidence_id", "") or "") for item in changed[:20]],
+            bool(dry_run),
         )

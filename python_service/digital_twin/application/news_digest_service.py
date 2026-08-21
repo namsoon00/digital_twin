@@ -179,9 +179,9 @@ def item_confidence_label(item: Dict[str, object]) -> str:
     states = item_news_states(item)
     payload = item_payload(item)
     if item_event_kind(item) == "disclosure":
-        if clean_text(payload.get("officialDocumentText") or item.get("officialDocumentText")):
+        if payload.get("documentVerified") is True:
             return "공식 원문 확인됨"
-        return "공식 공시 확인됨"
+        return "공식 메타데이터만 확인됨"
     read_status = article_read_status(item)
     trust = states.get("sourceTrustState")
     if read_status == "body" and trust == "trusted":
@@ -219,7 +219,7 @@ def event_reference_timestamp(event: DomainEvent) -> str:
 
 
 def event_is_story_update(items: List[Dict[str, object]]) -> bool:
-    return any(bool(item.get("storyUpdate")) for item in items or [])
+    return any(bool(item.get("storyUpdate") or item_payload(item).get("storyUpdate")) for item in items or [])
 
 
 def event_icon(items: List[Dict[str, object]], reference: object = "") -> str:
@@ -321,7 +321,7 @@ def confirmed_fact_lines(item: Dict[str, object]) -> List[str]:
             rows.append("접수일 " + receipt_date)
         if receipt_no:
             rows.append("접수번호 " + receipt_no)
-        if clean_text(payload.get("officialDocumentText") or item.get("officialDocumentText")):
+        if payload.get("documentVerified") is True:
             rows.append("공식 원문을 확보했습니다.")
         elif rows:
             rows.append("공식 공시 메타데이터를 확인했습니다. 세부 원문은 추가 확인이 필요합니다.")
@@ -1141,6 +1141,9 @@ class NewsDigestEnqueuer:
             "receiptNo": receipt_no if event_kind == "disclosure" else "",
             "receiptDate": receipt_date if event_kind == "disclosure" else "",
             "provider": clean_text(primary.get("source")) if event_kind == "disclosure" else "",
+            "officialDocumentText": clean_text(payload.get("officialDocumentText")) if event_kind == "disclosure" else "",
+            "officialDocumentState": clean_text(payload.get("officialDocumentState")) if event_kind == "disclosure" else "",
+            "analysisReady": bool(payload.get("analysisReady")) if event_kind == "disclosure" else False,
             "rawLines": raw_lines,
             "newsDigest": {
                 "eventKind": event_kind,

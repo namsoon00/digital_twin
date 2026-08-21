@@ -1,15 +1,16 @@
 import re
 from dataclasses import dataclass, field
-from typing import List
+from typing import Iterable, List
 
 
-ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v2"
+ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v3"
 CONTAMINATION_PATTERNS = (
     ("publisher-navigation", re.compile(r"\b(?:continue reading|read more|more from|recommended stor(?:y|ies))\b", re.IGNORECASE)),
     ("investment-promotion", re.compile(r"\b(?:is now the time to buy|missed nvidia|top \d+ stocks to buy)\b", re.IGNORECASE)),
     ("advertising-block", re.compile(r"\b(?:advertisement|sponsored content|paid post)\b|광고\s*(?:입니다|문의|제휴)", re.IGNORECASE)),
     ("related-news-tail", re.compile(r"(?:관련\s*뉴스|함께\s*본\s*뉴스|추천\s*기사|많이\s*본\s*기사|S&P\s*500\s*기업\s*중)", re.IGNORECASE)),
     ("live-widget", re.compile(r"\[\s*스팟\s*Live\s*\]", re.IGNORECASE)),
+    ("publisher-navigation", re.compile(r"(?:최신\s*뉴스|주요\s*뉴스|실시간\s*인기|기사\s*더보기|다음\s*기사|what are you looking for)", re.IGNORECASE)),
 )
 MOJIBAKE_RE = re.compile(r"(?:�|â€™|â€œ|â€|Ã.|\ufffd)")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|\n+")
@@ -34,8 +35,13 @@ class ArticleBodyQuality:
         }
 
 
-def inspect_article_body(article_text: object, minimum_chars: int = 280) -> ArticleBodyQuality:
-    text = " ".join(str(article_text or "").split())
+def inspect_article_body(
+    article_text: object,
+    minimum_chars: int = 280,
+    target_terms: Iterable[object] = (),
+) -> ArticleBodyQuality:
+    raw_text = str(article_text or "")
+    text = " ".join(raw_text.split())
     if not text:
         return ArticleBodyQuality("unavailable", False, "원문 본문이 수집되지 않았습니다.", 0, ["body-missing"])
     char_count = len(text)
@@ -52,6 +58,20 @@ def inspect_article_body(article_text: object, minimum_chars: int = 280) -> Arti
     sentences = [part.strip().casefold() for part in SENTENCE_SPLIT_RE.split(text) if len(part.strip()) >= 24]
     if len(sentences) >= 3 and len(set(sentences)) / len(sentences) < 0.72:
         issues.append("repeated-content")
+    lines = [" ".join(part.split()) for part in raw_text.splitlines() if len(" ".join(part.split())) >= 8]
+    headline_like = [
+        line for line in lines
+        if len(line) <= 120 and not re.search(r"[.!?。！？]['\"]?$|(?:다|했다|됐다|입니다)[.!。]?$", line)
+    ]
+    aliases = [str(value or "").strip() for value in target_terms or [] if len(str(value or "").strip()) >= 2]
+    target_line_count = len([
+        line for line in lines
+        if any(re.search(re.escape(alias), line, re.IGNORECASE) for alias in aliases)
+    ])
+    if len(lines) >= 6 and len(headline_like) >= 4 and len(headline_like) / len(lines) >= 0.55:
+        issues.append("headline-list-contamination")
+    if aliases and len(lines) >= 6 and target_line_count <= 1 and len(headline_like) >= 4:
+        issues.append("target-context-diluted")
     issues = list(dict.fromkeys(issues))
     if issues:
         labels = {
@@ -63,6 +83,8 @@ def inspect_article_body(article_text: object, minimum_chars: int = 280) -> Arti
             "related-news-tail": "다른 기사 목록이 본문에 섞였습니다",
             "live-widget": "실시간 위젯 문구가 본문에 섞였습니다",
             "repeated-content": "반복 문장이 많습니다",
+            "headline-list-contamination": "다른 기사 제목 목록이 본문에 섞였습니다",
+            "target-context-diluted": "대상 종목과 관련된 본문 비중이 너무 낮습니다",
         }
         return ArticleBodyQuality(
             "limited",

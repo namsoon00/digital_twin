@@ -1,7 +1,8 @@
+import json
 from typing import Dict, List
 
 from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
-from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
+from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, disclosure_evidence_payload
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 from ..news_intelligence.application.normalize_sources import normalize_evidence_sources
 
@@ -12,6 +13,21 @@ def int_setting(settings: Dict[str, object], key: str, fallback: int, lower: int
     except (TypeError, ValueError):
         value = fallback
     return max(lower, min(upper, value))
+
+
+def payload_signature(payload: Dict[str, object]) -> str:
+    def stable(value):
+        if isinstance(value, dict):
+            return {
+                key: stable(item)
+                for key, item in value.items()
+                if key not in {"checkedAt"}
+            }
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    return json.dumps(stable(payload or {}), ensure_ascii=False, sort_keys=True, default=str)
 
 
 class ResearchEvidenceGovernanceService:
@@ -55,10 +71,28 @@ class ResearchEvidenceGovernanceService:
             sector=str(raw.get("sector") or ""),
         )
 
-    def revalidate(self, symbol: str = "", limit: int = 500) -> Dict[str, object]:
+    def revalidate(self, symbol: str = "", limit: int = 500, dry_run: bool = False) -> Dict[str, object]:
         normalized_symbol = str(symbol or "").upper().strip()
         items = self.load_items(normalized_symbol, limit)
+        before_payloads = {
+            str(item.evidence_id or id(item)): payload_signature(item.raw_payload or {})
+            for item in items
+        }
         news_items = [item for item in items if str(item.kind or "").lower() == "news"]
+        disclosure_items = [item for item in items if str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"}]
+        for item in disclosure_items:
+            payload = dict(item.raw_payload or {})
+            item.raw_payload = disclosure_evidence_payload(
+                payload,
+                title=str(item.title or payload.get("reportName") or payload.get("officialDocumentType") or "공시"),
+                source=str(item.source or payload.get("sourcePublisher") or "공식 공시"),
+                document_text=payload.get("officialDocumentText"),
+                document_quality=payload.get("officialDocumentQuality"),
+                metadata_verified=bool(
+                    str(item.title or "").strip()
+                    and str(item.published_at or item.observed_at or "").strip()
+                ),
+            )
         normalize_evidence_sources(
             news_items,
             self.settings.get("researchClaimSourceRegistry") or "",
@@ -101,10 +135,18 @@ class ResearchEvidenceGovernanceService:
             provenance_complete_count += int(bool(provenance.get("provenanceComplete")))
             duplicate_publication_count += int(str(provenance.get("evidenceRelationship") or "") in {"exact-duplicate", "syndicated-copy"})
             unresolved_publisher_count += int(not original.get("publisherId") or original.get("publisherId") == "unknown")
-        written = self.evidence_store.upsert_many(written_items) if written_items else 0
+        changed_items = [
+            item for item in written_items
+            if before_payloads.get(str(item.evidence_id or id(item)), "")
+            != payload_signature(item.raw_payload or {})
+        ]
+        written = self.evidence_store.upsert_many(changed_items) if changed_items and not dry_run else 0
         return {
             "status": "ok",
+            "dryRun": bool(dry_run),
+            "notificationReplay": False,
             "loadedCount": len(items),
+            "changedCount": len(changed_items),
             "writtenCount": written,
             "symbolCount": len(groups),
             "eligibleEvidenceCount": eligible_count,
@@ -113,5 +155,14 @@ class ResearchEvidenceGovernanceService:
             "provenanceCompleteCount": provenance_complete_count,
             "duplicatePublicationCount": duplicate_publication_count,
             "unresolvedPublisherCount": unresolved_publisher_count,
+            "disclosureCount": len(disclosure_items),
+            "documentVerifiedDisclosureCount": len([
+                item for item in disclosure_items
+                if bool((item.raw_payload or {}).get("documentVerified"))
+            ]),
+            "metadataOnlyDisclosureCount": len([
+                item for item in disclosure_items
+                if str((item.raw_payload or {}).get("officialDocumentState") or "") == "metadata-only"
+            ]),
             "maxAgeMinutes": self.max_age_minutes(),
         }

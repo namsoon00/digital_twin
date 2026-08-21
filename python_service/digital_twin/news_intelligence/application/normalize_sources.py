@@ -4,7 +4,7 @@ from difflib import SequenceMatcher
 from typing import Dict, Iterable, List
 
 from ..domain.provenance import annotate_source_provenance, normalized_content
-from ..domain.story import story_identity
+from ..domain.story import event_cluster_identity, same_story_event, story_event_features, story_identity
 
 
 def _payload(item) -> Dict[str, object]:
@@ -27,13 +27,23 @@ def _context(item, registry: object = "") -> Dict[str, object]:
 
 def _item_story_identity(item) -> str:
     payload = _payload(item)
-    return story_identity({
+    context = {
         "symbol": getattr(item, "symbol", ""),
         "title": getattr(item, "title", ""),
         "publishedAt": getattr(item, "published_at", "") or getattr(item, "observed_at", ""),
         "url": getattr(item, "url", ""),
         "payload": payload,
-    })
+    }
+    return event_cluster_identity(context) or story_identity(context)
+
+
+def _story_context(item) -> Dict[str, object]:
+    return {
+        "symbol": getattr(item, "symbol", ""),
+        "title": getattr(item, "title", ""),
+        "publishedAt": getattr(item, "published_at", "") or getattr(item, "observed_at", ""),
+        "payload": _payload(item),
+    }
 
 
 def _body_tokens(item) -> set:
@@ -100,12 +110,24 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
             if str(getattr(candidate, "evidence_id", "")) in corroborating:
                 relationship, root = "independent-confirmation", candidate
                 break
-            if payload.get("storyClusterId") and payload.get("storyClusterId") == other.get("storyClusterId"):
-                relationship, root = "same-story", candidate
+            same_event = bool(
+                payload.get("storyClusterId")
+                and payload.get("storyClusterId") == other.get("storyClusterId")
+            ) or same_story_event(_story_context(item), _story_context(candidate))
+            if same_event:
+                current_origin = str(payload.get("sourceOrigin") or "")
+                candidate_origin = str(other.get("sourceOrigin") or "")
+                relationship = "independent-confirmation" if current_origin and candidate_origin and current_origin != candidate_origin else "same-story"
+                current_numbers = set(story_event_features(_story_context(item)).get("numbers") or [])
+                candidate_numbers = set(story_event_features(_story_context(candidate)).get("numbers") or [])
+                if current_numbers.difference(candidate_numbers):
+                    relationship = "follow-up"
+                    payload["storyUpdate"] = True
+                root = candidate
                 break
         if relationship == "original":
             roots.append(item)
-        elif relationship in {"same-story", "independent-confirmation"}:
+        elif relationship in {"same-story", "independent-confirmation", "follow-up"}:
             roots.append(item)
         if payload.get("storyUpdate"):
             relationship = "follow-up"
@@ -115,7 +137,7 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
             if relationship in {"exact-duplicate", "syndicated-copy"}
             else str(getattr(item, "evidence_id", "") or "")
         )
-        if relationship in {"exact-duplicate", "syndicated-copy"}:
+        if relationship in {"exact-duplicate", "syndicated-copy", "same-story", "independent-confirmation", "follow-up"}:
             root_payload = _payload(root)
             if root_payload.get("storyClusterId"):
                 payload["storyClusterId"] = root_payload.get("storyClusterId")
@@ -125,7 +147,8 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
             payload["syndicationState"] = relationship
         provenance["evidenceRelationship"] = relationship
         provenance["syndicationRootEvidenceId"] = root_id
-        provenance["storyRootEvidenceId"] = story_root_id
+        root_provenance = _payload(root).get("sourceProvenance") if isinstance(_payload(root).get("sourceProvenance"), dict) else {}
+        provenance["storyRootEvidenceId"] = str(root_provenance.get("storyRootEvidenceId") or story_root_id)
         provenance["independentEvidenceKey"] = (
             root_id if relationship in {"exact-duplicate", "syndicated-copy"}
             else str(payload.get("sourceOrigin") or "unknown") + "|" + str(payload.get("documentIdentity") or getattr(item, "evidence_id", ""))

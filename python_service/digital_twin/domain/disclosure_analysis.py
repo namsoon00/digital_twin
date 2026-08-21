@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List
 
 
-DISCLOSURE_ANALYSIS_PROMPT_VERSION = "dart-disclosure-analysis-v1"
+DISCLOSURE_ANALYSIS_PROMPT_VERSION = "disclosure-analysis-v2"
 SECTION_LABELS = ["의미", "영향", "확인", "대응"]
 
 
@@ -43,6 +43,22 @@ def metadata_value(context: Dict[str, object], key: str) -> str:
     return str(value or "").strip()
 
 
+def boolean_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "ready"}
+
+
+def disclosure_analysis_ready(context: Dict[str, object]) -> bool:
+    values = context or {}
+    metadata = values.get("metadata") if isinstance(values.get("metadata"), dict) else {}
+    if "analysisReady" in values:
+        return boolean_value(values.get("analysisReady"))
+    if "analysisReady" in metadata:
+        return boolean_value(metadata.get("analysisReady"))
+    return True
+
+
 def disclosure_report_name(context: Dict[str, object]) -> str:
     report = metadata_value(context, "reportName")
     if report:
@@ -69,6 +85,8 @@ def disclosure_summary(context: Dict[str, object]) -> Dict[str, str]:
 def build_disclosure_analysis_prompt(context: Dict[str, object]) -> str:
     disclosure = disclosure_summary(context)
     raw_lines = "\n".join("- " + line for line in context_raw_lines(context)) or "- 없음"
+    document_text = compact_line((context or {}).get("officialDocumentText"), 6000)
+    analysis_ready = disclosure_analysis_ready(context)
     return "\n".join([
         "너는 한국 주식 공시를 해석하는 금융 데이터 애널리스트다.",
         "매수 또는 매도 지시가 아니라 공시의 의미, 가능한 영향, 확인할 점, 대응 가이드를 설명한다.",
@@ -85,6 +103,8 @@ def build_disclosure_analysis_prompt(context: Dict[str, object]) -> str:
         "접수번호: " + (disclosure["receiptNo"] or "-"),
         "접수일: " + (disclosure["receiptDate"] or "-"),
         "제공 API: " + (disclosure["provider"] or "-"),
+        "원문 검증: " + ("완료" if analysis_ready else "미완료 · 제목과 접수 메타데이터만 사용"),
+        "공시 원문: " + (document_text or "미수집"),
         "알림 원문:",
         raw_lines,
     ])
@@ -140,7 +160,16 @@ def normalize_disclosure_analysis_output(output: str, fallback: DisclosureAnalys
 def local_disclosure_analysis(context: Dict[str, object], source: str = "로컬 규칙") -> DisclosureAnalysisResult:
     disclosure = disclosure_summary(context)
     report = disclosure["reportName"]
-    normalized = report.replace("ㆍ", "·").replace(" ", "")
+    document_text = str((context or {}).get("officialDocumentText") or "")
+    analysis_ready = disclosure_analysis_ready(context)
+    if not analysis_ready:
+        return DisclosureAnalysisResult([
+            "의미: 공식 공시 제목과 접수 사실만 확인됐으며 세부 원문은 아직 검증되지 않았습니다.",
+            "영향: 금액·조건·대상 정보가 없어 투자 영향을 판단할 수 없습니다.",
+            "확인: 공시 원문 수집 후 금액, 기간, 상대방과 발생 사유를 확인합니다.",
+            "대응: 제목만으로 방향을 단정하지 않고 원문 검증 전에는 관찰 근거로만 사용합니다.",
+        ], source=source)
+    normalized = (report + " " + document_text[:8000]).replace("ㆍ", "·").replace(" ", "")
     meaning = "새 공시가 접수되어 회사 이벤트나 리스크 변화 여부를 확인해야 합니다."
     impact = "보고서 세부 내용에 따라 실적, 재무구조, 투자심리가 달라질 수 있습니다."
     check = "공시 원문에서 금액, 기간, 상대방, 발생 사유가 시가총액·매출 대비 큰지 확인하세요."
@@ -208,4 +237,3 @@ def split_labeled_text(line: str):
         if label.strip() and value.strip():
             return label.strip(), value.strip()
     return "", text
-

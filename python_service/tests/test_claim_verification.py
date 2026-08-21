@@ -295,6 +295,26 @@ class ClaimVerificationTests(unittest.TestCase):
         self.assertTrue(any(item.properties.get("publisherId") == "reuters" for item in source_entities))
         self.assertTrue(any(item.relation_type == "OFFICIALLY_VERIFIED_BY" for item in graph.relations))
 
+    def test_ontology_cannot_verify_claim_from_reasoning_blocked_news(self):
+        news = evidence(
+            "news-parent-blocked",
+            "Reuters",
+            "Samsung announces share buyback",
+            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
+        )
+        normalize_evidence_sources([news])
+        self.govern([news])
+        news.raw_payload["newsEligibility"] = {"reasoningEligible": False}
+        graph = PortfolioOntology("claim-parent-gate")
+        stock_id = add_entity(graph, "stock", "005930", "Samsung Electronics", {"tboxClass": "Stock"})
+
+        add_governed_claim_concepts(graph, stock_id, news, news.raw_payload)
+
+        claims = [item for item in graph.entities if item.kind == "verified-claim"]
+        self.assertTrue(claims)
+        self.assertFalse(any(item.properties.get("tboxClass") == "VerifiedClaim" for item in claims))
+        self.assertTrue(all(item.properties.get("investmentJudgmentEligible") is False for item in claims))
+
 
 if __name__ == "__main__":
     unittest.main()

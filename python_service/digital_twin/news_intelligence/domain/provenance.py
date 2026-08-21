@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .source import SourceRegistry, SourceRegistryEntry, unknown_entry
 
 
-SOURCE_PROVENANCE_VERSION = "news-source-provenance-v1"
+SOURCE_PROVENANCE_VERSION = "news-source-provenance-v2"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "src", "ocid", "output"}
 
 
@@ -200,9 +200,18 @@ def resolve_source_provenance(
     )
     host_entry = source_registry.by_host(host)
     declared_entry = source_registry.by_name(declared)
+    official_domain_mismatch = bool(
+        host
+        and declared_entry
+        and declared_entry.primary
+        and (not host_entry or host_entry.publisher_id != declared_entry.publisher_id)
+    )
     if host_entry and host_entry.publisher_type != "discovery":
         entry = host_entry
         resolved_by = "canonical-domain-registry"
+    elif official_domain_mismatch:
+        entry = unknown_entry(host, declared)
+        resolved_by = "official-publisher-domain-mismatch"
     elif declared_entry and declared_entry.publisher_type != "discovery":
         entry = declared_entry
         resolved_by = "publisher-metadata-registry"
@@ -243,6 +252,8 @@ def resolve_source_provenance(
         verification_reasons.append("byline-missing")
     if not provenance_complete:
         verification_reasons.append("original-publisher-unresolved")
+    if official_domain_mismatch:
+        verification_reasons.append("official-publisher-domain-mismatch")
     verification_state = "verified" if provenance_complete and body_available and published_available else ("partial" if provenance_complete else "unverified")
     content_type = classify_content_type(payload, entry, title, canonical_url)
     if entry.publisher_type == "discovery":

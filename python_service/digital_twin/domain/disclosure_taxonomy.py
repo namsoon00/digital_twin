@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, Iterable
 
 
-DISCLOSURE_TAXONOMY_VERSION = "disclosure-taxonomy-v1"
+DISCLOSURE_TAXONOMY_VERSION = "disclosure-taxonomy-v2"
 
 
 def _text(*values: object) -> str:
@@ -25,16 +25,26 @@ def classify_disclosure(
     title: object,
     document_type: object = "",
     source: object = "",
+    document_text: object = "",
 ) -> Dict[str, object]:
     """Return stable event and materiality metadata for a filing."""
-    combined = _text(title, document_type)
+    header = _text(title, document_type)
+    body = _text(document_text)
+    combined = _text(header, body[:12000])
     form = str(document_type or title or "").upper().strip()
     event_type = "general"
     materiality = "context"
     category = "routine"
     reason = "routine-or-unclassified-disclosure"
 
-    if form in {"10-K", "10-Q", "20-F", "40-F"} or _contains(combined, [
+    if _contains(combined, ["기업공개", "상장 추진", "ipo", "initial public offering"]) and _contains(combined, [
+        "조회공시", "답변", "검토", "추진", "주요사항보고서",
+    ]):
+        event_type = "capital_policy"
+        materiality = "material" if body else "notable"
+        category = "listing-transaction"
+        reason = "listing-or-ipo-transaction-update"
+    elif form in {"10-K", "10-Q", "20-F", "40-F"} or _contains(header, [
         "사업보고서", "분기보고서", "반기보고서", "실적", "영업(잠정)실적",
     ]):
         event_type = "earnings"
@@ -50,7 +60,7 @@ def classify_disclosure(
         reason = "forward-financial-guidance"
     elif _contains(combined, [
         "유상증자", "무상증자", "전환사채", "신주인수권", "교환사채", "감자",
-        "자기주식", "배당", "주식분할", "주식병합", "합병", "회사분할",
+        "자기주식", "자사주", "주식소각", "배당", "주식분할", "주식병합", "합병", "회사분할",
         "공개매수", "최대주주변경", "13d", "13g", "offering", "buyback",
     ]):
         event_type = "capital_policy"
@@ -96,5 +106,6 @@ def classify_disclosure(
         "materialityState": materiality,
         "disclosureCategory": category,
         "classificationReason": reason,
+        "classificationBasis": "title-and-document" if body else "title-metadata",
         "source": str(source or "").strip(),
     }

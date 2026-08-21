@@ -669,6 +669,7 @@ class ExternalSignalCoreMixin:
             "dartLookbackDays": str(self.settings.get("externalDartLookbackDays") or "14"),
             "dartDocumentText": str(self.settings.get("externalDartDocumentTextEnabled") or "1"),
             "dartDocumentTextMaxChars": str(self.settings.get("externalDartDocumentTextMaxChars") or "6000"),
+            "dartDocumentMaxPerSymbol": str(self.settings.get("externalDartDocumentMaxPerSymbol") or "3"),
             "dartMappings": symbol_assignments(self.settings.get("externalDartCorpCodes") or ""),
             "alphaFundamentals": self.alpha_fundamentals_enabled(),
             "alphaFundamentalsMax": str(self.settings.get("externalAlphaFundamentalsMaxSymbols") or "1"),

@@ -1,12 +1,26 @@
 import hashlib
 import re
 from datetime import datetime
-from typing import Dict
+from typing import Dict, List, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-STORY_IDENTITY_VERSION = "news-story-identity-v2"
+STORY_IDENTITY_VERSION = "news-story-identity-v3"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "utm_campaign", "utm_medium", "utm_source", "utm_term"}
+EVENT_ACTIONS = (
+    ("buyback", ("자기주식", "자사주", "주식소각", "share buyback", "stock repurchase", "share cancellation")),
+    ("compensation", ("임금", "임단협", "성과급", "상여", "wage", "salary", "bonus", "compensation")),
+    ("reorganization", ("조직개편", "쇄신", "인사개편", "reorganization", "restructuring meeting")),
+    ("ipo", ("기업공개", "상장 추진", "ipo", "initial public offering")),
+    ("strike", ("파업", "쟁의", "strike", "walkout")),
+    ("app-store", ("앱스토어", "app store")),
+    ("contract", ("공급계약", "수주", "supply agreement", "contract award")),
+    ("earnings", ("실적", "매출", "영업이익", "earnings", "revenue", "profit")),
+)
+EVENT_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "to", "of", "for", "in", "on", "with", "from",
+    "관련", "대한", "통해", "위한", "올해", "지난", "종합", "단독", "속보", "news",
+}
 
 
 def _hash(value: str) -> str:
@@ -40,6 +54,106 @@ def _date_bucket(value: object) -> str:
         return text[:10]
 
 
+def _first(item: Dict[str, object], *keys: str) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+    for source in (item, payload, facts):
+        for key in keys:
+            value = source.get(key) if isinstance(source, dict) else None
+            if value not in (None, "", [], {}):
+                return str(value).strip()
+    return ""
+
+
+def _event_action(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").casefold())
+    for action, markers in EVENT_ACTIONS:
+        if any(marker in text for marker in markers):
+            return action
+    return "general"
+
+
+def _number_keys(value: object) -> List[str]:
+    units = {
+        "%": "percent",
+        "조": "trillion",
+        "조원": "trillion",
+        "억원": "hundred-million",
+        "억": "hundred-million",
+        "trillion": "trillion",
+        "billion": "billion",
+        "million": "million",
+    }
+    rows = []
+    for number, unit in re.findall(
+        r"(?<![0-9])([0-9]+(?:\.[0-9]+)?)\s*(%|조원?|억원?|trillion|billion|million)",
+        str(value or "").casefold(),
+    ):
+        rows.append(number.rstrip("0").rstrip(".") + ":" + units.get(unit, unit))
+    return sorted(set(rows))[:8]
+
+
+def _event_tokens(value: object) -> Set[str]:
+    tokens = {
+        token for token in re.findall(r"[a-z0-9가-힣]{2,}", str(value or "").casefold())
+        if token not in EVENT_STOP_WORDS and not token.isdigit()
+    }
+    return set(sorted(tokens)[:32])
+
+
+def story_event_features(item: Dict[str, object]) -> Dict[str, object]:
+    title = _first(item, "title", "headline", "name")
+    summary = _first(item, "articleSummaryKo", "summary", "koreanSummary")
+    event_type = _first(item, "eventType", "newsType", "category").casefold() or "general"
+    corpus = title + " " + summary
+    return {
+        "symbol": _first(item, "symbol", "ticker", "relatedSymbol").upper(),
+        "date": _date_bucket(_first(item, "publishedAt", "observedAt", "seenDate")),
+        "eventType": event_type,
+        "action": _event_action(corpus),
+        "numbers": _number_keys(corpus),
+        "tokens": _event_tokens(corpus),
+    }
+
+
+def event_cluster_identity(item: Dict[str, object]) -> str:
+    features = story_event_features(item)
+    if features["symbol"] and features["date"] and features["action"] != "general" and features["numbers"]:
+        return _hash("semantic|" + "|".join([
+            str(features["symbol"]),
+            str(features["date"]),
+            str(features["action"]),
+            ",".join(features["numbers"]),
+        ]))
+    return ""
+
+
+def same_story_event(left: Dict[str, object], right: Dict[str, object]) -> bool:
+    left_features = story_event_features(left)
+    right_features = story_event_features(right)
+    if not left_features["symbol"] or left_features["symbol"] != right_features["symbol"]:
+        return False
+    try:
+        date_distance = abs((
+            datetime.fromisoformat(str(left_features["date"]))
+            - datetime.fromisoformat(str(right_features["date"]))
+        ).days)
+    except ValueError:
+        date_distance = 0 if left_features["date"] == right_features["date"] else 99
+    if date_distance > 1:
+        return False
+    action = left_features["action"]
+    if action == "general" or action != right_features["action"]:
+        return False
+    left_numbers = set(left_features["numbers"])
+    right_numbers = set(right_features["numbers"])
+    if left_numbers and right_numbers and not left_numbers.intersection(right_numbers):
+        return False
+    shared_tokens = set(left_features["tokens"]).intersection(right_features["tokens"])
+    required_overlap = 1 if left_numbers and right_numbers else 2
+    return len(shared_tokens) >= required_overlap
+
+
 def story_identity(item: Dict[str, object]) -> str:
     item = item if isinstance(item, dict) else {}
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -59,6 +173,9 @@ def story_identity(item: Dict[str, object]) -> str:
     duplicate_root = first("duplicateOfClaimId", "canonicalClaimId", "claimId")
     if duplicate_root:
         return _hash("claim|" + duplicate_root)
+    semantic_identity = event_cluster_identity(item)
+    if semantic_identity:
+        return semantic_identity
     canonical_url = _normalized_url(first("articleCanonicalUrl", "canonicalUrl", "url", "sourceUrl"))
     body_fingerprint = first("articleBodyFingerprint", "bodyFingerprint", "contentHash")
     if canonical_url and body_fingerprint:

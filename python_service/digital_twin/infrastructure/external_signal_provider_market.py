@@ -3,6 +3,8 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
+from ..domain.disclosure_quality import assess_disclosure_document
+from ..domain.disclosure_taxonomy import classify_disclosure
 from ..domain.market_data import number
 from ..domain.portfolio_calculations import (
     BROKER_FX_SOURCE_TYPE,
@@ -32,6 +34,9 @@ class ExternalSignalMarketMixin:
 
     def dart_document_text_max_chars(self) -> int:
         return max(500, min(20000, int(number(self.settings.get("externalDartDocumentTextMaxChars")) or 6000)))
+
+    def dart_document_max_per_symbol(self) -> int:
+        return max(1, min(5, int(number(self.settings.get("externalDartDocumentMaxPerSymbol")) or 3)))
 
     def dart_company_fundamentals_enabled(self) -> bool:
         value = str(self.settings.get("externalDartCompanyFundamentalsEnabled") or "1").strip().lower()
@@ -598,27 +603,49 @@ class ExternalSignalMarketMixin:
                             api_key,
                             now,
                         )
-                    receipt_no = str(disclosure.get("receiptNo") or "").strip()
                     collect_document = self.dart_document_text_enabled() if include_document is None else bool(include_document)
-                    if receipt_no and collect_document:
-                        try:
-                            def fetch_document():
-                                url = "https://opendart.fss.or.kr/api/document.xml?" + urllib.parse.urlencode({
-                                    "crtfc_key": api_key,
-                                    "rcept_no": receipt_no,
-                                })
-                                return self.fetch_bytes(url, {"Accept": "application/zip,application/xml"})
+                    if collect_document:
+                        disclosure_items = disclosure.get("items") if isinstance(disclosure.get("items"), list) else []
+                        prioritized = []
+                        for index, item in enumerate(disclosure_items):
+                            if not isinstance(item, dict):
+                                continue
+                            classification = classify_disclosure(item.get("reportName"), item.get("reportName"), "OpenDART")
+                            item.update(classification)
+                            if index == 0 or classification.get("materialityState") in {"notable", "material"}:
+                                prioritized.append(item)
+                        for item in prioritized[:self.dart_document_max_per_symbol()]:
+                            receipt_no = str(item.get("receiptNo") or "").strip()
+                            if not receipt_no:
+                                continue
+                            try:
+                                def fetch_document(receipt=receipt_no):
+                                    url = "https://opendart.fss.or.kr/api/document.xml?" + urllib.parse.urlencode({
+                                        "crtfc_key": api_key,
+                                        "rcept_no": receipt,
+                                    })
+                                    return self.fetch_bytes(url, {"Accept": "application/zip,application/xml"})
 
-                            raw_document = self.guarded_call("OpenDART", "document:" + symbol, fetch_document)
-                            document_text = dart_document_text(raw_document, self.dart_document_text_max_chars())
+                                raw_document = self.guarded_call("OpenDART", "document:" + symbol + ":" + receipt_no, fetch_document)
+                                document_text = dart_document_text(raw_document, self.dart_document_text_max_chars())
+                                assessment = assess_disclosure_document(document_text, "body")
+                                item.update({
+                                    "documentText": assessment.document_text,
+                                    "documentTextPreview": assessment.document_text[:700],
+                                    "documentTextQuality": "body" if assessment.document_verified else "insufficient",
+                                    "documentState": assessment.state,
+                                })
+                            except Exception as error:  # noqa: BLE001 - list metadata remains available with an explicit fallback status.
+                                item.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable", "documentState": "metadata-only"})
+                                self.status_for_error(signals, "OpenDART", symbol + " document " + receipt_no + " ", error)
+                        latest = disclosure_items[0] if disclosure_items else {}
+                        if isinstance(latest, dict):
                             disclosure.update({
-                                "documentText": document_text,
-                                "documentTextPreview": document_text[:700],
-                                "documentTextQuality": "body" if len(document_text) >= 120 else "insufficient",
+                                "documentText": latest.get("documentText") or "",
+                                "documentTextPreview": latest.get("documentTextPreview") or "",
+                                "documentTextQuality": latest.get("documentTextQuality") or "metadata-only",
+                                "documentState": latest.get("documentState") or "metadata-only",
                             })
-                        except Exception as error:  # noqa: BLE001 - list metadata remains available with an explicit fallback status.
-                            disclosure.update({"documentText": "", "documentTextPreview": "", "documentTextQuality": "unavailable"})
-                            self.status_for_error(signals, "OpenDART", symbol + " document ", error)
                     signals["dartDisclosures"][symbol] = disclosure
             except Exception as error:  # noqa: BLE001
                 self.status_for_error(signals, "OpenDART", symbol + " ", error)

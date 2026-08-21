@@ -61,6 +61,12 @@ class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
         self.assertFalse(metadata_only.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
         self.assertIn("official-document-content-missing", metadata_only.raw_payload["evidenceGovernance"]["reasons"])
 
+        second = service.revalidate(limit=20, dry_run=True)
+
+        self.assertEqual(0, second["changedCount"])
+        self.assertEqual(0, second["writtenCount"])
+        self.assertTrue(second["notificationReplay"] is False)
+
     def test_sec_and_dart_document_extractors_preserve_readable_body(self):
         sec_text = sec_document_text(
             "<html><body><h1>Quarterly report</h1><p>Revenue increased and the company updated its outlook.</p><script>ignore()</script></body></html>",

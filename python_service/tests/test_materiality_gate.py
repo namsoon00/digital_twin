@@ -17,7 +17,7 @@ from digital_twin.application.ontology_reasoning_service import (
     event_review_level,
 )
 from digital_twin.domain.accounts import AccountConfig
-from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
+from digital_twin.domain.events import DomainEvent, NEWS_ARTICLE_ANALYZED, ONTOLOGY_REASONING_REQUESTED, RESEARCH_EVIDENCE_COLLECTED, ontology_reasoning_requested_event
 from digital_twin.domain.fact_changes import market_fact_change
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.materiality import evidence_materiality, market_change_materiality
@@ -584,7 +584,7 @@ class MaterialityGateTests(unittest.TestCase):
             "Reuters",
             "Apple earnings guidance beats estimates",
             "실적 가이던스 상향",
-            "https://example.test/strong",
+            "https://www.reuters.com/technology/apple-earnings-guidance",
             "2026-07-10T01:00:00Z",
             "support",
             8.0,
@@ -595,6 +595,13 @@ class MaterialityGateTests(unittest.TestCase):
                 "sourceTrustState": "trusted",
                 "materialityState": "material",
                 "articleReadStatus": "body",
+                "bodyQualityPassed": True,
+                "articleText": "Apple reported earnings and raised its full-year guidance after audited revenue beat estimates. " * 5,
+                "articleSummaryKo": "애플이 실적 예상치를 웃돌고 연간 가이던스를 상향했습니다.",
+                "summaryQualityState": "ready",
+                "articleSummaryQuality": {"state": "ready", "issues": []},
+                "aiAnalysis": {"status": "ok", "needsReview": False},
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True, "readStatus": "body"},
                 "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
             },
         )
@@ -630,7 +637,7 @@ class MaterialityGateTests(unittest.TestCase):
             "Reuters",
             "Apple earnings guidance beats estimates",
             "실적 가이던스 상향",
-            "https://example.test/strong",
+            "https://www.reuters.com/technology/apple-earnings-guidance",
             "2026-07-10T01:00:00Z",
             "support",
             8.0,
@@ -641,6 +648,13 @@ class MaterialityGateTests(unittest.TestCase):
                 "sourceTrustState": "trusted",
                 "materialityState": "material",
                 "articleReadStatus": "body",
+                "bodyQualityPassed": True,
+                "articleText": "Apple reported earnings and raised its full-year guidance after audited revenue beat estimates. " * 5,
+                "articleSummaryKo": "애플이 실적 예상치를 웃돌고 연간 가이던스를 상향했습니다.",
+                "summaryQualityState": "ready",
+                "articleSummaryQuality": {"state": "ready", "issues": []},
+                "aiAnalysis": {"status": "ok", "needsReview": False},
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True, "readStatus": "body"},
                 "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
             },
         )
@@ -679,7 +693,7 @@ class MaterialityGateTests(unittest.TestCase):
 
         self.assertEqual(2, result["changedCount"])
         self.assertEqual(["AAPL"], result["materialChangedSymbols"])
-        self.assertEqual([RESEARCH_EVIDENCE_COLLECTED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
+        self.assertEqual([RESEARCH_EVIDENCE_COLLECTED, NEWS_ARTICLE_ANALYZED, ONTOLOGY_REASONING_REQUESTED], [event.name for event in events.published])
         self.assertEqual(["AAPL"], events.published[-1].payload["symbols"])
         self.assertEqual(1, events.published[-1].payload["changedCount"])
         self.assertEqual(2, len(events.published[-1].payload["materialityAssessments"]))

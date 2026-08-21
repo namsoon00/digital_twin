@@ -141,6 +141,13 @@ def add_governed_claim_concepts(
     raw_payload: Dict[str, object],
 ) -> None:
     governance = raw_payload.get("evidenceGovernance") if isinstance(raw_payload.get("evidenceGovernance"), dict) else {}
+    news_eligibility = raw_payload.get("newsEligibility") if isinstance(raw_payload.get("newsEligibility"), dict) else {}
+    parent_reasoning_eligible = bool(governance.get("investmentJudgmentEligible"))
+    if str(getattr(item, "kind", "") or "").lower() == "news" and news_eligibility:
+        parent_reasoning_eligible = bool(
+            parent_reasoning_eligible
+            and news_eligibility.get("reasoningEligible")
+        )
     evidence_key = str(getattr(item, "evidence_id", "") or "").strip()
     if not evidence_key:
         return
@@ -193,7 +200,10 @@ def add_governed_claim_concepts(
             continue
         statement = str(claim.get("statement") or getattr(item, "summary", "") or getattr(item, "title", "") or evidence_key)
         state = str(claim.get("state") or "reported")
-        eligible = bool(claim.get("investmentJudgmentEligible"))
+        eligible = bool(claim.get("investmentJudgmentEligible") and parent_reasoning_eligible)
+        claim_reasons = list(claim.get("reasons") or [])
+        if claim.get("investmentJudgmentEligible") and not parent_reasoning_eligible:
+            claim_reasons = list(dict.fromkeys(claim_reasons + ["parent-evidence-reasoning-blocked"]))
         tbox_class = "VerifiedClaim" if eligible else "DisputedClaim" if state == "conflicted" else "RejectedClaim" if state in {"rejected", "expired", "superseded"} else "ExtractedClaim"
         claim_id = add_entity(graph, "verified-claim", claim_key, statement, {
             "tboxClass": tbox_class,
@@ -216,6 +226,7 @@ def add_governed_claim_concepts(
             "excerptEnd": claim.get("excerptEnd"),
             "checkedAt": governance.get("checkedAt"),
             "investmentJudgmentEligible": eligible,
+            "reasons": claim_reasons,
         })
         assessment_id = add_entity(graph, "evidence-assessment", claim_key, "근거 품질 검증", {
             "tboxClass": "EvidenceAssessment",
@@ -226,7 +237,7 @@ def add_governed_claim_concepts(
             "independentSourceCount": claim.get("independentSourceCount") or 0,
             "validationState": "ready" if eligible else "conditional",
             "dataState": "sufficient" if eligible else "partial",
-            "reasons": claim.get("reasons") or [],
+            "reasons": claim_reasons,
             "sourcePolicy": governance.get("sourcePolicy"),
         })
         relation_props = {

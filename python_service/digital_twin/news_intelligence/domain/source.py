@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
 
-SOURCE_REGISTRY_VERSION = "news-source-registry-v1"
+SOURCE_REGISTRY_VERSION = "news-source-registry-v2"
 SOURCE_TIERS = {"A", "B", "C", "D", "DISCOVERY_ONLY"}
 
 
@@ -207,11 +207,21 @@ class SourceRegistry:
         exact = [entry for entry in self.entries if normalized == entry.name.casefold() or normalized in entry.aliases]
         if exact:
             return exact[0]
+
+        def contains_alias(alias: str) -> bool:
+            # Publisher aliases are names, not arbitrary substrings. In
+            # particular, the SEC alias must never match "SecurityWeek".
+            return bool(re.search(
+                r"(?<![0-9a-z가-힣])" + re.escape(alias) + r"(?![0-9a-z가-힣])",
+                normalized,
+                re.IGNORECASE,
+            ))
+
         matches = [
             (len(alias), entry)
             for entry in self.entries
             for alias in entry.aliases
-            if alias and alias in normalized
+            if alias and contains_alias(alias)
         ]
         if matches:
             return max(matches, key=lambda row: row[0])[1]

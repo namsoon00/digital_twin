@@ -8,6 +8,7 @@ from typing import Dict, List, Mapping
 
 from ..application.account_service import AccountApplicationService
 from ..application.mysql_minimal_retention_service import MySQLMinimalRetentionService
+from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
 from ..domain.accounts import AccountConfig, split_symbols
 from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
 from ..domain.monitoring import RealtimeMonitor
@@ -1691,6 +1692,7 @@ def news_command(args) -> int:
         result = RevalidateNewsIntelligenceService(stores.research_evidence_store(settings)).revalidate(
             symbol=str(args.symbol or "").upper().strip(),
             limit=max(1, min(5000, int(args.limit or 500))),
+            dry_run=bool(args.dry_run),
         )
         print(json.dumps(result.to_dict(), ensure_ascii=False))
         return 0
@@ -1706,6 +1708,20 @@ def news_command(args) -> int:
         NewsCollectionScheduler(runner, interval).run_forever()
         return 0
     return 1
+
+
+def research_evidence_command(args) -> int:
+    settings = runtime_settings()
+    result = ResearchEvidenceGovernanceService(
+        stores.research_evidence_store(settings),
+        settings,
+    ).revalidate(
+        symbol=str(args.symbol or "").upper().strip(),
+        limit=max(1, min(5000, int(args.limit or 500))),
+        dry_run=bool(args.dry_run),
+    )
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
 
 
 def news_analysis_command(args) -> int:
@@ -2269,7 +2285,16 @@ def build_parser() -> argparse.ArgumentParser:
     news_revalidate = news_actions.add_parser("revalidate")
     news_revalidate.add_argument("--symbol", default="")
     news_revalidate.add_argument("--limit", default="500")
+    news_revalidate.add_argument("--dry-run", action="store_true")
     news.set_defaults(func=news_command)
+
+    research_evidence = subparsers.add_parser("research-evidence", help="Revalidate persisted news and disclosure evidence")
+    research_evidence_actions = research_evidence.add_subparsers(dest="research_evidence_action", required=True)
+    research_evidence_revalidate = research_evidence_actions.add_parser("revalidate")
+    research_evidence_revalidate.add_argument("--symbol", default="")
+    research_evidence_revalidate.add_argument("--limit", default="500")
+    research_evidence_revalidate.add_argument("--dry-run", action="store_true")
+    research_evidence.set_defaults(func=research_evidence_command)
 
     news_analysis = subparsers.add_parser("news-analysis", help="Enrich stored news with Korean summaries and title translations")
     news_analysis_actions = news_analysis.add_subparsers(dest="news_analysis_action", required=True)

@@ -2,6 +2,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
+from .disclosure_analysis import DISCLOSURE_ANALYSIS_PROMPT_VERSION, local_disclosure_analysis
+from .disclosure_quality import apply_disclosure_document_quality
 from .disclosure_taxonomy import classify_disclosure
 from .market_data import clamp, number
 from . import news_analysis as news_domain
@@ -636,6 +638,49 @@ def sec_filing_url(cik: object, accession: object, primary_document: object) -> 
     return "https://www.sec.gov/Archives/edgar/data/" + cik_text + "/" + accession_text + "/" + document
 
 
+def disclosure_evidence_payload(
+    base_payload: Dict[str, object],
+    *,
+    title: str,
+    source: str,
+    document_text: object,
+    document_quality: object,
+    metadata_verified: bool,
+) -> Dict[str, object]:
+    payload = {
+        **dict(base_payload or {}),
+        "officialDocumentText": compact_text(document_text, 20000),
+        "officialDocumentQuality": str(document_quality or "metadata-only").strip(),
+    }
+    payload = apply_disclosure_document_quality(payload, metadata_verified=metadata_verified)
+    payload.update(classify_disclosure(
+        title,
+        payload.get("officialDocumentType") or title,
+        source,
+        payload.get("officialDocumentText"),
+    ))
+    analysis = local_disclosure_analysis({
+        "reportName": title,
+        "provider": source,
+        "officialDocumentText": payload.get("officialDocumentText"),
+        "analysisReady": payload.get("analysisReady"),
+        "metadata": {
+            "reportName": title,
+            "provider": source,
+            "analysisReady": payload.get("analysisReady"),
+        },
+        "rawLines": [title, str(payload.get("officialDocumentPreview") or "")],
+    })
+    source_hash = hashlib.sha256(str(payload.get("officialDocumentText") or title).encode("utf-8")).hexdigest()[:24]
+    payload["disclosureAnalysis"] = {
+        **analysis.to_dict(),
+        "version": DISCLOSURE_ANALYSIS_PROMPT_VERSION,
+        "status": "ready" if payload.get("analysisReady") else "metadata-only",
+        "sourceTextHash": source_hash,
+    }
+    return payload
+
+
 def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchEvidence]:
     if not isinstance(sec, dict) or not sec:
         return []
@@ -650,30 +695,26 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
         document_text = compact_text(latest.get("documentText") or "", 20000)
         document_quality = str(latest.get("documentTextQuality") or "metadata-only").strip()
         polarity = keyword_polarity(form + " " + company_name)
-        classification = classify_disclosure(form, form, sec.get("provider") or "SEC EDGAR")
+        source = str(sec.get("provider") or "SEC EDGAR")
+        raw_payload = disclosure_evidence_payload({
+            "relationScope": "direct",
+            "sourceTrustState": "trusted",
+            "officialDocumentPreview": compact_text(latest.get("documentTextPreview") or document_text, 700),
+            "officialDocumentType": form,
+            "sourcePublisher": source,
+        }, title=form, source=source, document_text=document_text, document_quality=document_quality, metadata_verified=bool(form and filing_date))
         evidence.append(ResearchEvidence(
             evidence_id="research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
             symbol=normalized_symbol,
             kind="filing",
-            source=str(sec.get("provider") or "SEC EDGAR"),
+            source=source,
             title=form,
-            summary=(company_name + ", 제출일 " + (filing_date or "-")).strip(", "),
+            summary=(company_name + " · " + form + " · 제출일 " + (filing_date or "-")).strip(" ·"),
             url=url,
             observed_at=filing_date,
             polarity=polarity,
             published_at=filing_date,
-            raw_payload={
-                "relationScope": "direct",
-                **classification,
-                "sourceTrustState": "trusted",
-                "dataState": "sufficient" if len(document_text) >= 120 else "partial",
-                "validationState": "ready",
-                "officialDocumentText": document_text,
-                "officialDocumentPreview": compact_text(latest.get("documentTextPreview") or document_text, 700),
-                "officialDocumentQuality": document_quality,
-                "officialDocumentType": form,
-                "sourcePublisher": str(sec.get("provider") or "SEC EDGAR"),
-            },
+            raw_payload=raw_payload,
         ))
     facts = sec.get("facts") if isinstance(sec.get("facts"), dict) else {}
     financial_rows = []
@@ -746,40 +787,35 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
                 or "metadata-only"
             ).strip()
             source = str(disclosure_item.get("provider") or disclosure.get("provider") or "OpenDART")
-            classification = classify_disclosure(report, report, source)
             receipt_date = str(
                 disclosure_item.get("receiptDate")
                 or disclosure_item.get("receipt_date")
                 or ""
             )
+            raw_payload = disclosure_evidence_payload({
+                "relationScope": "direct",
+                "sourceTrustState": "trusted",
+                "officialDocumentPreview": compact_text(
+                    disclosure_item.get("documentTextPreview") or document_text,
+                    700,
+                ),
+                "officialDocumentType": report,
+                "sourcePublisher": source,
+                "receiptNo": receipt_no,
+                "reportName": report,
+            }, title=report, source=source, document_text=document_text, document_quality=document_quality, metadata_verified=bool(report and receipt_date and receipt_no))
             evidence.append(ResearchEvidence(
                 evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),
                 symbol=normalized_symbol,
                 kind="disclosure",
                 source=source,
                 title=report,
-                summary="접수일 " + (receipt_date or "-"),
+                summary=report + " · 접수일 " + (receipt_date or "-"),
                 url=opendart_url(receipt_no),
                 observed_at=receipt_date,
                 polarity=polarity,
                 published_at=receipt_date,
-                raw_payload={
-                    "relationScope": "direct",
-                    **classification,
-                    "sourceTrustState": "trusted",
-                    "dataState": "sufficient" if len(document_text) >= 120 else "partial",
-                    "validationState": "ready",
-                    "officialDocumentText": document_text,
-                    "officialDocumentPreview": compact_text(
-                        disclosure_item.get("documentTextPreview") or document_text,
-                        700,
-                    ),
-                    "officialDocumentQuality": document_quality,
-                    "officialDocumentType": report,
-                    "sourcePublisher": source,
-                    "receiptNo": receipt_no,
-                    "reportName": report,
-                },
+                raw_payload=raw_payload,
             ))
     news = facts.get("newsHeadlines") if isinstance(facts.get("newsHeadlines"), dict) else {}
     for item in (news.get("items") if isinstance(news.get("items"), list) else []):

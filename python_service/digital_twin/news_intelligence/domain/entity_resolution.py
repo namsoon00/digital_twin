@@ -5,7 +5,7 @@ from typing import Iterable, List
 from .entity import other_company_aliases, target_aliases, unique_aliases
 
 
-ENTITY_RESOLUTION_VERSION = "news-entity-resolution-v1"
+ENTITY_RESOLUTION_VERSION = "news-entity-resolution-v2"
 WORD_BOUNDARY = r"A-Za-z0-9_가-힣"
 BROKER_SUFFIXES = ("증권", "투자증권", "자산운용", "보험", "카드")
 ROUNDUP_MARKERS = (
@@ -28,6 +28,13 @@ LEADING_SUBJECT_RE = re.compile(
 COMPARISON_SUBJECT_RE = re.compile(
     r"^\s*(?P<subject>.{2,70}?)\s*(?:\([A-Z.]{1,8}\))?\s+(?:vs\.?|versus)\s+",
     re.IGNORECASE,
+)
+KOREAN_LEADING_SUBJECT_RE = re.compile(
+    r"^\s*(?:\[[^\]]{1,40}\]\s*)?(?P<subject>[가-힣A-Za-z0-9&().ㆍ·㈜\s]{2,50}?)[,·]\s+"
+)
+LEGAL_ENTITY_MARKERS = (
+    " reit", " bank", " bancorp", " holdings", " holding", " capital", " group",
+    " trust", " acquisition", " hospitality", " pharma", " energy",
 )
 
 
@@ -65,11 +72,40 @@ def _leading_other_subject(title: str, aliases: Iterable[str]) -> str:
         subject = str(comparison.group("subject") or "").strip(" ,:-")
         if subject and not matched_aliases(subject, aliases):
             return subject
+    korean = KOREAN_LEADING_SUBJECT_RE.search(title)
+    if korean:
+        subject = str(korean.group("subject") or "").strip(" ,:-")
+        if subject and not matched_aliases(subject, aliases):
+            return subject
     match = LEADING_SUBJECT_RE.search(title)
     if not match:
         return ""
     subject = str(match.group("subject") or "").strip()
-    return "" if matched_aliases(subject, aliases) else subject
+    subject_hits = matched_aliases(subject, aliases)
+    if not subject_hits:
+        return subject
+    normalized_subject = re.sub(r"[^a-z0-9가-힣]+", " ", subject.casefold()).strip()
+    normalized_aliases = {
+        re.sub(r"[^a-z0-9가-힣]+", " ", str(alias or "").casefold()).strip()
+        for alias in aliases
+    }
+    if normalized_subject not in normalized_aliases and any(marker in " " + normalized_subject for marker in LEGAL_ENTITY_MARKERS):
+        return subject
+    return ""
+
+
+def _secondary_role(title: str, aliases: Iterable[str]) -> str:
+    for alias in unique_aliases(aliases):
+        escaped = re.escape(alias)
+        if re.search(escaped + r"\s*(?:에서|서|로부터)\b", title, re.IGNORECASE) and re.search(r"수주|공급|계약", title):
+            return "customer"
+        if re.search(r"\b(?:from|to)\s+" + escaped + r"\b", title, re.IGNORECASE) and re.search(
+            r"\b(?:wins?|secures?|supplies?|contracts?)\b",
+            title,
+            re.IGNORECASE,
+        ):
+            return "customer"
+    return "mentioned"
 
 
 def _roundup_title(title: str, symbol: str, aliases: Iterable[str]) -> bool:
@@ -155,7 +191,7 @@ def resolve_target_entity(
         reasons.append("other-company-is-leading-subject")
         return TargetEntityResolution(
             normalized_symbol,
-            "mentioned",
+            _secondary_role(title_text, known_aliases),
             "ambiguous",
             False,
             title_hits,

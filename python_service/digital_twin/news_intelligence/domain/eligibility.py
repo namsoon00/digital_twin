@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -6,9 +7,22 @@ from .entity_resolution import TargetEntityResolution, matched_aliases, resolve_
 from .provenance import annotate_source_provenance, resolve_source_provenance
 
 
-NEWS_ELIGIBILITY_VERSION = "news-eligibility-v1"
+NEWS_ELIGIBILITY_VERSION = "news-eligibility-v2"
 INVESTABLE_SCOPES = {"direct", "related_product", "peer", "sector", "market"}
 USABLE_ANALYSIS_STATUSES = {"ok", "complete", "completed"}
+HARD_BODY_ISSUES = {
+    "publisher-navigation",
+    "related-news-tail",
+    "headline-list-contamination",
+    "target-context-diluted",
+    "text-encoding-corrupt",
+}
+HARD_REVIEW_RE = re.compile(
+    r"본문\s*(?:오염|불일치)|다른\s*기사|무관한\s*(?:기사|본문)|기사\s*본문\s*대신|"
+    r"사이트\s*(?:메뉴|탐색)|source\s*content\s*contamination|body\s*contamination|"
+    r"title\s*(?:and|/)\s*body\s*mismatch",
+    re.IGNORECASE,
+)
 
 
 def _dict(value: object) -> Dict[str, object]:
@@ -46,6 +60,8 @@ class NewsEligibility:
     reasoning: EligibilityLayer
     entity_resolution: TargetEntityResolution
     source_identity: Dict[str, object]
+    review_state: str = "clear"
+    review_reason_codes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -62,7 +78,38 @@ class NewsEligibility:
             },
             "entityResolution": self.entity_resolution.to_dict(),
             "sourceIdentity": dict(self.source_identity),
+            "reviewState": self.review_state,
+            "reviewReasonCodes": list(self.review_reason_codes),
         }
+
+
+def review_classification(payload: Dict[str, object]) -> tuple:
+    payload = _dict(payload)
+    facts = _dict(payload.get("articleFacts"))
+    analysis = _dict(payload.get("aiAnalysis"))
+    summary_quality = _dict(payload.get("articleSummaryQuality"))
+    issues = {
+        _text(value).lower()
+        for value in list(facts.get("bodyQualityIssues") or [])
+        + list(summary_quality.get("issues") or [])
+        if _text(value)
+    }
+    reasons: List[str] = []
+    if issues.intersection(HARD_BODY_ISSUES):
+        reasons.append("content-quality-hard-failure")
+    review_text = " ".join([
+        *[_text(value) for value in analysis.get("reasoningLimitations") or []],
+        _text(analysis.get("validationReasonKo")),
+        _text(payload.get("analysisConflictReasonKo")),
+    ])
+    if HARD_REVIEW_RE.search(review_text):
+        reasons.append("ai-detected-content-mismatch")
+    reasons = list(dict.fromkeys(reasons))
+    if reasons:
+        return "content-invalid", reasons
+    if _bool(analysis.get("needsReview")):
+        return "conditional-review", ["ai-review-requested"]
+    return "clear", []
 
 
 def assess_news_eligibility(
@@ -117,6 +164,7 @@ def assess_news_eligibility(
     relationship = _text(provenance.get("evidenceRelationship") or payload.get("evidenceRelationship")).lower()
     publisher_tier = _text(source_profile.get("publisherTier") or _dict(provenance.get("originalPublisher")).get("tier")).upper()
     target_confirmed = resolution.target_subject_confirmed
+    review_state, review_reason_codes = review_classification(payload)
     if not _text(title) and quality_gate.get("targetSubjectConfirmed") is True:
         target_confirmed = True
 
@@ -147,6 +195,8 @@ def assess_news_eligibility(
         display_reasons.append("external-analysis-not-ready")
     if payload.get("analysisConflict") or facts.get("analysisConflict"):
         display_reasons.append("analysis-conflict")
+    if review_state == "content-invalid":
+        display_reasons.extend(review_reason_codes)
     if trust not in {"standard", "trusted"}:
         display_reasons.append("source-trust-below-policy")
     if relationship in {"exact-duplicate", "syndicated-copy"}:
@@ -177,7 +227,16 @@ def assess_news_eligibility(
         reasoning_reasons.append("content-type-not-reasoning-eligible")
     reasoning_reasons = list(dict.fromkeys(reasoning_reasons))
     reasoning = EligibilityLayer(not reasoning_reasons, reasoning_reasons)
-    return NewsEligibility(archive, display, alert, reasoning, resolution, source_profile)
+    return NewsEligibility(
+        archive,
+        display,
+        alert,
+        reasoning,
+        resolution,
+        source_profile,
+        review_state,
+        review_reason_codes,
+    )
 
 
 def annotate_news_eligibility(payload: Dict[str, object], **context: object) -> Dict[str, object]:

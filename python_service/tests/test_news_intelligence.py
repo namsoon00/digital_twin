@@ -112,6 +112,29 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertEqual("mentioned", resolution.role)
         self.assertIn("Amazon.com", resolution.other_subject)
 
+    def test_legal_entity_with_apple_prefix_is_not_aapl(self):
+        resolution = resolve_target_entity(
+            "Apple Hospitality REIT Announces Monthly Distribution",
+            "Apple Hospitality REIT declared its monthly dividend.",
+            "AAPL",
+            "Apple",
+        )
+
+        self.assertFalse(resolution.target_subject_confirmed)
+        self.assertEqual("Apple Hospitality REIT", resolution.other_subject)
+
+    def test_korean_supplier_is_not_the_customer_company_subject(self):
+        resolution = resolve_target_entity(
+            "한성크린텍, SK하이닉스서 307억 규모 수주",
+            "한성크린텍이 SK하이닉스에서 공사를 수주했다.",
+            "000660",
+            "SK하이닉스",
+        )
+
+        self.assertFalse(resolution.target_subject_confirmed)
+        self.assertEqual("customer", resolution.role)
+        self.assertEqual("한성크린텍", resolution.other_subject)
+
     def test_body_quality_rejects_navigation_and_investment_promotion(self):
         result = inspect_article_body(
             ("NVIDIA announced quarterly results with audited revenue details. " * 8)
@@ -121,6 +144,23 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertIn("publisher-navigation", result.issues)
         self.assertIn("investment-promotion", result.issues)
+
+    def test_body_quality_rejects_unrelated_headline_lists(self):
+        body = "\n".join([
+            "SK하이닉스는 신규 생산 계획을 발표했다.",
+            "철도 노조 협상 다시 결렬",
+            "서울 아파트 가격 상승세",
+            "프로야구 주말 경기 결과",
+            "정부 세제 개편안 발표",
+            "국제 유가 장중 하락",
+            "주요 뉴스 더보기",
+        ])
+
+        result = inspect_article_body(body, 80, ["SK하이닉스"])
+
+        self.assertFalse(result.passed)
+        self.assertIn("headline-list-contamination", result.issues)
+        self.assertIn("target-context-diluted", result.issues)
 
     def test_four_eligibility_layers_require_external_analysis_and_claim_governance(self):
         payload = ready_payload()
@@ -168,6 +208,21 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertFalse(result.reasoning.eligible)
         self.assertIn("claim-governance-not-eligible", result.reasoning.reason_codes)
 
+    def test_parent_reasoning_gate_downgrades_persisted_claim_ledger(self):
+        payload = ready_payload()
+        payload["claimLedger"] = {
+            "claims": [{"claimId": "claim:test", "investmentJudgmentEligible": True, "reasons": []}],
+            "summary": {"claimCount": 1, "eligibleClaimCount": 1},
+        }
+        evidence = Evidence("NVIDIA announces multi-year supply agreement", payload)
+
+        annotate_evidence_eligibility(evidence)
+
+        self.assertFalse(evidence.raw_payload["newsEligibility"]["reasoningEligible"])
+        self.assertFalse(evidence.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
+        self.assertFalse(evidence.raw_payload["claimLedger"]["claims"][0]["investmentJudgmentEligible"])
+        self.assertEqual(0, evidence.raw_payload["claimLedger"]["summary"]["eligibleClaimCount"])
+
     def test_governed_external_analysis_can_be_conditional_reasoning_evidence(self):
         payload = ready_payload()
         payload["validationState"] = "conditional"
@@ -183,6 +238,26 @@ class NewsIntelligenceTests(unittest.TestCase):
 
         self.assertTrue(result.alert.eligible)
         self.assertTrue(result.reasoning.eligible)
+
+    def test_ai_detected_body_mismatch_blocks_alert_and_reasoning(self):
+        payload = ready_payload()
+        payload["aiAnalysis"] = {
+            "status": "ok",
+            "needsReview": True,
+            "reasoningLimitations": ["기사 본문 대신 다른 기사 제목 목록이 수집되었습니다."],
+        }
+        result = assess_news_eligibility(
+            payload,
+            title="NVIDIA announces multi-year supply agreement",
+            symbol="NVDA",
+            name="NVIDIA",
+            source="Reuters",
+            url="https://www.reuters.com/technology/nvidia-supply-agreement",
+        )
+
+        self.assertEqual("content-invalid", result.review_state)
+        self.assertFalse(result.alert.eligible)
+        self.assertFalse(result.reasoning.eligible)
 
     def test_story_identity_does_not_merge_different_articles_by_generic_takeaway(self):
         first = {"symbol": "NVDA", "eventType": "earnings", "publishedAt": "2026-08-12T01:00:00Z", "title": "BofA raises Nvidia earnings estimate"}
@@ -239,6 +314,45 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertEqual("B", entry.tier)
         self.assertEqual("bloomberg-law", registry.by_name("Bloomberg Law News").publisher_id)
         self.assertEqual("yonhap-infomax", registry.by_host("news.einfomax.co.kr").publisher_id)
+
+    def test_short_official_alias_does_not_match_securityweek(self):
+        registry = SourceRegistry()
+
+        self.assertIsNone(registry.by_name("SecurityWeek"))
+        self.assertEqual("sec-edgar", registry.by_name("SEC filing").publisher_id)
+
+    def test_official_publisher_requires_its_registered_domain(self):
+        result = resolve_source_provenance(
+            ready_payload(),
+            title="SecurityWeek vulnerability report",
+            source="SEC EDGAR",
+            provider="Google News US",
+            url="https://www.securityweek.com/security-report/",
+            published_at="2026-08-20T10:00:00Z",
+        )
+
+        self.assertNotEqual("sec-edgar", result.identity.publisher_id)
+        self.assertFalse(result.provenance_complete)
+        self.assertIn("official-publisher-domain-mismatch", result.reason_codes)
+
+    def test_semantic_event_cluster_groups_independent_reports(self):
+        first = Evidence("SK하이닉스, 40조원 규모 자사주 매입 추진", ready_payload(), "000660")
+        first.evidence_id = "research:000660:news:one"
+        first.source = "뉴스핌"
+        first.url = "https://www.newspim.com/news/view/one"
+        first.published_at = "2026-08-20T01:00:00Z"
+        first.raw_payload.update({"eventType": "capital_policy", "articleText": "SK하이닉스가 40조원 규모의 자사주 매입 계획을 검토한다. " * 5})
+        second = Evidence("SK Hynix plans 40 trillion won share buyback", ready_payload(), "000660")
+        second.evidence_id = "research:000660:news:two"
+        second.source = "Reuters"
+        second.url = "https://www.reuters.com/technology/sk-hynix-buyback"
+        second.published_at = "2026-08-20T02:00:00Z"
+        second.raw_payload.update({"eventType": "capital_policy", "articleText": "SK Hynix outlined a 40 trillion won share buyback proposal. " * 5})
+
+        normalized = normalize_evidence_sources([first, second])
+
+        self.assertEqual(normalized[0].raw_payload["storyClusterId"], normalized[1].raw_payload["storyClusterId"])
+        self.assertEqual("independent-confirmation", normalized[1].raw_payload["evidenceRelationship"])
 
     def test_exact_republication_is_not_a_second_alert_or_reasoning_source(self):
         first = Evidence("NVIDIA announces multi-year supply agreement", ready_payload())
@@ -306,6 +420,11 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertFalse(result.to_dict()["notificationReplay"])
         self.assertEqual("entity_mismatch", repository.saved[0].raw_payload["relationScope"])
         self.assertFalse(repository.saved[0].raw_payload["newsEligibility"]["alertEligible"])
+
+        second = RevalidateNewsIntelligenceService(repository).revalidate(dry_run=True)
+
+        self.assertEqual(0, second.changed_count)
+        self.assertEqual(0, second.saved_count)
 
     def test_cross_context_event_contains_only_alert_eligible_articles(self):
         allowed = Evidence("NVIDIA announces multi-year supply agreement", ready_payload())

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import html
 import re
 from typing import Dict, Iterable, List, Tuple
 
@@ -193,7 +194,13 @@ EVENT_TYPE_KEYWORDS = {
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
     "crypto_linked": ["bitcoin", "비트코인", "crypto", "암호화폐", "digital asset"],
     "price_commentary": ["주가", "stock", "목표주가", "급등", "급락", "plunge", "trading volume", "거래량", "거래대금"],
+    "labor": ["임단협", "임금", "성과급", "상여", "노조", "파업", "wage", "salary", "bonus", "union", "strike"],
 }
+PRICE_COMMENTARY_EDITORIAL_MARKERS = (
+    "price target", "analyst rating", "analyst says", "wall street says",
+    "목표주가", "투자의견", "증권사 전망", "주식 초고수", "특징주",
+    "why the stock", "stock could rise", "stock could fall",
+)
 
 SOCIAL_SOURCE_TERMS = [
     "facebook",
@@ -306,6 +313,7 @@ EVENT_TYPE_LABELS = {
     "macro_sector": "거시/업황",
     "crypto_linked": "가상자산 연동",
     "price_commentary": "주가 해설",
+    "labor": "노사·보상",
     "general": "일반 이슈",
 }
 
@@ -767,7 +775,15 @@ def strip_korean_news_wire_noise(value: object) -> str:
 
 def clean_article_body_text(value: object, limit: int = 5000) -> str:
     """Remove publisher chrome and quote widgets from an extracted article body."""
-    text = INVISIBLE_ARTICLE_TEXT_RE.sub("", strip_korean_news_wire_noise(value))
+    text = html.unescape(str(value or ""))
+    text = re.sub(
+        r"<\s*(?:script|style|noscript|svg|iframe)[^>]*>.*?<\s*/\s*(?:script|style|noscript|svg|iframe)\s*>",
+        " ",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = INVISIBLE_ARTICLE_TEXT_RE.sub("", strip_korean_news_wire_noise(text))
     text = compact_text(text, max(1, int(limit or 5000)))
     if not text:
         return ""
@@ -1142,6 +1158,7 @@ def article_sentence_candidates(
     analysis: Dict[str, object] = None,
     limit: int = 3,
     headline: object = "",
+    require_target: bool = False,
 ) -> List[str]:
     analysis = analysis if isinstance(analysis, dict) else {}
     source_text = clean_article_summary_noise(text, 5000)
@@ -1196,6 +1213,8 @@ def article_sentence_candidates(
         ranked = target_action_rows
     elif direct_subject_rows:
         ranked = direct_subject_rows
+    elif require_target:
+        ranked = []
     if source_navigation_heavy:
         direct_body_rows = [item for item in ranked if item[3] and item[6] and not item[4]]
         if not direct_body_rows:
@@ -1212,6 +1231,8 @@ def article_sentence_candidates(
             break
     if result:
         return result
+    if require_target:
+        return []
     fallback = compact_text(source_text, 180)
     if is_news_boilerplate_sentence(fallback):
         return []
@@ -1237,8 +1258,19 @@ def target_relevant_article_text(
         analysis,
         4,
         headline=title,
+        require_target=True,
     )
-    return compact_text(" ".join(candidates), max(1, int(limit or 1200))) or compact_text(source, limit)
+    if candidates:
+        return compact_text(" ".join(candidates), max(1, int(limit or 1200)))
+    resolution = resolve_target_entity(
+        title,
+        source,
+        target_symbol(target),
+        str(getattr(target, "name", "") or ""),
+    )
+    if resolution.target_subject_confirmed:
+        return compact_text(source, min(max(1, int(limit or 1200)), 600))
+    return compact_text(title, min(max(1, int(limit or 1200)), 360))
 
 
 def clean_article_title(value: object) -> str:
@@ -1916,6 +1948,8 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
     if merger_review_context(title, summary):
         return "regulation"
     text = _lower_text(str(title or "") + " " + str(summary or ""))
+    if any(marker in text for marker in PRICE_COMMENTARY_EDITORIAL_MARKERS):
+        return "price_commentary"
     best = ("general", 0)
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
         hits = sum(1 for keyword in keywords if _keyword_in_lowered_text(keyword, text))

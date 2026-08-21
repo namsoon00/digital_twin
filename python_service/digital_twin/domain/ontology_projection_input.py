@@ -168,7 +168,7 @@ def _compact_ai_analysis(value: object) -> Dict[str, object]:
             "sourceTrustState", "translationStatus", "translatedTitleKo",
             "rationaleKo", "actionBoundaryKo", "validationReasonKo",
             "reasoningLimitations", "keyNumbers", "riskSignals", "supportSignals",
-            "contrastSignals",
+            "contrastSignals", "decisionInlineEligible", "decisionInlineReasonKo",
         ],
         text_limit=900,
         list_limit=8,
@@ -244,7 +244,7 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
             "normalizedTitle", "normalizedSummary", "sourceKind", "sourcePlatform",
             "sourceOrigin", "sourcePublisher", "lifecycleState", "lifecycleChangedAt",
             "relevanceState", "materialityState", "sourceTrustState", "validationState",
-            "evidenceRole",
+            "evidenceRole", "officialDocumentState", "documentVerified", "analysisReady",
         ],
         text_limit=900,
         list_limit=10,
@@ -257,6 +257,7 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
         "sourcePlatform", "sourceOrigin", "sourcePublisher", "lifecycleState",
         "lifecycleChangedAt", "relevanceState", "materialityState", "sourceTrustState",
         "validationState", "evidenceRole", "articleAiAnalysisVersion",
+        "officialDocumentState", "documentVerified", "analysisReady",
     ]:
         if key not in result and key in item:
             result[key] = _bounded_value(item.get(key), text_limit=900, list_limit=10, depth=2)
@@ -269,7 +270,7 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
     ledger = source.get("claimLedger") if isinstance(source.get("claimLedger"), Mapping) else item.get("claimLedger")
     if isinstance(ledger, Mapping):
         result["claimLedger"] = _compact_claim_ledger(ledger)
-    for key in ["evidenceGovernance", "qualityGate"]:
+    for key in ["evidenceGovernance", "qualityGate", "newsEligibility", "promptEvidenceAdmission"]:
         value = source.get(key) if isinstance(source.get(key), Mapping) else item.get(key)
         if isinstance(value, Mapping):
             result[key] = _bounded_value(value, text_limit=500, list_limit=10, map_limit=30, depth=3)
@@ -296,6 +297,7 @@ def compact_research_evidence_item(value: object) -> Dict[str, object]:
             "dataQualityRisk", "articleAiAnalysisVersion", "analysisConflict",
             "analysisConflictSource", "analysisConflictReasonKo", "analysisConflictAiPolarity",
             "analysisConflictExistingPolarity",
+            "officialDocumentState", "documentVerified", "analysisReady",
         ],
         text_limit=900,
         list_limit=10,

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from digital_twin.domain.investment_evidence_governance import (
     claim_quality_summary,
@@ -39,6 +40,35 @@ def evidence(
         statement + " This official filing records the board decision and the disclosed transaction terms."
         if kind in {"disclosure", "filing"} else ""
     )
+    payload = {
+        "relationScope": "direct",
+        "eventType": event_type,
+        "articleReadStatus": "body",
+        "bodyQualityPassed": True,
+        "articleText": statement,
+        "articleCanonicalUrl": canonical_url,
+        "articlePublisher": article_publisher,
+        "officialDocumentText": official_text,
+    }
+    if kind == "news":
+        payload.update({
+            "dataState": "sufficient",
+            "validationState": "ready",
+            "aiAnalysis": {"decisionInlineEligible": True},
+            "newsEligibility": {
+                "displayEligible": True,
+                "alertEligible": True,
+                "reasoningEligible": True,
+            },
+        })
+    else:
+        payload.update({
+            "dataState": "sufficient",
+            "validationState": "ready",
+            "officialDocumentState": "document-verified",
+            "documentVerified": True,
+            "analysisReady": True,
+        })
     return ResearchEvidence(
         evidence_id=evidence_id,
         symbol="005930",
@@ -50,16 +80,7 @@ def evidence(
         observed_at=published_at,
         polarity=polarity,
         published_at=published_at,
-        raw_payload={
-            "relationScope": "direct",
-            "eventType": event_type,
-            "articleReadStatus": "body",
-            "bodyQualityPassed": True,
-            "articleText": statement,
-            "articleCanonicalUrl": canonical_url,
-            "articlePublisher": article_publisher,
-            "officialDocumentText": official_text,
-        },
+        raw_payload=payload,
     )
 
 
@@ -71,6 +92,7 @@ class ClaimVerificationTests(unittest.TestCase):
             max_age_minutes=10**8,
             minimum_source_trust_state="standard",
             policy=POLICY if policy is None else policy,
+            now=datetime(2026, 7, 21, tzinfo=timezone.utc),
         )
 
     def test_official_document_match_makes_news_claim_eligible(self):

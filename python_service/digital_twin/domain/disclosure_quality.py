@@ -4,16 +4,17 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 
-DISCLOSURE_DOCUMENT_QUALITY_VERSION = "disclosure-document-quality-v1"
+DISCLOSURE_DOCUMENT_QUALITY_VERSION = "disclosure-document-quality-v2"
 ERROR_PATTERNS = (
     re.compile(r"\b014\s*파일이\s*존재하지\s*않습니다", re.IGNORECASE),
     re.compile(r"(?:status|error)\s*[:=]\s*(?:013|014|error)", re.IGNORECASE),
     re.compile(r"document\s+(?:is\s+)?not\s+found", re.IGNORECASE),
 )
 CSS_BLOCK_RE = re.compile(
-    r"(?:^|\s)(?:\.?[a-z][a-z0-9_.:#-]*|#[a-z0-9_-]+)\s*\{[^{}]{0,4000}\}",
+    r"(?:^|\s)[.@#a-z][a-z0-9_.*#,:>+~\-\[\]=\"'()\s]{0,300}\{[^{}]{0,4000}\}",
     re.IGNORECASE,
 )
+XFORMS_SELECTOR_RESIDUE_RE = re.compile(r"(?<![\w-])\.xforms(?:-[a-z0-9_-]+)?(?![\w-])", re.IGNORECASE)
 
 
 def normalize_official_document_text(value: object, limit: int = 20000) -> str:
@@ -21,6 +22,7 @@ def normalize_official_document_text(value: object, limit: int = 20000) -> str:
     text = re.sub(r"<\s*(?:script|style|noscript)[^>]*>.*?<\s*/\s*(?:script|style|noscript)\s*>", " ", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"<[^>]+>", " ", text)
     text = CSS_BLOCK_RE.sub(" ", text)
+    text = XFORMS_SELECTOR_RESIDUE_RE.sub(" ", text)
     text = re.sub(r"\s+", " ", text).strip()
     bounded = text[:max(500, min(50000, int(limit or 20000)))]
     if any(pattern.search(bounded) for pattern in ERROR_PATTERNS):

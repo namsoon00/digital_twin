@@ -5,6 +5,7 @@ from typing import Dict
 from ..domain.disclosure_analysis import (
     DisclosureAnalysisResult,
     build_disclosure_analysis_prompt,
+    disclosure_analysis_ready,
     local_disclosure_analysis,
     normalize_disclosure_analysis_output,
 )
@@ -29,6 +30,8 @@ class CommandDisclosureAnalyzer(DisclosureAnalyzer):
         self.source = source
 
     def analyze(self, context: Dict[str, object]) -> DisclosureAnalysisResult:
+        if not disclosure_analysis_ready(context):
+            return local_disclosure_analysis(context, "메타데이터 전용")
         completed = subprocess.run(
             self.command,
             input=build_disclosure_analysis_prompt(context),

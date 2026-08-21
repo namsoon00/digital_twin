@@ -5,11 +5,11 @@ from typing import Dict, List, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-STORY_IDENTITY_VERSION = "news-story-identity-v3"
+STORY_IDENTITY_VERSION = "news-story-identity-v4"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "utm_campaign", "utm_medium", "utm_source", "utm_term"}
 EVENT_ACTIONS = (
-    ("buyback", ("자기주식", "자사주", "주식소각", "share buyback", "stock repurchase", "share cancellation")),
     ("compensation", ("임금", "임단협", "성과급", "상여", "wage", "salary", "bonus", "compensation")),
+    ("buyback", ("자기주식", "자사주", "주식소각", "share buyback", "stock repurchase", "share cancellation")),
     ("reorganization", ("조직개편", "쇄신", "인사개편", "reorganization", "restructuring meeting")),
     ("ipo", ("기업공개", "상장 추진", "ipo", "initial public offering")),
     ("strike", ("파업", "쟁의", "strike", "walkout")),
@@ -17,9 +17,14 @@ EVENT_ACTIONS = (
     ("contract", ("공급계약", "수주", "supply agreement", "contract award")),
     ("earnings", ("실적", "매출", "영업이익", "earnings", "revenue", "profit")),
 )
+COMPENSATION_MARKERS = ("임금", "임단협", "성과급", "상여", "보너스", "wage", "salary", "bonus", "compensation")
+SHARE_COMPENSATION_MARKERS = ("지급", "교부", "처분", "보상", "pay", "paid", "grant", "award", "transfer")
+BUYBACK_EXECUTION_MARKERS = ("취득", "매입", "소각", "buyback", "repurchase", "cancellation", "cancel shares")
 EVENT_STOP_WORDS = {
     "the", "a", "an", "and", "or", "to", "of", "for", "in", "on", "with", "from",
-    "관련", "대한", "통해", "위한", "올해", "지난", "종합", "단독", "속보", "news",
+    "about", "are", "as", "how", "what", "why", "finance", "yahoo", "news",
+    "stock", "stocks", "share", "shares",
+    "관련", "대한", "통해", "위한", "올해", "지난", "종합", "단독", "속보",
 }
 
 
@@ -67,6 +72,12 @@ def _first(item: Dict[str, object], *keys: str) -> str:
 
 def _event_action(value: object) -> str:
     text = re.sub(r"\s+", " ", str(value or "").casefold())
+    if any(marker in text for marker in COMPENSATION_MARKERS) and any(
+        marker in text for marker in SHARE_COMPENSATION_MARKERS
+    ):
+        return "compensation"
+    if any(marker in text for marker in BUYBACK_EXECUTION_MARKERS):
+        return "buyback"
     for action, markers in EVENT_ACTIONS:
         if any(marker in text for marker in markers):
             return action
@@ -110,7 +121,10 @@ def story_event_features(item: Dict[str, object]) -> Dict[str, object]:
         "symbol": _first(item, "symbol", "ticker", "relatedSymbol").upper(),
         "date": _date_bucket(_first(item, "publishedAt", "observedAt", "seenDate")),
         "eventType": event_type,
-        "action": _event_action(corpus),
+        # Clustering must fail closed. Generic words in an AI summary (for
+        # example "earnings impact") cannot turn unrelated headlines into
+        # the same corporate action.
+        "action": _event_action(title),
         "numbers": _number_keys(corpus),
         "tokens": _event_tokens(corpus),
     }
@@ -123,6 +137,7 @@ def event_cluster_identity(item: Dict[str, object]) -> str:
             str(features["symbol"]),
             str(features["date"]),
             str(features["action"]),
+            str(features["eventType"]),
             ",".join(features["numbers"]),
         ]))
     return ""
@@ -145,12 +160,16 @@ def same_story_event(left: Dict[str, object], right: Dict[str, object]) -> bool:
     action = left_features["action"]
     if action == "general" or action != right_features["action"]:
         return False
+    left_event_type = str(left_features["eventType"] or "general")
+    right_event_type = str(right_features["eventType"] or "general")
+    if left_event_type != right_event_type and "general" not in {left_event_type, right_event_type}:
+        return False
     left_numbers = set(left_features["numbers"])
     right_numbers = set(right_features["numbers"])
     if left_numbers and right_numbers and not left_numbers.intersection(right_numbers):
         return False
     shared_tokens = set(left_features["tokens"]).intersection(right_features["tokens"])
-    required_overlap = 1 if left_numbers and right_numbers else 2
+    required_overlap = 1 if left_numbers and right_numbers else 3
     return len(shared_tokens) >= required_overlap
 
 

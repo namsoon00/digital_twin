@@ -1112,9 +1112,6 @@ class NewsDigestEnqueuer:
                 "접수번호: " + (receipt_no or "확인 필요"),
                 "출처: " + (clean_text(primary.get("source")) or "OpenDART"),
             ]
-            document_preview = bounded_text(payload.get("officialDocumentPreview") or payload.get("officialDocumentText"), 6000)
-            if document_preview:
-                raw_lines.append("공시 원문: " + document_preview)
         context = {
             "messageType": NEWS_DIGEST,
             "accountId": account.account_id,

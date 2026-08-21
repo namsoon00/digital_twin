@@ -1,9 +1,11 @@
 import json
+from collections import Counter
 from typing import Dict, List
 
 from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, disclosure_evidence_payload
 from ..domain import news_analysis as news_domain
+from ..domain.prompt_evidence_admission import attach_prompt_evidence_admission
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 from ..news_intelligence.application.normalize_sources import normalize_evidence_sources
 
@@ -22,7 +24,7 @@ def payload_signature(payload: Dict[str, object]) -> str:
             return {
                 key: stable(item)
                 for key, item in value.items()
-                if key not in {"checkedAt"}
+                if key not in {"checkedAt", "ageMinutes"}
             }
         if isinstance(value, list):
             return [stable(item) for item in value]
@@ -137,6 +139,12 @@ class ResearchEvidenceGovernanceService:
                 item,
                 self.settings.get("researchClaimSourceRegistry") or "",
             )
+            item.raw_payload = attach_prompt_evidence_admission(
+                item.raw_payload,
+                kind=item.kind,
+                published_at=item.published_at,
+                observed_at=item.observed_at,
+            )
         for item in written_items:
             payload = dict(item.raw_payload or {})
             payload["evidenceQualityAuthority"] = "revalidation-v1"
@@ -158,6 +166,14 @@ class ResearchEvidenceGovernanceService:
             != payload_signature(item.raw_payload or {})
         ]
         written = self.evidence_store.upsert_many(changed_items) if changed_items and not dry_run else 0
+        prompt_admissions = [
+            dict((item.raw_payload or {}).get("promptEvidenceAdmission") or {})
+            for item in written_items
+            if isinstance((item.raw_payload or {}).get("promptEvidenceAdmission"), dict)
+        ]
+        prompt_usage_counts = Counter(
+            str(item.get("usage") or "blocked") for item in prompt_admissions
+        )
         return {
             "status": "ok",
             "dryRun": bool(dry_run),
@@ -180,6 +196,12 @@ class ResearchEvidenceGovernanceService:
             "metadataOnlyDisclosureCount": len([
                 item for item in disclosure_items
                 if str((item.raw_payload or {}).get("officialDocumentState") or "") == "metadata-only"
+            ]),
+            "promptAdmissionUsageCounts": dict(sorted(prompt_usage_counts.items())),
+            "promptEligibleCount": len([item for item in prompt_admissions if item.get("promptEligible")]),
+            "stalePromptBlockedCount": len([
+                item for item in prompt_admissions
+                if "evidence-stale" in list(item.get("reasonCodes") or [])
             ]),
             "maxAgeMinutes": self.max_age_minutes(),
         }

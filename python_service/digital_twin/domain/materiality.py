@@ -444,10 +444,13 @@ def evidence_materiality(evidence, settings: Dict[str, object] = None) -> Materi
         )
 
     governance = payload.get("evidenceGovernance") if isinstance(payload.get("evidenceGovernance"), dict) else {}
+    prompt_admission = payload.get("promptEvidenceAdmission") if isinstance(payload.get("promptEvidenceAdmission"), dict) else {}
     quality_gate = payload.get("qualityGate") if isinstance(payload.get("qualityGate"), dict) else {}
     eligible = bool(governance.get("investmentJudgmentEligible"))
     if not governance and payload.get("materialityPassed") is not None:
         eligible = bool(payload.get("materialityPassed"))
+    if prompt_admission:
+        eligible = bool(eligible and prompt_admission.get("decisionEligible"))
     polarity = str(getattr(evidence, "polarity", "") or "context").lower()
     read_scope = str(payload.get("readScope") or (payload.get("aiAnalysis") or {}).get("readScope") or "").lower()
     article_facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
@@ -461,6 +464,8 @@ def evidence_materiality(evidence, settings: Dict[str, object] = None) -> Materi
         matched.append("direction-identified")
     if eligible:
         matched.append("governance-approved")
+    elif prompt_admission and not prompt_admission.get("decisionEligible"):
+        matched.append("prompt-admission-blocked")
 
     if blocked:
         review_level = "blocked"
@@ -500,6 +505,8 @@ def evidence_materiality(evidence, settings: Dict[str, object] = None) -> Materi
             "polarity": polarity,
             "eventType": str(payload.get("eventType") or ""),
             "readScope": read_scope,
+            "promptEvidenceUsage": prompt_admission.get("usage") if prompt_admission else "",
+            "promptEvidenceReasonCodes": list(prompt_admission.get("reasonCodes") or []) if prompt_admission else [],
         },
         data_state=data_state,
         change_state="new-evidence",

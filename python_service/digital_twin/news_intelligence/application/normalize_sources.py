@@ -4,7 +4,7 @@ from difflib import SequenceMatcher
 from typing import Dict, Iterable, List
 
 from ..domain.provenance import annotate_source_provenance, normalized_content
-from ..domain.story import event_cluster_identity, same_story_event, story_event_features, story_identity
+from ..domain.story import STORY_IDENTITY_VERSION, event_cluster_identity, same_story_event, story_event_features, story_identity
 
 
 def _payload(item) -> Dict[str, object]:
@@ -27,6 +27,12 @@ def _context(item, registry: object = "") -> Dict[str, object]:
 
 def _item_story_identity(item) -> str:
     payload = _payload(item)
+    # Revalidation must be able to repair a cluster created by an older
+    # identity algorithm. Persisted derived IDs are audit output, not source
+    # authority for the next clustering generation.
+    payload.pop("storyClusterId", None)
+    payload.pop("eventClusterId", None)
+    payload.pop("canonicalEventId", None)
     context = {
         "symbol": getattr(item, "symbol", ""),
         "title": getattr(item, "title", ""),
@@ -86,6 +92,7 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
         item.raw_payload = annotate_source_provenance(_payload(item), **_context(item, source_registry))
         payload = _payload(item)
         payload["storyClusterId"] = _item_story_identity(item)
+        payload["storyIdentityVersion"] = STORY_IDENTITY_VERSION
         item.raw_payload = payload
 
     roots: List[object] = []

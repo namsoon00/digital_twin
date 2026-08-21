@@ -12,6 +12,8 @@ ROUNDUP_MARKERS = (
     "stocks to watch",
     "stocks on the move",
     "stock market today",
+    "오늘 이 종목",
+    "핵심주",
     "rally",
     "surge as market",
     "종목 주목",
@@ -27,6 +29,12 @@ LEADING_SUBJECT_RE = re.compile(
 )
 COMPARISON_SUBJECT_RE = re.compile(
     r"^\s*(?P<subject>.{2,70}?)\s*(?:\([A-Z.]{1,8}\))?\s+(?:vs\.?|versus)\s+",
+    re.IGNORECASE,
+)
+QUESTION_SUBJECT_RE = re.compile(
+    r"\b(?:what|why|how)\s+(?P<subject>.{2,80}?)\s+"
+    r"(?:results?|earnings?|outlook|says?|said|means?|reveals?|shows?|"
+    r"are\s+telling\s+us|tell(?:s|ing)?\s+us)\b",
     re.IGNORECASE,
 )
 KOREAN_LEADING_SUBJECT_RE = re.compile(
@@ -67,6 +75,12 @@ def _broker_alias_hits(value: object, aliases: Iterable[object]) -> List[str]:
 
 
 def _leading_other_subject(title: str, aliases: Iterable[str]) -> str:
+    question = QUESTION_SUBJECT_RE.search(title)
+    if question:
+        subject = str(question.group("subject") or "").strip(" ,:-")
+        first_word = subject.split(None, 1)[0].casefold() if subject else ""
+        if subject and first_word not in {"a", "an", "it", "its", "that", "the", "this", "these", "those"} and not matched_aliases(subject, aliases):
+            return subject
     comparison = COMPARISON_SUBJECT_RE.search(title)
     if comparison:
         subject = str(comparison.group("subject") or "").strip(" ,:-")
@@ -160,6 +174,7 @@ def resolve_target_entity(
     broker_hits = _broker_alias_hits(title_text, known_aliases)
     title_hits = matched_aliases(title_text, known_aliases)
     body_hits = matched_aliases(body_text, known_aliases)
+    other_title_hits = matched_aliases(title_text, other_company_aliases(normalized_symbol))
     other_subject = _leading_other_subject(title_text, known_aliases)
     reasons: List[str] = []
 
@@ -187,6 +202,21 @@ def resolve_target_entity(
             "multi-company-roundup",
             reasons,
         )
+    if title_hits and other_title_hits and re.match(r"^\s*(?:what|why|how)\b", title_text, re.IGNORECASE):
+        target_positions = [match.start() for alias in title_hits for match in [alias_pattern(alias).search(title_text)] if match]
+        other_positions = [match.start() for alias in other_title_hits for match in [alias_pattern(alias).search(title_text)] if match]
+        if target_positions and other_positions and min(other_positions) < min(target_positions):
+            reasons.append("other-company-leads-analysis-title")
+            return TargetEntityResolution(
+                normalized_symbol,
+                "mentioned",
+                "ambiguous",
+                False,
+                title_hits,
+                body_hits,
+                other_title_hits[0],
+                reasons,
+            )
     if title_hits and other_subject:
         reasons.append("other-company-is-leading-subject")
         return TargetEntityResolution(

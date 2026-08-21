@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Tuple
 from .data_freshness import parse_datetime
 from .investment_brain import stable_id, utc_now_iso
 from .investment_research import NewsCollectionTarget, ResearchEvidence, target_aliases
+from .prompt_evidence_admission import attach_prompt_evidence_admission
 from . import news_analysis as news_domain
 from ..news_intelligence.domain.provenance import resolve_source_provenance
 
@@ -1501,7 +1502,13 @@ def governed_evidence(
             "conflictingEvidenceIds": list(best_claim.get("conflictingEvidenceIds") or []),
             "supersededByEvidenceId": str(best_claim.get("supersededByEvidenceId") or ""),
         }
-        item.raw_payload = payload
+        item.raw_payload = attach_prompt_evidence_admission(
+            payload,
+            kind=item.kind,
+            published_at=item.published_at,
+            observed_at=item.observed_at,
+            now=now,
+        )
         aggregate = EvidenceClaim(
             claim_id=str(best_claim.get("claimId") or baseline.claim_id),
             evidence_id=evidence_id,

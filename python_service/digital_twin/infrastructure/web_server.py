@@ -95,6 +95,7 @@ from ..domain.investment_ubiquitous_language import (
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_analysis import investment_decision_key
 from ..domain.investment_evidence_governance import claim_quality_summary
+from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
 from ..domain.portfolio import utc_now_iso
@@ -3313,6 +3314,9 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         "displayEligibleCount": 0,
         "alertEligibleCount": 0,
         "reasoningEligibleCount": 0,
+        "promptEligibleCount": 0,
+        "decisionEligibleCount": 0,
+        "stalePromptBlockedCount": 0,
         "provenanceCompleteCount": 0,
         "unresolvedPublisherCount": 0,
         "duplicatePublicationCount": 0,
@@ -3333,6 +3337,17 @@ def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
         counts["alertEligibleCount"] += int(bool(eligibility.get("alertEligible")))
         counts["reasoningEligibleCount"] += int(bool(eligibility.get("reasoningEligible")))
         raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
+        prompt_admission = assess_prompt_evidence(
+            raw,
+            kind=getattr(item, "kind", "news"),
+            published_at=getattr(item, "published_at", ""),
+            observed_at=getattr(item, "observed_at", ""),
+        ).to_dict()
+        counts["promptEligibleCount"] += int(bool(prompt_admission.get("promptEligible")))
+        counts["decisionEligibleCount"] += int(bool(prompt_admission.get("decisionEligible")))
+        counts["stalePromptBlockedCount"] += int(
+            "evidence-stale" in list(prompt_admission.get("reasonCodes") or [])
+        )
         source_identity = eligibility.get("sourceIdentity") if isinstance(eligibility.get("sourceIdentity"), dict) else {}
         provenance = raw.get("sourceProvenance") if isinstance(raw.get("sourceProvenance"), dict) else {}
         original = provenance.get("originalPublisher") if isinstance(provenance.get("originalPublisher"), dict) else {}
@@ -3407,6 +3422,12 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
     states = item.state_payload()
     governance = raw.get("evidenceGovernance") if isinstance(raw.get("evidenceGovernance"), dict) else {}
+    prompt_admission = assess_prompt_evidence(
+        raw,
+        kind=item.kind,
+        published_at=item.published_at,
+        observed_at=item.observed_at,
+    ).to_dict()
     source_identity = news_eligibility.get("sourceIdentity") if isinstance(news_eligibility.get("sourceIdentity"), dict) else {}
     source_provenance = raw.get("sourceProvenance") if isinstance(raw.get("sourceProvenance"), dict) else {}
     original_publisher = source_provenance.get("originalPublisher") if isinstance(source_provenance.get("originalPublisher"), dict) else {}
@@ -3464,6 +3485,7 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else True,
         "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else False,
         "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(governance.get("investmentJudgmentEligible")),
+        "promptEvidenceAdmission": prompt_admission,
         "reviewState": str(news_eligibility.get("reviewState") or "") if news_eligibility else "",
         "reviewReasonCodes": list(news_eligibility.get("reviewReasonCodes") or []) if news_eligibility else [],
         "storyClusterId": str(raw.get("storyClusterId") or ""),
@@ -3545,6 +3567,12 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         return {}
     projected, analysis_source = projected_research_evidence(item)
     payload = projected.to_dict()
+    payload["promptEvidenceAdmission"] = assess_prompt_evidence(
+        projected.raw_payload,
+        kind=projected.kind,
+        published_at=projected.published_at,
+        observed_at=projected.observed_at,
+    ).to_dict()
     payload["analysisSource"] = analysis_source
     return {"item": payload}
 

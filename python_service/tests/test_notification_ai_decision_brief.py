@@ -12,10 +12,12 @@ from digital_twin.domain.notification_ai_decision_brief import (
     notification_ai_execution_profile,
 )
 from digital_twin.domain.notification_ai_gate_validation import validated_response_from_payload
+from digital_twin.domain.notification_ai_gate_validation import compact_research_evidence_for_ai
 from digital_twin.domain.notification_ai_context_router import (
     AI_DECISION_CORE_VERSION,
     route_notification_ai_decision_context,
 )
+from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.domain.notification_ai_prompt_release import (
     AI_DECISION_PROMPT_VERSION,
     active_notification_ai_prompt_release,
@@ -548,7 +550,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             payload["hypothesisSet"]["hypotheses"][0]["hypothesisId"],
         )
 
-    def test_unverified_external_evidence_is_reference_only(self):
+    def test_unverified_external_evidence_is_excluded_from_prompt(self):
         brief = notification_ai_decision_brief(decision_context(), {})
         brief["inference"]["activeRules"] = [{
             "ruleId": "graph.disclosure.event_risk.v1",
@@ -567,9 +569,85 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
         core, audit = route_notification_ai_decision_context(brief)
 
-        self.assertEqual("rule-scoped-reference", core["externalEvidence"][0]["evidenceUse"])
+        self.assertNotIn("externalEvidence", core)
         self.assertEqual(0, audit["included"]["actionExternalEvidenceCount"])
-        self.assertEqual(1, audit["included"]["referenceExternalEvidenceCount"])
+        self.assertEqual(0, audit["included"]["referenceExternalEvidenceCount"])
+        self.assertEqual(1, audit["evidenceAdmission"]["excludedCount"])
+        self.assertIn("official-document-not-verified", audit["evidenceAdmission"]["reasonCounts"])
+
+    def test_fresh_verified_linked_disclosure_is_action_evidence(self):
+        brief = notification_ai_decision_brief(decision_context(), {})
+        evidence_id = "research:005930:dart:verified"
+        brief["inference"]["activeRules"] = [{
+            "ruleId": "graph.disclosure.event_risk.v1",
+            "label": "공시 이벤트 원문 점검",
+            "evidenceRole": "risk",
+        }]
+        brief["decisionState"]["actionEnvelope"]["selectedRuleId"] = "graph.disclosure.event_risk.v1"
+        brief["inference"]["hypothesisSet"]["hypotheses"][0]["supportingRuleIds"] = ["graph.disclosure.event_risk.v1"]
+        brief["inference"]["hypothesisSet"]["hypotheses"][0]["supportingEvidenceIds"] = [evidence_id]
+        brief["evidence"]["researchEvidence"] = [{
+            "evidenceId": evidence_id,
+            "kind": "disclosure",
+            "title": "주요사항보고서",
+            "publishedAt": "2026-08-10T01:00:00Z",
+            "validationState": "ready",
+            "dataState": "sufficient",
+            "source": "OpenDART",
+            "investmentJudgmentEligible": True,
+            "officialDocumentState": "document-verified",
+            "documentVerified": True,
+            "analysisReady": True,
+        }]
+
+        core, audit = route_notification_ai_decision_context(brief)
+
+        self.assertEqual("action", core["externalEvidence"][0]["evidenceUse"])
+        self.assertEqual("decision", core["externalEvidence"][0]["promptAdmission"]["usage"])
+        self.assertEqual(1, audit["included"]["actionExternalEvidenceCount"])
+
+    def test_research_evidence_serialization_preserves_final_prompt_admission_fields(self):
+        evidence_id = "research:005930:dart:serialized"
+        evidence = ResearchEvidence(
+            evidence_id,
+            "005930",
+            "disclosure",
+            "OpenDART",
+            "주요사항보고서",
+            "회사가 주요 계약 체결을 공시했습니다.",
+            "https://dart.fss.or.kr/example",
+            "2026-08-10T01:00:00Z",
+            "support",
+            published_at="2026-08-10T01:00:00Z",
+            raw_payload={
+                "validationState": "ready",
+                "dataState": "sufficient",
+                "evidenceGovernance": {"investmentJudgmentEligible": True},
+                "officialDocumentState": "document-verified",
+                "documentVerified": True,
+                "analysisReady": True,
+                "promptEvidenceAdmission": {"usage": "reference", "promptEligible": True},
+            },
+        )
+        compact = compact_research_evidence_for_ai([evidence.to_dict()])[0]
+        brief = notification_ai_decision_brief(decision_context(), {})
+        brief["inference"]["activeRules"] = [{
+            "ruleId": "graph.disclosure.event_risk.v1",
+            "label": "공시 이벤트 원문 점검",
+            "evidenceRole": "support",
+        }]
+        brief["decisionState"]["actionEnvelope"]["selectedRuleId"] = "graph.disclosure.event_risk.v1"
+        hypothesis = brief["inference"]["hypothesisSet"]["hypotheses"][0]
+        hypothesis["supportingRuleIds"] = ["graph.disclosure.event_risk.v1"]
+        hypothesis["supportingEvidenceIds"] = [evidence_id]
+        brief["evidence"]["researchEvidence"] = [compact]
+
+        core, audit = route_notification_ai_decision_context(brief)
+
+        self.assertTrue(compact["documentVerified"])
+        self.assertTrue(compact["analysisReady"])
+        self.assertEqual("action", core["externalEvidence"][0]["evidenceUse"])
+        self.assertEqual(1, audit["included"]["actionExternalEvidenceCount"])
 
     def test_v2_ai_brief_uses_relation_matching_decision_synthesis_hypotheses(self):
         context = decision_context("act", "new-condition")

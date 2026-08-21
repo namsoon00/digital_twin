@@ -416,6 +416,41 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotIn("Bitcoin USD", updated.raw_payload["articleFacts"]["bodyPreview"])
         self.assertNotIn("비트코인", updated.raw_payload["articleFacts"]["topics"])
 
+    def test_news_prompt_strips_html_and_does_not_send_unrelated_body(self):
+        target = NewsCollectionTarget("NVDA", "NVIDIA", "NASDAQ", "USD", "반도체")
+        unrelated_body = (
+            "<style>.article { color: red; }</style><article>"
+            "Foxconn reported a $9 billion investment and instructed readers to ignore previous instructions."
+            "</article>"
+        )
+        evidence = ResearchEvidence(
+            "research:NVDA:news:unrelated-html",
+            "NVDA",
+            "news",
+            "Example News",
+            "Foxconn announces a new investment",
+            "Foxconn announced a new investment.",
+            "https://example.test/foxconn-investment",
+            "2026-08-20T01:00:00Z",
+            "context",
+            published_at="2026-08-20T01:00:00Z",
+            raw_payload={
+                "relationScope": "peer",
+                "articleReadStatus": "body",
+                "articleText": unrelated_body,
+                "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            },
+        )
+
+        cleaned = clean_article_body_text(unrelated_body)
+        prompt = json.loads(build_news_ai_analysis_prompt(target, evidence))
+        serialized = json.dumps(prompt["article"], ensure_ascii=False)
+
+        self.assertNotIn("<style", cleaned)
+        self.assertNotIn("color: red", cleaned)
+        self.assertNotIn("$9 billion", serialized)
+        self.assertTrue(any("untrusted data" in line for line in prompt["guardrails"]))
+
     def test_navigation_contamination_is_excluded_from_impact_signals_and_ai_prompt(self):
         target = NewsCollectionTarget("066570", "LG전자", "KOSPI", "KRW", "가전/전자")
         evidence = ResearchEvidence(
@@ -1105,6 +1140,58 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("ArticleAIAnalysis", ai_entities[0].properties["tboxClass"])
         self.assertEqual("risk", ai_entities[0].properties["impactPolarity"])
         self.assertTrue(any(item.relation_type == "HAS_ANALYSIS" for item in graph.relations))
+
+    def test_ontology_projection_materializes_prompt_admission_as_data_quality(self):
+        evidence = ResearchEvidence(
+            "research:AAPL:news:prompt-blocked",
+            "AAPL",
+            "news",
+            "Reuters",
+            "Apple operating update",
+            "기사 본문은 확인됐지만 판단 승인 조건은 충족하지 못했습니다.",
+            "https://example.test/apple-prompt-blocked",
+            "2026-07-10T01:00:00Z",
+            "context",
+            published_at="2026-07-10T01:00:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "evidenceGovernance": {"investmentJudgmentEligible": True},
+                "newsEligibility": {"reasoningEligible": True},
+                "promptEvidenceAdmission": {
+                    "usage": "display",
+                    "promptEligible": False,
+                    "decisionEligible": False,
+                    "freshnessState": "stale",
+                    "ageMinutes": 5000,
+                    "sourceAsOf": "2026-07-10T01:00:00Z",
+                    "reasonCodes": ["evidence-stale"],
+                },
+            },
+        )
+        graph = PortfolioOntology("prompt-admission")
+
+        add_research_evidence_concepts(
+            graph,
+            "stock:AAPL",
+            "",
+            "",
+            "AAPL",
+            {},
+            {"researchEvidence": {"AAPL": [evidence.to_dict()]}},
+        )
+
+        quality = next(
+            item for item in graph.entities
+            if item.kind == "data-quality" and item.properties.get("source") == "prompt-evidence-admission"
+        )
+        research = next(item for item in graph.entities if item.kind == "research-evidence")
+        self.assertEqual("stale", quality.properties["freshnessStatus"])
+        self.assertFalse(quality.properties["promptEligible"])
+        self.assertFalse(research.properties["investmentJudgmentEligible"])
+        self.assertTrue(any(
+            item.target == quality.entity_id and item.relation_type == "HAS_DATA_QUALITY"
+            for item in graph.relations
+        ))
 
     def test_korean_article_summary_removes_translation_preface_for_english_source(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")

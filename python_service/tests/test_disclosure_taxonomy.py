@@ -1,8 +1,11 @@
 import unittest
+from unittest.mock import patch
 
+from digital_twin.domain.disclosure_analysis import build_disclosure_analysis_prompt
 from digital_twin.domain.disclosure_taxonomy import classify_disclosure
 from digital_twin.domain.disclosure_quality import assess_disclosure_document, normalize_official_document_text
 from digital_twin.domain.investment_research import research_evidence_from_facts
+from digital_twin.infrastructure.disclosure_analyzer import CommandDisclosureAnalyzer
 
 
 class DisclosureTaxonomyTests(unittest.TestCase):
@@ -74,14 +77,40 @@ class DisclosureTaxonomyTests(unittest.TestCase):
 
     def test_document_quality_strips_css_and_rejects_dart_error_response(self):
         cleaned = normalize_official_document_text(
-            ".xforms-label { font-family: Arial; color: red; } 회사는 자기주식 취득 결정을 공시했다. " * 5
+            ".xforms * { font-family: 돋움체; color: red; } 회사는 자기주식 취득 결정을 공시했다. " * 5
         )
         error = assess_disclosure_document("014 파일이 존재하지 않습니다.", "body")
 
         self.assertNotIn("font-family", cleaned)
+        self.assertNotIn(".xforms", cleaned)
         self.assertIn("자기주식 취득", cleaned)
         self.assertEqual("document-rejected", error.state)
         self.assertEqual("blocked", error.validation_state)
+
+    def test_disclosure_prompt_deduplicates_document_preview(self):
+        sentence = "회사는 보통주 100만주를 취득하기로 결정했다."
+        prompt = build_disclosure_analysis_prompt({
+            "reportName": "자기주식취득결정",
+            "officialDocumentText": ".xforms * { font-size: 10px; } " + sentence,
+            "analysisReady": True,
+            "rawLines": ["공시명: 자기주식취득결정", "공시 원문: " + sentence],
+        })
+
+        self.assertEqual(1, prompt.count(sentence))
+        self.assertNotIn("font-size", prompt)
+        self.assertIn("신뢰할 수 없는 입력 데이터", prompt)
+
+    def test_metadata_only_disclosure_skips_external_ai_command(self):
+        analyzer = CommandDisclosureAnalyzer("unused-command")
+        with patch("digital_twin.infrastructure.disclosure_analyzer.subprocess.run") as run:
+            result = analyzer.analyze({
+                "reportName": "주요사항보고서",
+                "analysisReady": False,
+                "officialDocumentText": "",
+            })
+
+        run.assert_not_called()
+        self.assertEqual("메타데이터 전용", result.source)
 
 
 if __name__ == "__main__":

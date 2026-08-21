@@ -41,6 +41,7 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "sourceProvenance",
     "articleVerification",
     "storyClusterId",
+    "storyIdentityVersion",
     "storyRootEvidenceId",
     "evidenceRelationship",
     "syndicationRootEvidenceId",
@@ -52,6 +53,7 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "documentVerified",
     "analysisReady",
     "disclosureAnalysis",
+    "promptEvidenceAdmission",
 }
 
 AUTHORITATIVE_EVIDENCE_STATE_KEYS = {

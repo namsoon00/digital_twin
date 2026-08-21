@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from digital_twin.application.research_evidence_governance_service import ResearchEvidenceGovernanceService
+from digital_twin.application.research_evidence_governance_service import ResearchEvidenceGovernanceService, payload_signature
 from digital_twin.domain.investment_research import ResearchEvidence, research_evidence_from_external_signals
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.infrastructure.external_signal_provider_market import dart_document_text
@@ -30,6 +30,35 @@ class MemoryEvidenceStore:
 
 
 class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
+    def test_payload_signature_ignores_volatile_prompt_age_but_tracks_freshness_state(self):
+        first = {
+            "promptEvidenceAdmission": {
+                "checkedAt": "2026-07-24T00:01:00Z",
+                "ageMinutes": 1.0,
+                "freshnessState": "fresh",
+                "reasonCodes": [],
+            },
+        }
+        later = {
+            "promptEvidenceAdmission": {
+                "checkedAt": "2026-07-24T00:02:00Z",
+                "ageMinutes": 2.0,
+                "freshnessState": "fresh",
+                "reasonCodes": [],
+            },
+        }
+        stale = {
+            "promptEvidenceAdmission": {
+                "checkedAt": "2026-07-27T00:02:00Z",
+                "ageMinutes": 4322.0,
+                "freshnessState": "stale",
+                "reasonCodes": ["evidence-stale"],
+            },
+        }
+
+        self.assertEqual(payload_signature(first), payload_signature(later))
+        self.assertNotEqual(payload_signature(first), payload_signature(stale))
+
     def test_backfill_adds_ledger_and_blocks_metadata_only_official_document(self):
         news = ResearchEvidence(
             "legacy-news", "AAPL", "news", "Reuters", "Apple reports demand update",

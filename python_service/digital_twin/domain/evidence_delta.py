@@ -61,6 +61,8 @@ INFERENCE_PAYLOAD_KEYS = {
     "analysisconflictexistingpolarity", "analysisconflictreasonko",
     "analysisconflictsource", "correctionstate", "documenttype", "filingtype",
     "form", "receiptno", "reportname", "regulatoryeventtype",
+    "promptevidenceadmission", "newseligibility", "officialdocumentstate",
+    "documentverified", "analysisready", "storyidentityversion",
 }
 
 PRESENTATION_ONLY_PAYLOAD_KEYS = {

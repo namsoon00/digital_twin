@@ -79,6 +79,39 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertFalse(resolution.target_subject_confirmed)
         self.assertEqual("Onto Innovation", resolution.other_subject)
 
+    def test_question_headline_led_by_partners_is_not_a_direct_nvidia_event(self):
+        resolution = resolve_target_entity(
+            "NVIDIA (NVDA): What Foxconn and Super Micro Are Telling Us about the AI Boom",
+            "Foxconn and Super Micro discussed AI demand while Nvidia was mentioned as an ecosystem company.",
+            "NVDA",
+            "NVIDIA",
+        )
+
+        self.assertFalse(resolution.target_subject_confirmed)
+        self.assertIn("other-company-is-leading-subject", resolution.reason_codes)
+
+    def test_korean_multi_company_watch_roundup_is_not_a_direct_company_event(self):
+        resolution = resolve_target_entity(
+            "[오늘 이 종목] SK하이닉스·삼양식품·NAVER·두산에너빌리티 핵심주 주목",
+            "여러 종목의 실적과 수급을 함께 정리합니다.",
+            "035420",
+            "NAVER",
+        )
+
+        self.assertFalse(resolution.target_subject_confirmed)
+        self.assertIn("multi-company-roundup", resolution.reason_codes)
+
+    def test_question_clause_pronoun_is_not_misread_as_another_company(self):
+        resolution = resolve_target_entity(
+            "Nvidia Reveals a $21 Billion Position in SpaceX. Here's How That Could Impact Its Earnings",
+            "Nvidia disclosed the investment position.",
+            "NVDA",
+            "NVIDIA",
+        )
+
+        self.assertTrue(resolution.target_subject_confirmed)
+        self.assertEqual("subject", resolution.role)
+
     def test_multi_company_roundup_is_not_a_direct_tesla_event(self):
         resolution = resolve_target_entity(
             "Tesla, Palantir and Nvidia Rally as Stocks to Watch",
@@ -259,6 +292,24 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertFalse(result.alert.eligible)
         self.assertFalse(result.reasoning.eligible)
 
+    def test_price_target_commentary_is_not_alertable_without_a_new_company_event(self):
+        payload = ready_payload()
+        payload["eventType"] = "price_commentary"
+        payload["aiAnalysis"].update({"decisionInlineEligible": False})
+
+        result = assess_news_eligibility(
+            payload,
+            title="Analyst raises Nvidia price target after stock rally",
+            summary="The analyst sees 30% upside in Nvidia stock.",
+            symbol="NVDA",
+            name="NVIDIA",
+            source="Reuters",
+            url="https://www.reuters.com/technology/nvidia-price-target",
+        )
+
+        self.assertFalse(result.alert.eligible)
+        self.assertIn("price-commentary-not-alertable", result.alert.reason_codes)
+
     def test_story_identity_does_not_merge_different_articles_by_generic_takeaway(self):
         first = {"symbol": "NVDA", "eventType": "earnings", "publishedAt": "2026-08-12T01:00:00Z", "title": "BofA raises Nvidia earnings estimate"}
         second = {"symbol": "NVDA", "eventType": "earnings", "publishedAt": "2026-08-12T02:00:00Z", "title": "Nebius expands AI infrastructure funding"}
@@ -353,6 +404,100 @@ class NewsIntelligenceTests(unittest.TestCase):
 
         self.assertEqual(normalized[0].raw_payload["storyClusterId"], normalized[1].raw_payload["storyClusterId"])
         self.assertEqual("independent-confirmation", normalized[1].raw_payload["evidenceRelationship"])
+
+    def test_revalidation_splits_share_compensation_from_share_buyback(self):
+        buyback = Evidence("SK하이닉스, 자사주 매입 추진", ready_payload(), "000660")
+        buyback.evidence_id = "research:000660:news:buyback"
+        buyback.url = "https://example.test/sk-hynix-buyback"
+        buyback.published_at = "2026-08-20T01:00:00Z"
+        buyback.raw_payload.update({
+            "eventType": "capital_policy",
+            "storyClusterId": "story:legacy-overmerged",
+            "articleText": "SK하이닉스가 주주환원을 위해 자사주 매입을 추진한다. " * 5,
+        })
+        compensation = Evidence("SK하이닉스, 성과급을 자사주로 지급", ready_payload(), "000660")
+        compensation.evidence_id = "research:000660:news:compensation"
+        compensation.url = "https://example.test/sk-hynix-compensation"
+        compensation.published_at = "2026-08-20T02:00:00Z"
+        compensation.raw_payload.update({
+            "eventType": "labor",
+            "storyClusterId": "story:legacy-overmerged",
+            "articleText": "SK하이닉스 노사는 직원 성과급을 자사주로 지급하기로 합의했다. " * 5,
+        })
+
+        normalized = normalize_evidence_sources([buyback, compensation])
+
+        self.assertNotEqual(normalized[0].raw_payload["storyClusterId"], normalized[1].raw_payload["storyClusterId"])
+        self.assertEqual("original", normalized[1].raw_payload["evidenceRelationship"])
+
+    def test_revalidation_splits_company_ai_demand_story_from_market_rate_selloff(self):
+        demand = Evidence(
+            "NVIDIA (NVDA): What Foxconn and Super Micro Are Telling Us about the AI Boom - Yahoo Finance",
+            ready_payload(),
+            "NVDA",
+        )
+        demand.evidence_id = "research:NVDA:news:demand"
+        demand.url = "https://example.test/nvidia-ai-demand"
+        demand.published_at = "2026-08-19T01:00:00Z"
+        demand.raw_payload.update({
+            "eventType": "earnings",
+            "storyClusterId": "story:legacy-overmerged",
+            "articleText": "Foxconn and Super Micro described accelerating AI server demand and data-center capacity plans. " * 6,
+            "articleSummaryKo": "AI 서버 수요가 향후 실적에 미칠 영향을 설명합니다.",
+        })
+        rates = Evidence(
+            "Nvidia, AMD, Broadcom, Meta Slide as Bond Yields Surge: Why Tech Stocks Are Getting Hit - Yahoo Finance",
+            ready_payload(),
+            "NVDA",
+        )
+        rates.evidence_id = "research:NVDA:news:rates"
+        rates.url = "https://example.test/tech-bond-yield-selloff"
+        rates.published_at = "2026-08-18T01:00:00Z"
+        rates.raw_payload.update({
+            "eventType": "earnings",
+            "storyClusterId": "story:legacy-overmerged",
+            "articleText": "Treasury yields surged and semiconductor shares fell with the broader technology market. " * 6,
+            "articleSummaryKo": "국채 수익률 급등으로 기술주가 하락했고 개별 실적 영향은 제한적입니다.",
+        })
+
+        normalized = normalize_evidence_sources([demand, rates])
+
+        self.assertNotEqual(normalized[0].raw_payload["storyClusterId"], normalized[1].raw_payload["storyClusterId"])
+        self.assertTrue(all(item.raw_payload["evidenceRelationship"] == "original" for item in normalized))
+
+    def test_revalidation_does_not_merge_roundup_with_company_order_disclosure_review(self):
+        roundup = Evidence(
+            "SK하이닉스·NAVER 등 실적과 해외 수주 핵심주 주목",
+            ready_payload(),
+            "000660",
+        )
+        roundup.evidence_id = "research:000660:news:roundup"
+        roundup.url = "https://example.test/market-roundup"
+        roundup.published_at = "2026-08-21T01:00:00Z"
+        roundup.raw_payload.update({
+            "eventType": "earnings",
+            "storyClusterId": "story:legacy-overmerged",
+            "articleText": "여러 종목의 실적과 해외 수주를 함께 소개하는 시장 요약 기사입니다. " * 6,
+            "articleSummaryKo": "여러 종목의 실적과 수주 이슈를 나열한 시장 요약입니다.",
+        })
+        order_review = Evidence(
+            "LTA 강조한 SK하이닉스, 반기보고서에는 수주 없음",
+            ready_payload(),
+            "000660",
+        )
+        order_review.evidence_id = "research:000660:news:order-review"
+        order_review.url = "https://example.test/sk-hynix-order-review"
+        order_review.published_at = "2026-08-20T01:00:00Z"
+        order_review.raw_payload.update({
+            "eventType": "earnings",
+            "storyClusterId": "story:legacy-overmerged",
+            "articleText": "SK하이닉스의 장기 공급계약 설명과 반기보고서 수주 공시 사이의 차이를 검증합니다. " * 6,
+            "articleSummaryKo": "장기 공급계약 설명과 반기보고서 공시의 차이를 검증합니다.",
+        })
+
+        normalized = normalize_evidence_sources([roundup, order_review])
+
+        self.assertNotEqual(normalized[0].raw_payload["storyClusterId"], normalized[1].raw_payload["storyClusterId"])
 
     def test_exact_republication_is_not_a_second_alert_or_reasoning_source(self):
         first = Evidence("NVIDIA announces multi-year supply agreement", ready_payload())

@@ -22,6 +22,7 @@ from ..domain.news_collection_quality import (
     assess_news_collection_admission,
     news_collection_admission_summary,
 )
+from ..domain.prompt_evidence_admission import attach_prompt_evidence_admission
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
@@ -876,6 +877,13 @@ class NewsCollectionRunner:
                             annotate_evidence_eligibility(
                                 item,
                                 self.settings.get("researchClaimSourceRegistry") or "",
+                            )
+                            item.raw_payload = attach_prompt_evidence_admission(
+                                item.raw_payload,
+                                kind=item.kind,
+                                published_at=item.published_at,
+                                observed_at=item.observed_at,
+                                now=self.cleanup_now(),
                             )
                         governed_for_persistence.extend(corpus)
                         collected.extend(admitted_items)

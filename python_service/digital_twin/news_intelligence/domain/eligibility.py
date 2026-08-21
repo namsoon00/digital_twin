@@ -16,11 +16,20 @@ HARD_BODY_ISSUES = {
     "headline-list-contamination",
     "target-context-diluted",
     "text-encoding-corrupt",
+    "html-markup-residue",
+    "css-residue",
+    "embedded-instruction-text",
 }
 HARD_REVIEW_RE = re.compile(
     r"본문\s*(?:오염|불일치)|다른\s*기사|무관한\s*(?:기사|본문)|기사\s*본문\s*대신|"
     r"사이트\s*(?:메뉴|탐색)|source\s*content\s*contamination|body\s*contamination|"
     r"title\s*(?:and|/)\s*body\s*mismatch",
+    re.IGNORECASE,
+)
+LOW_VALUE_ALERT_RE = re.compile(
+    r"\b(?:analyst|price\s+target|stock\s+pick|newsletter|opinion|column|"
+    r"why\s+\w+\s+stock|could\s+(?:rise|fall)|viral|video\s+shows)\b|"
+    r"목표\s*주가|증권사\s*(?:전망|추천)|주식\s*초고수|특징주|칼럼|뉴스레터|화제의\s*영상",
     re.IGNORECASE,
 )
 
@@ -154,6 +163,7 @@ def assess_news_eligibility(
     relevance = _text(payload.get("relevanceState")).lower()
     trust = _text(payload.get("sourceTrustState") or source_profile.get("sourceTrustState") or facts.get("sourceTrustState")).lower()
     materiality = _text(payload.get("materialityState") or facts.get("materialityState")).lower()
+    event_type = _text(payload.get("eventType") or facts.get("eventType") or analysis.get("eventType")).lower()
     validation = _text(payload.get("validationState") or facts.get("validationState")).lower()
     read_status = _text(payload.get("articleReadStatus") or facts.get("readStatus")).lower()
     body_available = _bool(facts.get("bodyAvailable")) or read_status in {"body", "full", "full-body", "article-body"}
@@ -213,6 +223,11 @@ def assess_news_eligibility(
         alert_reasons.append("validation-blocked")
     if content_type in {"opinion", "aggregation", "automated", "unknown"}:
         alert_reasons.append("content-type-not-alertable")
+    title_summary_text = " ".join([_text(title), _text(summary), _text(payload.get("articleSummaryKo"))])
+    if event_type == "price_commentary":
+        alert_reasons.append("price-commentary-not-alertable")
+    if analysis.get("decisionInlineEligible") is not True and LOW_VALUE_ALERT_RE.search(title_summary_text):
+        alert_reasons.append("low-value-editorial-event")
     alert_reasons = list(dict.fromkeys(alert_reasons))
     alert = EligibilityLayer(not alert_reasons, alert_reasons)
 

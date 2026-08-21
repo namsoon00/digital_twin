@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, List
 
 
-ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v3"
+ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v4"
 CONTAMINATION_PATTERNS = (
     ("publisher-navigation", re.compile(r"\b(?:continue reading|read more|more from|recommended stor(?:y|ies))\b", re.IGNORECASE)),
     ("investment-promotion", re.compile(r"\b(?:is now the time to buy|missed nvidia|top \d+ stocks to buy)\b", re.IGNORECASE)),
@@ -13,6 +13,13 @@ CONTAMINATION_PATTERNS = (
     ("publisher-navigation", re.compile(r"(?:최신\s*뉴스|주요\s*뉴스|실시간\s*인기|기사\s*더보기|다음\s*기사|what are you looking for)", re.IGNORECASE)),
 )
 MOJIBAKE_RE = re.compile(r"(?:�|â€™|â€œ|â€|Ã.|\ufffd)")
+HTML_MARKUP_RE = re.compile(r"<\s*/?\s*(?:script|style|iframe|html|body|article|nav|div|p)\b", re.IGNORECASE)
+CSS_RESIDUE_RE = re.compile(r"(?:^|\s)[.#a-z][a-z0-9_.*#,:>+~\-\s]{0,180}\{[^{}]*(?:font|color|display|width|height)\s*:[^{}]*\}", re.IGNORECASE)
+EMBEDDED_INSTRUCTION_RE = re.compile(
+    r"\b(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|system)\s+instructions\b|"
+    r"\byou\s+are\s+(?:chatgpt|an?\s+assistant)\b|(?:이전|시스템)\s*지시(?:를|사항을)?\s*(?:무시|따르지)",
+    re.IGNORECASE,
+)
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|\n+")
 
 
@@ -51,6 +58,12 @@ def inspect_article_body(
         issues.append("body-too-short")
     if MOJIBAKE_RE.search(text):
         issues.append("text-encoding-corrupt")
+    if HTML_MARKUP_RE.search(raw_text):
+        issues.append("html-markup-residue")
+    if CSS_RESIDUE_RE.search(raw_text):
+        issues.append("css-residue")
+    if EMBEDDED_INSTRUCTION_RE.search(text):
+        issues.append("embedded-instruction-text")
     for issue, pattern in CONTAMINATION_PATTERNS:
         match = pattern.search(text)
         if match and (match.start() >= 80 or issue in {"investment-promotion", "live-widget"}):
@@ -85,6 +98,9 @@ def inspect_article_body(
             "repeated-content": "반복 문장이 많습니다",
             "headline-list-contamination": "다른 기사 제목 목록이 본문에 섞였습니다",
             "target-context-diluted": "대상 종목과 관련된 본문 비중이 너무 낮습니다",
+            "html-markup-residue": "HTML 마크업이 본문에 남아 있습니다",
+            "css-residue": "CSS 스타일이 본문에 남아 있습니다",
+            "embedded-instruction-text": "모델 지시로 오인될 수 있는 문장이 본문에 포함됐습니다",
         }
         return ArticleBodyQuality(
             "limited",

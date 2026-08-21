@@ -1475,6 +1475,7 @@ def compact_research_evidence_for_ai(rows: object, limit: int = 8) -> List[objec
             continue
         governance = item.get("evidenceGovernance") if isinstance(item.get("evidenceGovernance"), dict) else {}
         analysis = item.get("aiAnalysis") if isinstance(item.get("aiAnalysis"), dict) else {}
+        eligibility = item.get("newsEligibility") if isinstance(item.get("newsEligibility"), dict) else {}
         compact = {
             "evidenceId": item.get("evidenceId"),
             "kind": item.get("kind"),
@@ -1500,6 +1501,18 @@ def compact_research_evidence_for_ai(rows: object, limit: int = 8) -> List[objec
             "investmentJudgmentEligible": governance.get("investmentJudgmentEligible"),
             "verificationStatus": governance.get("verificationStatus"),
             "entityResolutionStatus": governance.get("entityResolutionStatus"),
+            "decisionInlineEligible": analysis.get("decisionInlineEligible")
+            if "decisionInlineEligible" in analysis else item.get("decisionInlineEligible"),
+            "displayEligible": eligibility.get("displayEligible")
+            if "displayEligible" in eligibility else item.get("displayEligible"),
+            "alertEligible": eligibility.get("alertEligible")
+            if "alertEligible" in eligibility else item.get("alertEligible"),
+            "reasoningEligible": eligibility.get("reasoningEligible")
+            if "reasoningEligible" in eligibility else item.get("reasoningEligible"),
+            "officialDocumentState": item.get("officialDocumentState"),
+            "documentVerified": item.get("documentVerified"),
+            "analysisReady": item.get("analysisReady"),
+            "promptEvidenceAdmission": item.get("promptEvidenceAdmission"),
             "independentSourceCount": governance.get("independentSourceCount"),
             "publishedAt": item.get("publishedAt"),
             "observedAt": item.get("observedAt"),

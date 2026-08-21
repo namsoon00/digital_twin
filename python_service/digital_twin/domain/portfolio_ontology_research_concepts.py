@@ -75,6 +75,7 @@ def event_relation_properties(item: object) -> Dict[str, object]:
         "analysisConflictAiPolarity",
         "analysisConflictReasonKo",
         "dataQualityRisk",
+        "promptEvidenceAdmission",
     ]:
         if key in raw_payload:
             props[key] = raw_payload.get(key)
@@ -96,6 +97,9 @@ def research_evidence_state(item: object, raw_payload: Dict[str, object]) -> Dic
     eligible = bool(governance.get("investmentJudgmentEligible"))
     if str(getattr(item, "kind", "") or "").lower() == "news" and news_eligibility:
         eligible = eligible and bool(news_eligibility.get("reasoningEligible"))
+    prompt_admission = raw_payload.get("promptEvidenceAdmission") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else {}
+    if prompt_admission:
+        eligible = eligible and bool(prompt_admission.get("decisionEligible"))
     relation_scope = str(raw_payload.get("relationScope") or "").strip().lower()
     analysis = raw_payload.get("aiAnalysis") if isinstance(raw_payload.get("aiAnalysis"), dict) else {}
     read_scope = str(
@@ -121,6 +125,7 @@ def research_evidence_state(item: object, raw_payload: Dict[str, object]) -> Dic
         materiality_passed = bool(eligible and relation_scope == "direct" and (body_read or raw_payload.get("eventType")))
     news_states = news_domain.news_state_payload(raw_payload)
     return {
+        "investmentJudgmentEligible": bool(eligible),
         "evidenceRole": evidence_role,
         "reviewLevel": review_level,
         "dataState": data_state,
@@ -147,6 +152,12 @@ def add_governed_claim_concepts(
         parent_reasoning_eligible = bool(
             parent_reasoning_eligible
             and news_eligibility.get("reasoningEligible")
+        )
+    prompt_admission = raw_payload.get("promptEvidenceAdmission") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else {}
+    if prompt_admission:
+        parent_reasoning_eligible = bool(
+            parent_reasoning_eligible
+            and prompt_admission.get("decisionEligible")
         )
     evidence_key = str(getattr(item, "evidence_id", "") or "").strip()
     if not evidence_key:
@@ -570,8 +581,41 @@ def add_research_evidence_concepts(
             "sourcePlatform": raw_payload.get("sourcePlatform"),
             "qualityGate": raw_payload.get("qualityGate"),
             "evidenceGovernance": raw_payload.get("evidenceGovernance"),
-            "investmentJudgmentEligible": bool((raw_payload.get("evidenceGovernance") or {}).get("investmentJudgmentEligible")) if isinstance(raw_payload.get("evidenceGovernance"), dict) else False,
+            "investmentJudgmentEligible": bool(evidence_state.get("investmentJudgmentEligible")),
+            "promptEvidenceAdmission": raw_payload.get("promptEvidenceAdmission"),
+            "promptEvidenceUsage": (raw_payload.get("promptEvidenceAdmission") or {}).get("usage") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else "",
+            "promptEvidenceEligible": bool((raw_payload.get("promptEvidenceAdmission") or {}).get("promptEligible")) if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else False,
         })
+        prompt_admission = raw_payload.get("promptEvidenceAdmission") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else {}
+        if prompt_admission:
+            prompt_quality_id = add_entity(
+                graph,
+                "data-quality",
+                item.evidence_id + ":prompt-admission",
+                "AI evidence admission",
+                {
+                    "tboxClass": "DataQuality",
+                    "source": "prompt-evidence-admission",
+                    "usage": prompt_admission.get("usage"),
+                    "promptEligible": bool(prompt_admission.get("promptEligible")),
+                    "decisionEligible": bool(prompt_admission.get("decisionEligible")),
+                    "freshnessStatus": prompt_admission.get("freshnessState"),
+                    "freshnessAgeMinutes": prompt_admission.get("ageMinutes"),
+                    "sourceAsOf": prompt_admission.get("sourceAsOf"),
+                    "reasonCodes": list(prompt_admission.get("reasonCodes") or []),
+                    "dataState": "sufficient" if prompt_admission.get("promptEligible") else "partial",
+                    "validationState": "ready" if prompt_admission.get("promptEligible") else "blocked",
+                },
+            )
+            add_relation(
+                graph,
+                event_id,
+                prompt_quality_id,
+                "HAS_DATA_QUALITY",
+                weight=1.0,
+                evidence_ids=[item.evidence_id],
+                properties={"source": "prompt-evidence-admission"},
+            )
         add_governed_claim_concepts(graph, stock_id, item, raw_payload)
         graph.evidence.append(OntologyEvidence(
             item.evidence_id,
@@ -581,7 +625,7 @@ def add_research_evidence_concepts(
             item.title,
             item.to_dict(),
             "risk" if str(item.polarity or "").lower() in {"negative", "risk", "bearish"} else "support" if str(item.polarity or "").lower() in {"positive", "support", "bullish"} else "context",
-            "sufficient" if bool((raw_payload.get("evidenceGovernance") or {}).get("investmentJudgmentEligible")) else "partial",
+            "sufficient" if bool(evidence_state.get("investmentJudgmentEligible")) else "partial",
         ))
         props = event_relation_properties(item)
         add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=1.0, evidence_ids=[item.evidence_id], properties=props)

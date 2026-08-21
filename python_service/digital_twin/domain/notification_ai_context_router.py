@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List, Tuple
 
+from .prompt_evidence_admission import assess_prompt_evidence
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v1"
+
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v2"
 AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v1"
 
 
@@ -381,10 +383,15 @@ def _continuity_delta(value: object) -> Dict[str, object]:
     return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
 
 
-def _external_evidence(brief: Dict[str, object], rules: List[Dict[str, object]], hypotheses: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def _external_evidence(
+    brief: Dict[str, object],
+    rules: List[Dict[str, object]],
+    hypotheses: List[Dict[str, object]],
+) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
     if not _marker_relevant(rules, hypotheses, EXTERNAL_EVIDENCE_MARKERS):
-        return []
+        return [], {"evaluatedCount": 0, "eligibleCount": 0, "reasonCounts": {}}
     evidence = _mapping(brief.get("evidence"))
+    reference_at = _mapping(brief.get("subject")).get("referenceDate")
     linked_ids = {
         str(value or "")
         for hypothesis in hypotheses
@@ -394,53 +401,88 @@ def _external_evidence(brief: Dict[str, object], rules: List[Dict[str, object]],
     }
     rows: List[Dict[str, object]] = []
     seen = set()
+    evaluated_count = 0
+    eligible_count = 0
+    reason_counts: Dict[str, int] = {}
+    excluded_ids: List[str] = []
 
-    def append_row(row: Dict[str, object], evidence_use: str) -> None:
+    def append_row(row: Dict[str, object], directly_linked: bool) -> None:
+        nonlocal evaluated_count, eligible_count
         identity = str(row.get("evidenceId") or row.get("title") or row.get("reportName") or "").strip()
         if not identity or identity.casefold() in seen:
             return
         seen.add(identity.casefold())
-        row["evidenceUse"] = evidence_use
+        evaluated_count += 1
+        admission = assess_prompt_evidence(
+            row,
+            kind=row.get("kind"),
+            published_at=row.get("publishedAt") or row.get("receiptDate") or row.get("seenDate"),
+            observed_at=row.get("observedAt"),
+            now=reference_at,
+            directly_linked=directly_linked,
+        ).to_dict()
+        if not admission.get("promptEligible"):
+            excluded_ids.append(identity)
+            for reason in admission.get("reasonCodes") or []:
+                reason_counts[str(reason)] = int(reason_counts.get(str(reason)) or 0) + 1
+            return
+        eligible_count += 1
+        row["evidenceUse"] = "action" if directly_linked and admission.get("usage") == "decision" else "rule-scoped-reference"
+        row["promptAdmission"] = admission
         rows.append(row)
 
     for item in evidence.get("researchEvidence") or []:
         if not isinstance(item, dict):
             continue
         evidence_id = str(item.get("evidenceId") or "")
-        validation = str(item.get("validationState") or "").lower()
         directly_linked = bool(evidence_id and evidence_id in linked_ids)
-        verified = validation in {"verified", "approved", "complete", "sufficient"}
-        if directly_linked and verified:
-            evidence_use = "action"
-        elif validation in {"ready", "conditional", "partial", "verified", "approved", "complete", "sufficient"}:
-            evidence_use = "rule-scoped-reference"
-        else:
-            continue
         append_row(
             _selected(
                 item,
                 (
                     "evidenceId", "kind", "title", "summary", "evidenceRole", "polarity",
                     "validationState", "dataState", "source", "publishedAt", "observedAt", "url",
+                    "sourceTrustState", "investmentJudgmentEligible", "verificationStatus",
+                    "entityResolutionStatus", "decisionInlineEligible", "displayEligible",
+                    "alertEligible", "reasoningEligible", "officialDocumentState",
+                    "documentVerified", "analysisReady", "reportName", "receiptDate",
                 ),
             ),
-            evidence_use,
+            directly_linked,
         )
         if len(rows) >= 3:
             break
     for item in evidence.get("newsHeadlines") or []:
         if isinstance(item, dict) and len(rows) < 3:
-            append_row(
-                _selected(item, ("evidenceId", "title", "summary", "stockImpactLabel", "domain", "seenDate", "url")),
-                "rule-scoped-reference",
+            legacy_news = _selected(
+                item,
+                (
+                    "evidenceId", "title", "summary", "stockImpactLabel", "domain",
+                    "seenDate", "publishedAt", "observedAt", "url",
+                    "investmentJudgmentEligible", "decisionInlineEligible", "reasoningEligible",
+                ),
             )
+            legacy_news["kind"] = "news"
+            append_row(legacy_news, False)
     disclosure = _mapping(evidence.get("disclosure"))
     if disclosure and len(rows) < 3:
-        append_row(
-            _selected(disclosure, ("evidenceId", "reportName", "receiptDate", "provider", "url")),
-            "rule-scoped-reference",
+        legacy_disclosure = _selected(
+            disclosure,
+            (
+                "evidenceId", "reportName", "receiptDate", "provider", "url",
+                "validationState", "dataState", "investmentJudgmentEligible",
+                "officialDocumentState", "documentVerified", "analysisReady",
+            ),
         )
-    return [row for row in rows if row][:3]
+        legacy_disclosure["kind"] = "disclosure"
+        append_row(legacy_disclosure, False)
+    return [row for row in rows if row][:3], {
+        "evaluatedCount": evaluated_count,
+        "eligibleCount": eligible_count,
+        "excludedCount": max(0, evaluated_count - eligible_count),
+        "reasonCounts": dict(sorted(reason_counts.items())),
+        "excludedEvidenceIds": excluded_ids[:5],
+    }
 
 
 def _portfolio_policy(brief: Dict[str, object]) -> Dict[str, object]:
@@ -524,7 +566,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     facts = _relation_facts(current, rules, drivers)
     linked_fact_keys = _rule_linked_fact_keys(rules, drivers)
     company, company_reference = _company_context(current, rules, hypotheses, _mapping(current.get("relationFacts")))
-    external_evidence = _external_evidence(brief, rules, hypotheses)
+    external_evidence, evidence_admission_audit = _external_evidence(brief, rules, hypotheses)
     temporal = _temporal_evidence(current)
     data_coverage = _mapping(brief.get("dataCoverage"))
     assessment = _mapping(brief.get("assessmentBundle"))
@@ -594,6 +636,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             ]),
             "unlinkedResearchEvidenceCount": max(0, len(_mapping(brief.get("evidence")).get("researchEvidence") or []) - len(external_evidence)),
         },
+        "evidenceAdmission": evidence_admission_audit,
         "fullDecisionBriefRetainedForAudit": True,
     }
     core["routingAudit"] = route_audit

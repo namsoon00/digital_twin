@@ -549,6 +549,9 @@ EVIDENCE_DECISION_FIELDS = (
     "evidenceId", "kind", "eventType", "title", "summary", "evidenceRole",
     "polarity", "materialityState", "relevanceState", "validationState", "dataState",
     "source", "sourceKind", "sourceTrustState", "publishedAt", "observedAt", "url",
+    "investmentJudgmentEligible", "verificationStatus", "entityResolutionStatus",
+    "decisionInlineEligible", "displayEligible", "alertEligible", "reasoningEligible",
+    "officialDocumentState", "documentVerified", "analysisReady", "promptEvidenceAdmission",
 )
 
 ACCOUNT_STRATEGY_FIELDS = (

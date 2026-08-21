@@ -906,6 +906,7 @@ class PortfolioOntologyProjectionRecorder:
         outcome_observation_service=None,
         investment_domain_store=None,
         graph_assembly_cache_store=None,
+        statistical_signal_service=None,
         runtime_context_overrides: Dict[str, Dict[str, object]] = None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
@@ -921,6 +922,7 @@ class PortfolioOntologyProjectionRecorder:
         self.world_projection_outbox = world_projection_outbox
         self.inference_detail_outbox = inference_detail_outbox
         self.graph_assembly_cache_store = graph_assembly_cache_store
+        self.statistical_signal_service = statistical_signal_service
         self.runtime_context_overrides = {
             str(account_id or ""): frozen_projection_runtime_context(context)
             for account_id, context in dict(runtime_context_overrides or {}).items()
@@ -7455,6 +7457,58 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=selected_symbols,
         )
         emit("temporal_windows.done", symbolCount=len(temporal_windows))
+        statistical_signal_context = {}
+        if self.statistical_signal_service:
+            emit("statistical_signals.start", symbolCount=len(temporal_windows))
+            try:
+                statistical_result = self.statistical_signal_service.run(
+                    account_id=snapshot.account_id,
+                    backend_id=str(
+                        self.settings.get("_reasoningTimeSeriesBackendId")
+                        or self.settings.get("timeSeriesActiveBackendId")
+                        or "market-time-series"
+                    ),
+                    windows=temporal_windows,
+                    as_of=str(snapshot.generated_at or as_of),
+                    source_event_id=str(metadata.get("sourceEventId") or ""),
+                )
+                feature_snapshot = statistical_result.get("featureSnapshot")
+                signal_snapshot = statistical_result.get("signalSnapshot")
+                statistical_signal_context = {
+                    "temporalFeatureSnapshot": (
+                        feature_snapshot.to_dict(include_windows=False)
+                        if hasattr(feature_snapshot, "to_dict")
+                        else {}
+                    ),
+                    "statisticalSignalSnapshot": (
+                        signal_snapshot.to_dict()
+                        if hasattr(signal_snapshot, "to_dict")
+                        else {}
+                    ),
+                    "statisticalSignalPipeline": {
+                        "status": str(statistical_result.get("status") or ""),
+                        "timings": dict(statistical_result.get("timings") or {}),
+                        "persistence": dict(statistical_result.get("persistence") or {}),
+                    },
+                }
+            except Exception as error:  # noqa: BLE001 - reference-only signals cannot block TypeDB.
+                statistical_signal_context = {
+                    "statisticalSignalPipeline": {
+                        "status": "error",
+                        "reason": str(error)[:300],
+                    },
+                }
+            emit(
+                "statistical_signals.done",
+                status=str(
+                    statistical_signal_context.get("statisticalSignalPipeline", {}).get("status")
+                    or "unavailable"
+                ),
+                signalCount=int(
+                    statistical_signal_context.get("statisticalSignalSnapshot", {}).get("signalCount")
+                    or 0
+                ),
+            )
         portfolio_lifecycle = {}
         if self.investment_domain_store and hasattr(self.investment_domain_store, "ontology_portfolio_lifecycle_context"):
             emit("portfolio_lifecycle.start")
@@ -7495,6 +7549,7 @@ class PortfolioOntologyProjectionRecorder:
             # exposed through operational monitoring instead.
             "dataPipelineHealth": data_pipeline_health,
             "temporalObservationWindows": temporal_windows,
+            **statistical_signal_context,
             "portfolioLifecycle": portfolio_lifecycle,
         }
         # V1 and any replay engine must consume the same ontology-owned

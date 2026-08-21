@@ -51,6 +51,7 @@ from .mysql_operational import (
     MySQLReasoningEngineJobStore,
     MySQLReasoningShadowJobStore,
     MySQLTemporalFeatureSnapshotStore,
+    MySQLStatisticalModelSignalStore,
     MySQLTimeSeriesBackendRegistryStore,
     MySQLTimeSeriesProjectionOutboxStore,
     MySQLSharedInstrumentInferenceStore,
@@ -226,6 +227,10 @@ def time_series_projection_outbox_store(settings: Dict[str, str] = None):
 
 def temporal_feature_snapshot_store(settings: Dict[str, str] = None):
     return MySQLTemporalFeatureSnapshotStore(configured_settings(settings))
+
+
+def statistical_model_signal_store(settings: Dict[str, str] = None):
+    return MySQLStatisticalModelSignalStore(configured_settings(settings))
 
 
 def reasoning_engine_registry_store(settings: Dict[str, str] = None):

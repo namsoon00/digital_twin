@@ -11,6 +11,9 @@ from .ontology_observation_quality import profile_for_domain
 from .ontology_projection_input import temporal_research_signals_for_symbol
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
+from .portfolio_ontology_statistical_concepts import (
+    statistical_signal_packet_can_replace_temporal_anchors,
+)
 
 
 DEFAULT_TEMPORAL_WINDOWS_TEXT = (
@@ -795,6 +798,13 @@ def add_position_temporal_concepts(
     if rows and isinstance(external_signals, dict):
         rows[-1] = {**rows[-1], "externalSignals": temporal_signals}
     trend_observation = profile_for_domain(observation_profiles or {}, "trend")
+    anchor_setting = (settings or {}).get("ontologyTemporalObservationAnchorProjectionEnabled")
+    normalized_anchor_setting = str(anchor_setting or "auto").strip().lower()
+    project_observation_anchors = (
+        not statistical_signal_packet_can_replace_temporal_anchors(runtime_context, symbol)
+        if normalized_anchor_setting in {"", "auto"}
+        else normalized_anchor_setting not in {"0", "false", "no", "off", "disabled"}
+    )
 
     for definition in definitions:
         stored_rows = stored_temporal_window_rows(runtime_context, symbol, definition.key)
@@ -869,7 +879,8 @@ def add_position_temporal_concepts(
                 "dataState": data_state,
                 "aiInfluenceLabel": definition.key + " " + phase["phaseLabel"],
             })
-        add_temporal_observation_anchors(graph, window_id, symbol, definition, selected)
+        if project_observation_anchors:
+            add_temporal_observation_anchors(graph, window_id, symbol, definition, selected)
 
         if not values.get("hasSufficientHistory"):
             add_temporal_coverage_gap(

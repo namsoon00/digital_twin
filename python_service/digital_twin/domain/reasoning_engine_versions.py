@@ -51,6 +51,7 @@ class EngineReleaseBundle:
     rulebox_release_id: str
     prompt_release_id: str
     feature_set_version: str
+    model_signal_release_id: str = ""
     source_contract_versions: Tuple[str, ...] = ()
     release_id: str = ""
     runtime_contract_version: str = REASONING_ENGINE_RUNTIME_CONTRACT_VERSION
@@ -105,6 +106,7 @@ def reasoning_release_identity(
             "ruleboxReleaseId": str(_release_bundle_value(bundle, "rulebox_release_id", "ruleboxReleaseId") or ""),
             "promptReleaseId": str(_release_bundle_value(bundle, "prompt_release_id", "promptReleaseId") or ""),
             "featureSetVersion": str(_release_bundle_value(bundle, "feature_set_version", "featureSetVersion") or ""),
+            "modelSignalReleaseId": str(_release_bundle_value(bundle, "model_signal_release_id", "modelSignalReleaseId") or ""),
             "sourceContractVersions": sorted(
                 str(item or "")
                 for item in (

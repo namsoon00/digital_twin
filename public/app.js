@@ -12629,6 +12629,8 @@
     var hypotheses = summary.hypotheses || {};
     var inferencebox = summary.inferencebox || {};
     var ruleKnowledge = summary.ruleKnowledge || {};
+    var statisticalSignals = summary.statisticalSignals || {};
+    var signalMigration = statisticalSignals.migrationCounts || {};
     var metrics = [
       ["경계 문맥", counts.boundedContexts, "업무 의미 영역"],
       ["TBox 개념", counts.classes, summary.sourceTBox && summary.sourceTBox.version],
@@ -12636,6 +12638,8 @@
       ["실행 규칙", counts.executableRules, rulebox.status || "확인 대기"],
       ["예측 가설 규칙", ruleKnowledge.hypothesisRuleCount, "결과 검증 대상"],
       ["가드레일 규칙", ruleKnowledge.guardrailRuleCount, "정책·품질·실행 제약"],
+      ["통계 신호 연결", signalMigration["shadow-signal-available"] || 0, "가격·추세 후보"],
+      ["통계 전환 예정", signalMigration.planned || 0, "검증 모델 필요"],
       ["현재 가설", counts.hypotheses, hypotheses.complete === false ? "일부 집계" : "전체 집계"],
       ["추론 세대", inferencebox.inferenceGenerationId ? 1 : "-", inferencebox.status || "계정 필요"]
     ];
@@ -12734,6 +12738,7 @@
       side: row.materializationPolicy || "schema"
     };
     if (section === "rules") return {
+      /* Statistical migration is governance metadata, not a live action. */
       title: row.label || row.ruleId,
       detail: row.ruleId,
       meta: [
@@ -12743,7 +12748,8 @@
         row.lifecycleClass || "실행군 미지정",
         "조건 " + Number(row.conditionCount || 0),
         "파생 " + Number(row.derivationCount || 0),
-        (row.triggerFamilies || []).slice(0, 2).join(" / ") || "트리거 없음"
+        (row.triggerFamilies || []).slice(0, 2).join(" / ") || "트리거 없음",
+        ((row.statisticalSignalContract || {}).migrationState || "통계 전환 해당 없음")
       ].join(" · "),
       side: row.enabled === false ? "중지" : (row.knowledgeValidationStatus || "사용")
     };
@@ -12813,6 +12819,7 @@
     var lineage = payload.lineage || {};
     var selectedItem = (payload.selection || {}).item || {};
     var knowledge = selectedItem.knowledgeBasis || {};
+    var statisticalContract = selectedItem.statisticalSignalContract || {};
     var references = Array.isArray(knowledge.references) ? knowledge.references : [];
     var knowledgeDetail = knowledge.ruleKind ? [
       '<section class="ontology-rule-knowledge">',
@@ -12829,6 +12836,19 @@
       references.length ? '<div class="ontology-rule-references">' + references.map(function (item) { return '<a href="' + escapeHtml(item.url || "#") + '" target="_blank" rel="noopener noreferrer"><strong>' + escapeHtml(item.title || item.referenceId) + '</strong><span>' + escapeHtml(item.claim || item.applicability || "") + '</span></a>'; }).join("") + '</div>' : '<p class="subtle">연결된 외부 연구 문헌이 없습니다. 내부 정책 또는 운영 계약 기반 규칙입니다.</p>',
       '</section>'
     ].join("") : "";
+    var statisticalDetail = statisticalContract.version ? [
+      '<section class="ontology-rule-knowledge">',
+      '<header><strong>통계 신호 전환 계약</strong><span>' + escapeHtml(statisticalContract.migrationState || "-") + '</span></header>',
+      '<div class="ontology-rule-knowledge-grid">',
+      '<p><span>현재 권한</span><strong>' + escapeHtml(statisticalContract.currentDecisionAuthority || "-") + '</strong></p>',
+      '<p><span>후보 권한</span><strong>' + escapeHtml(statisticalContract.candidateDecisionAuthority || "-") + '</strong></p>',
+      '<p><span>운영 적격</span><strong>' + escapeHtml(statisticalContract.productionEligible ? "예" : "아니오") + '</strong></p>',
+      '<p><span>전환 우선순위</span><strong>' + escapeHtml(statisticalContract.migrationPriority == null ? "-" : statisticalContract.migrationPriority) + '</strong></p>',
+      '</div>',
+      '<p class="ontology-rule-knowledge-explanation">필요 신호: ' + escapeHtml((statisticalContract.signalTypes || []).join(", ") || "없음") + '</p>',
+      '<p class="subtle">승격 조건: ' + escapeHtml((statisticalContract.promotionGates || []).join(" / ") || "해당 없음") + '</p>',
+      '</section>'
+    ].join("") : "";
     var groups = [
       ["classes", "TBox 개념"], ["relations", "TBox 관계"], ["rules", "실행 규칙"],
       ["hypotheses", "가설"], ["inferences", "추론"], ["decisions", "판단"], ["notifications", "알림"]
@@ -12843,6 +12863,7 @@
       }).join(""),
       '</div>',
       knowledgeDetail,
+      statisticalDetail,
       (payload.gaps || []).length ? '<div class="ontology-catalog-gaps"><strong>확인이 필요한 연결</strong>' + payload.gaps.map(function (gap) { return '<p><b>' + escapeHtml(gap.code || "gap") + '</b><span>' + escapeHtml(gap.detail || "-") + '</span></p>'; }).join("") + '</div>' : '<div class="ontology-catalog-lineage-ok">현재 조회 범위에서 누락 연결이 발견되지 않았습니다.</div>',
       '</section>'
     ].join("");

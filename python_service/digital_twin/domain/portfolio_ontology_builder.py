@@ -64,6 +64,7 @@ from .portfolio_ontology_pipeline_quality_concepts import add_position_pipeline_
 from .portfolio_ontology_lifecycle_concepts import add_portfolio_lifecycle_concepts
 from .portfolio_ontology_security_line_concepts import add_security_line_concepts
 from .portfolio_ontology_temporal_concepts import add_position_temporal_concepts
+from .portfolio_ontology_statistical_concepts import add_position_statistical_signal_concepts
 from .portfolio_ontology_valuation_concepts import add_position_valuation_concepts
 from .portfolio import PortfolioSummary, Position
 from .portfolio_ontology_outputs import (
@@ -356,6 +357,7 @@ def build_portfolio_ontology(
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
         add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
+        add_position_statistical_signal_concepts(graph, stock_id, symbol, runtime_context)
         add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
         add_company_knowledge_concepts(graph, stock_id, symbol, external_signals)
         add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)

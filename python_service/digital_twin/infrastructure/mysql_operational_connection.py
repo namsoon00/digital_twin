@@ -1348,6 +1348,42 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS statistical_model_signal_snapshots (
+        snapshot_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        as_of VARCHAR(40) NOT NULL DEFAULT '',
+        source_feature_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        feature_set_version VARCHAR(64) NOT NULL DEFAULT '',
+        model_release_id VARCHAR(191) NOT NULL,
+        signal_count INT NOT NULL DEFAULT 0,
+        subjects_json LONGTEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        material_hash VARCHAR(64) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_model_signal_account_time (account_id, as_of, created_at),
+        KEY idx_model_signal_release_time (model_release_id, as_of, created_at),
+        KEY idx_model_signal_feature_snapshot (source_feature_snapshot_id),
+        KEY idx_model_signal_material_hash (material_hash)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS statistical_model_signal_heads (
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        subject_id VARCHAR(191) NOT NULL,
+        signal_type VARCHAR(191) NOT NULL,
+        model_release_id VARCHAR(191) NOT NULL,
+        snapshot_id VARCHAR(191) NOT NULL,
+        signal_id VARCHAR(191) NOT NULL,
+        material_hash VARCHAR(64) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (account_id, subject_id, signal_type, model_release_id),
+        KEY idx_model_signal_head_snapshot (snapshot_id),
+        KEY idx_model_signal_head_subject (subject_id, observed_at),
+        KEY idx_model_signal_head_updated (updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS reasoning_engine_deployments (
         deployment_id VARCHAR(191) PRIMARY KEY,
         engine_family VARCHAR(64) NOT NULL,

@@ -66,6 +66,7 @@ class MySQLMinimalRetentionPolicy:
     inactive_evidence_retention_hours: int
     completed_time_series_projection_retention_hours: int
     temporal_feature_snapshot_retention_hours: int
+    statistical_model_signal_snapshot_retention_hours: int
     reasoning_shadow_job_retention_hours: int
     investment_reasoning_case_retention_hours: int
     reasoning_comparison_retention_hours: int
@@ -210,6 +211,13 @@ def mysql_minimal_retention_policy(settings: Mapping[str, object] = None) -> MyS
             1,
             24 * 30,
         ),
+        statistical_model_signal_snapshot_retention_hours=_int_setting(
+            configured,
+            "mysqlMinimalStatisticalModelSignalSnapshotRetentionHours",
+            24 * 90,
+            24,
+            24 * 365,
+        ),
         reasoning_shadow_job_retention_hours=_int_setting(
             configured,
             "mysqlMinimalReasoningShadowJobRetentionHours",
@@ -282,6 +290,10 @@ def policy_cutoffs(policy: MySQLMinimalRetentionPolicy, now: datetime = None) ->
         ),
         "temporalFeatureSnapshots": policy_cutoff_iso(
             policy.temporal_feature_snapshot_retention_hours,
+            now,
+        ),
+        "statisticalModelSignalSnapshots": policy_cutoff_iso(
+            policy.statistical_model_signal_snapshot_retention_hours,
             now,
         ),
         "reasoningShadowJobs": policy_cutoff_iso(

@@ -146,6 +146,7 @@ from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from .questdb_time_series import QuestDBTimeSeriesAdapter
 from .time_series_factory import build_temporal_feature_snapshot_service
+from .statistical_signal_factory import build_statistical_signal_pipeline_service
 
 
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -369,6 +370,7 @@ def build_monitor_runner(
             world_projection_outbox=stores.ontology_world_projection_outbox_store(configured_settings),
             inference_detail_outbox=stores.ontology_inference_detail_outbox_store(configured_settings),
             graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(configured_settings),
+            statistical_signal_service=build_statistical_signal_pipeline_service(configured_settings),
             settings=configured_settings,
         ),
         hypothesis_lifecycle_service=build_hypothesis_lifecycle_service(configured_settings, publisher),
@@ -1983,6 +1985,10 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         world_projection_outbox=shared_world_projection_outbox,
         inference_detail_outbox=V2InferenceDetailReceiptSink(),
         graph_assembly_cache_store=None,
+        statistical_signal_service=build_statistical_signal_pipeline_service({
+            **store_settings,
+            "_reasoningFeatureSetVersion": descriptor.release_bundle.feature_set_version,
+        }),
         settings=candidate_settings,
         source="reasoning-engine-v2-independent",
     )

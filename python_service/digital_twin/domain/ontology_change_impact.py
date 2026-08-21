@@ -31,6 +31,7 @@ SYMBOL_SCOPE_FAMILIES = {
     "market",
     "flow",
     "temporal",
+    "model-signal",
     "evidence",
     "quality",
     "valuation",
@@ -228,6 +229,8 @@ def family_for_field(field: object) -> str:
         return "flow"
     if _matches_any(value, ["trend", "transition", "temporal", "previous", "pricepath", "acceleration", "window", "horizon"]):
         return "temporal"
+    if _matches_any(value, ["modelsignal", "signaltype", "signaleligibility", "modelrelease", "scorerversion"]):
+        return "model-signal"
     if _matches_any(value, ["fresh", "quality", "sourceasof", "sourcefetched", "missing", "coverage", "stale", "validity", "latency"]):
         return "quality"
     if _matches_any(value, ["valuation", "fairvalue", "targetprice", "per", "pbr", "eps", "earning"]):
@@ -271,6 +274,8 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "valuation"
     if _matches_any(text, ["news", "disclosure", "filing", "research", "article", "document", "claim", "evidence", "external-signal", "corporate-action"]):
         return "evidence"
+    if _matches_any(text, ["statistical-model-signal", "modelsignalobservation", "signal-eligibility", "statisticalmodelrelease"]):
+        return "model-signal"
     if _matches_any(text, ["temporal", "trend-transition", "trend-phase", "price-path", "fact-change", "threshold-crossing", "event-cluster"]):
         field = props.get("field") or props.get("changedField") or ""
         family = family_for_field(field)

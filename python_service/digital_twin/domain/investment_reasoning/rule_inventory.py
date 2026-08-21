@@ -19,6 +19,8 @@ def reasoning_rule_inventory(rules: Iterable[Mapping[str, object]]) -> Dict[str,
     invalid = []
     disabled = []
     high_cost = []
+    signal_migration = Counter()
+    signal_types = Counter()
     for rule in rows:
         rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
         manifest = _mapping(rule.get("domain_manifest") or rule.get("domainManifest"))
@@ -31,6 +33,10 @@ def reasoning_rule_inventory(rules: Iterable[Mapping[str, object]]) -> Dict[str,
             or "unspecified"
         )
         lifecycle_class = str(manifest.get("lifecycleClass") or "unspecified")
+        signal_contract = _mapping(manifest.get("statisticalSignalContract"))
+        signal_migration[str(signal_contract.get("migrationState") or "missing")] += 1
+        for signal_type in signal_contract.get("signalTypes") or []:
+            signal_types[str(signal_type or "unknown")] += 1
         modules[module] += 1
         stages[stage] += 1
         lifecycle[lifecycle_class] += 1
@@ -74,5 +80,7 @@ def reasoning_rule_inventory(rules: Iterable[Mapping[str, object]]) -> Dict[str,
         "invalidRules": invalid[:30],
         "highCostRuleCount": len(high_cost),
         "highCostRules": sorted(high_cost, key=lambda item: (-item["costScore"], item["ruleId"]))[:20],
+        "statisticalSignalMigrationCounts": dict(sorted(signal_migration.items())),
+        "statisticalSignalRuleCounts": dict(sorted(signal_types.items())),
         "releaseReady": bool(rows) and not invalid,
     }

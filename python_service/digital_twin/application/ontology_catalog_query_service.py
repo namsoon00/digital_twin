@@ -5,11 +5,13 @@ the actually deployed TypeDB RuleBox/InferenceBox, and durable hypothesis and
 decision audit records through stable identifiers.
 """
 
+from collections import Counter
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..domain.ontology_rule_manifest import rule_domain_manifest
 from ..domain.ontology_schema import ontology_tbox
 from ..domain.ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_knowledge_basis, rule_knowledge_basis_from_rows
+from ..domain.statistical_signals.registry import model_registry_payload
 
 
 ONTOLOGY_CATALOG_VERSION = "ontology-catalog-v1"
@@ -99,12 +101,14 @@ class OntologyCatalogQueryService:
         hypothesis_lifecycle_store=None,
         decision_episode_store=None,
         notification_job_store=None,
+        statistical_signal_store=None,
         tbox_provider: Callable[[], Dict[str, object]] = ontology_tbox,
     ):
         self.ontology_repository = ontology_repository
         self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
         self.decision_episode_store = decision_episode_store
         self.notification_job_store = notification_job_store
+        self.statistical_signal_store = statistical_signal_store
         self.tbox_provider = tbox_provider
 
     def source_tbox(self) -> Dict[str, object]:
@@ -288,6 +292,7 @@ class OntologyCatalogQueryService:
             "knowledgeValidationStatus": text(knowledge_basis.get("validationStatus")),
             "decisionEligibility": text(knowledge_basis.get("decisionEligibility")),
             "requiresHypothesis": bool(knowledge_basis.get("requiresHypothesis")),
+            "statisticalSignalContract": item_dict(manifest.get("statisticalSignalContract")),
             "conditions": conditions,
             "derivations": derivations,
         }
@@ -385,6 +390,21 @@ class OntologyCatalogQueryService:
             resolved_rule_knowledge_basis(item)
             for item in rules
         ])
+        signal_migration_counts = Counter(
+            text((rule.get("statisticalSignalContract") or {}).get("migrationState")) or "missing"
+            for rule in rules
+        )
+        try:
+            statistical_signal_status = (
+                item_dict(self.statistical_signal_store.status())
+                if self.statistical_signal_store
+                else {
+                    "status": "not-configured",
+                    "reason": "이 조회 경로에는 통계 신호 저장소 진단이 연결되지 않았습니다.",
+                }
+            )
+        except Exception as error:  # noqa: BLE001 - catalog health must remain readable.
+            statistical_signal_status = {"status": "error", "reason": str(error)[:220]}
         relation_ids = {text(item.get("id")) for item in relations}
         undefined_rule_relations = sorted({
             relation_type
@@ -431,6 +451,21 @@ class OntologyCatalogQueryService:
                 "count": 0,
                 "detail": text(inference.get("reason")) or ("현재 추론 세대 표식을 확인했습니다." if lower(inference.get("status")) in AVAILABLE_STATUSES else "현재 추론 세대를 확인할 수 없습니다."),
             },
+            {
+                "id": "statistical-signals.availability",
+                "status": (
+                    "ok"
+                    if lower(statistical_signal_status.get("status")) in {"ready", "not-configured"}
+                    else "unavailable"
+                ),
+                "label": "통계 신호 최신 상태 저장소",
+                "count": int(statistical_signal_status.get("headCount") or 0),
+                "detail": text(statistical_signal_status.get("reason")) or (
+                    "종목·신호별 최신 헤드가 저장되고 있습니다."
+                    if lower(statistical_signal_status.get("status")) == "ready"
+                    else "통계 신호 저장 상태를 확인할 수 없습니다."
+                ),
+            },
         ]
         return {
             "version": ONTOLOGY_CATALOG_VERSION,
@@ -447,6 +482,11 @@ class OntologyCatalogQueryService:
             "deployedTBox": deployment,
             "rulebox": rulebox_meta,
             "ruleKnowledge": rule_knowledge_summary,
+            "statisticalSignals": {
+                "registry": model_registry_payload(),
+                "store": statistical_signal_status,
+                "migrationCounts": dict(sorted(signal_migration_counts.items())),
+            },
             "hypotheses": hypotheses,
             "inferencebox": inference,
             "counts": {

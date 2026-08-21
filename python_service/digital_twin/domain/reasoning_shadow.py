@@ -48,6 +48,8 @@ ONTOLOGY_RUNTIME_POLICY_SETTING_KEYS = frozenset(
         "materialityGateEnabled",
         "ontologyThresholdPolicy",
         "temporalWindowPeriods",
+        "ontologyTemporalObservationAnchorProjectionEnabled",
+        "statisticalPriceSignalReleaseId",
         "valuationAssumptions",
     }
 )

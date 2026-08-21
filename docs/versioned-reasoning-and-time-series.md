@@ -23,13 +23,16 @@ flowchart LR
     MySQL --> ActivePort[Active time-series port]
     QuestDB -. after promotion .-> ActivePort
     ActivePort --> Feature[Immutable TemporalFeatureSnapshot]
+    Feature --> Signal[Versioned statistical signal snapshot]
     MySQL --> Events[Durable reasoning source events]
     Events --> V1Queue[V1 mailbox]
     Events --> V2Queue[V2 direct leased queue]
     Feature --> V1[V1 active TypeDB reasoning]
+    Signal --> V1
     V1Queue --> V1
     V2Queue --> V2[V2 independent TypeDB reasoning]
     Feature --> V2
+    Signal --> V2
     V1 --> Delivery[Notification delivery]
     V2 -. shadow delivery forbidden .-> Health[V2 health, trace and latency evidence]
     Health --> Gate{Promotion gate}
@@ -54,6 +57,16 @@ input assembly, scoped TypeDB projection/inference, candidate construction,
 health, and delivery handoff. This is reuse of domain contracts, not a call
 into V1. A later V3 can replace any of these stages behind the same engine and
 source-event contracts.
+
+The temporal feature set and statistical model release are separate release
+coordinates. A reasoning release fingerprint includes both. The current
+`price-path-statistics-shadow-v1` release emits deterministic reference scores
+without probabilities or investment-action authority. MySQL stores immutable
+changed snapshots and one latest head per account, subject, signal type, and
+model release. TypeDB receives compact signal, model-release, feature-reference,
+and eligibility ABox concepts. Raw temporal anchors remain active until a
+calibrated production release and its TypeDB candidate rules are explicitly
+promoted.
 
 ## InvestmentReasoning Module
 

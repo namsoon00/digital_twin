@@ -196,6 +196,13 @@ class MySQLMinimalRetentionRepository:
                 "FROM `temporal_feature_snapshots` WHERE created_at < " + _cutoff_sql(),
                 (cutoffs["temporalFeatureSnapshots"],),
             ),
+            "statisticalModelSignalSnapshots": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
+                "FROM `statistical_model_signal_snapshots` snapshot WHERE created_at < " + _cutoff_sql()
+                + " AND NOT EXISTS (SELECT 1 FROM `statistical_model_signal_heads` head "
+                "WHERE head.snapshot_id = snapshot.snapshot_id)",
+                (cutoffs["statisticalModelSignalSnapshots"],),
+            ),
             "reasoningShadowJobs": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `reasoning_engine_shadow_jobs` WHERE job_status IN ('completed', 'failed', 'superseded') "
@@ -308,6 +315,11 @@ class MySQLMinimalRetentionRepository:
                     "temporalFeatureSnapshots:history",
                     self._delete_temporal_feature_snapshots,
                     (cutoffs["temporalFeatureSnapshots"],),
+                ),
+                (
+                    "statisticalModelSignalSnapshots:history",
+                    self._delete_statistical_model_signal_snapshots,
+                    (cutoffs["statisticalModelSignalSnapshots"],),
                 ),
                 (
                     "reasoningShadowJobs:terminal",
@@ -523,6 +535,31 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("temporal_feature_snapshots", deleted, bytes_deleted)
+
+    def _delete_statistical_model_signal_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        current_guard = (
+            "created_at < " + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM `statistical_model_signal_heads` head "
+            + "WHERE head.snapshot_id = statistical_model_signal_snapshots.snapshot_id)"
+        )
+        candidates = self._byte_bounded_candidates(
+            "SELECT snapshot_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `statistical_model_signal_snapshots` WHERE " + current_guard
+            + " ORDER BY created_at, snapshot_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "snapshot_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "statistical_model_signal_snapshots",
+            "snapshot_id",
+            candidates,
+            current_guard,
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("statistical_model_signal_snapshots", deleted, bytes_deleted)
 
     def _delete_reasoning_shadow_jobs(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         statuses = ("completed", "failed", "superseded")

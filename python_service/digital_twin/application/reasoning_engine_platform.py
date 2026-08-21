@@ -67,6 +67,7 @@ class ReasoningEnginePlatformService:
         from ..domain.ontology_rulebox_release_manifest import RULEBOX_RELEASE_MANIFEST_VERSION
         from ..domain.ontology_schema import ONTOLOGY_TBOX_VERSION
         from ..infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
+        from ..domain.statistical_signals import DEFAULT_PRICE_SIGNAL_RELEASE_ID
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
         v1_graph_database = str(
@@ -85,10 +86,15 @@ class ReasoningEnginePlatformService:
             rulebox_release_id=RULEBOX_RELEASE_MANIFEST_VERSION,
             prompt_release_id="investment-notification-prompt-registry-current",
             feature_set_version=TEMPORAL_FEATURE_SET_VERSION,
+            model_signal_release_id=str(
+                self.settings.get("statisticalPriceSignalReleaseId")
+                or DEFAULT_PRICE_SIGNAL_RELEASE_ID
+            ),
             source_contract_versions=(
                 "typedb-semantic-storage-v2",
                 TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "time-series-storage-contract-v1",
+                "statistical-model-signal-v1",
             ),
             runtime_revision=str(runtime.get("revision") or "unknown"),
         )

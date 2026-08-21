@@ -8,11 +8,15 @@ from typing import Dict, Iterable, List
 from .ontology_change_impact import rule_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_rule_knowledge import resolved_rule_knowledge_basis
+from .statistical_signals.rule_contracts import (
+    rule_statistical_signal_contract,
+    statistical_signal_reverse_index,
+)
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v5"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v6"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v2"
-RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v1"
+RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v2"
 
 ASSESSMENT_SCOPES = (
     "evidence-quality",
@@ -295,6 +299,7 @@ def rule_domain_manifest(
     lifecycle = _value(rule, "hypothesis_lifecycle", "hypothesisLifecycle")
     lifecycle_payload = lifecycle.to_dict() if hasattr(lifecycle, "to_dict") else dict(lifecycle or {}) if isinstance(lifecycle, dict) else {}
     knowledge_basis = resolved_rule_knowledge_basis(rule).to_dict()
+    statistical_signal_contract = rule_statistical_signal_contract(rule)
     condition_contracts = rule_condition_contracts(dependency)
     invalidation_contract = rule_invalidation_contract(condition_contracts, lifecycle_payload)
     derived_outputs = rule_derived_outputs(rule)
@@ -342,6 +347,7 @@ def rule_domain_manifest(
         "thesisFamily": knowledge_basis.get("thesisFamily"),
         "decisionEligibility": knowledge_basis.get("decisionEligibility"),
         "requiresHypothesis": bool(knowledge_basis.get("requiresHypothesis")),
+        "statisticalSignalContract": statistical_signal_contract,
         "executionStage": execution.get("executionStage"),
         "failurePolicy": execution.get("failurePolicy"),
         "costHint": execution.get("costHint"),
@@ -376,6 +382,10 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("knowledgeBasis")
         or not item.get("ruleKind")
         or not item.get("theoryFamily")
+        or (
+            item.get("ruleKind") == "predictive-hypothesis"
+            and not (item.get("statisticalSignalContract") or {}).get("signalTypes")
+        )
     ]
     conservative = [item["ruleId"] for item in manifests if item.get("conservativeRouting")]
     return {
@@ -440,11 +450,13 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
     for values in indexes.values():
         for key in list(values):
             values[key] = sorted(values[key])
+    statistical_signals = statistical_signal_reverse_index(manifests)
     fingerprint_payload = {
         "version": RULE_DEPENDENCY_INDEX_VERSION,
         "manifestVersion": ONTOLOGY_RULE_MANIFEST_VERSION,
         "dependencyContractVersion": RULE_DEPENDENCY_CONTRACT_VERSION,
         "indexes": indexes,
+        "statisticalSignals": statistical_signals,
     }
     fingerprint = hashlib.sha256(json.dumps(
         fingerprint_payload,
@@ -455,6 +467,7 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
     return {
         **fingerprint_payload,
         **indexes,
+        "statisticalSignals": statistical_signals,
         "ruleCount": len(manifests),
         "fingerprint": fingerprint,
     }

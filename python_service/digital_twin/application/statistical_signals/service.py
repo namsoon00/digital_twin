@@ -25,7 +25,7 @@ def _row_timestamp(row: Mapping[str, object]) -> str:
 
 
 def _latest_observed_at(windows: Mapping[str, object], fallback: object = "") -> str:
-    values = [str(fallback or "").strip()]
+    values = []
     for by_window in dict(windows or {}).values():
         if not isinstance(by_window, Mapping):
             continue
@@ -37,7 +37,8 @@ def _latest_observed_at(windows: Mapping[str, object], fallback: object = "") ->
                 for row in rows
                 if isinstance(row, Mapping)
             )
-    return max((value for value in values if value), default="")
+    observed = max((value for value in values if value), default="")
+    return observed or str(fallback or "").strip()
 
 
 class StatisticalSignalPipelineService:

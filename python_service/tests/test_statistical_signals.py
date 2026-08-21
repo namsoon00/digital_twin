@@ -147,6 +147,19 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual("unchanged", second["persistence"]["signalSnapshot"]["status"])
         self.assertEqual(first["signalSnapshot"].snapshot_id, second["signalSnapshot"].snapshot_id)
 
+    def test_later_worker_clock_does_not_change_same_observation_signal(self):
+        feature_store = MemoryFeatureStore()
+        signal_store = MemorySignalStore()
+        service = StatisticalSignalPipelineService(feature_store, signal_store)
+        snapshot = feature_snapshot()
+
+        first = service.run("account-1", "questdb-shadow", snapshot.windows, "2026-08-10T08:00:00Z")
+        second = service.run("account-1", "questdb-shadow", snapshot.windows, "2026-08-10T09:00:00Z")
+
+        self.assertEqual("changed", first["persistence"]["signalSnapshot"]["status"])
+        self.assertEqual("unchanged", second["persistence"]["signalSnapshot"]["status"])
+        self.assertEqual(first["signalSnapshot"].snapshot_id, second["signalSnapshot"].snapshot_id)
+
     def test_snapshot_identity_is_account_scoped_but_reuses_shared_market_material(self):
         first = score_temporal_feature_snapshot(feature_snapshot())
         second_features = TemporalFeatureSnapshot.create(

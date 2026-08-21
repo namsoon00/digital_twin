@@ -201,7 +201,17 @@ class ReasoningEnginePlatformService:
         for descriptor in descriptors:
             self.registry.upsert(descriptor)
         control = self.registry.control()
-        known = {descriptor.deployment_id for descriptor in descriptors}
+        # A rolling V2 release has two valid descriptors at once: the active
+        # historical release and the newly configured candidate.  The active
+        # row remains authoritative until promotion switches control, even
+        # though it is no longer emitted by ``descriptors()``.
+        registered = list(self.registry.list() or [])
+        known = {
+            str(row.get("deploymentId") or row.get("deployment_id") or "")
+            for row in registered
+            if str(row.get("deploymentId") or row.get("deployment_id") or "")
+        }
+        known.update(descriptor.deployment_id for descriptor in descriptors)
         active = control.active_deployment_id
         delivery = control.delivery_deployment_id
         candidate = control.candidate_deployment_id
@@ -260,6 +270,91 @@ class ReasoningEnginePlatformService:
         if candidate_id:
             response["promotionReadiness"] = self.promotion_readiness(candidate_id)
         return response
+
+    def register_v2_release(
+        self,
+        deployment_id: str,
+        release_id: str,
+        graph_database: str = "",
+    ) -> Dict[str, object]:
+        """Register a new V2 candidate without disturbing active delivery."""
+
+        clean_deployment_id = str(deployment_id or "").strip()
+        clean_release_id = str(release_id or "").strip()
+        if not clean_deployment_id or not clean_release_id:
+            return {
+                "status": "blocked",
+                "blockers": ["deployment-and-release-id-required"],
+            }
+
+        control = self.registry.control()
+        protected = {
+            str(control.active_deployment_id or ""),
+            str(control.delivery_deployment_id or ""),
+        }
+        if clean_deployment_id in protected:
+            return {
+                "status": "blocked",
+                "deploymentId": clean_deployment_id,
+                "blockers": ["candidate-must-not-rewrite-active-delivery-release"],
+            }
+
+        existing = dict(self.registry.get(clean_deployment_id) or {})
+        if existing and str(existing.get("status") or "") != "retired":
+            existing_bundle = dict(existing.get("releaseBundle") or {})
+            existing_release_id = str(
+                existing_bundle.get("release_id")
+                or existing_bundle.get("releaseId")
+                or ""
+            )
+            if existing_release_id != clean_release_id:
+                return {
+                    "status": "blocked",
+                    "deploymentId": clean_deployment_id,
+                    "blockers": ["deployment-id-already-bound-to-another-release"],
+                }
+
+        base = next(
+            descriptor
+            for descriptor in self.descriptors()
+            if str(descriptor.engine_version or "").lower() == "v2"
+        )
+        bundle = base.release_bundle
+        descriptor = ReasoningEngineDescriptor(
+            engine_family=base.engine_family,
+            engine_version=base.engine_version,
+            deployment_id=clean_deployment_id,
+            status="provisioning",
+            graph_store_binding=str(graph_database or base.graph_store_binding).strip(),
+            time_series_backend_id=base.time_series_backend_id,
+            release_bundle=EngineReleaseBundle(
+                tbox_release_id=bundle.tbox_release_id,
+                rulebox_release_id=bundle.rulebox_release_id,
+                prompt_release_id=bundle.prompt_release_id,
+                feature_set_version=bundle.feature_set_version,
+                model_signal_release_id=bundle.model_signal_release_id,
+                source_contract_versions=bundle.source_contract_versions,
+                release_id=clean_release_id,
+                runtime_contract_version=bundle.runtime_contract_version,
+                runtime_revision=bundle.runtime_revision,
+                comparison_contract_version=bundle.comparison_contract_version,
+            ),
+            capabilities=dict(base.capabilities),
+        )
+        self.registry.upsert(descriptor)
+        if existing and str(existing.get("status") or "") == "retired":
+            self.registry.transition(clean_deployment_id, "provisioning")
+        next_control = self.registry.set_control(
+            control.active_deployment_id,
+            control.delivery_deployment_id,
+            clean_deployment_id,
+            expected_version=control.version,
+        )
+        return {
+            "status": "registered",
+            "deployment": self.registry.get(clean_deployment_id),
+            "control": next_control.to_dict(),
+        }
 
     @staticmethod
     def timestamp(value: object):

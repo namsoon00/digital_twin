@@ -204,6 +204,22 @@ execution stage, lifecycle class, decision effect, disabled rules, invalid
 dependency contracts, and high-cost rules. A changed RuleBox requires a new
 deployment release rather than silently mixing evidence cohorts.
 
+Register that successor as a rolling candidate before restarting the V2
+worker:
+
+```bash
+python3 python_service/service.py reasoning-engine register-v2-release \
+  --deployment-id ontology-v2-production-r14 \
+  --release-id ontology-v2-release-r14
+```
+
+Registration keeps the current active and delivery deployment unchanged,
+moves only the candidate pointer, and persists the configured V2 deployment
+for the independent worker. The existing active descriptor remains valid in
+the control plane until the new cohort passes `candidate` and `promote` gates.
+Reusing a deployment ID that is currently active or delivery-authorized is
+rejected.
+
 ## Shadow Comparison Contract
 
 The active reasoning worker stores one bounded immutable handoff after a successful V1

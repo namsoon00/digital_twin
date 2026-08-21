@@ -1257,6 +1257,26 @@ def reasoning_engine_platform_command(args) -> int:
             "comparisons": rows,
         }, ensure_ascii=False))
         return 0
+    if args.reasoning_engine_action == "register-v2-release":
+        result = platform.register_v2_release(
+            args.deployment_id,
+            args.release_id,
+            graph_database=getattr(args, "graph_database", ""),
+        )
+        if result.get("status") == "registered":
+            deployment = dict(result.get("deployment") or {})
+            save_runtime_settings({
+                "reasoningEngineV2DeploymentId": args.deployment_id,
+                "reasoningEngineCandidateDeploymentId": args.deployment_id,
+                "reasoningEngineCandidateReleaseId": args.release_id,
+                "reasoningEngineV2TypeDbDatabase": str(
+                    deployment.get("graphStoreBinding")
+                    or configured.get("reasoningEngineV2TypeDbDatabase")
+                    or ""
+                ),
+            })
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "registered" else 2
     if args.reasoning_engine_action == "candidate":
         allow_recovered_queue_wait = bool(
             getattr(args, "allow_recovered_queue_wait", False)
@@ -2227,6 +2247,13 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_comparisons = reasoning_engine_actions.add_parser("comparisons")
     reasoning_comparisons.add_argument("--deployment-id", default="ontology-v2-shadow")
     reasoning_comparisons.add_argument("--limit", type=int, default=50)
+    reasoning_register = reasoning_engine_actions.add_parser(
+        "register-v2-release",
+        help="Register a frozen V2 candidate while keeping active delivery unchanged",
+    )
+    reasoning_register.add_argument("--deployment-id", required=True)
+    reasoning_register.add_argument("--release-id", required=True)
+    reasoning_register.add_argument("--graph-database", default="")
     for action_name in ["candidate", "promote"]:
         action = reasoning_engine_actions.add_parser(action_name)
         action.add_argument("--deployment-id", default="ontology-v2-shadow")

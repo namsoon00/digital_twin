@@ -137,6 +137,99 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             state["control"]["candidate_deployment_id"],
         )
 
+    def test_initialize_preserves_registered_active_v2_during_rolling_release(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "ontology-v2-production-r13": {
+                        "deploymentId": "ontology-v2-production-r13",
+                        "engineVersion": "v2",
+                        "status": "active",
+                    },
+                }
+                self.control_value = EngineControlState(
+                    active_deployment_id="ontology-v2-production-r13",
+                    delivery_deployment_id="ontology-v2-production-r13",
+                    candidate_deployment_id="ontology-v2-production-r14",
+                    version=8,
+                )
+
+            def upsert(self, item):
+                self.rows.setdefault(item.deployment_id, item.to_dict())
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+            def set_control(self, *args, **kwargs):
+                raise AssertionError("valid rolling control must not be reset")
+
+        registry = Registry()
+        platform = ReasoningEnginePlatformService(registry, {
+            "reasoningEngineV2DeploymentId": "ontology-v2-production-r14",
+            "reasoningEngineCandidateDeploymentId": "ontology-v2-production-r14",
+        })
+
+        state = platform.initialize()
+
+        self.assertEqual("ontology-v2-production-r13", state["control"]["active_deployment_id"])
+        self.assertEqual("ontology-v2-production-r14", state["control"]["candidate_deployment_id"])
+
+    def test_register_v2_release_keeps_active_delivery_and_moves_candidate(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "ontology-v2-production-r13": {
+                        "deploymentId": "ontology-v2-production-r13",
+                        "status": "active",
+                    }
+                }
+                self.control_value = EngineControlState(
+                    active_deployment_id="ontology-v2-production-r13",
+                    delivery_deployment_id="ontology-v2-production-r13",
+                    candidate_deployment_id="ontology-v1-active",
+                    version=11,
+                )
+
+            def upsert(self, item):
+                self.rows[item.deployment_id] = item.to_dict()
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def control(self):
+                return self.control_value
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                self.assert_expected_version = expected_version
+                self.control_value = EngineControlState(active, delivery, candidate, 12)
+                return self.control_value
+
+        registry = Registry()
+        platform = ReasoningEnginePlatformService(registry, {})
+
+        result = platform.register_v2_release(
+            "ontology-v2-production-r14",
+            "ontology-v2-release-r14",
+            graph_database="orbit-alpha-v2",
+        )
+
+        self.assertEqual("registered", result["status"])
+        self.assertEqual("ontology-v2-production-r13", result["control"]["active_deployment_id"])
+        self.assertEqual("ontology-v2-production-r13", result["control"]["delivery_deployment_id"])
+        self.assertEqual("ontology-v2-production-r14", result["control"]["candidate_deployment_id"])
+        self.assertEqual(11, registry.assert_expected_version)
+        self.assertEqual(
+            "ontology-v2-release-r14",
+            result["deployment"]["releaseBundle"]["release_id"],
+        )
+        self.assertEqual("orbit-alpha-v2", result["deployment"]["graphStoreBinding"])
+
     def test_cli_promotion_switches_control_and_active_graph_database_together(self):
         from digital_twin.infrastructure.cli import reasoning_engine_platform_command
 

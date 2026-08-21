@@ -9,7 +9,7 @@ from digital_twin.domain.investment_research import ResearchEvidence
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
-from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore
+from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore, merge_derived_evidence_payload
 from mysql_fixtures import TestResearchEvidenceStore, mysql_test_settings, reset_mysql_test_database, test_store_seed
 
 
@@ -31,6 +31,28 @@ class FixedCacheKeyExternalSignalProvider(ExternalSignalProvider):
 
 
 class ResearchEvidenceStoreTests(unittest.TestCase):
+    def test_replayed_source_payload_preserves_verified_enrichment(self):
+        previous = {
+            "articleText": "Apple reported audited revenue and guidance.",
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True, "bodyQualityIssues": []},
+            "entityResolution": {"targetSubjectConfirmed": True, "version": "news-entity-resolution-v2"},
+            "newsEligibility": {"alertEligible": True, "reasoningEligible": False},
+            "qualityGate": {"passed": True, "targetSubjectConfirmed": True},
+        }
+        replayed = {
+            "articleText": "Apple reported audited revenue and guidance.",
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            "qualityGate": {"passed": True},
+        }
+
+        merged = merge_derived_evidence_payload(previous, replayed)
+        changed = merge_derived_evidence_payload(previous, {**replayed, "articleText": "A corrected article body."})
+
+        self.assertTrue(merged["entityResolution"]["targetSubjectConfirmed"])
+        self.assertIn("bodyQualityIssues", merged["articleFacts"])
+        self.assertTrue(merged["qualityGate"]["targetSubjectConfirmed"])
+        self.assertNotIn("entityResolution", changed)
+
     @staticmethod
     def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
         return ResearchEvidence(

@@ -22,6 +22,72 @@ from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_events import insert_domain_event_with_connection
 
 
+DERIVED_EVIDENCE_PAYLOAD_KEYS = {
+    "aiAnalysis",
+    "articleAiAnalysisVersion",
+    "articleSummaryKo",
+    "articleSummaryQuality",
+    "summaryQualityState",
+    "entityResolution",
+    "qualityGate",
+    "newsEligibility",
+    "newsIntelligenceVersion",
+    "sourceIdentity",
+    "sourceProvenance",
+    "articleVerification",
+    "storyClusterId",
+    "storyRootEvidenceId",
+    "evidenceRelationship",
+    "syndicationRootEvidenceId",
+    "evidenceGovernance",
+    "claimLedger",
+    "disclosureDocumentQuality",
+    "officialDocumentState",
+    "metadataVerified",
+    "documentVerified",
+    "analysisReady",
+    "disclosureAnalysis",
+}
+
+
+def _payload_source_text(payload: Dict[str, object]) -> str:
+    values = payload if isinstance(payload, dict) else {}
+    facts = values.get("articleFacts") if isinstance(values.get("articleFacts"), dict) else {}
+    return str(
+        values.get("articleText")
+        or facts.get("bodyText")
+        or facts.get("bodyPreview")
+        or values.get("officialDocumentText")
+        or ""
+    ).strip()
+
+
+def merge_derived_evidence_payload(
+    previous_payload: Dict[str, object],
+    incoming_payload: Dict[str, object],
+) -> Dict[str, object]:
+    """Keep verified enrichment when another collector replays the same source row."""
+    previous = dict(previous_payload or {})
+    incoming = dict(incoming_payload or {})
+    previous_text = _payload_source_text(previous)
+    incoming_text = _payload_source_text(incoming)
+    if previous_text and incoming_text and previous_text != incoming_text:
+        return incoming
+    merged = dict(incoming)
+    for key in DERIVED_EVIDENCE_PAYLOAD_KEYS:
+        if merged.get(key) in (None, "", [], {}) and previous.get(key) not in (None, "", [], {}):
+            merged[key] = previous.get(key)
+    for key in ["articleFacts", "qualityGate"]:
+        previous_nested = previous.get(key) if isinstance(previous.get(key), dict) else {}
+        incoming_nested = incoming.get(key) if isinstance(incoming.get(key), dict) else {}
+        if previous_nested:
+            merged[key] = {**previous_nested, **incoming_nested}
+    for key in ["officialDocumentText", "officialDocumentPreview", "officialDocumentQuality"]:
+        if merged.get(key) in (None, "") and previous.get(key) not in (None, ""):
+            merged[key] = previous.get(key)
+    return merged
+
+
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
     def enqueue_news_analysis_work(self, jobs: Iterable[Dict[str, object]]) -> int:
         """Upsert latest-wins durable work without copying article payloads."""
@@ -355,7 +421,6 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             published_at = str(item.published_at or item.observed_at or "").strip()
             dedupe_key = "|".join([symbol, kind, source, title, str(item.url or "").strip()])[:191]
             payload = dict(item.raw_payload or {})
-            states = item.state_payload()
             previous_row = connection.execute(
                 """
                 SELECT *
@@ -365,6 +430,10 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 (evidence_id,),
             ).fetchone()
             previous = research_evidence_from_row(previous_row) if previous_row else None
+            if previous:
+                payload = merge_derived_evidence_payload(previous.raw_payload, payload)
+                item.raw_payload = payload
+            states = item.state_payload()
             previous_lifecycle_state = self._row_lifecycle_state(previous_row) if previous_row else ""
             lifecycle_changed_at = stamp if not previous_row or previous_lifecycle_state != "active" else self._row_lifecycle_changed_at(previous_row)
             payload["evidenceLifecycleState"] = "active"

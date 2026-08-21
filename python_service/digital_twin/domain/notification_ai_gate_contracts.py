@@ -104,6 +104,9 @@ class NotificationAIValidatedResponse:
     alternative_action: Dict[str, object] = field(default_factory=dict)
     follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
     unsupported_follow_ups: List[Dict[str, object]] = field(default_factory=list)
+    narrative_claims: List[Dict[str, object]] = field(default_factory=list)
+    claim_validation: Dict[str, object] = field(default_factory=dict)
+    writer_provenance: Dict[str, object] = field(default_factory=dict)
     source: str = "local"
     raw_response: str = ""
 
@@ -148,6 +151,9 @@ class NotificationAIValidatedResponse:
             "alternativeAction": "alternative_action",
             "followUpConditions": "follow_up_conditions",
             "unsupportedFollowUps": "unsupported_follow_ups",
+            "narrativeClaims": "narrative_claims",
+            "claimValidation": "claim_validation",
+            "writerProvenance": "writer_provenance",
             "rawResponse": "raw_response",
         }
         allowed = set(cls.__dataclass_fields__)
@@ -196,6 +202,9 @@ class NotificationAIValidatedResponse:
         payload["alternativeAction"] = payload.pop("alternative_action")
         payload["followUpConditions"] = payload.pop("follow_up_conditions")
         payload["unsupportedFollowUps"] = payload.pop("unsupported_follow_ups")
+        payload["narrativeClaims"] = payload.pop("narrative_claims")
+        payload["claimValidation"] = payload.pop("claim_validation")
+        payload["writerProvenance"] = payload.pop("writer_provenance")
         payload["rawResponse"] = payload.pop("raw_response")
         return payload
 

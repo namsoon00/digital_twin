@@ -25,6 +25,7 @@ from ..domain.notification_explanation import (
     build_notification_explanation_packet,
     normalize_notification_detail_level,
 )
+from ..domain.notification_narrative import response_writer_provenance
 from ..domain.notification_decision_policy import includes_portfolio_rebalance_policy
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.ontology_decision_state import (
@@ -2974,9 +2975,11 @@ def execution_telegram_message_full(context: Dict[str, object], response: Notifi
     if axis_rows:
         parts.extend(["", "<b>투자 판단 근거</b>", *axis_rows])
     evidence_rows = full_decision_evidence_rows(context, response)
-    parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
+    if evidence_rows:
+        parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
     counter_rows = full_decision_evidence_rows(context, response, counter=True)
-    parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    if counter_rows:
+        parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
     event_rows = full_event_and_catalyst_rows(context)
     parts.extend(["", "<b>주요 사건·일정</b>", *[_html_bullet(row, level) for row in event_rows]])
     news_row = compact_news_impact_html_row(context, level)
@@ -3070,19 +3073,8 @@ def execution_telegram_message_progressive(
     headline = execution_headline(context, response)
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     transition = compact_sentence_count(compact_decision_transition(context, response), 1)
-    evidence = list(compact_action_reason_rows(context, response))
-    evidence.extend(full_decision_evidence_rows(context, response))
-    next_checks = [
-        compact_sentence_count(compact_next_action_line(context, response), 1),
-        compact_invalidation_line(context, response),
-    ]
-    next_checks.extend(response.next_checks or [])
-    next_checks = [
-        str(item.get("label") or "").strip()
-        for item in response.follow_up_conditions or []
-        if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
-        and str(item.get("label") or "").strip()
-    ] + next_checks
+    evidence = full_decision_evidence_rows(context, response)
+    next_checks = list(response.next_checks or [])
     warnings = customer_data_note_rows(list(response.missing_data_impact))
     unsupported = compact_provider_unsupported_line(context)
     if unsupported:
@@ -3176,14 +3168,12 @@ def execution_telegram_message_compact_beginner(
     temporal_rows = compact_temporal_analysis_rows(context)
     if temporal_rows:
         parts.extend(["", "<b>시간축 분석</b>", *[_html_bullet(row, level) for row in temporal_rows]])
-    section_labels = compact_decision_section_labels(context, response)
-    reasons = compact_action_reason_rows(context, response)
-    if reasons:
-        parts.extend(["", "<b>" + section_labels["reason"] + "</b>", *[_html_bullet(item, level) for item in reasons]])
     evidence_rows = full_decision_evidence_rows(context, response)
-    parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
+    if evidence_rows:
+        parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in evidence_rows]])
     counter_rows = full_decision_evidence_rows(context, response, counter=True)
-    parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    if counter_rows:
+        parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
     assessment_rows = typedb_decision_assessment_rows(context)
@@ -3231,23 +3221,30 @@ def execution_telegram_message_compact_beginner(
 
 
 def compact_current_action_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
-    source = str(response.source or "").strip().lower()
+    writer = response_writer_provenance(response, context)
+    writer_kind = str(writer.get("writerKind") or "deterministic")
     comparison_incomplete = bool(
         response.hypotheses
         and str(response.hypothesis_comparison_state or "").strip().lower() != "completed"
     )
     if is_typedb_context_observation_notification(context or {}):
         marker = "[TypeDB 관찰]"
-    elif source.startswith("typedb"):
+    elif writer_kind == "typedb":
         marker = "[TypeDB 추론]"
-    elif source.startswith("local"):
-        marker = "[관계 추론]"
-    elif comparison_incomplete:
+    elif writer_kind == "ai" and comparison_incomplete:
         marker = "[AI 안전 보류]" if str(response.action or "").upper() == "HOLD" else "[AI 조건부]"
-    else:
+    elif writer_kind == "ai":
         marker = "[AI]"
+    else:
+        marker = "[시스템 요약]"
     if is_typedb_context_observation_notification(context or {}):
         return marker + " 매수·매도 행동은 변경하지 않고 관계의 다음 변화를 관찰합니다."
+    relation = relation_context_value(context or {})
+    envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
+    if str(envelope.get("status") or "").strip().upper() == "JUDGEMENT_BLOCKED" or bool(envelope.get("judgementBlocked")):
+        if is_watchlist_context(context):
+            return marker + " 신규 진입 판단을 유보하고 확인 가능한 자료가 갱신될 때까지 관심 상태를 유지합니다."
+        return marker + " 매수·매도 판단을 유보하고 확인 가능한 자료가 갱신될 때까지 현재 보유 상태를 바꾸지 않습니다."
     action = str(response.action or "").strip().upper()
     watchlist = is_watchlist_context(context)
     explicit_actions = {
@@ -4016,12 +4013,7 @@ def full_decision_evidence_rows(
             if isinstance(item, dict) and str(item.get("hypothesisId") or "") == response.selected_hypothesis_id
         ), {})
         append_unique_text(rows, selected.get("reasoning") or selected.get("claim"), 360)
-    fallback = (
-        "현재 결론을 약화하는 별도 반대 근거가 기록되지 않았습니다."
-        if counter else
-        "현재 결론에 연결된 검증 근거가 기록되지 않았습니다."
-    )
-    return rows or [fallback]
+    return rows
 
 
 def full_typedb_competing_inference_rows(
@@ -4053,12 +4045,17 @@ def full_typedb_competing_inference_rows(
     if response.precomputed_action:
         candidate = action_label_for_action(response.precomputed_action, context)
         final = action_label_for_action(response.action, context) or response.action_label
-        if envelope_status == "ENTRY_DEFERRED":
-            append_unique_text(rows, "TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 " + final, 220)
+        ai_authored = bool(response_writer_provenance(response, context).get("aiAuthored"))
+        final_action_label = "AI 최종 행동 " if ai_authored else "최종 행동 "
+        final_opinion_label = "AI 최종 의견 " if ai_authored else "최종 의견 "
+        if envelope_status == "JUDGEMENT_BLOCKED" or bool(envelope.get("judgementBlocked")):
+            append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · 최종 판단 보류", 220)
+        elif envelope_status == "ENTRY_DEFERRED":
+            append_unique_text(rows, "TypeDB 후보 상태 진입 후보·추가 확인 · " + final_action_label + final, 220)
         elif envelope_status == "ENTRY_ELIGIBLE":
-            append_unique_text(rows, "TypeDB 후보 상태 소액 진입 조건 성립 · AI 최종 행동 " + final, 220)
+            append_unique_text(rows, "TypeDB 후보 상태 소액 진입 조건 성립 · " + final_action_label + final, 220)
         else:
-            append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · AI 최종 의견 " + final, 220)
+            append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · " + final_opinion_label + final, 220)
     ordered = sorted(
         [item for item in response.hypotheses or [] if isinstance(item, dict)],
         key=lambda item: str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,

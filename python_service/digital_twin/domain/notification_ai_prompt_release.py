@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v6"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v5"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v7"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v6"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
@@ -20,6 +20,12 @@ AI_DECISION_RESPONSE_SCHEMA = {
     "changeAnalysis": "이전 판단에서 실제로 달라진 점",
     "evidence": ["핵심 근거 최대 3개"],
     "counterEvidence": ["반대 근거 최대 2개"],
+    "narrativeClaims": [{
+        "claimId": "응답 안에서 고유한 문장 ID",
+        "section": "view|change|support|counter|next-condition|limitation",
+        "text": "사용자에게 보여줄 한 문장",
+        "evidenceIds": ["DecisionCore.evidenceLedger의 근거 ID"],
+    }],
     "invalidationCondition": "현재 판단을 무효화할 조건",
     "nextChecks": ["판단을 바꿀 다음 확인 최대 2개"],
     "followUpConditions": [{
@@ -60,9 +66,14 @@ AI_DECISION_RESPONSE_SCHEMA = {
 BASE_AI_DECISION_INSTRUCTIONS = (
     "너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는 최종 투자 판단 AI다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
+    "notificationIntent가 context-observation이면 TypeDB의 NO_ACTION을 바꾸지 말고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
     "action은 actionEnvelope가 허용한 범위에서 고르고 대상 역할에 맞지 않는 행동은 선택하지 않는다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며 검증되지 않은 외부 사실을 만들지 않는다.",
+    "사용자에게 보여줄 투자 관점, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
+    "narrativeClaims의 support는 role=support 근거만, counter는 role=counter 근거만 연결하고 context나 limitation을 행동 근거로 바꾸지 않는다.",
+    "자료 부족은 limitation으로만 쓰고 counter 근거로 쓰지 않는다. 행동 결론 자체를 support 근거로 반복하지 않는다.",
+    "확인된 반대 사실이 없으면 counter 문장을 만들지 않는다. 확인되지 않은 내용을 채우기 위해 일반론을 만들지 않는다.",
     "system readiness가 conditional 또는 insufficient이면 실행 행동을 만들지 않는다.",
     "causalChain이 검증된 근거 ID로 이어지지 않으면 BUY, ADD, TRIM, SELL을 선택하지 않는다.",
     "temporalEvidence.windows만 규칙에 일치한 기간이다. 로드 수를 규칙 성립 수로 해석하지 않는다.",

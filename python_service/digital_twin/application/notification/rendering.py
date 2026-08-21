@@ -16,6 +16,11 @@ from ...domain.message_types import INVESTMENT_INSIGHT
 from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ...domain.notification_ai_gate_validation import local_validated_ai_response
 from ...domain.notification_explanation import INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
+from ...domain.notification_narrative import (
+    apply_narrative_brief_to_response,
+    build_investment_narrative_brief,
+    narrative_fingerprint,
+)
 from ...domain.notifications import NotificationJob, notification_debug_number
 from ..notification_ai_gate_message import execution_telegram_message, prepend_execution_start_badge
 
@@ -71,6 +76,14 @@ class NotificationRenderingService:
                 "renderedBytes": len(rendered.encode("utf-8")),
                 "renderedSha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
                 "detailUrl": str(context.get("notificationDetailUrl") or ""),
+                "writerProvenance": dict(context.get("notificationWriterProvenance") or {}),
+                "claimValidation": dict(context.get("notificationClaimValidation") or {}),
+                "narrativeVersion": str(
+                    (context.get("notificationNarrativeBrief") or {}).get("version") or ""
+                ),
+                "narrativeFingerprint": str(
+                    (context.get("notificationNarrativeBrief") or {}).get("fingerprint") or ""
+                ),
             }
             job.context = context
         return rendered
@@ -87,7 +100,6 @@ class NotificationRenderingService:
         validated = context.get("notificationAiValidatedResponse")
         if isinstance(validated, dict) and validated:
             response = NotificationAIValidatedResponse.from_dict(validated)
-            mode = "ai-or-typedb-validated"
         else:
             observation = typedb_context_observation_contract(context)
             response = local_validated_ai_response(
@@ -112,11 +124,28 @@ class NotificationRenderingService:
                 response.hypothesis_comparison_state = "not-required"
                 response.hypothesis_selection_source = "not-required"
                 response.decision_abstention = {}
-            mode = (
-                "typedb-context-observation"
-                if observation
-                else "typedb-deterministic"
-            )
+        narrative = build_investment_narrative_brief(context, response)
+        apply_narrative_brief_to_response(narrative, response)
+        narrative_payload = narrative.to_dict()
+        narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
+        writer = dict(narrative.writer_provenance)
+        writer_kind = str(writer.get("writerKind") or "deterministic")
+        mode = (
+            "typedb-context-observation"
+            if typedb_context_observation_contract(context)
+            else writer_kind + "-evidence-narrative"
+        )
+        context.update({
+            "validatedDecisionResponse": response.to_dict(),
+            "notificationNarrativeBrief": narrative_payload,
+            "notificationWriterProvenance": writer,
+            "notificationClaimValidation": dict(response.claim_validation or {}),
+        })
+        if bool(writer.get("aiAuthored")):
+            context["notificationAiValidatedResponse"] = response.to_dict()
+        else:
+            context.pop("notificationAiValidatedResponse", None)
+            context["notificationInferenceResponse"] = response.to_dict()
         rendered = prepend_execution_start_badge(
             execution_telegram_message(context, response),
             context,

@@ -111,7 +111,7 @@ class NotificationExplanationTests(unittest.TestCase):
         message = renderer.render(job)
 
         self.assertIn("<b>지금 행동</b>", message)
-        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("<b>TypeDB 핵심 추론</b>", message)
         self.assertIn("$226.17", message)
         self.assertNotIn("수익률 0%", message)
         self.assertNotIn("<b>관계 규칙</b>", message)
@@ -119,7 +119,9 @@ class NotificationExplanationTests(unittest.TestCase):
             "investment-notification-presentation-v1",
             job.context["notificationPresentationAudit"]["version"],
         )
-        self.assertEqual("typedb-deterministic", job.context["notificationPresentationMode"])
+        self.assertEqual("typedb-evidence-narrative", job.context["notificationPresentationMode"])
+        self.assertEqual("typedb", job.context["notificationWriterProvenance"]["writerKind"])
+        self.assertNotIn("notificationAiValidatedResponse", job.context)
 
     def test_operational_message_keeps_operational_presentation_audit(self):
         job = NotificationJob.create(

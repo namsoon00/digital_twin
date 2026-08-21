@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List, Tuple
 
+from .notification_narrative import build_decision_core_evidence_ledger
 from .prompt_evidence_admission import assess_prompt_evidence
 
 
@@ -572,6 +573,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     assessment = _mapping(brief.get("assessmentBundle"))
     core = {
         "schemaVersion": AI_DECISION_CORE_VERSION,
+        "notificationIntent": brief.get("notificationIntent"),
         "question": _selected(brief.get("question"), ("questionId", "intent", "horizon", "text")),
         "subject": _selected(brief.get("subject"), ("symbol", "name", "market", "targetRole", "referenceDate")),
         "decision": {
@@ -607,6 +609,15 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         "policyScope": _selected(brief.get("decisionPolicyScope"), ("name", "portfolioRebalancePolicy")),
         "portfolioPolicy": _portfolio_policy(brief),
     }
+    core["evidenceLedger"] = build_decision_core_evidence_ledger(
+        facts=facts,
+        rules=rules,
+        hypotheses=hypotheses,
+        temporal=temporal,
+        external_evidence=external_evidence,
+        data_limits=core.get("dataLimits") or [],
+        reference_date=_mapping(brief.get("subject")).get("referenceDate"),
+    )
     core = {key: value for key, value in core.items() if value not in (None, "", [], {})}
     route_audit = {
         "version": AI_DECISION_CONTEXT_ROUTE_VERSION,
@@ -626,6 +637,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             "companyEvidence": bool(company),
             "companyReferenceOnly": bool(company_reference),
             "continuityDelta": bool(core.get("continuityDelta")),
+            "evidenceLedgerCount": len(core.get("evidenceLedger") or []),
         },
         "excluded": {
             "unmatchedTemporalWindowCount": max(0, len(current.get("temporalWindows") or []) - len(temporal.get("windows") or [])),
@@ -651,6 +663,22 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     if _json_bytes(fitted) <= budget:
         return fitted
     fitted.pop("background", None)
+    compact_routing_audit = _mapping(fitted.get("routingAudit"))
+    fitted["routingAudit"] = {
+        "version": compact_routing_audit.get("version"),
+        "status": "reference-trimmed",
+    }
+    fitted["evidenceLedger"] = [
+        _selected(
+            item,
+            (
+                "evidenceId", "role", "kind", "label", "source", "sourceAsOf",
+                "freshness", "ruleIds", "hypothesisIds", "judgementEligible",
+            ),
+        )
+        for item in list(fitted.get("evidenceLedger") or [])[:10]
+        if isinstance(item, dict)
+    ]
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "reference-trimmed"
         return fitted
@@ -663,6 +691,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         if isinstance(rule, dict):
             rule["evidence"] = list(rule.get("evidence") or [])[:1]
     fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
+    fitted["evidenceLedger"] = list(fitted.get("evidenceLedger") or [])[:6]
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "reference-trimmed"
         return fitted

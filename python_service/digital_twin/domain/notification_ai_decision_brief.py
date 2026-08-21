@@ -345,6 +345,12 @@ def notification_ai_decision_brief(
         "schemaVersion": AI_DECISION_BRIEF_VERSION,
         "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
         "messageType": message_type,
+        "notificationIntent": (
+            "context-observation"
+            if str(merged.get("notificationDecisionMode") or "") == "typedb-context-observation"
+            or bool(merged.get("contextObservationDecision"))
+            else "investment-decision"
+        ),
         "decisionPolicyScope": policy_scope,
         "executionProfile": execution_profile,
         "question": relation.get("investmentQuestion") or {
@@ -1628,6 +1634,7 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
         "schemaVersion": critical.get("schemaVersion"),
         "decisionContractVersion": critical.get("decisionContractVersion"),
         "messageType": critical.get("messageType"),
+        "notificationIntent": critical.get("notificationIntent"),
         "decisionPolicyScope": _selected_fields(
             critical.get("decisionPolicyScope"),
             ("name", "portfolioRebalancePolicy", "reason"),

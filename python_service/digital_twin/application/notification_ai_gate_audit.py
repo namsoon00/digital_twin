@@ -30,6 +30,12 @@ from ..domain.notification_ai_gate_validation import (
     reconcile_change_analysis_with_decision_history,
 )
 from ..domain.notification_icon_policy import investment_notification_icon
+from ..domain.notification_narrative import (
+    apply_narrative_brief_to_response,
+    build_investment_narrative_brief,
+    narrative_fingerprint,
+    response_writer_provenance,
+)
 
 
 def _dedupe_sentences(value: object) -> str:
@@ -91,9 +97,12 @@ def notification_ai_validation_assertions(
     target = str(context.get("displayTarget") or context.get("target") or context.get("title") or message_type)
     reference = response.reference_date or reference_date(context)
     assertion_key = message_type + ":" + target + ":" + reference
-    validation_id = _ontology_id("ai-validation", assertion_key)
-    opinion_id = _ontology_id("validated-opinion", assertion_key + ":" + response.action)
-    audit_id = _ontology_id("ai-judgment-audit", assertion_key + ":" + response.action)
+    writer = response_writer_provenance(response, context)
+    ai_authored = bool(writer.get("aiAuthored"))
+    ai_decision_authored = bool(ai_authored and writer.get("decisionOwner") == "ai")
+    validation_id = _ontology_id("ai-validation" if ai_decision_authored else "presentation-validation", assertion_key)
+    opinion_id = _ontology_id("validated-opinion" if ai_decision_authored else "inference-opinion", assertion_key + ":" + response.action)
+    audit_id = _ontology_id("ai-judgment-audit" if ai_decision_authored else "inference-presentation-audit", assertion_key + ":" + response.action)
     dispatch_id = _ontology_id("notification-dispatch", assertion_key)
     delivery_profile = delivery_profile_from_context(context)
     delivery_id = _ontology_id("message-delivery-profile", delivery_profile.get("level") or "absoluteBeginner")
@@ -106,18 +115,19 @@ def notification_ai_validation_assertions(
         {
             "id": validation_id,
             "ontologyBox": "ABox",
-            "tboxClass": "AIValidation",
+            "tboxClass": "AIValidation" if ai_decision_authored else "ValidationAssessment",
             "engineVersion": NOTIFICATION_AI_GATE_VERSION,
             "decisionMode": AI_DECISION_MODE,
             "messageType": message_type,
             "target": target,
             "referenceDate": reference,
             "validationWarnings": list(response.validation_warnings or []),
+            "writerProvenance": writer,
         },
         {
             "id": opinion_id,
             "ontologyBox": "ABox",
-            "tboxClass": "ValidatedOpinion",
+            "tboxClass": "ValidatedOpinion" if ai_decision_authored else "InvestmentOpinion",
             "action": response.action,
             "actionLabel": response.action_label,
             "validationState": response.validation_state,
@@ -128,6 +138,7 @@ def notification_ai_validation_assertions(
             "reviewLabel": response.review_label,
             "decisionMode": AI_DECISION_MODE,
             "validatedOpinion": dict(payload or {}),
+            "writerProvenance": writer,
         },
         {
             "id": dispatch_id,
@@ -139,7 +150,7 @@ def notification_ai_validation_assertions(
         {
             "id": audit_id,
             "ontologyBox": "ABox",
-            "tboxClass": "AIJudgmentAudit",
+            "tboxClass": "AIJudgmentAudit" if ai_decision_authored else "ValidationAssessment",
             "decisionMode": AI_DECISION_MODE,
             "precomputedAction": response.precomputed_action,
             "aiAction": response.action,
@@ -148,6 +159,7 @@ def notification_ai_validation_assertions(
             "dataState": response.data_state,
             "reviewLevel": response.review_level,
             "validationReasons": list(response.validation_reasons or []),
+            "writerProvenance": writer,
         },
         {
             "id": delivery_id,
@@ -162,11 +174,14 @@ def notification_ai_validation_assertions(
     ]
     relations = [
         {"source": validation_id, "target": opinion_id, "relationType": "VALIDATES_OPINION"},
-        {"source": validation_id, "target": opinion_id, "relationType": "PRODUCES_AI_DECISION"},
         {"source": validation_id, "target": audit_id, "relationType": "HAS_DECISION_AUDIT"},
         {"source": validation_id, "target": dispatch_id, "relationType": "PRODUCES_VALIDATED_MESSAGE"},
         {"source": dispatch_id, "target": delivery_id, "relationType": "USES_MESSAGE_DELIVERY_PROFILE"},
     ]
+    if ai_decision_authored:
+        relations.append({"source": validation_id, "target": opinion_id, "relationType": "PRODUCES_AI_DECISION"})
+    else:
+        relations.append({"source": validation_id, "target": opinion_id, "relationType": "VALIDATES_DATA"})
     if active_opinion:
         active_id = _ontology_id("active-opinion", target)
         entities.append({
@@ -207,12 +222,14 @@ def notification_ai_decision_audit(
     source_urls = list(response.source_urls or [])
     source_labels = source_labels_from_context(context or {}, payload)
     guide_quality = strategy_guide_quality(context or {}, response)
+    writer = response_writer_provenance(response, context)
     return {
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
         "decisionMode": AI_DECISION_MODE,
-        "finalDecisionOwner": "aiResponse",
+        "finalDecisionOwner": "aiResponse" if writer.get("decisionOwner") == "ai" else "typedbDecisionSynthesis",
         "source": response.source,
-        "fallbackUsed": "fallback" in str(response.source or "").lower(),
+        "fallbackUsed": bool(writer.get("fallbackUsed")),
+        "writerProvenance": writer,
         "precomputedAction": response.precomputed_action,
         "aiAction": response.action,
         "disagreement": bool(response.disagreement_reason),
@@ -267,6 +284,10 @@ def context_with_validated_ai_response(
         warning = "저장된 이전 AI 판단과 맞지 않는 첫 판단 표현을 결정 이력 기준으로 보정했습니다."
         if warning not in response.validation_warnings:
             response.validation_warnings.append(warning)
+    narrative_brief = build_investment_narrative_brief(enriched, response)
+    apply_narrative_brief_to_response(narrative_brief, response)
+    narrative_payload = narrative_brief.to_dict()
+    narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
     payload = response.to_dict()
     guide_quality = strategy_guide_quality(enriched, response)
     payload["strategyGuideQuality"] = guide_quality
@@ -278,16 +299,23 @@ def context_with_validated_ai_response(
         if isinstance(item, dict) and item.get("tboxClass") == "AIJudgmentAudit"
     ]
     enriched["notificationAiValidatedResponse"] = payload
+    enriched["validatedDecisionResponse"] = payload
+    enriched["notificationNarrativeBrief"] = narrative_payload
+    enriched["notificationWriterProvenance"] = dict(narrative_brief.writer_provenance)
+    enriched["notificationClaimValidation"] = dict(response.claim_validation or {})
     enriched = context_with_investment_notification_state(enriched)
     icon = investment_notification_icon(enriched.get("messageType") or enriched.get("rule") or "", enriched)
     if icon:
         enriched["headline"] = execution_headline(enriched, response)
         enriched["titleIcon"] = icon
     enriched["notificationAiDecisionAudit"] = audit
+    writer = dict(narrative_brief.writer_provenance)
+    ai_authored = bool(writer.get("aiAuthored"))
+    ai_decision_authored = bool(ai_authored and writer.get("decisionOwner") == "ai")
     enriched["notificationAiGate"] = {
         "enabled": True,
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
-        "decisionMode": AI_DECISION_MODE,
+        "decisionMode": AI_DECISION_MODE if ai_decision_authored else "typedb-evidence-presentation",
         "source": response.source,
         "validationWarnings": list(response.validation_warnings or []),
         "validationState": response.validation_state,
@@ -296,14 +324,16 @@ def context_with_validated_ai_response(
         "messageDeliveryProfile": delivery_profile_from_context(enriched),
         "auditIds": audit_entity_ids,
         "strategyGuideQuality": guide_quality,
+        "writerProvenance": writer,
+        "claimValidation": dict(response.claim_validation or {}),
     }
-    enriched["ontologyAiValidation"] = {
+    validation_payload = {
         "ontologyBox": "ABox",
-        "tboxClass": "AIValidation",
+        "tboxClass": "AIValidation" if ai_decision_authored else "ValidationAssessment",
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
-        "decisionMode": AI_DECISION_MODE,
+        "decisionMode": AI_DECISION_MODE if ai_decision_authored else "typedb-evidence-presentation",
         "validates": ["activeInvestmentOpinion", "executionPlan", "missingData"],
-        "finalDecisionOwner": "aiResponse",
+        "finalDecisionOwner": "aiResponse" if ai_decision_authored else "typedbDecisionSynthesis",
         "validatedOpinion": payload,
         "decisionAudit": {
             "precomputedAction": response.precomputed_action,
@@ -318,7 +348,15 @@ def context_with_validated_ai_response(
         "strategyGuideQuality": guide_quality,
         "producesValidatedMessage": True,
         "assertionIds": [item.get("id") for item in assertions.get("entities", [])],
+        "writerProvenance": writer,
+        "claimValidation": dict(response.claim_validation or {}),
     }
+    if ai_decision_authored:
+        enriched["ontologyAiValidation"] = validation_payload
+        enriched.pop("ontologyPresentationValidation", None)
+    else:
+        enriched["ontologyPresentationValidation"] = validation_payload
+        enriched.pop("ontologyAiValidation", None)
     enriched["ontologyAssertions"] = assertions
     lines = [
         "판단: " + response.action_label + " · " + response.review_label,
@@ -350,14 +388,22 @@ def context_with_validated_ai_response(
         lines.append("다음 확인: " + next_action)
     if response.missing_data_impact:
         lines.append("부족 데이터: " + " / ".join(response.missing_data_impact[:3]))
-    lines.append("분석출처: " + AI_DECISION_SOURCE_LABEL + " / " + response.source)
-    enriched["notificationAiOpinion"] = {
+    source_label = AI_DECISION_SOURCE_LABEL if ai_authored else str(writer.get("label") or "TypeDB 관계 해석")
+    lines.append("분석출처: " + source_label + " / " + response.source)
+    opinion_payload = {
         "engineVersion": NOTIFICATION_AI_GATE_VERSION,
-        "source": AI_DECISION_SOURCE_LABEL,
+        "source": source_label,
         "messageType": enriched.get("messageType") or enriched.get("rule") or "",
         "lines": lines,
         "validatedResponse": payload,
+        "writerProvenance": writer,
     }
+    if ai_authored:
+        enriched["notificationAiOpinion"] = opinion_payload
+        enriched.pop("notificationInferenceOpinion", None)
+    else:
+        enriched["notificationInferenceOpinion"] = opinion_payload
+        enriched.pop("notificationAiOpinion", None)
     telegram_message = prepend_execution_start_badge(execution_telegram_message(enriched, response), enriched)
     transition_line = investment_notification_transition_line(enriched)
     if transition_line:

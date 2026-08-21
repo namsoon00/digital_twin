@@ -18,6 +18,7 @@ from digital_twin.application.notification.workflow import (
     NotificationQueueRunner,
 )
 from digital_twin.application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
+from digital_twin.application.ai_inference_queue_service import NotificationAIRequestEnqueuer
 from digital_twin.domain.context_observation_notifications import (
     CONTEXT_OBSERVATION_DECISION_MODE,
     typedb_context_observation_contract,
@@ -371,6 +372,7 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual("cryptoOntologySignal", event.rule)
         self.assertEqual("reference-only", event.metadata["validationState"])
         self.assertFalse(event.metadata["requiresAiJudgement"])
+        self.assertTrue(contract["requiresAiNarrative"])
         self.assertNotIn("행동 대안", "\n".join(event.lines))
         insight = build_investment_insight_events_by_snapshot([snapshot], [event])[0]
         self.assertEqual(["cryptoOntologySignal"], insight.metadata["sourceSignalTypes"])
@@ -413,7 +415,7 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual(CASE_PUBLISHED, published.stage)
         self.assertTrue(published.final_decision.published)
 
-    def test_reference_only_context_observation_skips_all_ai_enrichment(self):
+    def test_reference_only_context_observation_queues_ai_narrative_without_inline_judgement(self):
         context = {
             "messageType": "investmentInsight",
             "ontologyRelationContext": crypto_context_observation_relation(),
@@ -433,17 +435,13 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             def enqueue_notification_research_context(self, *_args, **_kwargs):
                 raise AssertionError("Hypothesis research must not run for a reference-only observation")
 
-        class FailTimeSeriesStore:
-            def load_temporal_windows(self, *_args, **_kwargs):
-                raise AssertionError("AI time-series loading must not run for a reference-only observation")
-
         NotificationAIOpinionEnricher({})(job)
         NotificationAIValidatedGateEnricher(
             FailReviewer(),
             {"notificationAiGateEnabled": "1"},
         )(job)
         NotificationHypothesisResearchEnricher(FailResearch(), {})(job)
-        NotificationAIDecisionContextEnricher(FailTimeSeriesStore(), {})(job)
+        NotificationAIDecisionContextEnricher(None, {})(job)
         runner = NotificationQueueRunner(
             queue=SimpleNamespace(),
             account_repository=None,
@@ -452,10 +450,13 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             ai_request_enqueuer=object(),
         )
 
-        self.assertFalse(runner.should_defer_ai_inference(job))
+        self.assertTrue(runner.should_defer_ai_inference(job))
         self.assertTrue(runner.apply_final_ai_delivery_gate(job))
         self.assertNotIn("notificationAiValidatedResponse", job.context)
-        self.assertNotIn("notificationAiInternalData", job.context)
+        self.assertEqual(
+            "unavailable",
+            job.context["notificationAiInternalData"]["audit"]["status"],
+        )
 
         forged = NotificationJob.create(
             "forged context",
@@ -467,6 +468,46 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             },
         )
         self.assertTrue(runner.should_defer_ai_inference(forged))
+
+    def test_context_observation_ai_request_does_not_reopen_typedb_action_lifecycle(self):
+        job = NotificationJob.create(
+            "crypto observation",
+            account_id="account:1",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "ontologyRelationContext": crypto_context_observation_relation(),
+                "notificationDecisionMode": CONTEXT_OBSERVATION_DECISION_MODE,
+                "investmentReasoningCaseId": "reasoning-case:observation",
+            },
+        )
+
+        class Queue:
+            request = None
+
+            def enqueue(self, _job, request):
+                self.request = request
+                return {"status": "awaiting-ai", "requestId": request.request_id}
+
+        class NoActionLifecycle:
+            def capture_ai_context(self, *_args, **_kwargs):
+                raise AssertionError("narrative-only request must not recapture action hypotheses")
+
+            def ai_queued(self, *_args, **_kwargs):
+                raise AssertionError("narrative-only request must not reopen the action lifecycle")
+
+        queue = Queue()
+        enqueuer = NotificationAIRequestEnqueuer(
+            queue,
+            settings={},
+            reasoning_orchestrator=NoActionLifecycle(),
+        )
+
+        outcome = enqueuer.enqueue(job)
+
+        self.assertEqual("awaiting-ai", outcome["status"])
+        self.assertIsNotNone(queue.request)
+        self.assertEqual(CONTEXT_OBSERVATION_DECISION_MODE, queue.request.context["notificationDecisionMode"])
 
     def test_typedb_relation_context_becomes_auditable_action_alternatives(self):
         relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]

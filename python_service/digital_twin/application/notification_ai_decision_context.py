@@ -8,7 +8,6 @@ from copy import deepcopy
 from typing import Dict, List
 
 from ..domain.ai_inference_queue import notification_ai_subject
-from ..domain.context_observation_notifications import is_typedb_context_observation_notification
 from ..domain.investment_brain import canonical_investment_timestamp
 from ..domain.market_data import number
 from ..domain.market_time_series import market_session_date
@@ -118,8 +117,6 @@ class NotificationAIDecisionContextEnricher:
         if getattr(job, "message_type", "") != INVESTMENT_INSIGHT or not self.enabled():
             return
         context = dict(getattr(job, "context", {}) or {})
-        if is_typedb_context_observation_notification(context):
-            return
         if context.get("notificationAiInternalData"):
             return
         subject = notification_ai_subject(context)

@@ -131,6 +131,7 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
         "decisionEligibility": "reference-only",
         "requiresHypothesis": False,
         "requiresAiJudgement": False,
+        "requiresAiNarrative": True,
         "action": "NO_ACTION",
         "validationState": "reference-only",
         "symbol": _text(subject.get("symbol") or facts.get("symbol")).upper(),

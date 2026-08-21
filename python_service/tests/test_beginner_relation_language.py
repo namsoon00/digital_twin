@@ -283,6 +283,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
                 "검증 3",
             ],
             source="test AI",
+            raw_response='{"action":"HOLD"}',
         )
 
         message = execution_telegram_message(
@@ -298,7 +299,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         for expected in [
             "<b>지금 행동</b>",
             "<b>이번 변화</b>",
-            "<b>판단 근거</b>",
+            "<b>핵심 근거</b>",
             "<b>다음 행동</b>",
             "<b>판단 변경 조건</b>",
             "근거 1",
@@ -333,6 +334,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             next_checks=["확인 1", "확인 2", "확인 3", "확인 4"],
             missing_data_impact=["부족 1", "부족 2", "부족 3", "부족 4", "부족 5"],
             source="test AI",
+            raw_response='{"action":"HOLD"}',
         )
 
         message = execution_telegram_message(
@@ -345,7 +347,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         )
 
         self.assertIn("<b>지금 행동</b>", message)
-        self.assertIn("<b>판단 근거</b>", message)
+        self.assertIn("<b>핵심 근거</b>", message)
         self.assertIn("<b>다음 행동</b>", message)
         self.assertIn("근거 1", message)
         self.assertIn("근거 2", message)
@@ -517,8 +519,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             response,
         )
 
-        self.assertIn("<b>판단 근거</b>", message)
-        self.assertIn("20일 평균보다 12.9%", message)
+        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("20일 평균보다 낮음", message)
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("점수 안내", message)
         self.assertNotIn("/100점", message)
@@ -633,7 +635,7 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
         self.assertNotIn("<b>밸류에이션</b>", message)
         self.assertIn("99,000원", message)
         self.assertNotIn("<b>자료 상태</b>", message)
-        self.assertIn("사용자 적정가 기준 안전마진", message)
+        self.assertIn("검증 적정가 비교", message)
         self.assertNotIn("대입값", message)
 
     def test_company_valuation_is_reference_without_active_company_rule(self):
@@ -913,16 +915,8 @@ class BeginnerRelationLanguageTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("<b>관계 판단 쉽게 보기</b>", message)
-        self.assertIn("관계 분석은 SK하이닉스", message)
-        self.assertIn("뉴스 리스크 대응 검토", message)
-        self.assertIn("관계 판단 쉽게 보기", message)
-        self.assertIn("뉴스나 공시 때문에 보유 이유를 다시 확인", message)
-        self.assertIn("매도 확정은 아닙니다", message)
-        self.assertIn("추론은 SK하이닉스의 현재 데이터가", message)
-        self.assertIn("보유 종목이고 공시/신고 이벤트", message)
-        self.assertIn("알림으로 연결하는 방식입니다", message)
-        self.assertIn("새 공시나 신고가 있어, 원문 내용과 다음 가격 반응을 함께 확인해야 합니다.", message)
+        self.assertEqual("<b>[관찰] 🛡️ SK하이닉스: 분할축소 우선 점검</b>", message)
+        self.assertNotIn("관계 판단 쉽게 보기", message)
         self.assertNotIn("습니다입니다", message)
         self.assertNotIn("SK하이닉스을", message)
         self.assertNotIn("엔진", message)

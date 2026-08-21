@@ -296,7 +296,7 @@ class NotificationReverseReasoningTests(unittest.TestCase):
             'renderNotificationReasoningStep(1, "원천 데이터·ABox 사실"',
             'renderNotificationReasoningStep(2, "TypeDB 규칙 실행"',
             'renderNotificationReasoningStep(3, "경쟁 가설 구성"',
-            'renderNotificationReasoningStep(4, "AI 비교·최종 판단"',
+            'renderNotificationReasoningStep(4, decisionStepTitle',
             'renderNotificationReasoningStep(5, "판단·실행·성과 수명주기"',
             'renderNotificationReasoningStep(6, "알림 발송"',
         ]

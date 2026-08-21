@@ -314,8 +314,8 @@ class NotificationReasoningReportTests(unittest.TestCase):
         message = render_notification(NotificationTemplate.default(INVESTMENT_INSIGHT), enriched)
 
         for heading in [
-            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "판단 근거",
-            "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
+            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석",
+            "핵심 근거", "TypeDB 경쟁 추론", "회사 가치",
             "주요 사건·일정", "다음 행동", "판단 변경 조건",
             "판단에서 제외한 정보", "뉴스 영향", "판단 이력",
         ]:
@@ -327,7 +327,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertNotIn("decision-episode:mstr:previous", message)
         self.assertNotIn("<b>자료 상태</b>", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
-        self.assertIn("[AI]", message)
+        self.assertIn("[시스템 요약]", message)
         self.assertNotIn("판단에 필요한 자료 있음", message)
         self.assertNotIn("/100점", message)
         self.assertNotIn("점수 안내", message)

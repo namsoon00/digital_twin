@@ -3,7 +3,10 @@ from datetime import datetime
 from typing import Callable, Dict, List
 from zoneinfo import ZoneInfo
 
-from ...domain.context_observation_notifications import is_typedb_context_observation_notification
+from ...domain.context_observation_notifications import (
+    is_typedb_context_observation_notification,
+    typedb_context_observation_contract,
+)
 from ...domain.disclosure_analysis import local_disclosure_analysis
 from ...domain.investment_brain import decision_episode_from_context
 from ...domain.investment_flow import INVESTMENT_FLOW_VERSION, investment_flow_id
@@ -570,7 +573,8 @@ class NotificationQueueRunner:
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:
             return False
-        if is_typedb_context_observation_notification(job.context or {}):
+        observation = typedb_context_observation_contract(job.context or {})
+        if observation and not bool(observation.get("requiresAiNarrative")):
             return False
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
             return False

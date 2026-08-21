@@ -211,11 +211,15 @@ def add_governed_claim_concepts(
             continue
         statement = str(claim.get("statement") or getattr(item, "summary", "") or getattr(item, "title", "") or evidence_key)
         state = str(claim.get("state") or "reported")
-        eligible = bool(claim.get("investmentJudgmentEligible") and parent_reasoning_eligible)
+        claim_verified = bool(claim.get("investmentJudgmentEligible"))
+        eligible = bool(claim_verified and parent_reasoning_eligible)
         claim_reasons = list(claim.get("reasons") or [])
         if claim.get("investmentJudgmentEligible") and not parent_reasoning_eligible:
             claim_reasons = list(dict.fromkeys(claim_reasons + ["parent-evidence-reasoning-blocked"]))
-        tbox_class = "VerifiedClaim" if eligible else "DisputedClaim" if state == "conflicted" else "RejectedClaim" if state in {"rejected", "expired", "superseded"} else "ExtractedClaim"
+        # Verification and action admission are separate facts. A claim can be
+        # verified while a stale parent document or market-specific coverage
+        # rule prevents it from affecting the current investment decision.
+        tbox_class = "VerifiedClaim" if claim_verified else "DisputedClaim" if state == "conflicted" else "RejectedClaim" if state in {"rejected", "expired", "superseded"} else "ExtractedClaim"
         claim_id = add_entity(graph, "verified-claim", claim_key, statement, {
             "tboxClass": tbox_class,
             "verificationStatus": claim.get("verificationStatus"),

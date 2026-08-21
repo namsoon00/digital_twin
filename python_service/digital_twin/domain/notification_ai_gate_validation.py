@@ -51,6 +51,7 @@ from .notification_ai_gate_text import (
     user_friendly_ai_text,
 )
 from .notification_ai_context import is_watchlist_context, target_position_role
+from .notification_narrative import normalize_narrative_claims, response_writer_provenance
 from .ontology_decision_state import (
     ACTION_ENVELOPE_STATUS_LABELS,
     DATA_STATE_LABELS,
@@ -2229,6 +2230,7 @@ def validated_response_from_payload(
         "notification-ai-decision-contract-v3",
         "notification-ai-decision-contract-v4",
         "notification-ai-decision-contract-v5",
+        "notification-ai-decision-contract-v6",
     }
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready" or not supported_causal_path
@@ -2359,6 +2361,21 @@ def validated_response_from_payload(
         relation_facts,
         str(subject.get("symbol") or context.get("rawSymbol") or context.get("symbol") or ""),
     )
+    provenance = response_writer_provenance(
+        type("ResponseSource", (), {"source": source, "raw_response": raw_response})(),
+        context,
+    )
+    narrative_claims, claim_validation = normalize_narrative_claims(
+        context,
+        payload,
+        writer_kind=str(provenance.get("writerKind") or "deterministic"),
+    )
+    if claim_validation.get("rejectedClaimCount"):
+        warnings.append(
+            "근거 ID 또는 역할 계약을 통과하지 못한 AI 문장 "
+            + str(claim_validation.get("rejectedClaimCount"))
+            + "개를 알림에서 제외했습니다."
+        )
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
@@ -2400,6 +2417,9 @@ def validated_response_from_payload(
         alternative_action=alternative_action,
         follow_up_conditions=follow_up_conditions,
         unsupported_follow_ups=unsupported_follow_ups,
+        narrative_claims=narrative_claims,
+        claim_validation=claim_validation,
+        writer_provenance=provenance,
         source=source,
         raw_response=raw_response,
     )

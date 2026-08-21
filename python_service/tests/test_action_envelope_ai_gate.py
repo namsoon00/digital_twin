@@ -455,7 +455,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("관계 분석에서는 소액 진입 검토 후보가 성립했지만 최종 행동은 관심 유지입니다.", message)
+        self.assertIn("TypeDB 후보 상태 소액 진입 조건 성립 · 최종 행동 관심 유지", message)
         self.assertIn("거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.", message)
 
     def test_deferred_entry_message_separates_candidate_from_final_hold(self):
@@ -522,13 +522,14 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             missing_data_impact=["웹 상세에서 확인할 체결·호가 자료가 없습니다."],
             next_checks=["거래 확인이 보강되면 다시 판단합니다."],
             source="test AI",
+            raw_response='{"action":"HOLD"}',
         )
 
         message = execution_telegram_message(context, response)
 
         self.assertIn("[AI] 지금은 매수하지 않고 관심종목으로 유지합니다.", message)
-        self.assertIn("<b>후보와 최종 판단</b>", message)
-        self.assertIn("진입 후보는 성립했지만 추가 확인 조건을 반영한 최종 행동은 관심 유지입니다.", message)
+        self.assertIn("<b>TypeDB 경쟁 추론</b>", message)
+        self.assertIn("TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
         self.assertIn("<b>핵심 근거</b>", message)
         self.assertIn("<b>반대 근거</b>", message)
         self.assertLess(
@@ -651,12 +652,13 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             next_checks=["정규장 거래량이 유지되는지 확인"],
             reference_date="2026-07-27 10:00 KST",
             source="test AI",
+            raw_response='{"action":"BUY"}',
         )
 
         message = execution_telegram_message(context, response)
 
         for heading in [
-            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석", "바뀐 이유",
+            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석",
             "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
             "주요 사건·일정", "다음 행동", "판단 변경 조건",
             "판단에서 제외한 정보", "뉴스 영향", "판단 이력",
@@ -713,7 +715,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             local_validated_ai_response(context, source="local fallback"),
         )
 
-        self.assertIn("[관계 추론]", message)
+        self.assertIn("[시스템 요약]", message)
         self.assertNotIn("[AI]", message)
 
     def test_typedb_fallback_is_labeled_as_typedb_not_ai(self):
@@ -815,7 +817,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         self.assertIn("미국 10년 금리 4.71%", message)
         self.assertIn("미국 2년 금리 4.37%", message)
-        self.assertIn("Apple은 금리 변화의 영향을 받는 종목으로 분류돼", message)
+        self.assertIn("금리 부담이 완화되고", message)
         self.assertIn("Apple 가격이 5일선·20일선·60일선 위를 유지하는지", message)
         self.assertIn("진입 제한을 완화할 조건", message)
         for internal in ["거시 부담 관계", "진입 지지 관계", "원시"]:
@@ -854,7 +856,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
-        self.assertIn("진입 시점과 금액을 보수적으로", message)
+        self.assertIn("매수로 바꿀 만큼의 진입 근거가 아직 확인되지 않았습니다.", message)
         self.assertNotIn("ENTRY_OBSERVING", message)
         self.assertIn("TypeDB 경쟁 추론", message)
 
@@ -939,7 +941,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             "미국 10년 금리 4.71%가 유지되어 거시 부담이 확인됐습니다.",
             user_friendly_ai_text(response.evidence[0]),
         )
-        self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", message)
+        self.assertNotIn("기존 뉴스·조사 내용을 새 판단 근거처럼 강화", message)
         self.assertNotIn("뉴스 영향", message)
         for internal in ["entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, message)
@@ -987,7 +989,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = job.context["telegramMessage"]
         self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
-        self.assertIn("새 뉴스·조사 근거가 아직 갱신되지 않아 기존 정보만 참고합니다.", message)
+        self.assertNotIn("기존 뉴스·조사 내용을 새 판단 근거처럼 강화", message)
         for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, message)
 
@@ -1052,6 +1054,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             hypothesis_comparison_state="fallback",
             hypothesis_selection_source="safety-fallback-fallback",
             source="Codex AI (GPT-5.6 Sol · max)",
+            raw_response='{"action":"HOLD"}',
         )
 
         message = execution_telegram_message(context, response)

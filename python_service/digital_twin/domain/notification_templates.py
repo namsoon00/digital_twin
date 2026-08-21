@@ -986,6 +986,12 @@ def context_with_reasoning_explanation(context: Dict[str, object]) -> Dict[str, 
         display_target = symbol_text
     if display_target:
         values["target"] = display_target
+    if context_message_type(values) == "investmentInsight":
+        values["aiOpinionBlock"] = ""
+        values["telegramAiOpinionBlock"] = ""
+        values["reasoningExplanation"] = ""
+        values["telegramReasoningExplanation"] = ""
+        return values
     values["aiOpinionBlock"] = ai_opinion_block(values, False)
     values["telegramAiOpinionBlock"] = ai_opinion_block(values, True)
     values["reasoningExplanation"] = reasoning_explanation_block(values, False)
@@ -1049,6 +1055,8 @@ def append_message_footer(rendered: str, context: Dict[str, object], rich: bool 
 
 def append_reasoning_explanation(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if context_message_type(context) == "investmentInsight":
+        return rendered
     if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):
         return rendered
     if context_message_type(context) == "modelReview":
@@ -1069,6 +1077,8 @@ def append_reasoning_explanation(rendered: str, context: Dict[str, object], rich
 
 def append_ai_opinion(rendered: str, context: Dict[str, object], rich: bool = False) -> str:
     rendered_text = str(rendered or "")
+    if context_message_type(context) == "investmentInsight":
+        return rendered
     if context_message_type(context) in REASONING_EXPLANATION_SKIP_TYPES:
         return rendered
     if isinstance(context, dict) and context.get("notificationAiValidatedResponse"):

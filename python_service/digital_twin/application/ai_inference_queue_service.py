@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from ..domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
+from ..domain.context_observation_notifications import typedb_context_observation_contract
 from ..domain.investment_brain import decision_episode_from_context
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
@@ -23,6 +24,7 @@ from ..domain.notification_ai_decision_brief import (
 from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
 )
+from ..domain.notification_narrative import narrative_fingerprint
 from ..domain.notifications import NotificationJob
 from .notification_ai_gate_audit import context_with_validated_ai_response
 from .notification_decision_memory import context_with_previous_investment_decision
@@ -56,6 +58,36 @@ def _timestamp(value: object):
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def attach_execution_writer_provenance(
+    context: Dict[str, object],
+    execution_audit: Dict[str, object],
+) -> None:
+    writer = dict(context.get("notificationWriterProvenance") or {})
+    if not writer:
+        return
+    writer.update({
+        "model": str(execution_audit.get("model") or ""),
+        "promptVersion": str(execution_audit.get("promptVersion") or ""),
+        "requestId": str(execution_audit.get("requestId") or ""),
+    })
+    context["notificationWriterProvenance"] = writer
+    narrative = dict(context.get("notificationNarrativeBrief") or {})
+    if narrative:
+        narrative["writerProvenance"] = writer
+        narrative["fingerprint"] = narrative_fingerprint(narrative)
+        context["notificationNarrativeBrief"] = narrative
+    for key in (
+        "notificationAiValidatedResponse",
+        "validatedDecisionResponse",
+        "notificationInferenceResponse",
+    ):
+        response = context.get(key)
+        if isinstance(response, dict):
+            response = dict(response)
+            response["writerProvenance"] = writer
+            context[key] = response
 
 
 def typedb_inference_fallback_response(context: Dict[str, object], reason: object):
@@ -219,7 +251,9 @@ def hypothesis_comparison_repair_prompt(
         str(prompt or "")
         + "\n\n이전 응답은 아래 가설 비교 검증 오류로 거부됐다. 새로운 JSON 객체 하나만 다시 출력한다. "
         + "입력 hypothesisSet.hypotheses의 각 hypothesisId를 정확히 한 번씩 사용하고, "
-        + "각 근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며, selectedHypothesisId는 입력 규칙 가설 중 하나여야 한다.\n"
+        + "각 근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용한다. 입력 가설이 있으면 selectedHypothesisId는 그중 하나여야 하고, 없으면 빈 문자열이어야 한다.\n"
+        + "narrativeClaims에는 사용자에게 보여줄 각 문장과 DecisionCore.evidenceLedger의 실제 evidenceId를 연결한다. "
+        + "자료 부족은 limitation으로만 쓰고, 확인된 반대 사실이 없으면 counter를 만들지 않는다.\n"
         + json.dumps(audit, ensure_ascii=False, sort_keys=True)
     )
 
@@ -270,7 +304,8 @@ class NotificationAIRequestEnqueuer:
             or reasoning_case_context.get("caseId")
             or ""
         )
-        if reasoning_case_id and self.reasoning_orchestrator is not None:
+        narrative_only = bool(typedb_context_observation_contract(context).get("requiresAiNarrative"))
+        if reasoning_case_id and self.reasoning_orchestrator is not None and not narrative_only:
             context = self.reasoning_orchestrator.capture_ai_context(
                 reasoning_case_id,
                 context,
@@ -292,7 +327,7 @@ class NotificationAIRequestEnqueuer:
             prompt_version=AI_DECISION_PROMPT_VERSION,
         )
         outcome = self.queue.enqueue(job, request)
-        if reasoning_case_id and self.reasoning_orchestrator is not None:
+        if reasoning_case_id and self.reasoning_orchestrator is not None and not narrative_only:
             status = str(outcome.get("status") or "")
             if status in {"awaiting-ai", "pending", "processing", "retry"}:
                 self.reasoning_orchestrator.ai_queued(
@@ -418,6 +453,7 @@ class AIInferenceQueueRunner:
 
     def process_request(self, request: AIInferenceRequest) -> str:
         context = dict(request.context or {})
+        narrative_only = bool(typedb_context_observation_contract(context).get("requiresAiNarrative"))
         try:
             if request.message_type == INVESTMENT_INSIGHT:
                 context = context_with_previous_investment_decision(
@@ -580,8 +616,8 @@ class AIInferenceQueueRunner:
             quality_gate = ontology_quality_gate_context(context, self.settings)
             context["ontologyQualityGate"] = quality_gate
         apply_ontology_quality_gate_to_response(response, quality_gate)
-        episode = self.decision_episode_context(request, context, response)
-        action_plan = self.action_plan_context(context, episode)
+        episode = None if narrative_only else self.decision_episode_context(request, context, response)
+        action_plan = None if narrative_only else self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
         continuity_packet = (
             dict(context.get("decisionContinuityPacket") or {})
@@ -644,6 +680,7 @@ class AIInferenceQueueRunner:
             "latencyMs": latency_ms,
         }
         enriched["notificationAiExecutionAudit"] = execution_audit
+        attach_execution_writer_provenance(enriched, execution_audit)
         result = AIInferenceResult.create(
             request,
             response.to_dict(),
@@ -652,7 +689,7 @@ class AIInferenceQueueRunner:
             latency_ms=latency_ms,
             prompt_bytes=prompt_bytes,
         )
-        if self.reasoning_orchestrator is not None and not fallback_reason:
+        if self.reasoning_orchestrator is not None and not fallback_reason and not narrative_only:
             valid, validation_reason = self.reasoning_orchestrator.validate_ai_result(
                 enriched,
                 result,
@@ -684,6 +721,7 @@ class AIInferenceQueueRunner:
                     },
                 })
                 enriched["notificationAiExecutionAudit"] = execution_audit
+                attach_execution_writer_provenance(enriched, execution_audit)
                 result = AIInferenceResult.create(
                     request,
                     response.to_dict(),
@@ -697,7 +735,7 @@ class AIInferenceQueueRunner:
         )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
-        if self.reasoning_orchestrator is not None:
+        if self.reasoning_orchestrator is not None and not narrative_only:
             try:
                 if fallback_reason:
                     self.storage_call_with_retry(
@@ -714,7 +752,7 @@ class AIInferenceQueueRunner:
                     )
             except Exception:  # noqa: BLE001 - notification publication remains authoritative.
                 pass
-        if not fallback_reason:
+        if not fallback_reason and not narrative_only:
             self.persist_decision_episode(request, context, episode, action_plan)
         fallback = " typedb-fallback" if fallback_reason else ""
         return (
@@ -775,6 +813,10 @@ class AIInferenceQueueRunner:
             },
             "latencyMs": 0,
         }
+        attach_execution_writer_provenance(
+            enriched,
+            enriched["notificationAiExecutionAudit"],
+        )
         result = AIInferenceResult.create(
             request,
             response.to_dict(),

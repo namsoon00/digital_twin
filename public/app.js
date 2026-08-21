@@ -24290,6 +24290,10 @@
     var decisionAbstention = comparison.decisionAbstention && typeof comparison.decisionAbstention === "object" ? comparison.decisionAbstention : {};
     var decisionGuardrails = Array.isArray(comparison.decisionGuardrails) ? comparison.decisionGuardrails : [];
     var aiExecution = trace.aiExecution && typeof trace.aiExecution === "object" ? trace.aiExecution : {};
+    var narrative = trace.narrative && typeof trace.narrative === "object" ? trace.narrative : {};
+    var narrativeWriter = narrative.writerProvenance && typeof narrative.writerProvenance === "object" ? narrative.writerProvenance : {};
+    var narrativeClaims = Array.isArray(narrative.claims) ? narrative.claims : [];
+    var narrativeValidations = Array.isArray(narrative.validations) ? narrative.validations : [];
     var executionLedger = trace.executionLedger && typeof trace.executionLedger === "object" ? trace.executionLedger : {};
     var assessmentBundle = trace.assessmentBundle && typeof trace.assessmentBundle === "object" ? trace.assessmentBundle : {};
     var investmentLifecycle = trace.investmentLifecycle && typeof trace.investmentLifecycle === "object" ? trace.investmentLifecycle : {};
@@ -24472,6 +24476,35 @@
     if (aiExecution.researchCycle && Object.keys(aiExecution.researchCycle).length) {
       aiExecutionBody += '<details class="notification-ai-prompt-audit"><summary>AI 조사 사이클</summary><pre>' + escapeHtml(JSON.stringify(aiExecution.researchCycle, null, 2)) + '</pre></details>';
     }
+    var narrativeValidationById = {};
+    narrativeValidations.forEach(function (item) {
+      if (item && item.claimId) narrativeValidationById[item.claimId] = item;
+    });
+    var narrativeBody = notificationReasoningTraceTags([
+      narrativeWriter.label || "작성 주체 미기록",
+      narrativeWriter.decisionOwner ? "판단 주체 " + narrativeWriter.decisionOwner : "",
+      narrative.intent ? "알림 목적 " + narrative.intent : "",
+      narrative.metrics && narrative.metrics.verifiedClaimCount !== undefined ? "검증 문장 " + narrative.metrics.verifiedClaimCount + "개" : "",
+      narrative.metrics && narrative.metrics.rejectedClaimCount ? "제외 문장 " + narrative.metrics.rejectedClaimCount + "개" : ""
+    ].filter(Boolean), "notification-reasoning-tags");
+    narrativeBody += notificationReasoningTraceItems(narrativeClaims, "notification-reasoning-rule-list", function (claim) {
+      var validation = narrativeValidationById[claim.claimId] || {};
+      var evidenceIds = Array.isArray(claim.evidenceIds) ? claim.evidenceIds : [];
+      return [
+        '<div class="notification-reasoning-rule">',
+        '<span>' + escapeHtml(claim.section || "claim") + '</span>',
+        '<strong>' + escapeHtml(claim.text || "문장 없음") + '</strong>',
+        '<em>' + escapeHtml(validation.status === "verified" ? "근거 연결 확인" : (validation.status || "검증 상태 미기록")) + '</em>',
+        evidenceIds.length ? '<code>' + escapeHtml(evidenceIds.join(", ")) + '</code>' : '',
+        '</div>'
+      ].join("");
+    });
+    if (narrative.evidenceLedger && narrative.evidenceLedger.length) {
+      narrativeBody += '<details class="notification-ai-prompt-audit"><summary>문장 근거 원장</summary><pre>' + escapeHtml(JSON.stringify(narrative.evidenceLedger, null, 2)) + '</pre></details>';
+    }
+    var decisionStepTitle = narrativeWriter.decisionOwner === "ai"
+      ? "AI 비교·최종 판단"
+      : (narrativeWriter.aiAuthored ? "AI 설명·TypeDB 판단 확인" : "TypeDB 판단·근거 요약");
     var executionRuns = Array.isArray(executionLedger.runs) ? executionLedger.runs : [];
     var executionLedgerBody = executionRuns.map(function (run) {
       var stages = Array.isArray(run.stages) ? run.stages : [];
@@ -24538,7 +24571,7 @@
       renderNotificationReasoningStep(1, "원천 데이터·ABox 사실", facts.length + "개 사실, " + sources.length + "개 출처", missing.length ? "부족 데이터 " + missing.length + "건도 원본과 함께 표시합니다." : "기록된 부족 데이터 없음", factBody + sourceBody + notificationReasoningTraceTags(missing, "notification-reasoning-tags caution"), reasoningDisclosurePrefix + "1"),
       renderNotificationReasoningStep(2, "TypeDB 규칙 실행", rules.length + "개 규칙, " + inferenceTraces.length + "개 추론 경로 · 영역별 판단 포함", snapshot.inferenceGenerationId || "추론 세대 ID 미기록", executionLedgerBody + assessmentBody + ruleBody + traceBody, reasoningDisclosurePrefix + "2"),
       renderNotificationReasoningStep(3, "경쟁 가설 구성", hypotheses.length + "개 가설을 비교 후보로 구성했습니다.", "선택 표시는 다음 AI 단계의 결과이며, 후보 생성보다 먼저 실행된 것이 아닙니다.", hypothesisCandidatesBody, reasoningDisclosurePrefix + "3"),
-      renderNotificationReasoningStep(4, "AI 비교·최종 판단", (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", aiExecutionBody + comparisonBody + hypothesisBody, reasoningDisclosurePrefix + "4"),
+      renderNotificationReasoningStep(4, decisionStepTitle, (finalDecision.actionLabel || finalDecision.primaryAction || "판단 기록 없음") + (finalDecision.summary ? " · " + finalDecision.summary : ""), finalDecision.validationLabel || finalDecision.dataStateLabel || "검증 상태 미기록", narrativeBody + aiExecutionBody + comparisonBody + hypothesisBody, reasoningDisclosurePrefix + "4"),
       renderNotificationReasoningStep(5, "판단·실행·성과 수명주기", investmentLifecycle.status === "ready" ? "판단과 실행계획이 연결됐습니다." : "연결된 실행 기록이 아직 없습니다.", investmentLifecycle.decisionEpisodeId || "DecisionEpisode ID 미기록", lifecycleBody, reasoningDisclosurePrefix + "5"),
       renderNotificationReasoningStep(6, "알림 발송", deliveryLabel, delivery.gateReason || "발송 정책과 반복 방지 정책을 통과한 결과입니다.", deliveryBody, reasoningDisclosurePrefix + "6"),
       '</ol>',

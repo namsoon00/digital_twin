@@ -137,7 +137,7 @@ class InvestmentUbiquitousLanguageRegistryTests(unittest.TestCase):
             settings,
         )
 
-        self.assertIn("판단에 준 영향과 보유 이유를 확인합니다.", result["telegramMessage"])
+        self.assertIn("[시스템 요약]", result["telegramMessage"])
         self.assertNotIn("feature 기여도", result["telegramMessage"])
 
     def test_language_governance_is_projected_separately_from_rulebox(self):

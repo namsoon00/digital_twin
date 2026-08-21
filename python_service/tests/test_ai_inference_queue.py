@@ -41,6 +41,27 @@ class FakeReviewer:
             invalidation_condition="현재 관계가 사라지면 의견을 다시 봅니다.",
             next_checks=["다음 추론 세대 확인"],
             source="fake max AI",
+            raw_response='{"action":"HOLD","narrativeClaims":[]}',
+            narrative_claims=[
+                {
+                    "claimId": "claim:view",
+                    "section": "view",
+                    "text": "현재 행동을 유지하고 다음 데이터 변화를 확인합니다.",
+                    "evidenceIds": ["fact:currentPrice"],
+                },
+                {
+                    "claimId": "claim:change",
+                    "section": "change",
+                    "text": "새 판단 조건이 처음 확인됐습니다.",
+                    "evidenceIds": ["fact:currentPrice"],
+                },
+                {
+                    "claimId": "claim:next",
+                    "section": "next-condition",
+                    "text": "다음 데이터 업데이트에서 같은 관계가 유지되는지 확인합니다.",
+                    "evidenceIds": ["fact:currentPrice"],
+                },
+            ],
         )
 
 
@@ -261,8 +282,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
         self.assertEqual("investment-ai-decision-brief-v4", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v1", prompt_audit["decisionCore"]["schemaVersion"])
-        self.assertEqual("notification-ai-context-route-v1", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v6", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("notification-ai-context-route-v2", prompt_audit["contextRouting"]["version"])
+        self.assertEqual("investment-ai-judge-v7", prompt_audit["promptRelease"]["version"])
         self.assertTrue(prompt_audit["contextRouting"]["fullDecisionBriefRetainedForAudit"])
         self.assertEqual("deepResearch", prompt_audit["executionProfile"]["name"])
         self.assertEqual(64, len(prompt_audit["promptHash"]))
@@ -365,10 +386,9 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("pending", delivered.status)
         self.assertEqual(1, orchestrator.fallback_calls)
         self.assertEqual("typedb-fallback", delivered.context["notificationAiExecutionAudit"]["status"])
-        self.assertIn(
-            "가설·행동 계약",
-            delivered.context["notificationAiValidatedResponse"]["summary"],
-        )
+        self.assertFalse(delivered.context["notificationWriterProvenance"]["aiAuthored"])
+        self.assertEqual("typedb", delivered.context["notificationWriterProvenance"]["decisionOwner"])
+        self.assertNotIn("가설·행동 계약", delivered.context["notificationAiValidatedResponse"]["summary"])
 
     def test_prompt_preparation_failure_releases_typedb_fallback(self):
         job = self.create_job()
@@ -688,6 +708,14 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("HOLD", delivered.context["investmentNotificationState"]["action"])
         self.assertNotIn("첫 판단", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
         self.assertIn("이전 AI 최종 판단과 같은", delivered.context["notificationAiValidatedResponse"]["changeAnalysis"])
+        transition_claim = next(
+            item
+            for item in delivered.context["notificationNarrativeBrief"]["claims"]
+            if item["section"] == "change"
+        )
+        self.assertEqual(["transition:decision"], transition_claim["evidenceIds"])
+        self.assertEqual("deterministic", transition_claim["writerKind"])
+        self.assertNotIn("첫 판단", transition_claim["text"])
         self.assertIn('"previousAction":"HOLD"', delivered.context["notificationAiExecutionAudit"]["prompt"])
 
     def test_heartbeat_requires_matching_owner_and_latest_head(self):

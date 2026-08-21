@@ -369,6 +369,7 @@ def _traceability_rows(
     relation: Dict[str, object],
     ai: Dict[str, object],
     selected_hypothesis: Dict[str, object],
+    writer: Dict[str, object],
 ) -> List[Dict[str, str]]:
     generation = _text(relation.get("inferenceGenerationId"), 180)
     graph_used = bool(relation.get("graphStoreUsed"))
@@ -403,12 +404,18 @@ def _traceability_rows(
             "detail": _text(selected_hypothesis.get("hypothesisId"), 160) or "선택 가설 ID가 저장되지 않았습니다.",
         },
         {
-            "label": "AI 인과 경로",
+            "label": "AI 인과 경로" if writer.get("aiAuthored") else "TypeDB 근거 경로",
             "state": "verified" if decision_readiness == "ready" and any(
                 str(item.get("status") or "") == "supported" and item.get("evidenceIds")
                 for item in causal_chain
             ) else "partial",
             "detail": (decision_readiness or "조건부") + " · " + str(len(causal_chain)) + "개 경로",
+        },
+        {
+            "label": "알림 문장 근거",
+            "state": "verified" if writer.get("writerKind") and writer.get("decisionOwner") else "partial",
+            "detail": _text(writer.get("label") or "작성 주체 미기록")
+            + " · 판단 주체 " + _text(writer.get("decisionOwner") or "미기록"),
         },
     ]
     return rows
@@ -442,8 +449,17 @@ def build_notification_reverse_reasoning_trace(
     decision = _dict(relation.get("decision"))
     plan = _dict(relation.get("executionPlan"))
     subject = _dict(relation.get("subject"))
-    ai = _dict(values.get("notificationAiValidatedResponse"))
+    ai = (
+        _dict(values.get("notificationAiValidatedResponse"))
+        or _dict(values.get("validatedDecisionResponse"))
+        or _dict(values.get("notificationInferenceResponse"))
+    )
     ai_execution = _dict(values.get("notificationAiExecutionAudit"))
+    narrative = _dict(values.get("notificationNarrativeBrief"))
+    writer = _dict(values.get("notificationWriterProvenance")) or _dict(
+        narrative.get("writerProvenance")
+    )
+    claim_validation = _dict(values.get("notificationClaimValidation"))
     prompt_context = _dict(values.get("notificationAiPromptContext"))
     hypotheses = _hypothesis_rows(relation, ai)
     selected_hypothesis_id = _text(
@@ -472,7 +488,8 @@ def build_notification_reverse_reasoning_trace(
     if delivery_reason and delivery_reason not in delivery_reasons:
         delivery_reasons.insert(0, delivery_reason)
     status = "ready" if relation.get("graphStoreUsed") and relation.get("nativeTypeDbReasoningUsed") else "partial"
-    if not ai or not hypotheses:
+    narrative_only = str(writer.get("writerRole") or "") == "narrative-only"
+    if not ai or (not hypotheses and not narrative_only):
         status = "partial"
     generation_at = _text(
         relation.get("inferenceGenerationAt") or values.get("referenceDate") or values.get("eventGeneratedAt"),
@@ -484,9 +501,19 @@ def build_notification_reverse_reasoning_trace(
         if _text(relation.get(key), 180)
     }
     alternatives = [item for item in hypotheses if item.get("hypothesisId") != selected_hypothesis_id]
-    traceability = _traceability_rows(relation, ai, selected_hypothesis)
+    traceability = _traceability_rows(relation, ai, selected_hypothesis, writer)
     fact_rows = _fact_rows(facts)
     source_rows = _source_rows(values)
+    decision_step_title = (
+        "AI 설명·TypeDB 판단 확인"
+        if narrative_only and writer.get("aiAuthored") else
+        "AI 비교·최종 판단"
+        if writer.get("decisionOwner") == "ai" else
+        "TypeDB 판단·근거 요약"
+    )
+    decision_step_summary = (
+        selected_action_label + (" · " + _text(ai.get("summary"), 260) if ai.get("summary") else "")
+    ) or "판단 기록 없음"
     steps = [
         {
             "id": "abox-facts",
@@ -508,9 +535,9 @@ def build_notification_reverse_reasoning_trace(
         },
         {
             "id": "ai-decision",
-            "title": "AI 비교·최종 판단",
-            "summary": (selected_action_label + (" · " + _text(ai.get("summary"), 260) if ai.get("summary") else "")) or "AI 판단 기록 없음",
-            "detail": _text(ai.get("disagreementReason"), 260) or "그래프 후보와 같은 방향인지 비교했습니다.",
+            "title": decision_step_title,
+            "summary": decision_step_summary,
+            "detail": _text(ai.get("disagreementReason"), 260) or _text(writer.get("label") or "작성 주체 미기록"),
         },
         {
             "id": "delivery",
@@ -558,6 +585,8 @@ def build_notification_reverse_reasoning_trace(
             "decisionReadiness": _text(ai.get("decisionReadiness"), 80),
             "causalChain": [dict(item) for item in ai.get("causalChain") or [] if isinstance(item, dict)],
             "alternativeAction": _dict(ai.get("alternativeAction")),
+            "decisionOwner": _text(writer.get("decisionOwner"), 80),
+            "writerLabel": _text(writer.get("label"), 120),
         },
         "aiComparison": {
             "precomputedAction": precomputed_action,
@@ -610,7 +639,19 @@ def build_notification_reverse_reasoning_trace(
             ),
             "validationState": _text(ai_execution.get("validationState"), 80),
             "latencyMs": int(ai_execution.get("latencyMs") or 0),
-            "executed": bool(ai_execution.get("requestId")),
+            "executed": bool(ai_execution.get("aiAttempted")),
+            "writerProvenance": writer,
+        },
+        "narrative": {
+            "version": _text(narrative.get("version"), 120),
+            "fingerprint": _text(narrative.get("fingerprint"), 100),
+            "intent": _text(narrative.get("intent"), 100),
+            "writerProvenance": writer,
+            "claims": [dict(item) for item in narrative.get("claims") or [] if isinstance(item, dict)],
+            "validations": [dict(item) for item in narrative.get("validations") or [] if isinstance(item, dict)],
+            "evidenceLedger": [dict(item) for item in narrative.get("evidenceLedger") or [] if isinstance(item, dict)],
+            "metrics": _dict(narrative.get("metrics")),
+            "claimValidation": claim_validation,
         },
         "selectedHypothesis": selected_hypothesis,
         "assessmentBundle": _dict(relation.get("assessmentBundle")),

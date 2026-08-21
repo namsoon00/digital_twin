@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -26,6 +27,44 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_v2_release_preflight_migrates_rulebox_before_freezing_snapshot(self):
+        from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
+        from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
+
+        rules = deepcopy(bootstrap_rule_catalog()["rules"])
+        rules[0]["knowledge_basis"]["ownershipContractVersion"] = "stale-contract"
+
+        class Repository:
+            def __init__(self):
+                self.rules = rules
+                self.calls = []
+
+            def rulebox_snapshot(self):
+                self.calls.append("snapshot")
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": deepcopy(self.rules),
+                    "ruleCount": len(self.rules),
+                }
+
+            def save_rulebox(self, payload):
+                self.calls.append("save")
+                self.rules = deepcopy(payload["rules"])
+                return {"saved": True, "status": "ok", "ruleCount": len(self.rules)}
+
+        repository = Repository()
+
+        snapshot, readiness = prepare_v2_rulebox_release(repository, {})
+
+        self.assertEqual("ready", readiness["status"])
+        self.assertEqual("migrated", readiness["ruleCatalogMigration"]["status"])
+        self.assertEqual(["snapshot", "save", "snapshot", "snapshot"], repository.calls)
+        self.assertEqual(
+            "ontology-rule-ownership-v1",
+            snapshot["rules"][0]["knowledge_basis"]["ownershipContractVersion"],
+        )
+
     def test_v2_watch_waits_for_release_database_without_process_exit(self):
         from digital_twin.infrastructure.cli import watch_v2_reasoning_engine
 

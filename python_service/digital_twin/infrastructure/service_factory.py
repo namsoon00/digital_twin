@@ -169,6 +169,31 @@ def typedb_capacity_guard(settings, role: str, state_store=None) -> TypeDBCapaci
     )
 
 
+def prepare_v2_rulebox_release(repository, settings=None):
+    """Migrate the persisted RuleBox before calculating a release fingerprint."""
+
+    readiness = PortfolioOntologyProjectionRecorder(
+        repository,
+        settings=dict(settings or {}),
+        source="reasoning-engine-v2-release-preflight",
+    ).ensure_rulebox_ready()
+    if str(readiness.get("status") or "") not in {"ready", "seeded"}:
+        raise RuntimeError(
+            "The independent V2 RuleBox release preflight failed: "
+            + str(readiness.get("reason") or readiness.get("status") or "unknown")
+        )
+    try:
+        snapshot = dict(repository.rulebox_snapshot() or {})
+    except Exception as error:
+        raise RuntimeError(
+            "The independent V2 RuleBox release is unavailable after preflight: "
+            + str(error)[:220]
+        ) from error
+    if str(snapshot.get("status") or "") != "ok" or not snapshot.get("rules"):
+        raise RuntimeError("The independent V2 RuleBox release is unavailable or empty")
+    return snapshot, readiness
+
+
 def monitor_event_bus(settings=None) -> EventBus:
     configured_settings = settings or runtime_settings()
     bus = default_event_bus()
@@ -1913,18 +1938,16 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         settings=candidate_settings,
     )
     repository = ontology_repository_from_settings(candidate_settings)
-    try:
-        candidate_rulebox = dict(repository.rulebox_snapshot() or {})
-    except Exception:
-        candidate_rulebox = {}
+    candidate_rulebox, rulebox_release_preflight = prepare_v2_rulebox_release(
+        repository,
+        candidate_settings,
+    )
     rulebox_fingerprint = str(
         candidate_rulebox.get("sourceRulesHash")
         or candidate_rulebox.get("rulesHash")
         or candidate_rulebox.get("ruleboxRulesHash")
         or payload_hash(candidate_rulebox.get("rules") or [])
     )
-    if str(candidate_rulebox.get("status") or "") != "ok" or not candidate_rulebox.get("rules"):
-        raise RuntimeError("The independent V2 RuleBox release is unavailable or empty")
     prewarm_status_reader = getattr(repository, "schema_function_prewarm_status", None)
     schema_function_readiness = {}
     if callable(prewarm_status_reader):
@@ -2024,6 +2047,17 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         "ruleboxOwnership": "v2-release-frozen",
         "ruleInventory": rule_inventory,
         "ruleInventoryReleaseReady": bool(rule_inventory.get("releaseReady")),
+        "ruleboxReleasePreflight": {
+            "status": str(rulebox_release_preflight.get("status") or ""),
+            "ruleCount": int(rulebox_release_preflight.get("ruleCount") or 0),
+            "ruleboxRulesHash": str(
+                rulebox_release_preflight.get("ruleboxRulesHash") or ""
+            ),
+            "migrationStatus": str(
+                (rulebox_release_preflight.get("ruleCatalogMigration") or {}).get("status")
+                or ""
+            ),
+        },
         "schemaFunctionReadiness": {
             "status": str(schema_function_readiness.get("status") or "unknown"),
             "functionsReady": bool(schema_function_readiness.get("functionsReady")),

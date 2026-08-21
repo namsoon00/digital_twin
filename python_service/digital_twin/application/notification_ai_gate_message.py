@@ -56,7 +56,11 @@ from ..domain.notification_ai_gate_validation import (
     delivery_level_from_context,
     watchlist_friendly_text,
 )
-from ..domain.notification_start_badge import labeled_message_start_badge
+from ..domain.notification_start_badge import (
+    labeled_message_start_badge,
+    notification_start_badge_required,
+    strip_message_start_badge,
+)
 from ..domain.notification_text_formatting import absolute_beginner_friendly_text, beginner_friendly_text
 from ..domain.notification_ontology_sections import relation_axis_summary_lines
 from .notification_message_metrics import _profit_loss_change_summary
@@ -641,6 +645,27 @@ def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = No
     if not text:
         return text
     values = dict(context or {})
+    if not notification_start_badge_required(values):
+        text = strip_message_start_badge(text, MESSAGE_START_BADGE)
+        summary = notification_topline_change_summary(values)
+        if not summary:
+            return text
+        lines = text.splitlines()
+        for index in range(min(3, len(lines)) - 1, -1, -1):
+            plain = html.unescape(re.sub(r"<[^>]+>", "", lines[index])).strip()
+            if plain == summary:
+                lines.pop(index)
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if not lines:
+            return text
+        summary_line = (
+            "<code>" + html.escape(summary, quote=False) + "</code>"
+            if lines[0].lstrip().startswith("<")
+            else summary
+        )
+        lines.insert(1, summary_line)
+        return "\n".join(lines).strip()
     contextual_title = investment_notification_title(
         values.get("messageType") or values.get("rule") or "",
         values,

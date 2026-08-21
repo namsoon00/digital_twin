@@ -135,8 +135,9 @@ class NotificationIconPolicyTests(unittest.TestCase):
             NotificationTemplate("marketObservation", "{telegramMessage}"),
             context,
         )
-        self.assertTrue(rendered.startswith("<b>🔔 새 알림 · LG전자</b>"))
+        self.assertTrue(rendered.startswith("<b>[시세] 📉 LG전자: 기준가 대비 -2.2% 하락</b>"))
         self.assertIn("<b>[시세] 📉 LG전자: 기준가 대비 -2.2% 하락</b>", rendered)
+        self.assertNotIn("🔔 새 알림", rendered)
         self.assertNotIn("LG전자 시세 관측", rendered)
 
         rising = AlertEvent(

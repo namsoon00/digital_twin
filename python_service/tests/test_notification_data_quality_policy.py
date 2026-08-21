@@ -785,11 +785,14 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
     def test_topline_change_summary_is_separated_from_new_alert_badge(self):
         message = prepend_execution_start_badge(
             "<b>[주의] 🛡️ SK하이닉스: 분할축소 점검</b>",
-            {"honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -8.9% -> -10.4%"},
+            {
+                "messageType": "investmentInsight",
+                "honeyStateReason": "의미 있는 추가 확대: 손익률 추가 악화 -8.9% -> -10.4%",
+            },
         )
 
-        self.assertTrue(message.startswith("<b>🔔 새 알림</b>\n<code>손익 구간: 손실 관리(-10.4%) · 이전 알림 대비 1.5%p 악화</code>"))
-        self.assertEqual(1, message.count("🔔 새 알림"))
+        self.assertTrue(message.startswith("<b>[주의] 🛡️ SK하이닉스: 분할축소 점검</b>\n<code>손익 구간: 손실 관리(-10.4%) · 이전 알림 대비 1.5%p 악화</code>"))
+        self.assertNotIn("🔔 새 알림", message)
 
     def test_threshold_summary_keeps_full_detected_and_configured_values(self):
         detected = "비트코인 24시간 +1.2%, 7일 +5.0%로 최근 일주일 상승 흐름이 이어지고 있으며 실제 보유 종목의 가격 반응을 함께 확인해야 합니다"
@@ -810,6 +813,14 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         message = prepend_message_start_badge("작업 완료\n- 요약: 테스트", context={"messageType": "workHandoff"})
 
         self.assertTrue(message.startswith("📦 운영 알림 · 작업완료\n\n작업 완료"))
+
+    def test_message_start_badge_is_omitted_for_customer_news(self):
+        message = prepend_message_start_badge(
+            "카카오 신사업 발표\n새 사업 계획을 확인했습니다.",
+            context={"messageType": "newsDigest", "symbolDisplayName": "카카오"},
+        )
+
+        self.assertEqual("카카오 신사업 발표\n새 사업 계획을 확인했습니다.", message)
 
     def test_topline_change_summary_shows_profit_loss_improvement_delta(self):
         summary = notification_topline_change_summary({

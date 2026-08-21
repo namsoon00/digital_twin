@@ -84,7 +84,11 @@ from .notification_title_rules import (
     reference_date_text,
 )
 from .notifications import notification_debug_number
-from .notification_start_badge import labeled_message_start_badge
+from .notification_start_badge import (
+    labeled_message_start_badge,
+    notification_start_badge_required,
+    strip_message_start_badge,
+)
 from .notification_title_policy import investment_notification_title
 from .operational_notification_presentation import (
     operational_message_start_badge,
@@ -1112,6 +1116,8 @@ def prepend_message_start_badge(rendered: str, rich: bool = False, context: Dict
     if contextual_title and first_line == contextual_title:
         return text
     base_badge = operational_message_start_badge(context or {}, MESSAGE_START_BADGE)
+    if base_badge == MESSAGE_START_BADGE and not notification_start_badge_required(context or {}):
+        return strip_message_start_badge(text, MESSAGE_START_BADGE)
     plain_badge = labeled_message_start_badge(base_badge, context or {})
     known_badges = [base_badge]
     if base_badge != MESSAGE_START_BADGE:

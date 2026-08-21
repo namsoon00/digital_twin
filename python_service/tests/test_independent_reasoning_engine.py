@@ -275,6 +275,106 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(["job:dead"], result["recoveredJobIds"])
         self.assertEqual("job:dead", connection.update_params[-1])
 
+    def test_mysql_queue_supersedes_dead_claim_from_obsolete_deployment(self):
+        class Connection:
+            def __init__(self):
+                self.updates = []
+
+            def execute(self, sql, params=()):
+                if "FROM reasoning_engine_control" in sql:
+                    return SimpleNamespace(fetchone=lambda: {
+                        "active_deployment_id": "ontology-v2-current",
+                        "delivery_deployment_id": "ontology-v2-current",
+                        "candidate_deployment_id": "ontology-v1-active",
+                    })
+                if sql.lstrip().startswith("SELECT"):
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "job_id": "job:obsolete",
+                        "deployment_id": "ontology-v2-old",
+                        "lease_owner": "worker-host:111:v2-old",
+                    }])
+                self.updates.append((sql, tuple(params)))
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        result = object.__new__(Store).recover_dead_local_leases(
+            "ontology-v2-current",
+            host_name="worker-host",
+            process_alive=lambda _process_id: False,
+        )
+
+        self.assertEqual([], result["recoveredJobIds"])
+        self.assertEqual(["job:obsolete"], result["supersededJobIds"])
+        self.assertIn("job_status = 'superseded'", connection.updates[-1][0])
+
+    def test_mysql_queue_persists_progress_in_existing_heartbeat_write(self):
+        class Connection:
+            def __init__(self):
+                self.sql = ""
+                self.params = ()
+
+            def execute(self, sql, params=()):
+                self.sql = sql
+                self.params = tuple(params)
+                return SimpleNamespace(rowcount=2)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def connect(self):
+                yield connection
+
+        alive = object.__new__(Store).heartbeat(
+            ["job:1", "job:2"],
+            "worker-host:111:v2-current",
+            600,
+            progress={
+                "stage": "shared_premise.inference.start",
+                "details": {"targetSymbolCount": 2},
+            },
+        )
+
+        self.assertTrue(alive)
+        self.assertIn("current_stage", connection.sql)
+        self.assertIn("stage_details_json", connection.sql)
+        self.assertIn("shared_premise.inference.start", connection.params)
+
+    def test_mysql_queue_releases_exact_worker_claims_during_managed_shutdown(self):
+        class Connection:
+            def __init__(self):
+                self.sql = ""
+                self.params = ()
+
+            def execute(self, sql, params=()):
+                self.sql = sql
+                self.params = tuple(params)
+                return SimpleNamespace(rowcount=3)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def connect(self):
+                yield connection
+
+        result = object.__new__(Store).release_worker_leases(
+            "ontology-v2-shadow",
+            "worker-host:123:v2-current",
+        )
+
+        self.assertEqual("released", result["status"])
+        self.assertEqual(3, result["releasedCount"])
+        self.assertIn("job_status = 'processing'", connection.sql)
+        self.assertEqual("ontology-v2-shadow", connection.params[-2])
+        self.assertEqual("worker-host:123:v2-current", connection.params[-1])
+
     def test_mysql_queue_compacts_old_scopes_without_losing_fact_changes(self):
         old = source_event("NVDA")
         old.payload.update({
@@ -723,6 +823,31 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("shadow-delivery-blocked", result["ai_handoff_status"])
         self.assertEqual(0, recorder.calls)
         self.assertFalse(engine.health()["monitorRunnerUsed"])
+
+    def test_engine_reports_internal_projection_progress(self):
+        class ProgressExecutor(FakeExecutor):
+            def execute(self, request, snapshots, progress_callback=None):
+                progress_callback("shared_premise.graph.start", {"nodeCount": 12})
+                return super().execute(request, snapshots)
+
+        progress = []
+        engine = V2ReasoningEngine(
+            descriptor(),
+            FakeAssembler(),
+            ProgressExecutor(),
+            FakeCandidateBuilder(),
+            delivery_authorized_provider=lambda: False,
+        )
+
+        result = engine.consume(
+            [source_event()],
+            progress_callback=lambda stage, payload: progress.append((stage, payload)),
+        )
+
+        self.assertEqual("ok", result["status"])
+        self.assertIn("input_assembly.start", [item[0] for item in progress])
+        self.assertIn("shared_premise.graph.start", [item[0] for item in progress])
+        self.assertIn("candidate_build.completed", [item[0] for item in progress])
 
     def test_engine_excludes_symbol_without_an_affected_account(self):
         class NoAffectedAccountAssembler:
@@ -1190,6 +1315,34 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("ontology-v2-shadow", queue.recovery_call["deploymentId"])
         self.assertEqual(1, queue.claim_call["limit"])
         self.assertEqual("REALTIME", queue.claim_call["reasoningLane"])
+
+    def test_runner_shutdown_releases_only_its_owned_jobs_once(self):
+        class Queue:
+            def __init__(self):
+                self.calls = []
+
+            def release_worker_leases(self, deployment_id, worker_id, reason):
+                self.calls.append((deployment_id, worker_id, reason))
+                return {"status": "released", "releasedCount": 2}
+
+        class Engine:
+            def descriptor(self):
+                return descriptor()
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            Engine(),
+            SimpleNamespace(),
+            worker_id="worker-host:123:v2-current",
+        )
+
+        first = runner.shutdown()
+        second = runner.shutdown()
+
+        self.assertEqual(2, first["releasedCount"])
+        self.assertEqual(first, second)
+        self.assertEqual(1, len(queue.calls))
 
     def test_runner_supersedes_permanently_unrestorable_source_packet(self):
         class Queue:

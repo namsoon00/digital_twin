@@ -1120,7 +1120,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     input_fingerprint = %s, request_json = %s, result_json = '{}',
                     job_status = 'queued', supersedable = %s, reasoning_lane = %s,
                     available_at = %s, lease_owner = '', lease_expires_at = '',
-                    heartbeat_at = '', claimed_at = '', duration_ms = 0,
+                    heartbeat_at = '', claimed_at = '', current_stage = '',
+                    stage_started_at = '', stage_updated_at = '', stage_details_json = NULL,
+                    duration_ms = 0,
                     last_error = 'Oversized source event was split before TypeDB execution.',
                     completed_at = '', updated_at = %s
                 WHERE job_id = %s
@@ -1264,6 +1266,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     connection.execute(
                         "UPDATE reasoning_engine_jobs SET job_status = 'superseded', completed_at = %s, "
                         "available_at = '', lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                        "current_stage = '', stage_started_at = '', stage_updated_at = '', stage_details_json = NULL, "
                         "last_error = 'Merged into the newest durable reasoning slot.', updated_at = %s "
                         "WHERE job_id IN (" + placeholders + ")",
                         (stamp, stamp, *replaced_ids),
@@ -1287,7 +1290,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     "source_boundary_json = %s, source_payload_hash = %s, scope_key = %s, "
                     "input_fingerprint = %s, request_json = %s, job_status = %s, priority = %s, "
                     "reasoning_lane = %s, available_at = %s, lease_owner = '', lease_expires_at = '', "
-                    "heartbeat_at = '', last_error = %s, completed_at = '', created_at = %s, updated_at = %s "
+                    "heartbeat_at = '', current_stage = '', stage_started_at = '', stage_updated_at = '', "
+                    "stage_details_json = NULL, last_error = %s, completed_at = '', created_at = %s, updated_at = %s "
                     "WHERE job_id = %s",
                     (
                         str(primary.get("snapshotId") or "")[:191],
@@ -1338,13 +1342,29 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         alive = process_alive if callable(process_alive) else local_process_is_alive
         stamp = iso_utc()
         recovered_job_ids = []
+        superseded_job_ids = []
         recovered_owners = []
         with self.transaction() as connection:
+            protected_deployments = {str(deployment_id or "")}
+            try:
+                control = connection.execute(
+                    "SELECT active_deployment_id, delivery_deployment_id, candidate_deployment_id "
+                    "FROM reasoning_engine_control WHERE control_id = 'global'"
+                ).fetchone() or {}
+                protected_deployments.update(
+                    str(control.get(key) or "").strip()
+                    for key in (
+                        "active_deployment_id",
+                        "delivery_deployment_id",
+                        "candidate_deployment_id",
+                    )
+                    if str(control.get(key) or "").strip()
+                )
+            except (AttributeError, TypeError):
+                pass
             rows = connection.execute(
-                "SELECT job_id, lease_owner FROM reasoning_engine_jobs "
-                "WHERE deployment_id = %s AND job_status = 'processing' "
-                "AND lease_owner <> '' FOR UPDATE",
-                (str(deployment_id or ""),),
+                "SELECT job_id, deployment_id, lease_owner FROM reasoning_engine_jobs "
+                "WHERE job_status = 'processing' AND lease_owner <> '' FOR UPDATE",
             ).fetchall()
             for row in rows or []:
                 owner = str(row.get("lease_owner") or "")
@@ -1359,25 +1379,88 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     owner_alive = True
                 if owner_alive:
                     continue
-                recovered_job_ids.append(str(row.get("job_id") or ""))
+                job_id = str(row.get("job_id") or "")
+                job_deployment = str(row.get("deployment_id") or deployment_id or "")
+                if job_deployment in protected_deployments:
+                    recovered_job_ids.append(job_id)
+                else:
+                    superseded_job_ids.append(job_id)
                 recovered_owners.append(owner)
             recovered_job_ids = [value for value in recovered_job_ids if value]
+            superseded_job_ids = [value for value in superseded_job_ids if value]
             if recovered_job_ids:
                 placeholders = ",".join(["%s"] * len(recovered_job_ids))
                 connection.execute(
                     "UPDATE reasoning_engine_jobs SET job_status = 'retry', "
                     "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
-                    "claimed_at = '', available_at = %s, "
+                    "claimed_at = '', current_stage = '', stage_started_at = '', "
+                    "stage_updated_at = '', stage_details_json = NULL, available_at = %s, "
                     "last_error = 'The previous local V2 worker stopped; retrying immediately.', "
-                    "updated_at = %s WHERE deployment_id = %s "
-                    "AND job_status = 'processing' AND job_id IN (" + placeholders + ")",
-                    (stamp, stamp, str(deployment_id or ""), *recovered_job_ids),
+                    "updated_at = %s WHERE job_status = 'processing' "
+                    "AND job_id IN (" + placeholders + ")",
+                    (stamp, stamp, *recovered_job_ids),
+                )
+            if superseded_job_ids:
+                placeholders = ",".join(["%s"] * len(superseded_job_ids))
+                connection.execute(
+                    "UPDATE reasoning_engine_jobs SET job_status = 'superseded', "
+                    "lease_owner = '', lease_expires_at = '', heartbeat_at = '', claimed_at = '', "
+                    "current_stage = '', stage_started_at = '', stage_updated_at = '', "
+                    "stage_details_json = NULL, available_at = '', completed_at = %s, "
+                    "last_error = 'Obsolete V2 deployment worker stopped; claim superseded.', "
+                    "updated_at = %s WHERE job_status = 'processing' "
+                    "AND job_id IN (" + placeholders + ")",
+                    (stamp, stamp, *superseded_job_ids),
                 )
         return {
-            "status": "recovered" if recovered_job_ids else "unchanged",
+            "status": "recovered" if recovered_job_ids or superseded_job_ids else "unchanged",
             "recoveredCount": len(recovered_job_ids),
             "recoveredJobIds": recovered_job_ids,
+            "supersededCount": len(superseded_job_ids),
+            "supersededJobIds": superseded_job_ids,
             "recoveredOwnerCount": len(set(recovered_owners)),
+        }
+
+    def release_worker_leases(
+        self,
+        deployment_id: str,
+        worker_id: str,
+        reason: str = "The V2 worker stopped; retrying immediately.",
+    ) -> Dict[str, object]:
+        """Return this worker's in-flight jobs before a managed restart.
+
+        Lease expiry remains the crash fallback. A supervised SIGTERM has an
+        exact owner identity, so retaining those claims for the full lease
+        interval only creates avoidable queue latency.
+        """
+
+        owner = str(worker_id or "").strip()
+        if not owner:
+            return {"status": "unchanged", "releasedCount": 0, "workerId": ""}
+        stamp = iso_utc()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE reasoning_engine_jobs SET job_status = 'retry', "
+                "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                "claimed_at = '', current_stage = '', stage_started_at = '', "
+                "stage_updated_at = '', stage_details_json = NULL, "
+                "available_at = %s, last_error = %s, updated_at = %s "
+                "WHERE deployment_id = %s AND job_status = 'processing' AND lease_owner = %s",
+                (
+                    stamp,
+                    str(reason or "The V2 worker stopped; retrying immediately.")[:500],
+                    stamp,
+                    str(deployment_id or ""),
+                    owner,
+                ),
+            )
+        released = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        return {
+            "status": "released" if released else "unchanged",
+            "releasedCount": released,
+            "workerId": owner,
+            "deploymentId": str(deployment_id or ""),
+            "availableAt": stamp if released else "",
         }
 
     def next_lane(self, deployment_id: str) -> str:
@@ -1428,7 +1511,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'retry', lease_owner = '', lease_expires_at = '',
-                    heartbeat_at = '',
+                    heartbeat_at = '', current_stage = '', stage_started_at = '',
+                    stage_updated_at = '', stage_details_json = NULL,
                     available_at = %s,
                     last_error = 'The prior V2 worker lease expired; retrying safely.',
                     updated_at = %s
@@ -1460,9 +1544,14 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             connection.execute(
                 "UPDATE reasoning_engine_jobs SET job_status = 'processing', lease_owner = %s, "
                 "lease_expires_at = %s, heartbeat_at = %s, claimed_at = %s, "
+                "current_stage = 'claimed', stage_started_at = %s, stage_updated_at = %s, "
+                "stage_details_json = NULL, "
                 "queue_wait_ms = TIMESTAMPDIFF(MICROSECOND, STR_TO_DATE(REPLACE(REPLACE(created_at, 'T', ' '), 'Z', ''), '%%Y-%%m-%%d %%H:%%i:%%s.%%f'), UTC_TIMESTAMP(6)) DIV 1000, "
                 "updated_at = %s WHERE job_id IN (" + placeholders + ")",
-                (str(worker_id or "reasoning-v2"), lease_until, stamp, stamp, stamp, *job_ids),
+                (
+                    str(worker_id or "reasoning-v2"), lease_until, stamp, stamp,
+                    stamp, stamp, stamp, *job_ids,
+                ),
             )
         return [self.row_payload(row) for row in rows or []]
 
@@ -1491,19 +1580,33 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
-    def heartbeat(self, job_ids: Iterable[str], worker_id: str, lease_seconds: int) -> bool:
+    def heartbeat(
+        self,
+        job_ids: Iterable[str],
+        worker_id: str,
+        lease_seconds: int,
+        progress: Mapping[str, object] = None,
+    ) -> bool:
         selected = [str(job_id or "") for job_id in job_ids or [] if str(job_id or "")]
         if not selected:
             return False
         stamp = iso_utc()
         lease_until = iso_utc(utc_now() + timedelta(seconds=max(60, int(lease_seconds or 600))))
+        progress_values = dict(progress or {})
+        stage = str(progress_values.get("stage") or "")[:96]
+        details = dict(progress_values.get("details") or {})
         placeholders = ",".join(["%s"] * len(selected))
         with self.connect() as connection:
             cursor = connection.execute(
                 "UPDATE reasoning_engine_jobs SET heartbeat_at = %s, lease_expires_at = %s, "
+                "stage_started_at = CASE WHEN current_stage <> %s THEN %s ELSE stage_started_at END, "
+                "current_stage = %s, stage_updated_at = %s, stage_details_json = %s, "
                 "updated_at = %s WHERE job_status = 'processing' AND lease_owner = %s "
                 "AND job_id IN (" + placeholders + ")",
-                (stamp, lease_until, stamp, str(worker_id or ""), *selected),
+                (
+                    stamp, lease_until, stage, stamp, stage, stamp,
+                    canonical_json(details), stamp, str(worker_id or ""), *selected,
+                ),
             )
         return int(getattr(cursor, "rowcount", 0) or 0) == len(selected)
 
@@ -1521,7 +1624,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'completed', result_json = %s,
                     duration_ms = %s, lease_owner = '', lease_expires_at = '',
-                    heartbeat_at = '', last_error = '', completed_at = %s, updated_at = %s
+                    heartbeat_at = '', current_stage = '', stage_started_at = '',
+                    stage_updated_at = '', stage_details_json = NULL,
+                    last_error = '', completed_at = %s, updated_at = %s
                 WHERE """ + where,
                 (
                     canonical_json(values),
@@ -1540,7 +1645,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'queued', lease_owner = '', lease_expires_at = '',
-                    heartbeat_at = '',
+                    heartbeat_at = '', current_stage = '', stage_started_at = '',
+                    stage_updated_at = '', stage_details_json = NULL,
                     available_at = %s, last_error = %s, updated_at = %s
                 WHERE job_id = %s
                 """,
@@ -1596,6 +1702,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 UPDATE reasoning_engine_jobs
                 SET job_status = %s, attempts = %s, result_json = %s,
                     lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    current_stage = '', stage_started_at = '', stage_updated_at = '',
+                    stage_details_json = NULL,
                     available_at = %s, last_error = %s, completed_at = %s,
                     updated_at = %s
                 WHERE job_id = %s
@@ -1647,6 +1755,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'excluded', result_json = %s,
                     lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    current_stage = '', stage_started_at = '', stage_updated_at = '',
+                    stage_details_json = NULL,
                     available_at = '', last_error = '', completed_at = %s,
                     duration_ms = %s, updated_at = %s
                 WHERE job_id = %s
@@ -1689,6 +1799,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'failed', result_json = %s,
                     lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    current_stage = '', stage_started_at = '', stage_updated_at = '',
+                    stage_details_json = NULL,
                     available_at = '', last_error = %s, completed_at = %s,
                     duration_ms = %s, updated_at = %s
                 WHERE job_id = %s
@@ -1710,7 +1822,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = 'superseded', lease_owner = '', lease_expires_at = '',
-                    heartbeat_at = '', available_at = '', last_error = %s,
+                    heartbeat_at = '', current_stage = '', stage_started_at = '',
+                    stage_updated_at = '', stage_details_json = NULL,
+                    available_at = '', last_error = %s,
                     completed_at = %s, updated_at = %s
                 WHERE job_id = %s
                 """,
@@ -1731,7 +1845,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 UPDATE reasoning_engine_jobs
                 SET job_status = %s, attempts = %s, lease_owner = '',
-                    lease_expires_at = '', heartbeat_at = '', available_at = %s, last_error = %s,
+                    lease_expires_at = '', heartbeat_at = '', current_stage = '',
+                    stage_started_at = '', stage_updated_at = '', stage_details_json = NULL,
+                    available_at = %s, last_error = %s,
                     completed_at = %s, updated_at = %s
                 WHERE job_id = %s
                 """,
@@ -1856,8 +1972,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             ).fetchall()
             pending_where = where + (" AND" if where else " WHERE") + " job_status IN ('queued', 'retry', 'processing')"
             pending_lanes = connection.execute(
-                "SELECT reasoning_lane, COUNT(*) AS row_count, MIN(created_at) AS oldest "
-                "FROM reasoning_engine_jobs" + pending_where + " GROUP BY reasoning_lane",
+                "SELECT job_status, reasoning_lane, current_stage, "
+                "COUNT(*) AS row_count, MIN(created_at) AS oldest, "
+                "MIN(stage_started_at) AS stage_started_at, MAX(stage_updated_at) AS stage_updated_at "
+                "FROM reasoning_engine_jobs" + pending_where
+                + " GROUP BY job_status, reasoning_lane, current_stage",
                 tuple(params),
             ).fetchall()
         count_map = {str(row.get("job_status") or ""): int(row.get("row_count") or 0) for row in counts or []}
@@ -1921,10 +2040,14 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     continue
         pending_by_lane = {}
         oldest_pending_by_lane = {}
+        processing_stages = {}
         now = utc_now()
         for row in pending_lanes or []:
             lane = str(row.get("reasoning_lane") or "unclassified")
-            pending_by_lane[lane] = int(row.get("row_count") or 0)
+            pending_by_lane[lane] = (
+                int(pending_by_lane.get(lane) or 0)
+                + int(row.get("row_count") or 0)
+            )
             oldest_at = str(row.get("oldest") or "")
             age = 0
             try:
@@ -1934,7 +2057,22 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 age = max(0, int((now - parsed.astimezone(timezone.utc)).total_seconds()))
             except ValueError:
                 pass
-            oldest_pending_by_lane[lane] = {"createdAt": oldest_at, "ageSeconds": age}
+            previous = dict(oldest_pending_by_lane.get(lane) or {})
+            if not previous or oldest_at < str(previous.get("createdAt") or oldest_at):
+                oldest_pending_by_lane[lane] = {"createdAt": oldest_at, "ageSeconds": age}
+            if str(row.get("job_status") or "") == "processing":
+                stage = str(row.get("current_stage") or "unknown")
+                previous_stage = dict(processing_stages.get(stage) or {})
+                processing_stages[stage] = {
+                    "count": int(previous_stage.get("count") or 0) + int(row.get("row_count") or 0),
+                    "startedAt": min(
+                        value for value in [
+                            str(previous_stage.get("startedAt") or ""),
+                            str(row.get("stage_started_at") or ""),
+                        ] if value
+                    ) if previous_stage.get("startedAt") or row.get("stage_started_at") else "",
+                    "updatedAt": str(row.get("stage_updated_at") or ""),
+                }
         return {
             "deploymentId": str(deployment_id or ""),
             "releaseFingerprint": str(release_fingerprint or ""),
@@ -1964,6 +2102,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "oldestPendingAgeSeconds": oldest_pending_age,
             "pendingByLane": pending_by_lane,
             "oldestPendingByLane": oldest_pending_by_lane,
+            "processingStages": processing_stages,
             "latestCompletedAt": str(rows[0].get("completed_at") or "") if rows else "",
         }
 
@@ -1994,6 +2133,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "runtimeRevision": str(values.get("runtime_revision") or ""),
             "reasoningLane": str(values.get("reasoning_lane") or ""),
             "heartbeatAt": str(values.get("heartbeat_at") or ""),
+            "currentStage": str(values.get("current_stage") or ""),
+            "stageStartedAt": str(values.get("stage_started_at") or ""),
+            "stageUpdatedAt": str(values.get("stage_updated_at") or ""),
+            "stageDetails": json_value(values.get("stage_details_json"), {}),
             "availableAt": str(values.get("available_at") or ""),
             "lastError": str(values.get("last_error") or ""),
             "createdAt": str(values.get("created_at") or ""),

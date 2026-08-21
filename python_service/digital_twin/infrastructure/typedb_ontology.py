@@ -9,6 +9,8 @@ import socket
 import threading
 import time
 import uuid
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
@@ -1758,6 +1760,8 @@ DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 900.0
 # candidate. Sixty-four stays below the observed oversized-query boundary and
 # cuts the cold schema to a resumable middle ground.
 DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE = 64
+DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE = 512
+DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS = 900.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -7809,8 +7813,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         projection_coordinator_write_enforced: bool = False,
         persistent_driver_enabled: bool = False,
         fresh_candidate_rebuild: bool = False,
+        fresh_schema_bootstrap_batch_size: int = DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+        fresh_schema_bootstrap_timeout_seconds: float = DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS,
+        http_address: str = "",
     ):
         self.address = str(address or "").strip()
+        self.http_address = str(http_address or "").strip().rstrip("/")
         self.user = str(user or "admin").strip() or "admin"
         self.password = str(password or "password")
         self.database = str(database or "orbit_alpha_ontology").strip() or "orbit_alpha_ontology"
@@ -7969,6 +7977,26 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # so no PortfolioWorld ABox can be reused. Normal live repositories
         # always retain immutable storage identity verification.
         self._fresh_candidate_rebuild = bool(fresh_candidate_rebuild)
+        self._fresh_schema_bootstrap_batch_size = max(
+            DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+            min(
+                2048,
+                int(
+                    number_or_none(fresh_schema_bootstrap_batch_size)
+                    or DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE
+                ),
+            ),
+        )
+        self._fresh_schema_bootstrap_timeout_seconds = max(
+            self._schema_operation_timeout_seconds,
+            min(
+                1800.0,
+                float(
+                    number_or_none(fresh_schema_bootstrap_timeout_seconds)
+                    or DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS
+                ),
+            ),
+        )
         self._database_created_in_process = False
         self._persistent_driver = None
         self._persistent_driver_lock = threading.RLock()
@@ -9212,7 +9240,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         size = max(1, int(batch_size or 1))
         return [rows[index:index + size] for index in range(0, len(rows), size)]
 
-    def base_schema_bootstrap_plan(self, existing_schema_text: str = "") -> List[Dict[str, object]]:
+    def base_schema_bootstrap_plan(
+        self,
+        existing_schema_text: str = "",
+        batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+    ) -> List[Dict[str, object]]:
         """Build a resumable, dependency-ordered base-schema write plan."""
         expected_statements = self.schema_definition_statements(self.schema_query())
         existing_statements = self.schema_definition_statements(existing_schema_text)
@@ -9227,7 +9259,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             if all(self.schema_definition_identity(statement))
         }
         existing_names = {name for _kind, name in existing_by_identity}
-        batch_size = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE
+        batch_size = max(1, min(2048, int(batch_size or DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE)))
         plan: List[Dict[str, object]] = []
 
         def append_definition_batches(phase: str, definitions: Iterable[str]) -> None:
@@ -9318,29 +9350,178 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         )
         return plan
 
-    def synchronize_base_schema_batches(self, driver, imported, schema_text: str = "") -> Dict[str, object]:
+    def synchronize_base_schema_batches(
+        self,
+        driver,
+        imported,
+        schema_text: str = "",
+        batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+        operation_timeout_seconds: float = None,
+    ) -> Dict[str, object]:
         """Apply a cold or partially written schema through bounded commits."""
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        plan = self.base_schema_bootstrap_plan(schema_text)
+        bounded_batch_size = max(1, min(2048, int(batch_size or DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE)))
+        plan = self.base_schema_bootstrap_plan(schema_text, batch_size=bounded_batch_size)
         phase_counts: Dict[str, int] = {}
+        phase_durations_ms: Dict[str, int] = {}
+        batch_metrics = []
         started_at = time.perf_counter()
-        for item in plan:
+        timeout_seconds = max(
+            1.0,
+            float(operation_timeout_seconds or self.schema_operation_timeout_seconds()),
+        )
+        for index, item in enumerate(plan, start=1):
             phase = str(item.get("phase") or "schema")
             phase_counts[phase] = phase_counts.get(phase, 0) + 1
             query = str(item.get("query") or "")
+            batch_started_at = time.perf_counter()
             with typedb_operation_timeout(
-                self.schema_operation_timeout_seconds(),
+                timeout_seconds,
                 "TypeDB base schema batch " + phase,
             ):
-                with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                with self.schema_transaction(
+                    driver,
+                    TransactionType.SCHEMA,
+                    timeout_seconds=timeout_seconds,
+                ) as tx:
                     tx.query(query).resolve()
                     tx.commit()
+            duration_ms = int((time.perf_counter() - batch_started_at) * 1000)
+            phase_durations_ms[phase] = phase_durations_ms.get(phase, 0) + duration_ms
+            batch_metrics.append({
+                "batch": index,
+                "phase": phase,
+                "definitionCount": int(item.get("definitionCount") or 0),
+                "queryBytes": len(query.encode("utf-8")),
+                "durationMs": duration_ms,
+            })
         result = {
             "mode": "bounded-schema-batches",
-            "batchSize": DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+            "batchSize": bounded_batch_size,
+            "operationTimeoutSeconds": timeout_seconds,
             "queryCount": len(plan),
             "definitionCount": sum(int(item.get("definitionCount") or 0) for item in plan),
             "phaseQueryCounts": phase_counts,
+            "phaseDurationsMs": phase_durations_ms,
+            "batches": batch_metrics,
+            "durationMs": int((time.perf_counter() - started_at) * 1000),
+            "resumed": bool(str(schema_text or "").strip() not in {"", "define"}),
+        }
+        self._last_base_schema_sync = dict(result)
+        return result
+
+    def typedb_http_json_request(
+        self,
+        path: str,
+        payload: Dict[str, object],
+        timeout_seconds: float,
+        token: str = "",
+    ) -> Dict[str, object]:
+        """Call the local TypeDB HTTP API without introducing a new client dependency."""
+
+        base = self.http_address
+        if not base:
+            raise RuntimeError("TypeDB HTTP address is unavailable.")
+        if "://" not in base:
+            base = "http://" + base
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        request = urllib.request.Request(
+            base + "/" + str(path or "").lstrip("/"),
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=max(1.0, float(timeout_seconds))) as response:
+                raw = response.read().decode("utf-8").strip()
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")[:600]
+            raise RuntimeError(
+                "TypeDB HTTP " + str(error.code) + ": " + detail
+            ) from error
+        except urllib.error.URLError as error:
+            raise RuntimeError("TypeDB HTTP connection failed: " + str(error.reason)) from error
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("TypeDB HTTP returned invalid JSON: " + raw[:300]) from error
+        return dict(parsed or {}) if isinstance(parsed, dict) else {"result": parsed}
+
+    def synchronize_base_schema_batches_http(
+        self,
+        schema_text: str = "",
+        batch_size: int = DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+        operation_timeout_seconds: float = None,
+    ) -> Dict[str, object]:
+        """Bootstrap a fresh schema over HTTP when a long gRPC commit loses keep-alive."""
+
+        bounded_batch_size = max(1, min(2048, int(batch_size or DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE)))
+        timeout_seconds = max(
+            1.0,
+            float(operation_timeout_seconds or self.schema_operation_timeout_seconds()),
+        )
+        signin = self.typedb_http_json_request(
+            "/v1/signin",
+            {"username": self.user, "password": self.password},
+            min(timeout_seconds, 30.0),
+        )
+        token = str(signin.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("TypeDB HTTP sign-in did not return an access token.")
+        plan = self.base_schema_bootstrap_plan(schema_text, batch_size=bounded_batch_size)
+        phase_counts: Dict[str, int] = {}
+        phase_durations_ms: Dict[str, int] = {}
+        batch_metrics = []
+        started_at = time.perf_counter()
+        for index, item in enumerate(plan, start=1):
+            phase = str(item.get("phase") or "schema")
+            query = str(item.get("query") or "")
+            batch_started_at = time.perf_counter()
+            try:
+                self.typedb_http_json_request(
+                    "/v1/query",
+                    {
+                        "databaseName": self.database,
+                        "transactionType": "schema",
+                        "query": query,
+                        "commit": True,
+                        "transactionOptions": {
+                            "transactionTimeoutMillis": int(timeout_seconds * 1000),
+                            "schemaLockAcquireTimeoutMillis": int(timeout_seconds * 1000),
+                        },
+                    },
+                    timeout_seconds,
+                    token=token,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    "TypeDB HTTP base schema batch failed at "
+                    + str(index) + "/" + str(len(plan)) + " (" + phase + "): " + str(error)
+                ) from error
+            duration_ms = int((time.perf_counter() - batch_started_at) * 1000)
+            phase_counts[phase] = phase_counts.get(phase, 0) + 1
+            phase_durations_ms[phase] = phase_durations_ms.get(phase, 0) + duration_ms
+            batch_metrics.append({
+                "batch": index,
+                "phase": phase,
+                "definitionCount": int(item.get("definitionCount") or 0),
+                "queryBytes": len(query.encode("utf-8")),
+                "durationMs": duration_ms,
+            })
+        result = {
+            "mode": "http-bounded-schema-batches",
+            "batchSize": bounded_batch_size,
+            "operationTimeoutSeconds": timeout_seconds,
+            "queryCount": len(plan),
+            "definitionCount": sum(int(item.get("definitionCount") or 0) for item in plan),
+            "phaseQueryCounts": phase_counts,
+            "phaseDurationsMs": phase_durations_ms,
+            "batches": batch_metrics,
             "durationMs": int((time.perf_counter() - started_at) * 1000),
             "resumed": bool(str(schema_text or "").strip() not in {"", "define"}),
         }
@@ -9361,7 +9542,20 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # base contract directly; retries can still resume from inspected text.
         schema_text = ""
         if self._fresh_candidate_rebuild and self._database_created_in_process:
-            self.synchronize_base_schema_batches(driver, imported, schema_text)
+            if self.http_address:
+                self.synchronize_base_schema_batches_http(
+                    schema_text,
+                    batch_size=self._fresh_schema_bootstrap_batch_size,
+                    operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
+                )
+            else:
+                self.synchronize_base_schema_batches(
+                    driver,
+                    imported,
+                    schema_text,
+                    batch_size=self._fresh_schema_bootstrap_batch_size,
+                    operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
+                )
             self._base_schema_ready_fingerprint = schema_fingerprint
             self.mark_process_base_schema_ready(schema_fingerprint)
             return
@@ -28146,6 +28340,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         native_execution_value = settings.get("typedbNativeRuleExecutionEnabled")
     return TypeDBOntologyGraphRepository(
         address=address,
+        http_address=str(settings.get("typedbHttpAddress") or ""),
         user=str(settings.get("typedbUser") or "admin"),
         password=str(settings.get("typedbPassword") or "password"),
         database=str(settings.get("typedbDatabase") or "orbit_alpha_ontology"),
@@ -28221,4 +28416,10 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         fresh_candidate_rebuild=typedb_bool(
             settings.get("typedbFreshCandidateRebuild")
         ),
+        fresh_schema_bootstrap_batch_size=int(number_or_none(
+            settings.get("typedbFreshSchemaBootstrapBatchSize")
+        ) or DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE),
+        fresh_schema_bootstrap_timeout_seconds=number_or_none(
+            settings.get("typedbFreshSchemaBootstrapTimeoutSeconds")
+        ) or DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS,
     )

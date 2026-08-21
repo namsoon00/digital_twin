@@ -292,6 +292,8 @@ class OntologyWorldProjectionRunner:
         summary = self.outbox_summary()
         return {
             "workerId": self.worker_id,
+            "writeMode": "durable-single-writer",
+            "claimConcurrency": 1,
             "batchSize": self.batch_size(),
             "leaseSeconds": self.lease_seconds(),
             "maxAttempts": self.max_attempts(),

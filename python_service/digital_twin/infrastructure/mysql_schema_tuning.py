@@ -478,6 +478,10 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
     ),
     "reasoning_engine_jobs": (
         MySQLColumnDefinition("reasoning_engine_jobs", "heartbeat_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "current_stage", "VARCHAR(96) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "stage_started_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "stage_updated_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "stage_details_json", "LONGTEXT NULL"),
         MySQLColumnDefinition("reasoning_engine_jobs", "source_snapshot_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "source_snapshot_at", "VARCHAR(40) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "source_boundary_json", "LONGTEXT NULL"),

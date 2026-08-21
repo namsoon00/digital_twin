@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock, current_thread
 from types import SimpleNamespace
-from unittest.mock import ANY, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 from digital_twin import service_manager
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
@@ -1101,6 +1101,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         inspect_schema.assert_not_called()
         synchronize.assert_called_once()
         self.assertEqual("", synchronize.call_args.args[2])
+        self.assertEqual(512, synchronize.call_args.kwargs["batch_size"])
+        self.assertEqual(900.0, synchronize.call_args.kwargs["operation_timeout_seconds"])
         mark_ready.assert_called_once()
         repository.invalidate_process_base_schema_readiness()
 
@@ -1145,6 +1147,124 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         for statement in initial_definitions:
             _kind, name = repository.schema_definition_identity(statement)
             self.assertNotIn("attribute " + name + ",", resumed_text)
+
+    def test_fresh_typedb_schema_plan_avoids_recompiling_thirty_small_batches(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        recovery_plan = repository.base_schema_bootstrap_plan("define\n", batch_size=64)
+        fresh_plan = repository.base_schema_bootstrap_plan("define\n", batch_size=512)
+
+        self.assertGreaterEqual(len(recovery_plan), 30)
+        self.assertLessEqual(len(fresh_plan), 10)
+        self.assertEqual(
+            sum(int(item.get("definitionCount") or 0) for item in recovery_plan),
+            sum(int(item.get("definitionCount") or 0) for item in fresh_plan),
+        )
+        self.assertLessEqual(
+            max(int(item.get("definitionCount") or 0) for item in fresh_plan),
+            512,
+        )
+
+    def test_fresh_schema_batches_use_the_configured_server_transaction_deadline(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        transaction = MagicMock()
+        transaction.__enter__.return_value = transaction
+        transaction.__exit__.return_value = False
+        driver = MagicMock()
+        driver.transaction.return_value = transaction
+        imported = ((None, None, None, None, SimpleNamespace(SCHEMA="schema")), None)
+
+        with patch.object(repository, "base_schema_bootstrap_plan", return_value=[{
+            "phase": "attributes",
+            "query": "define attribute test-value, value string;",
+            "definitionCount": 1,
+        }]), patch.object(repository, "schema_transaction", wraps=repository.schema_transaction) as schema_transaction:
+            result = repository.synchronize_base_schema_batches(
+                driver,
+                imported,
+                batch_size=512,
+                operation_timeout_seconds=900,
+            )
+
+        schema_transaction.assert_called_once_with(
+            driver,
+            "schema",
+            timeout_seconds=900.0,
+        )
+        options = driver.transaction.call_args.kwargs["options"]
+        self.assertEqual(900000, options.transaction_timeout_millis)
+        self.assertEqual(900000, options.schema_lock_acquire_timeout_millis)
+        self.assertEqual(1, result["queryCount"])
+
+    def test_fresh_schema_http_bootstrap_avoids_the_grpc_keepalive_boundary(self):
+        repository = TypeDBOntologyGraphRepository(
+            "127.0.0.1:1730",
+            http_address="127.0.0.1:8001",
+        )
+        requests = []
+
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        def urlopen(request, timeout):
+            requests.append((request, timeout))
+            if request.full_url.endswith("/v1/signin"):
+                return Response({"token": "candidate-token"})
+            return Response({})
+
+        with patch.object(repository, "base_schema_bootstrap_plan", return_value=[{
+            "phase": "attributes",
+            "query": "define attribute test-value, value string;",
+            "definitionCount": 1,
+        }]), patch(
+            "digital_twin.infrastructure.typedb_ontology.urllib.request.urlopen",
+            side_effect=urlopen,
+        ):
+            result = repository.synchronize_base_schema_batches_http(
+                batch_size=512,
+                operation_timeout_seconds=900,
+            )
+
+        self.assertEqual("http-bounded-schema-batches", result["mode"])
+        self.assertEqual(2, len(requests))
+        self.assertEqual("http://127.0.0.1:8001/v1/signin", requests[0][0].full_url)
+        self.assertEqual("http://127.0.0.1:8001/v1/query", requests[1][0].full_url)
+        query_payload = json.loads(requests[1][0].data.decode("utf-8"))
+        self.assertTrue(query_payload["commit"])
+        self.assertEqual("schema", query_payload["transactionType"])
+        self.assertEqual(900000, query_payload["transactionOptions"]["transactionTimeoutMillis"])
+        self.assertEqual("Bearer candidate-token", requests[1][0].headers["Authorization"])
+
+    def test_fresh_candidate_prefers_http_schema_bootstrap_when_configured(self):
+        repository = TypeDBOntologyGraphRepository(
+            "fresh-http.test:1730",
+            database="fresh_http_schema_test",
+            fresh_candidate_rebuild=True,
+            http_address="fresh-http.test:8001",
+        )
+        repository._database_created_in_process = True
+
+        with patch.object(repository, "synchronize_base_schema_batches_http") as http_sync, \
+                patch.object(repository, "synchronize_base_schema_batches") as grpc_sync:
+            repository.ensure_schema(None, None)
+
+        http_sync.assert_called_once_with(
+            "",
+            batch_size=512,
+            operation_timeout_seconds=900.0,
+        )
+        grpc_sync.assert_not_called()
+        repository.invalidate_process_base_schema_readiness()
 
     def test_typedb_schema_readiness_is_reused_by_fresh_repository_instances(self):
         address = "typedb-schema-cache.test:1729"
@@ -10897,11 +11017,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             restart_candidate.assert_called_once_with(spec)
             sleep.assert_not_called()
 
-    def test_service_manager_does_not_start_dependents_when_typedb_is_not_ready(self):
+    def test_service_manager_keeps_collectors_available_but_blocks_graph_dependents_when_typedb_is_not_ready(self):
         calls = []
         specs = {
             "typedb": {"label": "TypeDB ontology graph store", "role": "typedb"},
             "monitor": {"label": "Python realtime monitor"},
+            "ontology-reasoning": {"label": "Python ontology reasoning worker"},
         }
 
         def fake_start_worker(spec):
@@ -10912,7 +11033,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(service_manager, "start_worker", side_effect=fake_start_worker):
             self.assertEqual(1, service_manager.start())
 
-        self.assertEqual(["TypeDB ontology graph store"], calls)
+        self.assertEqual(["Python realtime monitor", "TypeDB ontology graph store"], calls)
 
     def test_service_manager_does_not_reseed_an_already_running_typedb(self):
         with tempfile.TemporaryDirectory() as temp:

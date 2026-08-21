@@ -1,4 +1,5 @@
 import errno
+import inspect
 import json
 import os
 import queue
@@ -136,7 +137,14 @@ class IsolatedOntologyReasoningCycle:
             "workerOutput": _output_text(output)[-1200:],
         }
 
-    def run_once(self, limit: int, timeout_seconds: int, grace_seconds: int) -> dict:
+    def run_once(
+        self,
+        limit: int,
+        timeout_seconds: int,
+        grace_seconds: int,
+        cancel_requested=None,
+        cancel_poll_seconds: float = 1.0,
+    ) -> dict:
         if not self.command:
             return {
                 "status": "error",
@@ -162,26 +170,59 @@ class IsolatedOntologyReasoningCycle:
         self.process = process
         if self._stop_requested:
             self._signal_group(process, signal.SIGTERM)
+        deadline = time.monotonic() + max(1, int(timeout_seconds or 1))
+        output = ""
         try:
-            output, _ = process.communicate(timeout=max(1, int(timeout_seconds or 1)))
-        except subprocess.TimeoutExpired as error:
-            if self._stop_requested:
-                output = _output_text(getattr(error, "output", "")) + self._terminate(process, grace_seconds)
-                return self._stopped_result(process, started, output)
-            output = _output_text(getattr(error, "output", "")) + self._terminate(process, grace_seconds)
-            return {
-                "status": "timeout",
-                "processedCount": 0,
-                "alertCount": 0,
-                "timeout": True,
-                "timeoutSeconds": int(timeout_seconds or 0),
-                "durationMs": int((time.monotonic() - started) * 1000),
-                "workerOutput": output[-1200:],
-            }
-        except OSError as error:
-            if self._stop_requested and getattr(error, "errno", None) == errno.EBADF:
-                return self._stopped_result(process, started)
-            raise
+            while True:
+                remaining = deadline - time.monotonic()
+                try:
+                    poll_seconds = (
+                        min(remaining, max(0.1, float(cancel_poll_seconds or 1.0)))
+                        if callable(cancel_requested)
+                        else remaining
+                    )
+                    output, _ = process.communicate(timeout=max(0.05, poll_seconds))
+                    break
+                except subprocess.TimeoutExpired as error:
+                    if callable(cancel_requested) and bool(cancel_requested()):
+                        output = _output_text(getattr(error, "output", "")) + self._terminate(
+                            process,
+                            grace_seconds,
+                        )
+                        return {
+                            "status": "preempted-reasoning-queue",
+                            "processedCount": 0,
+                            "alertCount": 0,
+                            "preempted": True,
+                            "durationMs": int((time.monotonic() - started) * 1000),
+                            "childExitCode": int(getattr(process, "returncode", 0) or 0),
+                            "workerOutput": output[-1200:],
+                        }
+                    if remaining > 0 and callable(cancel_requested):
+                        continue
+                    if self._stop_requested:
+                        output = _output_text(getattr(error, "output", "")) + self._terminate(
+                            process,
+                            grace_seconds,
+                        )
+                        return self._stopped_result(process, started, output)
+                    output = _output_text(getattr(error, "output", "")) + self._terminate(
+                        process,
+                        grace_seconds,
+                    )
+                    return {
+                        "status": "timeout",
+                        "processedCount": 0,
+                        "alertCount": 0,
+                        "timeout": True,
+                        "timeoutSeconds": int(timeout_seconds or 0),
+                        "durationMs": int((time.monotonic() - started) * 1000),
+                        "workerOutput": output[-1200:],
+                    }
+                except OSError as error:
+                    if self._stop_requested and getattr(error, "errno", None) == errno.EBADF:
+                        return self._stopped_result(process, started)
+                    raise
         finally:
             if self.process is process:
                 self.process = None
@@ -1464,6 +1505,18 @@ class OntologyMaintenanceScheduler:
         configured = getattr(self.runner, "execution_timeout_grace_seconds", None)
         return max(1, int(configured() if callable(configured) else 10))
 
+    def live_reasoning_pending(self) -> bool:
+        queue_reader = getattr(self.runner, "reasoning_queue_state", None)
+        counter = getattr(self.runner, "queue_pending_count", None)
+        if not callable(queue_reader) or not callable(counter):
+            return False
+        try:
+            return int(counter(dict(queue_reader() or {}))) > 0
+        except Exception:
+            # The shared TypeDB coordinator remains the final boundary when a
+            # transient MySQL probe cannot determine queue state.
+            return False
+
     def run_once(self):
         preflight = getattr(self.runner, "reasoning_queue_deferral", None)
         if callable(preflight):
@@ -1473,12 +1526,19 @@ class OntologyMaintenanceScheduler:
                 return result
         if not self.process_isolation_enabled():
             return self.runner.run_once()
-        result = self.isolated_cycle.run_once(
+        isolated_run = self.isolated_cycle.run_once
+        parameters = inspect.signature(isolated_run).parameters
+        kwargs = {}
+        if "cancel_requested" in parameters:
+            kwargs["cancel_requested"] = self.live_reasoning_pending
+            kwargs["cancel_poll_seconds"] = 1.0
+        result = isolated_run(
             0,
             self.execution_timeout_seconds(),
             self.execution_timeout_grace_seconds(),
+            **kwargs,
         )
-        if not bool(result.get("timeout")):
+        if not bool(result.get("timeout") or result.get("preempted")):
             return result
         recover = getattr(self.runner, "recover_dead_projection_leases", None)
         if not callable(recover):
@@ -1493,7 +1553,11 @@ class OntologyMaintenanceScheduler:
             }
         return {
             **dict(result or {}),
-            "timeoutLeaseRecovery": recovery,
+            (
+                "preemptionLeaseRecovery"
+                if bool(result.get("preempted"))
+                else "timeoutLeaseRecovery"
+            ): recovery,
         }
 
     def next_wait_seconds(self, result: dict) -> float:
@@ -1531,6 +1595,7 @@ class OntologyMaintenanceScheduler:
         if status in {
             "error",
             "partial",
+            "deferred-reasoning-queue",
             "deferred-write-lease",
             "deferred-pending-abox-activation",
             "deferred-scope-integrity-repair",

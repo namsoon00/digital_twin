@@ -1,6 +1,7 @@
 """Independent V2 reasoning execution without the monitoring runner."""
 
 import inspect
+import json
 import threading
 import time
 from copy import deepcopy
@@ -867,18 +868,37 @@ class V2ReasoningEngine:
     def release_identity(self) -> Dict[str, object]:
         return dict(self._release_identity)
 
-    def consume(self, source_events: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+    def consume(
+        self,
+        source_events: Iterable[Mapping[str, object]],
+        progress_callback=None,
+    ) -> Dict[str, object]:
         request = independent_reasoning_request(
             self._descriptor.deployment_id,
             source_events,
             self.release_manifest(),
         )
-        return self.execute(request).to_dict()
+        return self.execute(request, progress_callback=progress_callback).to_dict()
 
-    def execute(self, request: IndependentReasoningRequest, force: bool = False) -> IndependentReasoningResult:
+    def execute(
+        self,
+        request: IndependentReasoningRequest,
+        force: bool = False,
+        progress_callback=None,
+    ) -> IndependentReasoningResult:
         started_at = utc_now_iso()
         started = time.perf_counter()
         stages = {}
+
+        def progress(stage: str, payload: Mapping[str, object] = None) -> None:
+            if callable(progress_callback):
+                progress_callback(stage, {
+                    "requestId": request.request_id,
+                    "symbolCount": len(request.symbols),
+                    **dict(payload or {}),
+                })
+
+        progress("input_assembly.start")
         reasoning_case = (
             self.reasoning_orchestrator.start(request, self._release_identity)
             if self.reasoning_orchestrator is not None
@@ -887,6 +907,10 @@ class V2ReasoningEngine:
         input_started = time.perf_counter()
         assembled = self.input_assembler.assemble(request)
         stages["inputAssemblyMs"] = int((time.perf_counter() - input_started) * 1000)
+        progress(
+            "input_assembly.completed",
+            {"durationMs": stages["inputAssemblyMs"], "status": assembled.get("status")},
+        )
         preflight = dict(assembled.get("preflight") or {})
         if assembled.get("status") != "ready":
             preflight_status = str(preflight.get("status") or "input-not-ready")
@@ -930,8 +954,20 @@ class V2ReasoningEngine:
         if reasoning_case is not None:
             reasoning_case = self.reasoning_orchestrator.input_ready(reasoning_case.case_id)
         projection_started = time.perf_counter()
-        projection_results = self.inference_executor.execute(request, snapshots)
+        progress("projection_and_inference.start", {"accountCount": len(snapshots)})
+        inference_execute = self.inference_executor.execute
+        inference_parameters = inspect.signature(inference_execute).parameters
+        inference_kwargs = (
+            {"progress_callback": progress}
+            if "progress_callback" in inference_parameters
+            else {}
+        )
+        projection_results = inference_execute(request, snapshots, **inference_kwargs)
         projection_total_ms = int((time.perf_counter() - projection_started) * 1000)
+        progress(
+            "projection_and_inference.completed",
+            {"durationMs": projection_total_ms, "accountCount": len(projection_results)},
+        )
         # The scoped executor publishes after each successful leader account
         # so following accounts in the same batch can reuse the exact market
         # head. Publishing the whole batch again here previously doubled the
@@ -985,6 +1021,7 @@ class V2ReasoningEngine:
                 stages["projectionAndInferenceMs"],
             )
         candidate_started = time.perf_counter()
+        progress("candidate_build.start")
         candidates = self.candidate_builder.build(
             request,
             snapshots,
@@ -993,6 +1030,14 @@ class V2ReasoningEngine:
             force=force,
         )
         stages["candidateBuildMs"] = int((time.perf_counter() - candidate_started) * 1000)
+        progress(
+            "candidate_build.completed",
+            {
+                "durationMs": stages["candidateBuildMs"],
+                "detectedCount": len(candidates.get("detected") or []),
+                "readyCount": len(candidates.get("ready") or []),
+            },
+        )
         detected_events = list(candidates.get("detected") or [])
         ready_events = list(candidates.get("ready") or [])
         decision_syntheses = list(candidates.get("syntheses") or [])
@@ -1195,6 +1240,9 @@ class IndependentReasoningJobRunner:
         self.route_reconciliation = None
         self.route_reconciled_at = 0.0
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
+        self._shutdown_result: Dict[str, object] = {}
+        self._progress_lock = threading.Lock()
+        self._current_progress: Dict[str, object] = {}
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -1322,7 +1370,12 @@ class IndependentReasoningJobRunner:
             )
             heartbeat.start()
             try:
-                result = self.engine.consume(events)
+                consume = self.engine.consume
+                parameters = inspect.signature(consume).parameters
+                if "progress_callback" in parameters:
+                    result = consume(events, progress_callback=self.record_progress)
+                else:
+                    result = consume(events)
             finally:
                 stop_heartbeat.set()
                 heartbeat.join(timeout=max(1, self.heartbeat_seconds() + 1))
@@ -1719,6 +1772,38 @@ class IndependentReasoningJobRunner:
     def heartbeat_seconds(self) -> int:
         return _int_setting(self.settings, "reasoningEngineV2HeartbeatSeconds", 15, 2, 120)
 
+    def record_progress(self, stage: str, payload: Mapping[str, object] = None) -> None:
+        stage_name = str(stage or "unknown")[:96]
+        now = utc_now_iso()
+        details = {
+            str(key)[:64]: value
+            for key, value in list(dict(payload or {}).items())[:16]
+            if isinstance(value, (str, int, float, bool)) or value is None
+        }
+        with self._progress_lock:
+            previous_stage = str(self._current_progress.get("stage") or "")
+            started_at = (
+                str(self._current_progress.get("startedAt") or now)
+                if previous_stage == stage_name
+                else now
+            )
+            self._current_progress = {
+                "stage": stage_name,
+                "startedAt": started_at,
+                "updatedAt": now,
+                "details": details,
+            }
+        if previous_stage != stage_name:
+            print(
+                "V2 reasoning progress "
+                + json.dumps(self._current_progress, ensure_ascii=True, separators=(",", ":")),
+                flush=True,
+            )
+
+    def current_progress(self) -> Dict[str, object]:
+        with self._progress_lock:
+            return dict(self._current_progress)
+
     def heartbeat_loop(self, job_ids, stop_event, lease_lost) -> None:
         callback = getattr(self.queue, "heartbeat", None)
         if not callable(callback):
@@ -1730,9 +1815,13 @@ class IndependentReasoningJobRunner:
             60,
             3600,
         )
+        parameters = inspect.signature(callback).parameters
         while not stop_event.wait(self.heartbeat_seconds()):
             try:
-                alive = callback(job_ids, self.worker_id, lease_seconds)
+                kwargs = {}
+                if "progress" in parameters:
+                    kwargs["progress"] = self.current_progress()
+                alive = callback(job_ids, self.worker_id, lease_seconds, **kwargs)
             except Exception:
                 continue
             if not alive:
@@ -1767,6 +1856,31 @@ class IndependentReasoningJobRunner:
                 "reason": str(error)[:180],
             }
         return dict(result or {"status": "unchanged", "recoveredCount": 0})
+
+    def shutdown(self) -> Dict[str, object]:
+        """Release only claims owned by this exact process identity."""
+
+        if self._shutdown_result:
+            return dict(self._shutdown_result)
+        callback = getattr(self.queue, "release_worker_leases", None)
+        if not callable(callback):
+            self._shutdown_result = {"status": "unsupported", "releasedCount": 0}
+            return dict(self._shutdown_result)
+        try:
+            deployment_id = str(self.engine.descriptor().deployment_id or "")
+            result = callback(
+                deployment_id,
+                self.worker_id,
+                "The managed V2 worker stopped; retrying immediately on its replacement.",
+            )
+            self._shutdown_result = dict(result or {"status": "unchanged", "releasedCount": 0})
+        except Exception as error:  # noqa: BLE001 - durable expiry remains the crash fallback.
+            self._shutdown_result = {
+                "status": "error",
+                "releasedCount": 0,
+                "reason": str(error)[:180],
+            }
+        return dict(self._shutdown_result)
 
     def compact_backlog(self, deployment_id: str) -> Dict[str, object]:
         callback = getattr(self.queue, "compact_supersedable_backlog", None)

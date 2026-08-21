@@ -1,6 +1,8 @@
 import argparse
+import faulthandler
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -1154,8 +1156,44 @@ def watch_v2_reasoning_engine(
             )
             sleep(max(1.0, float(retry_seconds or 30.0)))
             continue
-        runner.watch()
-        return 0
+        shutdown = getattr(runner, "shutdown", None)
+        previous_handlers = {}
+        stack_signal = getattr(signal, "SIGUSR1", None)
+        stack_dump_registered = False
+
+        def stop_runner(signum, _frame):
+            if callable(shutdown):
+                shutdown()
+            raise SystemExit(128 + int(signum or 0))
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            try:
+                previous_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, stop_runner)
+            except (ValueError, OSError):
+                continue
+        if stack_signal is not None:
+            try:
+                faulthandler.register(stack_signal, file=sys.stderr, all_threads=True)
+                stack_dump_registered = True
+            except (RuntimeError, ValueError, OSError):
+                stack_dump_registered = False
+        try:
+            runner.watch()
+            return 0
+        finally:
+            if callable(shutdown):
+                shutdown()
+            if stack_dump_registered:
+                try:
+                    faulthandler.unregister(stack_signal)
+                except (RuntimeError, ValueError, OSError):
+                    pass
+            for signum, previous in previous_handlers.items():
+                try:
+                    signal.signal(signum, previous)
+                except (ValueError, OSError):
+                    continue
 
 
 def reasoning_engine_platform_command(args) -> int:

@@ -110,6 +110,53 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
 
         self.assertIsNone(event)
 
+    def test_portfolio_cash_change_does_not_fan_out_immaterial_symbol_turns(self):
+        previous = snapshot()
+        current = snapshot(aapl_price=100.2, msft_price=200.2)
+        current.portfolio.cash = 325.0
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertIsNone(event)
+
+    def test_portfolio_change_does_not_promote_an_unrelated_symbol(self):
+        previous = snapshot()
+        current = snapshot(aapl_price=102.0, msft_price=200.2)
+        current.portfolio.cash = 325.0
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertNotIn("MSFT", event.payload["factTypesBySymbol"])
+        self.assertNotIn("portfolioContext", event.payload["changedFieldsBySymbol"]["AAPL"])
+        self.assertTrue(event.payload["verifiedSourceSnapshot"]["portfolioContextChanged"])
+
+    def test_portfolio_change_keeps_direct_evidence_bound_to_its_symbol(self):
+        previous = snapshot()
+        current = snapshot(aapl_price=100.2, msft_price=200.2, external_signals={
+            "newsHeadlines": {
+                "AAPL": {
+                    "items": [{
+                        "symbol": "AAPL",
+                        "title": "Material guidance update",
+                        "url": "https://example.test/aapl-guidance",
+                    }],
+                },
+            },
+        })
+        current.portfolio.cash = 325.0
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(["AAPL"], event.payload["symbols"])
+        self.assertEqual(["ResearchEvidence"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertEqual(
+            ["external.newsHeadlines"],
+            event.payload["changedFieldsBySymbol"]["AAPL"],
+        )
+        self.assertNotIn("MSFT", event.payload["factTypesBySymbol"])
+
     def test_foreign_flow_direction_change_creates_a_flow_request(self):
         previous = snapshot()
         current = snapshot()

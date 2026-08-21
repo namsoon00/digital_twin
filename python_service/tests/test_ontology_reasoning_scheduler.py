@@ -199,6 +199,24 @@ class MaintenanceTimeoutCycle:
         }
 
 
+class MaintenancePreemptionCycle:
+    def run_once(
+        self,
+        *_args,
+        cancel_requested=None,
+        cancel_poll_seconds=0,
+        **_kwargs,
+    ):
+        assert callable(cancel_requested)
+        assert cancel_poll_seconds == 1.0
+        assert cancel_requested()
+        return {
+            "status": "preempted-reasoning-queue",
+            "preempted": True,
+            "durationMs": 1000,
+        }
+
+
 class MaintenanceTimeoutRecoveryRunner:
     def process_isolation_enabled(self):
         return True
@@ -215,6 +233,15 @@ class MaintenanceTimeoutRecoveryRunner:
                 "system:typedb-projection-coordinator",
             ],
         }
+
+
+class MaintenancePreemptionRunner(MaintenanceTimeoutRecoveryRunner):
+    def reasoning_queue_state(self):
+        return {"effectivePendingCount": 1}
+
+    @staticmethod
+    def queue_pending_count(state):
+        return int(state.get("effectivePendingCount") or 0)
 
 
 class PersistentTimeoutCycle:
@@ -281,6 +308,23 @@ class OntologyReasoningSchedulerTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual(1, result["processedCount"])
         self.assertTrue(result["isolatedExecution"])
+
+    def test_isolated_cycle_preempts_a_child_when_live_work_arrives(self):
+        cycle = IsolatedOntologyReasoningCycle(
+            [sys.executable, "-u", "-c", "import time; time.sleep(5)"],
+        )
+
+        result = cycle.run_once(
+            limit=0,
+            timeout_seconds=5,
+            grace_seconds=1,
+            cancel_requested=lambda: True,
+            cancel_poll_seconds=0.05,
+        )
+
+        self.assertEqual("preempted-reasoning-queue", result["status"])
+        self.assertTrue(result["preempted"])
+        self.assertLess(result["durationMs"], 2000)
 
     def test_persistent_isolated_cycle_reuses_one_warm_child_for_multiple_requests(self):
         worker = """import json
@@ -469,6 +513,18 @@ for raw in sys.stdin:
         self.assertEqual("cleared", result["timeoutLeaseRecovery"]["status"])
         self.assertEqual(2, result["timeoutLeaseRecovery"]["clearedCount"])
 
+    def test_maintenance_scheduler_preempts_and_recovers_when_reasoning_arrives(self):
+        scheduler = OntologyMaintenanceScheduler(
+            MaintenancePreemptionRunner(),
+            60,
+            isolated_cycle=MaintenancePreemptionCycle(),
+        )
+
+        result = scheduler.run_once()
+
+        self.assertEqual("preempted-reasoning-queue", result["status"])
+        self.assertEqual("cleared", result["preemptionLeaseRecovery"]["status"])
+
     def test_maintenance_scheduler_retries_lease_only_deferrals_before_normal_interval(self):
         scheduler = OntologyMaintenanceScheduler(DeferredLowPriorityRunner(), 60)
 
@@ -481,6 +537,17 @@ for raw in sys.stdin:
             "retryAfterSeconds": 10,
         }))
         self.assertEqual(60.0, scheduler.next_wait_seconds({"status": "ok"}))
+
+    def test_maintenance_scheduler_reports_reasoning_deferral_with_deduplication(self):
+        scheduler = OntologyMaintenanceScheduler(DeferredLowPriorityRunner(), 60)
+        result = {
+            "status": "deferred-reasoning-queue",
+            "reason": "Live reasoning has priority.",
+        }
+
+        self.assertTrue(scheduler.should_report(result, 100.0))
+        self.assertFalse(scheduler.should_report(result, 200.0))
+        self.assertTrue(scheduler.should_report(result, 401.0))
 
 
 def signal_value(name):

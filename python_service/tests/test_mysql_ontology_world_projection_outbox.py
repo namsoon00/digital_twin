@@ -70,6 +70,45 @@ class OntologyWorldProjectionOutboxTests(unittest.TestCase):
         serialize.assert_not_called()
         self.assertEqual(1, len(connection.calls))
 
+    def test_claim_does_not_admit_a_second_shared_world_writer(self):
+        class Cursor:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+            def fetchall(self):
+                raise AssertionError("pending jobs must not be read while a writer is active")
+
+        class Connection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, params=None):
+                self.calls.append((sql, params))
+                if "SELECT job_id, lease_owner, lease_expires_at" in sql:
+                    return Cursor({
+                        "job_id": "world-projection:active",
+                        "lease_owner": "worker:other",
+                        "lease_expires_at": "2099-01-01T00:00:00Z",
+                    })
+                return Cursor()
+
+        store = MySQLOntologyWorldProjectionOutboxStore.__new__(
+            MySQLOntologyWorldProjectionOutboxStore
+        )
+        connection = Connection()
+        store.transaction = lambda: _ConnectionContext(connection)
+
+        claimed = store.claim("worker:new", limit=4, lease_seconds=300)
+
+        self.assertEqual([], claimed)
+        self.assertTrue(any(
+            "SELECT job_id, lease_owner, lease_expires_at" in sql
+            for sql, _params in connection.calls
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

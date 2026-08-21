@@ -498,7 +498,7 @@ def _reasoning_external_groups(
     return sorted(set(selected))
 
 
-def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str], portfolio_changed: bool) -> List[str]:
+def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]) -> List[str]:
     selected = set()
     field_set = set(fields or [])
     if field_set - TECHNICAL_FIELDS - FLOW_FIELDS - ORDERBOOK_FIELDS - POSITION_CONTEXT_FIELDS:
@@ -509,7 +509,7 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
         selected.add("ExecutionFlow")
     if field_set & ORDERBOOK_FIELDS:
         selected.add("OrderBook")
-    if field_set & POSITION_CONTEXT_FIELDS or "positionRemoved" in field_set or portfolio_changed:
+    if field_set & POSITION_CONTEXT_FIELDS or "positionRemoved" in field_set:
         selected.add("PortfolioSnapshot")
     groups = set(external_groups or [])
     if groups & {"macro"}:
@@ -638,7 +638,11 @@ def verified_monitor_snapshot_reasoning_event(
             deferred_market_symbols.append(symbol)
         if raw_external_groups and not external_groups and not position_fields:
             deferred_supplemental_external_symbols.append(symbol)
-        if not (bootstrap_or_position_context or market_requires_reasoning or external_groups or portfolio_changed):
+        # Portfolio lifecycle changes have their own aggregate work items
+        # (portfolio-activity and portfolio-rebalance-*).  A cash or sibling
+        # position change must not promote every immaterial quote in this
+        # monitor snapshot into a per-symbol TypeDB turn.
+        if not (bootstrap_or_position_context or market_requires_reasoning or external_groups):
             continue
 
         # A direct evidence change can share a monitor snapshot with a small
@@ -648,18 +652,15 @@ def verified_monitor_snapshot_reasoning_event(
         # subject was selected for another reason.
         selected_position_fields = (
             list(position_fields)
-            if (bootstrap_or_position_context or market_requires_reasoning or portfolio_changed)
+            if (bootstrap_or_position_context or market_requires_reasoning)
             else []
         )
         fields = list(selected_position_fields)
-        if portfolio_changed:
-            fields.append("portfolioContext")
         fields.extend("external." + group for group in external_groups)
 
         fact_types = _fact_types_for_change(
             selected_position_fields,
             external_groups,
-            portfolio_changed,
         )
         all_fact_types.update(fact_types)
         changed_symbols.append(symbol)
@@ -674,7 +675,6 @@ def verified_monitor_snapshot_reasoning_event(
                 if selected_position_fields
                 else {}
             ),
-            "portfolioContext": current_portfolio if portfolio_changed else {},
             "external": after_external if external_groups else {},
         }
         revisions[symbol] = fact_revision_id(

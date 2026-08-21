@@ -186,6 +186,26 @@ def typedb_executable() -> str:
     return str(home_install) if home_install.exists() else ""
 
 
+def managed_executable(name: str, explicit: object = "") -> str:
+    """Resolve a managed binary even under launchd's minimal PATH."""
+
+    configured = str(explicit or "").strip()
+    candidates = [
+        configured,
+        shutil.which(str(name or "")) or "",
+        "/usr/local/bin/" + str(name or ""),
+        "/opt/homebrew/bin/" + str(name or ""),
+        "/usr/bin/" + str(name or ""),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return ""
+
+
 def source_revision() -> str:
     """Return the code revision that a managed process must keep for its lifetime."""
     try:
@@ -288,6 +308,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
         "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "80"),
+        "autoRotationWalMb": str((settings or {}).get("typedbCapacityAutoRotateWalMb") or "2048"),
         "autoRotationFreeSpaceMb": str(
             (settings or {}).get("typedbCapacityAutoRotateFreeSpaceMb") or "24576"
         ),
@@ -355,6 +376,12 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # for planner stability and can exceed six minutes on a cold store.
         "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "900"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
+        "freshSchemaBootstrapBatchSize": str(
+            (settings or {}).get("typedbFreshSchemaBootstrapBatchSize") or "512"
+        ),
+        "freshSchemaBootstrapTimeoutSeconds": str(
+            (settings or {}).get("typedbFreshSchemaBootstrapTimeoutSeconds") or "900"
+        ),
         "sharedWorldProjectionRebuildTimeoutSeconds": str(
             (settings or {}).get("typedbSharedWorldProjectionRebuildTimeoutSeconds")
             or os.environ.get("TYPEDB_SHARED_WORLD_PROJECTION_REBUILD_TIMEOUT_SECONDS")
@@ -557,8 +584,11 @@ def web_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
 
 
 def cloudflare_share_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
-    node = shutil.which("node") or ""
-    cloudflared = shutil.which("cloudflared") or ""
+    node = managed_executable("node", (settings or {}).get("cloudflareNodeExecutable"))
+    cloudflared = managed_executable(
+        "cloudflared",
+        (settings or {}).get("cloudflaredExecutable"),
+    )
     script = ROOT_DIR / "scripts" / "share-local.js"
     port = int_value(os.environ.get("PORT") or (settings or {}).get("webPort"), 3000, 1)
     missing = ""
@@ -578,6 +608,17 @@ def cloudflare_share_worker_spec(settings: Dict[str, object]) -> Dict[str, objec
         "env": {
             "PORT": str(port),
             "TUNNEL_PROVIDER": "cloudflared",
+            "CLOUDFLARED_COMMAND": cloudflared,
+            "PATH": os.pathsep.join(dict.fromkeys([
+                str(Path(node).parent) if node else "",
+                str(Path(cloudflared).parent) if cloudflared else "",
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "/usr/bin",
+                "/bin",
+                "/usr/sbin",
+                "/sbin",
+            ]).keys()).strip(os.pathsep),
             "SHARE_FIXED_ENTRY_URL": fixed_entry_url(settings),
             "SHARE_PUBLISH_TARGET": "1" if truthy((settings or {}).get("cloudflareSharePublishTargetEnabled", "1")) else "0",
         },
@@ -716,6 +757,39 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
             "processNice": str(spec.get("processNice") or background_nice),
         }
     return workers
+
+
+GRAPH_DEPENDENT_WORKERS = {
+    "ontology-rulebox-prewarm",
+    "ontology-reasoning",
+    "reasoning-engine-shadow",
+    "ontology-world-projection",
+    "ontology-inference-detail",
+    "ontology-maintenance",
+    "ontology-lab",
+}
+
+
+def worker_startup_phase(name: str, spec: Dict[str, object]) -> int:
+    """Keep source collection available while a cold graph store recovers."""
+
+    role = str((spec or {}).get("role") or "").strip()
+    if name == "mysql" or role == "mysql":
+        return 0
+    if name == "typedb" or role == "typedb":
+        return 2
+    if name in GRAPH_DEPENDENT_WORKERS:
+        return 3
+    return 1
+
+
+def ordered_worker_specs(specs: Dict[str, Dict[str, object]] = None):
+    """Return stable startup order without changing stop-order ownership."""
+
+    selected = dict(specs or worker_specs())
+    indexed = list(enumerate(selected.items()))
+    indexed.sort(key=lambda item: (worker_startup_phase(item[1][0], item[1][1]), item[0]))
+    return [item for _index, item in indexed]
 
 
 def read_pid(path: Path) -> int:
@@ -1122,6 +1196,7 @@ def typedb_auto_rotation_needed(
     now_epoch: float = None,
     size_provider=None,
     disk_usage_provider=None,
+    inventory_provider=None,
 ) -> Dict[str, object]:
     """Return whether a source-verified automatic TypeDB rotation is due.
 
@@ -1137,6 +1212,7 @@ def typedb_auto_rotation_needed(
     maximum_mb = int_value(configured.get("maxSizeMb"), 8192, 1)
     threshold_percent = int_value(configured.get("autoRotationPercent"), 80, 50)
     threshold_percent = min(100, threshold_percent)
+    wal_trigger_mb = int_value(configured.get("autoRotationWalMb"), 2048, 0)
     free_space_trigger_mb = int_value(
         configured.get("autoRotationFreeSpaceMb"),
         0,
@@ -1160,6 +1236,33 @@ def typedb_auto_rotation_needed(
     size_bytes = int((size_provider or directory_size_bytes)(data_path))
     size_mb = round(size_bytes / 1024 / 1024, 1)
     usage_percent = round(size_bytes / (maximum_mb * 1024 * 1024) * 100.0, 1)
+    try:
+        if inventory_provider is not None:
+            inventory = dict(inventory_provider(
+                {
+                    "ontologyTypeDbEnabled": "1",
+                    "typedbDataMaxSizeMb": str(maximum_mb),
+                    "typedbMinimumFreeSpaceMb": str(configured.get("minimumFreeSpaceMb") or "1"),
+                },
+                data_path=data_path,
+                disk_usage_provider=disk_usage_provider,
+            ) or {})
+        else:
+            # Capacity status already scans the complete TypeDB tree. The
+            # supervisor only needs WAL pressure here, so avoid repeating two
+            # full apparent/physical-size walks every minute.
+            wal_bytes = sum(
+                storage_directory_physical_size_bytes(path)
+                for path in data_path.glob("*/wal")
+                if path.is_dir()
+            )
+            inventory = {"typedbWalMb": round(wal_bytes / 1024 / 1024, 1)}
+    except (OSError, ValueError):
+        inventory = {}
+    try:
+        wal_mb = max(0.0, float(inventory.get("typedbWalMb") or 0.0))
+    except (TypeError, ValueError):
+        wal_mb = 0.0
     probe_path = data_path if data_path.exists() else data_path.parent
     try:
         disk_usage = (disk_usage_provider or shutil.disk_usage)(probe_path)
@@ -1198,7 +1301,13 @@ def typedb_auto_rotation_needed(
         and free_space_mb is not None
         and free_space_mb <= free_space_trigger_mb
     )
-    rotation_triggered = threshold_reached or disk_pressure_reached
+    wal_pressure_reached = bool(
+        data_path.exists()
+        and size_bytes > 0
+        and wal_trigger_mb > 0
+        and wal_mb >= wal_trigger_mb
+    )
+    rotation_triggered = threshold_reached or disk_pressure_reached or wal_pressure_reached
     hard_limit_reached = usage_percent >= 100.0
     if not enabled:
         return {
@@ -1210,6 +1319,8 @@ def typedb_auto_rotation_needed(
             "thresholdPercent": threshold_percent,
             "maxSizeMb": maximum_mb,
             "freeSpaceMb": free_space_mb,
+            "typedbWalMb": round(wal_mb, 1),
+            "walTriggerMb": wal_trigger_mb,
             "freeSpaceTriggerMb": free_space_trigger_mb,
             "stagingReady": staging_ready,
             "requiredStagingMb": required_staging_mb,
@@ -1227,6 +1338,9 @@ def typedb_auto_rotation_needed(
             "lastAttemptStatus": last_attempt_status,
             "retryWindowSeconds": retry_window_seconds,
             "freeSpaceMb": free_space_mb,
+            "typedbWalMb": round(wal_mb, 1),
+            "walTriggerMb": wal_trigger_mb,
+            "walPressureReached": wal_pressure_reached,
             "freeSpaceTriggerMb": free_space_trigger_mb,
             "diskPressureReached": False,
             "stagingReady": staging_ready,
@@ -1245,6 +1359,9 @@ def typedb_auto_rotation_needed(
             "lastAttemptStatus": last_attempt_status,
             "retryWindowSeconds": retry_window_seconds,
             "freeSpaceMb": free_space_mb,
+            "typedbWalMb": round(wal_mb, 1),
+            "walTriggerMb": wal_trigger_mb,
+            "walPressureReached": wal_pressure_reached,
             "freeSpaceTriggerMb": free_space_trigger_mb,
             "diskPressureReached": disk_pressure_reached,
             "stagingReady": staging_ready,
@@ -1259,6 +1376,9 @@ def typedb_auto_rotation_needed(
             else "shared disk free " + str(free_space_mb) + "MB <= automatic rotation "
             + str(free_space_trigger_mb) + "MB"
             if disk_pressure_reached and not threshold_reached
+            else "WAL " + str(round(wal_mb, 1)) + "MB >= automatic rotation "
+            + str(wal_trigger_mb) + "MB"
+            if wal_pressure_reached and not threshold_reached
             else "size " + str(size_mb) + "MB (" + str(usage_percent) + "%) >= automatic rotation "
             + str(threshold_percent) + "%"
         ),
@@ -1272,15 +1392,20 @@ def typedb_auto_rotation_needed(
         "retryWindowSeconds": retry_window_seconds,
         "hardLimitReached": hard_limit_reached,
         "trigger": (
-            "size-and-disk"
-            if threshold_reached and disk_pressure_reached
+            "multiple"
+            if sum([threshold_reached, disk_pressure_reached, wal_pressure_reached]) > 1
             else "shared-disk"
             if disk_pressure_reached
+            else "typedb-wal"
+            if wal_pressure_reached
             else "typedb-size"
         ),
         "freeSpaceMb": free_space_mb,
         "freeSpaceTriggerMb": free_space_trigger_mb,
         "diskPressureReached": disk_pressure_reached,
+        "typedbWalMb": round(wal_mb, 1),
+        "walTriggerMb": wal_trigger_mb,
+        "walPressureReached": wal_pressure_reached,
         "stagingReady": staging_ready,
         "requiredStagingMb": required_staging_mb,
         "estimatedCandidateMb": estimated_candidate_mb,
@@ -1828,12 +1953,27 @@ def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
     environment.update({
         "ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED": "1",
         "TYPEDB_ADDRESS": str(spec.get("healthAddress") or "127.0.0.1:1729"),
+        "TYPEDB_HTTP_ADDRESS": str(spec.get("httpAddress") or "127.0.0.1:8000"),
         "TYPEDB_DATABASE": str(spec.get("typedbDatabase") or "orbit_alpha_ontology"),
         "TYPEDB_USER": str(spec.get("typedbUser") or "admin"),
         "TYPEDB_PASSWORD": str(spec.get("typedbPassword") or ""),
         "TYPEDB_TLS_ENABLED": str(spec.get("typedbTlsEnabled") or "0"),
         "ONTOLOGY_TYPEDB_ENABLED": "1",
     })
+    if str(spec.get("role") or "") == "typedb-stage":
+        environment.update({
+            "TYPEDB_FRESH_CANDIDATE_REBUILD": "1",
+            "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE": str(
+                spec.get("freshSchemaBootstrapBatchSize") or "512"
+            ),
+            "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS": str(
+                spec.get("freshSchemaBootstrapTimeoutSeconds") or "900"
+            ),
+            "TYPEDB_SCHEMA_OPERATION_TIMEOUT_SECONDS": str(max(
+                int_value(spec.get("freshSchemaBootstrapTimeoutSeconds"), 900, 1),
+                int_value(spec.get("schemaOperationTimeoutSeconds"), 120, 1),
+            )),
+        })
     return environment
 
 
@@ -2415,7 +2555,7 @@ def status() -> int:
 
 def start(excluded_roles=None) -> int:
     excluded = {str(role or "").strip() for role in (excluded_roles or set())}
-    for spec in worker_specs().values():
+    for _name, spec in ordered_worker_specs(worker_specs()):
         if str(spec.get("role") or "").strip() in excluded:
             continue
         result = start_worker(spec)
@@ -2692,6 +2832,7 @@ def supervise() -> int:
         last_maintenance_at = 0.0
         last_typedb_capacity_notice = ""
         last_typedb_auto_rotation_notice = ""
+        unavailable_optional_workers = {}
         while not stopping["value"]:
             if supervisor_maintenance_active():
                 acknowledge_supervisor_maintenance()
@@ -2702,12 +2843,22 @@ def supervise() -> int:
                 stop_worker(spec)
             for spec in disabled_reasoning_worker_specs(specs).values():
                 stop_worker(spec)
-            for spec in specs.values():
+            for name, spec in ordered_worker_specs(specs):
                 if stopping["value"]:
                     break
                 if supervisor_maintenance_active():
                     acknowledge_supervisor_maintenance()
                     break
+                missing_reason = str(spec.get("missingReason") or "").strip()
+                if missing_reason:
+                    if unavailable_optional_workers.get(name) != missing_reason:
+                        append_log(
+                            supervisor_log_path(),
+                            "optional worker unavailable " + name + ": " + missing_reason,
+                        )
+                        unavailable_optional_workers[name] = missing_reason
+                    continue
+                unavailable_optional_workers.pop(name, None)
                 pid = read_pid(spec["pid"])
                 if not is_running(pid, spec):
                     append_log(supervisor_log_path(), "restart " + str(spec.get("label") or "unknown"))
@@ -2801,7 +2952,10 @@ def install_supervisor() -> int:
         "ProcessType": "Background",
         "SoftResourceLimits": {"NumberOfFiles": 65536},
         "HardResourceLimits": {"NumberOfFiles": 65536},
-        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
+        "EnvironmentVariables": {
+            "PYTHONUNBUFFERED": "1",
+            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
         "StandardOutPath": str(supervisor_log_path()),
         "StandardErrorPath": str(supervisor_log_path()),
     }
@@ -2935,6 +3089,11 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
     candidate = typedb_blue_green_stage_spec(spec)
     candidate_path = Path(candidate["dataPath"])
     stop_worker(candidate)
+    if not stop_typedb_stage_data_path_processes(candidate):
+        return {
+            "status": "candidate-owner-stop-failed",
+            "candidate": candidate,
+        }
     if candidate_path.exists():
         shutil.rmtree(candidate_path)
     remove_pid(candidate["pid"])
@@ -2999,9 +3158,10 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
 def cleanup_typedb_candidate(candidate: Dict[str, object], remove_data: bool = True) -> None:
     if candidate:
         stop_worker(candidate)
+        owners_stopped = stop_typedb_stage_data_path_processes(candidate)
         if remove_data:
             path = Path(candidate.get("dataPath") or "")
-            if path.exists():
+            if owners_stopped and path.exists():
                 shutil.rmtree(path)
 
 

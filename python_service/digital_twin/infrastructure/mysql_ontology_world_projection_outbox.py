@@ -442,6 +442,18 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
                 """,
                 (PENDING, stamp, PROCESSING, stamp),
             )
+            active_writer = connection.execute(
+                """
+                SELECT job_id, lease_owner, lease_expires_at
+                FROM ontology_world_projection_outbox
+                WHERE status = %s AND lease_expires_at >= %s
+                ORDER BY updated_at ASC, job_id ASC
+                LIMIT 1 FOR UPDATE
+                """,
+                (PROCESSING, stamp),
+            ).fetchone()
+            if active_writer:
+                return []
             rows = connection.execute(
                 """
                 SELECT * FROM ontology_world_projection_outbox

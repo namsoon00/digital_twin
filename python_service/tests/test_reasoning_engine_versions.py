@@ -31,16 +31,26 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         watched = []
         attempts = []
+        runners = []
 
         class Runner:
+            def __init__(self):
+                self.shutdown_count = 0
+
             def watch(self):
                 watched.append(True)
+
+            def shutdown(self):
+                self.shutdown_count += 1
+                return {"status": "unchanged"}
 
         def factory(settings, worker_id=""):
             attempts.append((settings, worker_id))
             if len(attempts) == 1:
                 raise RuntimeError("release database is rebuilding")
-            return Runner()
+            runner = Runner()
+            runners.append(runner)
+            return runner
 
         sleeps = []
         result = watch_v2_reasoning_engine(
@@ -55,6 +65,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual([7.0], sleeps)
         self.assertEqual([True], watched)
         self.assertEqual(2, len(attempts))
+        self.assertEqual(1, runners[0].shutdown_count)
 
     def test_deployments_bind_to_separate_graph_databases(self):
         class Registry:

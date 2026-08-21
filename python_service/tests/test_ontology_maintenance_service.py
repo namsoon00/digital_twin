@@ -509,10 +509,38 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual(
+            "strict-live-reasoning-priority",
+            result["backgroundFairness"]["reasonCode"],
+        )
         self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
         self.assertEqual([], repository.calls)
-        self.assertEqual("active-reasoning-lease", result["backgroundFairness"]["reasonCode"])
         self.assertEqual(10, result["retryAfterSeconds"])
+
+    def test_status_reports_strict_priority_instead_of_stale_fairness_grant(self):
+        store = FakeStateStore({
+            "reasoningQueueDeferredSinceAt": (
+                datetime.now(timezone.utc) - timedelta(minutes=10)
+            ).isoformat().replace("+00:00", "Z"),
+            "lastFairnessCompletedAt": "2026-01-01T00:00:00Z",
+        })
+        runner = OntologyMaintenanceRunner(
+            FakeOntologyRepository(),
+            state_store=store,
+            reasoning_queue_probe=lambda: {
+                "effectivePendingCount": 2,
+                "runningEntryCount": 0,
+            },
+        )
+
+        result = runner.status()
+
+        self.assertEqual(
+            "strict-live-reasoning-priority",
+            result["backgroundFairness"]["reasonCode"],
+        )
+        self.assertFalse(result["backgroundFairness"]["fairnessGranted"])
+        self.assertEqual(2, result["reasoningQueue"]["effectivePendingCount"])
 
     def test_aged_verified_priority_backlog_requests_a_bounded_reasoning_yield(self):
         now = datetime.now(timezone.utc)
@@ -536,6 +564,7 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
                 "ontologyAboxMaintenanceYieldAfterSeconds": "30",
                 "ontologyAboxMaintenanceYieldWindowSeconds": "30",
                 "ontologyAboxMaintenanceYieldRequestTtlSeconds": "90",
+                "ontologyAboxMaintenanceStrictReasoningPriority": "0",
             },
             reasoning_queue_probe=lambda: {
                 "effectivePendingCount": 2,
@@ -674,7 +703,10 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         runner = OntologyMaintenanceRunner(
             repository,
             state_store=store,
-            settings={"ontologyAboxMaintenanceMaxReasoningDeferralSeconds": "30"},
+            settings={
+                "ontologyAboxMaintenanceMaxReasoningDeferralSeconds": "30",
+                "ontologyAboxMaintenanceStrictReasoningPriority": "0",
+            },
             reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 0},
         )
 
@@ -728,7 +760,10 @@ class OntologyMaintenanceRunnerTests(unittest.TestCase):
         runner = OntologyMaintenanceRunner(
             repository,
             state_store=store,
-            settings={"ontologyAboxMaintenanceMaxReasoningDeferralSeconds": "30"},
+            settings={
+                "ontologyAboxMaintenanceMaxReasoningDeferralSeconds": "30",
+                "ontologyAboxMaintenanceStrictReasoningPriority": "0",
+            },
             reasoning_queue_probe=lambda: {"effectivePendingCount": 2, "runningEntryCount": 0},
         )
 

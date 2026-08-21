@@ -94,6 +94,35 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertLess(names.index("web"), names.index("typedb"))
         self.assertLess(names.index("web"), names.index("questdb"))
 
+    def test_cold_start_keeps_collection_available_before_typedb_seed(self):
+        specs = {
+            "mysql": {"role": "mysql"},
+            "web": {"role": "web"},
+            "typedb": {"role": "typedb"},
+            "market-data": {},
+            "news": {},
+            "reasoning-engine-shadow": {},
+            "ontology-world-projection": {},
+        }
+
+        names = [name for name, _spec in service_manager.ordered_worker_specs(specs)]
+
+        self.assertEqual("mysql", names[0])
+        self.assertLess(names.index("market-data"), names.index("typedb"))
+        self.assertLess(names.index("news"), names.index("typedb"))
+        self.assertLess(names.index("typedb"), names.index("reasoning-engine-shadow"))
+        self.assertLess(names.index("typedb"), names.index("ontology-world-projection"))
+
+    def test_managed_executable_finds_explicit_binary_outside_process_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            executable = Path(temp) / "node"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o700)
+            with patch.object(service_manager.shutil, "which", return_value=None):
+                resolved = service_manager.managed_executable("node", executable)
+
+            self.assertEqual(str(executable), resolved)
+
     def test_typedb_worker_rotates_only_active_database_by_default(self):
         spec = service_manager.typedb_worker_spec({
             "typedbPassword": "test-strong-password",
@@ -402,6 +431,30 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("shared-disk", decision["trigger"])
         self.assertTrue(decision["stagingReady"])
         self.assertEqual(1200.0, decision["freeSpaceMb"])
+
+    def test_automatic_rotation_detects_wal_amplification_before_size_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * 1024)
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                decision = service_manager.typedb_auto_rotation_needed(
+                    {
+                        "dataPath": data_path,
+                        "maxSizeMb": "10000",
+                        "autoRotationEnabled": "1",
+                        "autoRotationPercent": "90",
+                        "autoRotationWalMb": "2048",
+                        "blueGreenMinimumHeadroomMb": "1024",
+                    },
+                    inventory_provider=lambda *_args, **_kwargs: {"typedbWalMb": 4096},
+                )
+
+        self.assertTrue(decision["needed"])
+        self.assertEqual("typedb-wal", decision["trigger"])
+        self.assertTrue(decision["walPressureReached"])
+        self.assertEqual(4096.0, decision["typedbWalMb"])
 
     def test_automatic_rotation_reports_insufficient_blue_green_headroom(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -826,6 +879,27 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         stop_owners.assert_called_once_with(spec)
         clear_checkpoints.assert_called_once_with(spec)
         launch.assert_called_once_with(spec, "seed retry candidate restart")
+
+    def test_candidate_cleanup_stops_orphaned_data_path_owner_before_removal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data-candidate"
+            data_path.mkdir()
+            spec = {
+                "pid": Path(temp) / "candidate.pid",
+                "dataPath": data_path,
+            }
+            with patch.object(service_manager, "stop_worker") as stop, \
+                    patch.object(
+                        service_manager,
+                        "stop_typedb_stage_data_path_processes",
+                        return_value=True,
+                    ) as stop_owners:
+                service_manager.cleanup_typedb_candidate(spec, remove_data=True)
+
+            self.assertFalse(data_path.exists())
+
+        stop.assert_called_once_with(spec)
+        stop_owners.assert_called_once_with(spec)
 
     def test_candidate_retry_removes_only_incomplete_checkpoint_workdirs(self):
         with tempfile.TemporaryDirectory() as temp:

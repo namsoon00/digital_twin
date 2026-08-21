@@ -19,10 +19,19 @@ from ...domain.notification_ai import enrich_notification_ai_context
 from ...domain.notification_ai_delivery import final_ai_delivery_decision
 from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse, ai_gate_enabled_for_message_type
 from ...domain.notification_ai_gate_validation import local_validated_ai_response
+from ...domain.notification_ai_decision_brief import (
+    AI_DECISION_CONTRACT_VERSION,
+    AI_DECISION_PROMPT_VERSION,
+    notification_ai_execution_profile,
+)
 from ...domain.notifications import NotificationJob, notification_debug_number
 from ...domain.notification_identity import context_with_instrument_identity, notification_instrument_symbol
 from ...domain.notification_reasoning_report import build_notification_reasoning_report, render_operator_reasoning_report
 from ..notification_ai_gate_audit import context_with_validated_ai_response
+from ..notification_ai_judgement_service import (
+    NotificationAIContractError,
+    NotificationAIJudgementService,
+)
 from ..notification_decision_memory import context_with_previous_investment_decision
 from ..notification_disclosure_rendering import context_with_disclosure_analysis
 from .dispatch import NotificationDispatchService
@@ -184,6 +193,22 @@ class NotificationAIValidatedGateEnricher:
         self.reviewer = reviewer
         self.settings = settings or {}
         self.decision_episode_store = decision_episode_store
+        self.judgement_service = (
+            NotificationAIJudgementService(
+                reviewer,
+                self.settings,
+                max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 24 * 1024),
+                repair_reasoning_effort=str(
+                    self.settings.get("notificationAiComparisonRepairReasoningEffort") or "low"
+                ),
+                repair_timeout_seconds=int(
+                    self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 60
+                ),
+                enforce_contract_for_typed_response=False,
+            )
+            if reviewer
+            else None
+        )
 
     def __call__(self, job: NotificationJob) -> None:
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):
@@ -211,10 +236,40 @@ class NotificationAIValidatedGateEnricher:
             job.context = context_with_validated_ai_response(context, response, self.settings)
             return
         try:
-            response = self.reviewer.review(context) if self.reviewer else local_validated_ai_response(context)
+            if self.judgement_service:
+                context["notificationAiDecisionContractVersion"] = AI_DECISION_CONTRACT_VERSION
+                profile = notification_ai_execution_profile(context, self.settings)
+                context["notificationAiExecutionProfile"] = profile
+                outcome = self.judgement_service.judge(context, profile=profile)
+                if not outcome.publishable:
+                    raise NotificationAIContractError(
+                        outcome.final_contract_error
+                        or outcome.final_publication_error
+                        or outcome.repair_error
+                    )
+                response = outcome.response
+                context["_notificationAiInferencePacket"] = outcome.packet.to_audit_dict()
+                context["notificationAiExecutionAudit"] = {
+                    "version": "notification-ai-execution-audit-v2",
+                    "status": "completed",
+                    "promptVersion": AI_DECISION_PROMPT_VERSION,
+                    "inferencePacket": outcome.packet.to_audit_dict(),
+                    "promptHash": outcome.executed_prompt_hash,
+                    "promptBytes": outcome.executed_prompt_bytes,
+                    "executionProfile": profile,
+                    "claimPublication": {
+                        "status": str((response.claim_validation or {}).get("status") or "unavailable"),
+                        "verifiedClaimCount": response.verified_claim_count,
+                        "rejectedClaimCount": response.rejected_claim_count,
+                        "sections": sorted(response.verified_claim_sections),
+                    },
+                    "contractRepair": outcome.audit_dict().get("repair") or {},
+                }
+            else:
+                response = local_validated_ai_response(context, source="TypeDB inference fallback")
         except Exception as error:  # noqa: BLE001 - notification delivery should degrade to local validation.
-            response = local_validated_ai_response(context, source="local fallback")
-            response.validation_warnings.append("AI 검증 실패로 로컬 의견을 사용했습니다: " + str(error)[:140])
+            response = local_validated_ai_response(context, source="TypeDB inference fallback")
+            response.validation_warnings.append("AI 검증 실패로 TypeDB 해석을 사용했습니다: " + str(error)[:140])
         apply_ontology_quality_gate_to_response(response, quality_gate)
         if self.decision_episode_store and job.message_type == INVESTMENT_INSIGHT:
             try:

@@ -2231,6 +2231,7 @@ def validated_response_from_payload(
         "notification-ai-decision-contract-v4",
         "notification-ai-decision-contract-v5",
         "notification-ai-decision-contract-v6",
+        "notification-ai-decision-contract-v7",
     }
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready" or not supported_causal_path

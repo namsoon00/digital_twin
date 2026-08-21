@@ -20,6 +20,7 @@ from .notification_ai_context import relation_context_value
 
 NOTIFICATION_NARRATIVE_VERSION = "investment-notification-narrative-v1"
 NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v1"
+NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v1"
 
 CLAIM_SECTIONS = {
     "view", "change", "support", "counter", "next-condition", "limitation",
@@ -558,6 +559,56 @@ def is_action_only_text(value: object) -> bool:
     return bool(text and len(text) <= 32 and ACTION_ONLY_PATTERN.match(text))
 
 
+def narrative_claim_evidence_contract(
+    evidence_ledger: Iterable[Mapping[str, object]],
+) -> Dict[str, object]:
+    """Declare exactly which routed evidence IDs each message section may cite."""
+
+    rows = [dict(item) for item in evidence_ledger or [] if isinstance(item, Mapping)]
+    eligible = [
+        item for item in rows
+        if bool(item.get("judgementEligible", True)) and str(item.get("evidenceId") or "")
+    ]
+
+    def ids(*roles: str, include_ineligible: bool = False) -> List[str]:
+        source = rows if include_ineligible else eligible
+        accepted = set(roles)
+        return _unique(
+            item.get("evidenceId")
+            for item in source
+            if str(item.get("role") or "context") in accepted
+        )
+
+    context_ids = ids("context", include_ineligible=True)
+    support_ids = ids("support")
+    counter_ids = ids("counter")
+    limitation_ids = ids("limitation", include_ineligible=True)
+    change_ids = _unique(
+        item.get("evidenceId")
+        for item in eligible
+        if str(item.get("kind") or "") == "decision-transition"
+    )
+    all_decision_ids = _unique([*support_ids, *counter_ids, *context_ids])
+    return {
+        "version": NARRATIVE_CLAIM_CONTRACT_VERSION,
+        "allowedEvidenceIdsBySection": {
+            "view": all_decision_ids,
+            "change": change_ids,
+            "support": support_ids,
+            "counter": counter_ids,
+            "next-condition": _unique([*all_decision_ids, *limitation_ids]),
+            "limitation": limitation_ids,
+        },
+        "requirements": {
+            "allClaimsNeedEvidence": True,
+            "actionClaimsNeedJudgementEligibleEvidence": True,
+            "viewNeedsObservedState": True,
+            "nextConditionNeedsObservableEvidence": True,
+            "unverifiedClaimsAreNotPublished": True,
+        },
+    }
+
+
 def normalize_narrative_claims(
     context: Mapping[str, object],
     payload: Mapping[str, object],
@@ -573,6 +624,8 @@ def normalize_narrative_claims(
         for item in ledger
         if isinstance(item, Mapping) and str(item.get("evidenceId") or "")
     }
+    claim_contract = _mapping(prepared.get("narrativeClaimContract"))
+    allowed_by_section = _mapping(claim_contract.get("allowedEvidenceIdsBySection"))
     requested = payload.get("narrativeClaims") or payload.get("narrative_claims") or []
     narrative_only = bool(typedb_context_observation_contract(context or {}))
     claims: List[Dict[str, object]] = []
@@ -594,6 +647,13 @@ def normalize_narrative_claims(
         unknown_ids = [value for value in evidence_ids if value not in evidence_by_id]
         if unknown_ids:
             reasons.append("unknown-evidence-id")
+        allowed_ids = {
+            str(value or "")
+            for value in allowed_by_section.get(section) or []
+            if str(value or "")
+        }
+        if allowed_by_section and any(value not in allowed_ids for value in evidence_ids):
+            reasons.append("evidence-not-allowed-for-section")
         known_rows = [evidence_by_id[value] for value in evidence_ids if value in evidence_by_id]
         if section in CLAIM_SECTIONS and not known_rows:
             reasons.append("evidence-required")
@@ -615,6 +675,14 @@ def normalize_narrative_claims(
             reasons.append("counter-role-mismatch")
         if section == "limitation" and known_rows and any(row.get("role") != "limitation" for row in known_rows):
             reasons.append("non-limitation-used-as-limitation")
+        if section == "view" and not narrative_only and known_rows and not any(
+            str(row.get("kind") or "") != "inference" for row in known_rows
+        ):
+            reasons.append("view-needs-observed-state")
+        if section == "next-condition" and known_rows and not any(
+            str(row.get("kind") or "") != "inference" for row in known_rows
+        ):
+            reasons.append("next-condition-needs-observable-evidence")
         if section == "support" and is_action_only_text(text):
             reasons.append("action-used-as-evidence")
         claim_numbers = _number_tokens(text)
@@ -650,6 +718,7 @@ def normalize_narrative_claims(
         "rejectedClaimCount": len([item for item in validations if item.get("status") == "rejected"]),
         "validations": validations,
         "evidenceLedger": ledger,
+        "claimContract": claim_contract or narrative_claim_evidence_contract(ledger),
     }
 
 
@@ -757,6 +826,11 @@ def build_investment_narrative_brief(
     provenance = response_writer_provenance(response, context)
     writer_kind = str(provenance.get("writerKind") or "deterministic")
     response_validation = _mapping(getattr(response, "claim_validation", {}))
+    validation_packet_metadata = {
+        key: response_validation.get(key)
+        for key in ("inferencePacketId", "evidenceFingerprint")
+        if response_validation.get(key)
+    }
     ledger = [
         dict(item)
         for item in response_validation.get("evidenceLedger") or []
@@ -777,6 +851,21 @@ def build_investment_narrative_brief(
         for item in getattr(response, "narrative_claims", []) or []
         if isinstance(item, Mapping)
     ]
+    if response_claims:
+        validation_context = dict(context or {})
+        validation_context["_notificationAiPreparedDecisionCore"] = {
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": (
+                response_validation.get("claimContract")
+                or narrative_claim_evidence_contract(ledger)
+            ),
+        }
+        response_claims, response_validation = normalize_narrative_claims(
+            validation_context,
+            {"narrativeClaims": response_claims},
+            writer_kind=writer_kind,
+        )
+        response_validation.update(validation_packet_metadata)
     if not response_claims and writer_kind == "ai":
         provenance = {
             **provenance,
@@ -798,8 +887,13 @@ def build_investment_narrative_brief(
             writer_kind,
             narrative_only=str(provenance.get("writerRole") or "") == "narrative-only",
         )
+        generated_context = dict(context or {})
+        generated_context["_notificationAiPreparedDecisionCore"] = {
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+        }
         claims, generated_validation = normalize_narrative_claims(
-            {"_notificationAiPreparedDecisionCore": {"evidenceLedger": ledger}},
+            generated_context,
             {"narrativeClaims": generated_claims},
             writer_kind=writer_kind,
         )
@@ -838,6 +932,8 @@ def build_investment_narrative_brief(
         "supportClaimCount": len([item for item in verified_claims if item.get("section") == "support"]),
         "counterClaimCount": len([item for item in verified_claims if item.get("section") == "counter"]),
         "limitationClaimCount": len([item for item in verified_claims if item.get("section") == "limitation"]),
+        "inferencePacketId": str(response_validation.get("inferencePacketId") or ""),
+        "evidenceFingerprint": str(response_validation.get("evidenceFingerprint") or ""),
     }
     return InvestmentNarrativeBrief(
         intent=_narrative_intent(context),

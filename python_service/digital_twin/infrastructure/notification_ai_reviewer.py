@@ -60,15 +60,21 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
         )
         if not command:
             raise RuntimeError("notification AI command is not configured")
-        prompt = str(context.get("_notificationAiPreparedPrompt") or "") or build_notification_ai_decision_prompt(
-            context,
-            self.settings,
-            max_prompt_bytes=min(
-                self.max_prompt_bytes,
-                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
-            ),
-            profile=execution_profile,
-        )
+        prompt = str(context.get("_notificationAiPreparedPrompt") or "")
+        if str(context.get("messageType") or "") == "investmentInsight" and not prompt:
+            raise RuntimeError(
+                "investment notification AI requires a prepared inference packet"
+            )
+        if not prompt:
+            prompt = build_notification_ai_decision_prompt(
+                context,
+                self.settings,
+                max_prompt_bytes=min(
+                    self.max_prompt_bytes,
+                    int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
+                ),
+                profile=execution_profile,
+            )
         self.last_prompt_bytes = len(prompt.encode("utf-8"))
         self.last_execution_profile = dict(execution_profile or {})
         process_kwargs = {

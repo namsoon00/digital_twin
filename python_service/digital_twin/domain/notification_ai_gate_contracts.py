@@ -110,6 +110,22 @@ class NotificationAIValidatedResponse:
     source: str = "local"
     raw_response: str = ""
 
+    @property
+    def verified_claim_count(self) -> int:
+        return int((self.claim_validation or {}).get("verifiedClaimCount") or 0)
+
+    @property
+    def rejected_claim_count(self) -> int:
+        return int((self.claim_validation or {}).get("rejectedClaimCount") or 0)
+
+    @property
+    def verified_claim_sections(self) -> set:
+        return {
+            str(item.get("section") or "")
+            for item in self.narrative_claims or []
+            if isinstance(item, dict) and str(item.get("section") or "")
+        }
+
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "NotificationAIValidatedResponse":
         """Restore a persisted validated decision without trusting old presentation text."""

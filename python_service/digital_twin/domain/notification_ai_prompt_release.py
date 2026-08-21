@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v7"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v6"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v8"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v7"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
@@ -71,6 +71,8 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며 검증되지 않은 외부 사실을 만들지 않는다.",
     "사용자에게 보여줄 투자 관점, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
+    "narrativeClaims는 section별 허용 ID만 쓰고, view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
+    "확인된 사실은 명확히 말하되, 확인되지 않은 원인·전망·인과관계는 단정하지 않고 limitation에 검증 한계를 적는다.",
     "narrativeClaims의 support는 role=support 근거만, counter는 role=counter 근거만 연결하고 context나 limitation을 행동 근거로 바꾸지 않는다.",
     "자료 부족은 limitation으로만 쓰고 counter 근거로 쓰지 않는다. 행동 결론 자체를 support 근거로 반복하지 않는다.",
     "확인된 반대 사실이 없으면 counter 문장을 만들지 않는다. 확인되지 않은 내용을 채우기 위해 일반론을 만들지 않는다.",

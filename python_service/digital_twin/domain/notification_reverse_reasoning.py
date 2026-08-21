@@ -633,6 +633,8 @@ def build_notification_reverse_reasoning_trace(
             "internalDataAudit": _dict(ai_execution.get("internalDataAudit")),
             "researchCycle": _dict(ai_execution.get("researchCycle")),
             "hypothesisComparisonRepair": _dict(ai_execution.get("hypothesisComparisonRepair")),
+            "inferencePacket": _dict(ai_execution.get("inferencePacket")),
+            "claimPublication": _dict(ai_execution.get("claimPublication")),
             "responseSource": _text(
                 ai_execution.get("responseSource") or ai.get("source"),
                 180,

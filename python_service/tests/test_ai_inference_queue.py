@@ -283,7 +283,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v4", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v1", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v2", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v7", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v8", prompt_audit["promptRelease"]["version"])
         self.assertTrue(prompt_audit["contextRouting"]["fullDecisionBriefRetainedForAudit"])
         self.assertEqual("deepResearch", prompt_audit["executionProfile"]["name"])
         self.assertEqual(64, len(prompt_audit["promptHash"]))

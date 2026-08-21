@@ -22,6 +22,10 @@ from ..domain.notification_ai_decision_brief import (
 from ..domain.ontology_inference_context import relation_context_from_inferencebox
 from ..domain.ontology_worlds import portfolio_world_id
 from ..domain.portfolio import PortfolioSummary, Position
+from .notification_ai_judgement_service import (
+    NotificationAIContractError,
+    NotificationAIJudgementService,
+)
 
 
 class InvestmentBrainService:
@@ -58,6 +62,18 @@ class InvestmentBrainService:
         self.hypothesis_quality_review_service = hypothesis_quality_review_service
         self.hypothesis_policy_governance_service = hypothesis_policy_governance_service
         self.hypothesis_outcome_replay_service = hypothesis_outcome_replay_service
+        self.ai_judgement_service = NotificationAIJudgementService(
+            reviewer,
+            self.settings,
+            max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 24 * 1024),
+            repair_reasoning_effort=str(
+                self.settings.get("notificationAiComparisonRepairReasoningEffort") or "low"
+            ),
+            repair_timeout_seconds=int(
+                self.settings.get("notificationAiComparisonRepairTimeoutSeconds") or 60
+            ),
+            enforce_contract_for_typed_response=False,
+        )
 
     def ask(self, message: str, account_id: str = "", symbol: str = "") -> Dict[str, object]:
         message = " ".join(str(message or "").split())
@@ -166,7 +182,15 @@ class InvestmentBrainService:
                 "reasoningEffort": "max",
             },
         }
-        response = self.reviewer.review(context)
+        outcome = self.ai_judgement_service.judge(context)
+        if not outcome.publishable:
+            raise NotificationAIContractError(
+                outcome.final_contract_error
+                or outcome.final_publication_error
+                or outcome.repair_error
+            )
+        response = outcome.response
+        context["_notificationAiInferencePacket"] = outcome.packet.to_audit_dict()
         response_payload = response.to_dict()
         episode = decision_episode_from_context(context, response_payload, job_id=question.question_id)
         if episode and self.decision_episode_store:

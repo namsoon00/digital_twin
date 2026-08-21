@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List, Tuple
 
-from .notification_narrative import build_decision_core_evidence_ledger
+from .notification_narrative import (
+    build_decision_core_evidence_ledger,
+    narrative_claim_evidence_contract,
+)
 from .prompt_evidence_admission import assess_prompt_evidence
 
 
@@ -618,6 +621,25 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         data_limits=core.get("dataLimits") or [],
         reference_date=_mapping(brief.get("subject")).get("referenceDate"),
     )
+    transition = _mapping(_mapping(core.get("decision")).get("transition"))
+    if transition and str(transition.get("kind") or "").strip():
+        core["evidenceLedger"].insert(0, {
+            "evidenceId": "transition:decision",
+            "role": "context",
+            "kind": "decision-transition",
+            "label": "저장된 이전 판단과 현재 판단의 비교",
+            "value": transition,
+            "source": "decision-history",
+            "sourceAsOf": _mapping(brief.get("subject")).get("referenceDate"),
+            "freshness": "snapshot-bound",
+            "ruleIds": [],
+            "hypothesisIds": [],
+            "judgementEligible": True,
+            "detail": "",
+        })
+    core["narrativeClaimContract"] = narrative_claim_evidence_contract(
+        core["evidenceLedger"]
+    )
     core = {key: value for key, value in core.items() if value not in (None, "", [], {})}
     route_audit = {
         "version": AI_DECISION_CONTEXT_ROUTE_VERSION,
@@ -679,6 +701,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         for item in list(fitted.get("evidenceLedger") or [])[:10]
         if isinstance(item, dict)
     ]
+    fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
+        fitted["evidenceLedger"]
+    )
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "reference-trimmed"
         return fitted
@@ -692,6 +717,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
             rule["evidence"] = list(rule.get("evidence") or [])[:1]
     fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
     fitted["evidenceLedger"] = list(fitted.get("evidenceLedger") or [])[:6]
+    fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
+        fitted["evidenceLedger"]
+    )
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "reference-trimmed"
         return fitted

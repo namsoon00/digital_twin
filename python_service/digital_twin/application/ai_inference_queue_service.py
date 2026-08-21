@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 import uuid
-import hashlib
 from datetime import datetime, timezone
 from typing import Dict
 
@@ -17,16 +15,23 @@ from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
     AI_DECISION_PROMPT_VERSION,
-    build_notification_ai_prompt_bundle,
     notification_ai_decision_brief,
     notification_ai_execution_profile,
 )
 from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
 )
+from ..domain.notification_ai_inference_packet import build_notification_ai_inference_packet
 from ..domain.notification_narrative import narrative_fingerprint
 from ..domain.notifications import NotificationJob
 from .notification_ai_gate_audit import context_with_validated_ai_response
+from .notification_ai_judgement_service import (
+    NotificationAIContractError,
+    NotificationAIJudgementService,
+    ai_response_contract_error,
+    hypothesis_comparison_needs_repair,
+    hypothesis_comparison_repair_prompt,
+)
 from .notification_decision_memory import context_with_previous_investment_decision
 from .notification.quality import (
     apply_ontology_quality_gate_to_response,
@@ -121,141 +126,6 @@ def typedb_inference_fallback_response(context: Dict[str, object], reason: objec
     response.hypothesis_selection_source = "typedb-fallback-no-ai-selection"
     response.validation_warnings.append("AI stage fallback: " + detail[:320])
     return response
-
-
-def hypothesis_comparison_needs_repair(
-    message_type: object,
-    response,
-) -> bool:
-    return bool(
-        str(message_type or "") == INVESTMENT_INSIGHT
-        and getattr(response, "hypotheses", None)
-        and str(getattr(response, "hypothesis_comparison_state", "") or "") != "completed"
-    )
-
-
-def ai_response_contract_error(context: Dict[str, object], response) -> str:
-    """Preflight the AI selection against the compact TypeDB decision contract."""
-
-    prepared_core = context.get("_notificationAiPreparedDecisionCore")
-    if isinstance(prepared_core, dict):
-        hypothesis_set = prepared_core.get("hypothesisSet")
-        hypothesis_set = hypothesis_set if isinstance(hypothesis_set, dict) else {}
-        hypothesis_ids = {
-            str(item.get("hypothesisId") or "").strip()
-            for item in hypothesis_set.get("hypotheses") or []
-            if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip()
-        }
-        selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
-        if hypothesis_ids and selected_id not in hypothesis_ids:
-            return "selectedHypothesisId is not present in the routed TypeDB hypothesis set."
-        decision = prepared_core.get("decision")
-        decision = decision if isinstance(decision, dict) else {}
-        envelope = decision.get("actionEnvelope")
-        envelope = envelope if isinstance(envelope, dict) else {}
-        action = str(getattr(response, "action", "") or "").upper()
-        blocked_actions = {
-            str(value or "").upper()
-            for value in envelope.get("blockedActions") or []
-            if str(value or "")
-        }
-        if action in blocked_actions:
-            return "The selected action is blocked by the routed TypeDB action envelope."
-        allowed_actions = {
-            str(value or "").upper()
-            for value in envelope.get("allowedActions") or []
-            if str(value or "")
-        }
-        if allowed_actions and action not in allowed_actions:
-            return "The selected action is outside the routed TypeDB action envelope."
-        explicit_abstention = (
-            not hypothesis_ids
-            and hypothesis_set.get("comparisonRequired") is False
-            and str(hypothesis_set.get("minimumComparisonCount") or "0") == "0"
-        )
-        if explicit_abstention:
-            if selected_id:
-                return "selectedHypothesisId is not present in the empty routed TypeDB hypothesis set."
-            if getattr(response, "hypotheses", None):
-                return "AI returned hypotheses when the routed TypeDB hypothesis set is empty."
-            # The compact routed DecisionCore is authoritative. An empty set
-            # is a valid abstention contract, not a reason to fall through to
-            # a legacy synthesis that requires a selected hypothesis.
-            return ""
-        if hypothesis_ids and (allowed_actions or blocked_actions):
-            return ""
-
-    reasoning_case = context.get("investmentReasoningCase")
-    if not isinstance(reasoning_case, dict) or not reasoning_case:
-        return ""
-    selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
-    hypothesis_ids = {
-        str(value or "") for value in reasoning_case.get("hypothesisIds") or [] if str(value or "")
-    }
-    if hypothesis_ids and selected_id not in hypothesis_ids:
-        return "selectedHypothesisId is not present in the TypeDB hypothesis set."
-    syntheses = [
-        dict(value) for value in reasoning_case.get("decisionSyntheses") or [] if isinstance(value, dict)
-    ]
-    if not syntheses:
-        return ""
-    eligible_ids = {
-        str(value or "")
-        for synthesis in syntheses
-        for value in synthesis.get("eligibleHypothesisIds") or []
-        if str(value or "")
-    }
-    if selected_id not in eligible_ids:
-        return "selectedHypothesisId is reference-only in the TypeDB decision synthesis."
-    action = str(getattr(response, "action", "") or "").upper()
-    blocked_actions = {
-        str(value or "").upper()
-        for synthesis in syntheses
-        for value in synthesis.get("blockedActions") or []
-        if str(value or "")
-    }
-    if action in blocked_actions:
-        return "The selected action is blocked by the TypeDB action envelope."
-    applicable = [
-        synthesis for synthesis in syntheses
-        if selected_id in {
-            str(value or "") for value in synthesis.get("eligibleHypothesisIds") or []
-        }
-    ]
-    allowed_actions = {
-        str(value or "").upper()
-        for synthesis in applicable
-        for value in synthesis.get("allowedActions") or []
-        if str(value or "")
-    }
-    if allowed_actions and action not in allowed_actions:
-        return "The selected action is outside the TypeDB action envelope."
-    return ""
-
-
-def hypothesis_comparison_repair_prompt(
-    prompt: str,
-    response,
-    contract_error: str = "",
-) -> str:
-    abstention = dict(getattr(response, "decision_abstention", {}) or {})
-    audit = {
-        "reason": abstention.get("reason") or "가설 비교 계약 미충족",
-        "unreviewedHypothesisIds": abstention.get("unreviewedHypothesisIds") or [],
-        "invalidHypothesisIds": abstention.get("invalidHypothesisIds") or [],
-        "invalidEvidenceIds": abstention.get("invalidEvidenceIds") or [],
-        "duplicateHypothesisIds": abstention.get("duplicateHypothesisIds") or [],
-        "decisionContractError": str(contract_error or ""),
-    }
-    return (
-        str(prompt or "")
-        + "\n\n이전 응답은 아래 가설 비교 검증 오류로 거부됐다. 새로운 JSON 객체 하나만 다시 출력한다. "
-        + "입력 hypothesisSet.hypotheses의 각 hypothesisId를 정확히 한 번씩 사용하고, "
-        + "각 근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용한다. 입력 가설이 있으면 selectedHypothesisId는 그중 하나여야 하고, 없으면 빈 문자열이어야 한다.\n"
-        + "narrativeClaims에는 사용자에게 보여줄 각 문장과 DecisionCore.evidenceLedger의 실제 evidenceId를 연결한다. "
-        + "자료 부족은 limitation으로만 쓰고, 확인된 반대 사실이 없으면 counter를 만들지 않는다.\n"
-        + json.dumps(audit, ensure_ascii=False, sort_keys=True)
-    )
 
 
 class NotificationAIRequestEnqueuer:
@@ -425,6 +295,13 @@ class AIInferenceQueueRunner:
             10,
             120,
         )
+        self.judgement_service = NotificationAIJudgementService(
+            reviewer,
+            self.settings,
+            max_prompt_bytes=self.max_prompt_bytes,
+            repair_reasoning_effort=self.comparison_repair_reasoning_effort,
+            repair_timeout_seconds=self.comparison_repair_timeout_seconds,
+        )
         self.last_run_details = []
         self.stopping = False
 
@@ -469,7 +346,7 @@ class AIInferenceQueueRunner:
                 context["notificationAiExecutionProfile"] = execution_profile
             execution_profile["reasoningEffort"] = request.reasoning_effort
             decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
-            prompt_bundle = build_notification_ai_prompt_bundle(
+            packet = build_notification_ai_inference_packet(
                 context,
                 self.settings,
                 max_prompt_bytes=min(
@@ -479,17 +356,18 @@ class AIInferenceQueueRunner:
                 profile=execution_profile,
                 decision_brief=decision_brief,
             )
-            prompt = str(prompt_bundle.get("prompt") or "")
-            decision_core = dict(prompt_bundle.get("decisionCore") or {})
-            context_routing = dict(prompt_bundle.get("contextRouting") or {})
-            prompt_release = dict(prompt_bundle.get("promptRelease") or {})
+            prompt = packet.prompt
+            decision_core = packet.decision_core
+            context_routing = packet.context_routing
+            prompt_release = packet.prompt_release
+            context["_notificationAiInferencePacket"] = packet.to_audit_dict()
         except Exception as error:  # noqa: BLE001 - TypeDB inference remains publishable without AI preparation.
             if self.fallback_enabled:
                 return self.publish_preparation_fallback(request, context, error)
             raise
         executed_prompt = prompt
         prompt_bytes = len(executed_prompt.encode("utf-8"))
-        prompt_hash = hashlib.sha256(executed_prompt.encode("utf-8")).hexdigest()
+        prompt_hash = packet.prompt_hash
         stop_heartbeat = threading.Event()
         lease_lost = threading.Event()
         heartbeat = threading.Thread(
@@ -508,68 +386,36 @@ class AIInferenceQueueRunner:
         comparison_repair_initial_contract_error = ""
         fallback_reason = ""
         ai_attempted = False
-        review_context = dict(context)
-        review_context["_notificationAiPreparedPrompt"] = prompt
-        review_context["_notificationAiPreparedDecisionBrief"] = decision_brief
-        review_context["_notificationAiPreparedDecisionCore"] = decision_core
+        judgement_outcome = None
         try:
             remaining_seconds = self.remaining_delivery_seconds(request)
             if remaining_seconds < 5:
                 raise TimeoutError(
                     "notification AI delivery deadline exceeded before model execution"
                 )
-            review_context["_notificationAiTimeoutSecondsOverride"] = remaining_seconds
             ai_attempted = True
-            response = self.reviewer.review(review_context)
-            comparison_repair_contract_error = ai_response_contract_error(review_context, response)
-            comparison_repair_initial_contract_error = comparison_repair_contract_error
-            if (
-                hypothesis_comparison_needs_repair(request.message_type, response)
-                or comparison_repair_contract_error
-            ):
-                comparison_repair_attempted = True
-                repair_context = dict(review_context)
-                executed_prompt = hypothesis_comparison_repair_prompt(
-                    prompt,
-                    response,
-                    comparison_repair_contract_error,
+            judgement_outcome = self.judgement_service.judge(
+                context,
+                timeout_seconds=remaining_seconds,
+                timeout_provider=lambda: self.remaining_delivery_seconds(request),
+                profile=execution_profile,
+                decision_brief=decision_brief,
+                packet=packet,
+            )
+            response = judgement_outcome.response
+            executed_prompt = judgement_outcome.executed_prompt
+            comparison_repair_attempted = judgement_outcome.repair_attempted
+            comparison_repair_succeeded = judgement_outcome.repair_succeeded
+            comparison_repair_error = judgement_outcome.repair_error
+            comparison_repair_contract_error = judgement_outcome.final_contract_error
+            comparison_repair_initial_contract_error = judgement_outcome.initial_contract_error
+            if not judgement_outcome.publishable:
+                raise NotificationAIContractError(
+                    judgement_outcome.final_contract_error
+                    or judgement_outcome.final_publication_error
+                    or judgement_outcome.repair_error
+                    or "AI publication contract failed"
                 )
-                repair_context["_notificationAiPreparedPrompt"] = executed_prompt
-                repair_context["notificationAiExecutionProfile"] = {
-                    **execution_profile,
-                    "name": "contractRepair",
-                    "reasoningEffort": self.comparison_repair_reasoning_effort,
-                }
-                repair_remaining = self.remaining_delivery_seconds(request)
-                repair_context["_notificationAiTimeoutSecondsOverride"] = min(
-                    self.comparison_repair_timeout_seconds,
-                    repair_remaining,
-                )
-                try:
-                    if repair_remaining < 5:
-                        raise TimeoutError(
-                            "notification AI delivery deadline exceeded before contract repair"
-                        )
-                    repaired = self.reviewer.review(repair_context)
-                except Exception as error:  # noqa: BLE001 - a failed repair becomes an explicit abstention.
-                    comparison_repair_error = str(error)[:320]
-                    response.validation_warnings.append(
-                        "가설 비교 교정 요청이 실패해 선택 가설 없이 판단을 유보했습니다: "
-                        + comparison_repair_error
-                    )
-                else:
-                    response = repaired
-                    comparison_repair_contract_error = ai_response_contract_error(
-                        repair_context, response
-                    )
-                    comparison_repair_succeeded = bool(
-                        not hypothesis_comparison_needs_repair(request.message_type, response)
-                        and not comparison_repair_contract_error
-                    )
-                    if not comparison_repair_succeeded:
-                        response.validation_warnings.append(
-                            "가설 비교를 한 번 교정했지만 계약을 충족하지 못해 선택 가설 없이 판단을 유보했습니다."
-                        )
         except Exception as error:  # noqa: BLE001 - retry policy is applied below.
             review_error = error
             response = None
@@ -578,7 +424,11 @@ class AIInferenceQueueRunner:
             heartbeat.join(timeout=max(1.0, self.heartbeat_seconds + 1.0))
         latency_ms = int((time.monotonic() - started) * 1000)
         prompt_bytes = len(executed_prompt.encode("utf-8"))
-        prompt_hash = hashlib.sha256(executed_prompt.encode("utf-8")).hexdigest()
+        prompt_hash = (
+            judgement_outcome.executed_prompt_hash
+            if judgement_outcome is not None
+            else packet.prompt_hash
+        )
         reviewer_prompt_bytes = max(
             0,
             int(getattr(self.reviewer, "last_prompt_bytes", 0) or 0),
@@ -635,6 +485,7 @@ class AIInferenceQueueRunner:
             "promptHash": prompt_hash,
             "promptBytes": prompt_bytes,
             "prompt": executed_prompt,
+            "inferencePacket": packet.to_audit_dict(),
             "decisionBriefVersion": decision_brief.get("schemaVersion"),
             "decisionBrief": decision_brief,
             "decisionCore": decision_core,
@@ -676,6 +527,22 @@ class AIInferenceQueueRunner:
                 "timeoutSeconds": self.comparison_repair_timeout_seconds,
                 "finalState": str(response.hypothesis_comparison_state or ""),
                 "selectedHypothesisId": str(response.selected_hypothesis_id or ""),
+            },
+            "claimPublication": {
+                "status": str((response.claim_validation or {}).get("status") or "unavailable"),
+                "verifiedClaimCount": response.verified_claim_count,
+                "rejectedClaimCount": response.rejected_claim_count,
+                "sections": sorted(response.verified_claim_sections),
+                "initialContractError": (
+                    judgement_outcome.initial_publication_error
+                    if judgement_outcome is not None
+                    else ""
+                ),
+                "contractError": (
+                    judgement_outcome.final_publication_error
+                    if judgement_outcome is not None
+                    else ""
+                ),
             },
             "latencyMs": latency_ms,
         }

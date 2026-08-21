@@ -3999,11 +3999,13 @@ def notification_template_test_payload(payload: Dict[str, object]):
         message_type=event.rule or message_type,
         context=context,
     )
-    runner = build_notification_queue_runner(dry_run=dry_run)
+    synchronous_test = bool(dry_run or bypass_policy)
+    runner = build_notification_queue_runner(dry_run=synchronous_test)
     runner.apply_account_delivery_context(job, account)
-    rendered_message = runner.render(job)
-    if rendered_message:
-        job.text = rendered_message
+    if synchronous_test:
+        rendered_message = runner.render(job)
+        if rendered_message:
+            job.text = rendered_message
     if dry_run:
         return 200, {
             "delivered": False,

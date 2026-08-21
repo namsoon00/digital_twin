@@ -30069,6 +30069,39 @@
     };
   }
 
+  function researchPromptAdmissionMeta(item) {
+    item = item || {};
+    var admission = item.promptEvidenceAdmission && typeof item.promptEvidenceAdmission === "object"
+      ? item.promptEvidenceAdmission
+      : {};
+    var usage = String(admission.usage || "blocked").toLowerCase();
+    var freshness = String(admission.freshnessState || "unknown").toLowerCase();
+    var usageLabels = {
+      "decision": "판단 근거",
+      "reference": "참고 근거",
+      "alert": "알림 전용",
+      "display": "열람 전용",
+      "blocked": "사용 차단"
+    };
+    var freshnessLabels = {
+      "fresh": "최신",
+      "stale": "기한 지남",
+      "future": "시각 오류",
+      "unknown": "기준일 미확인"
+    };
+    var tone = usage === "decision" || usage === "reference" ? "watch"
+      : (usage === "blocked" || freshness === "stale" || freshness === "future" ? "danger" : "hold");
+    return {
+      usage: usage,
+      label: usageLabels[usage] || "사용 차단",
+      freshness: freshness,
+      freshnessLabel: freshnessLabels[freshness] || "기준일 미확인",
+      tone: tone,
+      ageMinutes: Number(admission.ageMinutes),
+      reasonCodes: Array.isArray(admission.reasonCodes) ? admission.reasonCodes : []
+    };
+  }
+
   function renderResearchEvidenceQuality(quality) {
     quality = quality && typeof quality === "object" ? quality : {};
     var state = String(quality.alertState || "healthy").toLowerCase();
@@ -30357,6 +30390,7 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var promptAdmission = researchPromptAdmissionMeta(item);
     var translation = researchEvidenceTranslationMeta(item);
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var key = feedEvidenceKey(item, index);
@@ -30380,6 +30414,7 @@
       '<span class="' + escapeHtml(claimMeta.tone) + '">' + escapeHtml(claimMeta.label) + '</span>',
       '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',
       '<span class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</span>',
+      '<span class="' + escapeHtml(promptAdmission.tone) + '">' + escapeHtml(promptAdmission.label + " · " + promptAdmission.freshnessLabel) + '</span>',
       '<span>' + escapeHtml(sourceMeta.source || "-") + '</span>',
       '<span class="' + escapeHtml(sourceMeta.tone || "hold") + '">' + escapeHtml(sourceMeta.dataLabel) + '</span>',
       '<span>' + escapeHtml(formatFeedTime(time) || "-") + '</span>',
@@ -30425,6 +30460,7 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var promptAdmission = researchPromptAdmissionMeta(item);
     var translation = researchEvidenceTranslationMeta(item);
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var canDelete = Boolean(item.evidenceId) && item.evidenceId !== "preview:005930:news";
@@ -30442,6 +30478,8 @@
       renderNotificationDetailMetric("기사 관계", sourceMeta.relationshipLabel, sourceMeta.relationship === "exact-duplicate" || sourceMeta.relationship === "syndicated-copy" ? "caution" : "muted"),
       renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
       renderNotificationDetailMetric("주장 검증", claimMeta.label, claimMeta.tone),
+      renderNotificationDetailMetric("AI 사용", promptAdmission.label, promptAdmission.tone),
+      renderNotificationDetailMetric("신선도", promptAdmission.freshnessLabel, promptAdmission.tone),
       renderNotificationDetailMetric("번역", translation.label, translation.tone),
       renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
       '</div>',
@@ -30468,6 +30506,7 @@
       '<span>방향 ' + escapeHtml(researchEvidencePolarityLabel(item.polarity)) + '</span>',
       '<span>독립 출처 ' + escapeHtml(String(claimMeta.independentSources || 1)) + '곳</span>',
       '<span>공식 근거 ' + escapeHtml(String(claimMeta.officialCount)) + '건</span>',
+      '<span class="' + escapeHtml(promptAdmission.tone) + '">AI 사용 ' + escapeHtml(promptAdmission.label) + '</span>',
       '<span class="' + escapeHtml(translation.tone) + '">' + escapeHtml(translation.label) + '</span>',
       '<span class="' + escapeHtml(summaryQuality.tone) + '">' + escapeHtml(summaryQuality.label) + '</span>',
       '</div>',
@@ -30490,6 +30529,7 @@
     var sourceMeta = feedEvidenceDataMeta(item);
     var summary = researchEvidenceKoreanSummary(item);
     var claimMeta = researchClaimVerificationMeta(item);
+    var promptAdmission = researchPromptAdmissionMeta(item);
     var translation = researchEvidenceTranslationMeta(item);
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     return {
@@ -30508,6 +30548,8 @@
         renderNotificationDetailMetric("출처 등급", sourceMeta.publisherTier || "확인 중", sourceMeta.publisherTier === "D" ? "caution" : "muted"),
         renderNotificationDetailMetric("기사 관계", sourceMeta.relationshipLabel, sourceMeta.relationship === "exact-duplicate" || sourceMeta.relationship === "syndicated-copy" ? "caution" : "muted"),
         renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
+        renderNotificationDetailMetric("AI 사용", promptAdmission.label, promptAdmission.tone),
+        renderNotificationDetailMetric("신선도", promptAdmission.freshnessLabel, promptAdmission.tone),
         renderNotificationDetailMetric("번역", translation.label, translation.tone),
         renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
         '</div>',

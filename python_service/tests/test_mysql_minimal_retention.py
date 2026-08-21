@@ -429,7 +429,10 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         ]
         self.assertTrue(source_queries)
         self.assertTrue(any("NOT EXISTS" in sql for sql in source_queries))
-        self.assertTrue(any("job_status IN ('queued', 'retry', 'processing')" in sql for sql in source_queries))
+        self.assertTrue(any(
+            "job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')" in sql
+            for sql in source_queries
+        ))
 
     def test_legacy_cleanup_limits_job_deletes_to_terminal_statuses(self):
         connection = ApplyConnection()

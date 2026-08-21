@@ -5712,6 +5712,14 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             typedb_error_code("[TSV13] Execution interrupted by a bounded TypeDB read."),
         )
 
+    def test_typedb_error_code_classifies_candidate_verification_as_non_transient(self):
+        self.assertEqual(
+            "typedbCandidateVerificationError",
+            typedb_error_code(
+                "Scoped ABox candidate verification failed for link:symbol:AAPL:profile"
+            ),
+        )
+
     def test_timed_out_native_rule_recovers_only_after_every_target_shard_succeeds(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=0)
         rule = default_graph_inference_rules()[0]

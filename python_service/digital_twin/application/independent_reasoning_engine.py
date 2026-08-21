@@ -90,10 +90,48 @@ def projection_retry_policy(projection: object) -> Dict[str, object]:
         "retryable": retryable,
         "retryAfterSeconds": max(1, retry_after) if retryable else 0,
         "reason": reason,
-        "reasonCode": str(failure.get("reasonCode") or ""),
-        "failureStage": str(failure.get("stage") or ""),
+        "reasonCode": str(
+            values.get("reasonCode")
+            or values.get("failureReasonCode")
+            or failure.get("reasonCode")
+            or ""
+        ),
+        "failureStage": str(
+            values.get("failureStage")
+            or failure.get("stage")
+            or ""
+        ),
         "blockingRuleId": str(failure.get("ruleId") or ""),
     }
+
+
+def waits_for_shared_world_projection(result: object) -> bool:
+    """Return whether a deferred turn is waiting on SharedPremiseWorld only."""
+
+    values = dict(result or {}) if isinstance(result, Mapping) else {}
+    reason_codes = {
+        str(values.get("reason_code") or values.get("reasonCode") or "").strip().lower()
+    }
+    failure_stages = set()
+    for projection in dict(values.get("projection_results") or {}).values():
+        if not isinstance(projection, Mapping):
+            continue
+        reason_codes.add(str(
+            projection.get("failureReasonCode")
+            or projection.get("reasonCode")
+            or ""
+        ).strip().lower())
+        failure_stages.add(str(projection.get("failureStage") or "").strip().lower())
+    reason_codes.discard("")
+    failure_stages.discard("")
+    return bool(
+        failure_stages.intersection({"shared-premise-projection", "shared-world-projection"})
+        or reason_codes.intersection({
+            "shared-premise-projection-failed",
+            "shared-premise-not-ready",
+            "typedb-shared-world-projection-error",
+        })
+    )
 
 
 def alert_event_payload(event: object) -> Dict[str, object]:
@@ -501,6 +539,15 @@ class ScopedTypeDBInferenceExecutor:
                             premise_proof.get("reason")
                             or "SharedPremiseWorld must complete before account inference."
                         )[:240],
+                        "reasonCode": str(
+                            premise_proof.get("reasonCode")
+                            or premise_proof.get("status")
+                            or "shared-premise-not-ready"
+                        )[:96],
+                        "failureStage": str(
+                            premise_proof.get("failureStage")
+                            or "shared-premise-projection"
+                        )[:96],
                         "retryable": bool(premise_proof.get("retryable", True)),
                         "recommendedRetryAfterSeconds": int(
                             premise_proof.get("recommendedRetryAfterSeconds") or 10
@@ -842,24 +889,34 @@ class V2ReasoningEngine:
         stages["inputAssemblyMs"] = int((time.perf_counter() - input_started) * 1000)
         preflight = dict(assembled.get("preflight") or {})
         if assembled.get("status") != "ready":
+            preflight_status = str(preflight.get("status") or "input-not-ready")
+            permanent = bool(preflight.get("permanent"))
+            result_status = (
+                "excluded"
+                if permanent and preflight_status == "no-affected-account"
+                else "rejected"
+                if permanent
+                else "deferred"
+            )
             if reasoning_case is not None:
                 reasoning_case = self.reasoning_orchestrator.defer(
                     reasoning_case.case_id,
                     str(preflight.get("reason") or "Point-in-time input is not ready."),
-                    retryable=not bool(preflight.get("permanent")),
+                    retryable=not permanent,
                 )
             result = IndependentReasoningResult(
                 request_id=request.request_id,
                 deployment_id=request.deployment_id,
-                status="rejected" if preflight.get("permanent") else "deferred",
+                status=result_status,
                 started_at=started_at,
                 completed_at=utc_now_iso(),
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 account_ids=request.account_ids,
                 symbols=request.symbols,
-                retryable=not bool(preflight.get("permanent")),
+                retryable=not permanent,
                 retry_after_seconds=int(preflight.get("retryAfterSeconds") or 15),
                 reason=str(preflight.get("reason") or "Point-in-time input is not ready."),
+                reason_code=preflight_status,
                 stage_durations_ms=stages,
                 reasoning_case_id=reasoning_case.case_id if reasoning_case else "",
                 reasoning_case_stage=reasoning_case.stage if reasoning_case else "",
@@ -995,6 +1052,14 @@ class V2ReasoningEngine:
             int(policy.get("retryAfterSeconds") or 0)
             for policy in retry_policies.values()
         ] or [0])
+        reason_code = str(next(
+            (
+                retry_policies.get(account_id, {}).get("reasonCode")
+                for account_id in failed_accounts
+                if retry_policies.get(account_id, {}).get("reasonCode")
+            ),
+            "",
+        ))
         status = (
             "ok"
             if verified_accounts and not failed_accounts
@@ -1069,6 +1134,7 @@ class V2ReasoningEngine:
             retryable=retryable,
             retry_after_seconds=max(1, retry_after) if retryable else 0,
             reason=reason,
+            reason_code=reason_code,
             stage_durations_ms=stages,
             reasoning_case_id=reasoning_case.case_id if reasoning_case else "",
             reasoning_case_stage=reasoning_case.stage if reasoning_case else "",
@@ -1089,7 +1155,7 @@ class V2ReasoningEngine:
     def health(self) -> Dict[str, object]:
         result = self.last_result.to_dict() if self.last_result else {}
         return {
-            "status": "ready" if not result or result.get("status") in {"ok", "partial"} else "degraded",
+            "status": "ready" if not result or result.get("status") in {"ok", "partial", "excluded"} else "degraded",
             "engineVersion": "v2",
             "independentExecution": True,
             "directSourceEvents": True,
@@ -1271,7 +1337,7 @@ class IndependentReasoningJobRunner:
             completion_jobs = list(selected_jobs)
             coverage_excluded_jobs = []
             if (
-                status not in {"deferred", "rejected"}
+                status not in {"blocked", "deferred", "rejected", "excluded"}
                 and "evaluated_symbols" in result
             ):
                 evaluated_symbols = {
@@ -1295,14 +1361,59 @@ class IndependentReasoningJobRunner:
                 coverage_excluded_job_ids
             )
             result["coverage_excluded_job_ids"] = coverage_excluded_job_ids
-            if status == "deferred" and result.get("retryable"):
+            if status == "excluded":
+                exclude = getattr(self.queue, "exclude", None)
                 for job_id in job_ids:
-                    self.queue.defer(
-                        job_id,
-                        str(result.get("reason") or "V2 input is not ready."),
-                        int(result.get("retry_after_seconds") or result.get("retryAfterSeconds") or 15),
-                    )
-                outcome = "deferred"
+                    if callable(exclude):
+                        exclude(
+                            job_id,
+                            result,
+                            str(result.get("reason") or "The source event has no applicable reasoning scope."),
+                            str(result.get("reason_code") or result.get("reasonCode") or "reasoning-scope-not-applicable"),
+                        )
+                    else:
+                        self.queue.supersede(
+                            job_id,
+                            str(result.get("reason") or "The source event has no applicable reasoning scope."),
+                        )
+                outcome = "excluded"
+            elif status == "deferred" and result.get("retryable"):
+                projection_waits = []
+                wait_for_projection = (
+                    waits_for_shared_world_projection(result)
+                    and callable(getattr(self.queue, "await_world_projection", None))
+                )
+                for job_id in job_ids:
+                    if wait_for_projection:
+                        projection_waits.append(self.queue.await_world_projection(
+                            job_id,
+                            result,
+                            str(result.get("reason") or "SharedPremiseWorld projection is not ready."),
+                            int(result.get("retry_after_seconds") or result.get("retryAfterSeconds") or 30),
+                            max_attempts=_int_setting(
+                                self.settings,
+                                "reasoningEngineV2WorldProjectionMaxAttempts",
+                                5,
+                                1,
+                                20,
+                            ),
+                        ))
+                    else:
+                        self.queue.defer(
+                            job_id,
+                            str(result.get("reason") or "V2 input is not ready."),
+                            int(result.get("retry_after_seconds") or result.get("retryAfterSeconds") or 15),
+                        )
+                terminal_projection_wait = bool(projection_waits) and all(
+                    wait.get("terminal") for wait in projection_waits
+                )
+                outcome = (
+                    "failed"
+                    if terminal_projection_wait
+                    else "awaiting-world-projection"
+                    if wait_for_projection
+                    else "deferred"
+                )
             elif status == "rejected" and callable(getattr(self.queue, "supersede", None)):
                 for job_id in job_ids:
                     self.queue.supersede(
@@ -1310,6 +1421,20 @@ class IndependentReasoningJobRunner:
                         str(result.get("reason") or "The immutable reasoning source was rejected."),
                     )
                 outcome = "superseded"
+            elif status == "blocked":
+                failure_reason = str(
+                    result.get("reason") or "V2 TypeDB inference failed without a retryable recovery path."
+                )
+                failure_code = str(
+                    result.get("reason_code") or result.get("reasonCode") or "reasoning-execution-blocked"
+                )
+                fail = getattr(self.queue, "fail", None)
+                for job_id in job_ids:
+                    if callable(fail):
+                        fail(job_id, result, failure_reason, failure_code)
+                    else:
+                        self.queue.retry(job_id, failure_reason, max_attempts=1)
+                outcome = "failed"
             else:
                 for job in coverage_excluded_jobs:
                     missing = sorted(
@@ -1320,18 +1445,33 @@ class IndependentReasoningJobRunner:
                         "The immutable source snapshot did not cover the requested "
                         "reasoning symbols: " + ", ".join(missing)
                     )[:300]
-                    supersede = getattr(self.queue, "supersede", None)
-                    if callable(supersede):
-                        supersede(job["jobId"], reason)
+                    exclude = getattr(self.queue, "exclude", None)
+                    if callable(exclude):
+                        exclude(
+                            job["jobId"],
+                            {
+                                **result,
+                                "status": "excluded",
+                                "retryable": False,
+                                "reason_code": "source-snapshot-symbol-not-covered",
+                                "not_evaluated_symbols": missing,
+                            },
+                            reason,
+                            "source-snapshot-symbol-not-covered",
+                        )
                     else:
-                        self.queue.defer(job["jobId"], reason, 5)
+                        supersede = getattr(self.queue, "supersede", None)
+                        if callable(supersede):
+                            supersede(job["jobId"], reason)
+                        else:
+                            self.queue.defer(job["jobId"], reason, 5)
                 for job_id in completion_job_ids:
                     parameters = inspect.signature(self.queue.complete).parameters
                     if "worker_id" in parameters:
                         self.queue.complete(job_id, result, worker_id=self.worker_id)
                     else:
                         self.queue.complete(job_id, result)
-                outcome = "completed" if completion_job_ids else "superseded"
+                outcome = "completed" if completion_job_ids else "excluded"
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update(self.engine.health())
             health.update({
@@ -1340,9 +1480,23 @@ class IndependentReasoningJobRunner:
                 "lastRunAt": utc_now_iso(),
                 "queue": self.queue_summary(descriptor.deployment_id),
             })
+            if outcome == "awaiting-world-projection":
+                health["status"] = "deferred"
+                health["dependencyStatus"] = "awaiting-world-projection"
+                health["dependencyReasonCode"] = str(
+                    result.get("reason_code") or result.get("reasonCode") or ""
+                )
+                health.pop("lastError", None)
+            elif outcome == "failed":
+                health["status"] = "blocked"
+                health["lastError"] = str(result.get("reason") or "SharedPremiseWorld projection failed.")[:300]
+            elif outcome == "excluded":
+                health["status"] = "ready"
             if str(health.get("status") or "") == "ready":
                 health.pop("lastError", None)
                 health.pop("executionGuard", None)
+                health.pop("dependencyStatus", None)
+                health.pop("dependencyReasonCode", None)
             health["routeReconciliation"] = route_reconciliation
             self.registry.update_health(descriptor.deployment_id, health)
             return {

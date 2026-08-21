@@ -196,6 +196,11 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 return SimpleNamespace(fetchall=lambda: [
                     {"job_status": "queued", "row_count": 2, "oldest": "2026-08-18T00:00:00Z"},
                     {"job_status": "processing", "row_count": 1, "oldest": "2026-08-18T00:01:00Z"},
+                    {
+                        "job_status": "awaiting_world_projection",
+                        "row_count": 4,
+                        "oldest": "2026-08-17T00:00:00Z",
+                    },
                 ])
 
         class Store(MySQLReasoningEngineJobStore):
@@ -208,7 +213,32 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(3, state["effectivePendingCount"])
         self.assertEqual(2, state["queuedCount"])
         self.assertEqual(1, state["processingCount"])
+        self.assertEqual(4, state["awaitingWorldProjectionCount"])
         self.assertEqual("2026-08-18T00:00:00Z", state["oldestRequestAt"])
+        self.assertEqual(
+            "2026-08-17T00:00:00Z",
+            state["oldestAwaitingWorldProjectionAt"],
+        )
+
+    def test_mysql_live_queue_does_not_report_projection_wait_as_active_backlog(self):
+        class Connection:
+            def execute(self, _sql, _params=()):
+                return SimpleNamespace(fetchall=lambda: [{
+                    "job_status": "awaiting_world_projection",
+                    "row_count": 1,
+                    "oldest": "2026-08-17T00:00:00Z",
+                }])
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+        state = object.__new__(Store).live_queue_state("v2-production")
+
+        self.assertEqual("waiting", state["status"])
+        self.assertEqual(0, state["effectivePendingCount"])
+        self.assertEqual("", state["oldestRequestAt"])
 
     def test_mysql_queue_recovers_only_confirmed_dead_local_worker_leases(self):
         class Connection:
@@ -694,6 +724,39 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(0, recorder.calls)
         self.assertFalse(engine.health()["monitorRunnerUsed"])
 
+    def test_engine_excludes_symbol_without_an_affected_account(self):
+        class NoAffectedAccountAssembler:
+            @staticmethod
+            def assemble(_request):
+                return {
+                    "status": "not-ready",
+                    "preflight": {
+                        "ready": False,
+                        "permanent": True,
+                        "status": "no-affected-account",
+                        "reason": "No account subscribes to the requested symbol.",
+                    },
+                }
+
+        class Executor:
+            @staticmethod
+            def execute(_request, _snapshots):
+                raise AssertionError("excluded input must not reach TypeDB")
+
+        engine = V2ReasoningEngine(
+            descriptor(),
+            NoAffectedAccountAssembler(),
+            Executor(),
+            FakeCandidateBuilder(),
+        )
+
+        result = engine.consume([source_event("UNTRACKED", [])])
+
+        self.assertEqual("excluded", result["status"])
+        self.assertEqual("no-affected-account", result["reason_code"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual("ready", engine.health()["status"])
+
     def test_native_rule_failure_is_deferred_instead_of_completed_as_blocked(self):
         class RetryableNativeFailureExecutor:
             def execute(self, request, snapshots):
@@ -1178,6 +1241,204 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("superseded", result["status"])
         self.assertEqual("job:old", queue.superseded[0][0])
         self.assertIn("immutable source packet", queue.superseded[0][1])
+
+    def test_runner_finishes_non_applicable_event_as_excluded(self):
+        class Queue:
+            def __init__(self):
+                self.excluded = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{"jobId": "job:untracked", "sourceEvent": source_event("UNTRACKED", []).to_dict()}]
+
+            def exclude(self, job_id, result, reason, reason_code):
+                self.excluded.append((job_id, result, reason, reason_code))
+
+            def defer(self, *_args):
+                raise AssertionError("a permanent exclusion must not be retried")
+
+            @staticmethod
+            def summary(_deployment_id):
+                return {"pendingCount": 0}
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+            @staticmethod
+            def consume(_events):
+                return {
+                    "request_id": "request:untracked",
+                    "status": "excluded",
+                    "retryable": False,
+                    "reason": "No account subscribes to the requested symbol.",
+                    "reason_code": "no-affected-account",
+                }
+
+            @staticmethod
+            def health():
+                return {"status": "ready", "monitorRunnerUsed": False}
+
+        class Registry:
+            def __init__(self):
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        queue = Queue()
+        registry = Registry()
+        result = IndependentReasoningJobRunner(queue, Engine(), registry).run_once()
+
+        self.assertEqual("excluded", result["status"])
+        self.assertEqual("job:untracked", queue.excluded[0][0])
+        self.assertEqual("no-affected-account", queue.excluded[0][3])
+        self.assertEqual("ready", registry.health["status"])
+
+    def test_runner_parks_shared_world_projection_failure_with_bounded_retry(self):
+        class Queue:
+            def __init__(self):
+                self.waiting = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{"jobId": "job:aapl", "sourceEvent": source_event("AAPL", []).to_dict()}]
+
+            def await_world_projection(
+                self,
+                job_id,
+                result,
+                reason,
+                retry_after_seconds,
+                max_attempts,
+            ):
+                self.waiting.append({
+                    "jobId": job_id,
+                    "result": result,
+                    "reason": reason,
+                    "retryAfterSeconds": retry_after_seconds,
+                    "maxAttempts": max_attempts,
+                })
+                return {"jobId": job_id, "terminal": False, "retryAfterSeconds": retry_after_seconds}
+
+            def defer(self, *_args):
+                raise AssertionError("SharedPremiseWorld waits must not enter the generic defer loop")
+
+            @staticmethod
+            def summary(_deployment_id):
+                return {"pendingCount": 0, "awaitingWorldProjectionCount": 1}
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+            @staticmethod
+            def consume(_events):
+                return {
+                    "request_id": "request:aapl",
+                    "status": "deferred",
+                    "retryable": True,
+                    "retry_after_seconds": 30,
+                    "reason": "SharedPremiseWorld projection failed.",
+                    "reason_code": "typedb-shared-world-projection-error",
+                    "projection_results": {
+                        "acct": {
+                            "failureReasonCode": "typedb-shared-world-projection-error",
+                            "failureStage": "shared-world-projection",
+                        }
+                    },
+                }
+
+            @staticmethod
+            def health():
+                return {"status": "degraded", "monitorRunnerUsed": False}
+
+        class Registry:
+            def __init__(self):
+                self.health = {"lastError": "stale failure"}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        queue = Queue()
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            Engine(),
+            registry,
+            settings={"reasoningEngineV2WorldProjectionMaxAttempts": "4"},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("awaiting-world-projection", result["status"])
+        self.assertEqual("job:aapl", queue.waiting[0]["jobId"])
+        self.assertEqual(4, queue.waiting[0]["maxAttempts"])
+        self.assertEqual("deferred", registry.health["status"])
+        self.assertEqual("awaiting-world-projection", registry.health["dependencyStatus"])
+        self.assertNotIn("lastError", registry.health)
+
+    def test_runner_terminally_fails_non_retryable_projection_integrity_error(self):
+        class Queue:
+            def __init__(self):
+                self.failed = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{"jobId": "job:aapl", "sourceEvent": source_event("AAPL", []).to_dict()}]
+
+            def fail(self, job_id, result, reason, reason_code):
+                self.failed.append((job_id, result, reason, reason_code))
+
+            def defer(self, *_args):
+                raise AssertionError("a deterministic integrity failure must not be deferred")
+
+            @staticmethod
+            def summary(_deployment_id):
+                return {"pendingCount": 0}
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+            @staticmethod
+            def consume(_events):
+                return {
+                    "request_id": "request:aapl",
+                    "status": "blocked",
+                    "retryable": False,
+                    "reason": "Scoped ABox candidate verification failed for AAPL.",
+                    "reason_code": "typedbCandidateVerificationError",
+                }
+
+            @staticmethod
+            def health():
+                return {"status": "degraded", "monitorRunnerUsed": False}
+
+        class Registry:
+            def __init__(self):
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        queue = Queue()
+        registry = Registry()
+        result = IndependentReasoningJobRunner(queue, Engine(), registry).run_once()
+
+        self.assertEqual("failed", result["status"])
+        self.assertEqual("job:aapl", queue.failed[0][0])
+        self.assertEqual("typedbCandidateVerificationError", queue.failed[0][3])
+        self.assertEqual("blocked", registry.health["status"])
 
 
 if __name__ == "__main__":

@@ -1076,6 +1076,8 @@ def typedb_projection_preflight_graph_for_execution(
 
 def typedb_error_code(error: object) -> str:
     text = str(error or "").lower()
+    if "scoped abox candidate verification failed" in text:
+        return "typedbCandidateVerificationError"
     if any(term in text for term in ["unable to connect", "connection refused", "connect failed", "unavailable"]):
         return "typedbConnectionError"
     # TypeDB can surface a cancelled bounded read as TSV13 without including
@@ -6076,6 +6078,7 @@ class ScopedABoxManifestMixin:
             relation_persistence = self.scoped_abox_relation_persistence_summary(
                 dict(timing.get("changedScopeWritePlan") or {}),
             )
+            reason_code = typedb_error_code(error)
             return {
                 "configured": True,
                 "saved": False,
@@ -6092,8 +6095,12 @@ class ScopedABoxManifestMixin:
                 "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
                 "scopeTopologyMigration": topology_migration,
                 "preservedActiveGeneration": bool(previous_manifest_id),
-                "reasonCode": typedb_error_code(error),
+                "reasonCode": reason_code,
                 "reason": str(error)[:220],
+                "retryable": reason_code in {
+                    "typedbConnectionError",
+                    "typedbTimeout",
+                },
                 "scopeVerification": verification,
                 "timing": timing,
                 "relationPersistence": relation_persistence,

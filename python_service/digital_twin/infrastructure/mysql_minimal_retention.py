@@ -204,7 +204,7 @@ class MySQLMinimalRetentionRepository:
             ),
             "reasoningEngineJobs": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(request_json) + OCTET_LENGTH(result_json)), 0) AS candidate_bytes "
-                "FROM `reasoning_engine_jobs` WHERE job_status IN ('completed', 'failed', 'superseded') "
+                "FROM `reasoning_engine_jobs` WHERE job_status IN ('completed', 'excluded', 'failed', 'superseded') "
                 "AND updated_at < " + _cutoff_sql(),
                 (cutoffs["reasoningEngineJobs"],),
             ),
@@ -214,7 +214,7 @@ class MySQLMinimalRetentionRepository:
                 + _cutoff_sql()
                 + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
                 "WHERE job.source_snapshot_id = source.snapshot_id "
-                "AND job.job_status IN ('queued', 'retry', 'processing')) "
+                "AND job.job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')) "
                 "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
                 "WHERE mailbox.source_snapshot_id = source.snapshot_id "
                 "AND mailbox.state IN ('pending', 'direct-pending'))",
@@ -547,7 +547,7 @@ class MySQLMinimalRetentionRepository:
         return self._result("reasoning_engine_shadow_jobs", deleted, bytes_deleted)
 
     def _delete_reasoning_engine_jobs(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        statuses = ("completed", "failed", "superseded")
+        statuses = ("completed", "excluded", "failed", "superseded")
         candidates = self._byte_bounded_candidates(
             "SELECT job_id, OCTET_LENGTH(request_json) + OCTET_LENGTH(result_json) AS payload_bytes "
             "FROM `reasoning_engine_jobs` WHERE job_status IN ("
@@ -575,7 +575,7 @@ class MySQLMinimalRetentionRepository:
             + _cutoff_sql()
             + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
             "WHERE job.source_snapshot_id = source.snapshot_id "
-            "AND job.job_status IN ('queued', 'retry', 'processing')) "
+            "AND job.job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')) "
             "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
             "WHERE mailbox.source_snapshot_id = source.snapshot_id "
             "AND mailbox.state IN ('pending', 'direct-pending')) "
@@ -592,7 +592,7 @@ class MySQLMinimalRetentionRepository:
             "created_at < " + _cutoff_sql()
             + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
             "WHERE job.source_snapshot_id = `verified_reasoning_source_snapshots`.snapshot_id "
-            "AND job.job_status IN ('queued', 'retry', 'processing')) "
+            "AND job.job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')) "
             "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
             "WHERE mailbox.source_snapshot_id = `verified_reasoning_source_snapshots`.snapshot_id "
             "AND mailbox.state IN ('pending', 'direct-pending'))",

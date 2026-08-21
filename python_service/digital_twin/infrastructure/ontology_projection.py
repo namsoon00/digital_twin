@@ -1175,6 +1175,14 @@ class PortfolioOntologyProjectionRecorder:
                 "retryable": bool(projection.get("retryable", True)),
                 "recommendedRetryAfterSeconds": int(projection.get("recommendedRetryAfterSeconds") or 10),
                 "projection": projection,
+                "reasonCode": str(
+                    projection.get("reasonCode")
+                    or "shared-premise-projection-failed"
+                )[:96],
+                "failureStage": str(
+                    projection.get("failureStage")
+                    or "shared-premise-projection"
+                )[:96],
                 "reason": str(projection.get("reason") or projection_status)[:220],
             }
         stage_started = time.perf_counter()
@@ -5050,6 +5058,8 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 and str(save_result.get("aboxSnapshotId") or manifest_id) == manifest_id
             )
+            save_status = str(save_result.get("status") or "error")
+            save_failed = save_status not in {"ok", "staged-scoped-manifest"}
             if (
                 kind != "premise"
                 and manifest_id
@@ -5085,8 +5095,18 @@ class PortfolioOntologyProjectionRecorder:
                     else
                     "ok"
                     if str((activation or {}).get("status") or "") == "ok"
-                    else str(save_result.get("status") or "error")
+                    else save_status
                 ),
+                "retryable": bool(save_result.get("retryable", False)) if save_failed else False,
+                "recommendedRetryAfterSeconds": (
+                    int(save_result.get("recommendedRetryAfterSeconds") or 30)
+                    if save_failed and bool(save_result.get("retryable", False))
+                    else 0
+                ),
+                "reasonCode": str(save_result.get("reasonCode") or "")[:96] if save_failed else "",
+                "failureStage": "shared-world-save" if save_failed else "",
+                "errorType": str(save_result.get("errorType") or "")[:96] if save_failed else "",
+                "reason": str(save_result.get("reason") or "")[:220] if save_failed else "",
                 "materialFingerprint": fingerprint,
                 "worldviewManifestId": manifest_id,
                 "projectionMode": "incremental-scoped-manifest-patch",
@@ -5115,10 +5135,16 @@ class PortfolioOntologyProjectionRecorder:
                 "projectionCoordinator": self.projection_coordinator_summary(coordinator_lease),
             }
         except Exception as error:  # noqa: BLE001 - market sharing must never suppress account reasoning.
+            error_type = type(error).__name__
             return {
                 **world_metadata(shared_world),
                 "projectionKind": kind,
                 "status": "error",
+                "retryable": True,
+                "recommendedRetryAfterSeconds": 30,
+                "reasonCode": "typedb-shared-world-projection-error",
+                "failureStage": "shared-world-projection",
+                "errorType": error_type,
                 "reason": str(error)[:220],
             }
         finally:

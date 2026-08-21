@@ -10,7 +10,7 @@ from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
-INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v3"
+INDEPENDENT_REASONING_RESULT_VERSION = "independent-reasoning-result-v4"
 
 
 def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
@@ -392,6 +392,7 @@ class IndependentReasoningResult:
     retryable: bool = False
     retry_after_seconds: int = 0
     reason: str = ""
+    reason_code: str = ""
     stage_durations_ms: Dict[str, int] = field(default_factory=dict)
     reasoning_case_id: str = ""
     reasoning_case_stage: str = ""

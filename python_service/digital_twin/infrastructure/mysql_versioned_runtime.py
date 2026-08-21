@@ -968,7 +968,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         rows = connection.execute(
             "SELECT request_json FROM reasoning_engine_jobs "
             "WHERE deployment_id = %s AND scope_key = %s AND supersedable = 1 "
-            "AND job_status IN ('queued', 'retry', 'awaiting_source') "
+            "AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection') "
             "ORDER BY source_snapshot_at, created_at, job_id FOR UPDATE",
             (str(deployment_id or ""), str(scope_key or "")),
         ).fetchall()
@@ -1053,7 +1053,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                             last_error = 'A newer direct source revision owns this scope.'
                         WHERE deployment_id = %s AND scope_key = %s
                           AND job_id <> %s AND supersedable = 1
-                          AND job_status IN ('queued', 'retry', 'awaiting_source')
+                          AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection')
                         """,
                         (stamp, stamp, deployment_id, material["scopeKey"], job_id),
                     )
@@ -1216,7 +1216,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             rows = connection.execute(
                 "SELECT * FROM reasoning_engine_jobs WHERE deployment_id = %s "
-                "AND supersedable = 1 AND job_status IN ('queued', 'retry', 'awaiting_source') "
+                "AND supersedable = 1 AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection') "
                 "ORDER BY source_snapshot_at, created_at, job_id LIMIT %s FOR UPDATE",
                 (str(deployment_id or ""), max(1, min(10000, int(limit or 2000)))),
             ).fetchall()
@@ -1396,7 +1396,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT reasoning_lane FROM reasoning_engine_jobs WHERE deployment_id = %s "
-                "AND job_status IN ('queued', 'retry') AND (available_at = '' OR available_at <= %s) "
+                "AND job_status IN ('queued', 'retry', 'awaiting_world_projection') AND (available_at = '' OR available_at <= %s) "
                 + boundary_filter +
                 "ORDER BY CASE WHEN created_at <= %s THEN 0 ELSE 1 END, "
                 "CASE WHEN created_at <= %s THEN created_at ELSE '' END, "
@@ -1443,7 +1443,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """
                 SELECT * FROM reasoning_engine_jobs
                 WHERE deployment_id = %s
-                  AND job_status IN ('queued', 'retry')
+                  AND job_status IN ('queued', 'retry', 'awaiting_world_projection')
                   AND (available_at = '' OR available_at <= %s)
                   AND (lease_expires_at = '' OR lease_expires_at < %s)
                 """ + boundary_filter + lane_filter + """
@@ -1552,6 +1552,157 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    def await_world_projection(
+        self,
+        job_id: str,
+        result: Mapping[str, object],
+        reason: str,
+        retry_after_seconds: int = 30,
+        max_attempts: int = 5,
+    ) -> Dict[str, object]:
+        """Park a tracked subject whose SharedPremiseWorld is not ready.
+
+        This is an expected dependency state, not a generic execution error.
+        The bounded counter prevents a deterministic TypeDB projection defect
+        from becoming an immortal queue item.
+        """
+
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT attempts FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone() or {"attempts": 0}
+            attempts = int(row.get("attempts") or 0) + 1
+            terminal = attempts >= max(1, int(max_attempts or 5))
+            base_delay = max(10, int(retry_after_seconds or 30))
+            delay = min(900, base_delay * (2 ** min(5, attempts - 1)))
+            stamp = iso_utc()
+            values = dict(result or {})
+            values.update({
+                "status": "failed" if terminal else "awaiting_world_projection",
+                "retryable": not terminal,
+                "retry_after_seconds": 0 if terminal else delay,
+                "reason": str(reason or values.get("reason") or "SharedPremiseWorld projection is pending.")[:500],
+                "reason_code": str(
+                    values.get("reason_code")
+                    or values.get("reasonCode")
+                    or "shared-premise-world-projection-pending"
+                )[:96],
+                "world_projection_attempt": attempts,
+                "world_projection_max_attempts": max(1, int(max_attempts or 5)),
+            })
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = %s, attempts = %s, result_json = %s,
+                    lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    available_at = %s, last_error = %s, completed_at = %s,
+                    updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    "failed" if terminal else "awaiting_world_projection",
+                    attempts,
+                    canonical_json(values),
+                    "" if terminal else iso_utc(utc_now() + timedelta(seconds=delay)),
+                    str(reason or "")[:500] if terminal else "",
+                    stamp if terminal else "",
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+        return {
+            "jobId": str(job_id or ""),
+            "attemptCount": attempts,
+            "terminal": terminal,
+            "retryAfterSeconds": 0 if terminal else delay,
+        }
+
+    def exclude(
+        self,
+        job_id: str,
+        result: Mapping[str, object],
+        reason: str,
+        reason_code: str = "reasoning-scope-not-applicable",
+    ) -> None:
+        """Finish a durable request that has no applicable investment scope."""
+
+        stamp = iso_utc()
+        values = dict(result or {})
+        values.update({
+            "status": "excluded",
+            "retryable": False,
+            "retry_after_seconds": 0,
+            "reason": str(reason or values.get("reason") or "Reasoning scope is not applicable.")[:500],
+            "reason_code": str(
+                reason_code
+                or values.get("reason_code")
+                or values.get("reasonCode")
+                or "reasoning-scope-not-applicable"
+            )[:96],
+        })
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'excluded', result_json = %s,
+                    lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    available_at = '', last_error = '', completed_at = %s,
+                    duration_ms = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    canonical_json(values),
+                    stamp,
+                    max(0, int(values.get("duration_ms") or values.get("durationMs") or 0)),
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+
+    def fail(
+        self,
+        job_id: str,
+        result: Mapping[str, object],
+        reason: str,
+        reason_code: str = "reasoning-execution-failed",
+    ) -> None:
+        """Finish a durable request after a non-transient execution failure."""
+
+        stamp = iso_utc()
+        values = dict(result or {})
+        values.update({
+            "status": "failed",
+            "retryable": False,
+            "retry_after_seconds": 0,
+            "reason": str(reason or values.get("reason") or "Reasoning execution failed.")[:500],
+            "reason_code": str(
+                reason_code
+                or values.get("reason_code")
+                or values.get("reasonCode")
+                or "reasoning-execution-failed"
+            )[:96],
+        })
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'failed', result_json = %s,
+                    lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    available_at = '', last_error = %s, completed_at = %s,
+                    duration_ms = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    canonical_json(values),
+                    str(reason or "")[:500],
+                    stamp,
+                    max(0, int(values.get("duration_ms") or values.get("durationMs") or 0)),
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+
     def supersede(self, job_id: str, reason: str) -> None:
         stamp = iso_utc()
         with self.connect() as connection:
@@ -1618,7 +1769,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             rows = connection.execute(
                 "SELECT job_status, COUNT(*) AS row_count, MIN(created_at) AS oldest "
                 "FROM reasoning_engine_jobs WHERE deployment_id = %s "
-                "AND job_status IN ('queued', 'retry', 'processing') "
+                "AND job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection') "
                 "GROUP BY job_status",
                 (clean_deployment_id,),
             ).fetchall()
@@ -1629,11 +1780,18 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         oldest_values = [
             str(row.get("oldest") or "")
             for row in rows or []
-            if str(row.get("oldest") or "")
+            if str(row.get("job_status") or "") in {"queued", "retry", "processing"}
+            and str(row.get("oldest") or "")
+        ]
+        waiting_oldest_values = [
+            str(row.get("oldest") or "")
+            for row in rows or []
+            if str(row.get("job_status") or "") == "awaiting_world_projection"
+            and str(row.get("oldest") or "")
         ]
         pending = sum(counts.get(status, 0) for status in ["queued", "retry", "processing"])
         return {
-            "status": "active" if pending else "idle",
+            "status": "active" if pending else "waiting" if counts.get("awaiting_world_projection", 0) else "idle",
             "probeMode": "versioned-reasoning-live-queue-v1",
             "deploymentId": clean_deployment_id,
             "effectivePendingCount": pending,
@@ -1641,7 +1799,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "queuedCount": counts.get("queued", 0),
             "retryingCount": counts.get("retry", 0),
             "processingCount": counts.get("processing", 0),
+            "awaitingWorldProjectionCount": counts.get("awaiting_world_projection", 0),
             "oldestRequestAt": min(oldest_values) if oldest_values else "",
+            "oldestAwaitingWorldProjectionAt": (
+                min(waiting_oldest_values) if waiting_oldest_values else ""
+            ),
         }
 
     @staticmethod
@@ -1797,6 +1959,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "failureCount": int(cohort_count_map.get("failed") or 0),
             "pendingCount": sum(int(count_map.get(status) or 0) for status in ["queued", "retry", "processing"]),
             "awaitingSourceCount": int(count_map.get("awaiting_source") or 0),
+            "awaitingWorldProjectionCount": int(count_map.get("awaiting_world_projection") or 0),
+            "excludedCount": int(count_map.get("excluded") or 0),
             "oldestPendingAgeSeconds": oldest_pending_age,
             "pendingByLane": pending_by_lane,
             "oldestPendingByLane": oldest_pending_by_lane,
@@ -1830,6 +1994,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "runtimeRevision": str(values.get("runtime_revision") or ""),
             "reasoningLane": str(values.get("reasoning_lane") or ""),
             "heartbeatAt": str(values.get("heartbeat_at") or ""),
+            "availableAt": str(values.get("available_at") or ""),
+            "lastError": str(values.get("last_error") or ""),
             "createdAt": str(values.get("created_at") or ""),
             "updatedAt": str(values.get("updated_at") or ""),
             "completedAt": str(values.get("completed_at") or ""),

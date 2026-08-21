@@ -43,6 +43,8 @@ class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
             "https://www.sec.gov/Archives/edgar/data/1/example.htm", "2026-07-24T00:00:00Z", "context",
             published_at="2026-07-24T00:00:00Z",
             raw_payload={"relationScope": "direct", "eventType": "earnings"},
+            data_state="sufficient",
+            validation_state="ready",
         )
         store = MemoryEvidenceStore([news, metadata_only])
         service = ResearchEvidenceGovernanceService(store, {
@@ -60,6 +62,8 @@ class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
         self.assertIn("claimLedger", news.raw_payload)
         self.assertFalse(metadata_only.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
         self.assertIn("official-document-content-missing", metadata_only.raw_payload["evidenceGovernance"]["reasons"])
+        self.assertEqual("partial", metadata_only.data_state)
+        self.assertEqual("conditional", metadata_only.validation_state)
 
         second = service.revalidate(limit=20, dry_run=True)
 

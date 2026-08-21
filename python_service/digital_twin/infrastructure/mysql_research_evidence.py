@@ -24,16 +24,20 @@ from .mysql_operational_events import insert_domain_event_with_connection
 
 DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "evidenceQualityAuthority",
+    "articleCanonicalUrl",
     "aiAnalysis",
     "articleAiAnalysisVersion",
     "articleSummaryKo",
     "articleSummaryQuality",
     "summaryQualityState",
     "entityResolution",
+    "publisherIdentity",
     "qualityGate",
     "newsEligibility",
     "newsIntelligenceVersion",
     "sourceIdentity",
+    "sourceOrigin",
+    "sourcePublisher",
     "sourceProvenance",
     "articleVerification",
     "storyClusterId",
@@ -48,6 +52,13 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "documentVerified",
     "analysisReady",
     "disclosureAnalysis",
+}
+
+AUTHORITATIVE_EVIDENCE_STATE_KEYS = {
+    "sourceTrustState",
+    "materialityState",
+    "dataState",
+    "validationState",
 }
 
 
@@ -85,6 +96,10 @@ def merge_derived_evidence_payload(
         incoming_nested = incoming.get(key) if isinstance(incoming.get(key), dict) else {}
         if previous_nested:
             merged[key] = {**previous_nested, **incoming_nested}
+    if str(previous.get("evidenceQualityAuthority") or "") == "revalidation-v1":
+        for key in AUTHORITATIVE_EVIDENCE_STATE_KEYS:
+            if key in previous:
+                merged[key] = previous.get(key)
     for key in ["officialDocumentText", "officialDocumentPreview", "officialDocumentQuality"]:
         if merged.get(key) in (None, "") and previous.get(key) not in (None, ""):
             merged[key] = previous.get(key)

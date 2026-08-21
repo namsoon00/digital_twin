@@ -3,6 +3,7 @@ from typing import Dict, List
 
 from ..domain.investment_evidence_governance import claim_policy, claim_quality_summary, governed_evidence
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence, disclosure_evidence_payload
+from ..domain import news_analysis as news_domain
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 from ..news_intelligence.application.normalize_sources import normalize_evidence_sources
 
@@ -28,6 +29,15 @@ def payload_signature(payload: Dict[str, object]) -> str:
         return value
 
     return json.dumps(stable(payload or {}), ensure_ascii=False, sort_keys=True, default=str)
+
+
+def synchronize_evidence_states(item: ResearchEvidence) -> None:
+    """Keep persisted state columns aligned with the governed JSON payload."""
+    states = news_domain.news_state_payload(item.raw_payload or {})
+    item.source_trust_state = states["sourceTrustState"]
+    item.materiality_state = states["materialityState"]
+    item.data_state = states["dataState"]
+    item.validation_state = states["validationState"]
 
 
 class ResearchEvidenceGovernanceService:
@@ -97,6 +107,8 @@ class ResearchEvidenceGovernanceService:
             news_items,
             self.settings.get("researchClaimSourceRegistry") or "",
         )
+        for item in items:
+            synchronize_evidence_states(item)
         groups: Dict[str, List[ResearchEvidence]] = {}
         for item in items:
             item_symbol = str(item.symbol or "").upper().strip()
@@ -129,6 +141,7 @@ class ResearchEvidenceGovernanceService:
             payload = dict(item.raw_payload or {})
             payload["evidenceQualityAuthority"] = "revalidation-v1"
             item.raw_payload = payload
+            synchronize_evidence_states(item)
         provenance_complete_count = 0
         duplicate_publication_count = 0
         unresolved_publisher_count = 0

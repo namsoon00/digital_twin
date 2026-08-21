@@ -35,14 +35,25 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         previous = {
             "articleText": "Apple reported audited revenue and guidance.",
             "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True, "bodyQualityIssues": []},
+            "evidenceQualityAuthority": "revalidation-v1",
             "entityResolution": {"targetSubjectConfirmed": True, "version": "news-entity-resolution-v2"},
             "newsEligibility": {"alertEligible": True, "reasoningEligible": False},
             "qualityGate": {"passed": True, "targetSubjectConfirmed": True},
+            "articleCanonicalUrl": "https://www.reuters.com/article/apple-demand",
+            "publisherIdentity": "reuters",
+            "sourceOrigin": "reuters",
+            "sourcePublisher": "Reuters",
+            "materialityState": "material",
+            "dataState": "sufficient",
+            "validationState": "conditional",
         }
         replayed = {
             "articleText": "Apple reported audited revenue and guidance.",
             "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
             "qualityGate": {"passed": True},
+            "materialityState": "context",
+            "dataState": "partial",
+            "validationState": "ready",
         }
 
         merged = merge_derived_evidence_payload(previous, replayed)
@@ -51,6 +62,12 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertTrue(merged["entityResolution"]["targetSubjectConfirmed"])
         self.assertIn("bodyQualityIssues", merged["articleFacts"])
         self.assertTrue(merged["qualityGate"]["targetSubjectConfirmed"])
+        self.assertEqual("https://www.reuters.com/article/apple-demand", merged["articleCanonicalUrl"])
+        self.assertEqual("reuters", merged["publisherIdentity"])
+        self.assertEqual("Reuters", merged["sourcePublisher"])
+        self.assertEqual("material", merged["materialityState"])
+        self.assertEqual("sufficient", merged["dataState"])
+        self.assertEqual("conditional", merged["validationState"])
         self.assertNotIn("entityResolution", changed)
 
         rejected = merge_derived_evidence_payload(

@@ -730,11 +730,11 @@ def with_rulebox_v3_governance(rules: List[GraphInferenceRule]) -> List[GraphInf
 
 
 def crypto_market_inference_rules() -> List[GraphInferenceRule]:
-    """RuleBox-owned BTC/ETH market-path interpretation.
+    """Map observation-owned crypto threshold events to semantic context.
 
-    Python schedules only a threshold transition.  These rules remain the
-    authority for whether the current ABox is an upward/downward market
-    relationship and how urgently it should be reviewed.
+    The market-observation domain owns numeric thresholds and transition
+    detection. TypeDB only connects the already classified event to an
+    explainable support/risk relationship.
     """
 
     rows = [
@@ -751,7 +751,6 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
     for horizon, field, direction, threshold, upper_threshold, severity in rows:
         threshold_key = str(int(threshold)) if threshold.is_integer() else str(threshold).replace(".", "_")
         level = "major" if severity == "ALERT" else "watch"
-        operator = ">=" if direction == "up" else "<="
         signed_threshold = threshold if direction == "up" else -threshold
         polarity = "support" if direction == "up" else "risk"
         relationship_label = "상승" if direction == "up" else "하락"
@@ -760,31 +759,22 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
             GraphRuleCondition(
                 "crypto-" + horizon + "-" + direction + "-" + level,
                 "relation",
-                "BTC 또는 ETH " + horizon + " 변화율이 RuleBox " + relationship_label + " 기준을 충족합니다.",
-                relation_type="HAS_PRICE_PATH",
-                target_kind="price-path",
-                target_property_filters={field: {"operator": operator, "value": signed_threshold}},
+                "시장 관찰 모듈이 BTC 또는 ETH " + horizon + " " + relationship_label + " 사건을 분류했습니다.",
+                relation_type="HAS_OBSERVATION",
+                target_kind="market-event",
+                target_property_filters={
+                    "eventType": "crypto-market-" + horizon + "-" + direction + "-" + level,
+                },
             ),
         ]
-        if upper_threshold is not None:
-            upper_operator = "<" if direction == "up" else ">"
-            signed_upper_threshold = upper_threshold if direction == "up" else -upper_threshold
-            conditions.append(GraphRuleCondition(
-                "crypto-" + horizon + "-" + direction + "-" + level + "-cap",
-                "relation",
-                "WATCH 구간은 더 높은 ALERT 기준에 아직 도달하지 않았습니다.",
-                relation_type="HAS_PRICE_PATH",
-                target_kind="price-path",
-                target_property_filters={field: {"operator": upper_operator, "value": signed_upper_threshold}},
-            ))
         rules.append(GraphInferenceRule(
             rule_id=rule_id,
             label="BTC/ETH " + horizon + " 원시 " + relationship_label + " 경로 -> 크립토 변동 재확인",
-            version="v1",
+            version="v2",
             source_kind="crypto-asset",
             action_group="macroRegime",
             action_level="review",
-            prompt_hint="BTC/ETH 원시 변화율은 ABox에 유지하고, 상승·하락·강도 구간의 관계 판단과 알림 강도는 TypeDB RuleBox에서만 결정합니다.",
+            prompt_hint="시장 관찰 모듈이 분류한 BTC/ETH 변동 사건을 원시 변화율과 함께 설명하되 투자 행동으로 확대하지 않습니다.",
             conditions=conditions,
             derivations=[
                 GraphRuleDerivation(
@@ -797,7 +787,7 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
                     polarity=polarity,
                     evidence_role=polarity,
                     decision_effect="support" if direction == "up" else "constrain",
-                    belief_label="BTC/ETH " + horizon + " 원시 변화율이 " + ("+" if signed_threshold > 0 else "") + str(int(signed_threshold)) + "% RuleBox 기준을 충족했습니다.",
+                    belief_label="BTC/ETH " + horizon + " 원시 변화율이 " + ("+" if signed_threshold > 0 else "") + str(int(signed_threshold)) + "% 시장 관찰 기준을 충족했습니다.",
                     ai_influence_label="크립토 " + horizon + " " + relationship_label + " 변동 재확인",
                     action_group="macroRegime",
                     action_level="review",

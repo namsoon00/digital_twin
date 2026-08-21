@@ -6,11 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.crypto_market_signals import (
     combine_crypto_market_snapshots,
+    crypto_market_observation_events,
     crypto_market_snapshot,
     crypto_market_transitions,
     crypto_transition_baseline,
     crypto_transition_targets,
 )
+from digital_twin.domain.ontology_rulebox_catalog import crypto_market_inference_rules
 from digital_twin.domain.portfolio import Position
 
 
@@ -116,6 +118,22 @@ class CryptoMarketSignalTests(unittest.TestCase):
             [],
             crypto_market_transitions(signals(btc_24h=0.0), signals(btc_24h=-8.0, freshness="stale")),
         )
+
+    def test_market_observation_owns_thresholds_and_rulebox_consumes_classified_event(self):
+        events = crypto_market_observation_events(signals(btc_24h=6.2, eth_7d=-4.2))
+        by_state = {item["symbol"] + ":" + item["horizon"]: item for item in events}
+
+        self.assertEqual("major", by_state["BTC:24h"]["severity"])
+        self.assertEqual("down", by_state["ETH:7d"]["direction"])
+        rules = crypto_market_inference_rules()
+        self.assertEqual(8, len(rules))
+        self.assertTrue(all(len(rule.conditions) == 1 for rule in rules))
+        self.assertTrue(all(rule.conditions[0].relation_type == "HAS_OBSERVATION" for rule in rules))
+        self.assertTrue(all(rule.conditions[0].target_kind == "market-event" for rule in rules))
+        self.assertTrue(all(
+            "eventType" in rule.conditions[0].target_property_filters
+            for rule in rules
+        ))
 
     def test_transition_baseline_only_records_fresh_supported_assets(self):
         source = signals(btc_24h=3.2, eth_7d=-4.1)

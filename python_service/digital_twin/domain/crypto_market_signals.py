@@ -333,6 +333,50 @@ def _transition_reason(previous: str, current: str) -> str:
     return "state-changed"
 
 
+def crypto_market_observation_events(
+    external_signals: Mapping[str, object] = None,
+    settings: Mapping[str, object] = None,
+) -> List[Dict[str, object]]:
+    """Classify raw values once at the market-observation boundary.
+
+    These rows describe an observed threshold state. They never select a
+    portfolio action; TypeDB may only connect the event to semantic context.
+    """
+
+    if not crypto_freshness_is_usable(external_signals):
+        return []
+    thresholds = crypto_thresholds(settings)
+    events: List[Dict[str, object]] = []
+    for symbol, item in sorted(crypto_markets_by_symbol(external_signals).items()):
+        for horizon, field in (("24h", "change24h"), ("7d", "change7d")):
+            threshold = thresholds[horizon]
+            change_pct = number(item.get(field))
+            band = _band(change_pct, threshold)
+            if band == "neutral":
+                continue
+            direction, severity = band.split(":", 1)
+            events.append({
+                "eventType": "crypto-market-" + horizon + "-" + direction + "-" + severity,
+                "eventCategory": "crypto-market-threshold",
+                "symbol": symbol,
+                "coinId": str(item.get("coinId") or COIN_ID_BY_SYMBOL[symbol]),
+                "horizon": horizon,
+                "direction": direction,
+                "severity": severity,
+                "changePct": round(change_pct, 4),
+                "thresholdPct": threshold,
+                "state": band,
+                "observedAt": str(
+                    item.get("lastUpdated")
+                    or item.get("fetchedAt")
+                    or crypto_freshness(external_signals).get("fetchedAt")
+                    or ""
+                ),
+                "provider": str(item.get("provider") or "CoinGecko"),
+            })
+    return events
+
+
 def crypto_market_transitions(
     previous_signals: Mapping[str, object] = None,
     current_signals: Mapping[str, object] = None,

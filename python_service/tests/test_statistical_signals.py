@@ -17,6 +17,8 @@ from digital_twin.domain.portfolio_ontology_statistical_concepts import (
 )
 from digital_twin.domain.statistical_signals import (
     model_signal_evaluation_report,
+    price_signal_rule_candidates,
+    score_flow_feature_snapshot,
     score_temporal_feature_snapshot,
     statistical_rule_candidate_release,
 )
@@ -53,6 +55,30 @@ def feature_snapshot(prices=None):
         as_of="2026-08-10T07:00:00Z",
         windows=windows,
         watermark=TimeSeriesWatermark("questdb-shadow", "2026-08-10T07:00:00Z"),
+    )
+
+
+def flow_feature_snapshot(direction=1):
+    values = []
+    for index in range(20):
+        price = 100 + index
+        values.append({
+            "bucketAt": "2026-07-%02dT07:00:00Z" % (index + 1),
+            "currentPrice": float(price),
+            "volume": 1_000_000,
+            "volumeRatio": 1.1,
+            "foreignNetVolume": direction * (25_000 + index * 1_000),
+            "institutionNetVolume": direction * (15_000 + index * 500),
+            "tradeStrength": 112 if direction > 0 else 88,
+            "bidAskImbalance": 12 if direction > 0 else -12,
+            "dataQuality": "actual",
+        })
+    return TemporalFeatureSnapshot.create(
+        backend_id="questdb-shadow",
+        account_id="account-1",
+        as_of="2026-07-20T07:00:00Z",
+        windows={"NVDA": {"20D": values}},
+        watermark=TimeSeriesWatermark("questdb-shadow", "2026-07-20T07:00:00Z"),
     )
 
 
@@ -133,6 +159,35 @@ class StatisticalSignalTests(unittest.TestCase):
         first_risk = next(item for item in first.signals if item.signal_type == "price-trend-break-risk")
         second_risk = next(item for item in second.signals if item.signal_type == "price-trend-break-risk")
         self.assertGreater(second_risk.score, first_risk.score)
+
+    def test_flow_signal_uses_independent_daily_samples_and_remains_reference_only(self):
+        positive = score_flow_feature_snapshot(flow_feature_snapshot(1))
+        negative = score_flow_feature_snapshot(flow_feature_snapshot(-1))
+
+        self.assertEqual(3, len(positive.signals))
+        self.assertTrue(all(item.sample_count == 20 for item in positive.signals))
+        self.assertTrue(all(item.eligibility.decision_eligibility == "reference-only" for item in positive.signals))
+        positive_support = next(item for item in positive.signals if item.signal_type == "flow-accumulation-support")
+        positive_risk = next(item for item in positive.signals if item.signal_type == "flow-distribution-risk")
+        negative_risk = next(item for item in negative.signals if item.signal_type == "flow-distribution-risk")
+        self.assertGreater(positive_support.score, positive_risk.score)
+        self.assertGreater(negative_risk.score, positive_risk.score)
+
+    def test_pipeline_builds_one_bundle_and_persists_each_model_release(self):
+        signal_store = MemorySignalStore()
+        service = StatisticalSignalPipelineService(MemoryFeatureStore(), signal_store)
+        snapshot = flow_feature_snapshot(1)
+
+        result = service.run("account-1", "questdb-shadow", snapshot.windows, snapshot.as_of)
+        bundle = result["signalBundle"]
+
+        self.assertEqual(2, len(bundle.model_release_ids))
+        self.assertEqual(7, len(bundle.signals))
+        self.assertEqual(2, len(result["persistence"]["signalSnapshots"]))
+        self.assertTrue(all(
+            item["status"] == "changed"
+            for item in result["persistence"]["signalSnapshots"].values()
+        ))
 
     def test_pipeline_latest_head_is_unchanged_for_same_material(self):
         feature_store = MemoryFeatureStore()
@@ -307,13 +362,20 @@ class StatisticalSignalTests(unittest.TestCase):
         ]
 
         self.assertTrue(validation["valid"])
-        self.assertEqual(73, len(predictive))
+        self.assertEqual(75, len(predictive))
         self.assertTrue(all((item.get("statisticalSignalContract") or {}).get("signalTypes") for item in predictive))
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
-        self.assertEqual(45, len(migration["not-applicable"]))
-        self.assertEqual(27, len(migration["shadow-signal-available"]))
-        self.assertEqual(46, len(migration["planned"]))
+        self.assertEqual(43, len(migration["not-applicable"]))
+        self.assertEqual(37, len(migration["shadow-signal-available"]))
+        self.assertEqual(38, len(migration["shadow-signal-required"]))
+        flow_rule = next(
+            item for item in predictive
+            if item.get("ruleId") == "graph.flow.sell_pressure.v1"
+        )
+        flow_contract = flow_rule["statisticalSignalContract"]
+        self.assertEqual("implemented", flow_contract["signalAvailability"])
+        self.assertIn("point-in-time-replay-and-calibration-required", flow_contract["promotionBlockers"])
 
     def test_shadow_migration_metadata_does_not_change_executable_rulebox_hash(self):
         rule = default_graph_inference_rules()[0]
@@ -331,11 +393,12 @@ class StatisticalSignalTests(unittest.TestCase):
             rulebox_rules_hash([without_shadow_contract]),
         )
 
-    def test_price_rule_candidates_are_disabled_and_require_calibrated_signals(self):
+    def test_all_predictive_rule_candidates_are_disabled_and_require_calibrated_signals(self):
         release = statistical_rule_candidate_release(default_graph_inference_rules())
 
         self.assertEqual("disabled-candidate", release["status"])
-        self.assertEqual(27, release["candidateCount"])
+        self.assertEqual(75, release["candidateCount"])
+        self.assertEqual(27, len(price_signal_rule_candidates(default_graph_inference_rules())))
         self.assertFalse(release["productionEligible"])
         for rule in release["rules"]:
             self.assertFalse(rule["enabled"])

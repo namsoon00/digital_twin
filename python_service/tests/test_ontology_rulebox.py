@@ -184,7 +184,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             target_symbols=["BTC"],
         )["query"]
         self.assertIn('has ontology-kind "crypto-asset"', direct_crypto_query)
-        self.assertIn("ontology-change-24h", direct_crypto_query)
+        self.assertIn('ontology-event-type "crypto-market-24h-down-watch"', direct_crypto_query)
 
     def test_rulebox_v3_has_explicit_governance_and_removes_false_generic_paths(self):
         rules = default_graph_inference_rules()
@@ -261,10 +261,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
             rules_by_id["graph.crypto.market.24h.up.major.v1"].to_dict(),
             target_symbols=["BTC"],
         )["query"]
-        self.assertIn(">= 3.0", watch_query)
-        self.assertIn("< 6.0", watch_query)
-        self.assertIn(">= 6.0", major_query)
-        self.assertNotIn("< 6.0", major_query)
+        self.assertIn('ontology-event-type "crypto-market-24h-up-watch"', watch_query)
+        self.assertNotIn("ontology-change-24h", watch_query)
+        self.assertIn('ontology-event-type "crypto-market-24h-up-major"', major_query)
+        self.assertNotIn("ontology-change-24h", major_query)
 
         factor_query = typedb_native_match_query(
             rules_by_id["graph.factor.position_crowding.v1"].to_dict(),

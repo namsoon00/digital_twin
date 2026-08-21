@@ -12,8 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
+from .ontology_rule_ownership import (
+    RULE_OWNERS,
+    RULE_OWNERSHIP_CONTRACT_VERSION,
+    rule_ownership_contract,
+)
 
-RULE_KNOWLEDGE_BASIS_VERSION = "ontology-rule-knowledge-basis-v1"
+
+RULE_KNOWLEDGE_BASIS_VERSION = "ontology-rule-knowledge-basis-v2"
 
 RULE_KINDS = frozenset({
     "predictive-hypothesis",
@@ -29,6 +35,29 @@ DECISION_ELIGIBILITY_STATES = frozenset({
     "guardrail-only",
     "reference-only",
 })
+
+CANDIDATE_OWNER_CONTRACTS = {
+    "predictive-hypothesis": (
+        "statistical-model", "candidate-feature-contract", "candidate-model-signal",
+        "candidate-validation-only", "review-before-catalog-admission",
+    ),
+    "policy-constraint": (
+        "portfolio-policy", "candidate-policy-input", "candidate-policy-guardrail",
+        "candidate-validation-only", "review-before-catalog-admission",
+    ),
+    "execution-gate": (
+        "trade-execution", "candidate-execution-input", "candidate-execution-guardrail",
+        "candidate-validation-only", "review-before-catalog-admission",
+    ),
+    "data-quality-gate": (
+        "data-quality", "candidate-quality-input", "candidate-quality-guardrail",
+        "candidate-validation-only", "review-before-catalog-admission",
+    ),
+    "context-observation": (
+        "ontology-semantic", "candidate-observation-input", "candidate-semantic-context",
+        "candidate-validation-only", "review-before-catalog-admission",
+    ),
+}
 
 
 def _text(value: object) -> str:
@@ -115,6 +144,12 @@ class RuleKnowledgeBasis:
     requires_hypothesis: bool = False
     outcome_validation_required: bool = False
     evidence_independence_key: str = ""
+    owner: str = ""
+    input_contract: str = ""
+    output_contract: str = ""
+    decision_authority: str = ""
+    migration_disposition: str = ""
+    ownership_contract_version: str = ""
     plain_language_basis: str = ""
     applicability: List[str] = field(default_factory=list)
     references: List[RuleKnowledgeReference] = field(default_factory=list)
@@ -133,6 +168,12 @@ class RuleKnowledgeBasis:
             "requiresHypothesis": bool(self.requires_hypothesis),
             "outcomeValidationRequired": bool(self.outcome_validation_required),
             "evidenceIndependenceKey": self.evidence_independence_key,
+            "owner": self.owner,
+            "inputContract": self.input_contract,
+            "outputContract": self.output_contract,
+            "decisionAuthority": self.decision_authority,
+            "migrationDisposition": self.migration_disposition,
+            "ownershipContractVersion": self.ownership_contract_version,
             "plainLanguageBasis": self.plain_language_basis,
             "applicability": list(self.applicability or []),
             "references": [item.to_dict() for item in self.references or []],
@@ -162,6 +203,16 @@ class RuleKnowledgeBasis:
             ),
             evidence_independence_key=_text(
                 item.get("evidenceIndependenceKey") or item.get("evidence_independence_key")
+            ),
+            owner=_text(item.get("owner")),
+            input_contract=_text(item.get("inputContract") or item.get("input_contract")),
+            output_contract=_text(item.get("outputContract") or item.get("output_contract")),
+            decision_authority=_text(item.get("decisionAuthority") or item.get("decision_authority")),
+            migration_disposition=_text(
+                item.get("migrationDisposition") or item.get("migration_disposition")
+            ),
+            ownership_contract_version=_text(
+                item.get("ownershipContractVersion") or item.get("ownership_contract_version")
             ),
             plain_language_basis=_text(item.get("plainLanguageBasis") or item.get("plain_language_basis")),
             applicability=_unique(item.get("applicability") or [], 24),
@@ -408,15 +459,58 @@ def _plain_language_basis(rule_kind: str, theory_family: str) -> str:
 def resolved_rule_knowledge_basis(rule: object) -> RuleKnowledgeBasis:
     """Resolve explicit metadata or produce a transparent conservative basis."""
 
+    rule_id = _rule_id(rule)
+    try:
+        ownership = rule_ownership_contract(rule_id)
+    except ValueError:
+        ownership = None
     raw = _value(rule, "knowledge_basis", "knowledgeBasis")
     if isinstance(raw, RuleKnowledgeBasis) and raw.rule_kind:
-        return raw
-    if isinstance(raw, Mapping):
+        explicit = raw
+    elif isinstance(raw, Mapping):
         explicit = RuleKnowledgeBasis.from_dict(raw)
-        if explicit.rule_kind:
-            return explicit
+    else:
+        explicit = RuleKnowledgeBasis()
+    explicit_contract_complete = bool(
+        explicit.owner in RULE_OWNERS
+        and explicit.input_contract
+        and explicit.output_contract
+        and explicit.decision_authority
+        and explicit.migration_disposition
+        and explicit.ownership_contract_version == RULE_OWNERSHIP_CONTRACT_VERSION
+    )
+    if explicit.rule_kind and (
+        (ownership and explicit.ownership_contract_version == ownership.version)
+        or (not ownership and explicit_contract_complete)
+    ):
+        return explicit
+    if explicit.rule_kind and not ownership and explicit.rule_kind in CANDIDATE_OWNER_CONTRACTS:
+        owner, input_contract, output_contract, authority, disposition = (
+            CANDIDATE_OWNER_CONTRACTS[explicit.rule_kind]
+        )
+        payload = explicit.to_dict()
+        payload.update({
+            "owner": owner,
+            "inputContract": input_contract,
+            "outputContract": output_contract,
+            "decisionAuthority": authority,
+            "migrationDisposition": disposition,
+            "ownershipContractVersion": RULE_OWNERSHIP_CONTRACT_VERSION,
+        })
+        return RuleKnowledgeBasis.from_dict(payload)
+    if explicit.rule_kind and ownership and explicit.basis_origin not in {"", "catalog-derived", "ownership-catalog"}:
+        payload = explicit.to_dict()
+        payload.update({
+            "owner": ownership.owner,
+            "inputContract": ownership.input_contract,
+            "outputContract": ownership.output_contract,
+            "decisionAuthority": ownership.decision_authority,
+            "migrationDisposition": ownership.migration_disposition,
+            "ownershipContractVersion": ownership.version,
+        })
+        return RuleKnowledgeBasis.from_dict(payload)
 
-    rule_kind = _rule_kind(rule)
+    rule_kind = ownership.rule_kind if ownership else _rule_kind(rule)
     theory_family = _theory_family(rule, rule_kind)
     thesis_family = _thesis_family(rule, rule_kind, theory_family)
     requires_hypothesis = rule_kind == "predictive-hypothesis"
@@ -432,17 +526,31 @@ def resolved_rule_knowledge_basis(rule: object) -> RuleKnowledgeBasis:
         decision_eligibility = "conditional"
         validation_status = "replay-required"
         threshold_origin = "authored-heuristic"
+    # A candidate rule is not admitted to the immutable production ownership
+    # catalog yet. It still needs a conservative owner while sandbox
+    # validation runs; production bootstrap IDs never use this fallback.
+    fallback_owner, fallback_input, fallback_output, fallback_authority, fallback_disposition = (
+        CANDIDATE_OWNER_CONTRACTS[rule_kind]
+    )
     return RuleKnowledgeBasis(
         rule_kind=rule_kind,
         theory_family=theory_family,
         thesis_family=thesis_family,
-        basis_origin="catalog-derived",
+        basis_origin="ownership-catalog" if ownership else "legacy-inference",
         threshold_origin=threshold_origin,
         validation_status=validation_status,
         decision_eligibility=decision_eligibility,
         requires_hypothesis=requires_hypothesis,
         outcome_validation_required=requires_hypothesis,
         evidence_independence_key=thesis_family,
+        owner=ownership.owner if ownership else fallback_owner,
+        input_contract=ownership.input_contract if ownership else fallback_input,
+        output_contract=ownership.output_contract if ownership else fallback_output,
+        decision_authority=ownership.decision_authority if ownership else fallback_authority,
+        migration_disposition=ownership.migration_disposition if ownership else fallback_disposition,
+        ownership_contract_version=(
+            ownership.version if ownership else RULE_OWNERSHIP_CONTRACT_VERSION
+        ),
         plain_language_basis=_plain_language_basis(rule_kind, theory_family),
         applicability=_unique([_source_kind(rule) or "all", _assessment_scope(rule)], 8),
         references=_references_for(theory_family, rule_kind),
@@ -456,9 +564,11 @@ def rule_knowledge_basis_from_rows(rule_id: str, *groups: Iterable[Mapping[str, 
     for row in rows:
         raw = row.get("knowledgeBasis") or row.get("knowledge_basis")
         if isinstance(raw, Mapping):
-            explicit = RuleKnowledgeBasis.from_dict(raw)
-            if explicit.rule_kind:
-                return explicit
+            return resolved_rule_knowledge_basis({
+                **row,
+                "ruleId": rule_id,
+                "knowledgeBasis": raw,
+            })
     primary = next((row for row in rows if row), {})
     return resolved_rule_knowledge_basis({
         "ruleId": rule_id,
@@ -480,6 +590,18 @@ def knowledge_basis_violations(basis: RuleKnowledgeBasis, rule_id: str = "") -> 
         issues.append(prefix + "knowledge basis requires thesis_family")
     if basis.decision_eligibility not in DECISION_ELIGIBILITY_STATES:
         issues.append(prefix + "knowledge basis has invalid decision_eligibility")
+    if basis.owner not in RULE_OWNERS:
+        issues.append(prefix + "knowledge basis has invalid or missing owner")
+    if not basis.input_contract:
+        issues.append(prefix + "knowledge basis requires input_contract")
+    if not basis.output_contract:
+        issues.append(prefix + "knowledge basis requires output_contract")
+    if not basis.decision_authority:
+        issues.append(prefix + "knowledge basis requires decision_authority")
+    if not basis.migration_disposition:
+        issues.append(prefix + "knowledge basis requires migration_disposition")
+    if basis.ownership_contract_version != RULE_OWNERSHIP_CONTRACT_VERSION:
+        issues.append(prefix + "knowledge basis ownership contract is stale")
     if basis.requires_hypothesis and basis.rule_kind != "predictive-hypothesis":
         issues.append(prefix + "only predictive rules may create hypotheses")
     if basis.rule_kind == "predictive-hypothesis" and not basis.outcome_validation_required:

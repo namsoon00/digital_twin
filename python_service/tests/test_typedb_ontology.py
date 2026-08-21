@@ -4553,17 +4553,17 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "BTC",
                 "snapshotId": "abox-scope:crypto",
             }),
-            OntologyEntity("price-path:BTC:crypto", "Bitcoin price path", "price-path", {
+            OntologyEntity("market-event:BTC:crypto", "Bitcoin threshold event", "market-event", {
                 "ontologyBox": "ABox",
                 "symbol": "BTC",
-                "change24h": -3.2,
+                "eventType": "crypto-market-24h-down-watch",
                 "snapshotId": "abox-scope:crypto",
             }),
         ])
         graph.relations.append(OntologyRelation(
             "crypto-asset:BTC",
-            "price-path:BTC:crypto",
-            "HAS_PRICE_PATH",
+            "market-event:BTC:crypto",
+            "HAS_OBSERVATION",
             properties={"ontologyBox": "ABox", "symbol": "BTC", "snapshotId": "abox-scope:crypto"},
         ))
         topology = native_rule_planner_topology(graph)

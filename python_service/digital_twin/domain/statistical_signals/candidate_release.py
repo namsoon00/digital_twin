@@ -11,7 +11,14 @@ from ..ontology_rulebox_contracts import (
     GraphRuleCondition,
     HypothesisLifecyclePolicy,
 )
-from .rule_contracts import PRICE_TREND_SIGNALS, rule_statistical_signal_contract
+from .rule_contracts import (
+    CROSS_ASSET_SIGNALS,
+    EVENT_SIGNALS,
+    FLOW_SIGNALS,
+    PRICE_TREND_SIGNALS,
+    VALUATION_SIGNALS,
+    rule_statistical_signal_contract,
+)
 
 
 STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION = "statistical-rule-candidate-release-v1"
@@ -23,6 +30,36 @@ EMPIRICAL_PRICE_THEORIES = {
 
 def _candidate_signal_type(rule: GraphInferenceRule) -> str:
     rule_id = str(rule.rule_id or "").lower()
+    theory = str(rule.resolved_knowledge_basis.theory_family or "")
+    risk = any(value in rule_id for value in (
+        "risk", "break", "failure", "failed", "outflow", "sell_pressure",
+        "distribution", "dilution", "stretch", "decline", "underperformance",
+    ))
+    if theory == "market-microstructure-and-investor-flow":
+        if "divergence" in rule_id or "price_up" in rule_id:
+            return "flow-price-divergence-risk"
+        return "flow-distribution-risk" if risk else "flow-accumulation-support"
+    if theory == "cross-asset-and-regime-transmission":
+        if any(value in rule_id for value in ("regime", "inversion", "volatility")):
+            return "regime-transition-risk"
+        return "cross-asset-residual-risk" if risk else "cross-asset-residual-support"
+    if theory == "fundamental-valuation-and-factors":
+        return "valuation-relative-stretch-risk" if risk else "valuation-relative-opportunity"
+    if theory == "event-information-diffusion":
+        if "persistence" in rule_id or "price_reaction" in rule_id:
+            return "event-response-persistence"
+        return "event-abnormal-return-risk" if risk else "event-abnormal-return-support"
+    if theory == "authored-investment-thesis":
+        contract = rule_statistical_signal_contract(rule)
+        choices = list(contract.get("signalTypes") or [])
+        risk_choices = [value for value in choices if value.endswith("risk")]
+        support_choices = [value for value in choices if value.endswith("support")]
+        if risk and risk_choices:
+            return risk_choices[0]
+        if not risk and support_choices:
+            return support_choices[0]
+        if choices:
+            return choices[0]
     if any(value in rule_id for value in ("acceleration", "persistent_decline", "weakness_accumulation")):
         return "price-downside-acceleration-risk"
     if any(value in rule_id for value in ("break", "failure", "failed", "distribution", "protect", "risk")):
@@ -45,9 +82,25 @@ def compile_price_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
     theory = str(rule.resolved_knowledge_basis.theory_family or "")
     if theory not in EMPIRICAL_PRICE_THEORIES:
         raise ValueError("Rule is not part of the price-signal migration cohort: " + rule.rule_id)
+    return compile_model_signal_rule_candidate(rule)
+
+
+def compile_model_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInferenceRule:
+    contract = rule_statistical_signal_contract(rule)
+    if not bool(contract.get("required")):
+        raise ValueError("Rule does not own a statistical hypothesis: " + rule.rule_id)
     signal_type = _candidate_signal_type(rule)
-    if signal_type not in PRICE_TREND_SIGNALS:
-        raise ValueError("Unsupported price signal type: " + signal_type)
+    supported = set(
+        PRICE_TREND_SIGNALS
+        + FLOW_SIGNALS
+        + CROSS_ASSET_SIGNALS
+        + VALUATION_SIGNALS
+        + EVENT_SIGNALS
+    )
+    if signal_type not in supported:
+        raise ValueError("Unsupported statistical signal type: " + signal_type)
+    release_ids = list(contract.get("releaseIds") or [])
+    release_id = str(release_ids[0] if release_ids else "")
     signal_condition = GraphRuleCondition(
         condition_id="validated-model-signal:" + rule.rule_id,
         kind="relation",
@@ -57,6 +110,7 @@ def compile_price_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
         target_kind="statistical-model-signal",
         target_property_filters={
             "signalType": signal_type,
+            "releaseId": release_id,
             "strengthBand": "strong",
             "validationStatus": "calibrated",
             "decisionEligibility": "eligible",
@@ -89,6 +143,8 @@ def compile_price_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
         threshold_origin="calibrated-model-release-policy",
         validation_status="candidate-replay-required",
         decision_eligibility="reference-only",
+        decision_authority="typedb-model-signal-rule",
+        migration_disposition="candidate-awaiting-promotion",
         outcome_validation_required=True,
         plain_language_basis=(
             rule.resolved_knowledge_basis.plain_language_basis
@@ -120,15 +176,27 @@ def price_signal_rule_candidates(rules: Iterable[GraphInferenceRule]) -> List[Gr
     ]
 
 
+def model_signal_rule_candidates(rules: Iterable[GraphInferenceRule]) -> List[GraphInferenceRule]:
+    return [
+        compile_model_signal_rule_candidate(rule)
+        for rule in rules or []
+        if bool(rule_statistical_signal_contract(rule).get("required"))
+    ]
+
+
 def statistical_rule_candidate_release(rules: Iterable[GraphInferenceRule]) -> Dict[str, object]:
     source_rules = list(rules or [])
-    candidates = price_signal_rule_candidates(source_rules)
+    candidates = model_signal_rule_candidates(source_rules)
     payload = {
         "version": STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION,
         "status": "disabled-candidate",
         "productionEligible": False,
         "candidateCount": len(candidates),
-        "sourceRuleIds": [rule.rule_id for rule in source_rules if rule_statistical_signal_contract(rule).get("migrationState") == "shadow-signal-available"],
+        "sourceRuleIds": [
+            rule.rule_id
+            for rule in source_rules
+            if bool(rule_statistical_signal_contract(rule).get("required"))
+        ],
         "candidateRuleIds": [rule.rule_id for rule in candidates],
         "rules": [rule.to_dict() for rule in candidates],
         "promotionGates": [

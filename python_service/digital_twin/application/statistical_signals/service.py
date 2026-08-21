@@ -6,7 +6,10 @@ import time
 from typing import Dict, Iterable, Mapping
 
 from ...domain.statistical_signals import (
+    DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+    ModelSignalBundle,
+    score_flow_feature_snapshot,
     score_temporal_feature_snapshot,
 )
 from ...domain.time_series_storage import (
@@ -54,11 +57,21 @@ class StatisticalSignalPipelineService:
         feature_snapshot_store=None,
         signal_store=None,
         model_release_id: str = DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+        model_release_ids: Iterable[str] = None,
         feature_set_version: str = TEMPORAL_FEATURE_SET_VERSION,
     ):
         self.feature_snapshot_store = feature_snapshot_store
         self.signal_store = signal_store
         self.model_release_id = str(model_release_id or DEFAULT_PRICE_SIGNAL_RELEASE_ID)
+        requested_releases = tuple(
+            str(value or "").strip()
+            for value in (model_release_ids or (
+                self.model_release_id,
+                DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+            ))
+            if str(value or "").strip()
+        )
+        self.model_release_ids = tuple(dict.fromkeys(requested_releases))
         self.feature_set_version = str(feature_set_version or TEMPORAL_FEATURE_SET_VERSION)
 
     def run(
@@ -95,37 +108,74 @@ class StatisticalSignalPipelineService:
             except Exception as error:  # noqa: BLE001 - reference signals must not block TypeDB.
                 feature_error = str(error)[:300]
         feature_persisted_at = time.perf_counter()
-        signal_snapshot = score_temporal_feature_snapshot(
-            feature_snapshot,
-            release_id=self.model_release_id,
+        scorers = {
+            DEFAULT_PRICE_SIGNAL_RELEASE_ID: score_temporal_feature_snapshot,
+            DEFAULT_FLOW_SIGNAL_RELEASE_ID: score_flow_feature_snapshot,
+        }
+        signal_snapshots = []
+        skipped_releases = []
+        for release_id in self.model_release_ids:
+            scorer = scorers.get(release_id)
+            if not scorer:
+                skipped_releases.append(release_id)
+                continue
+            signal_snapshots.append(scorer(feature_snapshot, release_id=release_id))
+        signal_bundle = ModelSignalBundle.create(
+            account_id=feature_snapshot.account_id,
+            as_of=latest_observed_at,
+            source_feature_snapshot_id=feature_snapshot.snapshot_id,
+            feature_set_version=feature_snapshot.feature_set_version,
+            snapshots=signal_snapshots,
+        )
+        signal_snapshot = next(
+            (
+                item for item in signal_snapshots
+                if item.model_release_id == self.model_release_id
+            ),
+            signal_snapshots[0] if signal_snapshots else None,
         )
         signal_scored_at = time.perf_counter()
-        signal_receipt = {
-            "status": "not-configured",
-            "changedSignalCount": 0,
-            "unchangedSignalCount": 0,
-        }
-        signal_error = ""
-        if self.signal_store:
-            try:
-                signal_receipt = dict(self.signal_store.save(signal_snapshot) or {})
-            except Exception as error:  # noqa: BLE001 - graph still receives the immutable packet.
-                signal_error = str(error)[:300]
-                signal_receipt = {
-                    "status": "persistence-error",
-                    "changedSignalCount": 0,
-                    "unchangedSignalCount": 0,
-                }
+        signal_receipts = {}
+        signal_errors = {}
+        for item in signal_snapshots:
+            receipt = {
+                "status": "not-configured",
+                "changedSignalCount": 0,
+                "unchangedSignalCount": 0,
+            }
+            if self.signal_store:
+                try:
+                    receipt = dict(self.signal_store.save(item) or {})
+                except Exception as error:  # noqa: BLE001 - graph still receives the immutable packet.
+                    signal_errors[item.model_release_id] = str(error)[:300]
+                    receipt = {
+                        "status": "persistence-error",
+                        "changedSignalCount": 0,
+                        "unchangedSignalCount": 0,
+                    }
+            signal_receipts[item.model_release_id] = receipt
+        signal_receipt = signal_receipts.get(
+            self.model_release_id,
+            next(iter(signal_receipts.values()), {
+                "status": "not-configured",
+                "changedSignalCount": 0,
+                "unchangedSignalCount": 0,
+            }),
+        )
         finished = time.perf_counter()
         return {
-            "status": "ready" if signal_snapshot.signals else "empty",
+            "status": "ready" if signal_bundle.signals else "empty",
             "featureSnapshot": feature_snapshot,
             "signalSnapshot": signal_snapshot,
+            "signalSnapshots": tuple(signal_snapshots),
+            "signalBundle": signal_bundle,
+            "skippedModelReleaseIds": skipped_releases,
             "persistence": {
                 "featureSnapshotInserted": feature_persisted,
                 "featureSnapshotError": feature_error,
                 "signalSnapshot": signal_receipt,
-                "signalSnapshotError": signal_error,
+                "signalSnapshots": signal_receipts,
+                "signalSnapshotErrors": signal_errors,
             },
             "timings": {
                 "featureAssemblyMs": int((feature_assembled_at - started) * 1000),

@@ -6,7 +6,15 @@ TypeDB condition or changes the current action envelope.
 
 from typing import Dict, Iterable, Mapping
 
-from .registry import DEFAULT_PRICE_SIGNAL_RELEASE_ID
+from .registry import (
+    DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
+    DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+    DEFAULT_EVENT_SIGNAL_RELEASE_ID,
+    DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+    DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+    DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+    model_release,
+)
 
 
 RULE_SIGNAL_CONTRACT_VERSION = "rule-statistical-signal-contract-v1"
@@ -62,19 +70,19 @@ def _signal_mapping(rule_id: str, theory_family: str):
     if theory_family in {"behavioral-momentum-and-trend", "behavioral-mean-reversion"}:
         return PRICE_TREND_SIGNALS, "shadow-signal-available", DEFAULT_PRICE_SIGNAL_RELEASE_ID, 1
     if theory_family == "market-microstructure-and-investor-flow":
-        return FLOW_SIGNALS, "planned", "flow-statistics-candidate-v1", 3
+        return FLOW_SIGNALS, "shadow-signal-available", DEFAULT_FLOW_SIGNAL_RELEASE_ID, 3
     if theory_family == "cross-asset-and-regime-transmission":
-        return CROSS_ASSET_SIGNALS, "planned", "cross-asset-statistics-candidate-v1", 2
+        return CROSS_ASSET_SIGNALS, "shadow-signal-required", DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, 2
     if theory_family == "fundamental-valuation-and-factors":
-        return VALUATION_SIGNALS, "planned", "valuation-statistics-candidate-v1", 4
+        return VALUATION_SIGNALS, "shadow-signal-required", DEFAULT_VALUATION_SIGNAL_RELEASE_ID, 4
     if theory_family == "event-information-diffusion":
-        return EVENT_SIGNALS, "planned", "event-response-statistics-candidate-v1", 5
+        return EVENT_SIGNALS, "shadow-signal-required", DEFAULT_EVENT_SIGNAL_RELEASE_ID, 5
     if theory_family == "authored-investment-thesis":
         if "bitcoin" in rule_id or "crypto" in rule_id or "rate_sensitivity" in rule_id:
-            return CROSS_ASSET_SIGNALS, "planned", "cross-asset-statistics-candidate-v1", 2
+            return CROSS_ASSET_SIGNALS, "shadow-signal-required", DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, 2
         if "leveraged_flow" in rule_id:
-            return FLOW_SIGNALS, "planned", "flow-statistics-candidate-v1", 3
-        return PRICE_TREND_SIGNALS, "planned", "authored-thesis-statistics-candidate-v1", 6
+            return FLOW_SIGNALS, "shadow-signal-required", DEFAULT_FLOW_SIGNAL_RELEASE_ID, 3
+        return PRICE_TREND_SIGNALS, "shadow-signal-required", DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, 6
     return (), "unmapped", "", 9
 
 
@@ -94,6 +102,16 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
             "migrationPriority": 0,
         }
     signal_types, state, release_id, priority = _signal_mapping(rule_id, theory_family)
+    release = model_release(release_id) if release_id else None
+    promotion_blockers = []
+    if state == "shadow-signal-required":
+        promotion_blockers.append("governed-scorer-not-implemented")
+    if release and release.status != "production":
+        promotion_blockers.append("model-release-not-production")
+    if release and release.validation_status != "calibrated":
+        promotion_blockers.append("point-in-time-replay-and-calibration-required")
+    if release and release.decision_eligibility != "eligible":
+        promotion_blockers.append("model-release-reference-only")
     return {
         "version": RULE_SIGNAL_CONTRACT_VERSION,
         "required": True,
@@ -102,6 +120,10 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
         "candidateDecisionAuthority": "typedb-model-signal-rule",
         "signalTypes": list(signal_types),
         "releaseIds": [release_id] if release_id else [],
+        "releaseStatus": release.status if release else "unmapped",
+        "releaseValidationStatus": release.validation_status if release else "unmapped",
+        "releaseDecisionEligibility": release.decision_eligibility if release else "reference-only",
+        "signalAvailability": "implemented" if state == "shadow-signal-available" else "missing",
         "migrationPriority": priority,
         "productionEligible": False,
         "shadowOnly": True,
@@ -113,6 +135,7 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
             "no-action-envelope-regression",
             "latency-slo-not-worse",
         ],
+        "promotionBlockers": promotion_blockers,
     }
 
 

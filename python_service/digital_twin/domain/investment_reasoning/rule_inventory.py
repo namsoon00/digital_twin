@@ -21,6 +21,9 @@ def reasoning_rule_inventory(rules: Iterable[Mapping[str, object]]) -> Dict[str,
     high_cost = []
     signal_migration = Counter()
     signal_types = Counter()
+    owners = Counter()
+    decision_authorities = Counter()
+    migration_dispositions = Counter()
     for rule in rows:
         rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
         manifest = _mapping(rule.get("domain_manifest") or rule.get("domainManifest"))
@@ -34,6 +37,14 @@ def reasoning_rule_inventory(rules: Iterable[Mapping[str, object]]) -> Dict[str,
         )
         lifecycle_class = str(manifest.get("lifecycleClass") or "unspecified")
         signal_contract = _mapping(manifest.get("statisticalSignalContract"))
+        knowledge = _mapping(rule.get("knowledge_basis") or rule.get("knowledgeBasis") or manifest.get("knowledgeBasis"))
+        owners[str(knowledge.get("owner") or manifest.get("owner") or "missing")] += 1
+        decision_authorities[str(
+            knowledge.get("decisionAuthority") or manifest.get("decisionAuthority") or "missing"
+        )] += 1
+        migration_dispositions[str(
+            knowledge.get("migrationDisposition") or manifest.get("migrationDisposition") or "missing"
+        )] += 1
         signal_migration[str(signal_contract.get("migrationState") or "missing")] += 1
         for signal_type in signal_contract.get("signalTypes") or []:
             signal_types[str(signal_type or "unknown")] += 1
@@ -82,5 +93,8 @@ def reasoning_rule_inventory(rules: Iterable[Mapping[str, object]]) -> Dict[str,
         "highCostRules": sorted(high_cost, key=lambda item: (-item["costScore"], item["ruleId"]))[:20],
         "statisticalSignalMigrationCounts": dict(sorted(signal_migration.items())),
         "statisticalSignalRuleCounts": dict(sorted(signal_types.items())),
+        "ownerCounts": dict(sorted(owners.items())),
+        "decisionAuthorityCounts": dict(sorted(decision_authorities.items())),
+        "migrationDispositionCounts": dict(sorted(migration_dispositions.items())),
         "releaseReady": bool(rows) and not invalid,
     }

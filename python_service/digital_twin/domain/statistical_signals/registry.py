@@ -9,6 +9,11 @@ from typing import Dict, Iterable, Tuple
 
 
 DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-shadow-v1"
+DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-shadow-v1"
+DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-shadow-v1"
+DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-shadow-v1"
+DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-shadow-v1"
+DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID = "authored-thesis-statistics-shadow-v1"
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,88 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "가격 경로를 표준화한 재현 가능 점수입니다. 역사적 재생과 확률 교정 전에는 "
                 "TypeDB 행동 후보를 만들 수 없습니다."
             ),
+        ),
+        StatisticalModelRelease(
+            release_id=DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+            model_family="investor-flow-statistics",
+            signal_types=(
+                "flow-accumulation-support",
+                "flow-distribution-risk",
+                "flow-price-divergence-risk",
+            ),
+            status="shadow",
+            validation_status="replay-required",
+            decision_eligibility="reference-only",
+            minimum_samples=20,
+            minimum_coverage_ratio=0.75,
+            scorer_version="flow-score-v1",
+            description="투자자별 수급, 체결과 가격 괴리를 검증하는 통계 신호입니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+            model_family="cross-asset-statistics",
+            signal_types=(
+                "cross-asset-residual-support",
+                "cross-asset-residual-risk",
+                "regime-transition-risk",
+            ),
+            status="shadow",
+            validation_status="replay-required",
+            decision_eligibility="reference-only",
+            minimum_samples=60,
+            minimum_coverage_ratio=0.80,
+            scorer_version="cross-asset-score-v1",
+            description="시장·금리·환율·크립토 설명분을 제외한 종목 반응과 레짐 변화를 검증합니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+            model_family="valuation-factor-statistics",
+            signal_types=(
+                "valuation-relative-opportunity",
+                "valuation-relative-stretch-risk",
+            ),
+            status="shadow",
+            validation_status="replay-required",
+            decision_eligibility="reference-only",
+            minimum_samples=60,
+            minimum_coverage_ratio=0.80,
+            scorer_version="valuation-factor-score-v1",
+            description="시점 재현 피어·과거 배수와 기업 품질을 함께 검증하는 상대가치 신호입니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=DEFAULT_EVENT_SIGNAL_RELEASE_ID,
+            model_family="event-response-statistics",
+            signal_types=(
+                "event-abnormal-return-support",
+                "event-abnormal-return-risk",
+                "event-response-persistence",
+            ),
+            status="shadow",
+            validation_status="replay-required",
+            decision_eligibility="reference-only",
+            minimum_samples=30,
+            minimum_coverage_ratio=0.80,
+            scorer_version="event-response-score-v1",
+            description="검증된 사건의 비정상 가격 반응과 지속성을 사건 종류별로 평가합니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
+            model_family="authored-thesis-statistics",
+            signal_types=(
+                "price-trend-continuation-support",
+                "price-trend-break-risk",
+                "cross-asset-residual-support",
+                "cross-asset-residual-risk",
+                "flow-accumulation-support",
+                "flow-distribution-risk",
+            ),
+            status="shadow",
+            validation_status="replay-required",
+            decision_eligibility="reference-only",
+            minimum_samples=60,
+            minimum_coverage_ratio=0.80,
+            scorer_version="authored-thesis-score-v1",
+            description="프로젝트 고유 투자 논리를 검증 가능한 신호 계열로 분해하는 후보 릴리스입니다.",
         ),
     )
 

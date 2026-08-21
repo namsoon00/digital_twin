@@ -1,6 +1,7 @@
 import json
 from typing import Dict, Iterable, List
 
+from .crypto_market_signals import crypto_market_observation_events
 from .market_data import number
 from .instrument_profiles import instrument_profile_for_position
 from .ontology_contracts import PortfolioOntology, entity_id
@@ -591,6 +592,14 @@ def add_portfolio_macro_and_cross_asset_concepts(
         add_relation(graph, portfolio_node_id, rate_id, "HAS_FX_EXPOSURE", weight=0.7, properties=props)
         add_relation(graph, rate_id, portfolio_node_id, "AFFECTS", weight=0.64, properties=props)
     crypto = external_signals.get("cryptoMarkets") if isinstance(external_signals.get("cryptoMarkets"), dict) else {}
+    runtime_settings = (
+        runtime_context.get("settings")
+        if isinstance(runtime_context, dict) and isinstance(runtime_context.get("settings"), dict)
+        else {}
+    )
+    crypto_events_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+    for event in crypto_market_observation_events(external_signals, runtime_settings):
+        crypto_events_by_symbol.setdefault(str(event.get("symbol") or "").upper(), []).append(event)
     for coin_id, item in sorted(crypto.items()):
         if not isinstance(item, dict):
             continue
@@ -700,6 +709,33 @@ def add_portfolio_macro_and_cross_asset_concepts(
         add_relation(graph, asset_id, volume_id, "HAS_TRADE_FLOW", weight=1.0, properties=props)
         add_relation(graph, asset_id, liquidity_id, "HAS_LIQUIDITY_PROFILE", weight=0.72, properties=props)
         add_relation(graph, asset_id, quality_id, "HAS_DATA_QUALITY", weight=1.0, properties=props)
+        for event in crypto_events_by_symbol.get(symbol, []):
+            event_key = ":".join([
+                symbol,
+                "crypto-threshold",
+                str(event.get("horizon") or ""),
+                str(event.get("direction") or ""),
+                str(event.get("severity") or ""),
+            ])
+            event_id = add_entity(graph, "market-event", event_key, name + " 크립토 변동 사건", {
+                "tboxClass": "CryptoMarketSignal",
+                "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CryptoMarketSignal"],
+                **dict(event),
+                "source": "crypto-market-observation-policy",
+            })
+            add_relation(
+                graph,
+                asset_id,
+                event_id,
+                "HAS_OBSERVATION",
+                weight=1.0,
+                properties={
+                    **props,
+                    "field": "cryptoMarketEvent",
+                    "eventType": str(event.get("eventType") or ""),
+                    "changeState": "current-threshold-state",
+                },
+            )
         add_relation(graph, crypto_id, portfolio_node_id, "AFFECTS", weight=1.0, properties=props)
         add_relation(graph, path_id, crypto_id, "CONFIRMS_SIGNAL", weight=0.76, properties=props)
 

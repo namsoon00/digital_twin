@@ -33,6 +33,12 @@ def _feature_summary(signal: Mapping[str, object]) -> Dict[str, object]:
             "rebound",
             "ma20Distance",
             "ma60Distance",
+            "latestSmartMoneyVolumeRatio",
+            "meanSmartMoneyVolumeRatio",
+            "flowSignPersistence",
+            "tradeStrength",
+            "bidAskImbalance",
+            "volumeRatio",
         )
         if key in features
     }
@@ -56,20 +62,23 @@ def statistical_signal_packet_can_replace_temporal_anchors(
     runtime_context: Mapping[str, object],
     symbol: object,
 ) -> bool:
-    snapshot, signals = statistical_signal_rows_for_symbol(runtime_context, symbol)
+    _, signals = statistical_signal_rows_for_symbol(runtime_context, symbol)
     if not signals:
         return False
-    try:
-        release = model_release(snapshot.get("modelReleaseId"))
-    except ValueError:
-        return False
-    if release.status != "production" or release.validation_status != "calibrated":
-        return False
-    return all(
-        str(_mapping(signal.get("eligibility")).get("decisionEligibility") or "") == "eligible"
-        and str(_mapping(signal.get("eligibility")).get("validationStatus") or "") == "calibrated"
-        for signal in signals
-    )
+    for signal in signals:
+        try:
+            release = model_release(signal.get("modelReleaseId"))
+        except ValueError:
+            return False
+        eligibility = _mapping(signal.get("eligibility"))
+        if release.status != "production" or release.validation_status != "calibrated":
+            return False
+        if (
+            str(eligibility.get("decisionEligibility") or "") != "eligible"
+            or str(eligibility.get("validationStatus") or "") != "calibrated"
+        ):
+            return False
+    return True
 
 
 def add_position_statistical_signal_concepts(
@@ -82,47 +91,56 @@ def add_position_statistical_signal_concepts(
     snapshot, signals = statistical_signal_rows_for_symbol(runtime_context, symbol)
     if not signals:
         return
-    release_id = str(snapshot.get("modelReleaseId") or "").strip()
-    try:
-        release = model_release(release_id)
-        release_status = release.status
-        release_validation = release.validation_status
-        release_eligibility = release.decision_eligibility
-    except ValueError:
-        release_status = "unknown"
-        release_validation = "unknown"
-        release_eligibility = "reference-only"
-    release_node_id = add_entity(
-        graph,
-        "statistical-model-release",
-        release_id,
-        release_id,
-        {
-            "tboxClass": "StatisticalModelRelease",
-            "tboxClasses": ["StatisticalModelRelease"],
-            "releaseId": release_id,
-            "featureSetVersion": str(snapshot.get("featureSetVersion") or ""),
-            "releaseStatus": release_status,
-            "validationStatus": release_validation,
-            "decisionEligibility": release_eligibility,
-            "source": "statistical-signal-registry",
-        },
+    feature_reference = str(
+        snapshot.get("sourceFeatureSnapshotId")
+        or snapshot.get("sharedMaterialHash")
+        or snapshot.get("materialHash")
+        or ""
     )
     feature_node_id = add_entity(
         graph,
         "temporal-feature-snapshot-reference",
-        str(snapshot.get("sharedMaterialHash") or snapshot.get("materialHash") or ""),
+        feature_reference,
         str(symbol or "") + " 기간 특징 스냅샷",
         {
             "tboxClass": "TemporalFeatureSnapshotReference",
             "tboxClasses": ["Observation", "TemporalFeatureSnapshotReference"],
             "featureSetVersion": str(snapshot.get("featureSetVersion") or ""),
-            "featureMaterialHash": str(snapshot.get("sharedMaterialHash") or snapshot.get("materialHash") or ""),
+            "featureMaterialHash": feature_reference,
             "observedAt": str(snapshot.get("asOf") or ""),
             "source": "temporal-feature-snapshot-store",
         },
     )
+    release_nodes = {}
     for signal in signals:
+        release_id = str(signal.get("modelReleaseId") or snapshot.get("modelReleaseId") or "").strip()
+        if release_id not in release_nodes:
+            try:
+                release = model_release(release_id)
+                release_status = release.status
+                release_validation = release.validation_status
+                release_eligibility = release.decision_eligibility
+            except ValueError:
+                release_status = "unknown"
+                release_validation = "unknown"
+                release_eligibility = "reference-only"
+            release_nodes[release_id] = add_entity(
+                graph,
+                "statistical-model-release",
+                release_id,
+                release_id,
+                {
+                    "tboxClass": "StatisticalModelRelease",
+                    "tboxClasses": ["StatisticalModelRelease"],
+                    "releaseId": release_id,
+                    "featureSetVersion": str(signal.get("featureSetVersion") or snapshot.get("featureSetVersion") or ""),
+                    "releaseStatus": release_status,
+                    "validationStatus": release_validation,
+                    "decisionEligibility": release_eligibility,
+                    "source": "statistical-signal-registry",
+                },
+            )
+        release_node_id = release_nodes[release_id]
         eligibility = _mapping(signal.get("eligibility"))
         signal_type = str(signal.get("signalType") or "").strip()
         signal_id = add_entity(

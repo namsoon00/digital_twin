@@ -8,13 +8,14 @@ from typing import Dict, Iterable, List
 from .ontology_change_impact import rule_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_rule_knowledge import resolved_rule_knowledge_basis
+from .ontology_rule_ownership import validate_rule_ownership
 from .statistical_signals.rule_contracts import (
     rule_statistical_signal_contract,
     statistical_signal_reverse_index,
 )
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v5"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v6"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v2"
 RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v1"
 
@@ -23,6 +24,8 @@ ASSESSMENT_SCOPES = (
     "investment-opinion",
     "portfolio-fit",
     "execution-readiness",
+    "market-context",
+    "notification-delivery",
 )
 
 EVENT_FAMILY_TOKENS = {
@@ -60,6 +63,18 @@ def _items(value: object) -> List[object]:
 
 
 def rule_domain_module(rule: object, families: Iterable[str]) -> str:
+    basis = resolved_rule_knowledge_basis(rule)
+    owned_module = {
+        "statistical-model": "decision-intelligence",
+        "market-observation": "market-observation",
+        "ontology-semantic": "ontology-semantic",
+        "portfolio-policy": "allocation-rebalance",
+        "data-quality": "data-quality",
+        "trade-execution": "trade-execution",
+        "notification-policy": "notification-delivery",
+    }.get(str(basis.owner or ""))
+    if owned_module:
+        return owned_module
     action_group = str(_value(rule, "action_group", "actionGroup") or "").lower()
     values = {str(item or "").lower() for item in families or []}
     if action_group.startswith("execution"):
@@ -84,7 +99,10 @@ def rule_question_types(rule: object, module: str) -> List[str]:
         "risk-exposure": ["position-risk", "holding-action"],
         "research-evidence": ["event-impact", "holding-action", "watchlist-entry"],
         "market-observation": ["market-context", "holding-action", "watchlist-entry"],
+        "ontology-semantic": ["market-context", "event-impact", "holding-action", "watchlist-entry"],
+        "data-quality": ["evidence-quality", "holding-action", "watchlist-entry"],
         "trade-execution": ["execution-readiness", "holding-action", "watchlist-entry"],
+        "notification-delivery": ["notification-delivery"],
     }.get(module, ["holding-action", "watchlist-entry"])
     if action_group and action_group not in {"holding", "watchlist"}:
         values.append(action_group)
@@ -118,6 +136,11 @@ def rule_assessment_scope(
             "execution-gate": "execution-readiness",
             "policy-constraint": "portfolio-fit",
             "predictive-hypothesis": "investment-opinion",
+            "context-observation": (
+                "notification-delivery"
+                if resolved_rule_knowledge_basis(rule).owner == "notification-policy"
+                else "market-context"
+            ),
         }.get(rule_kind)
         if governed_scope:
             return governed_scope
@@ -256,12 +279,16 @@ def assessment_output_contract(scope: str, effects: Iterable[str]) -> Dict[str, 
         "investment-opinion": "InvestmentOpinionAssessment",
         "portfolio-fit": "PortfolioFitAssessment",
         "execution-readiness": "ExecutionReadinessAssessment",
+        "market-context": "MarketContextAssessment",
+        "notification-delivery": "NotificationDeliveryAssessment",
     }[scope]
     cross_scope_effects = {
         "evidence-quality": ["may-block-judgement"],
         "investment-opinion": ["proposes-investment-action"],
         "portfolio-fit": ["may-constrain-position-size", "never-rewrites-investment-opinion"],
         "execution-readiness": ["may-constrain-or-block-execution", "never-rewrites-investment-opinion"],
+        "market-context": ["reference-only", "never-proposes-investment-action"],
+        "notification-delivery": ["controls-delivery-only", "never-rewrites-investment-opinion"],
     }[scope]
     return {
         "type": output_type,
@@ -342,6 +369,12 @@ def rule_domain_manifest(
         "conflictGroup": str(_value(rule, "action_group", "actionGroup") or module),
         "outcomeContract": dict(lifecycle_payload.get("outcomeContract") or {}),
         "knowledgeBasis": knowledge_basis,
+        "owner": knowledge_basis.get("owner"),
+        "inputContract": knowledge_basis.get("inputContract"),
+        "outputContractOwner": knowledge_basis.get("outputContract"),
+        "decisionAuthority": knowledge_basis.get("decisionAuthority"),
+        "migrationDisposition": knowledge_basis.get("migrationDisposition"),
+        "ownershipContractVersion": knowledge_basis.get("ownershipContractVersion"),
         "ruleKind": knowledge_basis.get("ruleKind"),
         "theoryFamily": knowledge_basis.get("theoryFamily"),
         "thesisFamily": knowledge_basis.get("thesisFamily"),
@@ -359,12 +392,16 @@ def rule_domain_manifest(
 
 
 def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]:
+    source_rules = list(rules or [])
     manifests = [
         dict(getattr(rule, "resolved_domain_manifest"))
         if hasattr(rule, "resolved_domain_manifest")
         else rule_domain_manifest(rule)
-        for rule in rules or []
+        for rule in source_rules
     ]
+    ownership = validate_rule_ownership(
+        str(_value(rule, "rule_id", "ruleId") or "") for rule in source_rules
+    )
     invalid = [
         item["ruleId"]
         for item in manifests
@@ -380,6 +417,11 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("derivedOutputs")
         or item.get("dependencyContractVersion") != RULE_DEPENDENCY_CONTRACT_VERSION
         or not item.get("knowledgeBasis")
+        or not item.get("owner")
+        or not item.get("inputContract")
+        or not item.get("outputContractOwner")
+        or not item.get("decisionAuthority")
+        or not item.get("migrationDisposition")
         or not item.get("ruleKind")
         or not item.get("theoryFamily")
         or (
@@ -390,10 +432,11 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
     conservative = [item["ruleId"] for item in manifests if item.get("conservativeRouting")]
     return {
         "version": ONTOLOGY_RULE_MANIFEST_VERSION,
-        "valid": not invalid,
+        "valid": not invalid and bool(ownership.get("valid")),
         "ruleCount": len(manifests),
         "invalidRuleIds": invalid,
         "conservativeRuleIds": conservative,
+        "ownership": ownership,
         "manifests": manifests,
     }
 

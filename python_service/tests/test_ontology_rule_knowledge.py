@@ -7,10 +7,18 @@ from digital_twin.domain.ontology_rule_knowledge import (
     knowledge_basis_violations,
     resolved_rule_knowledge_basis,
 )
+from digital_twin.domain.ontology_rule_ownership import (
+    RULE_OWNERSHIP_CONTRACT_VERSION,
+    rule_ownership_contract,
+    validate_rule_ownership,
+)
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_rulebox_contracts import GraphInferenceRule
 from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash, rulebox_rules_payload
-from digital_twin.infrastructure.ontology_projection import migrate_typedb_rule_catalog
+from digital_twin.infrastructure.ontology_projection import (
+    migrate_typedb_rule_catalog,
+    rulebox_catalog_requires_bootstrap_repair,
+)
 
 
 class OntologyRuleKnowledgeTests(unittest.TestCase):
@@ -30,6 +38,28 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
             == (rule.resolved_knowledge_basis.rule_kind == "predictive-hypothesis")
             for rule in rules
         ))
+        ownership = validate_rule_ownership(rule.rule_id for rule in rules)
+        self.assertTrue(ownership["valid"])
+        self.assertEqual(118, ownership["ownedRuleCount"])
+        self.assertEqual(75, ownership["ownerCounts"]["statistical-model"])
+
+    def test_mixed_rule_ownership_is_explicit_instead_of_name_inferred(self):
+        self.assertEqual(
+            "statistical-model",
+            rule_ownership_contract("graph.flow.sell_pressure.v1").owner,
+        )
+        self.assertEqual(
+            "portfolio-policy",
+            rule_ownership_contract("graph.instrument_profile.averaging_down_policy.v1").owner,
+        )
+        self.assertEqual(
+            "notification-policy",
+            rule_ownership_contract("graph.materiality.alert_candidate.v1").owner,
+        )
+        self.assertEqual(
+            "ontology-semantic",
+            rule_ownership_contract("graph.crypto.market.24h.up.watch.v1").owner,
+        )
 
     def test_rule_knowledge_basis_round_trips_with_the_rulebox_contract(self):
         original = next(
@@ -146,6 +176,29 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
             (rule.get("knowledge_basis") or {}).get("ruleKind")
             for rule in migration["rules"]
         ))
+
+    def test_stale_ownership_contract_is_repaired_without_replacing_rule_logic(self):
+        bootstrap = rulebox_rules_payload(default_graph_inference_rules())
+        stored = deepcopy(bootstrap)
+        stored[0]["knowledge_basis"]["ownershipContractVersion"] = "legacy"
+        original_conditions = deepcopy(stored[0]["conditions"])
+
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+
+        self.assertIn(stored[0]["rule_id"], migration["ownershipContractUpdatedRuleIds"])
+        self.assertEqual(original_conditions, migration["rules"][0]["conditions"])
+        self.assertEqual(
+            RULE_OWNERSHIP_CONTRACT_VERSION,
+            migration["rules"][0]["knowledge_basis"]["ownershipContractVersion"],
+        )
+
+    def test_stale_ownership_contract_triggers_one_time_bootstrap_repair(self):
+        stored = rulebox_rules_payload(default_graph_inference_rules())
+        self.assertFalse(rulebox_catalog_requires_bootstrap_repair(stored))
+
+        stored[0]["knowledge_basis"]["ownershipContractVersion"] = "legacy"
+
+        self.assertTrue(rulebox_catalog_requires_bootstrap_repair(stored))
 
 
 if __name__ == "__main__":

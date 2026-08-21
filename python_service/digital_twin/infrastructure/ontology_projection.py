@@ -17,6 +17,7 @@ from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import (
     rulebox_rules_hash as compute_rulebox_rules_hash,
 )
+from ..domain.ontology_rule_ownership import RULE_OWNERSHIP_CONTRACT_VERSION
 from ..domain.ontology_change_impact import (
     build_inference_impact_plan,
     compact_inference_impact_plan,
@@ -356,6 +357,17 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         ).strip()
         for item in rules
         if item.get("enabled") is not False
+    ):
+        return True
+    if any(
+        str(
+            (item.get("knowledge_basis") or item.get("knowledgeBasis") or {}).get(
+                "ownershipContractVersion"
+            )
+            or ""
+        ).strip()
+        != RULE_OWNERSHIP_CONTRACT_VERSION
+        for item in rules
     ):
         return True
     for item in rules:
@@ -802,6 +814,7 @@ def migrate_typedb_rule_catalog(
     removed = []
     updated = []
     knowledge_basis_updated = []
+    ownership_contract_updated = []
     added = []
     runtime_shape_updated = []
     stored_rule_ids = set()
@@ -836,18 +849,38 @@ def migrate_typedb_rule_catalog(
             continue
         default_derivations = default_rule.get("derivations") or []
         changed = False
-        if not isinstance(rule.get("knowledge_basis") or rule.get("knowledgeBasis"), dict):
-            default_knowledge_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis")
+        stored_knowledge_basis = rule.get("knowledge_basis") or rule.get("knowledgeBasis")
+        default_knowledge_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis")
+        if not isinstance(stored_knowledge_basis, dict):
             if isinstance(default_knowledge_basis, dict):
                 rule["knowledge_basis"] = deepcopy(default_knowledge_basis)
                 changed = True
                 knowledge_basis_updated.append(rule_id)
-        elif not str((rule.get("knowledge_basis") or rule.get("knowledgeBasis") or {}).get("ruleKind") or "").strip():
-            default_knowledge_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis")
+                ownership_contract_updated.append(rule_id)
+        elif not str(stored_knowledge_basis.get("ruleKind") or "").strip():
             if isinstance(default_knowledge_basis, dict):
                 rule["knowledge_basis"] = deepcopy(default_knowledge_basis)
                 changed = True
                 knowledge_basis_updated.append(rule_id)
+                ownership_contract_updated.append(rule_id)
+        elif isinstance(default_knowledge_basis, dict) and (
+            str(stored_knowledge_basis.get("ownershipContractVersion") or "").strip()
+            != str(default_knowledge_basis.get("ownershipContractVersion") or "").strip()
+        ):
+            basis_origin = str(stored_knowledge_basis.get("basisOrigin") or "").strip().lower()
+            if basis_origin in {"operator-authored", "admin-authored", "user-authored"}:
+                merged_basis = deepcopy(stored_knowledge_basis)
+                for key in (
+                    "owner", "inputContract", "outputContract", "decisionAuthority",
+                    "migrationDisposition", "ownershipContractVersion",
+                ):
+                    merged_basis[key] = deepcopy(default_knowledge_basis.get(key))
+                rule["knowledge_basis"] = merged_basis
+            else:
+                rule["knowledge_basis"] = deepcopy(default_knowledge_basis)
+            changed = True
+            knowledge_basis_updated.append(rule_id)
+            ownership_contract_updated.append(rule_id)
         for index, derivation in enumerate(rule.get("derivations") or []):
             if not isinstance(derivation, dict):
                 continue
@@ -886,6 +919,7 @@ def migrate_typedb_rule_catalog(
         "addedRuleIds": sorted(set(added)),
         "decisionPolicyUpdatedRuleIds": sorted(set(updated)),
         "knowledgeBasisUpdatedRuleIds": sorted(set(knowledge_basis_updated)),
+        "ownershipContractUpdatedRuleIds": sorted(set(ownership_contract_updated)),
         "rawAboxRuntimeUpdatedRuleIds": sorted(set(runtime_shape_updated)),
     }
 
@@ -7474,6 +7508,7 @@ class PortfolioOntologyProjectionRecorder:
                 )
                 feature_snapshot = statistical_result.get("featureSnapshot")
                 signal_snapshot = statistical_result.get("signalSnapshot")
+                signal_bundle = statistical_result.get("signalBundle")
                 statistical_signal_context = {
                     "temporalFeatureSnapshot": (
                         feature_snapshot.to_dict(include_windows=False)
@@ -7481,7 +7516,9 @@ class PortfolioOntologyProjectionRecorder:
                         else {}
                     ),
                     "statisticalSignalSnapshot": (
-                        signal_snapshot.to_dict()
+                        signal_bundle.to_dict()
+                        if hasattr(signal_bundle, "to_dict")
+                        else signal_snapshot.to_dict()
                         if hasattr(signal_snapshot, "to_dict")
                         else {}
                     ),
@@ -7489,6 +7526,9 @@ class PortfolioOntologyProjectionRecorder:
                         "status": str(statistical_result.get("status") or ""),
                         "timings": dict(statistical_result.get("timings") or {}),
                         "persistence": dict(statistical_result.get("persistence") or {}),
+                        "skippedModelReleaseIds": list(
+                            statistical_result.get("skippedModelReleaseIds") or []
+                        ),
                     },
                 }
             except Exception as error:  # noqa: BLE001 - reference-only signals cannot block TypeDB.

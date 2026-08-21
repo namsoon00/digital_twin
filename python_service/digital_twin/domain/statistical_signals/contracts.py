@@ -9,6 +9,7 @@ from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 
 MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v1"
+MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v1"
 SIGNAL_ELIGIBILITY_CONTRACT_VERSION = "statistical-signal-eligibility-v1"
 
 
@@ -308,4 +309,87 @@ class ModelSignalSnapshot:
             "signals": [item.to_dict() for item in self.signals],
             "materialHash": self.material_hash,
             "sharedMaterialHash": self.shared_material_hash,
+        }
+
+
+@dataclass(frozen=True)
+class ModelSignalBundle:
+    """One immutable read packet composed from independently stored releases."""
+
+    bundle_id: str
+    account_id: str
+    as_of: str
+    source_feature_snapshot_id: str
+    feature_set_version: str
+    model_release_ids: Tuple[str, ...]
+    subjects: Tuple[str, ...]
+    snapshots: Tuple[ModelSignalSnapshot, ...]
+    signals: Tuple[ModelSignal, ...]
+    material_hash: str
+    contract_version: str = MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION
+
+    @classmethod
+    def create(
+        cls,
+        account_id: object,
+        as_of: object,
+        source_feature_snapshot_id: object,
+        feature_set_version: object,
+        snapshots: Iterable[ModelSignalSnapshot],
+    ) -> "ModelSignalBundle":
+        snapshot_rows = tuple(sorted(
+            [item for item in snapshots or [] if isinstance(item, ModelSignalSnapshot)],
+            key=lambda item: (item.model_release_id, item.snapshot_id),
+        ))
+        signal_rows = tuple(sorted(
+            [signal for snapshot in snapshot_rows for signal in snapshot.signals],
+            key=lambda item: (
+                item.subject_id,
+                item.model_release_id,
+                item.signal_type,
+                item.horizon,
+                item.signal_id,
+            ),
+        ))
+        release_ids = tuple(sorted({item.model_release_id for item in snapshot_rows if item.model_release_id}))
+        subjects = tuple(sorted({item.subject_id for item in signal_rows if item.subject_id}))
+        material = {
+            "contractVersion": MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION,
+            "accountId": _text(account_id),
+            "sourceFeatureSnapshotId": _text(source_feature_snapshot_id),
+            "featureSetVersion": _text(feature_set_version),
+            "modelReleaseIds": list(release_ids),
+            "subjects": list(subjects),
+            "snapshotMaterialHashes": [item.material_hash for item in snapshot_rows],
+        }
+        digest = payload_hash(material)
+        return cls(
+            bundle_id="model-signal-bundle:" + digest[:32],
+            account_id=_text(account_id),
+            as_of=_text(as_of),
+            source_feature_snapshot_id=_text(source_feature_snapshot_id),
+            feature_set_version=_text(feature_set_version),
+            model_release_ids=release_ids,
+            subjects=subjects,
+            snapshots=snapshot_rows,
+            signals=signal_rows,
+            material_hash=digest,
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "contractVersion": self.contract_version,
+            "bundleId": self.bundle_id,
+            "accountId": self.account_id,
+            "asOf": self.as_of,
+            "sourceFeatureSnapshotId": self.source_feature_snapshot_id,
+            "featureSetVersion": self.feature_set_version,
+            "modelReleaseIds": list(self.model_release_ids),
+            "modelReleaseCount": len(self.model_release_ids),
+            "signalCount": len(self.signals),
+            "subjects": list(self.subjects),
+            "signals": [item.to_dict() for item in self.signals],
+            "snapshots": [item.to_dict() for item in self.snapshots],
+            "materialHash": self.material_hash,
+            "sharedMaterialHash": self.material_hash,
         }

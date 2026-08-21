@@ -66,6 +66,7 @@ NATIVE_RULE_PLANNER_RELATION_TARGET_PROPERTY_FIELDS = {
     "deltaPct",
     "drawdownFromPeakPct",
     "drawdownPolicyDeltaPct",
+    "eventType",
     "factor",
     "field",
     "forwardPE",

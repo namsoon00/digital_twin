@@ -81,6 +81,7 @@ class NotificationAIValidatedResponse:
     next_action_plan: str = ""
     evidence: List[str] = field(default_factory=list)
     counter_evidence: List[str] = field(default_factory=list)
+    counter_evidence_status: str = "not-checked"
     invalidation_condition: str = ""
     next_checks: List[str] = field(default_factory=list)
     missing_data_impact: List[str] = field(default_factory=list)
@@ -100,6 +101,7 @@ class NotificationAIValidatedResponse:
     unresolved_questions: List[str] = field(default_factory=list)
     epistemic_summary: str = ""
     decision_readiness: str = "conditional"
+    decision_assurance: Dict[str, object] = field(default_factory=dict)
     causal_chain: List[Dict[str, object]] = field(default_factory=list)
     alternative_action: Dict[str, object] = field(default_factory=dict)
     follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
@@ -145,6 +147,7 @@ class NotificationAIValidatedResponse:
             "changeAnalysis": "change_analysis",
             "nextActionPlan": "next_action_plan",
             "counterEvidence": "counter_evidence",
+            "counterEvidenceStatus": "counter_evidence_status",
             "invalidationCondition": "invalidation_condition",
             "nextChecks": "next_checks",
             "missingDataImpact": "missing_data_impact",
@@ -163,6 +166,7 @@ class NotificationAIValidatedResponse:
             "unresolvedQuestions": "unresolved_questions",
             "epistemicSummary": "epistemic_summary",
             "decisionReadiness": "decision_readiness",
+            "decisionAssurance": "decision_assurance",
             "causalChain": "causal_chain",
             "alternativeAction": "alternative_action",
             "followUpConditions": "follow_up_conditions",
@@ -182,6 +186,24 @@ class NotificationAIValidatedResponse:
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
+        if payload.get("counter_evidence") and payload.get("counter_evidence_status") == "not-checked":
+            payload["counter_evidence_status"] = "confirmed"
+        if not payload.get("decision_assurance"):
+            payload["decision_assurance"] = {
+                "contractVersion": "notification-decision-assurance-v1",
+                "pipelineValidation": payload.get("validation_state") or "conditional",
+                "evidenceQuality": payload.get("data_state") or "partial",
+                "decisionConfidence": payload.get("decision_readiness") or "conditional",
+                "executionEligibility": (
+                    "blocked"
+                    if payload.get("validation_state") == "blocked" or payload.get("data_state") == "unavailable"
+                    else "eligible"
+                    if payload.get("action") in {"BUY", "ADD", "TRIM", "SELL"}
+                    and payload.get("decision_readiness") == "ready"
+                    else "review-only"
+                ),
+                "counterEvidenceStatus": payload.get("counter_evidence_status") or "not-checked",
+            }
         payload["engineVersion"] = NOTIFICATION_AI_GATE_VERSION
         payload["actionLabel"] = payload.pop("action_label")
         payload["validationState"] = payload.pop("validation_state")
@@ -196,6 +218,7 @@ class NotificationAIValidatedResponse:
         payload["changeAnalysis"] = payload.pop("change_analysis")
         payload["nextActionPlan"] = payload.pop("next_action_plan")
         payload["counterEvidence"] = payload.pop("counter_evidence")
+        payload["counterEvidenceStatus"] = payload.pop("counter_evidence_status")
         payload["invalidationCondition"] = payload.pop("invalidation_condition")
         payload["nextChecks"] = payload.pop("next_checks")
         payload["missingDataImpact"] = payload.pop("missing_data_impact")
@@ -214,6 +237,7 @@ class NotificationAIValidatedResponse:
         payload["unresolvedQuestions"] = payload.pop("unresolved_questions")
         payload["epistemicSummary"] = payload.pop("epistemic_summary")
         payload["decisionReadiness"] = payload.pop("decision_readiness")
+        payload["decisionAssurance"] = payload.pop("decision_assurance")
         payload["causalChain"] = payload.pop("causal_chain")
         payload["alternativeAction"] = payload.pop("alternative_action")
         payload["followUpConditions"] = payload.pop("follow_up_conditions")

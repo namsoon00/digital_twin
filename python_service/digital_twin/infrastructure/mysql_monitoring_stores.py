@@ -1321,6 +1321,18 @@ class MySQLEventLog(MySQLOperationalConnection):
     def insert_event_dict(self, event: Dict[str, object]) -> None:
         self.handle(DomainEvent.from_dict(event))
 
+    def get(self, event_id: str):
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT event_id, name, aggregate_id, occurred_at,
+                       correlation_id, payload_json, event_json
+                FROM domain_events WHERE event_id = %s
+                """,
+                (str(event_id or "").strip(),),
+            ).fetchone()
+        return domain_event_from_row(row) if row else None
+
     def events(self, name: str = "", aggregate_id: str = "", limit: int = 0) -> List[DomainEvent]:
         clauses = []
         params = []

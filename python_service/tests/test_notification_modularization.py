@@ -7,6 +7,7 @@ from digital_twin.application.notification.intake import NotificationIngressServ
 from digital_twin.application.notification.query import NotificationTraceQueryService
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_COMPLETED
 from digital_twin.domain.notification.lifecycle import notification_transition_allowed
+from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.notification.transport import NotificationResult
 from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
@@ -179,7 +180,7 @@ class NotificationModularizationTests(unittest.TestCase):
     def test_trace_query_returns_complete_chronological_timeline(self):
         trace = NotificationTraceQueryService(TraceStore()).trace_for_job("job:1")
 
-        self.assertEqual("notification-trace-v1", trace["contractVersion"])
+        self.assertEqual("notification-trace-v2", trace["contractVersion"])
         self.assertEqual(
             ["received", "rendered", "dispatching", "delivery_result"],
             [item["stage"] for item in trace["timeline"]],
@@ -187,6 +188,113 @@ class NotificationModularizationTests(unittest.TestCase):
         self.assertEqual([1, 2, 3, 4], [item["sequence"] for item in trace["timeline"]])
         self.assertEqual("started", trace["timeline"][2]["outcome"])
         self.assertEqual("Telegram", trace["timeline"][3]["metadata"]["provider"])
+
+    def test_trace_query_connects_the_complete_pipeline_without_exposing_secrets(self):
+        job = NotificationJob.create(
+            "saved",
+            account_id="main",
+            message_type="investmentInsight",
+            source_event_id="event:1",
+            source_event_name="ontologyReasoningCompleted",
+            context={
+                "eventGeneratedAt": "2026-08-16T00:00:00Z",
+                "investmentReasoningCaseId": "case:1",
+                "v2DecisionSynthesis": {
+                    "synthesis_id": "synthesis:1",
+                    "source_abox_snapshot_id": "abox:1",
+                    "inference_generation_id": "generation:1",
+                    "graph_trace_complete": True,
+                    "data_state": "sufficient",
+                    "eligible_hypothesis_ids": ["hypothesis:1"],
+                    "allowed_actions": ["HOLD"],
+                },
+                "ontologyDecisionQuality": {
+                    "status": "ready",
+                    "pipelineValidation": "passed",
+                    "qualitySampleId": "quality:1",
+                    "sourceAboxSnapshotId": "abox:1",
+                    "inferenceGenerationId": "generation:1",
+                },
+                "notificationAiQueue": {
+                    "status": "completed",
+                    "requestId": "ai:1",
+                    "resultId": "result:1",
+                    "completedAt": "2026-08-16T00:00:07Z",
+                },
+                "notificationAiValidatedResponse": {
+                    "action": "HOLD",
+                    "decisionAssurance": {"executionEligibility": "review-only"},
+                    "rawResponse": "must-not-leak",
+                },
+            },
+        )
+        reasoning = {
+            "snapshot": {
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+                "inferenceGenerationAt": "2026-08-16T00:00:03Z",
+            },
+            "aiExecution": {
+                "requestId": "ai:1",
+                "status": "completed",
+                "latencyMs": 3000,
+                "prompt": "full prompt",
+                "inferencePacket": {
+                    "packetId": "packet:1",
+                    "promptHash": "prompt-hash",
+                    "evidenceFingerprint": "evidence-hash",
+                },
+                "claimPublication": {"status": "verified"},
+            },
+            "narrative": {
+                "fingerprint": "narrative:1",
+                "claimValidation": {"status": "verified", "inferencePacketId": "packet:1"},
+            },
+        }
+        reasoning_case = {
+            "caseId": "case:1",
+            "requestId": "reasoning:1",
+            "stage": "PUBLISHED",
+            "stageHistory": [
+                {"stage": "INPUT_READY", "at": "2026-08-16T00:00:01Z"},
+                {"stage": "DECISION_SYNTHESIZED", "at": "2026-08-16T00:00:03Z"},
+                {"stage": "AI_PENDING", "at": "2026-08-16T00:00:04Z"},
+            ],
+        }
+        trace = NotificationTraceQueryService(TraceStore()).trace_for_job(
+            job,
+            reasoning_trace=reasoning,
+            source_event={
+                "event_id": "event:1",
+                "name": "ontologyReasoningCompleted",
+                "occurred_at": "2026-08-16T00:00:00Z",
+                "payload": {"apiKey": "must-not-leak"},
+            },
+            reasoning_case=reasoning_case,
+            ai_trace={
+                "requestId": "ai:1",
+                "resultId": "result:1",
+                "status": "completed",
+                "startedAt": "2026-08-16T00:00:04Z",
+                "completedAt": "2026-08-16T00:00:07Z",
+                "response": {"rawResponse": "must-not-leak"},
+            },
+            rendered_message="rendered message",
+        )
+
+        pipeline = trace["pipeline"]
+        self.assertEqual("notification-pipeline-trace-v1", pipeline["contractVersion"])
+        self.assertEqual(9, pipeline["stageCount"])
+        self.assertEqual(
+            [
+                "source-event", "v2-reasoning", "ontology-quality",
+                "decision-synthesis", "ai-packet", "ai-response",
+                "claim-validation", "rendering", "delivery",
+            ],
+            [item["key"] for item in pipeline["stages"]],
+        )
+        self.assertEqual("ai-response", pipeline["bottleneck"]["stageKey"])
+        self.assertNotIn("must-not-leak", str(trace))
 
     def test_lifecycle_contract_rejects_out_of_order_delivery(self):
         self.assertTrue(notification_transition_allowed("rendered", "dispatching"))

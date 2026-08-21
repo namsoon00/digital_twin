@@ -455,6 +455,12 @@ def build_notification_reverse_reasoning_trace(
         or _dict(values.get("notificationInferenceResponse"))
     )
     ai_execution = _dict(values.get("notificationAiExecutionAudit"))
+    ontology_quality = _dict(values.get("ontologyDecisionQuality")) or _dict(
+        ai_execution.get("ontologyDecisionQuality")
+    )
+    ontology_quality_gate = _dict(values.get("ontologyQualityGate")) or _dict(
+        ai_execution.get("ontologyQualityGate")
+    )
     narrative = _dict(values.get("notificationNarrativeBrief"))
     writer = _dict(values.get("notificationWriterProvenance")) or _dict(
         narrative.get("writerProvenance")
@@ -560,6 +566,11 @@ def build_notification_reverse_reasoning_trace(
         },
         "snapshot": {
             "generatedAt": generation_at,
+            "sourceAboxSnapshotId": _text(
+                relation.get("sourceAboxSnapshotId")
+                or graph.get("sourceAboxSnapshotId"),
+                180,
+            ),
             "inferenceGenerationId": _text(relation.get("inferenceGenerationId"), 180),
             "inferenceGenerationAt": _text(relation.get("inferenceGenerationAt"), 100),
             "ruleSetHash": _text(relation.get("ruleboxShortHash") or relation.get("ruleboxRulesHash"), 180),
@@ -583,6 +594,8 @@ def build_notification_reverse_reasoning_trace(
             "reviewLabel": _text(ai.get("reviewLabel"), 120),
             "invalidationCondition": _text(ai.get("invalidationCondition"), 320),
             "decisionReadiness": _text(ai.get("decisionReadiness"), 80),
+            "counterEvidenceStatus": _text(ai.get("counterEvidenceStatus"), 80),
+            "decisionAssurance": _dict(ai.get("decisionAssurance")),
             "causalChain": [dict(item) for item in ai.get("causalChain") or [] if isinstance(item, dict)],
             "alternativeAction": _dict(ai.get("alternativeAction")),
             "decisionOwner": _text(writer.get("decisionOwner"), 80),
@@ -643,7 +656,11 @@ def build_notification_reverse_reasoning_trace(
             "latencyMs": int(ai_execution.get("latencyMs") or 0),
             "executed": bool(ai_execution.get("aiAttempted")),
             "writerProvenance": writer,
+            "ontologyDecisionQuality": ontology_quality,
+            "ontologyQualityGate": ontology_quality_gate,
         },
+        "ontologyDecisionQuality": ontology_quality,
+        "ontologyQualityGate": ontology_quality_gate,
         "narrative": {
             "version": _text(narrative.get("version"), 120),
             "fingerprint": _text(narrative.get("fingerprint"), 100),

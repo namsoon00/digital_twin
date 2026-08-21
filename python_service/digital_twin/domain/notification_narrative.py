@@ -841,11 +841,19 @@ def build_investment_narrative_brief(
         for item in ledger
         if str(item.get("evidenceId") or "")
     }
-    for item in context_evidence_ledger(context, response):
-        evidence_id = str(item.get("evidenceId") or "")
-        if evidence_id and evidence_id not in ledger_by_id:
-            ledger.append(item)
-            ledger_by_id[evidence_id] = item
+    packet_bound = bool(
+        response_validation.get("inferencePacketId")
+        and response_validation.get("evidenceFingerprint")
+    )
+    if not packet_bound:
+        # Legacy and deterministic writers did not have an immutable AI packet.
+        # Production AI claims must stay bound to the exact evidence ledger the
+        # model received; widening it after validation changes claim semantics.
+        for item in context_evidence_ledger(context, response):
+            evidence_id = str(item.get("evidenceId") or "")
+            if evidence_id and evidence_id not in ledger_by_id:
+                ledger.append(item)
+                ledger_by_id[evidence_id] = item
     response_claims = [
         dict(item)
         for item in getattr(response, "narrative_claims", []) or []
@@ -902,6 +910,16 @@ def build_investment_narrative_brief(
         item for item in claims
         if next((row.get("status") for row in validations if row.get("claimId") == item.get("claimId")), "verified") != "rejected"
     ]
+    if packet_bound:
+        # Deterministic transition narration is produced after the model has
+        # returned. It may use only its dedicated system-authored transition
+        # record; AI-authored claims above have already been checked against
+        # the untouched packet ledger.
+        for item in context_evidence_ledger(context, response):
+            evidence_id = str(item.get("evidenceId") or "")
+            if evidence_id == "transition:decision" and evidence_id not in ledger_by_id:
+                ledger.append(item)
+                ledger_by_id[evidence_id] = item
     transition_evidence = ledger_by_id.get("transition:decision")
     canonical_change = _text(getattr(response, "change_analysis", ""), 420)
     if transition_evidence and canonical_change:

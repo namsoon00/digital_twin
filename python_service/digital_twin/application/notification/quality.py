@@ -7,6 +7,7 @@ from ...domain.ontology_decision_state import (
     REVIEW_LEVEL_LABELS,
     VALIDATION_STATE_LABELS,
 )
+from ...domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
 
 
 def _dict_value(value: object) -> Dict[str, object]:
@@ -19,6 +20,8 @@ def ontology_quality_candidates(context: Dict[str, object]) -> List[Dict[str, ob
     ontology = _dict_value(context.get("ontology"))
     metadata_ontology = _dict_value(metadata.get("ontology"))
     return [
+        _dict_value(context.get("ontologyDecisionQuality")),
+        build_ontology_decision_quality_snapshot(context),
         _dict_value(context.get("ontologyQuality")),
         _dict_value(context.get("ontologyQualitySample")),
         _dict_value(metadata.get("ontologyQuality")),
@@ -42,6 +45,9 @@ def ontology_quality_gate_context(context: Dict[str, object], settings: Dict[str
         ).strip().lower()
         errors = list(candidate.get("errors") or candidate.get("violations") or [])
         warnings = list(candidate.get("warnings") or candidate.get("qualityWarnings") or [])
+        candidate_data_state = str(candidate.get("dataState") or candidate.get("data_state") or "").strip().lower()
+        if candidate_data_state not in {"sufficient", "partial", "unavailable"}:
+            candidate_data_state = ""
         if raw_status in {"error", "failed", "unavailable", "missing", "blocked"}:
             validation_state = "blocked"
             data_state = "unavailable"
@@ -52,7 +58,7 @@ def ontology_quality_gate_context(context: Dict[str, object], settings: Dict[str
             reason = "온톨로지 자료에 누락이나 경고가 있어 AI 의견을 조건부로 사용합니다."
         else:
             validation_state = "ready"
-            data_state = "sufficient"
+            data_state = candidate_data_state or "sufficient"
             reason = "온톨로지 연결과 필수 근거가 확인됐습니다."
         return {
             "enabled": True,

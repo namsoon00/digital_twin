@@ -313,6 +313,9 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertIn("var missing = Array.isArray(trace.missingData)", render_source)
         self.assertIn('class="notification-reasoning-step-disclosure"', source)
         self.assertIn("function renderNotificationDetailDisclosure", source)
+        self.assertIn("function renderNotificationUnifiedPipeline", source)
+        self.assertIn('"전체 처리 계보"', source)
+        self.assertIn("이 단계의 전체 저장 데이터", source)
         self.assertIn('"추론 과정 상세"', source)
         self.assertIn('detailFacts.length + "개 사실', source)
         self.assertIn("notificationDetailDisclosureOpen", source)
@@ -332,7 +335,22 @@ class NotificationReverseReasoningTests(unittest.TestCase):
             def get(self, job_id):
                 return job if job_id == job.job_id else None
 
-        with mock.patch("digital_twin.infrastructure.web_server.notification_queue_store", return_value=Queue()):
+        class AIStore:
+            def trace_for_notification(self, _job_id):
+                return {}
+
+        class ExecutionStore:
+            def execution_trace_for_inference_generation(self, *_args, **_kwargs):
+                return {"status": "ready", "runCount": 0, "runs": []}
+
+        class InvestmentStore:
+            def lifecycle_trace(self, _episode_id):
+                return {"status": "unavailable"}
+
+        with mock.patch("digital_twin.infrastructure.web_server.notification_queue_store", return_value=Queue()), \
+                mock.patch("digital_twin.infrastructure.web_server.stores.ai_inference_queue_store", return_value=AIStore()), \
+                mock.patch("digital_twin.infrastructure.web_server.stores.ontology_projection_run_store", return_value=ExecutionStore()), \
+                mock.patch("digital_twin.infrastructure.web_server.stores.investment_domain_store", return_value=InvestmentStore()):
             detail = notification_job_detail_payload(job.job_id)
 
         self.assertIn("reasoningTrace", detail["job"])
@@ -342,6 +360,8 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("분할축소 검토 시작", detail["job"]["actionFlow"]["transition"]["label"])
         self.assertEqual("sufficient", detail["job"]["actionFlow"]["dataReadiness"]["dataState"])
         self.assertTrue(detail["job"]["reasoningTrace"]["missingData"])
+        self.assertEqual("notification-trace-v2", detail["job"]["notificationTrace"]["contractVersion"])
+        self.assertEqual(9, detail["job"]["notificationTrace"]["pipeline"]["stageCount"])
         self.assertNotIn("reasoningTrace", notification_job_list_payload(job, stale_minutes=30))
         self.assertNotIn("actionFlow", notification_job_list_payload(job, stale_minutes=30))
 

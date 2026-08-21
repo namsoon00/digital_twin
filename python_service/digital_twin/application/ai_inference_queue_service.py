@@ -23,6 +23,7 @@ from ..domain.notification_ai_gate_validation import (
 )
 from ..domain.notification_ai_inference_packet import build_notification_ai_inference_packet
 from ..domain.notification_narrative import narrative_fingerprint
+from ..domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
 from ..domain.notifications import NotificationJob
 from .notification_ai_gate_audit import context_with_validated_ai_response
 from .notification_ai_judgement_service import (
@@ -163,7 +164,6 @@ class NotificationAIRequestEnqueuer:
                 self.continuity_service,
                 account_id=job.account_id,
             )
-        context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
         reasoning_case_context = (
             context.get("investmentReasoningCase")
             if isinstance(context.get("investmentReasoningCase"), dict)
@@ -180,6 +180,10 @@ class NotificationAIRequestEnqueuer:
                 reasoning_case_id,
                 context,
             )
+        quality_snapshot = build_ontology_decision_quality_snapshot(context)
+        if quality_snapshot:
+            context["ontologyDecisionQuality"] = quality_snapshot
+        context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
         execution_profile = notification_ai_execution_profile(context, self.settings)
         context["notificationAiExecutionProfile"] = execution_profile
         model = str(self.settings.get("notificationAiModel") or "gpt-5.6-sol")
@@ -340,6 +344,10 @@ class AIInferenceQueueRunner:
                     account_id=request.account_id,
                     symbol=request.symbol,
                 )
+            quality_snapshot = build_ontology_decision_quality_snapshot(context)
+            if quality_snapshot:
+                context["ontologyDecisionQuality"] = quality_snapshot
+            context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
             execution_profile = dict(context.get("notificationAiExecutionProfile") or {})
             if not execution_profile:
                 execution_profile = notification_ai_execution_profile(context, self.settings)
@@ -544,6 +552,8 @@ class AIInferenceQueueRunner:
                     else ""
                 ),
             },
+            "ontologyDecisionQuality": dict(context.get("ontologyDecisionQuality") or {}),
+            "ontologyQualityGate": dict(context.get("ontologyQualityGate") or {}),
             "latencyMs": latency_ms,
         }
         enriched["notificationAiExecutionAudit"] = execution_audit

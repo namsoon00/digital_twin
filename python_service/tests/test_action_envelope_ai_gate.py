@@ -355,6 +355,26 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("BUY", response.precomputed_action)
         self.assertIn("직접 위험 뉴스", response.disagreement_reason)
 
+    def test_ai_may_hold_with_explicit_disagreement_when_no_counter_was_found(self):
+        response = validated_response_from_payload(
+            entry_context(),
+            {
+                "action": "HOLD",
+                "summary": "진입 조건은 생겼지만 판단 적격 근거 계열이 부족합니다.",
+                "opinion": "관심을 유지합니다.",
+                "evidence": ["가격 회복 관계가 성립했습니다."],
+                "counterEvidence": [],
+                "counterEvidenceStatus": "none-found",
+                "disagreementReason": "독립 근거 계열과 가치평가 자료가 부족해 실행 판단을 낮췄습니다.",
+                "nextChecks": ["독립 근거 계열과 가치평가 자료 확인"],
+            },
+        )
+
+        self.assertEqual("HOLD", response.action)
+        self.assertEqual("none-found", response.counter_evidence_status)
+        self.assertEqual("review-only", response.decision_assurance["executionEligibility"])
+        self.assertFalse(any("진입 후보를 유지했습니다" in item for item in response.validation_warnings))
+
     def test_loaded_temporal_windows_are_rewritten_to_actual_rule_matches(self):
         context = entry_context()
         keys = ["15M", "1H", "SESSION", "1D", "3D", "5D", "20D"]

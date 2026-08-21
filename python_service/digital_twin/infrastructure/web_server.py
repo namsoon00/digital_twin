@@ -2946,6 +2946,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "decisionKey": decision_key,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
+        "sourceEventId": job.source_event_id,
         "sourceEventName": job.source_event_name,
         "title": title,
         "symbol": symbol,
@@ -3216,16 +3217,59 @@ def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owne
     try:
         from ..application.notification.query import NotificationTraceQueryService
 
-        payload["notificationTrace"] = NotificationTraceQueryService(store).trace_for_job(job.job_id)
+        configured = runtime_settings()
+        source_event = {}
+        if job.source_event_id:
+            try:
+                event = stores.event_log(configured).get(job.source_event_id)
+                source_event = event.to_dict() if event else {}
+            except Exception as error:  # noqa: BLE001 - a pruned event must not hide the remaining lineage.
+                source_event = {"event_id": job.source_event_id, "lookupError": str(error)}
+        context = dict(job.context or {})
+        case_context = context.get("investmentReasoningCase")
+        case_context = dict(case_context or {}) if isinstance(case_context, dict) else {}
+        case_id = str(
+            context.get("investmentReasoningCaseId")
+            or case_context.get("caseId")
+            or ""
+        ).strip()
+        reasoning_case = {}
+        if case_id:
+            try:
+                case = stores.investment_reasoning_case_store(configured).get(case_id)
+                reasoning_case = case.to_dict() if case else case_context
+            except Exception as error:  # noqa: BLE001 - compact immutable context remains usable.
+                reasoning_case = {**case_context, "caseId": case_id, "lookupError": str(error)}
+        try:
+            ai_trace = stores.ai_inference_queue_store(configured).trace_for_notification(job.job_id)
+        except Exception as error:  # noqa: BLE001 - notification execution audit is the fallback.
+            ai_trace = {"lookupError": str(error)}
+        payload["notificationTrace"] = NotificationTraceQueryService(store).trace_for_job(
+            job,
+            reasoning_trace=payload.get("reasoningTrace") or {},
+            source_event=source_event,
+            reasoning_case=reasoning_case,
+            ai_trace=ai_trace,
+            rendered_message=str(payload.get("fullText") or ""),
+        )
+        if reasoning_case and isinstance(payload.get("reasoningTrace"), dict):
+            payload["reasoningTrace"]["reasoningCase"] = reasoning_case
     except Exception as error:  # noqa: BLE001 - the saved notification remains readable without its timeline.
         payload["notificationTrace"] = {
-            "contractVersion": "notification-trace-v1",
+            "contractVersion": "notification-trace-v2",
             "jobId": job.job_id,
             "status": "error",
             "reason": str(error)[:220],
             "lifecycle": [],
             "deliveryAttempts": [],
             "timeline": [],
+            "pipeline": {
+                "contractVersion": "notification-pipeline-trace-v1",
+                "status": "error",
+                "complete": False,
+                "stageCount": 0,
+                "stages": [],
+            },
         }
     return {"job": payload}
 

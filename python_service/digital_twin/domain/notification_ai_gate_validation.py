@@ -1984,6 +1984,7 @@ def build_notification_ai_gate_prompt(
             "nextActionPlan": "string - next evidence, timing, and decision consequence",
             "evidence": ["string"],
             "counterEvidence": ["string"],
+            "counterEvidenceStatus": "confirmed|none-found|not-checked|unavailable",
             "invalidationCondition": "string",
             "nextChecks": ["string"],
             "missingDataImpact": ["string"],
@@ -2090,12 +2091,12 @@ def validated_response_from_payload(
             "조회된 시간 구간 수를 규칙 성립 수로 표현한 문장을 실제 TypeDB 일치 구간 기준으로 보정했습니다."
         )
     raw_counter = watchlist_friendly_rows(context, user_friendly_ai_list(payload.get("counterEvidence") or payload.get("counter_evidence") or [], 4))
+    explicit_disagreement = str(payload.get("disagreementReason") or payload.get("disagreement_reason") or "").strip()
     if envelope_disagreement_required(context, action):
-        explicit_disagreement = str(payload.get("disagreementReason") or payload.get("disagreement_reason") or "").strip()
-        if not raw_counter:
+        if not raw_counter and not explicit_disagreement:
             warnings.append("TypeDB 진입 조건을 낮추는 AI 의견에 반대 근거 또는 불일치 사유가 없어 진입 후보를 유지했습니다.")
             action = "BUY"
-        elif not explicit_disagreement:
+        elif raw_counter and not explicit_disagreement:
             warnings.append("AI가 별도 불일치 사유를 쓰지 않아 첫 번째 반대 근거를 진입 보류 사유로 기록했습니다.")
     evidence = list(raw_evidence)
     for item in fallback_evidence_rows(context, 5):
@@ -2110,9 +2111,12 @@ def validated_response_from_payload(
             break
         append_unique_text(counter, watchlist_friendly_text(context, item), 180)
     if not raw_counter:
-        warnings.append("AI 응답에 반대 근거가 없어 관계 분석 데이터에서 반대 근거를 보강했습니다.")
-    if not counter:
-        counter.append("제공 데이터 안에서 뚜렷한 반대 근거가 부족해 판단 강도를 보수적으로 봅니다.")
+        if counter:
+            warnings.append("AI가 직접 제시하지 않은 반대 근거를 관계 분석 데이터에서 별도로 보강했습니다.")
+        elif explicit_disagreement:
+            warnings.append("AI가 행동 조정 사유는 제시했지만 별도의 반대 근거는 확인하지 못했습니다.")
+        else:
+            warnings.append("반대 근거 검사 상태가 확인되지 않아 not-checked로 기록했습니다.")
     raw_invalidation = str(payload.get("invalidationCondition") or payload.get("invalidation_condition") or "").strip()
     invalidation = soften_order_language(watchlist_friendly_text(context, user_friendly_ai_text(raw_invalidation or fallback.invalidation_condition or default_invalidation_for_action(action))))
     raw_next_checks = payload.get("nextChecks") or payload.get("next_checks") or []
@@ -2141,7 +2145,7 @@ def validated_response_from_payload(
     validation_state, data_state, review_level, validation_label, validation_reasons = validation_state_for_response(
         context,
         len(raw_evidence),
-        not bool(raw_counter),
+        not bool(raw_counter or explicit_disagreement),
         source_urls,
         source_labels,
         missing_labels,
@@ -2286,6 +2290,21 @@ def validated_response_from_payload(
         append_unique_text(counter, disagreement, 180)
         if not (payload.get("disagreementReason") or payload.get("disagreement_reason")):
             warnings.append("AI 판단이 사전 계산 후보와 달라 불일치 사유를 감사 로그에 기록했습니다.")
+    requested_counter_status = str(
+        payload.get("counterEvidenceStatus")
+        or payload.get("counter_evidence_status")
+        or ""
+    ).strip().lower()
+    if raw_counter:
+        counter_evidence_status = "confirmed"
+    elif requested_counter_status in {"none-found", "not-checked", "unavailable"}:
+        counter_evidence_status = requested_counter_status
+    elif data_state == "unavailable":
+        counter_evidence_status = "unavailable"
+    elif explicit_disagreement:
+        counter_evidence_status = "none-found"
+    else:
+        counter_evidence_status = "not-checked"
     strategy_guide = normalized_strategy_guide_payload(context, payload)
     current_action_plan = soften_order_language(watchlist_friendly_text(
         context,
@@ -2395,6 +2414,7 @@ def validated_response_from_payload(
         next_action_plan=next_action_plan,
         evidence=evidence[:5],
         counter_evidence=counter[:4],
+        counter_evidence_status=counter_evidence_status,
         invalidation_condition=invalidation,
         next_checks=next_checks,
         missing_data_impact=missing_impact[:5],
@@ -2414,6 +2434,20 @@ def validated_response_from_payload(
         unresolved_questions=unresolved_questions,
         epistemic_summary=epistemic_summary,
         decision_readiness=decision_readiness,
+        decision_assurance={
+            "contractVersion": "notification-decision-assurance-v1",
+            "pipelineValidation": validation_state,
+            "evidenceQuality": data_state,
+            "decisionConfidence": decision_readiness,
+            "executionEligibility": (
+                "blocked"
+                if validation_state == "blocked" or data_state == "unavailable"
+                else "eligible"
+                if action in {"BUY", "ADD", "TRIM", "SELL"} and decision_readiness == "ready"
+                else "review-only"
+            ),
+            "counterEvidenceStatus": counter_evidence_status,
+        },
         causal_chain=causal_chain,
         alternative_action=alternative_action,
         follow_up_conditions=follow_up_conditions,

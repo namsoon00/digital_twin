@@ -814,6 +814,65 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ).fetchone()
         return self.request_from_row(row) if row else None
 
+    def trace_for_notification(self, notification_job_id: str) -> Dict[str, object]:
+        """Return one read-only AI execution trace for notification diagnostics."""
+
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT request.request_id, request.notification_job_id,
+                       request.subject_key, request.symbol,
+                       request.inference_generation_id, request.context_hash,
+                       request.prompt_version, request.model,
+                       request.reasoning_effort, request.priority,
+                       request.status, request.attempts, request.available_at,
+                       request.created_at, request.updated_at,
+                       request.started_at, request.completed_at,
+                       request.superseded_by, request.last_error,
+                       result.result_id, result.source AS result_source,
+                       result.validation_state AS result_validation_state,
+                       result.latency_ms, result.prompt_bytes,
+                       result.response_json, result.created_at AS result_created_at
+                FROM ai_inference_requests request
+                LEFT JOIN ai_inference_results result
+                  ON result.request_id = request.request_id
+                WHERE request.notification_job_id = %s
+                ORDER BY request.created_at DESC, request.request_id DESC
+                LIMIT 1
+                """,
+                (_clean(notification_job_id),),
+            ).fetchone()
+        if not row:
+            return {}
+        return {
+            "requestId": _clean(row.get("request_id")),
+            "notificationJobId": _clean(row.get("notification_job_id")),
+            "subjectKey": _clean(row.get("subject_key")),
+            "symbol": _clean(row.get("symbol")),
+            "inferenceGenerationId": _clean(row.get("inference_generation_id")),
+            "contextHash": _clean(row.get("context_hash")),
+            "promptVersion": _clean(row.get("prompt_version")),
+            "model": _clean(row.get("model")),
+            "reasoningEffort": _clean(row.get("reasoning_effort")),
+            "priority": int(row.get("priority") or 0),
+            "status": _clean(row.get("status")),
+            "attempts": int(row.get("attempts") or 0),
+            "availableAt": _clean(row.get("available_at")),
+            "createdAt": _clean(row.get("created_at")),
+            "updatedAt": _clean(row.get("updated_at")),
+            "startedAt": _clean(row.get("started_at")),
+            "completedAt": _clean(row.get("completed_at")),
+            "supersededBy": _clean(row.get("superseded_by")),
+            "lastError": _clean(row.get("last_error")),
+            "resultId": _clean(row.get("result_id")),
+            "resultSource": _clean(row.get("result_source")),
+            "validationState": _clean(row.get("result_validation_state")),
+            "latencyMs": int(row.get("latency_ms") or 0),
+            "promptBytes": int(row.get("prompt_bytes") or 0),
+            "resultCreatedAt": _clean(row.get("result_created_at")),
+            "response": _json_loads(row.get("response_json"), {}),
+        }
+
     def summary(self) -> Dict[str, object]:
         with self.connect() as connection:
             rows = connection.execute(

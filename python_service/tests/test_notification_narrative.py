@@ -129,6 +129,49 @@ class NotificationNarrativeTests(unittest.TestCase):
         self.assertNotIn("추가매수 보류", [item["text"] for item in brief.claims])
         self.assertIn("종목 성격 물타기 차단", [item["text"] for item in brief.claims])
 
+    def test_packet_bound_claim_validation_does_not_widen_its_evidence_ledger(self):
+        ledger = [{
+            "evidenceId": "fact:ma20Distance",
+            "role": "support",
+            "kind": "derived",
+            "label": "20일 평균 괴리",
+            "value": 4.3,
+            "judgementEligible": True,
+        }]
+        claim = {
+            "claimId": "claim:ma20",
+            "section": "support",
+            "text": "현재가는 20일 평균보다 4.3% 높습니다.",
+            "evidenceIds": ["fact:ma20Distance"],
+            "writerKind": "ai",
+        }
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            narrative_claims=[claim],
+            claim_validation={
+                "status": "verified",
+                "verifiedClaimCount": 1,
+                "rejectedClaimCount": 0,
+                "evidenceLedger": ledger,
+                "inferencePacketId": "packet:1",
+                "evidenceFingerprint": "evidence:1",
+            },
+            source="openai",
+            raw_response='{"action":"HOLD"}',
+        )
+        context = {
+            "messageType": "investmentInsight",
+            "ontologyRelationContext": {
+                "facts": {"currentPrice": 218000, "ma20Distance": 4.3},
+                "matchedRules": [{"ruleId": "graph.extra.rule", "label": "추가 규칙"}],
+            },
+        }
+
+        brief = build_investment_narrative_brief(context, response)
+
+        self.assertEqual(["fact:ma20Distance"], [item["evidenceId"] for item in brief.evidence_ledger])
+        self.assertEqual(1, brief.metrics["verifiedClaimCount"])
+
     def test_reference_only_evidence_cannot_become_action_support(self):
         context = {
             "_notificationAiPreparedDecisionCore": {

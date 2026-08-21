@@ -143,6 +143,14 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
     if contextual_icon:
         return contextual_icon
 
+    if key == "marketObservation":
+        observation = metadata.get("marketObservation") if isinstance(metadata.get("marketObservation"), dict) else {}
+        direction = str(observation.get("direction") or "").strip().lower()
+        if direction not in {"up", "down", "flat"}:
+            value = signed_direction(data_value(raw_lines, "기준 대비"))
+            direction = "up" if value > 0 else "down" if value < 0 else "flat"
+        return "📈" if direction == "up" else "📉" if direction == "down" else "↔️"
+
     if key == "modelBuy":
         return "🟢"
     if key == "watchlistBuyCandidate":
@@ -232,6 +240,7 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
 
 def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEvent, fallback: str) -> str:
     key = str(rule or "")
+    metadata = dict(getattr(event, "metadata", {}) or {})
     status = data_value(raw_lines, "상태")
     profit = data_value(raw_lines, "손익") or data_value(raw_lines, "수익률")
     change = data_value(raw_lines, "변화")
@@ -274,6 +283,15 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         return "매도 기준 점검"
     if key == "watchlistQuote":
         return "관심종목 시세 갱신"
+    if key == "marketObservation":
+        observation = metadata.get("marketObservation") if isinstance(metadata.get("marketObservation"), dict) else {}
+        change_text = percent_text(data_value(raw_lines, "기준 대비"))
+        direction = str(observation.get("direction") or "").strip().lower()
+        if direction not in {"up", "down", "flat"}:
+            value = signed_direction(change_text)
+            direction = "up" if value > 0 else "down" if value < 0 else "flat"
+        direction_label = {"up": "상승", "down": "하락", "flat": "변동 없음"}[direction]
+        return " ".join(part for part in ["기준가 대비", change_text, direction_label] if part)
     if key == "watchlistQuotePending":
         return "관심종목 시세 미수집"
     if key == "holdingTiming":

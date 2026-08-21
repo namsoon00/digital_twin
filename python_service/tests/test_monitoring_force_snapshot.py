@@ -180,6 +180,43 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertEqual(1, len(observations))
         self.assertFalse(observations[0].metadata["deliveryDeferred"])
         self.assertEqual("deterministic-outbox-before-typedb", observations[0].metadata["deliveryMode"])
+        self.assertIn("절대 3% 이상", "\n".join(observations[0].criteria))
+
+    def test_always_raw_market_observation_displays_its_effective_threshold(self):
+        previous_position = normalize_position({
+            "symbol": "066570", "name": "LG전자", "market": "KR", "currency": "KRW",
+            "quantity": 1, "currentPrice": 195600, "updatedAt": utc_now_iso(),
+        })
+        current_position = normalize_position({
+            "symbol": "066570", "name": "LG전자", "market": "KR", "currency": "KRW",
+            "quantity": 1, "currentPrice": 191300, "updatedAt": utc_now_iso(),
+        })
+        previous = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([previous_position]), [previous_position], [], metadata={},
+        )
+        current = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([current_position]), [current_position], [], metadata={},
+        )
+
+        observations = [
+            event for event in RealtimeMonitor({
+                "marketObservationRawDeliveryMode": "always",
+            }).events_for_snapshot(current, previous.to_monitor_state())
+            if event.rule == MARKET_OBSERVATION
+        ]
+
+        self.assertEqual(1, len(observations))
+        observation = observations[0]
+        details = observation.metadata["marketObservation"]
+        self.assertEqual("LG전자", observation.title)
+        self.assertEqual("down", details["direction"])
+        self.assertEqual(2.0, details["deliveryThresholdPct"])
+        self.assertEqual(3.0, details["immediateThresholdPct"])
+        self.assertEqual("always", details["rawDeliveryMode"])
+        self.assertIn("절대 2% 이상", "\n".join(observation.criteria))
+        self.assertNotIn("절대 3% 이상", "\n".join(observation.criteria))
 
     def test_always_raw_market_observation_survives_missing_inference(self):
         """Raw observations remain deliverable when AI/TypeDB insight is unavailable."""

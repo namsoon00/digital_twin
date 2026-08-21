@@ -5,7 +5,7 @@ from typing import Dict, List
 
 from .alert_formatting import signed_pct
 from .external_api_sources import external_api_source_line
-from .message_types import MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, OPERATOR_REASONING_REPORT, TRIGGER_SUMMARIES
+from .message_types import MARKET_OBSERVATION, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, OPERATOR_REASONING_REPORT, TRIGGER_SUMMARIES
 from .notification_ai import enrich_notification_ai_context
 from .notification_ontology_sections import (
     CURVE_REGIME_LABELS,
@@ -169,7 +169,7 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     },
     "marketObservation": {
         "template": DEFAULT_TEMPLATE,
-        "description": "급변 시 즉시 발송하는 원시 시세 관측 알림 (투자 판단 없음)",
+        "description": "설정한 누적 변동 기준을 충족하면 즉시 발송하는 시세 변동 알림 (투자 판단 없음)",
     },
     "portfolioHoldingsSnapshot": {
         "template": DEFAULT_TEMPLATE,
@@ -394,7 +394,7 @@ def alert_context(event: AlertEvent) -> Dict[str, object]:
     type_line = ("유형: " + message_type_label) if message_type_label else ""
     trigger_line = ("발생 조건: " + trigger_summary) if trigger_summary else ""
     data_lines = lines
-    status_headline = ("[" + severity_label + "]") if severity_label else ""
+    status_headline = "[시세]" if event.rule == MARKET_OBSERVATION else (("[" + severity_label + "]") if severity_label else "")
     title_icon = notification_title_icon(event.rule, raw_lines, event)
     title_headline = notification_title_headline(event.rule, raw_lines, event, message_type_label or event.title)
     target_value = target_display_value(event.title, raw_symbol, display_symbol)

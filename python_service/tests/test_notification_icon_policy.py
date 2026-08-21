@@ -19,7 +19,7 @@ from digital_twin.domain.portfolio import AlertEvent  # noqa: E402
 EXPECTED_BASE_ICONS = {
     "default": "🔔",
     "investmentInsight": "🧭",
-    "marketObservation": "📈",
+    "marketObservation": "↔️",
     "portfolioHoldingsSnapshot": "📋",
     "portfolioActivityObservation": "↔️",
     "investmentCalendarReminder": "🗓️",
@@ -111,6 +111,48 @@ class NotificationIconPolicyTests(unittest.TestCase):
         self.assertEqual("➖", title_icon("monitorPositionChange", ["보유 제외 감지"]))
         self.assertEqual("💵", title_icon("monitorCashChange", ["변화: +4.0%p"]))
         self.assertEqual("💸", title_icon("monitorCashChange", ["변화: -4.0%p"]))
+
+    def test_market_observation_title_uses_price_direction_without_repeating_observation(self):
+        event = AlertEvent(
+            "account-1",
+            "계좌",
+            "WATCH",
+            "marketObservation",
+            "market-observation-066570-down",
+            "LG전자",
+            ["현재가: 191,300원", "기준 대비: -2.2%"],
+            symbol="066570",
+            metadata={"marketObservation": {"changePct": -2.2, "direction": "down"}},
+        )
+
+        context = alert_context(event)
+
+        self.assertEqual("📉", context["titleIcon"])
+        self.assertEqual("기준가 대비 -2.2% 하락", context["titleHeadline"])
+        self.assertEqual("[시세] 📉 LG전자: 기준가 대비 -2.2% 하락", context["headline"])
+        self.assertEqual("LG전자 / 066570", context["displayTarget"])
+        rendered = render_notification(
+            NotificationTemplate("marketObservation", "{telegramMessage}"),
+            context,
+        )
+        self.assertTrue(rendered.startswith("<b>🔔 새 알림 · LG전자</b>"))
+        self.assertIn("<b>[시세] 📉 LG전자: 기준가 대비 -2.2% 하락</b>", rendered)
+        self.assertNotIn("LG전자 시세 관측", rendered)
+
+        rising = AlertEvent(
+            "account-1",
+            "계좌",
+            "WATCH",
+            "marketObservation",
+            "market-observation-066570-up",
+            "LG전자",
+            ["현재가: 199,900원", "기준 대비: +2.2%"],
+            symbol="066570",
+            metadata={"marketObservation": {"changePct": 2.2, "direction": "up"}},
+        )
+        rising_context = alert_context(rising)
+        self.assertEqual("📈", rising_context["titleIcon"])
+        self.assertEqual("[시세] 📈 LG전자: 기준가 대비 +2.2% 상승", rising_context["headline"])
 
     def test_operations_and_job_list_icons_use_current_status(self):
         self.assertEqual("⏳", notification_message_icon("ontologyReasoningQueue"))

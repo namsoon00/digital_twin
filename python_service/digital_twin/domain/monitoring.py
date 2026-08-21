@@ -725,6 +725,13 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return False
         return abs(float(change_pct or 0.0)) >= self.market_observation_immediate_price_change_threshold()
 
+    def market_observation_raw_delivery_threshold(self) -> float:
+        """Return the threshold actually applied to a raw quote alert."""
+
+        if self.market_observation_raw_delivery_mode() == "always":
+            return self.market_observation_price_change_threshold()
+        return self.market_observation_immediate_price_change_threshold()
+
     @staticmethod
     def market_observation_candidate_payload(event: AlertEvent) -> Dict[str, object]:
         metadata = dict(getattr(event, "metadata", {}) or {})
@@ -859,13 +866,14 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             }.get(baseline_kind, "직전 저장 시세와 비교")
             delivery_deferred = not immediate_delivery
             immediate_threshold = self.market_observation_immediate_price_change_threshold()
+            raw_delivery_threshold = self.market_observation_raw_delivery_threshold()
             lines = [
                 "현재가: " + price_money(current_price, currency),
                 baseline_label + ": " + price_money(baseline_price, currency),
                 "기준 대비: " + signed_pct(change_pct),
                 "직전 저장값: " + price_money(previous_price, currency),
                 "관측 기준: " + comparison_label,
-                "판단 상태: 원시 시세 관측만 발송 · 매수·매도 판단 없음",
+                "판단 상태: 가격 변동 사실만 알림 · 매수·매도 판단 없음",
                 "후속 처리: TypeDB 추론이 최신 ABox에서 완료되면 관계 분석 결과를 별도 인사이트로 발송",
             ]
             if source:
@@ -874,8 +882,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "기준 시세 대비 절대 " + compact_number(threshold)
                 + "% 이상 누적 변동 시 TypeDB 후속 확인을 요청"
                 if delivery_deferred
-                else "기준 시세 대비 절대 " + compact_number(immediate_threshold)
-                + "% 이상 누적 변동 시 원시 시세 관측을 즉시 발송"
+                else "기준 시세 대비 절대 " + compact_number(raw_delivery_threshold)
+                + "% 이상 누적 변동 시 시세 변동 알림을 즉시 발송"
             )
             events.append(AlertEvent(
                 snapshot.account_id,
@@ -883,7 +891,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "WATCH",
                 MARKET_OBSERVATION,
                 ":".join([snapshot.account_id, "market-observation", symbol, direction]),
-                (item.name or symbol) + " 시세 관측",
+                item.name or symbol,
                 lines,
                 symbol,
                 criteria=self.criteria(
@@ -908,6 +916,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                         "outboxChangePct": round(delivery_change_pct, 4),
                         "initialPrice": initial_baseline_price,
                         "thresholdPct": threshold,
+                        "deliveryThresholdPct": raw_delivery_threshold if immediate_delivery else threshold,
+                        "immediateThresholdPct": immediate_threshold,
+                        "rawDeliveryMode": self.market_observation_raw_delivery_mode(),
                         "direction": direction,
                         "currency": currency,
                         "source": source,

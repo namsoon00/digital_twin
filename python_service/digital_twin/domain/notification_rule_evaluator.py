@@ -1023,58 +1023,18 @@ def apply_state_cooldown_rule(
     transition_is_material = bool(transition.get("material"))
     transition_kind = str(transition.get("kind") or "")
     if has_graph_transition and transition_kind == "initial" and not transition_is_material:
-        if (
-            str(getattr(job, "message_type", "") or "") == "investmentInsight"
-            and not nested_dict(job_context.get("notificationAiValidatedResponse"))
-        ):
-            decision.state_decision = "await-final-ai-baseline"
-            decision.state_reason = "이전 최종 판단 이력을 확인한 뒤 첫 관계 상태 발송 여부를 결정"
-            decision.reasons.append("상태 정책: " + decision.state_reason)
-            return decision
         decision.state_decision = "baseline"
         decision.state_suppressed = True
-        decision.state_reason = "최초 비실행 관계 상태를 알림 없이 기준선으로 저장"
+        decision.state_reason = "최초 비실행 TypeDB 관계 상태를 알림·AI 실행 없이 기준선으로 저장"
         decision.reasons.append("상태 정책: " + decision.state_reason)
         decision.mark_suppressed("initial_graph_baseline", decision.state_reason)
         return decision
-    baseline_confirmation = next((
-        condition
-        for condition in config.similarity_bypass_conditions or []
-        if condition.enabled and condition.condition_type == "baseline_age_gte"
-    ), None)
-    baseline_observed_at = str(previous_context.get("_relationBaselineObservedAt") or "").strip()
-    if (
-        baseline_confirmation
-        and baseline_observed_at
-        and decision.state_recent_sent_count <= 0
-        and not transition_is_material
-    ):
-        matched, reason = similarity_bypass_match(
-            baseline_confirmation,
-            job=job,
-            previous_context=previous_context,
-            decision=decision,
-        )
-        if matched:
-            decision.state_decision = "confirmed-baseline"
-            decision.state_reason = "반복 확인된 첫 관계 상태: " + reason
-            decision.similarity_bypassed = True
-            decision.similarity_bypass_reason = decision.state_reason
-            decision.reasons.append("상태 정책: " + decision.state_reason)
-            return decision
-        observed_age = max(0, int(numeric_value(previous_context.get("_relationBaselineAgeMinutes")) or 0))
-        required_age = max(0, int(numeric_value(baseline_confirmation.value) or 0))
-        decision.state_decision = "baseline-confirmation-wait"
+    if has_graph_transition and not transition_is_material:
+        decision.state_decision = "unchanged-inference"
         decision.state_suppressed = True
-        decision.state_reason = (
-            "초기 관계 상태 재확인 대기: "
-            + str(observed_age)
-            + "분 / "
-            + str(required_age)
-            + "분"
-        )
+        decision.state_reason = "TypeDB 관계 판단과 사용자 행동 범위가 같아 AI와 알림을 다시 실행하지 않습니다."
         decision.reasons.append("상태 정책: " + decision.state_reason)
-        decision.mark_suppressed("initial_graph_confirmation_wait", decision.state_reason)
+        decision.mark_suppressed("unchanged_graph_inference", decision.state_reason)
         return decision
     if has_graph_transition and transition_is_material and transition_kind != "initial" and decision.state_recent_sent_count > 0:
         decision.state_decision = "meaningful-change"
@@ -1085,8 +1045,7 @@ def apply_state_cooldown_rule(
         return decision
     # For graph-backed alerts, a raw P&L or moving-average fluctuation must
     # not bypass the cooldown when the TypeDB action envelope stayed the same.
-    graph_state_static = bool(has_graph_transition and not transition_is_material)
-    if not graph_state_static and apply_typedb_profit_loss_delivery(
+    if apply_typedb_profit_loss_delivery(
         decision,
         job,
         previous_context=previous_context,
@@ -1101,8 +1060,6 @@ def apply_state_cooldown_rule(
     if job is not None:
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:
-                continue
-            if graph_state_static:
                 continue
             matched, reason = similarity_bypass_match(
                 condition,

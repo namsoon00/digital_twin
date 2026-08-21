@@ -9,6 +9,11 @@ from ...domain.data_freshness import (
     sanitize_notification_context_for_freshness,
 )
 from ...domain.message_types import INVESTMENT_INSIGHT, ONTOLOGY_REASONING_QUEUE
+from ...domain.market_hours import (
+    default_market_hours_markets,
+    evaluate_market_hours,
+)
+from ...domain.notification_ai_context import is_graph_backed_relation_context
 from ...domain.notifications import NotificationJob
 
 
@@ -94,6 +99,79 @@ class NotificationDispatchEligibilityService:
         )
         context["deliverySuppressionReason"] = "obsolete_queue_health_at_dispatch"
         context["operationalDispatchState"]["status"] = "suppressed-obsolete"
+        job.context = context
+        self.suppress(job, reason)
+        return False
+
+    def apply_inference_change_gate(self, job: NotificationJob) -> bool:
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return True
+        context = dict(job.context or {})
+        relation = context.get("ontologyRelationContext")
+        relation = relation if isinstance(relation, dict) else {}
+        relation_diff = context.get("ontologyRelationDiff")
+        relation_diff = relation_diff if isinstance(relation_diff, dict) else {}
+        if not is_graph_backed_relation_context(relation) or "material" not in relation_diff:
+            return True
+        material = bool(relation_diff.get("material"))
+        context["inferenceChangeGate"] = {
+            "version": "dispatch-inference-change-v1",
+            "decision": "send" if material else "suppress",
+            "material": material,
+            "reason": str(relation_diff.get("reason") or ""),
+        }
+        job.context = context
+        if material:
+            return True
+        reason = "TypeDB 관계 판단과 사용자 행동 범위가 이전 추론과 같아 AI와 알림을 다시 실행하지 않습니다."
+        context["deliverySuppressionReason"] = "unchanged_graph_inference"
+        job.context = context
+        self.suppress(job, reason)
+        return False
+
+    def apply_market_hours_gate(self, job: NotificationJob, stage: str) -> bool:
+        context = dict(job.context or {})
+        message_type = str(job.message_type or "")
+        enabled_value = context.get("marketHoursEnabled")
+        if enabled_value is None:
+            context["dispatchMarketHoursGate"] = {
+                "version": "dispatch-market-hours-v1",
+                "stage": stage,
+                "status": "bypass-missing-admission-policy",
+                "decision": "send",
+                "reason": "입장 단계의 장 시간 정책 정보가 없는 직접 큐 작업이라 재검증하지 않습니다.",
+            }
+            job.context = context
+            return True
+        enabled = str(enabled_value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        markets = context.get("marketHoursMarkets")
+        markets = markets if isinstance(markets, list) else default_market_hours_markets(message_type)
+        decision = evaluate_market_hours(
+            message_type,
+            context,
+            enabled,
+            markets,
+            now=self.now_provider(),
+        )
+        context.update(decision.to_context())
+        context["dispatchMarketHoursGate"] = {
+            "version": "dispatch-market-hours-v1",
+            "stage": stage,
+            "status": decision.status,
+            "decision": "send" if decision.should_send else "defer",
+            "reason": decision.reason,
+            "checkedAt": decision.local_time,
+        }
+        job.context = context
+        if decision.should_send:
+            return True
+        reason = stage + " 장 운영 상태 재검증: " + str(decision.reason or "장 운영 시간 외")
+        context["deliverySuppressionReason"] = "market_closed_at_dispatch"
+        context["marketHoursDeferral"] = {
+            "version": "market-hours-deferral-v1",
+            "status": "deferred-to-next-material-observation",
+            "reason": "닫힌 장의 이전 작업은 폐기하고 다음 유효한 자료 변화에서 다시 판단합니다.",
+        }
         job.context = context
         self.suppress(job, reason)
         return False

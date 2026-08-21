@@ -3580,8 +3580,7 @@
         { id: "insight_ma60_crossed_below", label: "60일 평균 아래로 전환", type: "ma60_crossed_below", field: "", value: 0, enabled: true, description: "가격이 60일 평균 아래로 내려가면 다시 보냅니다." },
         { id: "insight_ma60_crossed_above", label: "60일 평균 위로 회복", type: "ma60_crossed_above", field: "", value: 0, enabled: true, description: "가격이 60일 평균 위로 회복하면 다시 보냅니다." },
         { id: "insight_action_changed", label: "권장 대응 변경", type: "field_changed_any", field: "notificationAiValidatedResponse.actionLabel,notificationAiValidatedResponse.action,aiOpinion.actionLabel,aiOpinion.action", value: "", enabled: true, description: "검증된 최종 대응이 바뀌면 다시 보냅니다." },
-        { id: "insight_inference_state_changed", label: "추론 상태 변경", type: "inference_state_changed", field: "", value: "", enabled: true, description: "최종 행동, 확인 단계, 자료 상태 또는 AI 검증 상태가 바뀌면 다시 보냅니다." },
-        { id: "confirmed_initial_graph_state", label: "초기 관계 상태 재확인", type: "baseline_age_gte", field: "", value: 30, enabled: true, description: "처음 조용히 기록한 비실행 관계 상태가 설정 시간 이상 반복 확인되면 한 번 보냅니다." }
+        { id: "insight_inference_state_changed", label: "추론 상태 변경", type: "inference_state_changed", field: "", value: "", enabled: true, description: "최종 행동, 확인 단계, 자료 상태 또는 AI 검증 상태가 바뀌면 다시 보냅니다." }
       ];
     }
     return [];

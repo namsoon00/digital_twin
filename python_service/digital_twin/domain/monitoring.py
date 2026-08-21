@@ -24,7 +24,10 @@ from .message_types import (
 )
 from .ontology_inference_context import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from .ontology_insights import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
-from .ontology_projection_status import projection_waits_for_reasoning_worker
+from .ontology_projection_status import (
+    projection_reuses_unchanged_inference,
+    projection_waits_for_reasoning_worker,
+)
 from .ontology_relation_reasoning import relation_rule_context_summary_lines
 from .ontology_decision_state import (
     CHANGE_STATE_LABELS,
@@ -343,6 +346,20 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         signal_snapshot = snapshot
         decision_snapshot = self.snapshot_with_strategy_states(snapshot)
         has_account_data = decision_snapshot.has_live_account_data()
+        projection = ontology_projection_from_metadata(
+            decision_snapshot.metadata if isinstance(decision_snapshot.metadata, dict) else {}
+        )
+        unchanged_inference = projection_reuses_unchanged_inference(projection)
+        if unchanged_inference:
+            ontology_metadata = decision_snapshot.metadata.setdefault("ontology", {})
+            ontology_metadata["investmentEvaluationGate"] = {
+                "version": "investment-evaluation-gate-v1",
+                "status": "skipped-unchanged-inference",
+                "reason": "가격·손익·수급·뉴스 등 실질 입력과 TypeDB 관계 판단이 직전 세대와 같습니다.",
+                "typeDbInferenceExecuted": False,
+                "aiRequired": False,
+                "investmentAlertRequired": False,
+            }
         inference_missing_events: List[AlertEvent] = []
         inference_missing = False
         raw_events.extend(self.connection_events(decision_snapshot, previous))
@@ -365,10 +382,10 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             self.attach_ontology_inference_missing_state(decision_snapshot, inference_state)
             inference_missing_events = self.ontology_inference_missing_events(decision_snapshot, previous or {}, inference_state)
             raw_events.extend(inference_missing_events)
-            if not inference_missing:
+            if not inference_missing and not unchanged_inference:
                 raw_events.extend(self.ontology_signal_events(signal_snapshot, reasoning_context=reasoning_context))
         raw_events.extend(self.external_signal_events(signal_snapshot, previous or {}))
-        if has_account_data and not inference_missing:
+        if has_account_data and not inference_missing and not unchanged_inference:
             raw_events.extend(self.holding_timing_events(decision_snapshot))
             raw_events.extend(self.observation_followup_events(decision_snapshot, reasoning_context))
         raw_events = self.attach_data_freshness(decision_snapshot, raw_events)

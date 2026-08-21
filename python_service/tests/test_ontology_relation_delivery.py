@@ -312,7 +312,7 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         self.assertEqual("awaiting_ai", found["_relationPredecessorStatus"])
         self.assertNotIn("_relationPredecessorSentAt", found)
 
-    def test_suppressed_predecessor_does_not_restart_state_cooldown(self):
+    def test_suppressed_predecessor_does_not_allow_unchanged_inference_after_cooldown(self):
         previous_context = self.context()
         previous_context["deliverySuppressionReason"] = "state_cooldown"
         previous_context["_relationPredecessorObservedAt"] = "2026-08-11T00:20:00Z"
@@ -334,8 +334,9 @@ class OntologyRelationDeliveryTests(unittest.TestCase):
         store = Store.__new__(Store)
         decision = store.evaluate_job_with_connection(None, current)
 
-        self.assertTrue(decision.should_send)
-        self.assertNotEqual("cooldown", decision.state_decision)
+        self.assertFalse(decision.should_send)
+        self.assertEqual("unchanged-inference", decision.state_decision)
+        self.assertEqual("unchanged_graph_inference", decision.suppression_reason)
         self.assertEqual(0, decision.state_recent_sent_count)
         self.assertEqual("", decision.state_last_sent_at)
 

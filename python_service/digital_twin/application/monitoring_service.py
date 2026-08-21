@@ -11,6 +11,7 @@ from ..domain.ontology_projection_input import (
     frozen_monitor_state_for_reasoning,
 )
 from ..domain.ontology_projection_status import VERIFIED_MONITOR_SNAPSHOT_QUEUED
+from ..domain.ontology_projection_status import projection_reuses_unchanged_inference
 from ..domain.message_types import PORTFOLIO_ONTOLOGY_SIGNAL
 from ..domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state
 from ..domain.repositories import MonitorAccountJob, MonitorAccountJobRepository, MonitorStateRepository, MonitoringCycleRecorder, OntologyProjectionRecorder, SnapshotMonitor
@@ -574,7 +575,11 @@ class MonitorRunner:
             for event in ready
             if str(getattr(event, "symbol", "") or "").strip()
         }
-        if no_match:
+        unchanged_inference = projection_reuses_unchanged_inference(projection)
+        if unchanged_inference:
+            status = "unchanged-inference"
+            reason = "실질 입력과 검증된 TypeDB 관계 판단이 같아 투자 이벤트와 AI 실행을 생략했습니다."
+        elif no_match:
             status = "no-signal"
             reason = "TypeDB native rules evaluated the current ABox successfully, but no investment relation matched."
         elif str(projection.get("status") or "").lower() not in {
@@ -593,7 +598,10 @@ class MonitorRunner:
             reason = "The current inference did not create a material investment alert candidate."
         symbol_outcomes = []
         for symbol in selected_symbols or target_symbols:
-            if symbol in ready_symbols:
+            if unchanged_inference:
+                symbol_status = "unchanged-inference"
+                symbol_reason = "동일한 material fingerprint와 InferenceBox를 재사용해 새 판단을 만들지 않았습니다."
+            elif symbol in ready_symbols:
                 symbol_status = "delivery-ready"
                 symbol_reason = "An investment alert candidate passed cadence."
             elif symbol in detected_symbols:

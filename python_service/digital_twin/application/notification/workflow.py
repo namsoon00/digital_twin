@@ -447,6 +447,12 @@ class NotificationQueueRunner:
             if not self.apply_operational_state_gate(job, "AI 판단 전"):
                 processed += 1
                 continue
+            if not self.apply_inference_change_gate(job):
+                processed += 1
+                continue
+            if not self.apply_market_hours_gate(job, "AI 판단 전"):
+                processed += 1
+                continue
             if not self.apply_dispatch_freshness_gate(job, "AI 판단 전"):
                 processed += 1
                 continue
@@ -482,6 +488,9 @@ class NotificationQueueRunner:
                 processed += 1
                 continue
             if not self.apply_dispatch_freshness_gate(job, "발송 직전"):
+                processed += 1
+                continue
+            if not self.apply_market_hours_gate(job, "발송 직전"):
                 processed += 1
                 continue
             if self.dry_run:
@@ -622,6 +631,12 @@ class NotificationQueueRunner:
 
     def apply_operational_state_gate(self, job: NotificationJob, stage: str) -> bool:
         return self.eligibility_service.apply_operational_state_gate(job, stage)
+
+    def apply_inference_change_gate(self, job: NotificationJob) -> bool:
+        return self.eligibility_service.apply_inference_change_gate(job)
+
+    def apply_market_hours_gate(self, job: NotificationJob, stage: str) -> bool:
+        return self.eligibility_service.apply_market_hours_gate(job, stage)
 
     def apply_dispatch_freshness_gate(self, job: NotificationJob, stage: str) -> bool:
         return self.eligibility_service.apply_dispatch_freshness_gate(job, stage)

@@ -52,7 +52,7 @@ from digital_twin.infrastructure.mysql_notification_config import (
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
-    def test_initial_non_actionable_graph_state_waits_for_final_ai_history_check(self):
+    def test_initial_non_actionable_graph_state_is_stored_as_silent_baseline(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "NVIDIA 관심 유지",
@@ -83,11 +83,11 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             job=job,
         )
 
-        self.assertTrue(decision.should_send)
-        self.assertEqual("await-final-ai-baseline", decision.state_decision)
-        self.assertEqual("", decision.suppression_reason)
+        self.assertFalse(decision.should_send)
+        self.assertEqual("baseline", decision.state_decision)
+        self.assertEqual("initial_graph_baseline", decision.suppression_reason)
 
-    def test_repeated_initial_graph_state_waits_for_configured_confirmation_age(self):
+    def test_repeated_initial_graph_state_is_suppressed_without_ai(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "NVIDIA 관심 유지",
@@ -118,10 +118,10 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
 
         self.assertFalse(decision.should_send)
-        self.assertEqual("baseline-confirmation-wait", decision.state_decision)
-        self.assertEqual("initial_graph_confirmation_wait", decision.suppression_reason)
+        self.assertEqual("unchanged-inference", decision.state_decision)
+        self.assertEqual("unchanged_graph_inference", decision.suppression_reason)
 
-    def test_repeated_initial_graph_state_sends_once_after_configured_confirmation_age(self):
+    def test_cooldown_expiry_does_not_send_an_unchanged_graph_inference(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "NVIDIA 관심 유지",
@@ -146,14 +146,15 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             sent_count=0,
             previous_context={
                 "_relationBaselineObservedAt": "2026-08-11T00:00:00Z",
-                "_relationBaselineAgeMinutes": 30,
+                "_relationBaselineAgeMinutes": 720,
             },
             job=job,
         )
 
-        self.assertTrue(decision.should_send)
-        self.assertEqual("confirmed-baseline", decision.state_decision)
-        self.assertTrue(decision.similarity_bypassed)
+        self.assertFalse(decision.should_send)
+        self.assertEqual("unchanged-inference", decision.state_decision)
+        self.assertEqual("unchanged_graph_inference", decision.suppression_reason)
+        self.assertFalse(decision.similarity_bypassed)
 
     def test_actionable_transition_does_not_wait_for_initial_baseline_confirmation(self):
         rule = default_notification_rule("investmentInsight")

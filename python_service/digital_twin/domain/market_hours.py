@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .notification_ai_context import is_graph_backed_relation_context
+
 
 DEFAULT_MARKET_HOUR_SESSIONS: Dict[str, Dict[str, object]] = {
     "KR": {
@@ -127,12 +129,83 @@ def infer_market_from_context(message_type: str, context: Dict[str, object]) -> 
     return ""
 
 
-def _context_text(value: object) -> str:
-    if isinstance(value, dict):
-        return " ".join(_context_text(item) for item in value.values())
-    if isinstance(value, list):
-        return " ".join(_context_text(item) for item in value)
-    return str(value or "")
+def _mapping(value: object) -> Dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _normalized_values(*values: object) -> set:
+    return {
+        str(value or "").strip().replace("-", "_").replace(" ", "_").upper()
+        for value in values
+        if str(value or "").strip()
+    }
+
+
+def _structured_disclosure_changed_decision(context: Dict[str, object]) -> bool:
+    source_types = context.get("sourceSignalTypes")
+    source_types = source_types if isinstance(source_types, list) else []
+    if "externalDartDisclosure" not in {str(item or "").strip() for item in source_types}:
+        return False
+    insight = _mapping(context.get("ontologyInsight"))
+    semantic = _mapping(insight.get("semanticComponents"))
+    event_keys = semantic.get("materialSourceEventKeys") or insight.get("materialSourceEventKeys") or []
+    relation = _mapping(context.get("ontologyRelationContext"))
+    return bool(
+        event_keys
+        and _mapping(context.get("ontologyRelationDiff")).get("material")
+        and is_graph_backed_relation_context(relation)
+    )
+
+
+def _structured_urgent_investment_transition(context: Dict[str, object]) -> bool:
+    relation_diff = _mapping(context.get("ontologyRelationDiff"))
+    relation = _mapping(context.get("ontologyRelationContext"))
+    if not relation_diff.get("material") or not is_graph_backed_relation_context(relation):
+        return False
+
+    decision = _mapping(relation.get("decision"))
+    state = _mapping(relation.get("decisionState"))
+    envelope = _mapping(relation.get("actionEnvelope"))
+    transition = _mapping(relation_diff.get("decisionTransition"))
+    review_level = str(
+        state.get("reviewLevel")
+        or relation.get("reviewLevel")
+        or decision.get("reviewLevel")
+        or ""
+    ).strip().lower()
+    if review_level not in {"act", "immediate"}:
+        return False
+
+    action_values = _normalized_values(
+        envelope.get("preferredAction"),
+        decision.get("primaryAction"),
+        relation.get("primaryAction"),
+        transition.get("currentAction"),
+    )
+    urgent_actions = {
+        "TRIM",
+        "SELL",
+        "REDUCE",
+        "EXIT",
+        "STOP_LOSS",
+        "TRIM_REVIEW",
+        "SELL_REVIEW",
+        "LOSS_CONTROL",
+        "LOSS_CONTROL_WATCH",
+    }
+    action_groups = _normalized_values(
+        decision.get("actionGroup"),
+        relation.get("actionGroup"),
+    )
+    decision_stages = _normalized_values(
+        decision.get("decisionStage"),
+        relation.get("decisionStage"),
+    )
+    return bool(
+        action_values & urgent_actions
+        or action_groups & {"LOSSCONTROL", "RISKMANAGEMENT", "EVENTRISK"}
+        or decision_stages & {"RISK_REVIEW", "LOSS_REDUCE", "LOSS_CONTROL", "EXIT_REVIEW"}
+    )
 
 
 def market_hours_important_exception_reason(message_type: str, context: Dict[str, object]) -> str:
@@ -142,16 +215,10 @@ def market_hours_important_exception_reason(message_type: str, context: Dict[str
         return "공시는 장 시간 외에도 확인이 필요한 이벤트라 발송"
     if key != "investmentInsight":
         return ""
-    blob = _context_text({
-        "severity": context.get("severity"),
-        "headline": context.get("headline") or context.get("title"),
-        "rawLines": context.get("rawLines"),
-        "ontologyInsight": context.get("ontologyInsight"),
-        "sourceSignalTypes": context.get("sourceSignalTypes"),
-        "body": context.get("body"),
-    })
-    if any(term in blob for term in ["공시", "손실", "손절", "분할축소", "리스크 증가", "위험", "riskIncrease", "riskManagement", "externalDartDisclosure"]):
-        return "손실·공시·위험 증가 계열 투자 판단이라 장 시간 외에도 발송"
+    if _structured_disclosure_changed_decision(context):
+        return "새 공시가 TypeDB 판단을 실제로 바꾼 중요 이벤트라 장 시간 외에도 발송"
+    if _structured_urgent_investment_transition(context):
+        return "TypeDB 관계가 즉시 손실·위험 대응 단계로 바뀌어 장 시간 외에도 발송"
     return ""
 
 

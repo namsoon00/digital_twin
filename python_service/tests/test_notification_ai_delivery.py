@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
@@ -40,6 +41,42 @@ def watchlist_context(ai_kind="unchanged", material_sources=None):
             "semanticComponents": {
                 "materialSourceEventKeys": list(material_sources or []),
             },
+        },
+    }
+
+
+def graph_risk_context(material=True):
+    return {
+        "messageType": "investmentInsight",
+        "market": "KR",
+        "symbol": "005930",
+        "marketHoursEnabled": True,
+        "marketHoursMarkets": ["KR", "US"],
+        "body": "본문에 손실과 분할축소라는 말이 포함됩니다.",
+        "ontologyRelationDiff": {
+            "material": material,
+            "reason": "행동 범위 변경" if material else "동일 행동 범위",
+            "decisionTransition": {
+                "kind": "action-changed" if material else "unchanged",
+                "material": material,
+                "currentAction": "TRIM" if material else "HOLD",
+            },
+        },
+        "ontologyRelationContext": {
+            "source": "typedbInferenceBox",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "decision": {
+                "basis": "typedbInferenceBox",
+                "decisionStage": "RISK_REVIEW",
+                "actionGroup": "lossControl",
+                "primaryAction": "TRIM_REVIEW",
+            },
+            "decisionState": {
+                "reviewLevel": "act",
+                "dataState": "sufficient",
+            },
+            "actionEnvelope": {"preferredAction": "TRIM"},
         },
     }
 
@@ -140,6 +177,65 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("refresh", job.context["aiFreshnessHeadroomGate"]["decision"])
         self.assertEqual("ai_freshness_headroom_recheck", job.context["deliverySuppressionReason"])
         self.assertIn("데이터 유효시간", queue.reason)
+
+    def test_dispatch_gate_suppresses_unchanged_graph_inference_before_ai(self):
+        queue = SuppressionQueue()
+        runner = NotificationQueueRunner(
+            queue,
+            account_repository=None,
+            notifier_factory=lambda account: None,
+        )
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context=graph_risk_context(material=False),
+        )
+
+        self.assertFalse(runner.apply_inference_change_gate(job))
+        self.assertEqual("unchanged_graph_inference", job.context["deliverySuppressionReason"])
+        self.assertIn("이전 추론과 같아", queue.reason)
+
+    def test_message_words_alone_do_not_bypass_closed_market(self):
+        queue = SuppressionQueue()
+        runner = NotificationQueueRunner(
+            queue,
+            account_repository=None,
+            notifier_factory=lambda account: None,
+            now_provider=lambda: datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc),
+        )
+        context = graph_risk_context(material=False)
+        context.pop("ontologyRelationDiff")
+        context.pop("ontologyRelationContext")
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+
+        self.assertFalse(runner.apply_market_hours_gate(job, "AI 판단 전"))
+        self.assertEqual("closed", job.context["marketHoursStatus"])
+        self.assertEqual("market_closed_at_dispatch", job.context["deliverySuppressionReason"])
+
+    def test_material_typedb_risk_transition_bypasses_closed_market(self):
+        queue = SuppressionQueue()
+        runner = NotificationQueueRunner(
+            queue,
+            account_repository=None,
+            notifier_factory=lambda account: None,
+            now_provider=lambda: datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc),
+        )
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context=graph_risk_context(material=True),
+        )
+
+        self.assertTrue(runner.apply_market_hours_gate(job, "발송 직전"))
+        self.assertEqual("closed_exception", job.context["marketHoursStatus"])
+        self.assertIn("TypeDB 관계", job.context["marketHoursReason"])
 
 
 if __name__ == "__main__":

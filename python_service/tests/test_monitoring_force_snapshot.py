@@ -512,6 +512,76 @@ class MonitoringForceSnapshotTests(unittest.TestCase):
         self.assertEqual(["investmentInsight"], pipeline["detectedMessageTypes"])
         self.assertEqual("cadence-suppressed", pipeline["symbolOutcomes"][0]["status"])
 
+    def test_alert_pipeline_records_unchanged_inference_without_candidates(self):
+        position = normalize_position({
+            "symbol": "000660", "name": "SK하이닉스", "market": "KR", "currency": "KRW",
+            "quantity": 1, "currentPrice": 200000, "updatedAt": utc_now_iso(),
+        })
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([position]), [position], [], metadata={},
+        )
+        projection = {
+            "status": "unchanged-material-facts",
+            "materialChangeDetected": False,
+            "inferenceBox": {
+                "status": "ok",
+                "targetSymbols": ["000660"],
+                "reusedForUnchangedMaterialFacts": True,
+            },
+        }
+
+        MonitorRunner.record_investment_alert_pipeline(
+            SimpleNamespace(),
+            snapshot,
+            projection,
+            [],
+            [],
+            allowed_symbols={"000660"},
+        )
+
+        pipeline = projection["alertPipeline"]
+        self.assertEqual("unchanged-inference", pipeline["status"])
+        self.assertEqual("unchanged-inference", pipeline["symbolOutcomes"][0]["status"])
+        self.assertEqual(0, pipeline["detectedCandidateCount"])
+
+    def test_unchanged_projection_skips_investment_event_generation(self):
+        position = normalize_position({
+            "symbol": "000660", "name": "SK하이닉스", "market": "KR", "currency": "KRW",
+            "quantity": 1, "currentPrice": 200000, "updatedAt": utc_now_iso(),
+        })
+        snapshot = AccountSnapshot(
+            "main", "메인", "toss", "live", "ok", utc_now_iso(),
+            portfolio_summary([position]), [position], [],
+            metadata={
+                "ontology": {
+                    "projection": {
+                        "status": "unchanged-material-facts",
+                        "materialChangeDetected": False,
+                        "inferenceBox": {"reusedForUnchangedMaterialFacts": True},
+                    },
+                },
+            },
+        )
+        monitor = RealtimeMonitor()
+
+        with (
+            patch.object(monitor, "ontology_inference_missing_state", return_value={"missing": False}),
+            patch.object(monitor, "ontology_signal_events", return_value=[]) as ontology_events,
+            patch.object(monitor, "holding_timing_events", return_value=[]) as holding_events,
+            patch.object(monitor, "observation_followup_events", return_value=[]) as followup_events,
+        ):
+            monitor.events_for_snapshot(snapshot, {})
+
+        ontology_events.assert_not_called()
+        holding_events.assert_not_called()
+        followup_events.assert_not_called()
+        gate = snapshot.metadata["ontology"]["investmentEvaluationGate"]
+        self.assertEqual("skipped-unchanged-inference", gate["status"])
+        self.assertFalse(gate["typeDbInferenceExecuted"])
+        self.assertFalse(gate["aiRequired"])
+        self.assertFalse(gate["investmentAlertRequired"])
+
     def test_raw_observation_followup_builds_an_insight_after_graph_analysis(self):
         watchlist = normalize_position({
             "symbol": "AAPL",

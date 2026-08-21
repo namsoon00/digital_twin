@@ -85,6 +85,27 @@ def merge_derived_evidence_payload(
     for key in ["officialDocumentText", "officialDocumentPreview", "officialDocumentQuality"]:
         if merged.get(key) in (None, "") and previous.get(key) not in (None, ""):
             merged[key] = previous.get(key)
+    terminal_rejection = bool(
+        str(previous.get("validationState") or "").lower() == "blocked"
+        and (
+            previous.get("excludedReason")
+            or str(previous.get("relationScope") or "").lower() == "entity_mismatch"
+            or previous.get("bodyQualityPassed") is False
+        )
+    )
+    if terminal_rejection:
+        for key in [
+            "relationScope",
+            "relevanceState",
+            "dataState",
+            "validationState",
+            "directMention",
+            "excludedReason",
+            "bodyQualityState",
+            "bodyQualityPassed",
+        ]:
+            if key in previous:
+                merged[key] = previous.get(key)
     return merged
 
 

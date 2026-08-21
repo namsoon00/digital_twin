@@ -53,6 +53,19 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertTrue(merged["qualityGate"]["targetSubjectConfirmed"])
         self.assertNotIn("entityResolution", changed)
 
+        rejected = merge_derived_evidence_payload(
+            {
+                **previous,
+                "relationScope": "entity_mismatch",
+                "validationState": "blocked",
+                "excludedReason": "다른 회사가 기사 주체입니다.",
+            },
+            {**replayed, "relationScope": "direct", "validationState": "conditional"},
+        )
+
+        self.assertEqual("entity_mismatch", rejected["relationScope"])
+        self.assertEqual("blocked", rejected["validationState"])
+
     @staticmethod
     def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
         return ResearchEvidence(

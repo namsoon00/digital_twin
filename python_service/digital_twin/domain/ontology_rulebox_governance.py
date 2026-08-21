@@ -128,6 +128,13 @@ def canonical_rulebox_rule(rule: Dict[str, object]) -> Dict[str, object]:
     result = canonical_json_value(rule)
     if not isinstance(result, dict):
         return {}
+    manifest_key = "domain_manifest" if isinstance(result.get("domain_manifest"), dict) else "domainManifest"
+    if isinstance(result.get(manifest_key), dict):
+        # Model migration plans are catalog metadata. They do not alter a
+        # TypeDB condition, derivation, routing dependency, or action envelope.
+        # Keeping them out of the executable hash avoids freezing a new
+        # RuleBox release for a shadow-only analysis contract.
+        result[manifest_key].pop("statisticalSignalContract", None)
     if isinstance(result.get("conditions"), list):
         result["conditions"] = sorted(
             [canonical_json_value(item) for item in result.get("conditions") if isinstance(item, dict)],

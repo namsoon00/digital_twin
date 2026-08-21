@@ -14,9 +14,9 @@ from .statistical_signals.rule_contracts import (
 )
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v6"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v5"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v2"
-RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v2"
+RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v1"
 
 ASSESSMENT_SCOPES = (
     "evidence-quality",
@@ -451,12 +451,14 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         for key in list(values):
             values[key] = sorted(values[key])
     statistical_signals = statistical_signal_reverse_index(manifests)
+    # Statistical migration metadata is governance-only. It must not change
+    # the executable dependency fingerprint until a candidate rule is
+    # explicitly promoted into the RuleBox.
     fingerprint_payload = {
         "version": RULE_DEPENDENCY_INDEX_VERSION,
         "manifestVersion": ONTOLOGY_RULE_MANIFEST_VERSION,
         "dependencyContractVersion": RULE_DEPENDENCY_CONTRACT_VERSION,
         "indexes": indexes,
-        "statisticalSignals": statistical_signals,
     }
     fingerprint = hashlib.sha256(json.dumps(
         fingerprint_payload,

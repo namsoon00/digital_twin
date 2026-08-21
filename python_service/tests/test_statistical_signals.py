@@ -8,6 +8,7 @@ from digital_twin.domain.ontology_rule_manifest import (
     validate_rule_domain_manifests,
 )
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio import PortfolioSummary, Position
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
@@ -300,6 +301,22 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual(45, len(migration["not-applicable"]))
         self.assertEqual(27, len(migration["shadow-signal-available"]))
         self.assertEqual(46, len(migration["planned"]))
+
+    def test_shadow_migration_metadata_does_not_change_executable_rulebox_hash(self):
+        rule = default_graph_inference_rules()[0]
+        payload = rule.to_dict()
+        without_shadow_contract = {
+            **payload,
+            "domain_manifest": {
+                **dict(payload.get("domain_manifest") or {}),
+            },
+        }
+        without_shadow_contract["domain_manifest"].pop("statisticalSignalContract", None)
+
+        self.assertEqual(
+            rulebox_rules_hash([payload]),
+            rulebox_rules_hash([without_shadow_contract]),
+        )
 
     def test_price_rule_candidates_are_disabled_and_require_calibrated_signals(self):
         release = statistical_rule_candidate_release(default_graph_inference_rules())

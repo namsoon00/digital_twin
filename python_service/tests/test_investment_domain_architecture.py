@@ -302,6 +302,14 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS investment_performance_attributions", schema)
         self.assertEqual(4.75, attribution.active_return_pct)
 
+    def test_investment_flow_backfill_only_reads_missing_episodes(self):
+        schema = "\n".join(MYSQL_SCHEMA)
+
+        self.assertIn("INSERT IGNORE INTO investment_flow_heads", schema)
+        self.assertIn("FROM investment_decision_episodes AS episodes", schema)
+        self.assertIn("WHERE NOT EXISTS", schema)
+        self.assertIn("heads.decision_episode_id = episodes.episode_id", schema)
+
 
 if __name__ == "__main__":
     unittest.main()

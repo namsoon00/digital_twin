@@ -1945,7 +1945,14 @@ MYSQL_SCHEMA = [
         inference_generation_id,
         selected_hypothesis_id, action, data_state, validation_state,
         decided_at, updated_at
-    FROM investment_decision_episodes
+    FROM investment_decision_episodes AS episodes
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM investment_flow_heads AS heads
+        WHERE heads.account_id = episodes.account_id
+          AND heads.symbol = UPPER(episodes.symbol)
+          AND heads.decision_episode_id = episodes.episode_id
+    )
     """,
     """
     CREATE TABLE IF NOT EXISTS investment_decision_follow_ups (

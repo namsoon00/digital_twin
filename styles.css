@@ -21992,6 +21992,199 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   border-left-color: var(--amber);
 }
 
+.notification-pipeline-section {
+  gap: var(--ds-space-5);
+  border-left: 3px solid var(--blue);
+}
+
+.notification-pipeline-section.unavailable {
+  border-left-color: var(--amber);
+}
+
+.notification-pipeline-summary {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.3fr) minmax(90px, 0.3fr) minmax(220px, 1fr);
+  gap: 0 var(--ds-space-4);
+  min-width: 0;
+  border-top: 1px solid var(--ds-card-border);
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.notification-pipeline-summary > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--ds-space-3) 0;
+}
+
+.notification-pipeline-summary em,
+.notification-pipeline-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-pipeline-summary em {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 760;
+}
+
+.notification-pipeline-summary strong {
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+  font-weight: 920;
+}
+
+.notification-pipeline-flow {
+  position: relative;
+  display: grid;
+  gap: var(--ds-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notification-pipeline-flow::before {
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 15px;
+  width: 1px;
+  background: var(--ds-card-border);
+  content: "";
+}
+
+.notification-pipeline-stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+
+.notification-pipeline-index {
+  z-index: 1;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--blue) 48%, var(--ds-card-border));
+  border-radius: 50%;
+  background: var(--ds-card-bg);
+  color: var(--blue);
+  font-size: var(--ds-type-caption);
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.notification-pipeline-stage[data-pipeline-status="failed"] .notification-pipeline-index,
+.notification-pipeline-stage[data-pipeline-status="blocked"] .notification-pipeline-index {
+  border-color: color-mix(in srgb, var(--red) 48%, var(--ds-card-border));
+  color: var(--red);
+}
+
+.notification-pipeline-stage[data-pipeline-status="missing"] .notification-pipeline-index,
+.notification-pipeline-stage[data-pipeline-status="conditional"] .notification-pipeline-index {
+  border-color: color-mix(in srgb, var(--amber) 48%, var(--ds-card-border));
+  color: var(--amber);
+}
+
+.notification-pipeline-stage > details {
+  min-width: 0;
+}
+
+.notification-pipeline-stage > details > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--ds-space-4);
+  align-items: start;
+  min-width: 0;
+  padding: 2px 0 var(--ds-space-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.notification-pipeline-stage > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.notification-pipeline-stage > details > summary > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notification-pipeline-stage > details > summary strong,
+.notification-pipeline-stage > details > summary em,
+.notification-pipeline-stage > details > summary i {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-pipeline-stage > details > summary strong {
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+  font-weight: 950;
+}
+
+.notification-pipeline-stage > details > summary em {
+  color: var(--ink);
+  font-size: var(--ds-type-label);
+  font-style: normal;
+  font-weight: 760;
+  line-height: 1.48;
+}
+
+.notification-pipeline-stage > details > summary i {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-style: normal;
+  font-weight: 760;
+}
+
+.notification-pipeline-stage-detail {
+  display: grid;
+  gap: var(--ds-space-3);
+  min-width: 0;
+  padding: var(--ds-space-3) 0 var(--ds-space-2);
+}
+
+.notification-pipeline-identifiers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 var(--ds-space-4);
+  min-width: 0;
+  margin: 0;
+  border-top: 1px solid var(--ds-card-border);
+}
+
+.notification-pipeline-identifiers > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--ds-space-3) 0;
+  border-bottom: 1px solid var(--ds-card-border);
+}
+
+.notification-pipeline-identifiers dt,
+.notification-pipeline-identifiers dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-pipeline-identifiers dt {
+  color: var(--muted);
+  font-size: var(--ds-type-caption);
+  font-weight: 760;
+}
+
+.notification-pipeline-identifiers dd {
+  color: var(--ink);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .notification-reasoning-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -22383,6 +22576,18 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 
   .notification-reasoning-head {
     grid-template-columns: 1fr;
+  }
+
+  .notification-pipeline-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notification-pipeline-summary > span:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .notification-pipeline-stage > details > summary {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .notification-reasoning-trace-row li,

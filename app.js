@@ -24211,6 +24211,94 @@
     return trace && typeof trace === "object" ? trace : null;
   }
 
+  function notificationPipelineStatusMeta(status) {
+    var key = String(status || "missing");
+    var labels = {
+      completed: "완료",
+      conditional: "조건부",
+      "in-progress": "진행 중",
+      blocked: "차단",
+      failed: "실패",
+      missing: "기록 없음"
+    };
+    return {
+      label: labels[key] || key,
+      tone: key === "completed" ? "watch" : (key === "failed" || key === "blocked" ? "caution" : "hold")
+    };
+  }
+
+  function notificationPipelineDuration(value) {
+    var milliseconds = Number(value || 0);
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "소요시간 미기록";
+    if (milliseconds < 1000) return formatInteger(milliseconds) + "ms";
+    if (milliseconds < 60000) return (milliseconds / 1000).toFixed(milliseconds < 10000 ? 2 : 1) + "초";
+    return (milliseconds / 60000).toFixed(1) + "분";
+  }
+
+  function renderNotificationUnifiedPipeline(job) {
+    var trace = job && job.notificationTrace && typeof job.notificationTrace === "object"
+      ? job.notificationTrace
+      : {};
+    var pipeline = trace.pipeline && typeof trace.pipeline === "object" ? trace.pipeline : {};
+    var stages = Array.isArray(pipeline.stages) ? pipeline.stages : [];
+    if (!stages.length) {
+      return '<section class="notification-detail-section notification-pipeline-section unavailable"><strong>전체 처리 계보</strong><p>이 알림에는 통합 계보가 저장되지 않았습니다. 기존 추론 근거와 수명주기 기록은 아래에서 각각 확인할 수 있습니다.</p></section>';
+    }
+    var status = String(pipeline.status || "partial");
+    var statusMeta = {
+      complete: { label: "전체 단계 연결", tone: "watch" },
+      partial: { label: "일부 단계 확인 필요", tone: "hold" },
+      blocked: { label: "차단 단계 있음", tone: "caution" }
+    }[status] || { label: "계보 확인 필요", tone: "hold" };
+    var bottleneck = pipeline.bottleneck && typeof pipeline.bottleneck === "object" ? pipeline.bottleneck : {};
+    var links = pipeline.links && typeof pipeline.links === "object" ? pipeline.links : {};
+    var body = stages.map(function (stage, index) {
+      stage = stage && typeof stage === "object" ? stage : {};
+      var stageMeta = notificationPipelineStatusMeta(stage.status);
+      var identifiers = stage.identifiers && typeof stage.identifiers === "object" ? stage.identifiers : {};
+      var identifierRows = Object.keys(identifiers).filter(function (key) {
+        var value = identifiers[key];
+        return value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length);
+      });
+      var timing = [
+        stage.startedAt ? "시작 " + formatClock(stage.startedAt) : "시작 시각 미기록",
+        stage.completedAt && stage.completedAt !== stage.startedAt ? "완료 " + formatClock(stage.completedAt) : "",
+        notificationPipelineDuration(stage.durationMs)
+      ].filter(Boolean).join(" · ");
+      var disclosureKey = "notification-job:" + notificationJobKey(job) + ":pipeline:" + String(stage.key || index);
+      var disclosureOpen = Boolean(state.notificationDetailDisclosureOpen[disclosureKey]);
+      return [
+        '<li class="notification-pipeline-stage" data-pipeline-status="' + escapeHtml(stage.status || "missing") + '">',
+        '<span class="notification-pipeline-index" aria-hidden="true">' + escapeHtml(String(stage.sequence || index + 1)) + '</span>',
+        '<details data-notification-detail-disclosure-key="' + escapeHtml(disclosureKey) + '"' + (disclosureOpen ? ' open' : '') + '>',
+        '<summary><span><strong>' + escapeHtml(stage.title || "처리 단계") + '</strong><em>' + escapeHtml(stage.summary || "세부 기록을 확인하세요.") + '</em><i>' + escapeHtml(timing) + '</i></span><b class="tone-chip ' + escapeHtml(stageMeta.tone) + '">' + escapeHtml(stageMeta.label) + '</b></summary>',
+        '<div class="notification-pipeline-stage-detail">',
+        identifierRows.length ? '<dl class="notification-pipeline-identifiers">' + identifierRows.map(function (key) {
+          var value = identifiers[key];
+          var rendered = Array.isArray(value) ? value.join(" · ") : String(value);
+          return '<div><dt>' + escapeHtml(key) + '</dt><dd>' + escapeHtml(rendered) + '</dd></div>';
+        }).join("") + '</dl>' : '<p class="notification-reasoning-empty">이 단계의 연결 식별자가 기록되지 않았습니다.</p>',
+        '<details class="notification-ai-prompt-audit"><summary>이 단계의 전체 저장 데이터</summary><pre>' + escapeHtml(JSON.stringify(stage.details || {}, null, 2)) + '</pre></details>',
+        '</div>',
+        '</details>',
+        '</li>'
+      ].join("");
+    }).join("");
+    return [
+      '<section class="notification-detail-section notification-pipeline-section">',
+      '<div class="notification-reasoning-head"><div><strong>전체 처리 계보</strong><span>원천 이벤트부터 채널 전달까지 실제 저장 시각과 계약을 한 흐름으로 연결했습니다.</span></div><span class="tone-chip ' + escapeHtml(statusMeta.tone) + '">' + escapeHtml(statusMeta.label) + '</span></div>',
+      '<div class="notification-pipeline-summary">',
+      '<span><em>단계</em><strong>' + escapeHtml(String(stages.length)) + '</strong></span>',
+      '<span><em>완료</em><strong>' + escapeHtml(String(stages.filter(function (stage) { return stage.status === "completed"; }).length)) + '</strong></span>',
+      '<span><em>최장 구간</em><strong>' + escapeHtml(bottleneck.title ? bottleneck.title + " · " + notificationPipelineDuration(bottleneck.durationMs) : "측정값 없음") + '</strong></span>',
+      '</div>',
+      '<div class="notification-reasoning-provenance">' + Object.keys(links).filter(function (key) { return links[key]; }).map(function (key) { return '<code>' + escapeHtml(key + " " + links[key]) + '</code>'; }).join("") + '</div>',
+      '<ol class="notification-pipeline-flow">' + body + '</ol>',
+      '<details class="notification-ai-prompt-audit"><summary>전체 계보 JSON</summary><pre>' + escapeHtml(JSON.stringify(pipeline, null, 2)) + '</pre></details>',
+      '</section>'
+    ].join("");
+  }
+
   function renderNotificationLifecycleTrace(job) {
     var trace = job && job.notificationTrace && typeof job.notificationTrace === "object"
       ? job.notificationTrace
@@ -24673,6 +24761,13 @@
         deliveryDetails,
         "delivery",
         detailDisclosurePrefix + "delivery"
+      ),
+      renderNotificationDetailDisclosure(
+        "전체 처리 계보",
+        (((job.notificationTrace || {}).pipeline || {}).stageCount || 0) + "개 단계 · 원천 이벤트부터 전달까지",
+        renderNotificationUnifiedPipeline(job),
+        "lineage",
+        detailDisclosurePrefix + "lineage"
       ),
       renderNotificationDetailDisclosure(
         "추론 과정 상세",

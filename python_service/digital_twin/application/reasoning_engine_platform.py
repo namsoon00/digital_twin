@@ -248,6 +248,18 @@ class ReasoningEnginePlatformService:
             "deploymentRetirement": retirement,
         }
         candidate_id = str(control.candidate_deployment_id or "")
+        configured_v2_id = str(
+            self.settings.get("reasoningEngineV2DeploymentId") or ""
+        ).strip()
+        configured_v2 = dict(self.registry.get(configured_v2_id) or {})
+        independent_id = (
+            configured_v2_id
+            if str(configured_v2.get("engineVersion") or "").lower() == "v2"
+            and str(configured_v2.get("status") or "") != "retired"
+            else candidate_id
+        )
+        independent_release = self.release_identity(independent_id) if independent_id else {}
+        response["independentDeploymentId"] = independent_id
         candidate_release = self.release_identity(candidate_id) if candidate_id else {}
         if self.shadow_queue is not None:
             response["shadowQueue"] = self.shadow_queue.summary(
@@ -262,13 +274,24 @@ class ReasoningEnginePlatformService:
                 candidate_release_fingerprint=str(candidate_release.get("releaseFingerprint") or ""),
                 validation_cohort_id=str(candidate_release.get("validationCohortId") or ""),
             )
-        if self.independent_job_store is not None and candidate_id:
+        if self.independent_job_store is not None and independent_id:
             response["independentQueue"] = self.independent_queue_summary(
-                candidate_id,
-                candidate_release,
+                independent_id,
+                independent_release,
             )
-        if candidate_id:
-            response["promotionReadiness"] = self.promotion_readiness(candidate_id)
+        if independent_id and independent_id not in {
+            str(control.active_deployment_id or ""),
+            str(control.delivery_deployment_id or ""),
+        }:
+            response["promotionReadiness"] = self.promotion_readiness(independent_id)
+        elif independent_id:
+            response["promotionReadiness"] = {
+                "ready": True,
+                "mode": "active-v2",
+                "deploymentId": independent_id,
+                "blockers": [],
+                "health": dict(configured_v2.get("health") or {}),
+            }
         return response
 
     def register_v2_release(
@@ -644,11 +667,22 @@ class ReasoningEnginePlatformService:
             previous,
             expected_version=control.version,
         )
+        cleanup = self.supersede_inactive_pending_work(previous)
         return {
             "status": "promoted",
             "control": next_control.to_dict(),
             "promotionReadiness": dict(readiness or {}),
+            "previousDeploymentQueueCleanup": cleanup,
         }
+
+    def supersede_inactive_pending_work(self, deployment_id: str) -> Dict[str, object]:
+        cleanup = getattr(self.independent_job_store, "supersede_pending_deployment", None)
+        if not deployment_id or not callable(cleanup):
+            return {"status": "unsupported", "supersededCount": 0}
+        return dict(cleanup(
+            deployment_id,
+            "The reasoning deployment is inactive after a control-plane switch.",
+        ) or {})
 
     def promote(self, deployment_id: str, health: Mapping[str, object], comparison: Mapping[str, object]):
         row = self.registry.get(deployment_id)
@@ -705,4 +739,9 @@ class ReasoningEnginePlatformService:
             control.active_deployment_id,
             expected_version=control.version,
         )
-        return {"status": "rolled-back", "control": next_control.to_dict()}
+        cleanup = self.supersede_inactive_pending_work(control.active_deployment_id)
+        return {
+            "status": "rolled-back",
+            "control": next_control.to_dict(),
+            "previousDeploymentQueueCleanup": cleanup,
+        }

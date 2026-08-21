@@ -44,6 +44,30 @@ def event():
 
 
 class ReasoningIngressRouterTests(unittest.TestCase):
+    def test_v2_ingress_targets_only_the_configured_runnable_deployment(self):
+        class Connection:
+            def execute(self, sql, params=()):
+                if "FROM reasoning_engine_control" in sql:
+                    return Cursor({
+                        "active_deployment_id": "v2-r15",
+                        "delivery_deployment_id": "v2-r15",
+                        "candidate_deployment_id": "v2-r14",
+                    })
+                if "FROM reasoning_engine_deployments" in sql:
+                    return Cursor(many=[
+                        {"deployment_id": "v2-r14"},
+                        {"deployment_id": "v2-r15"},
+                    ])
+                if "FROM runtime_settings" in sql:
+                    assert params == ("reasoningEngineV2DeploymentId",)
+                    return Cursor({"value": "v2-r15"})
+                raise AssertionError("unexpected SQL: " + sql)
+
+        self.assertEqual(
+            ["v2-r15"],
+            MySQLReasoningEngineJobStore.target_deployments_with_connection(Connection()),
+        )
+
     @patch.object(MySQLReasoningEngineJobStore, "bind_source_boundaries_with_connection")
     @patch.object(MySQLReasoningEngineJobStore, "ingress_event_with_connection")
     @patch("digital_twin.infrastructure.mysql_reasoning_ingress.MySQLOntologyReasoningMailboxStore.ingress_event_with_connection")

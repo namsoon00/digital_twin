@@ -269,6 +269,46 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         )
         self.assertEqual("orbit-alpha-v2", result["deployment"]["graphStoreBinding"])
 
+    def test_active_v2_status_reads_the_configured_worker_queue_not_rollback_queue(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-r14": {"deploymentId": "v2-r14", "engineVersion": "v2", "status": "candidate"},
+                    "v2-r15": {"deploymentId": "v2-r15", "engineVersion": "v2", "status": "active", "health": {"status": "ready"}},
+                }
+
+            def upsert(self, item):
+                self.rows.setdefault(item.deployment_id, item.to_dict())
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return EngineControlState("v2-r15", "v2-r15", "v2-r14", 4)
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200, **kwargs):
+                del lookback, kwargs
+                return {"deploymentId": deployment_id, "pendingCount": 0}
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEngineV2DeploymentId": "v2-r15",
+                "reasoningEngineV1DeploymentId": "v1",
+            },
+            independent_job_store=Jobs(),
+        )
+
+        state = platform.initialize()
+
+        self.assertEqual("v2-r15", state["independentDeploymentId"])
+        self.assertEqual("v2-r15", state["independentQueue"]["deploymentId"])
+        self.assertEqual("active-v2", state["promotionReadiness"]["mode"])
+
     def test_cli_promotion_switches_control_and_active_graph_database_together(self):
         from digital_twin.infrastructure.cli import reasoning_engine_platform_command
 

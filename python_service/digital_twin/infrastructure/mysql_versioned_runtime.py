@@ -733,6 +733,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 for row in rows or []
                 if str(row.get("deployment_id") or "").strip()
             ]
+        configured_row = connection.execute(
+            "SELECT value FROM runtime_settings WHERE `key` = %s",
+            ("reasoningEngineV2DeploymentId",),
+        ).fetchone() or {}
+        configured = str(configured_row.get("value") or "").strip()
+        if configured and configured in deployments:
+            return [configured]
         # A cold-start race is repaired from the append-only domain event log.
         # Never invent an obsolete fallback deployment at ingress time.
         return sorted(set(deployments))
@@ -1830,6 +1837,39 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 """,
                 (str(reason or "")[:500], stamp, stamp, str(job_id or "")),
             )
+
+    def supersede_pending_deployment(
+        self,
+        deployment_id: str,
+        reason: str,
+    ) -> Dict[str, object]:
+        """Terminalize work for a deployment that no worker can consume."""
+
+        stamp = iso_utc()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = 'superseded', lease_owner = '', lease_expires_at = '',
+                    heartbeat_at = '', current_stage = '', stage_started_at = '',
+                    stage_updated_at = '', stage_details_json = NULL,
+                    available_at = '', last_error = %s,
+                    completed_at = %s, updated_at = %s
+                WHERE deployment_id = %s
+                  AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection')
+                """,
+                (
+                    str(reason or "")[:500],
+                    stamp,
+                    stamp,
+                    str(deployment_id or ""),
+                ),
+            )
+        return {
+            "status": "superseded",
+            "deploymentId": str(deployment_id or ""),
+            "supersededCount": int(getattr(cursor, "rowcount", 0) or 0),
+        }
 
     def retry(self, job_id: str, error: str, max_attempts: int = 3) -> Dict[str, object]:
         with self.transaction() as connection:

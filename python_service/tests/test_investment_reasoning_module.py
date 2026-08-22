@@ -85,6 +85,47 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
         self.assertEqual(CASE_SUPERSEDED, superseded.stage)
         self.assertTrue(superseded.completed_at)
 
+    def test_validated_context_observation_completes_when_delivery_is_suppressed(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+                "traceComplete": True,
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [])
+        orchestrator.decisions_synthesized(
+            reasoning_case.case_id,
+            [DecisionSynthesis(
+                synthesis_id="synthesis:observation",
+                account_id="account:1",
+                symbol="NVDA",
+                source_abox_snapshot_id="abox:1",
+                inference_generation_id="generation:1",
+                graph_candidate_action="NO_ACTION",
+                graph_trace_complete=True,
+            )],
+        )
+        validated = orchestrator.context_observation_validated(reasoning_case.case_id)
+
+        completed = orchestrator.complete_without_ai(
+            validated.case_id,
+            "반복 알림이므로 발송하지 않았습니다.",
+            source="typedb-delivery-suppressed",
+        )
+
+        self.assertEqual("COMPLETED", completed.stage)
+        self.assertTrue(completed.completed_at)
+        self.assertEqual("typedb-delivery-suppressed", completed.final_decision.source)
+
 
 def reasoning_request(fact_types=None):
     event = DomainEvent(

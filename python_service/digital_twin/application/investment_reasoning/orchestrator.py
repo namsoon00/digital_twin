@@ -513,7 +513,11 @@ class InvestmentReasoningOrchestrator:
             reason=str(reason or ""),
             published=False,
         )
-        if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
+        if reasoning_case.stage in {
+            CASE_HYPOTHESES_READY,
+            CASE_DECISION_SYNTHESIZED,
+            CASE_VALIDATED,
+        }:
             reasoning_case.transition(CASE_COMPLETED, reason)
         self.repository.save(reasoning_case)
         return reasoning_case

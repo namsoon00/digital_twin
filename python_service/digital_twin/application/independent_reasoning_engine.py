@@ -1137,10 +1137,19 @@ class V2ReasoningEngine:
                     retryable=retryable,
                 )
             elif not delivery_authorized or not ready_events or ai_handoff_status == "no-delivery-candidate":
+                if not delivery_authorized:
+                    completion_reason = "현재 v2 배포는 알림 발송 권한이 없어 TypeDB 판단까지만 완료했습니다."
+                    completion_source = "typedb-shadow"
+                elif not ready_events:
+                    completion_reason = "새롭거나 중요한 판단 변화가 없어 AI 판단 요청과 알림을 생성하지 않았습니다."
+                    completion_source = "typedb-no-material-change"
+                else:
+                    completion_reason = "반복·쿨다운·발송 정책을 통과한 새 알림이 없어 AI 판단 요청을 생성하지 않았습니다."
+                    completion_source = "typedb-delivery-suppressed"
                 reasoning_case = self.reasoning_orchestrator.complete_without_ai(
                     reasoning_case.case_id,
-                    "Shadow execution or delivery policy produced no AI judgement request.",
-                    source="typedb-shadow" if not delivery_authorized else "typedb-no-delivery",
+                    completion_reason,
+                    source=completion_source,
                 )
         source_ids = tuple(
             value["sourceAboxSnapshotId"] for value in identities.values()

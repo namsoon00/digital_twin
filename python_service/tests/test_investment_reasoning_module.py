@@ -149,7 +149,13 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
                             "counterEvidenceIds": ["evidence:weak-volume"],
                             "invalidationConditions": ["price recovery fails"],
                             "theoryFamily": knowledge_basis["theoryFamily"],
-                            "thesisFamily": knowledge_basis["thesisFamily"],
+                            "thesisFamily": "trend-continuation",
+                            "predictionTarget": "price-path",
+                            "expectedDirection": "support",
+                            "expectedOutcome": "risk-adjusted continuation",
+                            "competingFamilyIds": ["trend-break"],
+                            "outcomeMetric": "benchmark-adjusted-return",
+                            "falsificationContract": "opposite transition is observed",
                             "knowledgeBasis": knowledge_basis,
                         }],
                     },
@@ -768,6 +774,12 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         }])
 
         self.assertEqual(["hypothesis:recovery"], [item.hypothesis_id for item in graph_hypotheses])
+        self.assertEqual("price-path", graph_hypotheses[0].prediction_target)
+        self.assertEqual("support", graph_hypotheses[0].expected_direction)
+        self.assertEqual("risk-adjusted continuation", graph_hypotheses[0].expected_outcome)
+        self.assertEqual(("trend-break",), graph_hypotheses[0].competing_family_ids)
+        self.assertEqual("benchmark-adjusted-return", graph_hypotheses[0].outcome_metric)
+        self.assertEqual("opposite transition is observed", graph_hypotheses[0].falsification_contract)
         self.assertEqual((), invented_hypotheses)
 
     def test_hypothesis_manager_filters_other_subjects_and_generations(self):

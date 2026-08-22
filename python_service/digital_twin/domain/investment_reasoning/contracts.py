@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, Mapping, Tuple
 
+from ..hypothesis_catalog import hypothesis_family_definition
 from ..ontology_rule_knowledge import rule_knowledge_basis_from_rows
 
 from ..ontology_change_impact import requested_scope_families_for_event_fact_types
@@ -130,6 +131,12 @@ class HypothesisRecord:
     theory_family: str = ""
     thesis_family: str = ""
     evidence_independence_key: str = ""
+    prediction_target: str = ""
+    expected_direction: str = ""
+    expected_outcome: str = ""
+    competing_family_ids: Tuple[str, ...] = ()
+    outcome_metric: str = ""
+    falsification_contract: str = ""
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
     account_id: str = ""
     subject_symbol: str = ""
@@ -148,6 +155,13 @@ class HypothesisRecord:
         ).to_dict() if primary_rule_id else dict(
             payload.get("knowledgeBasis") or payload.get("knowledge_basis") or {}
         )
+        thesis_family = str(
+            payload.get("thesisFamily")
+            or payload.get("thesis_family")
+            or knowledge_basis.get("thesisFamily")
+            or ""
+        )
+        family_definition = hypothesis_family_definition(thesis_family)
         return cls(
             hypothesis_id=str(payload.get("hypothesisId") or payload.get("hypothesis_id") or ""),
             family_id=str(payload.get("familyId") or payload.get("family_id") or ""),
@@ -169,17 +183,42 @@ class HypothesisRecord:
                 or knowledge_basis.get("theoryFamily")
                 or ""
             ),
-            thesis_family=str(
-                payload.get("thesisFamily")
-                or payload.get("thesis_family")
-                or knowledge_basis.get("thesisFamily")
-                or ""
-            ),
+            thesis_family=thesis_family,
             evidence_independence_key=str(
                 payload.get("evidenceIndependenceKey")
                 or payload.get("evidence_independence_key")
                 or knowledge_basis.get("evidenceIndependenceKey")
                 or ""
+            ),
+            prediction_target=str(
+                payload.get("predictionTarget")
+                or payload.get("prediction_target")
+                or (family_definition.prediction_target if family_definition else "")
+            ),
+            expected_direction=str(
+                payload.get("expectedDirection")
+                or payload.get("expected_direction")
+                or (family_definition.expected_direction if family_definition else "")
+            ),
+            expected_outcome=str(
+                payload.get("expectedOutcome")
+                or payload.get("expected_outcome")
+                or (family_definition.expected_outcome if family_definition else "")
+            ),
+            competing_family_ids=_texts(
+                payload.get("competingFamilyIds")
+                or payload.get("competing_family_ids")
+                or (family_definition.competing_family_ids if family_definition else ())
+            ),
+            outcome_metric=str(
+                payload.get("outcomeMetric")
+                or payload.get("outcome_metric")
+                or (family_definition.outcome_metric if family_definition else "")
+            ),
+            falsification_contract=str(
+                payload.get("falsificationContract")
+                or payload.get("falsification_contract")
+                or (family_definition.falsification_contract if family_definition else "")
             ),
             knowledge_basis=knowledge_basis,
             account_id=str(payload.get("accountId") or payload.get("account_id") or ""),
@@ -196,6 +235,7 @@ class HypothesisRecord:
         for key in [
             "supporting_rule_ids", "supporting_evidence_ids", "counter_evidence_ids",
             "causal_trace_ids", "assumptions", "invalidation_conditions",
+            "competing_family_ids",
         ]:
             payload[key] = list(payload[key])
         return payload

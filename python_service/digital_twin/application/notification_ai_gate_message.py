@@ -3037,6 +3037,25 @@ def _notification_company_value_summary(context: Dict[str, object]) -> List[str]
     return rows
 
 
+def _investment_view_row(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> str:
+    detail = compact_sentence_count(
+        customer_visible_ai_text(response.investment_view or response.summary),
+        2,
+    )
+    if is_typedb_context_observation_notification(context or {}):
+        detail = detail or "이 알림 자체는 매수·매도 판단이 아닙니다."
+    elif compact_reason_is_internal(detail):
+        detail = ""
+    label = (
+        action_label_for_action(response.investment_view_action, context)
+        if response.investment_view_action else ""
+    )
+    return (("종목 의견: " + label + ". ") if label else "") + detail
+
+
 def _notification_selected_inference_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
@@ -3095,7 +3114,7 @@ def execution_telegram_message_progressive(
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
     ]
-    investment_view = compact_sentence_count(customer_visible_ai_text(response.investment_view or response.summary), 2)
+    investment_view = _investment_view_row(context, response)
     if investment_view:
         parts.extend(["", "<b>투자 관점</b>", _html_bullet(investment_view, level)])
     parts.extend([
@@ -3152,13 +3171,18 @@ def execution_telegram_message_compact_beginner(
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+    ]
+    investment_view = _investment_view_row(context, response)
+    if investment_view:
+        parts.extend(["", "<b>투자 관점</b>", _html_bullet(investment_view, level)])
+    parts.extend([
         "",
         "<b>지금 행동</b>",
         _html_bullet(
             compact_current_action_line(context, response),
             level,
         ),
-    ]
+    ])
     transition = compact_decision_transition(context, response)
     if transition:
         parts.extend(["", "<b>이번 변화</b>", _html_bullet(transition, level)])

@@ -51,6 +51,9 @@ def entry_context():
             "actionEnvelope": {
                 "status": "ENTRY_ELIGIBLE",
                 "statusLabel": "소액 진입 조건 성립",
+                "investmentViewAction": "BUY",
+                "executionAction": "BUY",
+                "executionDisposition": "ready",
                 "preferredAction": "BUY",
                 "targetRole": "watchlist",
                 "allowedActions": ["BUY", "HOLD", "AVOID"],
@@ -76,6 +79,29 @@ def entry_context():
 
 
 class ActionEnvelopeAiGateTests(unittest.TestCase):
+    def test_local_fallback_preserves_investment_view_when_policy_defers_execution(self):
+        context = entry_context()
+        context["messageDeliveryLevel"] = "beginner"
+        context["ontologyRelationContext"]["actionEnvelope"].update({
+            "status": "ENTRY_DEFERRED",
+            "investmentViewAction": "BUY",
+            "executionAction": "HOLD",
+            "executionDisposition": "constrained",
+            "preferredAction": "HOLD",
+            "selectedRuleId": "graph.entry.confirmed.v1",
+            "portfolioConstraintRuleIds": ["graph.portfolio.position_limit.v1"],
+        })
+
+        response = local_validated_ai_response(context, source="typedb-fallback")
+        message = execution_telegram_message(context, response)
+
+        self.assertEqual("BUY", response.investment_view_action)
+        self.assertEqual("HOLD", response.execution_action)
+        self.assertEqual("HOLD", response.action)
+        self.assertEqual(["graph.portfolio.position_limit.v1"], response.portfolio_constraint_rule_ids)
+        self.assertIn("종목 의견: 소액 진입 검토", message)
+        self.assertIn("관심 유지", message)
+
     def test_ai_input_receives_typedb_envelope_and_transition(self):
         context = entry_context()
         context["previousInvestmentDecisionEpisode"] = {

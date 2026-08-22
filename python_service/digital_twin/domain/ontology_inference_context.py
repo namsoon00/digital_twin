@@ -374,9 +374,16 @@ def relation_context_from_inferencebox(
     matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
     if not matches:
         return {}
-    decision = decision_from_inference(facts, matches, relations, traces, source_name=source_name)
-    action_envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
     assessment_bundle = decision_assessment_bundle(matches, relations)
+    decision = decision_from_inference(
+        facts,
+        matches,
+        relations,
+        traces,
+        source_name=source_name,
+        assessment_bundle=assessment_bundle,
+    )
+    action_envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
     execution_plan = execution_plan_from_relation_context(facts, decision, matches)
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
@@ -420,8 +427,10 @@ def relation_context_from_inferencebox(
             "traces": traces,
         },
         "hypothesisPolicy": {
-            "minimumComparisonCount": (settings or {}).get("investmentBrainMinimumHypothesisCount") or 3,
-            "maximumComparisonCount": (settings or {}).get("investmentBrainMaximumHypothesisCount") or 8,
+            "minimumIndependentEvidenceFamilies": (
+                (settings or {}).get("investmentBrainMinimumIndependentEvidenceFamilies") or 1
+            ),
+            "maximumComparisonCount": (settings or {}).get("investmentBrainMaximumHypothesisCount") or 4,
         },
     })
     investment_brain = attach_abox_hypothesis_calibrations(
@@ -1197,6 +1206,7 @@ def action_envelope_from_inference(
     facts: Dict[str, object],
     matches: List[OntologyRuleMatch],
     relations: List[Dict[str, object]],
+    assessment_bundle: Dict[str, object] = None,
 ) -> Dict[str, object]:
     """Combine TypeDB relation effects into one bounded action envelope.
 
@@ -1208,6 +1218,12 @@ def action_envelope_from_inference(
     """
 
     facts = facts or {}
+    assessment_bundle = dict(assessment_bundle or decision_assessment_bundle(matches, relations))
+    investment_opinion = dict(assessment_bundle.get("investmentOpinion") or {})
+    portfolio_fit = dict(assessment_bundle.get("portfolioFit") or {})
+    execution_readiness = dict(assessment_bundle.get("executionReadiness") or {})
+    evidence_quality = dict(assessment_bundle.get("evidenceQuality") or {})
+    recommended_plan = dict(assessment_bundle.get("recommendedPlan") or {})
     entries: List[Dict[str, object]] = []
     excluded_entries: List[Dict[str, object]] = []
     blocked_policy_entries: List[Dict[str, object]] = []
@@ -1288,45 +1304,48 @@ def action_envelope_from_inference(
 
     by_effect = {effect: [item for item in entries if item["effect"] == effect] for effect in ("support", "defer", "constrain", "block")}
     partial = [item for item in entries if str(item["match"].data_state or "").lower() == "partial"]
+    opinion_rule_ids = set(investment_opinion.get("ruleIds") or [])
+    opinion_entries = [item for item in entries if item["match"].rule_id in opinion_rule_ids]
+    selected_opinion_rule_id = str(investment_opinion.get("selectedRuleId") or "").strip()
+    selected_entry = next(
+        (item for item in opinion_entries if item["match"].rule_id == selected_opinion_rule_id),
+        None,
+    )
+    if selected_entry is None and opinion_entries:
+        selected_entry = min(opinion_entries, key=lambda item: semantic_relation_sort_key(item["relation"]))
+        selected_opinion_rule_id = selected_entry["match"].rule_id
+    investment_view_action = str(investment_opinion.get("candidateAction") or "").strip().upper()
+    opinion_effect_counts = dict(investment_opinion.get("decisionEffectCounts") or {})
+    opinion_deferred = bool(opinion_effect_counts.get("defer"))
+    quality_blocked = bool(evidence_quality.get("judgementBlocked"))
+    execution_blocked = execution_readiness.get("status") == "blocked"
+    if not investment_view_action or quality_blocked or execution_blocked:
+        execution_action = "NO_ACTION"
+    elif target_role == WATCHLIST_TARGET_ROLE and investment_view_action == "BUY" and opinion_deferred:
+        execution_action = "HOLD"
+    elif investment_view_action in set(blocked_actions) or (
+        allowed_actions and investment_view_action not in set(allowed_actions)
+    ):
+        execution_action = "HOLD" if "HOLD" not in set(blocked_actions) else "NO_ACTION"
+    else:
+        execution_action = investment_view_action
 
-    if not entries:
+    if not investment_view_action or quality_blocked:
         status = "JUDGEMENT_BLOCKED"
-        driving = []
-        preferred_action = "HOLD"
-    elif by_effect["block"]:
-        status = "ENTRY_BLOCKED" if target_role == WATCHLIST_TARGET_ROLE else "JUDGEMENT_BLOCKED"
-        driving = by_effect["block"]
-        preferred_action = "HOLD"
-    elif target_role == WATCHLIST_TARGET_ROLE and by_effect["support"] and not by_effect["defer"]:
+    elif target_role == WATCHLIST_TARGET_ROLE and investment_view_action == "BUY" and execution_action == "BUY":
         status = "ENTRY_ELIGIBLE"
-        driving = by_effect["support"]
-        preferred_action = "BUY"
-    elif target_role == WATCHLIST_TARGET_ROLE and by_effect["support"]:
-        status = "ENTRY_DEFERRED"
-        driving = by_effect["defer"] + by_effect["support"]
-        preferred_action = "HOLD"
-    elif target_role == WATCHLIST_TARGET_ROLE and by_effect["defer"]:
-        status = "ENTRY_DEFERRED"
-        driving = by_effect["defer"]
-        preferred_action = "HOLD"
+    elif target_role == WATCHLIST_TARGET_ROLE and investment_view_action == "BUY":
+        status = "ENTRY_BLOCKED" if execution_blocked or "BUY" in set(blocked_actions) else "ENTRY_DEFERRED"
     elif target_role == WATCHLIST_TARGET_ROLE:
         status = "ENTRY_OBSERVING"
-        driving = by_effect["constrain"] or entries
-        preferred_action = "HOLD"
     else:
         status = "HOLDING_REVIEW"
-        driving = entries
-        selected = min(driving, key=lambda item: semantic_relation_sort_key(item["relation"])) if driving else None
-        preferred_action = str(
-            (selected or {}).get("relation", {}).get("candidateAction")
-            or ((selected or {}).get("match").candidate_action if selected else "")
-            or "HOLD"
-        ).strip().upper()
+    driving = opinion_entries
+    preferred_action = execution_action
 
-    if preferred_action in set(blocked_actions) or (allowed_actions and preferred_action not in set(allowed_actions)):
-        preferred_action = "HOLD"
-
-    if target_role == WATCHLIST_TARGET_ROLE:
+    if not investment_view_action:
+        ai_allowed_actions = []
+    elif target_role == WATCHLIST_TARGET_ROLE:
         if status == "ENTRY_ELIGIBLE":
             ai_allowed_actions = [code for code in ["BUY", "HOLD", "AVOID"] if code in allowed_actions and code not in blocked_actions]
         elif status in {"ENTRY_DEFERRED", "ENTRY_OBSERVING", "ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"}:
@@ -1335,7 +1354,7 @@ def action_envelope_from_inference(
             ai_allowed_actions = [code for code in allowed_actions if code not in blocked_actions]
     else:
         ai_allowed_actions = [code for code in allowed_actions if code not in blocked_actions]
-    if not ai_allowed_actions and preferred_action:
+    if not ai_allowed_actions and preferred_action and preferred_action != "NO_ACTION":
         ai_allowed_actions = [preferred_action]
 
     blocked_rule_ids = unique_texts(
@@ -1347,22 +1366,18 @@ def action_envelope_from_inference(
         for item in blocked_policy_entries
         if item.get("reason") == "missing-decision-effect"
     )[:8]
-    data_state = (
-        "unavailable"
-        if not entries
-        else ("partial" if partial else "sufficient")
-    )
+    data_state = "unavailable" if not opinion_entries else ("partial" if partial else "sufficient")
     data_readiness = {
         "state": (
             "blocked"
-            if not entries
+            if not opinion_entries
             else ("partial" if partial else "ready")
         ),
         "dataState": data_state,
-        "usable": bool(entries),
+        "usable": bool(opinion_entries),
         "blockedRuleIds": blocked_rule_ids,
         "excludedRuleIds": unique_texts([item["match"].rule_id for item in excluded_entries])[:12],
-        "eligibleRuleIds": unique_texts([item["match"].rule_id for item in entries])[:12],
+        "eligibleRuleIds": unique_texts([item["match"].rule_id for item in opinion_entries])[:12],
         "partialRuleIds": unique_texts([item["match"].rule_id for item in partial])[:8],
         "requiredDomains": unique_texts(
             domain
@@ -1385,21 +1400,23 @@ def action_envelope_from_inference(
         return values[:6]
 
     status_label = ACTION_ENVELOPE_STATUS_LABELS.get(status, "조건 확인")
-    selected_entry = min(driving, key=lambda item: semantic_relation_sort_key(item["relation"])) if driving else None
     return {
-        "version": "typedb-action-envelope-v2",
+        "version": "typedb-action-envelope-v3",
         "source": "typedb-materialized-decision-effects",
         "status": status,
         "statusLabel": status_label,
         "targetRole": target_role,
         "actionPolicy": action_policy,
+        "investmentViewAction": investment_view_action,
+        "executionAction": execution_action,
+        "executionDisposition": str(recommended_plan.get("status") or "judgement-blocked"),
         "preferredAction": preferred_action,
         "allowedActions": allowed_actions,
         "blockedActions": blocked_actions,
         "aiAllowedActions": ai_allowed_actions,
         "aiMayUpgradeToBuy": bool(target_role == WATCHLIST_TARGET_ROLE and status == "ENTRY_ELIGIBLE"),
         "aiMayDowngrade": bool(preferred_action and len(ai_allowed_actions) > 1),
-        "judgementBlocked": bool(not entries or by_effect["block"]),
+        "judgementBlocked": bool(not investment_view_action or quality_blocked),
         "dataReadiness": data_readiness,
         "missingDecisionEffectRuleIds": missing_effect_rule_ids,
         "supportRuleIds": rule_ids("support"),
@@ -1407,8 +1424,12 @@ def action_envelope_from_inference(
         "constraintRuleIds": rule_ids("constrain"),
         "blockingRuleIds": rule_ids("block"),
         "drivingRuleIds": unique_texts([item["match"].rule_id for item in driving])[:8],
-        "selectedRuleId": str((selected_entry or {}).get("match").rule_id if selected_entry else ""),
+        "selectedRuleId": selected_opinion_rule_id,
         "selectedDecisionEffect": str((selected_entry or {}).get("effect") or ""),
+        "portfolioConstraintRuleIds": list(portfolio_fit.get("ruleIds") or []),
+        "executionConstraintRuleIds": list(execution_readiness.get("ruleIds") or []),
+        "dataQualityRuleIds": list(evidence_quality.get("ruleIds") or []),
+        "assessmentBundleVersion": str(assessment_bundle.get("version") or ""),
         "inferenceEligibilityAssessments": [
             {
                 "tboxClass": "InferenceEligibilityAssessment",
@@ -1431,8 +1452,8 @@ def action_envelope_from_inference(
         ],
         "coreInferenceSelection": {
             "tboxClass": "CoreInferenceSelection",
-            "selectedRuleId": str((selected_entry or {}).get("match").rule_id if selected_entry else ""),
-            "eligibleRuleIds": unique_texts([item["match"].rule_id for item in entries])[:12],
+            "selectedRuleId": selected_opinion_rule_id,
+            "eligibleRuleIds": unique_texts([item["match"].rule_id for item in opinion_entries])[:12],
             "excludedRuleIds": unique_texts([item["match"].rule_id for item in excluded_entries])[:12],
             "selectionBasis": "fresh-usable-typedb-inference",
         },
@@ -1453,7 +1474,11 @@ def decision_from_inference(
     relations: List[Dict[str, object]],
     traces: List[Dict[str, object]],
     source_name: str = "typedbInferenceBox",
+    assessment_bundle: Dict[str, object] = None,
 ) -> Dict[str, object]:
+    assessment_bundle = dict(assessment_bundle or decision_assessment_bundle(matches, relations))
+    investment_opinion = dict(assessment_bundle.get("investmentOpinion") or {})
+    opinion_rule_ids = set(investment_opinion.get("ruleIds") or [])
     active = [
         item
         for item in matches
@@ -1462,9 +1487,15 @@ def decision_from_inference(
         and str((item.evidence_state or {}).get("inferenceEligibilityStatus") or "eligible") == "eligible"
         and decision_stage_from_relation(relation_for_match(item, relations)) is not None
         and decision_effect_from_relation(relation_for_match(item, relations))
+        and item.rule_id in opinion_rule_ids
     ]
     candidates = active
-    action_envelope = action_envelope_from_inference(facts, matches, relations)
+    action_envelope = action_envelope_from_inference(
+        facts,
+        matches,
+        relations,
+        assessment_bundle=assessment_bundle,
+    )
     if not candidates:
         missing_effect_rule_ids = list(action_envelope.get("missingDecisionEffectRuleIds") or [])
         missing_stage = any(
@@ -1473,14 +1504,17 @@ def decision_from_inference(
             if item.matched
         )
         return {
-            "label": "TypeDB 판단 효과 누락" if missing_effect_rule_ids else "TypeDB 판단 정책 누락",
+            "label": (
+                "TypeDB 판단 효과 누락"
+                if missing_effect_rule_ids else "예측 가설 미성립"
+            ),
             "tone": "caution",
             "basis": source_name,
             "selectedRuleId": "",
             "selectionRole": (
                 "blocked-missing-typedb-decision-effect"
                 if missing_effect_rule_ids
-                else "blocked-missing-typedb-decision-policy"
+                else "blocked-no-predictive-hypothesis"
             ),
             "finalDecisionOwner": "typedb-schema-function-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
@@ -1500,7 +1534,7 @@ def decision_from_inference(
             "stagePolicySource": (
                 "missingTypeDbDecisionEffect"
                 if missing_effect_rule_ids
-                else ("missingTypeDbDecisionStage" if missing_stage else "typedbActionEnvelopeBlocked")
+                else ("missingTypeDbDecisionStage" if missing_stage else "typedbPredictiveHypothesisRequired")
             ),
             "judgementBlocked": True,
             "actionPolicyApplied": False,
@@ -1575,7 +1609,7 @@ def decision_from_inference(
         or ""
     ).strip().upper()
     candidate_action = str(
-        action_envelope.get("preferredAction")
+        action_envelope.get("investmentViewAction")
         or materialized_candidate_action
     ).strip().upper()
     allowed_actions = {
@@ -1591,16 +1625,11 @@ def decision_from_inference(
     # This is a target-role safety boundary.  It consumes the action authored
     # by the materialized RuleBox relation and never derives an action from a
     # stage name or an action group in Python.
+    execution_action = str(action_envelope.get("executionAction") or "NO_ACTION").strip().upper()
     action_policy_applied = bool(
-        action_policy.get("targetRole") == WATCHLIST_TARGET_ROLE
-        and materialized_candidate_action
-        and (
-            materialized_candidate_action in blocked_actions
-            or (allowed_actions and materialized_candidate_action not in allowed_actions)
-        )
+        candidate_action
+        and execution_action not in {candidate_action, ""}
     )
-    if action_policy_applied:
-        candidate_action = "HOLD"
     trace = next((item for item in traces if str(item.get("ruleId") or "") == selected.rule_id), {})
     materialized_label = str(
         relation.get("decisionLabel")
@@ -1645,6 +1674,8 @@ def decision_from_inference(
         "primaryAction": str(relation.get("primaryAction") or relation.get("primary_action") or selected.primary_action or ""),
         "primaryActionLabel": str(relation.get("primaryActionLabel") or relation.get("primary_action_label") or selected.primary_action_label or materialized_label),
         "candidateAction": candidate_action,
+        "investmentViewAction": candidate_action,
+        "executionAction": execution_action,
         # Preserve the action authored by the selected TypeDB relation for
         # target-role policy rendering. The envelope may deliberately narrow
         # it to HOLD, but a holding-only action on a watchlist item still has

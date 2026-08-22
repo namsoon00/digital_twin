@@ -215,6 +215,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for rule in rules
             if rule.enabled
         ))
+        self.assertTrue(all(
+            not derivation.candidate_action
+            for rule in rules
+            if rule.resolved_knowledge_basis.rule_kind != "predictive-hypothesis"
+            for derivation in rule.derivations
+        ))
+        self.assertTrue(all(
+            derivation.candidate_action
+            for rule in rules
+            if rule.enabled and rule.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
+            for derivation in rule.derivations
+        ))
 
         profit_harvest = rules_by_id["graph.profit_harvest.path_deceleration.v1"]
         temporal_conditions = [

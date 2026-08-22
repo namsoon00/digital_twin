@@ -481,6 +481,8 @@ def with_rulebox_execution_guidance(rules: List[GraphInferenceRule]) -> List[Gra
 
     enriched: List[GraphInferenceRule] = []
     for rule in rules or []:
+        knowledge_basis = resolved_rule_knowledge_basis(rule)
+        authors_investment_action = knowledge_basis.rule_kind == "predictive-hypothesis"
         derivations = []
         for derivation in rule.derivations or []:
             stage = str(derivation.decision_stage or "").strip()
@@ -510,8 +512,14 @@ def with_rulebox_execution_guidance(rules: List[GraphInferenceRule]) -> List[Gra
                 primary_action_label=derivation.primary_action_label or str(guidance.get("primaryActionLabel") or derivation.decision_label or rule.label),
                 allowed_actions=list(derivation.allowed_actions or guidance.get("allowedActions") or []),
                 blocked_actions=list(derivation.blocked_actions or guidance.get("blockedActions") or []),
-                candidate_action=derivation.candidate_action or str(guidance.get("candidateAction") or "HOLD"),
-                candidate_action_label=derivation.candidate_action_label or str(guidance.get("candidateActionLabel") or ""),
+                candidate_action=(
+                    derivation.candidate_action or str(guidance.get("candidateAction") or "HOLD")
+                    if authors_investment_action else ""
+                ),
+                candidate_action_label=(
+                    derivation.candidate_action_label or str(guidance.get("candidateActionLabel") or "")
+                    if authors_investment_action else ""
+                ),
                 blocked_action_labels=list(derivation.blocked_action_labels or guidance.get("blockedActionLabels") or []),
                 strengthen_conditions=list(derivation.strengthen_conditions or guidance.get("strengthenConditions") or []),
                 weaken_conditions=list(derivation.weaken_conditions or guidance.get("weakenConditions") or []),

@@ -25,7 +25,13 @@ class OntologyInferencePort(Protocol):
 
 
 class HypothesisManagerPort(Protocol):
-    def from_candidates(self, candidates: Iterable[object]):
+    def from_candidates(
+        self,
+        candidates: Iterable[object],
+        subject_symbols: Iterable[str] = (),
+        inference_generation_ids: Iterable[str] = (),
+        account_ids: Iterable[str] = (),
+    ):
         ...
 
     def from_ai_context(self, context: Mapping[str, object]):

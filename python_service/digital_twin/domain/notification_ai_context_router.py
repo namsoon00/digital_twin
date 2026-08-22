@@ -175,6 +175,9 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
                 "familySource", "mergedRuleCount", "stance", "evidenceState",
                 "verificationStatus", "approvalStatus", "scopeState", "horizon",
                 "marketHypothesisId", "accountHypothesisOverlayId",
+                "candidateAction", "predictionTarget", "expectedDirection",
+                "expectedOutcome", "outcomeMetric", "falsificationContract",
+                "inferenceGenerationId",
             ),
         )
         row["claim"] = _sentence_text(item.get("claim"), 320)
@@ -583,7 +586,13 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             "previousAction": _mapping(decision_state.get("previousFinalDecision")).get("action"),
             "precomputedActionCandidate": decision_state.get("precomputedActionCandidate"),
             "typeDbDecision": _selected(decision_state.get("decision"), ("primaryAction", "decisionEffect", "judgementBlocked", "targetRole")),
-            "actionEnvelope": _selected(envelope, ("status", "preferredAction", "allowedActions", "blockedActions", "judgementBlocked", "selectedRuleId", "blockingRuleIds", "targetRole")),
+            "actionEnvelope": _selected(envelope, (
+                "status", "investmentViewAction", "executionAction", "executionDisposition",
+                "allowedActions", "blockedActions", "aiAllowedActions",
+                "judgementBlocked", "selectedRuleId", "drivingRuleIds", "blockingRuleIds",
+                "portfolioConstraintRuleIds", "executionConstraintRuleIds", "dataQualityRuleIds",
+                "assessmentBundleVersion", "targetRole",
+            )),
             "transition": _selected(decision_state.get("decisionTransition"), ("kind", "changed", "material", "previousAction", "currentAction", "summary")),
             "readiness": _selected(
                 decision_state.get("systemReadiness"),
@@ -722,6 +731,31 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     )
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "reference-trimmed"
+        return fitted
+    fitted["hypothesisSet"]["hypotheses"] = [
+        {
+            **_selected(item, (
+                "hypothesisId", "templateId", "familyId", "stance", "candidateAction",
+                "predictionTarget", "expectedDirection", "expectedOutcome", "outcomeMetric",
+                "evidenceState", "verificationStatus", "approvalStatus", "scopeState", "horizon",
+                "inferenceGenerationId",
+            )),
+            "claim": _sentence_text(item.get("claim"), 140),
+            "supportingRuleIds": _unique(item.get("supportingRuleIds") or [], 3),
+            "supportingEvidenceIds": _unique(item.get("supportingEvidenceIds") or [], 2),
+            "counterEvidenceIds": _unique(item.get("counterEvidenceIds") or [], 2),
+            "invalidationConditions": _unique(item.get("invalidationConditions") or [], 1),
+        }
+        for item in fitted.get("hypothesisSet", {}).get("hypotheses") or []
+        if isinstance(item, dict)
+    ]
+    fitted["evidenceLedger"] = list(fitted.get("evidenceLedger") or [])[:4]
+    fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
+        fitted["evidenceLedger"]
+    )
+    fitted["dataLimits"] = list(fitted.get("dataLimits") or [])[:3]
+    if _json_bytes(fitted) <= budget:
+        fitted["routingAudit"]["status"] = "decision-contract-compacted"
         return fitted
     raise ValueError(
         "AI decision core cannot preserve TypeDB hypotheses within "

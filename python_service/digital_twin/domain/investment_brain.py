@@ -19,6 +19,7 @@ from .hypothesis_scoping import (
     UNVERIFIED_SCOPE,
     inference_scope_assessment,
 )
+from .hypothesis_catalog import hypothesis_family_definition
 from .hypothesis_outcome_contract import (
     HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
     default_directional_criteria,
@@ -239,6 +240,13 @@ class HypothesisTemplate:
     theory_family: str = ""
     thesis_family: str = ""
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
+    prediction_target: str = ""
+    expected_direction: str = ""
+    expected_outcome: str = ""
+    default_horizon: str = ""
+    competing_family_ids: List[str] = field(default_factory=list)
+    outcome_metric: str = ""
+    falsification_contract: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -380,6 +388,14 @@ class InvestmentHypothesis:
     theory_family: str = ""
     thesis_family: str = ""
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
+    prediction_target: str = ""
+    expected_direction: str = ""
+    expected_outcome: str = ""
+    competing_family_ids: List[str] = field(default_factory=list)
+    outcome_metric: str = ""
+    falsification_contract: str = ""
+    inference_generation_id: str = ""
+    candidate_action: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         payload = camelize(asdict(self))
@@ -454,7 +470,8 @@ class HypothesisSet:
     question_id: str
     hypotheses: List[InvestmentHypothesis]
     comparison_required: bool = True
-    minimum_comparison_count: int = 3
+    minimum_comparison_count: int = 1
+    comparison_policy: str = "primary-counter-or-explicit-gap"
     inference_generation_id: str = ""
     families: List[HypothesisFamily] = field(default_factory=list)
     market_hypotheses: List[MarketHypothesis] = field(default_factory=list)
@@ -638,6 +655,14 @@ class DecisionEpisode:
                 theory_family=str(item.get("theoryFamily") or item.get("theory_family") or ""),
                 thesis_family=str(item.get("thesisFamily") or item.get("thesis_family") or ""),
                 knowledge_basis=dict(item.get("knowledgeBasis") or item.get("knowledge_basis") or {}),
+                prediction_target=str(item.get("predictionTarget") or item.get("prediction_target") or ""),
+                expected_direction=str(item.get("expectedDirection") or item.get("expected_direction") or ""),
+                expected_outcome=str(item.get("expectedOutcome") or item.get("expected_outcome") or ""),
+                competing_family_ids=list(item.get("competingFamilyIds") or item.get("competing_family_ids") or []),
+                outcome_metric=str(item.get("outcomeMetric") or item.get("outcome_metric") or ""),
+                falsification_contract=str(item.get("falsificationContract") or item.get("falsification_contract") or ""),
+                inference_generation_id=str(item.get("inferenceGenerationId") or item.get("inference_generation_id") or ""),
+                candidate_action=str(item.get("candidateAction") or item.get("candidate_action") or "").strip().upper(),
             ))
         families = []
         for item in hypothesis_payload.get("families") or []:
@@ -755,6 +780,11 @@ class DecisionEpisode:
                 hypothesis_payload.get("minimumComparisonCount")
                 if hypothesis_payload.get("minimumComparisonCount") not in (None, "")
                 else (0 if hypothesis_payload.get("comparisonRequired") is False else 3)
+            ),
+            comparison_policy=str(
+                hypothesis_payload.get("comparisonPolicy")
+                or hypothesis_payload.get("comparison_policy")
+                or "legacy-fixed-count"
             ),
             inference_generation_id=str(hypothesis_payload.get("inferenceGenerationId") or ""),
             families=families,
@@ -1483,7 +1513,7 @@ def build_competing_hypotheses(
     match_rows = [dict(item) for item in matches or [] if isinstance(item, dict)]
     policy = policy if isinstance(policy, dict) else {}
     scope_context = scope_context if isinstance(scope_context, dict) else {}
-    minimum_count = int_setting(policy.get("minimumComparisonCount"), 3, 2, 6)
+    minimum_count = int_setting(policy.get("minimumIndependentEvidenceFamilies"), 1, 1, 6)
     maximum_count = int_setting(policy.get("maximumComparisonCount"), 8, minimum_count, 12)
     hypothesis_seed = stable_id("hypothesis-set", question.question_id, inference_generation_id, symbol)
     rule_keys = ordered_rule_ids(match_rows, trace_rows, relation_rows)
@@ -1493,6 +1523,7 @@ def build_competing_hypotheses(
             symbol,
             name,
             question,
+            inference_generation_id,
             rule_id,
             relations_for_rule(relation_rows, rule_id),
             traces_for_rule(trace_rows, rule_id),
@@ -1532,6 +1563,7 @@ def build_competing_hypotheses(
         question_id=question.question_id,
         hypotheses=hypotheses,
         minimum_comparison_count=minimum_count,
+        comparison_policy="primary-counter-or-explicit-gap",
         inference_generation_id=inference_generation_id,
         families=hypothesis_families_from_hypotheses(hypotheses),
         market_hypotheses=market_hypotheses_from_hypotheses(hypotheses),
@@ -1646,6 +1678,7 @@ def hypothesis_from_inference_rule(
     symbol: str,
     name: str,
     question: InvestmentQuestion,
+    inference_generation_id: str,
     rule_id: str,
     rows: List[Dict[str, object]],
     traces: List[Dict[str, object]],
@@ -1677,6 +1710,7 @@ def hypothesis_from_inference_rule(
     label = causal_label(name, rows, traces, matches)
     template_id = "hypothesis-template:" + rule_id
     evidence_state = hypothesis_evidence_state(rows, traces, matches)
+    family_definition = hypothesis_family_definition(knowledge_basis.thesis_family)
     causal_signature, family_source = causal_signature_for_rule(
         rule_id,
         stance,
@@ -1707,6 +1741,11 @@ def hypothesis_from_inference_rule(
             market_causal_signature,
         )
     overlay_metadata = account_overlay_metadata(rows, traces, matches)
+    candidate_action = next((
+        str(item.get("candidateAction") or item.get("candidate_action") or "").strip().upper()
+        for item in [*rows, *traces, *matches]
+        if str(item.get("candidateAction") or item.get("candidate_action") or "").strip()
+    ), "")
     account_overlay_id = account_overlay_id_for_scope(
         scope_context,
         family_id,
@@ -1763,6 +1802,14 @@ def hypothesis_from_inference_rule(
         theory_family=knowledge_basis.theory_family,
         thesis_family=knowledge_basis.thesis_family,
         knowledge_basis=knowledge_basis.to_dict(),
+        prediction_target=family_definition.prediction_target if family_definition else "",
+        expected_direction=family_definition.expected_direction if family_definition else stance,
+        expected_outcome=family_definition.expected_outcome if family_definition else "",
+        competing_family_ids=list(family_definition.competing_family_ids) if family_definition else [],
+        outcome_metric=family_definition.outcome_metric if family_definition else "",
+        falsification_contract=family_definition.falsification_contract if family_definition else "",
+        inference_generation_id=str(inference_generation_id or ""),
+        candidate_action=candidate_action,
     )
 
 
@@ -2081,6 +2128,17 @@ def compact_hypotheses_by_causal_family(
             theory_family=primary.theory_family,
             thesis_family=primary.thesis_family,
             knowledge_basis=dict(primary.knowledge_basis or {}),
+            prediction_target=primary.prediction_target,
+            expected_direction=primary.expected_direction,
+            expected_outcome=primary.expected_outcome,
+            competing_family_ids=unique_texts(
+                [value for item in ordered for value in item.competing_family_ids],
+                12,
+            ),
+            outcome_metric=primary.outcome_metric,
+            falsification_contract=primary.falsification_contract,
+            inference_generation_id=common_hypothesis_value(ordered, "inference_generation_id"),
+            candidate_action=common_hypothesis_value(ordered, "candidate_action"),
         ))
     return compacted
 
@@ -2529,6 +2587,13 @@ def hypothesis_templates_from_hypotheses(hypotheses: Iterable[InvestmentHypothes
             theory_family=item.theory_family,
             thesis_family=item.thesis_family,
             knowledge_basis=dict(item.knowledge_basis or {}),
+            prediction_target=item.prediction_target,
+            expected_direction=item.expected_direction,
+            expected_outcome=item.expected_outcome,
+            default_horizon=item.horizon,
+            competing_family_ids=list(item.competing_family_ids),
+            outcome_metric=item.outcome_metric,
+            falsification_contract=item.falsification_contract,
         ).to_dict())
     return rows
 
@@ -2565,6 +2630,7 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
             derivation.get("relation_type") or derivation.get("relationType")
             for derivation in derivations
         ], 12)
+        family_definition = hypothesis_family_definition(knowledge_basis.thesis_family)
         rows.append(HypothesisTemplate(
             template_id="hypothesis-template:" + rule_id,
             label=str(rule.get("label") or rule_id),
@@ -2578,6 +2644,13 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
             theory_family=knowledge_basis.theory_family,
             thesis_family=knowledge_basis.thesis_family,
             knowledge_basis=knowledge_basis.to_dict(),
+            prediction_target=family_definition.prediction_target if family_definition else "",
+            expected_direction=family_definition.expected_direction if family_definition else stance,
+            expected_outcome=family_definition.expected_outcome if family_definition else "",
+            default_horizon=family_definition.default_horizon if family_definition else "multi-horizon",
+            competing_family_ids=list(family_definition.competing_family_ids) if family_definition else [],
+            outcome_metric=family_definition.outcome_metric if family_definition else "",
+            falsification_contract=family_definition.falsification_contract if family_definition else "",
         ).to_dict())
     return rows
 

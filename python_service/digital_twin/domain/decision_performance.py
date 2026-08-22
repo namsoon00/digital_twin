@@ -76,6 +76,12 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
                 "hypothesisId": str(hypothesis.get("hypothesisId") or episode.get("selectedHypothesisId") or ""),
                 "hypothesisTemplateId": str(hypothesis.get("templateId") or ""),
                 "hypothesisTemplateLabel": str(hypothesis.get("templateLabel") or hypothesis.get("claim") or ""),
+                "hypothesisFamilyId": str(hypothesis.get("familyId") or ""),
+                "predictionTarget": str(hypothesis.get("predictionTarget") or ""),
+                "expectedDirection": str(hypothesis.get("expectedDirection") or ""),
+                "expectedOutcome": str(hypothesis.get("expectedOutcome") or ""),
+                "outcomeMetric": str(hypothesis.get("outcomeMetric") or ""),
+                "falsificationContract": str(hypothesis.get("falsificationContract") or ""),
                 "ruleIds": list(hypothesis.get("supportingRuleIds") or []),
                 "horizonMinutes": int(number(payload.get("horizonMinutes"))),
                 "status": status,
@@ -195,6 +201,78 @@ def grouped_metrics(
     )
 
 
+def grouped_family_horizon_metrics(
+    observations: List[Dict[str, object]],
+    minimum_sample_count: int,
+) -> List[Dict[str, object]]:
+    grouped: Dict[str, List[Dict[str, object]]] = {}
+    labels: Dict[str, str] = {}
+    for item in observations:
+        family_id = str(item.get("hypothesisFamilyId") or item.get("hypothesisTemplateId") or "").strip()
+        if not family_id:
+            continue
+        horizon = int(number(item.get("horizonMinutes")))
+        metric = str(item.get("outcomeMetric") or "instrumentReturnPct").strip()
+        key = "|".join([family_id, str(horizon), metric])
+        grouped.setdefault(key, []).append(item)
+        labels[key] = " · ".join(filter(None, [
+            str(item.get("hypothesisTemplateLabel") or family_id),
+            str(horizon) + "분",
+            metric,
+        ]))
+    return sorted(
+        [metric_slice(rows, key, labels[key], minimum_sample_count) for key, rows in grouped.items()],
+        key=lambda item: (int(item.get("decisiveOutcomeCount") or 0), str(item.get("key") or "")),
+        reverse=True,
+    )
+
+
+def contradiction_learning_candidates(
+    episodes: Iterable[object],
+    minimum_sample_count: int = 3,
+) -> List[Dict[str, object]]:
+    """Return review candidates only for one repeated causal contract."""
+
+    minimum = max(2, int(minimum_sample_count or 3))
+    observations = performance_observations(episodes)
+    grouped: Dict[str, List[Dict[str, object]]] = {}
+    for item in observations:
+        if not item.get("calibrationEligible") or item.get("status") != "directionally-contradicted":
+            continue
+        family_id = str(item.get("hypothesisFamilyId") or item.get("hypothesisTemplateId") or "").strip()
+        if not family_id:
+            continue
+        horizon = int(number(item.get("horizonMinutes")))
+        metric = str(item.get("outcomeMetric") or "instrumentReturnPct").strip()
+        key = "|".join([family_id, str(horizon), metric])
+        grouped.setdefault(key, []).append(item)
+    candidates = []
+    for key, rows in grouped.items():
+        independent = latest_independent_observations(rows)
+        if len(independent) < minimum:
+            continue
+        first = independent[0]
+        candidates.append({
+            "groupKey": key,
+            "familyId": str(first.get("hypothesisFamilyId") or ""),
+            "templateId": str(first.get("hypothesisTemplateId") or ""),
+            "templateLabel": str(first.get("hypothesisTemplateLabel") or ""),
+            "predictionTarget": str(first.get("predictionTarget") or ""),
+            "expectedDirection": str(first.get("expectedDirection") or ""),
+            "expectedOutcome": str(first.get("expectedOutcome") or ""),
+            "outcomeMetric": str(first.get("outcomeMetric") or "instrumentReturnPct"),
+            "falsificationContract": str(first.get("falsificationContract") or ""),
+            "horizonMinutes": int(number(first.get("horizonMinutes"))),
+            "contradictedCount": len(independent),
+            "sourceEpisodeIds": sorted({str(item.get("episodeId") or "") for item in independent if str(item.get("episodeId") or "")}),
+            "affectedRuleIds": sorted({str(rule_id) for item in independent for rule_id in item.get("ruleIds") or [] if str(rule_id or "")}),
+            "latestObservedAt": max((str(item.get("observedAt") or "") for item in independent), default=""),
+            "automaticDeployment": False,
+            "decisionEligibility": "learning-review-only",
+        })
+    return sorted(candidates, key=lambda item: (int(item["contradictedCount"]), item["latestObservedAt"]), reverse=True)
+
+
 def evaluate_decision_performance(
     episodes: Iterable[object],
     minimum_sample_count: int = 5,
@@ -221,6 +299,10 @@ def evaluate_decision_performance(
         "byAction": grouped_metrics(observations, "action", minimum_sample_count),
         "byRule": grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True),
         "byHypothesis": grouped_metrics(observations, "hypothesisTemplateId", minimum_sample_count),
+        "byHypothesisFamily": grouped_metrics(observations, "hypothesisFamilyId", minimum_sample_count),
+        "byHypothesisFamilyAndHorizon": grouped_family_horizon_metrics(observations, minimum_sample_count),
+        "byPredictionTarget": grouped_metrics(observations, "predictionTarget", minimum_sample_count),
+        "byOutcomeMetric": grouped_metrics(observations, "outcomeMetric", minimum_sample_count),
         "governance": {
             "automaticDeployment": False,
             "promotionRequires": ["minimum-history", "more-corroborated-outcomes", "non-negative-action-adjusted-return", "human-review"],

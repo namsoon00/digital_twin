@@ -63,17 +63,37 @@ def decision_synthesis_from_relation_context(
     subject = _mapping(relation.get("subject"))
     decision = _mapping(relation.get("decision"))
     envelope = _mapping(relation.get("actionEnvelope")) or _mapping(decision.get("actionEnvelope"))
+    assessments = _mapping(relation.get("assessmentBundle"))
+    opinion_assessment = _mapping(assessments.get("investmentOpinion"))
+    portfolio_assessment = _mapping(assessments.get("portfolioFit"))
+    execution_assessment = _mapping(assessments.get("executionReadiness"))
+    quality_assessment = _mapping(assessments.get("evidenceQuality"))
+    recommended_plan = _mapping(assessments.get("recommendedPlan"))
     graph = _mapping(relation.get("graphStoreInference"))
     hypotheses = _hypotheses(relation)
-    graph_candidate_action = str(
-        decision.get("candidateAction")
-        or envelope.get("preferredAction")
+    investment_view_action = str(
+        opinion_assessment.get("candidateAction")
+        or envelope.get("investmentViewAction")
         or ""
     ).upper().strip()
-    selected_rule_id = str(decision.get("selectedRuleId") or envelope.get("selectedRuleId") or "")
+    graph_candidate_action = investment_view_action or "NO_ACTION"
+    execution_action = str(
+        envelope.get("executionAction")
+        or envelope.get("preferredAction")
+        or "NO_ACTION"
+    ).upper().strip()
+    selected_rule_id = str(
+        (
+            opinion_assessment.get("selectedRuleId")
+            if assessments else envelope.get("selectedRuleId")
+        )
+        or ""
+    )
     context_observation = typedb_context_observation_contract(relation)
     if context_observation:
         graph_candidate_action = "NO_ACTION"
+        investment_view_action = ""
+        execution_action = "NO_ACTION"
     actions_by_rule: Dict[str, list] = {}
     for row in [
         *[item for item in graph.get("relations") or [] if isinstance(item, Mapping)],
@@ -165,6 +185,13 @@ def decision_synthesis_from_relation_context(
         source_abox_snapshot_id=source_abox_snapshot_id,
         inference_generation_id=inference_generation_id,
         graph_candidate_action=graph_candidate_action,
+        investment_view_action=investment_view_action,
+        execution_action=execution_action,
+        execution_disposition=str(
+            envelope.get("executionDisposition")
+            or recommended_plan.get("status")
+            or "judgement-blocked"
+        ),
         allowed_actions=() if context_observation else _texts(
             relation.get("allowedActions")
             or decision.get("allowedActions")
@@ -181,6 +208,15 @@ def decision_synthesis_from_relation_context(
         eligible_hypothesis_ids=_texts(eligible_ids),
         reference_hypothesis_ids=_texts(reference_ids),
         selected_rule_id=selected_rule_id,
+        portfolio_constraint_rule_ids=_texts(
+            envelope.get("portfolioConstraintRuleIds") or portfolio_assessment.get("ruleIds")
+        ),
+        execution_constraint_rule_ids=_texts(
+            envelope.get("executionConstraintRuleIds") or execution_assessment.get("ruleIds")
+        ),
+        data_quality_rule_ids=_texts(
+            envelope.get("dataQualityRuleIds") or quality_assessment.get("ruleIds")
+        ),
         review_level=str(relation.get("reviewLevel") or decision.get("reviewLevel") or ""),
         data_state=str(relation.get("dataState") or decision.get("dataState") or ""),
         change_state=str(relation.get("changeState") or ""),
@@ -190,7 +226,11 @@ def decision_synthesis_from_relation_context(
         reversal_conditions=_texts(
             decision.get("weakenConditions") or envelope.get("invalidationConditions")
         ),
-        judgement_blocked=bool(decision.get("judgementBlocked") or envelope.get("judgementBlocked")),
+        judgement_blocked=bool(
+            envelope.get("judgementBlocked")
+            or quality_assessment.get("judgementBlocked")
+            or not investment_view_action
+        ),
         graph_trace_complete=bool(
             source_abox_snapshot_id
             and inference_generation_id

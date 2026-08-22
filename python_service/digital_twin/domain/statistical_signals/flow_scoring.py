@@ -8,7 +8,8 @@ from typing import Dict, Iterable, List, Mapping
 
 from ..time_series_storage import TemporalFeatureSnapshot
 from .contracts import ModelSignal, ModelSignalSnapshot, SignalEligibility
-from .registry import DEFAULT_FLOW_SIGNAL_RELEASE_ID, model_release
+from ..hypothesis_catalog import hypothesis_family_definition
+from .registry import DEFAULT_FLOW_SIGNAL_RELEASE_ID, model_release, signal_hypothesis_family
 
 
 FLOW_FIELDS = (
@@ -216,6 +217,8 @@ def score_flow_feature_snapshot(
             * (0.6 if metrics.get("stale") else 1.0)
         )
         for signal_type, score in _scores(metrics).items():
+            hypothesis_family_id = signal_hypothesis_family(signal_type)
+            hypothesis_family = hypothesis_family_definition(hypothesis_family_id)
             signals.append(ModelSignal.create(
                 signal_type=signal_type,
                 signal_family=release.model_family,
@@ -233,6 +236,10 @@ def score_flow_feature_snapshot(
                 eligibility=eligibility,
                 input_features=metrics,
                 probability=None,
+                hypothesis_family_id=hypothesis_family_id,
+                outcome_metric=hypothesis_family.outcome_metric if hypothesis_family else "",
+                knowledge_cutoff_at=str(metrics.get("latestObservedAt") or snapshot.as_of),
+                uncertainty_status="uncalibrated",
             ))
     return ModelSignalSnapshot.create(
         account_id=snapshot.account_id,

@@ -186,7 +186,15 @@ class InvestmentReasoningOrchestrator:
 
     def hypotheses_ready(self, case_id: str, candidates: Iterable[object]) -> ReasoningCase:
         reasoning_case = self.required(case_id)
-        hypotheses = self.hypothesis_manager.from_candidates(candidates)
+        hypotheses = self.hypothesis_manager.from_candidates(
+            candidates,
+            subject_symbols=reasoning_case.fact_delta.symbols,
+            inference_generation_ids=(
+                reasoning_case.inference_result.inference_generation_ids
+                if reasoning_case.inference_result else ()
+            ),
+            account_ids=reasoning_case.fact_delta.account_ids,
+        )
         if hypotheses:
             reasoning_case.hypotheses = hypotheses
         if reasoning_case.stage == CASE_INFERENCE_COMPLETED:

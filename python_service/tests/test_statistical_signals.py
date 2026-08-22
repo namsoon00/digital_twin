@@ -21,6 +21,7 @@ from digital_twin.domain.statistical_signals import (
     score_flow_feature_snapshot,
     score_temporal_feature_snapshot,
     statistical_rule_candidate_release,
+    validate_signal_hypothesis_mapping,
 )
 from digital_twin.domain.time_series_storage import TemporalFeatureSnapshot, TimeSeriesWatermark
 from digital_twin.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
@@ -150,6 +151,15 @@ class StatisticalSignalTests(unittest.TestCase):
         support = next(item for item in first.signals if item.signal_type == "price-trend-continuation-support")
         risk = next(item for item in first.signals if item.signal_type == "price-trend-break-risk")
         self.assertGreater(support.score, risk.score)
+        self.assertEqual("trend-continuation", support.hypothesis_family_id)
+        self.assertEqual("benchmark-adjusted-return", support.outcome_metric)
+        self.assertEqual(support.observed_at, support.knowledge_cutoff_at)
+        self.assertEqual("uncalibrated", support.uncertainty_status)
+        self.assertIsNone(support.probability_lower)
+        self.assertIsNone(support.probability_upper)
+
+    def test_every_registered_model_signal_maps_to_a_predictive_family(self):
+        self.assertEqual((), validate_signal_hypothesis_mapping())
 
     def test_changed_prices_change_signal_material(self):
         first = score_temporal_feature_snapshot(feature_snapshot([100, 101, 103, 105, 108, 110]))
@@ -281,9 +291,13 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual(4, relation_types.count("GENERATED_BY_MODEL_RELEASE"))
         self.assertEqual(4, relation_types.count("BASED_ON_FEATURE_SNAPSHOT"))
         self.assertEqual(4, relation_types.count("HAS_SIGNAL_ELIGIBILITY"))
+        self.assertEqual(4, relation_types.count("SUPPORTS_HYPOTHESIS_FAMILY"))
         signal_entities = [item for item in graph.entities if item.kind == "statistical-model-signal"]
         self.assertEqual(4, len(signal_entities))
         self.assertTrue(all(item.properties.get("decisionEligibility") == "reference-only" for item in signal_entities))
+        self.assertTrue(all(item.properties.get("hypothesisFamilyId") for item in signal_entities))
+        family_entities = [item for item in graph.entities if item.kind == "hypothesis-family-definition"]
+        self.assertEqual(3, len(family_entities))
 
     def test_shadow_signal_packet_keeps_existing_temporal_rule_inputs(self):
         snapshot = feature_snapshot()

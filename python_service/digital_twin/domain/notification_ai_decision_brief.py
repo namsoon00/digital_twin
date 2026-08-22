@@ -523,6 +523,8 @@ HYPOTHESIS_DECISION_FIELDS = (
     "counterEvidenceIds", "causalPathIds", "assumptions", "invalidationConditions",
     "horizon", "scopeState", "verificationStatus", "approvalStatus",
     "theoryFamily", "thesisFamily", "evidenceIndependenceKey", "knowledgeBasis",
+    "predictionTarget", "expectedDirection", "expectedOutcome", "outcomeMetric",
+    "falsificationContract", "competingFamilyIds", "inferenceGenerationId", "candidateAction",
 )
 
 DECISION_FIELDS = (
@@ -536,8 +538,11 @@ DECISION_FIELDS = (
 
 ACTION_ENVELOPE_FIELDS = (
     "status", "preferredAction", "allowedActions", "blockedActions", "aiAllowedActions",
+    "investmentViewAction", "executionAction", "executionDisposition",
     "aiMayDowngrade", "aiMayUpgradeToBuy", "judgementBlocked", "selectedRuleId",
     "drivingRuleIds", "supportRuleIds", "blockingRuleIds", "constraintRuleIds",
+    "portfolioConstraintRuleIds", "executionConstraintRuleIds", "dataQualityRuleIds",
+    "assessmentBundleVersion",
     "invalidationConditions", "strengthenConditions", "nextChecks", "targetRole",
     "dataReadiness", "coreInferenceSelection",
 )
@@ -1012,8 +1017,10 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
                 inference.get("executionPlan"),
                 (
                     "engineVersion", "targetRole", "actionPolicy", "candidateAction",
+                    "investmentViewAction", "executionAction", "executionDisposition",
                     "decisionLabel", "decisionStage", "primaryAction", "allowedActions",
-                    "blockedActions", "supportSignals", "nextChecks", "missingDataImpact",
+                    "blockedActions", "portfolioConstraintRuleIds", "executionConstraintRuleIds",
+                    "dataQualityRuleIds", "supportSignals", "nextChecks", "missingDataImpact",
                 ),
             ),
             "decisionDrivers": _compact_dict_rows(
@@ -1468,9 +1475,11 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             _selected_fields(
                 envelope,
                 (
-                    "status", "preferredAction", "allowedActions", "blockedActions",
+                    "status", "preferredAction", "investmentViewAction", "executionAction",
+                    "executionDisposition", "allowedActions", "blockedActions",
                     "judgementBlocked", "selectedRuleId", "drivingRuleIds",
-                    "blockingRuleIds", "constraintRuleIds", "targetRole",
+                    "blockingRuleIds", "constraintRuleIds", "portfolioConstraintRuleIds",
+                    "executionConstraintRuleIds", "dataQualityRuleIds", "targetRole",
                 ),
             ),
             string_limit=72,
@@ -1586,9 +1595,11 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
         envelope_payload = _selected_fields(
             envelope,
             (
-                "status", "preferredAction", "allowedActions", "blockedActions",
+                "status", "preferredAction", "investmentViewAction", "executionAction",
+                "executionDisposition", "allowedActions", "blockedActions",
                 "judgementBlocked", "selectedRuleId", "drivingRuleIds",
-                "blockingRuleIds", "constraintRuleIds", "targetRole",
+                "blockingRuleIds", "constraintRuleIds", "portfolioConstraintRuleIds",
+                "executionConstraintRuleIds", "dataQualityRuleIds", "targetRole",
                 "invalidationConditions", "nextChecks",
             ),
         )

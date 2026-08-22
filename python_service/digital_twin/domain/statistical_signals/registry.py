@@ -16,6 +16,40 @@ DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-shadow-v1"
 DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID = "authored-thesis-statistics-shadow-v1"
 
 
+SIGNAL_HYPOTHESIS_FAMILY_BY_TYPE = {
+    "price-trend-continuation-support": "trend-continuation",
+    "price-trend-break-risk": "trend-break",
+    "price-downside-acceleration-risk": "trend-break",
+    "price-recovery-support": "mean-reversion",
+    "flow-accumulation-support": "flow-accumulation",
+    "flow-distribution-risk": "flow-distribution",
+    "flow-price-divergence-risk": "flow-distribution",
+    "cross-asset-residual-support": "cross-asset-support",
+    "cross-asset-residual-risk": "cross-asset-risk",
+    "regime-transition-risk": "cross-asset-risk",
+    "valuation-relative-opportunity": "fundamental-rerating",
+    "valuation-relative-stretch-risk": "fundamental-deterioration",
+    "event-abnormal-return-support": "event-support",
+    "event-abnormal-return-risk": "event-risk",
+    "event-response-persistence": "event-support",
+}
+
+
+def signal_hypothesis_family(signal_type: object) -> str:
+    return SIGNAL_HYPOTHESIS_FAMILY_BY_TYPE.get(str(signal_type or "").strip().lower(), "")
+
+
+def validate_signal_hypothesis_mapping(releases=None) -> Tuple[str, ...]:
+    rows = tuple(releases or default_statistical_model_registry())
+    missing = sorted({
+        signal_type
+        for release in rows
+        for signal_type in release.signal_types
+        if signal_type not in SIGNAL_HYPOTHESIS_FAMILY_BY_TYPE
+    })
+    return tuple(missing)
+
+
 @dataclass(frozen=True)
 class StatisticalModelRelease:
     release_id: str

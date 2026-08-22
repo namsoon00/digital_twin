@@ -117,6 +117,26 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
     return {
         "metadata": {
             "ontologyRelationContext": {
+                "subject": {"symbol": "NVDA", "name": "NVIDIA"},
+                "accountId": "account:1",
+                "inferenceGenerationId": "generation:1",
+                "assessmentBundle": {
+                    "version": "typedb-decision-assessment-bundle-v1",
+                    "investmentOpinion": {
+                        "status": "supported",
+                        "candidateAction": "BUY",
+                        "selectedRuleId": "graph.price.recovery.v1",
+                        "ruleIds": ["graph.price.recovery.v1"],
+                    },
+                    "portfolioFit": {"status": "not-evaluated", "ruleIds": []},
+                    "executionReadiness": {"status": "not-evaluated", "ruleIds": []},
+                    "evidenceQuality": {"status": "not-evaluated", "ruleIds": []},
+                    "recommendedPlan": {
+                        "status": "ready",
+                        "investmentAction": "BUY",
+                        "planOption": "execute-opinion",
+                    },
+                },
                 "investmentBrain": {
                     "hypothesisSet": {
                         "hypotheses": [{
@@ -333,6 +353,48 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
         self.assertEqual((), synthesis.eligible_hypothesis_ids)
         self.assertIsNone(builder._base_event(snapshot, relation, synthesis))
+
+    def test_policy_candidate_action_does_not_leak_into_decision_synthesis(self):
+        relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]
+        relation["investmentBrain"]["hypothesisSet"]["hypotheses"] = []
+        relation.update({
+            "subject": {"symbol": "NAVER", "name": "NAVER", "market": "KR"},
+            "sourceAboxSnapshotId": "abox:naver:1",
+            "inferenceGenerationId": "generation:naver:1",
+            "decision": {
+                "candidateAction": "HOLD",
+                "selectedRuleId": "graph.instrument_profile.averaging_down_policy.v1",
+            },
+            "actionEnvelope": {
+                "preferredAction": "HOLD",
+                "selectedRuleId": "graph.instrument_profile.averaging_down_policy.v1",
+            },
+            "assessmentBundle": {
+                "investmentOpinion": {
+                    "status": "not-evaluated",
+                    "candidateAction": "",
+                    "selectedRuleId": "",
+                    "ruleIds": [],
+                },
+                "portfolioFit": {
+                    "status": "deferred",
+                    "ruleIds": ["graph.instrument_profile.averaging_down_policy.v1"],
+                },
+                "executionReadiness": {"status": "not-evaluated", "ruleIds": []},
+                "evidenceQuality": {"status": "not-evaluated", "ruleIds": []},
+                "recommendedPlan": {
+                    "status": "judgement-blocked",
+                    "investmentAction": "",
+                    "planOption": "wait-for-usable-evidence",
+                },
+            },
+        })
+
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+
+        self.assertEqual("NO_ACTION", synthesis.graph_candidate_action)
+        self.assertEqual("", synthesis.selected_rule_id)
+        self.assertEqual((), synthesis.eligible_hypothesis_ids)
 
     def test_reference_only_crypto_relation_becomes_information_notification(self):
         observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -707,6 +769,29 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
         self.assertEqual(["hypothesis:recovery"], [item.hypothesis_id for item in graph_hypotheses])
         self.assertEqual((), invented_hypotheses)
+
+    def test_hypothesis_manager_filters_other_subjects_and_generations(self):
+        manager = GraphHypothesisManager()
+        naver = hypothesis_candidate("hypothesis:naver")
+        naver_context = naver["metadata"]["ontologyRelationContext"]
+        naver_context.update({
+            "subject": {"symbol": "035420"},
+            "inferenceGenerationId": "generation:naver:1",
+        })
+        nvidia = hypothesis_candidate("hypothesis:nvidia")
+        nvidia_context = nvidia["metadata"]["ontologyRelationContext"]
+        nvidia_context.update({
+            "subject": {"symbol": "NVDA"},
+            "inferenceGenerationId": "generation:nvidia:1",
+        })
+
+        hypotheses = manager.from_candidates(
+            [naver, nvidia],
+            subject_symbols=("035420",),
+            inference_generation_ids=("generation:naver:1",),
+        )
+
+        self.assertEqual(["hypothesis:naver"], [item.hypothesis_id for item in hypotheses])
 
     def test_case_is_published_only_after_inference_ai_validation_and_delivery(self):
         repository = InMemoryReasoningCaseRepository()

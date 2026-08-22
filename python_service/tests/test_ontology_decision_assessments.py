@@ -4,6 +4,7 @@ from digital_twin.domain.ontology_decision_assessments import (
     decision_assessment_bundle,
     without_portfolio_assessment,
 )
+from digital_twin.domain.ontology_inference_context import action_envelope_from_inference
 from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
 
 
@@ -113,6 +114,37 @@ class OntologyDecisionAssessmentTests(unittest.TestCase):
         self.assertEqual("not-evaluated", bundle["investmentOpinion"]["status"])
         self.assertEqual("deferred", bundle["portfolioFit"]["status"])
         self.assertEqual(["graph.strategy.fit"], bundle["portfolioFit"]["ruleIds"])
+
+    def test_policy_only_match_cannot_author_an_investment_view(self):
+        policy_match = match("graph.instrument_profile.averaging_down_policy.v1", "HOLD", "defer")
+        policy_relation = relation(
+            "graph.instrument_profile.averaging_down_policy.v1",
+            "investment-opinion",
+            "HOLD",
+            "defer",
+        )
+        policy_relation.update({
+            "blockedActions": ["ADD"],
+            "knowledgeBasis": {
+                "ruleKind": "policy-constraint",
+                "decisionEligibility": "guardrail-only",
+                "requiresHypothesis": False,
+            },
+        })
+
+        envelope = action_envelope_from_inference(
+            {"source": "holding", "isHolding": True},
+            [policy_match],
+            [policy_relation],
+        )
+
+        self.assertEqual("", envelope["investmentViewAction"])
+        self.assertEqual("NO_ACTION", envelope["executionAction"])
+        self.assertEqual("", envelope["selectedRuleId"])
+        self.assertEqual(
+            ["graph.instrument_profile.averaging_down_policy.v1"],
+            envelope["portfolioConstraintRuleIds"],
+        )
 
 
 if __name__ == "__main__":

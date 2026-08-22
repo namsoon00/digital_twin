@@ -276,6 +276,18 @@ def action_envelope_from_context(context: Dict[str, object]) -> Dict[str, object
     return dict(envelope or {})
 
 
+def investment_view_action_from_context(context: Dict[str, object]) -> str:
+    envelope = action_envelope_from_context(context)
+    action = str(envelope.get("investmentViewAction") or "").strip().upper()
+    return action if action in VALID_ACTIONS else ""
+
+
+def execution_action_from_context(context: Dict[str, object]) -> str:
+    envelope = action_envelope_from_context(context)
+    action = str(envelope.get("executionAction") or envelope.get("preferredAction") or "").strip().upper()
+    return action if action in VALID_ACTIONS else "HOLD"
+
+
 def local_action_envelope_summary(context: Dict[str, object], action: str) -> str:
     """Explain a materialized TypeDB envelope when remote AI is unavailable.
 
@@ -657,6 +669,12 @@ def normalized_hypothesis_comparison(
             "templateLabel": user_friendly_ai_text(candidate.get("templateLabel") or "", 240),
             "claim": user_friendly_ai_text(candidate.get("claim") or "", 320),
             "stance": str(candidate.get("stance") or "uncertain"),
+            "candidateAction": str(candidate.get("candidateAction") or "").strip().upper(),
+            "predictionTarget": str(candidate.get("predictionTarget") or ""),
+            "expectedDirection": str(candidate.get("expectedDirection") or ""),
+            "expectedOutcome": str(candidate.get("expectedOutcome") or ""),
+            "outcomeMetric": str(candidate.get("outcomeMetric") or ""),
+            "falsificationContract": user_friendly_ai_text(candidate.get("falsificationContract") or "", 280),
             "supportingEvidenceIds": user_friendly_ai_list(candidate.get("supportingEvidenceIds") or [], 12),
             "counterEvidenceIds": user_friendly_ai_list(candidate.get("counterEvidenceIds") or [], 12),
             "causalPathIds": user_friendly_ai_list(candidate.get("causalPathIds") or [], 12),
@@ -862,7 +880,7 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     opinion = active_investment_opinion_value(context)
     lines = build_notification_ai_opinion(context).get("lines") or []
     raw_lines = _raw_lines(context)
-    action = str(opinion.get("action") or "").strip().upper() if isinstance(opinion, dict) else ""
+    action = execution_action_from_context(context)
     if action not in VALID_ACTIONS:
         action = fallback_action_from_label(
             (opinion or {}).get("actionLabel") if isinstance(opinion, dict) else ""
@@ -875,11 +893,6 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     action = normalized_action_for_rulebox_policy(context, action)
     action = normalized_action_for_action_envelope(context, action)
     envelope = action_envelope_from_context(context)
-    if str(envelope.get("status") or "") == "ENTRY_ELIGIBLE":
-        # A local response exists specifically when the remote model is not
-        # available.  Preserve the current TypeDB entry eligibility rather
-        # than letting a stale legacy opinion silently erase it.
-        action = "BUY"
     system_readiness = decision_readiness_contract(context)
     if (
         action in {"BUY", "ADD", "TRIM", "SELL"}
@@ -966,6 +979,13 @@ def local_validated_ai_response(context: Dict[str, object], source: str = "local
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
+        investment_view_action=investment_view_action_from_context(context),
+        execution_action=action,
+        execution_disposition=str(envelope.get("executionDisposition") or ""),
+        selected_rule_id=str(envelope.get("selectedRuleId") or ""),
+        portfolio_constraint_rule_ids=list(envelope.get("portfolioConstraintRuleIds") or []),
+        execution_constraint_rule_ids=list(envelope.get("executionConstraintRuleIds") or []),
+        data_quality_rule_ids=list(envelope.get("dataQualityRuleIds") or []),
         validation_state=validation_state,
         validation_label=validation_label,
         data_state=data_state,
@@ -1977,6 +1997,7 @@ def build_notification_ai_gate_prompt(
         "스키마:",
         json.dumps({
             "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+            "investmentViewAction": "selected predictive hypothesis action",
             "summary": "string",
             "opinion": "string",
             "currentActionPlan": "string - concrete action now and why",
@@ -2172,6 +2193,26 @@ def validated_response_from_payload(
         )
     comparison_state = str(hypothesis_comparison.get("hypothesisComparisonState") or "unavailable")
     selection_source = str(hypothesis_comparison.get("hypothesisSelectionSource") or "not-selected")
+    envelope = action_envelope_from_context(context)
+    graph_investment_view_action = investment_view_action_from_context(context)
+    requested_investment_view_action = str(
+        payload.get("investmentViewAction")
+        or payload.get("investment_view_action")
+        or graph_investment_view_action
+    ).strip().upper()
+    selected_hypothesis = next((
+        item for item in hypotheses
+        if str(item.get("hypothesisId") or "") == selected_hypothesis_id
+    ), {})
+    selected_hypothesis_action = str(selected_hypothesis.get("candidateAction") or "").strip().upper()
+    if selected_hypothesis_action in VALID_ACTIONS:
+        investment_view_action = selected_hypothesis_action
+        if requested_investment_view_action in VALID_ACTIONS and requested_investment_view_action != selected_hypothesis_action:
+            warnings.append("AI 투자 관점이 선택한 예측 가설의 행동과 달라 선택 가설 기준으로 보정했습니다.")
+    elif requested_investment_view_action in VALID_ACTIONS:
+        investment_view_action = requested_investment_view_action
+    else:
+        investment_view_action = graph_investment_view_action
     if hypotheses and comparison_state != "completed":
         warnings.append("AI가 모든 경쟁 가설을 유효하게 비교하지 못해 선택 가설 없이 판단을 유보했습니다.")
     invalid_hypothesis_ids = list(hypothesis_comparison.get("invalidHypothesisIds") or [])
@@ -2236,6 +2277,7 @@ def validated_response_from_payload(
         "notification-ai-decision-contract-v5",
         "notification-ai-decision-contract-v6",
         "notification-ai-decision-contract-v7",
+        "notification-ai-decision-contract-v8",
     }
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready" or not supported_causal_path
@@ -2399,6 +2441,13 @@ def validated_response_from_payload(
     response = NotificationAIValidatedResponse(
         action=action,
         action_label=action_label_for_target(context, action),
+        investment_view_action=investment_view_action,
+        execution_action=action,
+        execution_disposition=str(envelope.get("executionDisposition") or ""),
+        selected_rule_id=str(envelope.get("selectedRuleId") or ""),
+        portfolio_constraint_rule_ids=list(envelope.get("portfolioConstraintRuleIds") or []),
+        execution_constraint_rule_ids=list(envelope.get("executionConstraintRuleIds") or []),
+        data_quality_rule_ids=list(envelope.get("dataQualityRuleIds") or []),
         validation_state=validation_state,
         validation_label=validation_label,
         data_state=data_state,

@@ -88,6 +88,14 @@ def lifecycle_reference_for_hypothesis(
     symbol = upper(episode.get("symbol"))
     account_id = text(episode.get("accountId"))
     family_id = text(hypothesis.get("familyId"))
+    predictive_contract = {
+        "predictionTarget": text(hypothesis.get("predictionTarget")),
+        "expectedDirection": text(hypothesis.get("expectedDirection")),
+        "expectedOutcome": text(hypothesis.get("expectedOutcome")),
+        "outcomeMetric": text(hypothesis.get("outcomeMetric")),
+        "falsificationContract": text(hypothesis.get("falsificationContract")),
+        "competingFamilyIds": values(hypothesis.get("competingFamilyIds")),
+    }
     source_rule_ids = values(hypothesis.get("supportingRuleIds"))
     result: List[Dict[str, object]] = []
     market_context = text(hypothesis.get("marketId") or episode.get("marketId") or episode.get("market"))
@@ -107,6 +115,7 @@ def lifecycle_reference_for_hypothesis(
             "symbol": symbol,
             "familyId": family_id,
             "sourceRuleIds": source_rule_ids,
+            **predictive_contract,
         })
     overlay_id = text(hypothesis.get("accountHypothesisOverlayId"))
     if overlay_id:
@@ -125,6 +134,7 @@ def lifecycle_reference_for_hypothesis(
             "symbol": symbol,
             "familyId": family_id,
             "sourceRuleIds": source_rule_ids,
+            **predictive_contract,
         })
     if not result:
         hypothesis_id = text(hypothesis.get("hypothesisId"))
@@ -144,6 +154,7 @@ def lifecycle_reference_for_hypothesis(
                 "symbol": symbol,
                 "familyId": family_id,
                 "sourceRuleIds": source_rule_ids,
+                **predictive_contract,
             })
     return result
 
@@ -369,6 +380,12 @@ def outcome_assessment_for_lifecycle(
         "accountId": text(lifecycle.get("accountId")) if scope == "account" else "",
         "symbol": upper(lifecycle.get("symbol")),
         "familyId": text(lifecycle.get("familyId")),
+        "predictionTarget": text(lifecycle.get("predictionTarget")),
+        "expectedDirection": text(lifecycle.get("expectedDirection")),
+        "expectedOutcome": text(lifecycle.get("expectedOutcome")),
+        "outcomeMetric": text(lifecycle.get("outcomeMetric")),
+        "falsificationContract": text(lifecycle.get("falsificationContract")),
+        "competingFamilyIds": values(lifecycle.get("competingFamilyIds")),
         "minimumSampleCount": minimum,
         "outcomeContract": contract,
         "matchedEpisodeCount": gathered["matchedEpisodeCount"],

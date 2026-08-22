@@ -66,6 +66,13 @@ DEFAULT_AI_GATE_MESSAGE_TYPES = {
 class NotificationAIValidatedResponse:
     action: str = "HOLD"
     action_label: str = "보유"
+    investment_view_action: str = ""
+    execution_action: str = "HOLD"
+    execution_disposition: str = ""
+    selected_rule_id: str = ""
+    portfolio_constraint_rule_ids: List[str] = field(default_factory=list)
+    execution_constraint_rule_ids: List[str] = field(default_factory=list)
+    data_quality_rule_ids: List[str] = field(default_factory=list)
     validation_state: str = "conditional"
     validation_label: str = "조건부 사용"
     data_state: str = "partial"
@@ -135,6 +142,13 @@ class NotificationAIValidatedResponse:
         payload = payload if isinstance(payload, dict) else {}
         aliases = {
             "actionLabel": "action_label",
+            "investmentViewAction": "investment_view_action",
+            "executionAction": "execution_action",
+            "executionDisposition": "execution_disposition",
+            "selectedRuleId": "selected_rule_id",
+            "portfolioConstraintRuleIds": "portfolio_constraint_rule_ids",
+            "executionConstraintRuleIds": "execution_constraint_rule_ids",
+            "dataQualityRuleIds": "data_quality_rule_ids",
             "validationState": "validation_state",
             "validationLabel": "validation_label",
             "dataState": "data_state",
@@ -206,6 +220,13 @@ class NotificationAIValidatedResponse:
             }
         payload["engineVersion"] = NOTIFICATION_AI_GATE_VERSION
         payload["actionLabel"] = payload.pop("action_label")
+        payload["investmentViewAction"] = payload.pop("investment_view_action")
+        payload["executionAction"] = payload.pop("execution_action")
+        payload["executionDisposition"] = payload.pop("execution_disposition")
+        payload["selectedRuleId"] = payload.pop("selected_rule_id")
+        payload["portfolioConstraintRuleIds"] = payload.pop("portfolio_constraint_rule_ids")
+        payload["executionConstraintRuleIds"] = payload.pop("execution_constraint_rule_ids")
+        payload["dataQualityRuleIds"] = payload.pop("data_quality_rule_ids")
         payload["validationState"] = payload.pop("validation_state")
         payload["validationLabel"] = payload.pop("validation_label")
         payload["dataState"] = payload.pop("data_state")

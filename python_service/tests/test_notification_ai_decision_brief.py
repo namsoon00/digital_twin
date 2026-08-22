@@ -228,6 +228,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
     def test_ai_validation_uses_the_exact_routed_hypothesis_set(self):
         context = decision_context()
+        context["ontologyRelationContext"]["investmentBrain"]["hypothesisSet"]["hypotheses"][0]["candidateAction"] = "ADD"
         legacy = {
             "hypothesisId": "hypothesis:legacy",
             "templateId": "template:legacy",
@@ -244,6 +245,7 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
         response = validated_response_from_payload(routed, {
             "action": "HOLD",
+            "investmentViewAction": "SELL",
             "investmentView": "가격 방어 가설을 유지합니다.",
             "executionDecision": "현재 행동을 유지합니다.",
             "evidence": ["가격 방어 관계가 확인됐습니다.", "현재 가격 사실을 확인했습니다."],
@@ -266,6 +268,9 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         self.assertEqual("completed", response.hypothesis_comparison_state)
         self.assertEqual(candidate["hypothesisId"], response.selected_hypothesis_id)
         self.assertEqual([candidate["hypothesisId"]], [item["hypothesisId"] for item in response.hypotheses])
+        self.assertEqual("ADD", response.investment_view_action)
+        self.assertEqual("HOLD", response.execution_action)
+        self.assertTrue(any("선택한 예측 가설" in item for item in response.validation_warnings))
 
     def test_internal_context_enricher_loads_snapshot_bounded_windows(self):
         store = FakeTimeSeriesStore()
@@ -680,6 +685,12 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
                 for item in brief["inference"]["hypothesisSet"]["hypotheses"]
             ],
         )
+
+    def test_prompt_release_requires_separate_investment_view_and_execution_action(self):
+        prompt = build_notification_ai_decision_prompt(decision_context(), {})
+
+        self.assertIn('"investmentViewAction"', prompt)
+        self.assertIn("정책·실행·품질 규칙은 종목 의견을 바꾸지 않으며", prompt)
 
     def test_ordinary_symbol_decision_excludes_rebalance_policy_but_scheduled_review_keeps_it(self):
         context = decision_context()

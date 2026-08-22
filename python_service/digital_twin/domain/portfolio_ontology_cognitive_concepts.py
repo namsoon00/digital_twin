@@ -775,6 +775,12 @@ def add_hypothesis_outcome_assessment_concepts(
             "accountId": account_id,
             "symbol": symbol,
             "familyId": assessment.get("familyId"),
+            "predictionTarget": assessment.get("predictionTarget"),
+            "expectedDirection": assessment.get("expectedDirection"),
+            "expectedOutcome": assessment.get("expectedOutcome"),
+            "outcomeMetric": assessment.get("outcomeMetric"),
+            "falsificationContract": assessment.get("falsificationContract"),
+            "competingFamilyIds": assessment.get("competingFamilyIds") or [],
             "outcomeState": assessment.get("outcomeState"),
             "outcomeStateLabel": assessment.get("outcomeStateLabel"),
             "summary": assessment.get("summary"),
@@ -825,6 +831,10 @@ def add_decision_performance_concepts(
         "outcomeCoveragePct": performance.get("outcomeCoveragePct"),
         "byHorizon": list(performance.get("byHorizon") or []),
         "byAction": list(performance.get("byAction") or []),
+        "byHypothesisFamily": list(performance.get("byHypothesisFamily") or []),
+        "byHypothesisFamilyAndHorizon": list(performance.get("byHypothesisFamilyAndHorizon") or []),
+        "byPredictionTarget": list(performance.get("byPredictionTarget") or []),
+        "byOutcomeMetric": list(performance.get("byOutcomeMetric") or []),
         "automaticDeployment": False,
         "source": "DecisionEpisode+ObservedOutcome",
     })
@@ -857,6 +867,22 @@ def add_decision_performance_concepts(
             add_entity(graph, "hypothesis-template", template_key, str(metric.get("label") or template_key), {"tboxClass": "ApprovedHypothesisTemplate"})
         add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
         add_relation(graph, performance_id, template_id, "EVALUATES_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-feedback"})
+    for metric in performance.get("byHypothesisFamilyAndHorizon") or []:
+        if not isinstance(metric, dict) or not str(metric.get("key") or "").strip():
+            continue
+        metric_key = str(metric.get("key") or "")
+        family_key = metric_key.split("|", 1)[0]
+        performance_id = add_entity(graph, "hypothesis-performance", "family-horizon|" + metric_key, str(metric.get("label") or metric_key) + " 성과", {
+            "tboxClass": "HypothesisPerformance",
+            "performanceScope": "hypothesis-family+horizon+outcome-metric",
+            **dict(metric),
+            "automaticDeployment": False,
+        })
+        family_id = entity_id("hypothesis-family", family_key)
+        if not any(item.entity_id == family_id for item in graph.entities):
+            add_entity(graph, "hypothesis-family", family_key, family_key, {"tboxClass": "HypothesisFamily", "familyId": family_key})
+        add_relation(graph, summary_id, performance_id, "HAS_PERFORMANCE_SLICE", weight=1.0, properties={"source": "investment-brain-feedback"})
+        add_relation(graph, performance_id, family_id, "EVALUATES_HYPOTHESIS", weight=1.0, properties={"source": "investment-brain-feedback"})
 
 
 def add_hypothesis_calibration_concepts(

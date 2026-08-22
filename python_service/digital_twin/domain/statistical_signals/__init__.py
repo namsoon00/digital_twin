@@ -17,6 +17,8 @@ from .registry import (
     DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
     StatisticalModelRelease,
     default_statistical_model_registry,
+    signal_hypothesis_family,
+    validate_signal_hypothesis_mapping,
 )
 from .scoring import score_temporal_feature_snapshot
 from .flow_scoring import score_flow_feature_snapshot
@@ -59,6 +61,8 @@ __all__ = [
     "STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION",
     "RULE_SIGNAL_CONTRACT_VERSION",
     "default_statistical_model_registry",
+    "signal_hypothesis_family",
+    "validate_signal_hypothesis_mapping",
     "compile_price_signal_rule_candidate",
     "compile_model_signal_rule_candidate",
     "model_signal_evaluation_report",

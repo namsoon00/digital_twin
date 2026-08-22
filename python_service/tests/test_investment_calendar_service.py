@@ -926,7 +926,11 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
             "source": "yfinance",
             "payload": {"autoDetected": True, "officialSource": False},
         }))
-        service = InvestmentCalendarCandidateService(candidate_store, self.service(store=calendar_store))
+        service = InvestmentCalendarCandidateService(
+            candidate_store,
+            self.service(store=calendar_store),
+            now=lambda: datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
 
         result = service.reconcile_all_candidates()
 

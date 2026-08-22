@@ -312,6 +312,7 @@ def precomputed_action_value(context: Dict[str, object]) -> str:
     decision = relation_context.get("decision") if isinstance(relation_context.get("decision"), dict) else {}
     envelope = relation_context.get("actionEnvelope") if isinstance(relation_context.get("actionEnvelope"), dict) else {}
     for value in [
+        envelope.get("investmentViewAction"),
         envelope.get("preferredAction"),
         decision.get("candidateAction"),
         decision.get("primaryAction"),

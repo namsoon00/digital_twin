@@ -33,7 +33,8 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
     signatures: Dict[tuple, List[str]] = {}
     for rule in enabled_rules:
         rule_id = str(rule.rule_id or "").strip() or "<missing-rule-id>"
-        violations.extend(knowledge_basis_violations(rule.resolved_knowledge_basis, rule_id))
+        knowledge_basis = rule.resolved_knowledge_basis
+        violations.extend(knowledge_basis_violations(knowledge_basis, rule_id))
         if not str(rule.hypothesis_family_key or "").strip():
             violations.append(rule_id + ": hypothesis_family_key is required")
         lifecycle = rule.resolved_hypothesis_lifecycle()
@@ -76,8 +77,14 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
             if effect not in DECISION_EFFECTS:
                 violations.append(rule_id + ": derivation has no valid decision_effect")
             candidate_action = str(derivation.candidate_action or "").strip().upper()
+            if knowledge_basis.rule_kind != "predictive-hypothesis":
+                if candidate_action:
+                    violations.append(
+                        rule_id + ": only predictive-hypothesis rules may author candidate_action"
+                    )
+                continue
             if candidate_action not in RULEBOX_ACTIONS:
-                violations.append(rule_id + ": derivation has no valid candidate_action")
+                violations.append(rule_id + ": predictive derivation has no valid candidate_action")
                 continue
             target_role = str(derivation.target_role or "").strip().lower()
             if target_role == WATCHLIST_TARGET_ROLE and candidate_action not in WATCHLIST_ALLOWED_ACTIONS:

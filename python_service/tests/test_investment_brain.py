@@ -14,7 +14,10 @@ from digital_twin.domain.investment_brain import (
     hypothesis_set_from_relation_context,
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
-from digital_twin.domain.decision_performance import evaluate_decision_performance
+from digital_twin.domain.decision_performance import (
+    contradiction_learning_candidates,
+    evaluate_decision_performance,
+)
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
@@ -367,6 +370,56 @@ class FakeResearchOrchestrator:
 
 
 class InvestmentBrainTest(unittest.TestCase):
+    def test_learning_review_never_combines_different_families_or_horizons(self):
+        episodes = []
+        definitions = [
+            ("trend-continuation", 60),
+            ("trend-continuation", 1440),
+            ("trend-break", 60),
+        ]
+        for index, (family_id, horizon) in enumerate(definitions):
+            episodes.append({
+                "episodeId": "episode-split-" + str(index),
+                "accountId": "account-1",
+                "symbol": "005930",
+                "selectedHypothesisId": "hypothesis-" + str(index),
+                "hypothesisSet": {"hypotheses": [{
+                    "hypothesisId": "hypothesis-" + str(index),
+                    "templateId": "template:" + family_id,
+                    "templateLabel": family_id,
+                    "familyId": family_id,
+                    "outcomeMetric": "excess-return",
+                    "supportingRuleIds": ["rule:" + family_id],
+                }]},
+                "outcomes": [{
+                    "selectedHypothesisStatus": "directionally-contradicted",
+                    "observedAt": "2026-07-2" + str(index) + "T01:00:00Z",
+                    "payload": {
+                        "horizonMinutes": horizon,
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "event-" + str(index),
+                    },
+                }],
+            })
+
+        self.assertEqual([], contradiction_learning_candidates(episodes, minimum_sample_count=3))
+
+        for index in range(3, 6):
+            duplicate = deepcopy(episodes[0])
+            duplicate["episodeId"] = "episode-same-" + str(index)
+            duplicate["selectedHypothesisId"] = "hypothesis-same-" + str(index)
+            duplicate["hypothesisSet"]["hypotheses"][0]["hypothesisId"] = duplicate["selectedHypothesisId"]
+            duplicate["outcomes"][0]["observedAt"] = "2026-07-2" + str(index) + "T01:00:00Z"
+            duplicate["outcomes"][0]["payload"]["accountIndependenceKey"] = "event-same-" + str(index)
+            episodes.append(duplicate)
+
+        candidates = contradiction_learning_candidates(episodes, minimum_sample_count=3)
+        self.assertEqual(1, len(candidates))
+        self.assertEqual("trend-continuation", candidates[0]["familyId"])
+        self.assertEqual(60, candidates[0]["horizonMinutes"])
+        self.assertEqual("excess-return", candidates[0]["outcomeMetric"])
+        self.assertFalse(candidates[0]["automaticDeployment"])
+
     def test_decision_performance_groups_rule_hypothesis_and_horizon(self):
         episodes = []
         for index, status in enumerate(["directionally-corroborated", "directionally-corroborated", "directionally-contradicted"]):

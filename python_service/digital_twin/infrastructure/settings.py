@@ -1573,7 +1573,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "1",
         ),
         "investmentBrainMinimumHypothesisCount": value("investmentBrainMinimumHypothesisCount", "INVESTMENT_BRAIN_MINIMUM_HYPOTHESIS_COUNT", "3"),
-        "investmentBrainMaximumHypothesisCount": value("investmentBrainMaximumHypothesisCount", "INVESTMENT_BRAIN_MAXIMUM_HYPOTHESIS_COUNT", "8"),
+        "investmentBrainMaximumHypothesisCount": value("investmentBrainMaximumHypothesisCount", "INVESTMENT_BRAIN_MAXIMUM_HYPOTHESIS_COUNT", "4"),
         "investmentBrainInferenceBoxLimit": value("investmentBrainInferenceBoxLimit", "INVESTMENT_BRAIN_INFERENCEBOX_LIMIT", "500"),
         "investmentBrainResearchEnabled": value("investmentBrainResearchEnabled", "INVESTMENT_BRAIN_RESEARCH_ENABLED", "1"),
         "investmentBrainResearchMaxRounds": value("investmentBrainResearchMaxRounds", "INVESTMENT_BRAIN_RESEARCH_MAX_ROUNDS", "2"),

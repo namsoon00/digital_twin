@@ -451,9 +451,10 @@ def execution_plan_from_relation_context(
     # separately from the envelope so a holding-only action cannot look like
     # a valid watchlist entry after the envelope safely narrows it to HOLD.
     raw_candidate_action = (
-        decision.get("sourceCandidateAction")
-        or action_envelope.get("preferredAction")
+        action_envelope.get("investmentViewAction")
+        or decision.get("investmentViewAction")
         or decision.get("candidateAction")
+        or decision.get("sourceCandidateAction")
     )
     candidate_action_provided = raw_candidate_action not in (None, "")
     candidate_action = str(raw_candidate_action or "HOLD").strip().upper()
@@ -549,6 +550,12 @@ def execution_plan_from_relation_context(
         "primaryActionLabel": primary_label,
         "candidateAction": candidate_action,
         "candidateActionLabel": candidate_action_label,
+        "investmentViewAction": str(action_envelope.get("investmentViewAction") or candidate_action),
+        "executionAction": str(action_envelope.get("executionAction") or primary_action),
+        "executionDisposition": str(action_envelope.get("executionDisposition") or ""),
+        "portfolioConstraintRuleIds": list(action_envelope.get("portfolioConstraintRuleIds") or []),
+        "executionConstraintRuleIds": list(action_envelope.get("executionConstraintRuleIds") or []),
+        "dataQualityRuleIds": list(action_envelope.get("dataQualityRuleIds") or []),
         "blockedActions": blocked_actions[:5],
         "riskSignals": risk_signals[:7],
         "supportSignals": support_signals[:5],

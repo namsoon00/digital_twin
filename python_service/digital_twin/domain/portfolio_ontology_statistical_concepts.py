@@ -5,6 +5,7 @@ from typing import Dict, Mapping
 from .ontology_contracts import PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 from .statistical_signals.registry import model_release
+from .hypothesis_catalog import hypothesis_family_definition
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -112,6 +113,7 @@ def add_position_statistical_signal_concepts(
         },
     )
     release_nodes = {}
+    hypothesis_family_nodes = {}
     for signal in signals:
         release_id = str(signal.get("modelReleaseId") or snapshot.get("modelReleaseId") or "").strip()
         if release_id not in release_nodes:
@@ -161,6 +163,12 @@ def add_position_statistical_signal_concepts(
                 "strengthBand": str(signal.get("strengthBand") or "weak"),
                 "confidence": round(_number(signal.get("confidence")), 8),
                 "probability": signal.get("probability"),
+                "probabilityLower": signal.get("probabilityLower"),
+                "probabilityUpper": signal.get("probabilityUpper"),
+                "hypothesisFamilyId": str(signal.get("hypothesisFamilyId") or ""),
+                "outcomeMetric": str(signal.get("outcomeMetric") or ""),
+                "knowledgeCutoffAt": str(signal.get("knowledgeCutoffAt") or signal.get("observedAt") or ""),
+                "uncertaintyStatus": str(signal.get("uncertaintyStatus") or "uncalibrated"),
                 "sampleCount": int(_number(signal.get("sampleCount"))),
                 "coverageRatio": round(_number(signal.get("coverageRatio")), 8),
                 "observedAt": str(signal.get("observedAt") or ""),
@@ -208,3 +216,36 @@ def add_position_statistical_signal_concepts(
         add_relation(graph, signal_id, release_node_id, "GENERATED_BY_MODEL_RELEASE", properties=relation_properties)
         add_relation(graph, signal_id, feature_node_id, "BASED_ON_FEATURE_SNAPSHOT", properties=relation_properties)
         add_relation(graph, signal_id, assessment_id, "HAS_SIGNAL_ELIGIBILITY", properties=relation_properties)
+        hypothesis_family_id = str(signal.get("hypothesisFamilyId") or "").strip()
+        if hypothesis_family_id:
+            family = hypothesis_family_definition(hypothesis_family_id)
+            if hypothesis_family_id not in hypothesis_family_nodes:
+                hypothesis_family_nodes[hypothesis_family_id] = add_entity(
+                    graph,
+                    "hypothesis-family-definition",
+                    hypothesis_family_id,
+                    family.label if family else hypothesis_family_id,
+                    {
+                        "tboxClass": "HypothesisFamily",
+                        "tboxClasses": ["InvestmentThesis", "HypothesisFamily"],
+                        "familyId": hypothesis_family_id,
+                        "predictionTarget": family.prediction_target if family else "",
+                        "expectedOutcome": family.expected_outcome if family else "",
+                        "expectedDirection": family.expected_direction if family else "",
+                        "defaultHorizon": family.default_horizon if family else "",
+                        "outcomeMetric": family.outcome_metric if family else "",
+                        "falsificationContract": family.falsification_contract if family else "",
+                        "competingFamilyIds": list(family.competing_family_ids) if family else [],
+                        "source": "investment-hypothesis-catalog",
+                    },
+                )
+            add_relation(
+                graph,
+                signal_id,
+                hypothesis_family_nodes[hypothesis_family_id],
+                "SUPPORTS_HYPOTHESIS_FAMILY",
+                properties={
+                    **relation_properties,
+                    "evidenceRole": "reference" if str(eligibility.get("decisionEligibility") or "") != "eligible" else "support",
+                },
+            )

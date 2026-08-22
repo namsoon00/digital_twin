@@ -139,6 +139,12 @@ class ModelSignal:
     eligibility: SignalEligibility
     input_features: Dict[str, object] = field(default_factory=dict)
     probability: Optional[float] = None
+    probability_lower: Optional[float] = None
+    probability_upper: Optional[float] = None
+    hypothesis_family_id: str = ""
+    outcome_metric: str = ""
+    knowledge_cutoff_at: str = ""
+    uncertainty_status: str = "uncalibrated"
     material_hash: str = ""
     contract_version: str = MODEL_SIGNAL_CONTRACT_VERSION
 
@@ -161,10 +167,20 @@ class ModelSignal:
         eligibility: SignalEligibility,
         input_features: Mapping[str, object] = None,
         probability: object = None,
+        probability_lower: object = None,
+        probability_upper: object = None,
+        hypothesis_family_id: object = "",
+        outcome_metric: object = "",
+        knowledge_cutoff_at: object = "",
+        uncertainty_status: object = "uncalibrated",
     ) -> "ModelSignal":
         normalized_probability = None
         if probability not in (None, ""):
             normalized_probability = _bounded(probability)
+        normalized_lower = None if probability_lower in (None, "") else _bounded(probability_lower)
+        normalized_upper = None if probability_upper in (None, "") else _bounded(probability_upper)
+        if normalized_lower is not None and normalized_upper is not None and normalized_lower > normalized_upper:
+            raise ValueError("Model signal probability interval is inverted")
         material = {
             "contractVersion": MODEL_SIGNAL_CONTRACT_VERSION,
             "signalType": _text(signal_type).lower(),
@@ -182,6 +198,12 @@ class ModelSignal:
             "eligibility": eligibility.to_dict(),
             "inputFeatures": _canonical(dict(input_features or {})),
             "probability": normalized_probability,
+            "probabilityLower": normalized_lower,
+            "probabilityUpper": normalized_upper,
+            "hypothesisFamilyId": _text(hypothesis_family_id),
+            "outcomeMetric": _text(outcome_metric),
+            "knowledgeCutoffAt": _text(knowledge_cutoff_at) or _text(observed_at),
+            "uncertaintyStatus": _text(uncertainty_status).lower() or "uncalibrated",
         }
         digest = payload_hash(material)
         strength_band = (
@@ -208,6 +230,12 @@ class ModelSignal:
             eligibility=eligibility,
             input_features=dict(material["inputFeatures"]),
             probability=normalized_probability,
+            probability_lower=normalized_lower,
+            probability_upper=normalized_upper,
+            hypothesis_family_id=str(material["hypothesisFamilyId"]),
+            outcome_metric=str(material["outcomeMetric"]),
+            knowledge_cutoff_at=str(material["knowledgeCutoffAt"]),
+            uncertainty_status=str(material["uncertaintyStatus"]),
             material_hash=digest,
         )
 
@@ -223,6 +251,12 @@ class ModelSignal:
             "score": self.score,
             "strengthBand": self.strength_band,
             "probability": self.probability,
+            "probabilityLower": self.probability_lower,
+            "probabilityUpper": self.probability_upper,
+            "hypothesisFamilyId": self.hypothesis_family_id,
+            "outcomeMetric": self.outcome_metric,
+            "knowledgeCutoffAt": self.knowledge_cutoff_at,
+            "uncertaintyStatus": self.uncertainty_status,
             "confidence": self.confidence,
             "observedAt": self.observed_at,
             "sourceFeatureSnapshotId": self.source_feature_snapshot_id,

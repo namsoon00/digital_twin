@@ -18,7 +18,10 @@ from ..domain.hypothesis_outcome_contract import (
 )
 from ..domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
 from ..domain.market_time_series import market_timezone
-from ..domain.decision_performance import evaluate_decision_performance
+from ..domain.decision_performance import (
+    contradiction_learning_candidates,
+    evaluate_decision_performance,
+)
 from ..domain.trade_execution import ActionPlan
 from ..domain.events import investment_decision_changed_event, investment_validation_changed_event
 from ..domain.investment_flow import investment_flow_id
@@ -829,7 +832,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             current_price = number(facts.get("currentPrice"))
             decision_price = number((episode.facts_at_decision or {}).get("currentPrice"))
             change_pct = round(((current_price / decision_price) - 1) * 100, 4) if current_price and decision_price else 0.0
-            stance = selected_hypothesis_stance(episode)
+            selected_hypothesis = selected_hypothesis_payload(episode)
+            stance = str(selected_hypothesis.get("stance") or "uncertain")
             delay_minutes = max(0.0, (observed_time - target_time).total_seconds() / 60.0)
             contract_observation = observation_domain_status(facts, contract)
             evaluation = evaluate_hypothesis_outcome(
@@ -862,6 +866,13 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 payload={
                     "selectedHypothesisId": episode.selected_hypothesis_id,
                     "selectedHypothesisStance": stance,
+                    "hypothesisFamilyId": selected_hypothesis.get("familyId") or "",
+                    "hypothesisTemplateId": selected_hypothesis.get("templateId") or "",
+                    "predictionTarget": selected_hypothesis.get("predictionTarget") or "",
+                    "expectedDirection": selected_hypothesis.get("expectedDirection") or "",
+                    "expectedOutcome": selected_hypothesis.get("expectedOutcome") or "",
+                    "outcomeMetric": selected_hypothesis.get("outcomeMetric") or "",
+                    "falsificationContract": selected_hypothesis.get("falsificationContract") or "",
                     "inferenceGenerationId": facts.get("inferenceGenerationId") or "",
                     "observationBasis": str(facts.get("observationBasis") or "subsequent-market-observation"),
                     "observationSource": str(facts.get("observationSource") or facts.get("provider") or ""),
@@ -967,40 +978,45 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 """,
                 (str(account_id or ""), str(symbol or "").upper(), min(200, minimum * 10)),
             ).fetchall()
-        distinct_rows = []
-        seen_independence_keys = set()
+        episode_rows = []
         for row in rows or []:
             outcome_payload = _json_loads(row.get("outcome_json"), {})
             if not outcome_is_calibration_eligible(outcome_payload):
                 continue
             episode_payload = _json_loads(row.get("episode_json"), {})
-            episode_id = str(episode_payload.get("episodeId") or "")
-            outcome_detail = outcome_payload.get("payload") if isinstance(outcome_payload.get("payload"), dict) else {}
-            independence_key = str(outcome_detail.get("accountIndependenceKey") or episode_id)
-            if not episode_id or not independence_key or independence_key in seen_independence_keys:
+            if not str(episode_payload.get("episodeId") or ""):
                 continue
-            seen_independence_keys.add(independence_key)
-            distinct_rows.append(row)
-            if len(distinct_rows) >= minimum:
-                break
-        if len(distinct_rows) < minimum:
+            episode_payload["outcomes"] = [outcome_payload]
+            episode_rows.append(episode_payload)
+        candidates = contradiction_learning_candidates(episode_rows, minimum)
+        if not candidates:
             return None
-        episodes = [DecisionEpisode.from_dict(_json_loads(row.get("episode_json"), {})) for row in distinct_rows]
-        episode_ids = [item.episode_id for item in episodes if item.episode_id]
-        rule_ids: List[str] = []
-        for episode in episodes:
-            for hypothesis in episode.hypothesis_set.hypotheses:
-                if hypothesis.hypothesis_id == episode.selected_hypothesis_id:
-                    rule_ids.extend(hypothesis.supporting_rule_ids)
-        rule_ids = list(dict.fromkeys(rule_ids))
+        candidate = candidates[0]
+        episode_ids = list(candidate.get("sourceEpisodeIds") or [])
+        rule_ids = list(candidate.get("affectedRuleIds") or [])
+        family_label = str(candidate.get("templateLabel") or candidate.get("familyId") or "선택 가설")
+        horizon_minutes = int(candidate.get("horizonMinutes") or 0)
         proposal = LearningProposal(
-            proposal_id=stable_id("learning-proposal", account_id, symbol, ",".join(episode_ids)),
-            title=str(symbol or "") + " 선택 가설 반복 반증 검토",
-            reason="서로 독립된 최근 사건 " + str(minimum) + "건에서 선택 가설이 계약 기반 사후 관측으로 반복 반증됐습니다. 원천 데이터와 가설 기준을 재검토해야 합니다.",
+            proposal_id=stable_id("learning-proposal", account_id, symbol, str(candidate.get("groupKey") or ""), ",".join(episode_ids)),
+            title=str(symbol or "") + " " + family_label + " 반복 반증 검토",
+            reason=(
+                "동일 가설 가족군·동일 관찰 기간의 서로 독립된 최근 사건 "
+                + str(candidate.get("contradictedCount") or minimum)
+                + "건에서 계약 기반 사후 관측이 반복 반증됐습니다. 원천 데이터와 가설 기준을 재검토해야 합니다."
+            ),
             source_episode_ids=episode_ids,
             affected_rule_ids=rule_ids,
             proposed_change={
                 "changeType": "review-hypothesis-prior-and-evidence-coverage",
+                "familyId": candidate.get("familyId"),
+                "templateId": candidate.get("templateId"),
+                "predictionTarget": candidate.get("predictionTarget"),
+                "expectedDirection": candidate.get("expectedDirection"),
+                "expectedOutcome": candidate.get("expectedOutcome"),
+                "outcomeMetric": candidate.get("outcomeMetric"),
+                "falsificationContract": candidate.get("falsificationContract"),
+                "horizonMinutes": horizon_minutes,
+                "contradictedCount": candidate.get("contradictedCount"),
                 "automaticDeployment": False,
                 "requiredValidation": ["historical-replay", "TypeDB-rule-preview", "human-approval"],
             },
@@ -1073,10 +1089,14 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
 
 
 def selected_hypothesis_stance(episode: DecisionEpisode) -> str:
+    return str(selected_hypothesis_payload(episode).get("stance") or "uncertain")
+
+
+def selected_hypothesis_payload(episode: DecisionEpisode) -> Dict[str, object]:
     for item in episode.hypothesis_set.hypotheses:
         if item.hypothesis_id == episode.selected_hypothesis_id:
-            return item.stance
-    return "uncertain"
+            return item.to_dict()
+    return {}
 
 
 def directional_hypothesis_status(stance: str, price_change_pct: float) -> str:

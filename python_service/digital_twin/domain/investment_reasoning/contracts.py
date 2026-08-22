@@ -14,7 +14,7 @@ INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v2"
 FACT_DELTA_VERSION = "investment-fact-delta-v1"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v1"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v1"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v2"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -131,6 +131,9 @@ class HypothesisRecord:
     thesis_family: str = ""
     evidence_independence_key: str = ""
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
+    account_id: str = ""
+    subject_symbol: str = ""
+    inference_generation_id: str = ""
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "HypothesisRecord":
@@ -179,6 +182,13 @@ class HypothesisRecord:
                 or ""
             ),
             knowledge_basis=knowledge_basis,
+            account_id=str(payload.get("accountId") or payload.get("account_id") or ""),
+            subject_symbol=str(payload.get("subjectSymbol") or payload.get("subject_symbol") or "").upper(),
+            inference_generation_id=str(
+                payload.get("inferenceGenerationId")
+                or payload.get("inference_generation_id")
+                or ""
+            ),
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -236,12 +246,18 @@ class DecisionSynthesis:
     source_abox_snapshot_id: str
     inference_generation_id: str
     graph_candidate_action: str = ""
+    investment_view_action: str = ""
+    execution_action: str = "NO_ACTION"
+    execution_disposition: str = "judgement-blocked"
     allowed_actions: Tuple[str, ...] = ()
     blocked_actions: Tuple[str, ...] = ()
     alternatives: Tuple[ActionAlternative, ...] = ()
     eligible_hypothesis_ids: Tuple[str, ...] = ()
     reference_hypothesis_ids: Tuple[str, ...] = ()
     selected_rule_id: str = ""
+    portfolio_constraint_rule_ids: Tuple[str, ...] = ()
+    execution_constraint_rule_ids: Tuple[str, ...] = ()
+    data_quality_rule_ids: Tuple[str, ...] = ()
     review_level: str = ""
     data_state: str = ""
     change_state: str = ""
@@ -263,6 +279,9 @@ class DecisionSynthesis:
             source_abox_snapshot_id=str(payload.get("source_abox_snapshot_id") or payload.get("sourceAboxSnapshotId") or ""),
             inference_generation_id=str(payload.get("inference_generation_id") or payload.get("inferenceGenerationId") or ""),
             graph_candidate_action=str(payload.get("graph_candidate_action") or payload.get("graphCandidateAction") or "").upper(),
+            investment_view_action=str(payload.get("investment_view_action") or payload.get("investmentViewAction") or "").upper(),
+            execution_action=str(payload.get("execution_action") or payload.get("executionAction") or "NO_ACTION").upper(),
+            execution_disposition=str(payload.get("execution_disposition") or payload.get("executionDisposition") or "judgement-blocked"),
             allowed_actions=_texts(payload.get("allowed_actions") or payload.get("allowedActions"), uppercase=True),
             blocked_actions=_texts(payload.get("blocked_actions") or payload.get("blockedActions"), uppercase=True),
             alternatives=tuple(
@@ -273,6 +292,9 @@ class DecisionSynthesis:
             eligible_hypothesis_ids=_texts(payload.get("eligible_hypothesis_ids") or payload.get("eligibleHypothesisIds")),
             reference_hypothesis_ids=_texts(payload.get("reference_hypothesis_ids") or payload.get("referenceHypothesisIds")),
             selected_rule_id=str(payload.get("selected_rule_id") or payload.get("selectedRuleId") or ""),
+            portfolio_constraint_rule_ids=_texts(payload.get("portfolio_constraint_rule_ids") or payload.get("portfolioConstraintRuleIds")),
+            execution_constraint_rule_ids=_texts(payload.get("execution_constraint_rule_ids") or payload.get("executionConstraintRuleIds")),
+            data_quality_rule_ids=_texts(payload.get("data_quality_rule_ids") or payload.get("dataQualityRuleIds")),
             review_level=str(payload.get("review_level") or payload.get("reviewLevel") or ""),
             data_state=str(payload.get("data_state") or payload.get("dataState") or ""),
             change_state=str(payload.get("change_state") or payload.get("changeState") or ""),
@@ -290,7 +312,8 @@ class DecisionSynthesis:
         for key in [
             "allowed_actions", "blocked_actions", "eligible_hypothesis_ids",
             "reference_hypothesis_ids", "missing_data", "next_checks",
-            "reversal_conditions",
+            "reversal_conditions", "portfolio_constraint_rule_ids",
+            "execution_constraint_rule_ids", "data_quality_rule_ids",
         ]:
             payload[key] = list(payload[key])
         payload["alternatives"] = [item.to_dict() for item in self.alternatives]

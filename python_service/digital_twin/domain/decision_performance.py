@@ -1,3 +1,5 @@
+import math
+
 from typing import Dict, Iterable, List
 
 
@@ -124,6 +126,52 @@ def action_return_state(values: Iterable[object]) -> str:
     return "flat"
 
 
+def binomial_confidence_interval(success_count: int, sample_count: int) -> Dict[str, float]:
+    """Return a 95% Wilson interval without claiming a calibrated probability."""
+
+    total = max(0, int(sample_count or 0))
+    successes = max(0, min(total, int(success_count or 0)))
+    if not total:
+        return {"rate": 0.0, "lower": 0.0, "upper": 0.0}
+    z = 1.959963984540054
+    rate = successes / total
+    denominator = 1 + (z * z / total)
+    centre = (rate + (z * z / (2 * total))) / denominator
+    margin = (
+        z
+        * math.sqrt((rate * (1 - rate) / total) + (z * z / (4 * total * total)))
+        / denominator
+    )
+    return {
+        "rate": round(rate, 6),
+        "lower": round(max(0.0, centre - margin), 6),
+        "upper": round(min(1.0, centre + margin), 6),
+    }
+
+
+def performance_qualification_state(
+    enough_samples: bool,
+    corroborated_count: int,
+    contradicted_count: int,
+    average_action_adjusted_return: float,
+    promotion_eligible: bool,
+    directional_hit_rate_upper95: float,
+) -> str:
+    """Classify review urgency while retaining human RuleBox governance."""
+
+    if not enough_samples:
+        return "insufficient-history"
+    if (
+        int(contradicted_count or 0) > int(corroborated_count or 0)
+        and float(average_action_adjusted_return or 0) < 0
+        and float(directional_hit_rate_upper95 or 0) < 0.5
+    ):
+        return "quarantine-recommended"
+    if promotion_eligible:
+        return "qualified-for-review"
+    return "review-required"
+
+
 def metric_slice(
     observations: Iterable[Dict[str, object]],
     key: str = "",
@@ -143,6 +191,15 @@ def metric_slice(
     corroboration = corroboration_state(len(corroborated), len(contradicted), enough_samples)
     return_state = action_return_state(adjusted)
     promotion_eligible = corroboration == "more-corroborated" and return_state == "non-negative"
+    confidence = binomial_confidence_interval(len(corroborated), len(decisive))
+    qualification_state = performance_qualification_state(
+        enough_samples,
+        len(corroborated),
+        len(contradicted),
+        avg_adjusted,
+        promotion_eligible,
+        confidence["upper"],
+    )
     return {
         "key": str(key or "all"),
         "label": str(label or key or "전체"),
@@ -165,8 +222,16 @@ def metric_slice(
         "minimumSampleCount": int(minimum_sample_count or 0),
         "sampleStatus": "usable" if enough_samples else ("awaiting-eligible-outcomes" if rows and not eligible_rows else "insufficient-history"),
         "corroborationState": corroboration,
+        "directionalHitRate": confidence["rate"],
+        "directionalHitRateConfidence95": {
+            "lower": confidence["lower"],
+            "upper": confidence["upper"],
+        },
         "actionReturnState": return_state,
         "promotionEligible": promotion_eligible,
+        "qualificationState": qualification_state,
+        "quarantineRecommended": qualification_state == "quarantine-recommended",
+        "automaticRuleChange": False,
         "governance": "human-review-required" if promotion_eligible else "not-eligible",
     }
 
@@ -283,6 +348,7 @@ def evaluate_decision_performance(
     independent_observations = latest_independent_observations(observations)
     calibration_observations = latest_independent_observations(item for item in observations if item.get("calibrationEligible"))
     coverage = (len(episodes_with_outcomes) / len(episode_rows) * 100.0) if episode_rows else 0.0
+    by_rule = grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True)
     return {
         "status": "ok" if observations else "insufficient-data",
         "episodeCount": len(episode_rows),
@@ -297,7 +363,7 @@ def evaluate_decision_performance(
         "summary": metric_slice(observations, "all", "전체 판단", minimum_sample_count),
         "byHorizon": grouped_metrics(observations, "horizonMinutes", minimum_sample_count),
         "byAction": grouped_metrics(observations, "action", minimum_sample_count),
-        "byRule": grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True),
+        "byRule": by_rule,
         "byHypothesis": grouped_metrics(observations, "hypothesisTemplateId", minimum_sample_count),
         "byHypothesisFamily": grouped_metrics(observations, "hypothesisFamilyId", minimum_sample_count),
         "byHypothesisFamilyAndHorizon": grouped_family_horizon_metrics(observations, minimum_sample_count),
@@ -306,5 +372,10 @@ def evaluate_decision_performance(
         "governance": {
             "automaticDeployment": False,
             "promotionRequires": ["minimum-history", "more-corroborated-outcomes", "non-negative-action-adjusted-return", "human-review"],
+            "quarantineRecommendedRuleIds": [
+                str(item.get("key") or "")
+                for item in by_rule
+                if item.get("quarantineRecommended") and str(item.get("key") or "")
+            ],
         },
     }

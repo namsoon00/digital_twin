@@ -300,8 +300,12 @@ class OntologyDiagnosticsService:
                 "decisiveOutcomeCount": int(row.get("decisiveOutcomeCount") or 0),
                 "calibrationEligibleOutcomeCount": int(row.get("calibrationEligibleOutcomeCount") or 0),
                 "corroborationState": str(row.get("corroborationState") or "insufficient-history"),
+                "directionalHitRate": float(row.get("directionalHitRate") or 0),
+                "directionalHitRateConfidence95": dict(row.get("directionalHitRateConfidence95") or {}),
                 "averageActionAdjustedReturnPct": float(row.get("averageActionAdjustedReturnPct") or 0),
                 "promotionEligible": bool(row.get("promotionEligible")),
+                "qualificationState": str(row.get("qualificationState") or "insufficient-history"),
+                "quarantineRecommended": bool(row.get("quarantineRecommended")),
             })
         return {
             "status": str(result.get("status") or "insufficient-data"),
@@ -314,6 +318,9 @@ class OntologyDiagnosticsService:
             "sampleStatus": str(summary.get("sampleStatus") or "insufficient-sample"),
             "promotionEligible": bool(summary.get("promotionEligible")),
             "ruleCount": len(result.get("byRule") or []),
+            "quarantineRecommendedRuleCount": sum(
+                1 for item in rule_outcomes if item.get("quarantineRecommended")
+            ),
             "hypothesisCount": len(result.get("byHypothesis") or []),
             "ruleOutcomes": rule_outcomes[:80],
             "automaticDeployment": False,
@@ -418,6 +425,8 @@ class OntologyDiagnosticsService:
                 "corroborationState": str(outcome.get("corroborationState") or "insufficient-history"),
                 "averageActionAdjustedReturnPct": float(outcome.get("averageActionAdjustedReturnPct") or 0),
                 "promotionEligible": bool(outcome.get("promotionEligible")),
+                "qualificationState": str(outcome.get("qualificationState") or "insufficient-history"),
+                "quarantineRecommended": bool(outcome.get("quarantineRecommended")),
                 "governance": "human-review-required",
             })
         coverage = ledger.get("ruleCoverage") if isinstance(ledger.get("ruleCoverage"), dict) else {}
@@ -435,6 +444,9 @@ class OntologyDiagnosticsService:
             "coverageRatio": float(coverage.get("coverageRatio") or 0),
             "matchedRuleIds": list(coverage.get("matchedRuleIds") or [])[:80],
             "untracedRuleIds": list(coverage.get("untracedRuleIds") or [])[:80],
+            "quarantineRecommendedRuleCount": sum(
+                1 for item in rows if item.get("quarantineRecommended")
+            ),
             "rules": rows,
             "automaticDeployment": False,
             "interpretation": "Rule activation and delayed outcomes are joined for human review; outcome performance never changes RuleBox automatically.",

@@ -101,6 +101,75 @@ class DecisionEvidenceContractTests(unittest.TestCase):
         self.assertTrue(transition["rebaseline"])
         self.assertFalse(transition["allowsActionChange"])
 
+    def test_unqualified_threshold_hypothesis_keeps_context_but_caps_readiness(self):
+        support = hypothesis("support", "family:support", "support")
+        support["knowledgeBasis"] = {
+            "decisionEligibility": "action-eligible",
+            "validationStatus": "replay-required",
+            "thresholdOrigin": "authored-heuristic",
+            "migrationDisposition": "replace-with-model-signal-rule",
+            "requiresHypothesis": True,
+        }
+        risk = hypothesis("risk", "family:risk", "risk")
+        context = {
+            "ontologyRelationContext": {
+                "investmentBrain": {
+                    "hypothesisSet": {
+                        "minimumComparisonCount": 2,
+                        "hypotheses": [support, risk],
+                    },
+                },
+                "actionEnvelope": {
+                    "selectedRuleId": "graph.rule.support",
+                    "dataReadiness": {
+                        "state": "ready",
+                        "usable": True,
+                        "eligibleRuleIds": ["graph.rule.support", "graph.rule.risk"],
+                    },
+                },
+            },
+        }
+
+        readiness = decision_readiness_contract(context)
+        evidence = readiness["evidenceSummary"]
+
+        self.assertEqual("conditional", readiness["state"])
+        self.assertEqual(2, evidence["eligibleHypothesisCount"])
+        self.assertEqual(1, evidence["conditionalHypothesisCount"])
+        self.assertIn("threshold-origin:authored-heuristic", evidence["qualificationWarnings"])
+
+    def test_conditional_alternative_does_not_downgrade_a_qualified_selected_path(self):
+        support = hypothesis("support", "family:support", "support")
+        risk = hypothesis("risk", "family:risk", "risk")
+        risk["knowledgeBasis"] = {
+            "decisionEligibility": "action-eligible",
+            "validationStatus": "replay-required",
+            "requiresHypothesis": True,
+        }
+        context = {
+            "ontologyRelationContext": {
+                "investmentBrain": {
+                    "hypothesisSet": {
+                        "minimumComparisonCount": 2,
+                        "hypotheses": [support, risk],
+                    },
+                },
+                "actionEnvelope": {
+                    "selectedRuleId": "graph.rule.support",
+                    "dataReadiness": {
+                        "state": "ready",
+                        "usable": True,
+                        "eligibleRuleIds": ["graph.rule.support", "graph.rule.risk"],
+                    },
+                },
+            },
+        }
+
+        readiness = decision_readiness_contract(context)
+
+        self.assertEqual("ready", readiness["state"])
+        self.assertEqual(1, readiness["evidenceSummary"]["conditionalHypothesisCount"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,6 +50,11 @@ def ai_response_contract_error(
         selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
         if hypothesis_ids and selected_id not in hypothesis_ids:
             return "selectedHypothesisId is not present in the routed TypeDB hypothesis set."
+        selected_hypothesis = next((
+            item
+            for item in hypothesis_set.get("hypotheses") or []
+            if isinstance(item, dict) and str(item.get("hypothesisId") or "").strip() == selected_id
+        ), {})
         decision = prepared_core.get("decision")
         decision = decision if isinstance(decision, dict) else {}
         envelope = decision.get("actionEnvelope")
@@ -69,6 +74,20 @@ def ai_response_contract_error(
         }
         if allowed_actions and action not in allowed_actions:
             return "The selected action is outside the routed TypeDB action envelope."
+        hypothesis_action = str(
+            selected_hypothesis.get("candidateAction")
+            or selected_hypothesis.get("candidate_action")
+            or ""
+        ).upper().strip()
+        if (
+            hypothesis_action
+            and action != hypothesis_action
+            and not str(getattr(response, "disagreement_reason", "") or "").strip()
+        ):
+            return (
+                "The selected action differs from the selected TypeDB hypothesis "
+                "without an explicit disagreement reason."
+            )
         explicit_abstention = (
             not hypothesis_ids
             and hypothesis_set.get("comparisonRequired") is False
@@ -128,6 +147,25 @@ def ai_response_contract_error(
     }
     if allowed_actions and action not in allowed_actions:
         return "The selected action is outside the TypeDB action envelope."
+    candidate_actions = {
+        str(alternative.get("action") or "").upper().strip()
+        for synthesis in applicable
+        for alternative in synthesis.get("alternatives") or []
+        if isinstance(alternative, dict)
+        and selected_id in {
+            str(value or "") for value in alternative.get("hypothesisIds") or []
+        }
+        and str(alternative.get("action") or "").strip()
+    }
+    if (
+        len(candidate_actions) == 1
+        and action not in candidate_actions
+        and not str(getattr(response, "disagreement_reason", "") or "").strip()
+    ):
+        return (
+            "The selected action differs from the selected TypeDB hypothesis "
+            "without an explicit disagreement reason."
+        )
     return ""
 
 

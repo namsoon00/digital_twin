@@ -492,6 +492,70 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(1, result["summary"]["corroboratedCount"])
         self.assertEqual(0, result["summary"]["contradictedCount"])
 
+    def test_decision_performance_recommends_quarantine_without_auto_mutation(self):
+        episodes = []
+        for index in range(5):
+            episodes.append({
+                "episodeId": "episode-poor-" + str(index),
+                "accountId": "account-1",
+                "symbol": "005930",
+                "action": "BUY",
+                "selectedHypothesisId": "hypothesis-poor",
+                "hypothesisSet": {"hypotheses": [{
+                    "hypothesisId": "hypothesis-poor",
+                    "templateId": "template:poor",
+                    "supportingRuleIds": ["rule:poor"],
+                }]},
+                "outcomes": [{
+                    "selectedHypothesisStatus": "directionally-contradicted",
+                    "priceChangeFromDecisionPct": -2.0,
+                    "payload": {
+                        "horizonMinutes": 1440,
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "poor-event-" + str(index),
+                    },
+                }],
+            })
+
+        result = evaluate_decision_performance(episodes, minimum_sample_count=5)
+        rule = result["byRule"][0]
+
+        self.assertEqual("quarantine-recommended", rule["qualificationState"])
+        self.assertTrue(rule["quarantineRecommended"])
+        self.assertFalse(rule["automaticRuleChange"])
+        self.assertEqual(["rule:poor"], result["governance"]["quarantineRecommendedRuleIds"])
+        self.assertEqual(0.0, rule["directionalHitRate"])
+        self.assertGreater(rule["directionalHitRateConfidence95"]["upper"], 0.0)
+
+    def test_mixed_rule_performance_is_review_only_when_confidence_crosses_half(self):
+        episodes = []
+        statuses = (["directionally-corroborated"] * 6) + (["directionally-contradicted"] * 9)
+        for index, status in enumerate(statuses):
+            episodes.append({
+                "episodeId": "episode-mixed-" + str(index),
+                "action": "BUY",
+                "selectedHypothesisId": "hypothesis-mixed",
+                "hypothesisSet": {"hypotheses": [{
+                    "hypothesisId": "hypothesis-mixed",
+                    "supportingRuleIds": ["rule:mixed"],
+                }]},
+                "outcomes": [{
+                    "selectedHypothesisStatus": status,
+                    "priceChangeFromDecisionPct": 1 if status == "directionally-corroborated" else -1,
+                    "payload": {
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "mixed-event-" + str(index),
+                    },
+                }],
+            })
+
+        result = evaluate_decision_performance(episodes, minimum_sample_count=5)
+        rule = result["byRule"][0]
+
+        self.assertGreater(rule["directionalHitRateConfidence95"]["upper"], 0.5)
+        self.assertEqual("review-required", rule["qualificationState"])
+        self.assertFalse(rule["quarantineRecommended"])
+
     def test_relation_context_separates_rule_hypotheses_from_decision_guardrails(self):
         payload = hypothesis_set_from_relation_context(relation_context())
         hypotheses = payload["hypothesisSet"]["hypotheses"]

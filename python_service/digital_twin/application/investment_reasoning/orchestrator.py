@@ -531,6 +531,18 @@ class InvestmentReasoningOrchestrator:
             return False, "TypeDB hypothesis set is empty; AI publication is not allowed."
         if judgment.selected_hypothesis_id not in hypothesis_ids:
             return False, "AI selected hypothesis is not present in the TypeDB hypothesis set."
+        selected_hypothesis = next((
+            item
+            for item in reasoning_case.hypotheses
+            if item.hypothesis_id == judgment.selected_hypothesis_id
+        ), None)
+        if (
+            selected_hypothesis
+            and selected_hypothesis.candidate_action
+            and selected_hypothesis.candidate_action != judgment.action
+            and not str(judgment.rejected_candidate_reason or "").strip()
+        ):
+            return False, "AI judgment differs from the selected TypeDB hypothesis without an explicit disagreement reason."
         if reasoning_case.decision_syntheses:
             eligible_ids = {
                 hypothesis_id

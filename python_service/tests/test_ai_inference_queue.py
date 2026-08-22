@@ -108,6 +108,36 @@ class AIInferenceQueueTests(unittest.TestCase):
 
         self.assertIn("empty routed TypeDB hypothesis set", ai_response_contract_error(context, response))
 
+    def test_ai_must_explain_action_disagreement_with_selected_typedb_hypothesis(self):
+        context = {
+            "_notificationAiPreparedDecisionCore": {
+                "hypothesisSet": {
+                    "hypotheses": [{
+                        "hypothesisId": "hypothesis:entry",
+                        "candidateAction": "BUY",
+                    }],
+                    "comparisonRequired": True,
+                },
+                "decision": {
+                    "actionEnvelope": {
+                        "allowedActions": ["BUY", "HOLD"],
+                    },
+                },
+            },
+        }
+        unexplained = NotificationAIValidatedResponse(
+            action="HOLD",
+            selected_hypothesis_id="hypothesis:entry",
+        )
+        explained = NotificationAIValidatedResponse(
+            action="HOLD",
+            selected_hypothesis_id="hypothesis:entry",
+            disagreement_reason="거래 확인이 없어 진입 실행을 보류합니다.",
+        )
+
+        self.assertIn("without an explicit disagreement reason", ai_response_contract_error(context, unexplained))
+        self.assertEqual("", ai_response_contract_error(context, explained))
+
     def test_superseded_lease_stops_the_active_ai_process(self):
         class Queue:
             def heartbeat(self, *_args):

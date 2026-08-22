@@ -36,6 +36,7 @@ from digital_twin.domain.investment_reasoning import (
     CASE_SUPPRESSED,
     CASE_SUPERSEDED,
     CASE_VALIDATED,
+    AIJudgmentResult,
     FactDelta,
     GraphHypothesisManager,
     DecisionSynthesis,
@@ -84,6 +85,50 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
 
         self.assertEqual(CASE_SUPERSEDED, superseded.stage)
         self.assertTrue(superseded.completed_at)
+
+    def test_ai_action_disagreement_requires_a_persisted_reason(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        reasoning_case = orchestrator.hypotheses_ready(
+            reasoning_case.case_id,
+            [hypothesis_candidate()],
+        )
+        unexplained = AIJudgmentResult.from_dict({
+            "action": "HOLD",
+            "selectedHypothesisId": "hypothesis:recovery",
+            "validationState": "verified",
+        })
+        explained = AIJudgmentResult.from_result(
+            SimpleNamespace(
+                request_id="ai-request:disagreement",
+                result_id="ai-result:disagreement",
+                validation_state="verified",
+            ),
+            {
+                "action": "HOLD",
+                "selectedHypothesisId": "hypothesis:recovery",
+                "validationState": "verified",
+                "disagreementReason": "거래 확인이 부족해 실행을 보류합니다.",
+            },
+        )
+
+        valid, reason = orchestrator.validate_judgment(reasoning_case, unexplained)
+        self.assertFalse(valid)
+        self.assertIn("without an explicit disagreement reason", reason)
+        self.assertTrue(explained.rejected_candidate_reason)
+        self.assertEqual((True, ""), orchestrator.validate_judgment(reasoning_case, explained))
 
     def test_validated_context_observation_completes_when_delivery_is_suppressed(self):
         repository = InMemoryReasoningCaseRepository()

@@ -58,6 +58,8 @@ class InvestmentModelProjectionTests(unittest.TestCase):
         self.assertEqual("runtime-r15", result["activeRelease"]["runtimeRevision"])
         self.assertEqual(118, result["inventory"]["rules"])
         self.assertTrue(result["validation"]["promotionReady"])
+        self.assertEqual("internal-validation", result["productReadiness"]["stage"])
+        self.assertFalse(result["productReadiness"]["releaseRecommended"])
         self.assertFalse(result["governance"]["automaticPromotion"])
         self.assertNotIn("tossToken", str(result))
 

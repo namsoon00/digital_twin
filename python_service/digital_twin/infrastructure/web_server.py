@@ -1367,7 +1367,11 @@ def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> D
     service = OntologyCatalogQueryService(
         ontology_repository=ontology_repository_from_settings(settings),
         hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
-        decision_episode_store=stores.investment_decision_episode_store(settings) if include_lineage else None,
+        decision_episode_store=(
+            stores.investment_decision_episode_store(settings)
+            if include_lineage or section_id == "summary"
+            else None
+        ),
         notification_job_store=stores.notification_job_store(settings) if include_lineage else None,
         statistical_signal_store=stores.statistical_model_signal_store(settings) if section_id == "summary" else None,
     )

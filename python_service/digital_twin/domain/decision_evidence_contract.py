@@ -79,6 +79,29 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         knowledge_basis.get("decisionEligibility")
         or knowledge_basis.get("decision_eligibility")
     ).lower()
+    knowledge_validation = _text(
+        knowledge_basis.get("validationStatus")
+        or knowledge_basis.get("validation_status")
+    ).lower()
+    threshold_origin = _text(
+        knowledge_basis.get("thresholdOrigin")
+        or knowledge_basis.get("threshold_origin")
+    ).lower()
+    migration_disposition = _text(
+        knowledge_basis.get("migrationDisposition")
+        or knowledge_basis.get("migration_disposition")
+    ).lower()
+    qualification_warnings: List[str] = []
+    if knowledge_validation in {
+        "replay-required", "candidate-replay-required", "authored-review-required",
+    }:
+        qualification_warnings.append("knowledge-validation:" + knowledge_validation)
+    if threshold_origin in {"authored-heuristic", "legacy-threshold"}:
+        qualification_warnings.append("threshold-origin:" + threshold_origin)
+    if migration_disposition in {
+        "replace-with-model-signal-rule", "candidate-awaiting-promotion",
+    }:
+        qualification_warnings.append("signal-migration:" + migration_disposition)
     if knowledge_eligibility in {"guardrail-only", "reference-only"}:
         reasons.append("knowledge-eligibility:" + knowledge_eligibility)
     if knowledge_basis and not bool(
@@ -105,6 +128,8 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         "eligible": eligible,
         "evidenceState": evidence_state or "unspecified",
         "reasons": reasons,
+        "qualificationState": "conditional" if qualification_warnings else "qualified",
+        "qualificationWarnings": qualification_warnings,
     }
 
 
@@ -155,6 +180,19 @@ def hypothesis_set_evidence_summary(hypothesis_set: Mapping[str, object]) -> Dic
         "eligibleHypothesisIds": [identity(item) for item in eligible if identity(item)],
         "referenceHypothesisIds": [identity(item) for item in reference if identity(item)],
         "eligibleFamilyIds": eligible_families,
+        "qualifiedHypothesisCount": len([
+            item for item in eligible
+            if hypothesis_decision_eligibility(item).get("qualificationState") == "qualified"
+        ]),
+        "conditionalHypothesisCount": len([
+            item for item in eligible
+            if hypothesis_decision_eligibility(item).get("qualificationState") == "conditional"
+        ]),
+        "qualificationWarnings": _unique_texts(
+            warning
+            for item in eligible
+            for warning in hypothesis_decision_eligibility(item).get("qualificationWarnings") or []
+        ),
         "referenceHypotheses": reference_rows,
     }
 
@@ -354,6 +392,41 @@ def decision_readiness_contract(context_or_relation: Mapping[str, object]) -> Di
     if state == "ready" and bool(hypothesis_set.get("comparisonRequired", True)) and len(directional_stances) < 2:
         state = "conditional"
         reasons.append("eligible hypotheses do not cover both support and risk paths")
+    selected_hypothesis_id = _text(
+        hypothesis_set.get("selectedHypothesisId")
+        or hypothesis_set.get("selected_hypothesis_id")
+    )
+    selected_path_hypotheses = [
+        item for item in eligible_hypotheses
+        if (
+            selected_hypothesis_id
+            and _text(item.get("hypothesisId") or item.get("hypothesis_id")) == selected_hypothesis_id
+        ) or (
+            not selected_hypothesis_id
+            and selected_rule_id
+            and selected_rule_id in {
+                _text(value)
+                for value in _items(
+                    item.get("supportingRuleIds") or item.get("supporting_rule_ids")
+                )
+            }
+        )
+    ]
+    qualification_scope = selected_path_hypotheses or eligible_hypotheses
+    selected_path_requires_qualification = bool(qualification_scope) and (
+        any(
+            hypothesis_decision_eligibility(item).get("qualificationState") == "conditional"
+            for item in qualification_scope
+        )
+        if selected_path_hypotheses
+        else all(
+            hypothesis_decision_eligibility(item).get("qualificationState") == "conditional"
+            for item in qualification_scope
+        )
+    )
+    if state == "ready" and selected_path_requires_qualification:
+        state = "conditional"
+        reasons.append("selected hypothesis path still requires replay or model-signal qualification")
     return {
         "version": DECISION_READINESS_CONTRACT_VERSION,
         "status": "evaluated",

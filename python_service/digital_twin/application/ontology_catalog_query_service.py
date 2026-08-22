@@ -376,6 +376,32 @@ class OntologyCatalogQueryService:
         except Exception as error:  # noqa: BLE001
             return {"status": "error", "count": 0, "complete": False, "reason": str(error)[:220]}
 
+    def decision_performance_summary(self) -> Dict[str, object]:
+        store = self.decision_episode_store
+        reader = getattr(store, "performance", None) if store else None
+        if not callable(reader):
+            return {
+                "status": "unavailable",
+                "reason": "판단 사후 성과 저장소가 이 조회에 연결되지 않았습니다.",
+            }
+        try:
+            payload = item_dict(reader(limit=500))
+        except Exception as error:  # noqa: BLE001 - catalog remains readable without outcomes.
+            return {"status": "error", "reason": str(error)[:220]}
+        summary = item_dict(payload.get("summary"))
+        governance = item_dict(payload.get("governance"))
+        return {
+            "status": text(payload.get("status")) or "insufficient-data",
+            "episodeCount": int(payload.get("episodeCount") or 0),
+            "episodeWithOutcomeCount": int(payload.get("episodeWithOutcomeCount") or 0),
+            "calibrationEligibleEpisodeCount": int(payload.get("calibrationEligibleEpisodeCount") or 0),
+            "outcomeCoveragePct": float(payload.get("outcomeCoveragePct") or 0),
+            "calibrationCoveragePct": float(payload.get("calibrationCoveragePct") or 0),
+            "summary": summary,
+            "byAction": [item_dict(item) for item in payload.get("byAction") or [] if isinstance(item, Mapping)],
+            "governance": governance,
+        }
+
     def summary(self, world_id: str = "", account_id: str = "") -> Dict[str, object]:
         tbox = self.source_tbox()
         classes = self.class_rows()
@@ -426,6 +452,7 @@ class OntologyCatalogQueryService:
         })
         hypotheses = self.hypothesis_count(account_id=account_id)
         inference = self.inference_recovery(world_id)
+        decision_performance = self.decision_performance_summary()
         diagnostics = [
             {
                 "id": "tbox.deployment",
@@ -493,6 +520,7 @@ class OntologyCatalogQueryService:
                 "store": statistical_signal_status,
                 "migrationCounts": dict(sorted(signal_migration_counts.items())),
             },
+            "decisionPerformance": decision_performance,
             "hypotheses": hypotheses,
             "inferencebox": inference,
             "counts": {

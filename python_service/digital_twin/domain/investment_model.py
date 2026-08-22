@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
+from .investment_product_readiness import investment_product_readiness
+from .investment_reasoning.rule_inventory import reasoning_rule_inventory
+
 
 INVESTMENT_MODEL_VERSION = "investment-model-v1"
 
@@ -77,6 +80,19 @@ def investment_model_projection(
         or promotion_health.get("candidateReleaseId")
     )
     status = "ready" if active_id and promotion_ready else ("review" if active_id else "unavailable")
+    inventory = reasoning_rule_inventory([
+        item for item in rulebox.get("rules") or [] if isinstance(item, Mapping)
+    ])
+    comparison = _mapping(promotion.get("comparison")) or _mapping(active_health.get("comparisonSummary"))
+    product_readiness = investment_product_readiness(
+        operational_promotion_ready=promotion_ready,
+        rule_inventory=inventory,
+        catalog=catalog,
+        experiments=experiments,
+        active_health=active_health,
+        comparison=comparison,
+        settings=settings,
+    )
     return {
         "version": INVESTMENT_MODEL_VERSION,
         "status": status,
@@ -142,12 +158,13 @@ def investment_model_projection(
         },
         "validation": {
             "state": "pass" if promotion_ready else "blocked",
-            "label": "운영 가능" if promotion_ready else "승격 점검 필요",
+            "label": "운영 릴리스 통과" if promotion_ready else "운영 승격 점검 필요",
             "promotionReady": promotion_ready,
             "blockers": blockers,
             "cohortId": _text(active_health.get("validationCohortId") or promotion_health.get("validationCohortId")),
             "ruleInventoryReady": bool(active_health.get("ruleInventoryReleaseReady") or promotion_health.get("ruleInventoryReleaseReady")),
         },
+        "productReadiness": product_readiness,
         "candidate": {
             "deploymentId": candidate_id,
             "count": sum(1 for item in deployments if _text(item.get("status")) == "candidate"),

@@ -447,6 +447,7 @@ class AIJudgmentResult:
             rejected_candidate_reason=str(
                 payload.get("candidateAdjustmentReason")
                 or payload.get("rejectedCandidateReason")
+                or payload.get("disagreementReason")
                 or ""
             ),
             next_observations=_texts(payload.get("nextChecks") or payload.get("nextObservations")),

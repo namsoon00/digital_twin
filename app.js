@@ -12276,6 +12276,24 @@
     return { label: "상태 확인", tone: "danger" };
   }
 
+  function renderInvestmentProductReadiness(value) {
+    var readiness = value && typeof value === "object" ? value : {};
+    var gates = Array.isArray(readiness.gates) ? readiness.gates : [];
+    var stage = String(readiness.stage || "internal-validation");
+    var stageTone = readiness.generalAvailabilityReady ? "watch" : (readiness.closedBetaReady ? "caution" : "danger");
+    var gateMarkup = gates.map(function (gate) {
+      var passed = !!gate.passed;
+      return '<li class="' + (passed ? "pass" : "blocked") + '"><span aria-hidden="true">' + (passed ? "✓" : "!") + '</span><div><strong>' + escapeHtml(gate.label || gate.id || "검증 항목") + '</strong><p>' + escapeHtml(gate.detail || "상세 기록 없음") + '</p></div><em>' + (passed ? "통과" : "보완 필요") + '</em></li>';
+    }).join("");
+    return [
+      '<section class="investment-product-readiness" data-readiness-stage="' + escapeHtml(stage) + '">',
+      '<header><div><span class="label">PRODUCT READINESS</span><strong>제품 출시 준비도</strong><p>엔진 실행 여부와 투자 판단 품질을 분리해 검증합니다.</p></div><span class="status-pill ' + escapeHtml(stageTone) + '">' + escapeHtml(readiness.stageLabel || "내부 검증") + '</span></header>',
+      gates.length ? '<ul>' + gateMarkup + '</ul>' : '<p class="investment-product-readiness-empty">출시 품질 검증 자료를 아직 읽지 못했습니다.</p>',
+      '<footer><strong>' + escapeHtml(readiness.releaseRecommended ? "정식 출시 검토 가능" : "현재 정식 출시 권고 안 함") + '</strong><span>규칙 변경과 출시 승격은 자동으로 수행하지 않습니다.</span></footer>',
+      '</section>'
+    ].join("");
+  }
+
   function renderInvestmentModelOverview(operator) {
     var payload = investmentModelPayload();
     if ((state.investmentModelLoading && !state.investmentModelLoaded) || payload.status === "warming") {
@@ -12290,6 +12308,7 @@
     var validation = payload.validation || {};
     var bindings = payload.bindings || {};
     var cache = payload.cache || {};
+    var productReadiness = payload.productReadiness || {};
     var meta = investmentModelStatusMeta(payload.status || release.status);
     var lifecycle = ((payload.governance || {}).stages || []).map(function (stage) {
       var labels = { draft: "초안", replay: "재현", compare: "비교", approval: "승인", candidate: "후보", promotion: "승격", observation: "관찰", retired: "폐기" };
@@ -12309,8 +12328,9 @@
       '<div><span>가설</span><strong>' + escapeHtml(Number(inventory.hypotheses || 0)) + '</strong><em>수명주기 포함</em></div>',
       '<div><span>승격 상태</span><strong>' + escapeHtml(validation.label || "확인") + '</strong><em>' + escapeHtml(validation.cohortId || "검증 코호트 없음") + '</em></div>',
       '</section>',
+      renderInvestmentProductReadiness(productReadiness),
       '<section class="investment-model-bindings"><div><span>그래프 저장소</span><strong>' + escapeHtml(bindings.graphStore || "미기록") + '</strong></div><div><span>시계열</span><strong>' + escapeHtml(bindings.timeSeries || "미기록") + '</strong></div><div><span>마지막 실행</span><strong>' + escapeHtml(formatClock(release.lastRunAt || release.updatedAt) || "-") + '</strong></div></section>',
-      operator ? '<section class="investment-model-governance"><header><div><span class="label">RELEASE GOVERNANCE</span><strong>변경·승격 절차</strong></div><em>자동 승격 없음</em></header><div class="investment-model-lifecycle">' + lifecycle + '</div>' + (blockers.length ? '<div class="investment-model-blockers"><strong>승격 차단</strong>' + blockers.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '<p>현재 릴리스의 구조 검증 게이트를 통과했습니다. 수익성 평가는 결과 관측과 별도로 누적합니다.</p>') + '</section>' : '<section class="investment-model-note"><strong>이 기준은 설명용 읽기 화면입니다.</strong><p>규칙 편집과 승격은 운영 관리에서만 수행하며 AI 제안은 자동 반영하지 않습니다.</p></section>',
+      operator ? '<section class="investment-model-governance"><header><div><span class="label">RELEASE GOVERNANCE</span><strong>변경·승격 절차</strong></div><em>자동 승격 없음</em></header><div class="investment-model-lifecycle">' + lifecycle + '</div>' + (blockers.length ? '<div class="investment-model-blockers"><strong>운영 승격 차단</strong>' + blockers.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '<p>현재 릴리스는 운영 구조 검증을 통과했습니다. 제품 출시는 위 품질·성과·지연 게이트를 별도로 통과해야 합니다.</p>') + '</section>' : '<section class="investment-model-note"><strong>운영 상태와 출시 품질은 별도 기준입니다.</strong><p>규칙 편집과 승격은 운영 관리에서만 수행하며 AI 제안은 자동 반영하지 않습니다.</p></section>',
       '<div class="investment-model-refresh"><button class="text-button" type="button" data-action="refresh-investment-model"' + (state.investmentModelLoading || cache.refreshing ? " disabled" : "") + '>' + escapeHtml(state.investmentModelLoading || cache.refreshing ? "최신 상태 확인 중" : "상태 새로고침") + '</button>' + (!operator ? renderWorkDetailButton("investment-model-management", "", "운영자 모델 관리", "text-button compact") : "") + '</div>',
       '</div>'
     ].join("");

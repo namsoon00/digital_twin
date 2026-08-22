@@ -527,6 +527,32 @@
 .investment-model-bindings > div { display: grid; gap: 4px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); }
 .investment-model-bindings strong { color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
 
+.investment-product-readiness {
+  display: grid;
+  gap: 12px;
+  padding-block: 16px;
+  border-block: 1px solid var(--line);
+}
+
+.investment-product-readiness > header,
+.investment-product-readiness > footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.investment-product-readiness > header > div { display: grid; gap: 4px; min-width: 0; }
+.investment-product-readiness > header strong { color: var(--ink); font-size: 14px; }
+.investment-product-readiness > header p,
+.investment-product-readiness-empty { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.investment-product-readiness ul { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.investment-product-readiness li { display: grid; grid-template-columns: 22px minmax(0, 1fr) max-content; gap: 8px; align-items: start; min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); }
+.investment-product-readiness li > span { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; font-weight: 900; }
+.investment-product-readiness li > div { display: grid; gap: 3px; min-width: 0; }
+.investment-product-readiness li strong { color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
+.investment-product-readiness li p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+.investment-product-readiness li em { color: inherit; font-size: 9px; font-style: normal; font-weight: 850; }
+.investment-product-readiness li.pass { color: var(--green); }
+.investment-product-readiness li.blocked { color: var(--red); }
+.investment-product-readiness > footer { align-items: baseline; padding-top: 2px; }
+.investment-product-readiness > footer strong { color: var(--ink); font-size: 11px; }
+.investment-product-readiness > footer span { color: var(--muted); font-size: 9px; text-align: right; }
+
 .investment-model-note,
 .investment-model-governance,
 .investment-model-actions {
@@ -607,6 +633,10 @@
   .investment-model-metrics > div:nth-child(2) { border-right: 0; }
   .investment-model-metrics > div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .investment-model-bindings > div:last-child { grid-column: 1 / -1; }
+  .investment-product-readiness > header,
+  .investment-product-readiness > footer { align-items: flex-start; flex-direction: column; }
+  .investment-product-readiness ul { grid-template-columns: minmax(0, 1fr); }
+  .investment-product-readiness > footer span { text-align: left; }
   .investment-model-refresh .text-button { flex: 1 1 100%; min-height: 42px; }
 }
 

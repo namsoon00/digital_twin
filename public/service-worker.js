@@ -1,12 +1,12 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260822-decision-workspace-v3";
+const SHELL_CACHE = "orbit-alpha-shell-20260822-reasoning-detail-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=20260822-decision-workspace-v3",
+  "./styles.css?v=20260822-reasoning-detail-v4",
   "./app-default-settings.js?v=20260821-stable-share-v1",
-  "./app.js?v=20260822-decision-workspace-v3",
+  "./app.js?v=20260822-reasoning-detail-v4",
   "./vendor/lightweight-charts.standalone.production.js",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",

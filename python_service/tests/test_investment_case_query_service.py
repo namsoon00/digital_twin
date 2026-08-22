@@ -153,6 +153,13 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             result["evidence"]["missingData"],
         )
         self.assertEqual("generation:1", result["traceRefs"]["inferenceGenerationId"])
+        self.assertEqual("reconstructed", result["reasoning"]["snapshotState"])
+        self.assertEqual(1, result["reasoning"]["counts"]["rules"])
+        rule_node = next(
+            item for item in result["explanation"]["causalPaths"][0]["nodes"]
+            if item["layer"] == "rule"
+        )
+        self.assertEqual("rule:ai-demand", rule_node["items"][0]["id"])
 
     def test_unselected_hypothesis_evidence_is_kept_in_case_summary(self):
         row = episode()

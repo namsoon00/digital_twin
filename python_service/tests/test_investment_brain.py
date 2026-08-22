@@ -953,6 +953,11 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertTrue(outcome_contract["criteria"])
         self.assertTrue(outcome_contract["marketIndependenceKey"])
         self.assertTrue(outcome_contract["accountIndependenceKey"])
+        reasoning = episode.facts_at_decision["reasoningDetailSnapshot"]
+        self.assertEqual("exact", reasoning["snapshotState"])
+        self.assertEqual(2, reasoning["counts"]["relations"])
+        self.assertEqual(2, reasoning["counts"]["rules"])
+        self.assertTrue(reasoning["facts"])
 
         graph = PortfolioOntology("account-1")
         add_investment_brain_concepts(graph, "account-1", [episode.to_dict()])

@@ -23,6 +23,7 @@ from .investment_flow import (
     unique_texts,
     values,
 )
+from .investment_reasoning_detail import reasoning_detail_from_episode
 
 
 INVESTMENT_CASE_VERSION = "investment-case-v2"
@@ -66,6 +67,7 @@ class InvestmentCaseSnapshot:
     trace_refs: Dict[str, object] = field(default_factory=dict)
     status_dimensions: List[Dict[str, object]] = field(default_factory=list)
     explanation: Dict[str, object] = field(default_factory=dict)
+    reasoning: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self, compact: bool = False) -> Dict[str, object]:
         stages = [dict(item) for item in self.stages]
@@ -139,6 +141,7 @@ class InvestmentCaseSnapshot:
                 "scenarios": [dict(item) for item in self.scenarios],
                 "evidence": dict(self.evidence),
                 "traceRefs": dict(self.trace_refs),
+                "reasoning": dict(self.reasoning),
             })
         return payload
 
@@ -286,6 +289,8 @@ def _scenario(item: Mapping[str, object], selected_id: str) -> Dict[str, object]
         limit=20,
     )
     knowledge_basis = item_dict(item.get("knowledgeBasis") or item.get("knowledge_basis"))
+    supporting_rule_ids = unique_texts(values(item.get("supportingRuleIds") or item.get("supporting_rule_ids")), limit=50)
+    counter_rule_ids = unique_texts(values(item.get("counterRuleIds") or item.get("counter_rule_ids")), limit=50)
     return {
         "id": current_id,
         "title": text(item.get("templateLabel") or item.get("template_label")) or "검토 시나리오",
@@ -302,9 +307,10 @@ def _scenario(item: Mapping[str, object], selected_id: str) -> Dict[str, object]
         "counterEvidenceIds": counter_ids,
         "assumptions": assumptions,
         "invalidationConditions": invalidations,
+        "supportingRuleIds": supporting_rule_ids,
+        "counterRuleIds": counter_rule_ids,
         "ruleIds": unique_texts(
-            list(values(item.get("supportingRuleIds") or item.get("supporting_rule_ids")))
-            + list(values(item.get("counterRuleIds") or item.get("counter_rule_ids"))),
+            supporting_rule_ids + counter_rule_ids,
             limit=50,
         ),
         "relationIds": unique_texts(values(item.get("causalPathIds") or item.get("causal_path_ids")), limit=50),
@@ -318,6 +324,15 @@ def _scenario(item: Mapping[str, object], selected_id: str) -> Dict[str, object]
         "predictionTarget": text(item.get("predictionTarget") or item.get("prediction_target")),
         "expectedOutcome": text(item.get("expectedOutcome") or item.get("expected_outcome")),
         "outcomeMetric": text(item.get("outcomeMetric") or item.get("outcome_metric")),
+        "marketConditionIds": unique_texts(values(item.get("marketConditionIds") or item.get("market_condition_ids")), limit=50),
+        "marketRelationTypes": unique_texts(values(item.get("marketRelationTypes") or item.get("market_relation_types")), limit=50),
+        "accountConditionIds": unique_texts(values(item.get("accountConditionIds") or item.get("account_condition_ids")), limit=50),
+        "accountFields": unique_texts(values(item.get("accountFields") or item.get("account_fields")), limit=50),
+        "accountRelationTypes": unique_texts(values(item.get("accountRelationTypes") or item.get("account_relation_types")), limit=50),
+        "accountTargetKinds": unique_texts(values(item.get("accountTargetKinds") or item.get("account_target_kinds")), limit=50),
+        "targetRoles": unique_texts(values(item.get("targetRoles") or item.get("target_roles")), limit=50),
+        "actionPolicies": unique_texts(values(item.get("actionPolicies") or item.get("action_policies")), limit=50),
+        "knowledgeBasis": knowledge_basis,
         "plainLanguageBasis": text(knowledge_basis.get("plainLanguageBasis") or knowledge_basis.get("plain_language_basis")),
     }
 
@@ -338,6 +353,9 @@ def _guardrail_rows(episode: Mapping[str, object]) -> List[Dict[str, object]]:
             "requiredChecks": _human_descriptions(values(item.get("requiredChecks") or item.get("required_checks"))),
             "missingData": [row["text"] for row in missing_rows],
             "missingDataItems": missing_rows,
+            "source": text(item.get("source")),
+            "sourceRuleIds": unique_texts(values(item.get("sourceRuleIds") or item.get("source_rule_ids")), limit=50),
+            "knowledgeBasis": item_dict(item.get("knowledgeBasis") or item.get("knowledge_basis")),
         })
     return result
 
@@ -470,9 +488,15 @@ def _case_explanation(
     abstention: Mapping[str, object],
     source_snapshot_id: str,
     inference_generation_id: str,
+    reasoning_detail: Mapping[str, object],
 ) -> Dict[str, object]:
     selected = next((item for item in scenarios if item.get("selected")), {})
-    candidate_scope = [selected] if selected else scenarios
+    candidate_scope = scenarios
+    detail_facts = [item_dict(item) for item in reasoning_detail.get("facts") or [] if item_dict(item)]
+    detail_relations = [item_dict(item) for item in reasoning_detail.get("relations") or [] if item_dict(item)]
+    detail_rules = [item_dict(item) for item in reasoning_detail.get("rules") or [] if item_dict(item)]
+    detail_traces = [item_dict(item) for item in reasoning_detail.get("traces") or [] if item_dict(item)]
+    detail_hypotheses = [item_dict(item) for item in reasoning_detail.get("hypotheses") or [] if item_dict(item)]
     primary = {
         "id": "decision-primary",
         "layer": "ai" if abstention else "hypothesis" if selected else "decision",
@@ -487,6 +511,34 @@ def _case_explanation(
     counter = []
     paths = []
     for index, scenario in enumerate(candidate_scope[:6]):
+        scenario_id = text(scenario.get("id"))
+        scenario_rule_ids = set(scenario.get("ruleIds") or [])
+        scenario_path_ids = set(scenario.get("relationIds") or [])
+        scenario_evidence_ids = set(
+            list(scenario.get("supportingEvidenceIds") or [])
+            + list(scenario.get("counterEvidenceIds") or [])
+        )
+        rule_items = [item for item in detail_rules if text(item.get("id")) in scenario_rule_ids]
+        trace_items = [
+            item for item in detail_traces
+            if text(item.get("id")) in scenario_path_ids or text(item.get("ruleId")) in scenario_rule_ids
+        ]
+        relation_items = [
+            item for item in detail_relations
+            if text(item.get("ruleId")) in scenario_rule_ids
+            or text(item.get("id")) in scenario_path_ids
+            or text(item.get("id")) in scenario_evidence_ids
+        ]
+        fact_items = [
+            item for item in detail_facts
+            if scenario_rule_ids.intersection(set(item.get("ruleIds") or []))
+            or scenario_path_ids.intersection(set(item.get("traceIds") or []))
+        ]
+        if not fact_items and len(candidate_scope) == 1:
+            fact_items = detail_facts
+        hypothesis_items = [item for item in detail_hypotheses if text(item.get("id")) == scenario_id]
+        if not hypothesis_items:
+            hypothesis_items = [scenario]
         support_count = int(scenario.get("supportCount") or 0)
         counter_count = int(scenario.get("counterCount") or 0)
         row = {
@@ -516,11 +568,43 @@ def _case_explanation(
             "selected": bool(scenario.get("selected")),
             "eligibility": text(scenario.get("decisionEligibility")) or "unknown",
             "nodes": [
-                {"layer": "fact", "label": "판단 시점 사실", "refIds": [source_snapshot_id] if source_snapshot_id else []},
-                {"layer": "relation", "label": "TypeDB 관계", "refIds": list(scenario.get("relationIds") or [])},
-                {"layer": "rule", "label": "성립 규칙", "refIds": list(scenario.get("ruleIds") or [])},
-                {"layer": "hypothesis", "label": text(scenario.get("title")) or "투자 가설", "refIds": [text(scenario.get("id"))]},
-                {"layer": "decision", "label": action or "판단 유보", "refIds": []},
+                {
+                    "layer": "fact",
+                    "label": "판단 시점 사실",
+                    "refIds": [text(item.get("id")) for item in fact_items] or ([source_snapshot_id] if source_snapshot_id else []),
+                    "items": fact_items,
+                },
+                {
+                    "layer": "relation",
+                    "label": "TypeDB 관계",
+                    "refIds": [text(item.get("id")) for item in relation_items] or list(scenario.get("relationIds") or []),
+                    "items": relation_items,
+                },
+                {
+                    "layer": "rule",
+                    "label": "성립 규칙",
+                    "refIds": [text(item.get("id")) for item in rule_items] or list(scenario.get("ruleIds") or []),
+                    "items": rule_items,
+                    "traces": trace_items,
+                },
+                {
+                    "layer": "hypothesis",
+                    "label": text(scenario.get("title")) or "투자 가설",
+                    "refIds": [scenario_id] if scenario_id else [],
+                    "items": hypothesis_items,
+                },
+                {
+                    "layer": "decision",
+                    "label": action or "판단 유보",
+                    "refIds": [],
+                    "items": [{
+                        "id": "decision-current",
+                        "label": action or "판단 유보",
+                        "reason": headline,
+                        "selectedHypothesisId": selected_id,
+                        "abstained": bool(abstention),
+                    }],
+                },
             ],
             "inferenceGenerationId": inference_generation_id,
         })
@@ -719,6 +803,7 @@ def investment_case_snapshot(
     latest_outcome = outcomes[0] if outcomes else {}
     latest_notification = notifications[0] if notifications else {}
     engine_manifest = item_dict(facts_at_decision.get("engineManifest"))
+    reasoning_detail = reasoning_detail_from_episode(episode, scenarios, guardrails)
     case_status = "blocked" if readiness_state in {"blocked", "error"} else (
         "review" if readiness_state in {"warning", "pending"} else "active"
     )
@@ -733,6 +818,7 @@ def investment_case_snapshot(
         abstention=abstention,
         source_snapshot_id=source_snapshot_id,
         inference_generation_id=inference_generation_id,
+        reasoning_detail=reasoning_detail,
     )
     change_conditions = list(explanation.get("changeConditions") or [])
     if abstention:
@@ -845,6 +931,7 @@ def investment_case_snapshot(
         },
         status_dimensions=dimensions,
         explanation=explanation,
+        reasoning=reasoning_detail,
     )
 
 

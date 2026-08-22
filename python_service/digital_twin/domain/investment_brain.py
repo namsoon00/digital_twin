@@ -30,6 +30,7 @@ from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STAT
 from .ontology_rule_knowledge import rule_knowledge_basis_from_rows
 from .ontology_schema import tbox_fingerprint
 from .ontology_worlds import market_world
+from .investment_reasoning_detail import reasoning_detail_snapshot
 
 
 INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v5"
@@ -3045,6 +3046,11 @@ def decision_episode_from_context(
         effective_at=decided_at,
     )
     replay_manifest = decision_replay_manifest(context, relation_context)
+    reasoning_snapshot = reasoning_detail_snapshot(
+        relation_context,
+        seed_episode.hypothesis_set.to_dict(),
+        validated_response,
+    )
     return DecisionEpisode(
         episode_id=episode_id,
         account_id=str(context.get("accountId") or ""),
@@ -3118,6 +3124,7 @@ def decision_episode_from_context(
             **({"v2DecisionSynthesis": dict(context.get("v2DecisionSynthesis") or {})} if isinstance(context.get("v2DecisionSynthesis"), dict) and context.get("v2DecisionSynthesis") else {}),
             **({"hypothesisOutcomeContract": outcome_contract} if outcome_contract else {}),
             **({"engineManifest": replay_manifest} if replay_manifest else {}),
+            "reasoningDetailSnapshot": reasoning_snapshot,
             **({"decisionReferenceDateRaw": raw_decided_at} if raw_decided_at != decided_at else {}),
         },
         research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),

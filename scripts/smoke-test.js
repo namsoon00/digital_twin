@@ -778,10 +778,15 @@ function checkWorkflowConsoleContract() {
       code.indexOf('["history", "변화·결과"]') >= 0 &&
       code.indexOf("renderDecisionStatusDimensions") >= 0 &&
       code.indexOf("renderInvestmentCaseReasoning") >= 0 &&
+      code.indexOf("renderInvestmentReasoningInventory") >= 0 &&
+      code.indexOf("실제로 맞은 조건") >= 0 &&
+      code.indexOf("전체 추론 상세") >= 0 &&
       code.indexOf("renderDecisionInfoButton") >= 0 &&
       styles.indexOf(".oa-case-detail-tabs") >= 0 &&
       styles.indexOf(".oa-decision-master-detail") >= 0 &&
-      styles.indexOf(".oa-case-causal-paths") >= 0,
+      styles.indexOf(".oa-case-causal-paths") >= 0 &&
+      styles.indexOf(".oa-reasoning-snapshot") >= 0 &&
+      styles.indexOf(".oa-reasoning-inventory") >= 0,
     "투자 케이스의 사용자용 상태·근거·추론·결과 상세 계약이 없습니다."
   );
 }

@@ -666,6 +666,8 @@
     ontologyDiagnostics: null,
     ontologyDiagnosticsLoading: false,
     ontologyDiagnosticsError: "",
+    ontologyDiagnosticsPollTimer: 0,
+    ontologyDiagnosticsPollAttempt: 0,
     ontologyReasoningStatus: null,
     ontologyReasoningStatusLoading: false,
     ontologyReasoningStatusLoaded: false,
@@ -5974,11 +5976,16 @@
     state.ontologyDiagnosticsError = "";
     if (state.snapshot) render();
     var path = ontologyDiagnosticsPath();
-    if (!full) path += (path.indexOf("?") >= 0 ? "&" : "?") + "quick=1";
+    path += (path.indexOf("?") >= 0 ? "&" : "?") + (full ? "refresh=1" : "quick=1");
     return requestJson(path)
       .then(function (payload) {
         state.ontologyDiagnostics = payload || {};
         state.ontologyDiagnosticsError = "";
+        if (full && payload && payload.cache && payload.cache.refreshing) {
+          scheduleOntologyDiagnosticsPoll();
+        } else if (full) {
+          stopOntologyDiagnosticsPoll();
+        }
         return payload;
       })
       .catch(function (error) {
@@ -5989,6 +5996,36 @@
         state.ontologyDiagnosticsLoading = false;
         if (state.snapshot) render();
       });
+  }
+
+  function stopOntologyDiagnosticsPoll() {
+    if (state.ontologyDiagnosticsPollTimer) window.clearTimeout(state.ontologyDiagnosticsPollTimer);
+    state.ontologyDiagnosticsPollTimer = 0;
+    state.ontologyDiagnosticsPollAttempt = 0;
+  }
+
+  function scheduleOntologyDiagnosticsPoll() {
+    if (state.ontologyDiagnosticsPollTimer || state.ontologyDiagnosticsPollAttempt >= 45) return;
+    state.ontologyDiagnosticsPollTimer = window.setTimeout(function () {
+      state.ontologyDiagnosticsPollTimer = 0;
+      state.ontologyDiagnosticsPollAttempt += 1;
+      requestJson(ontologyDiagnosticsPath())
+        .then(function (payload) {
+          state.ontologyDiagnostics = payload || {};
+          state.ontologyDiagnosticsError = "";
+          if (payload && payload.cache && payload.cache.refreshing) {
+            scheduleOntologyDiagnosticsPoll();
+          } else {
+            stopOntologyDiagnosticsPoll();
+          }
+          if (state.snapshot) render();
+        })
+        .catch(function (error) {
+          state.ontologyDiagnosticsError = error.message || "TypeDB 진단을 읽지 못했습니다.";
+          scheduleOntologyDiagnosticsPoll();
+          if (state.snapshot) render();
+        });
+    }, 2000);
   }
 
   function loadOntologyReasoningStatus(force) {
@@ -33246,8 +33283,10 @@
     var refreshOntologyDiagnosticsButton = app.querySelector('[data-action="refresh-ontology-diagnostics"]');
     if (refreshOntologyDiagnosticsButton) {
       refreshOntologyDiagnosticsButton.addEventListener("click", function () {
-        loadOntologyDiagnostics(true, true).then(function () {
-          showSnackbar("TypeDB 진단을 다시 읽었습니다.");
+        loadOntologyDiagnostics(true, true).then(function (payload) {
+          showSnackbar(payload && payload.cache && payload.cache.refreshing
+            ? "TypeDB 진단 갱신을 시작했습니다."
+            : "TypeDB 진단을 다시 읽었습니다.");
         });
       });
     }

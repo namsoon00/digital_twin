@@ -257,15 +257,15 @@ function checkWorkflowConsoleContract() {
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
   const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
-  const tabLabels = ["오늘", "캘린더", "시장", "판단", "알림", "검증", "설정"];
+  const tabLabels = ["오늘", "캘린더", "시장", "판단", "알림", "근거 점검", "설정"];
   assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "7개 업무 탭 ID가 모두 정의되지 않았습니다.");
   assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "7개 업무 탭명이 모두 정의되지 않았습니다.");
   assertOk((tabBlock.match(/\{ id:/g) || []).length === 7, "상위 업무 탭은 정확히 7개여야 합니다.");
   assertOk(
     code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];') >= 0
-      && code.indexOf('var managementTabIds = ["experiments"];') >= 0
+      && code.indexOf("var managementTabIds = [];") >= 0
       && code.indexOf("var pageModeEnabledTabs = [];") >= 0,
-    "모바일 핵심 6탭과 검증 관리 메뉴 구성이 일치하지 않습니다."
+    "모바일 핵심 6탭과 판단 내부 근거 점검 구성이 일치하지 않습니다."
   );
   assertOk(
     indexHtml.indexOf('viewport-fit=cover') >= 0
@@ -378,7 +378,6 @@ function checkWorkflowConsoleContract() {
     "selectConsoleInstrumentRows",
     "selectConsoleDecisionRows",
     "selectConsoleAlertRows",
-    "selectConsoleValidationRows",
     "selectConsoleOperationSources"
   ].forEach(function (selector) {
     assertOk(code.indexOf("function " + selector) >= 0, "업무 화면 selector가 없습니다: " + selector);
@@ -393,6 +392,26 @@ function checkWorkflowConsoleContract() {
   ].forEach(function (renderer) {
     assertOk(code.indexOf("function " + renderer) >= 0, "업무 화면 renderer가 없습니다: " + renderer);
   });
+  assertOk(
+    code.indexOf("function renderValidationUserConsole") >= 0 &&
+      code.indexOf("validationAudience") < 0 &&
+      code.indexOf("renderValidationOperatorConsole") < 0,
+    "근거 점검 화면에 제거된 사용자/운영자 이중 경로가 남아 있습니다."
+  );
+  assertOk(
+    code.indexOf("function renderInvestmentModelOverview") >= 0 &&
+      code.indexOf('data-work-detail="investment-model-overview"') >= 0 &&
+      code.indexOf("사실</span><b>&rarr;</b><span>관계") >= 0 &&
+      styles.indexOf(".investment-model-overview") >= 0,
+    "판단 기준에서 활성 투자모델·관계·가설·추론 계약을 확인할 수 없습니다."
+  );
+  assertOk(
+    code.indexOf('class="oa-case-list"') >= 0 &&
+      code.indexOf('class="oa-alert-card') >= 0 &&
+      styles.indexOf(".oa-case-row") >= 0 &&
+      styles.indexOf(".oa-alert-card") >= 0,
+    "현재 의견과 변화 알림이 구분된 카드 단위로 렌더링되지 않습니다."
+  );
   assertOk(
     code.indexOf('var settingsSections = [') >= 0 &&
       ["계정", "내 환경", "운영 관리"].every(function (label) { return code.indexOf('label: "' + label + '"') >= 0; }) &&
@@ -753,13 +772,13 @@ function checkWorkflowConsoleContract() {
   assertOk(
     code.indexOf('return "/api/investment-cases?"') >= 0 &&
       code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
-      code.indexOf('["summary", "요약"]') >= 0 &&
+      code.indexOf('["summary", "결론"]') >= 0 &&
       code.indexOf('["evidence", "근거"]') >= 0 &&
-      code.indexOf('["scenarios", "시나리오"]') >= 0 &&
+      code.indexOf('["scenarios", "가능한 흐름"]') >= 0 &&
       code.indexOf('["history", "이력"]') >= 0 &&
       styles.indexOf(".oa-case-detail-tabs") >= 0 &&
       styles.indexOf(".oa-flow-stage-strip.case-stages") >= 0,
-    "투자 케이스의 사용자용 5단계와 상세 탭 UI 계약이 없습니다."
+    "투자 케이스의 사용자용 5단계와 결론·근거·흐름 상세 계약이 없습니다."
   );
 }
 
@@ -2136,7 +2155,7 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
     assertOk(code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];') >= 0, "하단 핵심 6탭 구성이 역할과 맞지 않습니다.");
-    assertOk(code.indexOf('var managementTabIds = ["experiments"];') >= 0, "검증 관리 메뉴 구성이 역할과 맞지 않습니다.");
+    assertOk(code.indexOf("var managementTabIds = [];") >= 0, "근거 점검이 별도 관리 메뉴로 중복 노출됩니다.");
     assertOk(
       modelingHtml.indexOf('class="oa-decision-workspace-nav"') >= 0
         && modelingHtml.indexOf('data-tab="experiments"') >= 0
@@ -2983,20 +3002,28 @@ async function checkNormalMode(port, context) {
   const investmentFlow = await request(port, "/api/investment-flow?limit=10");
   assertOk(investmentFlow.statusCode === 200, "투자 판단 흐름 API 응답 코드가 200이 아닙니다: " + investmentFlow.statusCode + " · " + investmentFlow.body.slice(0, 500));
   const investmentFlowPayload = JSON.parse(investmentFlow.body);
-  assertOk(investmentFlowPayload.version === "investment-flow-v1", "투자 판단 흐름 API 버전이 없습니다.");
+  assertOk(investmentFlowPayload.version === "investment-flow-v2", "투자 판단 흐름 API v2 계약이 없습니다.");
   assertOk(Array.isArray(investmentFlowPayload.items), "투자 판단 흐름 API items가 배열이 아닙니다.");
   assertOk(investmentFlowPayload.operatorView && Array.isArray(investmentFlowPayload.operatorView.stages), "투자 판단 흐름 API 운영 단계가 없습니다.");
 
   const investmentCases = await request(port, "/api/investment-cases?limit=10");
   assertOk(investmentCases.statusCode === 200, "투자 케이스 API 응답 코드가 200이 아닙니다: " + investmentCases.statusCode + " · " + investmentCases.body.slice(0, 500));
   const investmentCasesPayload = JSON.parse(investmentCases.body);
-  assertOk(investmentCasesPayload.version === "investment-case-v1", "투자 케이스 API 버전이 없습니다.");
+  assertOk(investmentCasesPayload.version === "investment-case-v2", "투자 케이스 API v2 계약이 없습니다.");
   assertOk(Array.isArray(investmentCasesPayload.items), "투자 케이스 API items가 배열이 아닙니다.");
   assertOk(investmentCasesPayload.summary && typeof investmentCasesPayload.summary === "object", "투자 케이스 API summary가 없습니다.");
   assertOk(investmentCasesPayload.operatorView && investmentCasesPayload.operatorView.loaded === false, "투자 케이스 사용자 목록이 운영 진단을 즉시 로드했습니다.");
   const operatorInvestmentCases = await request(port, "/api/investment-cases?limit=10&audience=operator");
   const operatorInvestmentCasesPayload = JSON.parse(operatorInvestmentCases.body);
   assertOk(operatorInvestmentCasesPayload.operatorView && operatorInvestmentCasesPayload.operatorView.loaded === true && Array.isArray(operatorInvestmentCasesPayload.operatorView.stages), "투자 케이스 운영 진단이 없습니다.");
+
+  const investmentModel = await request(port, "/api/investment-model");
+  assertOk(investmentModel.statusCode === 200, "투자모델 API 응답 코드가 200이 아닙니다: " + investmentModel.statusCode + " · " + investmentModel.body.slice(0, 500));
+  const investmentModelPayload = JSON.parse(investmentModel.body);
+  assertOk(investmentModelPayload.version === "investment-model-v1", "투자모델 읽기 계약이 없습니다.");
+  assertOk(investmentModelPayload.readOnly === true, "투자모델 기본 API가 읽기 전용이 아닙니다.");
+  assertOk(investmentModelPayload.model && investmentModelPayload.model.contract === "facts-relations-hypotheses-inference-decision", "투자모델 판단 생성 계약이 없습니다.");
+  assertOk(investmentModelPayload.inventory && typeof investmentModelPayload.inventory.rules === "number", "투자모델 규칙 인벤토리가 없습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode + " · " + emptyAccounts.body.slice(0, 500));

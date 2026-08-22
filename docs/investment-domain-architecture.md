@@ -100,7 +100,7 @@ read model projects the latest episode for each account and instrument into one
 stable `InvestmentCaseSnapshot`:
 
 ```text
-confirmed facts -> signal set -> competing investment case -> decision -> outcome
+confirmed facts -> signals and relations -> competing investment cases -> current opinion -> outcome
 ```
 
 The case ID is stable across new episodes for the same account and instrument.
@@ -108,8 +108,11 @@ List reads use the indexed `investment_flow_heads` projection and never query
 TypeDB, hydrate full outcome history, or replay inference. Detail reads expose
 the complete supporting and counter evidence, assumptions, invalidation
 conditions, and guardrails. History is loaded separately from prior persisted
-episodes. The original source/evidence/relation/hypothesis/validation/inference/
-decision/notification lineage is an operator-only trace loaded on demand.
+episodes. Evidence assurance is an overlay on the judgement: it may block or
+qualify an opinion, but it is not another serial inference stage. Notification
+delivery is a separate downstream branch and never lowers judgement readiness
+when no notification is required. The source/evidence/relation/hypothesis/
+inference/decision lineage is an operator-only trace loaded on demand.
 
 The HTTP contracts are:
 
@@ -121,6 +124,23 @@ The HTTP contracts are:
 `/api/investment-flow` remains a compatibility and operational API. New user
 interfaces use the investment-case contract so implementation stages do not
 leak into the investor's primary decision workflow.
+
+## Investment Model Read Model
+
+The active deployment registry, versioned RuleBox, ontology catalog, and
+hypothesis experiment ledger remain authoritative. `GET /api/investment-model`
+projects those sources into one read-only model identity:
+
+```text
+facts -> relations -> hypotheses -> inference -> current opinion
+```
+
+The projection exposes the active deployment and release fingerprints, model
+thesis, graph and time-series bindings, rule/relation/hypothesis inventory, and
+promotion state. It never copies rules into a second mutable store and never
+returns credentials. A persistent stale-while-revalidate cache keeps the last
+successful release visible while slow optional dependencies refresh. Explicit
+refresh is an operator action; AI proposals cannot promote themselves.
 
 ## Policy Reasoning
 

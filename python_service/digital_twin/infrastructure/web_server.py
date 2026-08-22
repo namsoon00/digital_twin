@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -95,6 +96,7 @@ from ..domain.investment_ubiquitous_language import (
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_analysis import investment_decision_key
 from ..domain.investment_evidence_governance import claim_quality_summary
+from ..domain.investment_model import investment_model_projection
 from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
@@ -174,6 +176,11 @@ FLOW_LENS_READ_MODEL = None
 FLOW_LENS_READ_MODEL_LOCK = threading.Lock()
 ONTOLOGY_INFERENCE_LEDGER_READ_MODEL = StaleReadModelCache(
     "ontology-inference-ledger",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
+INVESTMENT_MODEL_READ_MODEL = StaleReadModelCache(
+    "investment-model",
     ttl_seconds=60,
     retry_cooldown_seconds=20,
 )
@@ -1436,6 +1443,78 @@ def investment_case_api_payload(
             first_query(query, "audience") or first_query(query, "includeOperator") or ""
         ).strip().lower() in {"operator", "1", "true", "yes"},
     )
+
+
+def _investment_model_source_payload() -> Dict[str, object]:
+    loaders = {
+        "platform": reasoning_engine_platform_status_payload,
+        "rulebox": ontology_rulebox_payload,
+        "catalog": lambda: ontology_catalog_api_payload("summary", {}),
+        "experiments": ontology_experiments_status_payload,
+    }
+    results = {}
+    errors = []
+    with ThreadPoolExecutor(max_workers=len(loaders), thread_name_prefix="investment-model-read") as executor:
+        futures = {key: executor.submit(loader) for key, loader in loaders.items()}
+        for key, future in futures.items():
+            try:
+                results[key] = future.result()
+            except Exception as error:  # noqa: BLE001 - partial model status remains useful.
+                results[key] = {}
+                errors.append(key + ": " + str(error)[:180])
+    payload = investment_model_projection(
+        results.get("platform"),
+        results.get("rulebox"),
+        results.get("catalog"),
+        results.get("experiments"),
+        runtime_settings(),
+    )
+    payload["diagnostics"] = {"partial": bool(errors), "errors": errors}
+    return payload
+
+
+def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
+    """Return the last model release immediately while refreshing stale sources."""
+
+    key = "active"
+    if force:
+        refreshed = INVESTMENT_MODEL_READ_MODEL.refresh(key, _investment_model_source_payload)
+        payload = dict(refreshed.get("payload") or {})
+        payload["cache"] = {
+            "stale": False,
+            "ageSeconds": 0,
+            "refreshing": False,
+            "lastSuccessAt": refreshed.get("lastSuccessAt", ""),
+        }
+        return payload
+    cached = INVESTMENT_MODEL_READ_MODEL.snapshot(key)
+    if cached.get("hasData"):
+        refresh_started = False
+        if cached.get("stale"):
+            refresh_started = INVESTMENT_MODEL_READ_MODEL.refresh_async(key, _investment_model_source_payload)
+        payload = dict(cached.get("payload") or {})
+        payload["cache"] = {
+            "stale": bool(cached.get("stale")),
+            "ageSeconds": cached.get("ageSeconds", 0),
+            "refreshing": bool(cached.get("refreshing") or refresh_started),
+            "lastSuccessAt": cached.get("lastSuccessAt", ""),
+        }
+        return payload
+    started = INVESTMENT_MODEL_READ_MODEL.refresh_async(key, _investment_model_source_payload)
+    current = INVESTMENT_MODEL_READ_MODEL.snapshot(key)
+    payload = investment_model_projection({}, {}, {}, {}, runtime_settings())
+    payload["status"] = "warming" if started or current.get("refreshing") else "unavailable"
+    payload["diagnostics"] = {
+        "partial": True,
+        "errors": [current.get("lastError")] if current.get("lastError") else [],
+    }
+    payload["cache"] = {
+        "stale": False,
+        "ageSeconds": 0,
+        "refreshing": bool(started or current.get("refreshing")),
+        "lastSuccessAt": "",
+    }
+    return payload
 
 
 def save_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
@@ -5863,6 +5942,11 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/flow-lens" and self.command == "GET":
             return self.send_payload(200, flow_lens_read_payload(query), cache_control="no-store")
+
+        if path == "/api/investment-model" and self.command == "GET":
+            return self.send_payload(200, investment_model_api_payload(
+                force=request_bool(first_query(query, "refresh"), False),
+            ), cache_control="no-store")
 
         if path == "/api/investment-cases" and self.command == "GET":
             return self.send_payload(200, investment_case_api_payload(query), cache_control="no-store")

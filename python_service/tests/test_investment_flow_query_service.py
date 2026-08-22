@@ -36,6 +36,7 @@ def episode(
                 "hypothesisId": selected_id,
                 "claim": "AI 수요가 Apple 실적을 지지한다.",
                 "supportingRuleIds": ["rule:ai-demand"],
+                "causalPathIds": ["relation:path:ai-demand"],
             }] if selected else [],
         },
     }
@@ -105,9 +106,10 @@ class InvestmentFlowQueryServiceTests(unittest.TestCase):
         self.assertEqual("pass", result["validationState"])
         self.assertEqual("pass", result["readinessState"])
         self.assertEqual(
-            ["source", "evidence", "relation", "hypothesis", "validation", "inference", "decision", "notification"],
+            ["source", "evidence", "relation", "hypothesis", "inference", "decision"],
             [item["id"] for item in result["stages"]],
         )
+        self.assertEqual("sent", result["delivery"]["state"])
         self.assertEqual(investment_flow_id("account-1", "AAPL", "episode:1"), result["flowId"])
 
     def test_blocked_projection_explains_the_first_missing_stage(self):
@@ -170,8 +172,8 @@ class InvestmentFlowQueryServiceTests(unittest.TestCase):
         result = service.detail("episode:1")
 
         self.assertEqual("ok", result["status"])
-        self.assertEqual(8, len(result["lineage"]["nodes"]))
-        self.assertEqual(7, len(result["lineage"]["links"]))
+        self.assertEqual(6, len(result["lineage"]["nodes"]))
+        self.assertEqual(5, len(result["lineage"]["links"]))
         self.assertTrue(result["gaps"])
         self.assertNotIn("raw", result)
 
@@ -179,7 +181,8 @@ class InvestmentFlowQueryServiceTests(unittest.TestCase):
         result = decision_flow_projection(episode(), [])
 
         self.assertEqual("pass", result["readinessState"])
-        self.assertEqual("warning", result["stages"][-1]["state"])
+        self.assertEqual("not-required", result["delivery"]["state"])
+        self.assertFalse(result["delivery"]["expected"])
         self.assertEqual("", result["blockingStage"])
         self.assertEqual("확인 완료", result["blockingStageLabel"])
 
@@ -193,8 +196,8 @@ class InvestmentFlowQueryServiceTests(unittest.TestCase):
         ).detail(row["episodeId"])
 
         self.assertEqual("pass", projection["stages"][0]["state"])
-        self.assertEqual("validation", projection["blockingStage"])
-        self.assertEqual(["validation", "notification"], [item["stage"] for item in detail["gaps"]])
+        self.assertEqual("assurance", projection["blockingStage"])
+        self.assertEqual(["assurance"], [item["stage"] for item in detail["gaps"]])
 
 
 if __name__ == "__main__":

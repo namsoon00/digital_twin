@@ -24,13 +24,13 @@ from .investment_flow import (
 )
 
 
-INVESTMENT_CASE_VERSION = "investment-case-v1"
+INVESTMENT_CASE_VERSION = "investment-case-v2"
 
 CASE_STAGES = (
     ("fact", "확인된 사실"),
     ("signal", "핵심 신호"),
     ("case", "투자 케이스"),
-    ("decision", "현재 판단"),
+    ("decision", "현재 의견"),
     ("outcome", "결과 추적"),
 )
 
@@ -92,7 +92,6 @@ class InvestmentCaseSnapshot:
             outcome = {
                 "state": outcome.get("state"),
                 "count": outcome.get("count", 0),
-                "notificationCount": outcome.get("notificationCount", 0),
             }
         payload = {
             "version": INVESTMENT_CASE_VERSION,
@@ -278,6 +277,7 @@ def investment_case_snapshot(
     episode = item_dict(episode_value)
     flow = decision_flow_projection(episode, jobs or [])
     flow_stages = {text(item.get("id")): item_dict(item) for item in flow.get("stages") or []}
+    assurance = item_dict(flow.get("assurance"))
     hypotheses = _hypotheses(episode)
     selected_id = text(episode.get("selectedHypothesisId") or episode.get("selected_hypothesis_id"))
     scenarios = [_scenario(item, selected_id) for item in hypotheses]
@@ -312,8 +312,8 @@ def investment_case_snapshot(
     ])
     case_state = _worst_state([
         flow_stages.get("hypothesis", {}).get("state"),
-        flow_stages.get("validation", {}).get("state"),
         flow_stages.get("inference", {}).get("state"),
+        assurance.get("state"),
     ])
     decision_state = text(flow_stages.get("decision", {}).get("state")) or "warning"
     outcome_state = "pass" if outcomes else "pending"
@@ -328,10 +328,10 @@ def investment_case_snapshot(
         _stage(
             "signal",
             signal_state,
-            f"지지 {len(supporting_ids)}개 · 반박 {len(counter_ids)}개 · 관계 {len(flow.get('ruleIds') or [])}개",
+            f"지지 {len(supporting_ids)}개 · 반박 {len(counter_ids)}개 · 관계 {len(flow.get('relationIds') or [])}개",
             supportCount=len(supporting_ids),
             counterCount=len(counter_ids),
-            relationCount=len(flow.get("ruleIds") or []),
+            relationCount=len(flow.get("relationIds") or []),
         ),
         _stage(
             "case",
@@ -349,9 +349,8 @@ def investment_case_snapshot(
         _stage(
             "outcome",
             outcome_state,
-            f"관측 결과 {len(outcomes)}건 · 연결 알림 {len(notifications)}건" if outcomes or notifications else "다음 관측 결과를 기다리는 중입니다.",
+            f"관측 결과 {len(outcomes)}건" if outcomes else "다음 관측 결과를 기다리는 중입니다.",
             outcomeCount=len(outcomes),
-            notificationCount=len(notifications),
         ),
     ]
 
@@ -369,6 +368,7 @@ def investment_case_snapshot(
     source_snapshot_id = text(flow.get("sourceAboxSnapshotId"))
     latest_outcome = outcomes[0] if outcomes else {}
     latest_notification = notifications[0] if notifications else {}
+    engine_manifest = item_dict(facts_at_decision.get("engineManifest"))
     case_status = "blocked" if readiness_state in {"blocked", "error"} else (
         "review" if readiness_state in {"warning", "pending"} else "active"
     )
@@ -400,7 +400,7 @@ def investment_case_snapshot(
             "state": signal_state,
             "supportCount": len(supporting_ids),
             "counterCount": len(counter_ids),
-            "relationCount": len(flow.get("ruleIds") or []),
+            "relationCount": len(flow.get("relationIds") or []),
             "summary": stages[1]["detail"],
         },
         scenarios=scenarios,
@@ -410,6 +410,8 @@ def investment_case_snapshot(
             "dataState": text(flow.get("dataState")),
             "validationState": text(flow.get("validationState")),
             "validationLabel": text(flow.get("validationLabel")),
+            "assuranceState": text(assurance.get("state")),
+            "assuranceLabel": text(assurance.get("label")),
             "reason": headline,
             "investmentView": text(episode.get("investmentView") or episode.get("investment_view")),
             "executionDecision": text(episode.get("executionDecision") or episode.get("execution_decision")),
@@ -425,6 +427,7 @@ def investment_case_snapshot(
             "items": outcomes,
             "notificationCount": len(notifications),
             "latestNotification": latest_notification,
+            "delivery": dict(flow.get("delivery") or {}),
         },
         evidence={
             "supportCount": len(supporting_ids),
@@ -443,7 +446,18 @@ def investment_case_snapshot(
             "inferenceGenerationId": text(flow.get("inferenceGenerationId")),
             "selectedHypothesisId": selected_id,
             "ruleIds": list(flow.get("ruleIds") or []),
+            "relationIds": list(flow.get("relationIds") or []),
             "notificationIds": [text(item.get("jobId")) for item in notifications if text(item.get("jobId"))],
+            "modelRelease": {
+                "deploymentId": text(engine_manifest.get("deploymentId")),
+                "releaseFingerprint": text(engine_manifest.get("releaseFingerprint")),
+                "reasoningEngineVersion": text(engine_manifest.get("reasoningEngineVersion")),
+                "tboxFingerprint": text(engine_manifest.get("tboxFingerprint")),
+                "ruleboxFingerprint": text(engine_manifest.get("ruleboxFingerprint")),
+                "promptVersion": text(engine_manifest.get("promptVersion")),
+                "modelVersion": text(engine_manifest.get("modelVersion")),
+                "decisionContractVersion": text(engine_manifest.get("decisionContractVersion")),
+            },
         },
     )
 

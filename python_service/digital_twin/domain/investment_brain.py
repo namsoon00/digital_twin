@@ -3157,6 +3157,18 @@ def decision_replay_manifest(
         else {}
     )
     return {
+        "deploymentId": str(
+            relation_context.get("reasoningEngineDeploymentId")
+            or relation_context.get("deploymentId")
+            or frozen.get("deploymentId")
+            or ""
+        ),
+        "releaseFingerprint": str(
+            relation_context.get("reasoningEngineReleaseFingerprint")
+            or relation_context.get("releaseFingerprint")
+            or frozen.get("releaseFingerprint")
+            or ""
+        ),
         "tboxFingerprint": str(
             relation_context.get("tboxFingerprint")
             or graph_inference.get("tboxFingerprint")

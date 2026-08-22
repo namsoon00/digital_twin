@@ -11,17 +11,15 @@ from dataclasses import asdict, is_dataclass
 from typing import Dict, Iterable, List, Mapping
 
 
-INVESTMENT_FLOW_VERSION = "investment-flow-v1"
+INVESTMENT_FLOW_VERSION = "investment-flow-v2"
 
 FLOW_STAGES = (
     ("source", "원천 데이터"),
     ("evidence", "근거"),
     ("relation", "관계"),
     ("hypothesis", "가설"),
-    ("validation", "검증"),
     ("inference", "추론"),
     ("decision", "판단"),
-    ("notification", "알림"),
 )
 
 FLOW_STAGE_LABELS = dict(FLOW_STAGES)
@@ -123,6 +121,22 @@ def hypothesis_rule_ids(hypotheses: Iterable[Mapping[str, object]]) -> List[str]
     )
 
 
+def hypothesis_relation_ids(hypotheses: Iterable[Mapping[str, object]]) -> List[str]:
+    return unique_texts(
+        relation_id
+        for hypothesis in hypotheses or []
+        for key in (
+            "causalPathIds",
+            "causal_path_ids",
+            "marketRelationTypes",
+            "market_relation_types",
+            "accountRelationTypes",
+            "account_relation_types",
+        )
+        for relation_id in values(hypothesis.get(key))
+    )
+
+
 def notification_status(job: object) -> str:
     return text(item_dict(job).get("status")).lower()
 
@@ -145,6 +159,28 @@ def notification_items(jobs: Iterable[object]) -> List[Dict[str, object]]:
     return result
 
 
+def delivery_projection(notices: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+    rows = [item_dict(item) for item in notices or [] if item_dict(item)]
+    states = {notification_status(item) for item in rows}
+    if states & {"failed", "error"}:
+        state, label = "failed", "전송 실패"
+    elif states & {"done", "sent", "delivered"}:
+        state, label = "sent", "전송 완료"
+    elif states & {"pending", "processing", "awaiting_ai", "queued"}:
+        state, label = "pending", "전송 대기"
+    elif states & {"suppressed", "skipped", "cancelled", "canceled"}:
+        state, label = "suppressed", "정책상 미발송"
+    else:
+        state, label = "not-required", "알림 조건 없음"
+    return {
+        "state": state,
+        "label": label,
+        "expected": bool(rows),
+        "count": len(rows),
+        "detail": str(len(rows)) + "개 전달 기록" if rows else "의미 있는 변화가 없어 알림을 만들지 않았습니다.",
+    }
+
+
 def decision_flow_projection(episode_value: object, jobs: Iterable[object] = None) -> Dict[str, object]:
     episode = item_dict(episode_value)
     episode_id = text(episode.get("episodeId") or episode.get("episode_id"))
@@ -162,6 +198,7 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         or item_dict(episode.get("factsAtDecision")).get("sourceSnapshotId")
     )
     facts = item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
+    engine_manifest = item_dict(facts.get("engineManifest") or facts.get("engine_manifest"))
     evidence_ids = unique_texts(
         list(values(episode.get("evidenceIds") or episode.get("evidence_ids")))
         + list(values(episode.get("counterEvidenceIds") or episode.get("counter_evidence_ids")))
@@ -170,6 +207,7 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
     selected_id = text(episode.get("selectedHypothesisId") or episode.get("selected_hypothesis_id"))
     selected = next((item for item in hypotheses if hypothesis_id(item) == selected_id), {})
     rule_ids = hypothesis_rule_ids(hypotheses)
+    relation_ids = hypothesis_relation_ids(hypotheses)
     inference_generation_id = text(
         episode.get("inferenceGenerationId") or episode.get("inference_generation_id")
     )
@@ -186,30 +224,26 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         "blocked" if data_state in {"insufficient", "missing", "unavailable"} else "warning"
     )
     evidence_state = "pass" if evidence_ids else ("blocked" if validation_state == "blocked" else "warning")
-    relation_state = "pass" if rule_ids else ("warning" if inference_generation_id else "blocked")
+    relation_state = "pass" if relation_ids else ("warning" if inference_generation_id else "blocked")
     hypothesis_state = "pass" if selected_id else ("warning" if hypotheses else "blocked")
     inference_state = "pass" if inference_generation_id else "blocked"
-    decision_state = "blocked" if abstention or validation_state in {"blocked", "error"} else "pass"
-    notice_states = {notification_status(item) for item in notices}
-    notification_state = (
-        "error" if notice_states & {"failed", "error"}
-        else "pass" if notice_states & {"done", "sent"}
-        else "pending" if notice_states & {"pending", "processing", "awaiting_ai"}
-        else "warning"
-    )
+    decision_state = "blocked" if abstention else "pass"
+    delivery = delivery_projection(notices)
+    assurance = {
+        "state": validation_state,
+        "label": FLOW_STATE_LABELS[validation_state],
+        "detail": text(episode.get("decisionSummary") or episode.get("decision_summary")) or "근거 점검 상태를 확인하세요.",
+        "guardrailCount": len(guardrails),
+    }
     stages = [
         stage_payload("source", source_state, source_snapshot_id or ("판단 시점 사실이 저장됨" if facts else "판단 시점 원천 스냅샷 연결 필요"), refId=source_snapshot_id),
         stage_payload("evidence", evidence_state, str(len(evidence_ids)) + "개 근거 연결" if evidence_ids else "판단 근거 연결 필요", count=len(evidence_ids)),
-        stage_payload("relation", relation_state, str(len(rule_ids)) + "개 규칙·관계 경로" if rule_ids else "관계 분석 경로 확인 필요", count=len(rule_ids)),
+        stage_payload("relation", relation_state, str(len(relation_ids)) + "개 관계 경로 · " + str(len(rule_ids)) + "개 규칙" if relation_ids else "실제 관계 경로 연결 필요", count=len(relation_ids), ruleCount=len(rule_ids)),
         stage_payload("hypothesis", hypothesis_state, text(selected.get("claim") or selected.get("label")) or ("후보 가설 " + str(len(hypotheses)) + "개" if hypotheses else "선택 가능한 가설 없음"), count=len(hypotheses), refId=selected_id),
-        stage_payload("validation", validation_state, text(episode.get("decisionSummary") or episode.get("decision_summary")) or "검증 상태 확인", guardrailCount=len(guardrails)),
         stage_payload("inference", inference_state, inference_generation_id or "추론 세대 연결 필요", refId=inference_generation_id),
         stage_payload("decision", decision_state, text(episode.get("decisionSummary") or episode.get("decision_summary")) or text(episode.get("action")) or "판단 보류", refId=episode_id),
-        stage_payload("notification", notification_state, str(len(notices)) + "개 알림 연결" if notices else "연결된 알림 없음", count=len(notices)),
     ]
-    # Delivery is downstream of the investment judgement. A missing or delayed
-    # notification stays visible without making a valid judgement look unready.
-    readiness_stages = [item for item in stages if item.get("id") != "notification"]
+    readiness_stages = list(stages) + [{"id": "assurance", "label": "근거 점검", **assurance}]
     worst = max(readiness_stages, key=lambda item: FLOW_STATE_RANK.get(text(item.get("state")), 2))
     blocking = {}
     if worst.get("state") != "pass":
@@ -225,10 +259,9 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         "evidence": "지지·반박 근거를 추가로 확인하세요.",
         "relation": "종목 관계와 적용 규칙을 다시 분석하세요.",
         "hypothesis": "경쟁 가설과 반대 근거를 비교하세요.",
-        "validation": "차단 조건과 데이터 품질을 확인하세요.",
+        "assurance": "부족한 근거와 차단 조건을 확인하세요.",
         "inference": "TypeDB 추론 세대를 재확인하세요.",
         "decision": "판단 보류 사유와 무효화 조건을 확인하세요.",
-        "notification": "알림 전달 상태와 재시도 여부를 확인하세요.",
     }
     return {
         "version": INVESTMENT_FLOW_VERSION,
@@ -256,12 +289,24 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         "sourceAboxSnapshotId": source_snapshot_id,
         "inferenceGenerationId": inference_generation_id,
         "selectedHypothesisId": selected_id,
+        "modelRelease": {
+            "deploymentId": text(engine_manifest.get("deploymentId")),
+            "releaseFingerprint": text(engine_manifest.get("releaseFingerprint")),
+            "reasoningEngineVersion": text(engine_manifest.get("reasoningEngineVersion")),
+            "tboxFingerprint": text(engine_manifest.get("tboxFingerprint")),
+            "ruleboxFingerprint": text(engine_manifest.get("ruleboxFingerprint")),
+            "promptVersion": text(engine_manifest.get("promptVersion")),
+            "modelVersion": text(engine_manifest.get("modelVersion")),
+        },
         "evidenceIds": evidence_ids,
+        "relationIds": relation_ids,
         "ruleIds": rule_ids,
         "hypotheses": hypotheses,
         "guardrails": guardrails,
         "abstention": abstention,
         "notifications": notices,
+        "assurance": assurance,
+        "delivery": delivery,
         "stages": stages,
         "raw": episode,
     }

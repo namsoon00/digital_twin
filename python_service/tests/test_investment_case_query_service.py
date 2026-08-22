@@ -40,6 +40,7 @@ def episode(
                 "templateLabel": "AI 수요 지속",
                 "claim": "AI 수요가 실적을 지지합니다.",
                 "supportingRuleIds": ["rule:ai-demand"],
+                "causalPathIds": ["relation:path:ai-demand"],
                 "supportingEvidenceIds": ["evidence:1"],
                 "counterEvidenceIds": ["evidence:counter"],
                 "invalidationConditions": ["수요 증가가 다음 분기에 확인되지 않습니다."],
@@ -115,7 +116,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         store = FakeDecisionStore([episode()])
         result = InvestmentCaseQueryService(store, FakeNotificationStore()).list_cases()
 
-        self.assertEqual("investment-case-v1", result["version"])
+        self.assertEqual("investment-case-v2", result["version"])
         self.assertEqual(1, result["count"])
         self.assertEqual(investment_case_id("default", "AAPL"), result["items"][0]["caseId"])
         self.assertEqual(1, store.head_reads)
@@ -130,7 +131,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         ).list_cases(include_operator=True)
 
         self.assertTrue(result["operatorView"]["loaded"])
-        self.assertEqual(8, len(result["operatorView"]["stages"]))
+        self.assertEqual(6, len(result["operatorView"]["stages"]))
 
     def test_detail_separates_evidence_scenarios_and_trace_references(self):
         row = episode()
@@ -199,7 +200,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         result = service.trace(investment_case_id("default", "AAPL"))
 
         self.assertEqual("operator", result["audience"])
-        self.assertEqual(8, len(result["trace"]["lineage"]["nodes"]))
+        self.assertEqual(6, len(result["trace"]["lineage"]["nodes"]))
         self.assertEqual("decision-episode:1", result["episodeId"])
 
 

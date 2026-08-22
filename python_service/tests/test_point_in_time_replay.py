@@ -62,6 +62,8 @@ class PointInTimeReplayTests(unittest.TestCase):
                 "reasoningEffort": "max",
             }},
             {
+                "reasoningEngineDeploymentId": "ontology-v2-production-r15",
+                "reasoningEngineReleaseFingerprint": "release:15",
                 "engineVersion": "typedb:v2",
                 "inferenceGenerationId": "generation:5",
                 "sourceAboxSnapshotId": "abox:5",
@@ -69,6 +71,8 @@ class PointInTimeReplayTests(unittest.TestCase):
             },
         )
 
+        self.assertEqual("ontology-v2-production-r15", result["deploymentId"])
+        self.assertEqual("release:15", result["releaseFingerprint"])
         self.assertTrue(result["tboxFingerprint"])
         self.assertEqual("rulebox:5", result["ruleboxFingerprint"])
         self.assertEqual("prompt:5", result["promptVersion"])

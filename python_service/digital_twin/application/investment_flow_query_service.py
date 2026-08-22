@@ -45,6 +45,7 @@ class InvestmentFlowQueryService:
         items.sort(key=lambda item: (text(item.get("updatedAt")), text(item.get("episodeId"))), reverse=True)
         validation_counts = Counter(text(item.get("validationState")) or "warning" for item in items)
         readiness_counts = Counter(text(item.get("readinessState")) or "warning" for item in items)
+        delivery_counts = Counter(text((item.get("delivery") or {}).get("state")) or "not-required" for item in items)
         stage_counts = defaultdict(Counter)
         issues = []
         for item in items:
@@ -94,6 +95,7 @@ class InvestmentFlowQueryService:
                 "total": len(items),
                 "validation": dict(validation_counts),
                 "readiness": dict(readiness_counts),
+                "delivery": dict(delivery_counts),
                 "attentionRequired": len(issues),
             },
             "items": [self._compact(item) for item in items],
@@ -126,6 +128,14 @@ class InvestmentFlowQueryService:
                     "state": stage.get("state"),
                     "detail": stage.get("detail"),
                 })
+        assurance = item_dict(projection.get("assurance"))
+        if assurance.get("state") in {"warning", "pending", "blocked", "error"}:
+            gaps.append({
+                "stage": "assurance",
+                "stageLabel": "근거 점검",
+                "state": assurance.get("state"),
+                "detail": assurance.get("detail"),
+            })
         return {
             **projection,
             "status": "ok",
@@ -225,5 +235,5 @@ class InvestmentFlowQueryService:
         return result
 
     def _compact(self, item: Dict[str, object]) -> Dict[str, object]:
-        omitted = {"raw", "hypotheses", "guardrails", "evidenceIds", "ruleIds", "abstention"}
+        omitted = {"raw", "hypotheses", "guardrails", "evidenceIds", "relationIds", "ruleIds", "abstention"}
         return {key: value for key, value in item.items() if key not in omitted}

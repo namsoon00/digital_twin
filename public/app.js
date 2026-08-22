@@ -1956,7 +1956,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260822-reasoning-detail-v4", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260823-decision-detail-v5", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -14339,11 +14339,11 @@
     var selected = selectable && String(state.activeDecisionCaseId || "") === String(detailKey || "");
     var primary = (row.explanation || {}).primaryCause || {};
     return [
-      '<button class="oa-case-row' + (selected ? " selected" : "") + '" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '"' + (selectable ? ' data-decision-select="' + escapeHtml(detailKey) + '" aria-current="' + (selected ? "true" : "false") + '"' : ' data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '"') + '>',
+      '<button class="oa-case-row' + (selected ? " selected" : "") + '" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '"' + (selectable ? ' data-decision-select="' + escapeHtml(detailKey) + '" data-decision-detail-type="' + escapeHtml(detailType) + '" aria-current="' + (selected ? "true" : "false") + '"' : ' data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '"') + '>',
       '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.readinessLabel || "확인 필요") + '</em></span></header>',
       '<div class="oa-case-reason"><span>핵심 원인</span><strong>' + escapeHtml(primary.summary || row.reason || "판단 근거를 확인하세요.") + '</strong></div>',
       '<div class="oa-case-next"><span>' + escapeHtml(row.phaseLabel || "투자 케이스") + '</span><p>' + escapeHtml(row.nextAction || row.invalidation || "무효화 조건과 다음 확인을 살펴보세요.") + '</p></div>',
-      '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">' + escapeHtml(selected ? "선택됨" : selectable ? "화면에서 보기 →" : "케이스 보기 →") + '</b></footer>',
+      '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">' + escapeHtml(selectable ? "상세 보기 →" : "케이스 보기 →") + '</b></footer>',
       '</button>'
     ].join("");
   }
@@ -32516,8 +32516,12 @@
       if (decisionSelect && app.contains(decisionSelect)) {
         event.preventDefault();
         state.activeDecisionCaseId = String(decisionSelect.getAttribute("data-decision-select") || "");
-        if (state.activeDecisionCaseId) loadInvestmentFlowDetail(state.activeDecisionCaseId, false);
-        render({ transition: "section" });
+        var decisionDetailType = String(decisionSelect.getAttribute("data-decision-detail-type") || "investment-case");
+        if (state.activeDecisionCaseId) {
+          openWorkDetailLayer(decisionDetailType, state.activeDecisionCaseId);
+        } else {
+          render({ transition: "section" });
+        }
         return;
       }
       var flowRefresh = event.target.closest && event.target.closest('[data-action="refresh-investment-flow"]');

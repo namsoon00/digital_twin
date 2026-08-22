@@ -291,7 +291,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
                 self.assertEqual(["options"], profiles)
                 return {"collectedAt": "2026-08-16T00:00:00Z", "modulesCollected": []}
 
-        with patch(
+        with patch.dict("sys.modules", {"yfinance": object()}), patch(
             "digital_twin.infrastructure.external_api.adapters.yfinance.legacy_provider",
             return_value=EmptyProfileProvider(),
         ):

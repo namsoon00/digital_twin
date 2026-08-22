@@ -67,24 +67,26 @@ def _fingerprint(value: object) -> str:
 
 
 def _knowledge_timestamp(value: object):
-    parsed = parse_investment_timestamp(value)
-    if parsed:
-        text = str(value or "").strip()
-        precision = "date" if len(text) == 10 and text[4:5] == "-" else "timestamp"
-        return parsed, canonical_investment_timestamp(value), precision
     text = str(value or "").strip()
-    if len(text) == 15 and text[8:9] == "T":
-        try:
-            parsed = datetime.strptime(text, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None, "", "invalid"
-        return parsed, parsed.isoformat().replace("+00:00", "Z"), "timestamp"
+    # Python 3.11+ accepts YYYYMMDD in datetime.fromisoformat, while older
+    # runtimes do not. Detect publisher date precision before the generic
+    # parser so replay semantics do not depend on the Python version.
     if len(text) == 8 and text.isdigit():
         try:
             parsed = datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc)
         except ValueError:
             return None, "", "invalid"
         return parsed, parsed.isoformat().replace("+00:00", "Z"), "date"
+    parsed = parse_investment_timestamp(value)
+    if parsed:
+        precision = "date" if len(text) == 10 and text[4:5] == "-" else "timestamp"
+        return parsed, canonical_investment_timestamp(value), precision
+    if len(text) == 15 and text[8:9] == "T":
+        try:
+            parsed = datetime.strptime(text, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None, "", "invalid"
+        return parsed, parsed.isoformat().replace("+00:00", "Z"), "timestamp"
     try:
         parsed = parsedate_to_datetime(text)
     except (TypeError, ValueError, OverflowError):

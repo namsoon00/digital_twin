@@ -1,4 +1,5 @@
 import unittest
+import uuid
 from types import SimpleNamespace
 
 from digital_twin.application.time_series_platform import (
@@ -195,7 +196,7 @@ class RecordingQuestDB(QuestDBTimeSeriesAdapter):
 class SchemaQuestDB(QuestDBTimeSeriesAdapter):
     def __init__(self, ttl_overrides=None, missing_tables=None, metadata_error=""):
         super().__init__({
-            "questDbHttpUrl": "http://schema-test-" + str(id(self)),
+            "questDbHttpUrl": "http://schema-test-" + uuid.uuid4().hex,
             "marketTimeSeriesRawRetentionDays": "2",
             "marketTimeSeries15mRetentionDays": "10",
             "marketTimeSeries1hRetentionDays": "90",

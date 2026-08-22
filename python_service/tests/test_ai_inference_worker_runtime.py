@@ -43,7 +43,11 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             service_manager,
             "share_credentials_environment",
             return_value={"SHARE_VIEW_TOKEN": "private-view-token"},
-        ), patch.object(service_manager.shutil, "which", side_effect=lambda command: "/usr/local/bin/" + command):
+        ), patch.object(
+            service_manager,
+            "managed_executable",
+            side_effect=lambda command, _explicit="": "/usr/local/bin/" + command,
+        ):
             specs = service_manager.worker_specs()
 
         share = specs["cloudflare-share"]

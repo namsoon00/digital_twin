@@ -772,13 +772,17 @@ function checkWorkflowConsoleContract() {
   assertOk(
     code.indexOf('return "/api/investment-cases?"') >= 0 &&
       code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
-      code.indexOf('["summary", "결론"]') >= 0 &&
-      code.indexOf('["evidence", "근거"]') >= 0 &&
-      code.indexOf('["scenarios", "가능한 흐름"]') >= 0 &&
-      code.indexOf('["history", "이력"]') >= 0 &&
+      code.indexOf('["summary", "요약"]') >= 0 &&
+      code.indexOf('["evidence", "근거·반대"]') >= 0 &&
+      code.indexOf('["reasoning", "추론 과정"]') >= 0 &&
+      code.indexOf('["history", "변화·결과"]') >= 0 &&
+      code.indexOf("renderDecisionStatusDimensions") >= 0 &&
+      code.indexOf("renderInvestmentCaseReasoning") >= 0 &&
+      code.indexOf("renderDecisionInfoButton") >= 0 &&
       styles.indexOf(".oa-case-detail-tabs") >= 0 &&
-      styles.indexOf(".oa-flow-stage-strip.case-stages") >= 0,
-    "투자 케이스의 사용자용 5단계와 결론·근거·흐름 상세 계약이 없습니다."
+      styles.indexOf(".oa-decision-master-detail") >= 0 &&
+      styles.indexOf(".oa-case-causal-paths") >= 0,
+    "투자 케이스의 사용자용 상태·근거·추론·결과 상세 계약이 없습니다."
   );
 }
 

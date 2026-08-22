@@ -270,6 +270,7 @@ def policy_cutoffs(policy: MySQLMinimalRetentionPolicy, now: datetime = None) ->
 
     return {
         "terminalNotifications": policy_cutoff_iso(policy.terminal_notification_retention_hours, now),
+        "decisionNotificationReceipts": policy_cutoff_iso(policy.investment_reasoning_case_retention_hours, now),
         "completedWorldProjection": policy_cutoff_iso(policy.completed_world_projection_retention_hours, now),
         "completedInferenceDetail": policy_cutoff_iso(policy.completed_inference_detail_retention_hours, now),
         "failedWorldProjectionPayload": policy_cutoff_iso(

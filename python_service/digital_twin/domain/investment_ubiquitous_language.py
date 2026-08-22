@@ -53,6 +53,8 @@ class InvestmentLanguageTerm:
     owner: str = "ontology"
     source: str = "tbox"
     replacement_term_id: str = ""
+    why_it_matters: str = ""
+    does_not_mean: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -68,6 +70,8 @@ class InvestmentLanguageTerm:
             "owner": self.owner,
             "source": self.source,
             "replacementTermId": self.replacement_term_id,
+            "whyItMatters": self.why_it_matters,
+            "doesNotMean": self.does_not_mean,
         }
 
 
@@ -236,6 +240,105 @@ CORE_LANGUAGE_TERMS = [
         ["시장 민감도"],
         ["market beta"],
     ),
+    InvestmentLanguageTerm(
+        "decision-action",
+        "decision-concept",
+        "투자 의견",
+        "현재 근거를 종합해 시스템이 제안하는 보유, 매수 검토, 축소 같은 대응 방향입니다.",
+        _level_renderings("투자 의견"),
+        [],
+        ["decision action"],
+        why_it_matters="현재 자료로 무엇을 할지 한 문장으로 구분할 수 있습니다.",
+        does_not_mean="자동 주문이나 수익을 보장하는 지시가 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "decision-readiness",
+        "decision-concept",
+        "판단 상태",
+        "현재 투자 의견을 확정적으로 사용할 수 있는지, 조건부인지, 보류해야 하는지를 나타냅니다.",
+        _level_renderings("판단 상태"),
+        [],
+        ["decision readiness"],
+        why_it_matters="같은 투자 의견이라도 근거가 충분한지 따로 확인할 수 있습니다.",
+        does_not_mean="가격 상승 가능성이나 투자 매력도를 뜻하는 점수가 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "data-state",
+        "evidence-concept",
+        "자료 상태",
+        "판단 시점에 필요한 시세, 수급, 재무와 사건 자료가 어느 정도 확보됐는지 나타냅니다.",
+        _level_renderings("자료 상태"),
+        [],
+        ["data state"],
+        why_it_matters="빠진 자료 때문에 판단 범위가 줄었는지 구분할 수 있습니다.",
+        does_not_mean="자료가 많다는 이유만으로 내용이 정확하거나 결론이 맞다는 뜻은 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "inference-state",
+        "reasoning-concept",
+        "관계 추론 상태",
+        "TypeDB가 사실과 관계, 규칙을 연결해 투자 가설을 만들고 비교했는지 나타냅니다.",
+        _level_renderings("관계 추론 상태"),
+        [],
+        ["inference state"],
+        why_it_matters="단순 계산이 아니라 어떤 관계 경로가 판단 후보를 만들었는지 확인할 수 있습니다.",
+        does_not_mean="규칙이 성립했다는 사실만으로 최종 투자 의견이 확정됐다는 뜻은 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "ai-validation-state",
+        "reasoning-concept",
+        "AI 검토 상태",
+        "AI가 TypeDB 후보와 반대 근거를 비교해 최종 의견을 만들었는지 나타냅니다.",
+        _level_renderings("AI 검토 상태"),
+        [],
+        ["AI validation state"],
+        why_it_matters="관계 규칙의 후보와 최종 투자 의견이 달라진 이유를 구분할 수 있습니다.",
+        does_not_mean="AI가 검토했다는 사실만으로 결론이 사실로 확정된 것은 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "type-db-action-candidate",
+        "reasoning-concept",
+        "TypeDB 행동 후보",
+        "현재 사실과 관계 규칙이 성립해 TypeDB가 우선 제시한 행동 방향입니다.",
+        _level_renderings("TypeDB 행동 후보"),
+        [],
+        ["TypeDB candidate"],
+        why_it_matters="AI 최종 의견과 비교해 어떤 규칙 경로가 유지되거나 약화됐는지 알 수 있습니다.",
+        does_not_mean="사용자에게 바로 실행을 권하는 최종 결론이 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "reasoning-rule",
+        "reasoning-concept",
+        "판단 규칙",
+        "특정 사실과 관계가 함께 성립할 때 어떤 가설이나 위험을 도출할지 정의한 기준입니다.",
+        _level_renderings("판단 규칙"),
+        [],
+        ["reasoning rule"],
+        why_it_matters="판단 결과를 같은 입력으로 다시 재현하고 감사할 수 있게 합니다.",
+        does_not_mean="모든 종목과 시장 상황에 항상 같은 결론을 강제하는 단일 공식이 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "competing-hypothesis",
+        "reasoning-concept",
+        "경쟁 가설",
+        "같은 사실을 상승, 하락, 보류처럼 서로 다른 방향으로 설명하는 후보 시나리오입니다.",
+        _level_renderings("경쟁 가설"),
+        [],
+        ["competing hypothesis"],
+        why_it_matters="한 방향의 근거만 반복하지 않고 반대 설명을 함께 비교하게 합니다.",
+        does_not_mean="가능한 시나리오가 모두 같은 확률로 발생한다는 뜻은 아닙니다.",
+    ),
+    InvestmentLanguageTerm(
+        "decision-guardrail",
+        "governance-concept",
+        "판단 제한 조건",
+        "자료 부족, 시장별 제공 한계 또는 위험 정책 때문에 특정 행동을 확정하지 못하게 하는 조건입니다.",
+        _level_renderings("판단 제한 조건"),
+        [],
+        ["decision guardrail"],
+        why_it_matters="왜 더 강한 의견으로 넘어가지 못했는지 명확히 보여줍니다.",
+        does_not_mean="해당 종목이 반드시 위험하거나 투자 가치가 없다는 뜻은 아닙니다.",
+    ),
 ]
 
 
@@ -304,6 +407,8 @@ def _term_from_dict(payload: Dict[str, object], fallback: Optional[InvestmentLan
         owner=str(source.get("owner") or fallback.owner or "ontology").strip(),
         source=str(source.get("source") or fallback.source or "admin").strip(),
         replacement_term_id=str(source.get("replacementTermId") or fallback.replacement_term_id).strip(),
+        why_it_matters=str(source.get("whyItMatters") or fallback.why_it_matters).strip(),
+        does_not_mean=str(source.get("doesNotMean") or fallback.does_not_mean).strip(),
     )
 
 
@@ -646,6 +751,8 @@ def add_investment_language_governance_concepts(
             "termVersion": term.get("version"),
             "preferredLabel": term.get("preferredLabel"),
             "definition": term.get("definition"),
+            "whyItMatters": term.get("whyItMatters"),
+            "doesNotMean": term.get("doesNotMean"),
             "owner": term.get("owner"),
             "source": term.get("source"),
             "replacementTermId": term.get("replacementTermId"),

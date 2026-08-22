@@ -154,6 +154,75 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         )
         self.assertEqual("generation:1", result["traceRefs"]["inferenceGenerationId"])
 
+    def test_unselected_hypothesis_evidence_is_kept_in_case_summary(self):
+        row = episode()
+        row["selectedHypothesisId"] = ""
+        row["decisionAbstention"] = {
+            "abstained": True,
+            "reason": "AI가 현재 TypeDB 규칙 가설을 모두 평가하지 못했습니다.",
+        }
+        row["evidenceIds"] = []
+        row["counterEvidenceIds"] = []
+
+        result = investment_case_snapshot(row)
+
+        self.assertEqual(1, result.signals["supportCount"])
+        self.assertEqual(1, result.signals["counterCount"])
+        self.assertEqual("all-candidate-hypotheses", result.evidence["scope"])
+        self.assertEqual("blocked", result.readiness_state)
+        self.assertEqual("decision", result.phase)
+        dimensions = {item["id"]: item for item in result.status_dimensions}
+        self.assertEqual("pass", dimensions["inference"]["state"])
+        self.assertEqual("blocked", dimensions["ai"]["state"])
+        self.assertEqual(
+            "AI_HYPOTHESIS_COMPARISON_INCOMPLETE",
+            result.explanation["primaryCause"]["reasonCode"],
+        )
+
+    def test_legacy_embedded_gap_payloads_are_rendered_as_plain_language(self):
+        row = episode()
+        row["unresolvedQuestions"] = [
+            "누락 데이터 {'key': 'tradeStrength', 'label': '체결강도', "
+            "'effect': '체결 압력을 확인할 수 없습니다.', 'status': 'missing', 'source': 'KIS'}"
+        ]
+
+        result = investment_case_snapshot(row)
+
+        self.assertIn("체결강도: 체결 압력을 확인할 수 없습니다.", result.decision["requiredChecks"])
+        self.assertNotIn("{'key'", " ".join(result.decision["requiredChecks"]))
+
+    def test_guardrail_reason_and_change_condition_do_not_leak_internal_payloads(self):
+        row = episode()
+        row["decisionGuardrails"] = [{
+            "label": "근거 충분성 제한",
+            "reason": "필수 데이터 {'key': 'tradeStrength', 'label': '체결강도', "
+            "'effect': '체결 압력을 확인할 수 없습니다.'}",
+        }]
+        row["hypothesisSet"]["hypotheses"][0]["invalidationConditions"] = [
+            "TypeDB 조건 holding-source:graph.test.v1이 다음 추론 세대에서 성립하지 않습니다."
+        ]
+
+        result = investment_case_snapshot(row)
+
+        constraint = result.explanation["constraints"][0]
+        self.assertIn("체결강도: 체결 압력을 확인할 수 없습니다.", constraint["summary"])
+        self.assertNotIn("{'key'", constraint["summary"])
+        self.assertEqual(
+            "현재 관계 규칙이 다음 추론에서도 유지되는지, 반대 근거가 더 강해지는지 확인합니다.",
+            result.explanation["changeConditions"][0],
+        )
+
+    def test_case_summary_reports_independent_status_dimensions(self):
+        result = InvestmentCaseQueryService(
+            FakeDecisionStore([episode()]),
+            FakeNotificationStore(),
+        ).list_cases()
+
+        self.assertEqual(1, result["summary"]["dimensions"]["decision"]["pass"])
+        self.assertEqual(1, result["summary"]["dimensions"]["data"]["pass"])
+        self.assertEqual(1, result["summary"]["dimensions"]["inference"]["pass"])
+        self.assertEqual(1, result["summary"]["dimensions"]["ai"]["pass"])
+
     def test_detail_resolves_default_case_for_legacy_empty_account_rows(self):
         row = episode(account_id="")
         store = FakeDecisionStore([row])

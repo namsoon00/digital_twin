@@ -1085,6 +1085,31 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS decision_notification_receipts (
+        job_id VARCHAR(191) PRIMARY KEY,
+        decision_episode_id VARCHAR(191) NOT NULL,
+        decision_key VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        message_type VARCHAR(191) NOT NULL DEFAULT 'notification',
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_decision_notification_episode_time (decision_episode_id, updated_at, job_id),
+        KEY idx_decision_notification_account_time (account_id, updated_at, job_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    INSERT IGNORE INTO decision_notification_receipts (
+        job_id, decision_episode_id, decision_key, account_id, symbol,
+        message_type, status, created_at, updated_at
+    )
+    SELECT job_id, decision_episode_id, decision_key, account_id, symbol,
+           message_type, status, created_at, updated_at
+    FROM notification_jobs
+    WHERE decision_episode_id <> ''
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_lifecycle_events (
         event_id VARCHAR(191) PRIMARY KEY,
         job_id VARCHAR(191) NOT NULL,

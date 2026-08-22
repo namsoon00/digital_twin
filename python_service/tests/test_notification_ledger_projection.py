@@ -5,9 +5,10 @@ from digital_twin.infrastructure.mysql_notification_jobs import MySQLNotificatio
 
 
 class Cursor:
-    def __init__(self, one=None, rows=None):
+    def __init__(self, one=None, rows=None, rowcount=0):
         self.one = one
         self.rows = rows or []
+        self.rowcount = rowcount
 
     def fetchone(self):
         return self.one
@@ -57,6 +58,14 @@ class ReceiptConnection(RecordingConnection):
         if sql.startswith("SELECT job_id, read_at"):
             return Cursor(rows=[])
         return Cursor()
+
+
+class NotificationWriteConnection(RecordingConnection):
+    def execute(self, sql, params=()):
+        self.calls.append((sql, list(params or [])))
+        if "UPDATE notification_jobs" in sql:
+            return Cursor(rowcount=1)
+        return Cursor(rowcount=1)
 
 
 class NotificationLedgerProjectionTests(unittest.TestCase):
@@ -135,6 +144,35 @@ class NotificationLedgerProjectionTests(unittest.TestCase):
         self.assertEqual("AAPL", linkage["symbol"])
         self.assertEqual("episode-aapl-1", linkage["decisionEpisodeId"])
         self.assertTrue(linkage["decisionKey"].startswith("decision:"))
+
+    def test_notification_write_persists_compact_decision_receipt(self):
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+        connection = NotificationWriteConnection()
+        job = NotificationJob.create(
+            "Apple 판단 변화",
+            account_id="account-1",
+            context={"symbol": "AAPL", "investmentDecisionEpisodeId": "episode-aapl-1"},
+        )
+
+        store.upsert_job_with_connection(connection, job)
+
+        receipt_sql, receipt_params = connection.calls[-1]
+        self.assertIn("INSERT INTO decision_notification_receipts", receipt_sql)
+        self.assertIn("ON DUPLICATE KEY UPDATE", receipt_sql)
+        self.assertEqual(job.job_id, receipt_params[0])
+        self.assertEqual("episode-aapl-1", receipt_params[1])
+        self.assertEqual("AAPL", receipt_params[4])
+
+    def test_decision_notification_summary_reads_compact_receipt(self):
+        store = MySQLNotificationJobStore.__new__(MySQLNotificationJobStore)
+        connection = RecordingConnection()
+        store.connect = lambda: connection
+
+        summaries = store.job_summaries_for_decision_episodes(["episode-1"])
+
+        self.assertEqual("job-1", summaries[0]["jobId"])
+        self.assertIn("FROM decision_notification_receipts", connection.calls[0][0])
+        self.assertNotIn("payload_json", connection.calls[0][0])
 
 
 if __name__ == "__main__":

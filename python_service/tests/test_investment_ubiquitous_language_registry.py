@@ -47,6 +47,37 @@ class InvestmentUbiquitousLanguageRegistryTests(unittest.TestCase):
             validation["coverage"]["coveredCount"],
         )
 
+    def test_decision_workspace_terms_explain_use_and_misinterpretation(self):
+        registry = default_investment_language_registry()
+        terms = {item["termId"]: item for item in registry["terms"]}
+
+        for term_id in (
+            "decision-action",
+            "decision-readiness",
+            "data-state",
+            "inference-state",
+            "ai-validation-state",
+            "type-db-action-candidate",
+            "reasoning-rule",
+            "competing-hypothesis",
+            "decision-guardrail",
+        ):
+            self.assertIn(term_id, terms)
+            self.assertTrue(terms[term_id]["whyItMatters"])
+            self.assertTrue(terms[term_id]["doesNotMean"])
+
+    def test_decision_workspace_explanations_survive_registry_override(self):
+        registry = default_investment_language_registry()
+        term = next(item for item in registry["terms"] if item["termId"] == "decision-readiness")
+        term["whyItMatters"] = "사용자 정의 중요성"
+        term["doesNotMean"] = "사용자 정의 주의사항"
+
+        normalized = normalize_investment_language_registry(registry)
+        normalized_term = next(item for item in normalized["terms"] if item["termId"] == "decision-readiness")
+
+        self.assertEqual("사용자 정의 중요성", normalized_term["whyItMatters"])
+        self.assertEqual("사용자 정의 주의사항", normalized_term["doesNotMean"])
+
     def test_validation_rejects_duplicate_raw_term_ids(self):
         registry = default_investment_language_registry()
         duplicate = dict(next(item for item in registry["terms"] if item["termId"] == "PlatformGrowth"))

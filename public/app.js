@@ -511,6 +511,7 @@
     consoleDecisionAction: "all",
     consoleDecisionQuality: "all",
     consoleDecisionView: "action",
+    activeDecisionCaseId: "",
     investmentFlow: null,
     investmentFlowLoading: false,
     investmentFlowLoaded: false,
@@ -1953,7 +1954,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260822-decision-workspace-v2", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260822-decision-workspace-v3", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -5861,6 +5862,30 @@
   function investmentLanguageTerms() {
     var registry = state.investmentLanguage && state.investmentLanguage.registry;
     return registry && Array.isArray(registry.terms) ? registry.terms : [];
+  }
+
+  function decisionLanguageTerm(termId) {
+    return investmentLanguageTerms().filter(function (item) {
+      return String(item.termId || "") === String(termId || "");
+    })[0] || null;
+  }
+
+  function renderDecisionInfoButton(termId, currentUse) {
+    var term = decisionLanguageTerm(termId) || {};
+    var label = term.preferredLabel || "정보 설명";
+    var definition = term.definition || "이 항목이 현재 투자 판단에서 어떤 역할을 하는지 설명합니다.";
+    return [
+      '<details class="oa-decision-info">',
+      '<summary aria-label="' + escapeHtml(label + " 설명") + '" title="' + escapeHtml(label + " 설명") + '"><span class="oa-help-icon" aria-hidden="true"></span></summary>',
+      '<div role="note">',
+      '<strong>' + escapeHtml(label) + '</strong>',
+      '<p>' + escapeHtml(definition) + '</p>',
+      currentUse ? '<span><b>이 화면에서는</b>' + escapeHtml(currentUse) + '</span>' : '',
+      term.whyItMatters ? '<span><b>왜 중요한가</b>' + escapeHtml(term.whyItMatters) + '</span>' : '',
+      term.doesNotMean ? '<span><b>주의</b>' + escapeHtml(term.doesNotMean) + '</span>' : '',
+      '</div>',
+      '</details>'
+    ].join("");
   }
 
   function activeInvestmentLanguageTerm() {
@@ -11666,6 +11691,9 @@
     if ((state.activeTab === "overview" || state.activeTab === "modeling" || state.activeTab === "experiments") && (!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) {
       loadInvestmentFlow(false);
     }
+    if (state.activeTab === "modeling" && !state.investmentLanguageLoaded && !state.investmentLanguageLoading) {
+      loadInvestmentLanguage(false);
+    }
     if (shouldLoadHypothesisWorkspace() && !state.hypothesisWorkspaceLoaded && !state.hypothesisWorkspaceLoading) {
       loadHypothesisWorkspace(false);
     }
@@ -13793,7 +13821,7 @@
         var matched = rows.filter(function (row) {
           return String(row.symbol || "").toUpperCase() === String(item.symbol || "").toUpperCase();
         })[0] || {};
-        var action = decisionActionMeta(decision.action, decision.action);
+        var action = decisionActionMeta(decision.state === "blocked" ? "BLOCKED" : decision.action, decision.action);
         var dataState = String(decision.dataState || (item.facts || {}).dataState || "partial");
         var readinessState = String(item.readinessState || "warning");
         return {
@@ -13826,6 +13854,8 @@
           phase: String(item.phase || "case"),
           phaseLabel: String(item.phaseLabel || "투자 케이스"),
           nextAction: String(item.nextAction || ""),
+          statusDimensions: Array.isArray(item.statusDimensions) ? item.statusDimensions : [],
+          explanation: item.explanation && typeof item.explanation === "object" ? item.explanation : {},
           outcome: item.outcome || {},
           updatedAt: item.updatedAt || item.decidedAt || "",
           raw: item
@@ -13871,6 +13901,8 @@
         changeState: changeState,
         conflictState: conflictState,
         validationState: validationState,
+        statusDimensions: [],
+        explanation: {},
         profitLossRate: numeric(row.profitLossRate),
         updatedAt: recordChangedAt(row, recordChangedAt(graph)),
         raw: row
@@ -14242,17 +14274,90 @@
     ].join(""));
   }
 
-  function renderDecisionConsoleRow(row) {
+  function renderDecisionConsoleRow(row, selectable) {
+    selectable = selectable === true;
     var detailType = row.caseId || row.decisionEpisodeId ? "investment-case" : "investment-action";
     var detailKey = row.caseId || row.decisionEpisodeId || row.key;
     var readinessTone = investmentFlowStateTone(row.readinessState || (row.blocked ? "blocked" : "warning"));
+    var selected = selectable && String(state.activeDecisionCaseId || "") === String(detailKey || "");
+    var primary = (row.explanation || {}).primaryCause || {};
     return [
-      '<button class="oa-case-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '">',
+      '<button class="oa-case-row' + (selected ? " selected" : "") + '" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '"' + (selectable ? ' data-decision-select="' + escapeHtml(detailKey) + '" aria-current="' + (selected ? "true" : "false") + '"' : ' data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '"') + '>',
       '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.readinessLabel || "확인 필요") + '</em></span></header>',
-      '<div class="oa-case-reason"><span>왜 지금</span><strong>' + escapeHtml(row.reason || "판단 근거를 확인하세요.") + '</strong></div>',
+      '<div class="oa-case-reason"><span>핵심 원인</span><strong>' + escapeHtml(primary.summary || row.reason || "판단 근거를 확인하세요.") + '</strong></div>',
       '<div class="oa-case-next"><span>' + escapeHtml(row.phaseLabel || "투자 케이스") + '</span><p>' + escapeHtml(row.nextAction || row.invalidation || "무효화 조건과 다음 확인을 살펴보세요.") + '</p></div>',
-      '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">케이스 보기 &rarr;</b></footer>',
+      '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">' + escapeHtml(selected ? "선택됨" : selectable ? "화면에서 보기 →" : "케이스 보기 →") + '</b></footer>',
       '</button>'
+    ].join("");
+  }
+
+  function decisionDimensionTermId(dimensionId) {
+    return {
+      decision: "decision-readiness",
+      data: "data-state",
+      inference: "inference-state",
+      ai: "ai-validation-state",
+      outcome: "decision-action"
+    }[String(dimensionId || "")] || "decision-readiness";
+  }
+
+  function renderDecisionStatusDimensions(dimensions, compact) {
+    var rows = Array.isArray(dimensions) ? dimensions : [];
+    if (!rows.length) return '<p class="oa-decision-empty-note">세부 상태를 불러오는 중입니다.</p>';
+    return '<div class="oa-decision-dimensions' + (compact ? " compact" : "") + '">' + rows.map(function (item) {
+      var tone = investmentFlowStateTone(item.state || "warning");
+      return [
+        '<article data-flow-state="' + escapeHtml(item.state || "warning") + '">',
+        '<header><span>' + escapeHtml(item.label || "상태") + '</span>' + renderDecisionInfoButton(decisionDimensionTermId(item.id), item.effect || "현재 판단에서 이 상태를 별도로 확인합니다.") + '</header>',
+        '<strong class="' + escapeHtml(tone) + '">' + escapeHtml(item.stateLabel || "확인 필요") + '</strong>',
+        '<p>' + escapeHtml(item.reason || "상태 원인을 확인하고 있습니다.") + '</p>',
+        '</article>'
+      ].join("");
+    }).join("") + '</div>';
+  }
+
+  function decisionExplanationRows(explanation, key) {
+    var rows = Array.isArray(explanation[key]) ? explanation[key] : [];
+    if (key === "supportingCauses" && !rows.length && Array.isArray(explanation.topCauses)) rows = explanation.topCauses;
+    return rows;
+  }
+
+  function renderDecisionCauseList(rows, emptyText) {
+    rows = Array.isArray(rows) ? rows : [];
+    if (!rows.length) return '<p class="oa-decision-empty-note">' + escapeHtml(emptyText || "확인된 항목이 없습니다.") + '</p>';
+    return '<ul class="oa-decision-cause-list">' + rows.slice(0, 4).map(function (item) {
+      return '<li><strong>' + escapeHtml(item.title || "판단 근거") + '</strong><span>' + escapeHtml(item.summary || item.effect || "세부 설명 확인 중") + '</span>' + (item.effect && item.summary ? '<em>' + escapeHtml(item.effect) + '</em>' : '') + '</li>';
+    }).join("") + '</ul>';
+  }
+
+  function selectedDecisionRow(rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    var selected = rows.filter(function (row) {
+      return String(row.caseId || row.decisionEpisodeId || row.key) === String(state.activeDecisionCaseId || "");
+    })[0];
+    return selected || rows[0] || null;
+  }
+
+  function renderSelectedDecisionSummary(row) {
+    if (!row) return renderConsoleEmpty("선택할 투자 의견이 없습니다", "필터를 조정하면 현재 판단을 비교할 수 있습니다.");
+    var detailKey = row.caseId || row.decisionEpisodeId || row.key;
+    var detail = state.investmentFlowDetails[detailKey] || row.raw || {};
+    var explanation = detail.explanation || row.explanation || {};
+    var dimensions = detail.statusDimensions || row.statusDimensions || [];
+    var support = decisionExplanationRows(explanation, "supportingCauses");
+    var counter = decisionExplanationRows(explanation, "counterCauses").concat(decisionExplanationRows(explanation, "constraints"));
+    var conditions = Array.isArray(explanation.changeConditions) ? explanation.changeConditions : [];
+    var detailDecision = detail.decision || {};
+    var action = decisionActionMeta(detailDecision.state === "blocked" ? "BLOCKED" : (detailDecision.action || row.actionCode), row.actionLabel);
+    return [
+      '<section class="oa-decision-selected" aria-label="선택한 투자 의견">',
+      '<header class="oa-decision-selected-head"><div><span>선택한 판단</span><h2>' + escapeHtml(detail.name || row.name || row.symbol) + '</h2><p>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심 종목" : "보유 종목"].filter(Boolean).join(" · ")) + '</p></div><div><strong class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(action.label) + '</strong><span>' + escapeHtml(detail.readinessLabel || row.readinessLabel || "확인 필요") + '</span></div></header>',
+      '<section class="oa-decision-selected-section"><header><strong>판단을 나눠서 보기</strong>' + renderDecisionInfoButton("decision-readiness", "투자 의견, 자료, 관계 추론, AI 검토와 결과 추적을 분리해 표시합니다.") + '</header>' + renderDecisionStatusDimensions(dimensions, true) + '</section>',
+      '<section class="oa-decision-selected-section"><header><strong>왜 이런 판단인가</strong>' + renderDecisionInfoButton("reasoning-rule", "성립한 규칙과 가설이 현재 의견에 준 영향을 요약합니다.") + '</header>' + renderDecisionCauseList(support, row.reason || "핵심 지지 근거를 불러오는 중입니다.") + '</section>',
+      '<section class="oa-decision-selected-section"><header><strong>반대로 볼 점</strong>' + renderDecisionInfoButton("competing-hypothesis", "현재 의견을 약화하거나 다른 행동을 지지하는 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 저장된 반대 근거나 제한 조건이 없습니다.") + '</section>',
+      '<section class="oa-decision-change-conditions"><strong>판단이 달라지는 조건</strong>' + (conditions.length ? '<ul>' + conditions.slice(0, 3).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p>' + escapeHtml(detail.nextAction || row.nextAction || "다음 관측에서 같은 관계가 유지되는지 확인합니다.") + '</p>') + '</section>',
+      '<footer><button class="text-button primary" type="button" data-investment-case-tab="summary" data-investment-case-key="' + escapeHtml(detailKey) + '">전체 판단 보기</button><button class="text-button" type="button" data-investment-case-tab="reasoning" data-investment-case-key="' + escapeHtml(detailKey) + '">추론 과정 보기</button></footer>',
+      '</section>'
     ].join("");
   }
 
@@ -14314,13 +14419,18 @@
       { label: "결과 대기", value: awaitingOutcome + "건", detail: "성과 관측", target: { type: "decision", value: "all", key: "all", quality: "all" } }
     ];
     var viewLabels = { action: "행동이 필요한 의견", recent: "최근 달라진 의견", all: "전체 투자 의견" };
-    var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", state.consoleDecisionView === "action" ? "현재 즉시 검토할 행동이 없습니다. 전체 의견에서 관찰 상태를 확인할 수 있습니다." : "검색어나 필터를 조정하세요.", '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
+    var selected = selectedDecisionRow(page.items);
+    if (selected) state.activeDecisionCaseId = selected.caseId || selected.decisionEpisodeId || selected.key;
+    var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(function (row) { return renderDecisionConsoleRow(row, true); }).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", state.consoleDecisionView === "action" ? "현재 즉시 검토할 행동이 없습니다. 전체 의견에서 관찰 상태를 확인할 수 있습니다." : "검색어나 필터를 조정하세요.", '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
     return renderConsoleManagedPage("modeling", metrics, [
       '<section class="oa-decision-context"><span>DECISION WORKSPACE</span><strong>판단은 주문이 아니라 현재 근거에 따른 투자 의견입니다.</strong><p>의견이 달라졌거나 행동이 필요한 종목부터 확인하고, 부족한 근거는 별도 점검 화면에서 보완합니다.</p></section>',
       renderDecisionViewSwitch(allRows),
       renderDecisionFilterToolbar(),
       '<div data-console-monitor-destination="decisions" tabindex="-1">',
-      renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[state.consoleDecisionView] || viewLabels.action, description: "회사별 현재 의견, 왜 지금인지, 다음 확인 행동을 최신순으로 봅니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
+      '<div class="oa-decision-master-detail">',
+      renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[state.consoleDecisionView] || viewLabels.action, description: "회사를 선택하면 오른쪽에서 판단과 원인을 비교합니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
+      renderSelectedDecisionSummary(selected),
+      '</div>',
       '</div>'
     ].join(""), { leading: renderDecisionWorkspaceNavigation("modeling") });
   }
@@ -23943,10 +24053,10 @@
 
   function renderInvestmentCaseDetailTabs(key, active) {
     var tabs = [
-      ["summary", "결론"],
-      ["evidence", "근거"],
-      ["scenarios", "가능한 흐름"],
-      ["history", "이력"]
+      ["summary", "요약"],
+      ["evidence", "근거·반대"],
+      ["reasoning", "추론 과정"],
+      ["history", "변화·결과"]
     ];
     if (investmentCaseOperatorAccess()) tabs.push(["trace", "기술 계보"]);
     return '<nav class="oa-case-detail-tabs" role="tablist" aria-label="투자 케이스 상세 보기">' + tabs.map(function (item) {
@@ -23958,39 +24068,40 @@
   function renderInvestmentCaseSummary(detail, key) {
     var decision = detail.decision || {};
     var outcome = detail.outcome || {};
-    var action = decisionActionMeta(decision.action, decision.action);
+    var action = decisionActionMeta(decision.state === "blocked" ? "BLOCKED" : decision.action, decision.action);
     var checks = Array.isArray(decision.requiredChecks) ? decision.requiredChecks : [];
     var latestOutcome = outcome.latest || {};
     var modelRelease = ((detail.traceRefs || {}).modelRelease || {});
+    var explanation = detail.explanation || {};
+    var support = decisionExplanationRows(explanation, "supportingCauses");
+    var counter = decisionExplanationRows(explanation, "counterCauses").concat(decisionExplanationRows(explanation, "constraints"));
+    var changeConditions = Array.isArray(explanation.changeConditions) ? explanation.changeConditions : [];
     var outcomeText = outcome.count
       ? [latestOutcome.observedAt ? formatClock(latestOutcome.observedAt) : "최근 관측", latestOutcome.priceChangeFromDecisionPct !== undefined && latestOutcome.priceChangeFromDecisionPct !== null ? "판단 후 " + latestOutcome.priceChangeFromDecisionPct + "%" : "결과 저장됨"].join(" · ")
       : "다음 관측 결과를 기다리는 중";
     return [
       '<section class="oa-flow-detail-summary oa-case-summary" data-flow-state="' + escapeHtml(detail.readinessState || "warning") + '">',
-      '<div><span>현재 행동</span><strong>' + escapeHtml(action.label) + '</strong></div>',
-      '<div><span>판단 준비</span><strong>' + escapeHtml(detail.readinessLabel || "확인 필요") + '</strong></div>',
+      '<div><span>현재 투자 의견 ' + renderDecisionInfoButton("decision-action", "이 케이스에서 현재 검토할 행동 방향입니다.") + '</span><strong>' + escapeHtml(action.label) + '</strong></div>',
+      '<div><span>판단 상태 ' + renderDecisionInfoButton("decision-readiness", "의견을 사용할 수 있는 근거 수준을 행동과 분리해 표시합니다.") + '</span><strong>' + escapeHtml(detail.readinessLabel || "확인 필요") + '</strong></div>',
       '<p><strong>' + escapeHtml(detail.phaseLabel || "투자 케이스") + '</strong><span>' + escapeHtml(detail.headline || "판단 근거를 확인하고 있습니다.") + '</span></p>',
       renderRecordChangedAt(detail),
       '</section>',
-      '<section class="oa-flow-detail-section oa-case-flow"><header><div><span>CASE FLOW</span><strong>현재 케이스의 진행 위치</strong></div><em>각 단계를 눌러 관련 정보를 확인하세요.</em></header>',
-      renderInvestmentFlowStages(detail.stages, false, key),
+      '<section class="oa-case-overview-section"><header><strong>판단 상태를 분리해서 보기</strong>' + renderDecisionInfoButton("decision-readiness", "자료 부족과 추론 실패, AI 보류를 하나의 상태로 합치지 않습니다.") + '</header>' + renderDecisionStatusDimensions(detail.statusDimensions, false) + '</section>',
+      '<div class="oa-case-cause-columns"><section><header><strong>핵심 근거</strong>' + renderDecisionInfoButton("reasoning-rule", "현재 투자 의견을 지지한 관계와 규칙의 설명입니다.") + '</header>' + renderDecisionCauseList(support, decision.reason || detail.headline || "지지 근거를 확인 중입니다.") + '</section><section><header><strong>반대 근거와 제한</strong>' + renderDecisionInfoButton("competing-hypothesis", "다른 결론을 지지하거나 현재 의견의 강도를 낮춘 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 기록된 반대 근거나 제한 조건이 없습니다.") + '</section></div>',
+      '<section class="oa-case-next-check"><header><span>다음 판단</span><strong>의견이 달라지는 조건</strong></header>',
+      changeConditions.length ? '<ul>' + changeConditions.slice(0, 4).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : (checks.length ? '<ul>' + checks.slice(0, 4).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p>' + escapeHtml(detail.nextAction || "현재 판단의 약화 조건과 다음 관측을 확인하세요.") + '</p>'),
       '</section>',
-      '<dl class="oa-case-key-facts">',
-      '<div><dt>확인된 사실</dt><dd>' + escapeHtml((detail.facts || {}).summary || "데이터 확인 중") + '</dd></div>',
-      '<div><dt>핵심 신호</dt><dd>' + escapeHtml((detail.signals || {}).summary || "신호 비교 중") + '</dd></div>',
-      '<div><dt>선택한 이유</dt><dd>' + escapeHtml(decision.reason || detail.headline || "판단 이유 확인 중") + '</dd></div>',
-      '<div><dt>결과 추적</dt><dd>' + escapeHtml(outcomeText) + '</dd></div>',
-      '</dl>',
-      '<section class="oa-case-next-check"><header><span>NEXT CHECK</span><strong>다음에 확인할 것</strong></header>',
-      checks.length ? '<ul>' + checks.slice(0, 8).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p>' + escapeHtml(detail.nextAction || "현재 판단의 약화 조건과 다음 관측을 확인하세요.") + '</p>',
-      '</section>',
-      '<section class="oa-case-model-link"><span><strong>사용한 판단 기준</strong><em>' + escapeHtml(modelRelease.deploymentId || modelRelease.reasoningEngineVersion || "릴리스 계보 확인") + '</em></span>' + renderWorkDetailButton("investment-model-overview", "", "판단 기준", "text-button compact") + '</section>'
+      '<dl class="oa-case-key-facts"><div><dt>확인된 사실</dt><dd>' + escapeHtml((detail.facts || {}).summary || "데이터 확인 중") + '</dd></div><div><dt>결과 추적</dt><dd>' + escapeHtml(outcomeText) + '</dd></div></dl>',
+      '<details class="oa-case-process"><summary><span><strong>처리 단계 보기</strong><em>사실에서 결과 추적까지의 진행 상태</em></span></summary><section class="oa-flow-detail-section oa-case-flow">' + renderInvestmentFlowStages(detail.stages, false, key) + '</section></details>',
+      '<section class="oa-case-model-link"><span><strong>사용한 판단 기준</strong><em>' + escapeHtml(modelRelease.deploymentId || modelRelease.reasoningEngineVersion || modelRelease.lineageLabel || "릴리스 계보 확인") + '</em></span>' + renderWorkDetailButton("investment-model-overview", "", "판단 기준", "text-button compact") + '</section>'
     ].join("");
   }
 
   function renderInvestmentCaseEvidence(detail) {
     var evidence = detail.evidence || {};
+    var explanation = detail.explanation || {};
     var missing = Array.isArray(evidence.missingData) ? evidence.missingData : [];
+    var missingItems = Array.isArray(evidence.missingDataItems) ? evidence.missingDataItems : [];
     var checks = Array.isArray(evidence.requiredChecks) ? evidence.requiredChecks : [];
     var supportIds = Array.isArray(evidence.supportingIds) ? evidence.supportingIds : [];
     var counterIds = Array.isArray(evidence.counterIds) ? evidence.counterIds : [];
@@ -24000,15 +24111,32 @@
       '<div><span>반박 근거</span><strong>' + escapeHtml(Number(evidence.counterCount || 0) + "건") + '</strong></div>',
       '<div><span>누락 자료</span><strong>' + escapeHtml(Number(evidence.missingCount || 0) + "건") + '</strong></div>',
       '</section>',
-      '<section class="oa-case-evidence-section"><header><span>DATA GAPS</span><strong>보완하거나 다시 확인할 자료</strong></header>',
-      missing.length ? '<ul>' + missing.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p class="oa-flow-complete">명시적으로 기록된 누락 자료가 없습니다.</p>',
-      checks.length ? '<div class="oa-case-check-list"><strong>검토 순서</strong><ol>' + checks.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ol></div>' : '',
+      '<div class="oa-case-cause-columns"><section><header><strong>의견을 지지한 근거</strong>' + renderDecisionInfoButton("reasoning-rule", "규칙과 가설을 통해 현재 의견 방향을 지지한 항목입니다.") + '</header>' + renderDecisionCauseList(decisionExplanationRows(explanation, "supportingCauses"), "명시적으로 저장된 지지 근거가 없습니다.") + '</section><section><header><strong>반대 근거</strong>' + renderDecisionInfoButton("competing-hypothesis", "현재 의견과 다른 시나리오를 지지하는 근거입니다.") + '</header>' + renderDecisionCauseList(decisionExplanationRows(explanation, "counterCauses"), "명시적으로 저장된 반대 근거가 없습니다.") + '</section></div>',
+      '<section class="oa-case-evidence-section"><header><span>자료 한계</span><strong>빠졌거나 적용할 수 없는 자료</strong>' + renderDecisionInfoButton("data-state", "확인되지 않은 자료는 사실처럼 쓰지 않고 판단 범위만 제한합니다.") + '</header>',
+      missingItems.length ? '<ul class="oa-case-gap-list">' + missingItems.map(function (item) { return '<li><strong>' + escapeHtml(item.label || "확인 항목") + '</strong><span>' + escapeHtml(item.detail || item.text || "확인 필요") + '</span><em>' + escapeHtml(item.applicability === "not-applicable" ? "현재 시장에서 적용 안 됨" : item.source || "수집 상태 확인") + '</em></li>'; }).join("") + '</ul>' : (missing.length ? '<ul>' + missing.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p class="oa-flow-complete">명시적으로 기록된 누락 자료가 없습니다.</p>'),
+      checks.length ? '<div class="oa-case-check-list"><strong>다음 검토 순서</strong><ol>' + checks.slice(0, 5).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ol></div>' : '',
       '</section>',
       '<details class="oa-flow-technical"><summary><span><strong>근거 식별자</strong><em>감사와 원문 조회에 사용하는 저장 키</em></span></summary><dl>',
       '<div><dt>원천 스냅샷</dt><dd>' + escapeHtml(evidence.sourceSnapshotId || "연결 필요") + '</dd></div>',
       '<div><dt>지지 근거</dt><dd>' + escapeHtml(supportIds.join(" · ") || "없음") + '</dd></div>',
       '<div><dt>반박 근거</dt><dd>' + escapeHtml(counterIds.join(" · ") || "없음") + '</dd></div>',
       '</dl></details>'
+    ].join("");
+  }
+
+  function renderInvestmentCaseReasoning(detail) {
+    var explanation = detail.explanation || {};
+    var comparison = explanation.comparison || {};
+    var paths = Array.isArray(explanation.causalPaths) ? explanation.causalPaths : [];
+    var typeDbActions = Array.isArray(comparison.typeDbCandidateActions) ? comparison.typeDbCandidateActions : [];
+    var detailDecision = detail.decision || {};
+    var finalAction = decisionActionMeta(detailDecision.state === "blocked" ? "BLOCKED" : (comparison.aiFinalAction || detailDecision.action), comparison.aiFinalAction).label;
+    return [
+      '<section class="oa-case-reasoning-compare"><header><strong>TypeDB 후보와 최종 의견</strong>' + renderDecisionInfoButton("type-db-action-candidate", "TypeDB 후보를 AI가 반대 근거와 제한 조건까지 비교한 뒤 최종 의견을 작성합니다.") + '</header><div><span><em>TypeDB 행동 후보</em><strong>' + escapeHtml(typeDbActions.length ? typeDbActions.map(function (value) { return decisionActionMeta(value, value).label; }).join(" · ") : "행동 후보 없음") + '</strong></span><b aria-hidden="true">→</b><span><em>최종 투자 의견</em><strong>' + escapeHtml(finalAction) + '</strong></span></div><p>' + escapeHtml(comparison.reason || "현재 추론 세대의 가설 비교 결과입니다.") + '</p></section>',
+      '<section class="oa-case-overview-section"><header><strong>사실에서 의견까지 연결</strong>' + renderDecisionInfoButton("reasoning-rule", "사실과 관계가 규칙을 통과해 가설과 최종 의견으로 이어지는 경로입니다.") + '</header>',
+      paths.length ? '<div class="oa-case-causal-paths">' + paths.map(function (path) { return '<article><header><strong>' + escapeHtml(path.title || "추론 경로") + '</strong><span>' + escapeHtml(path.selected ? "선택 경로" : "대안 경로") + '</span></header><ol>' + (Array.isArray(path.nodes) ? path.nodes : []).map(function (node) { return '<li><span>' + escapeHtml(node.label || node.layer || "단계") + '</span><em>' + escapeHtml((Array.isArray(node.refIds) ? node.refIds.length : 0) ? node.refIds.length + "개 연결" : "설명 단계") + '</em></li>'; }).join("") + '</ol></article>'; }).join("") + '</div>' : '<p class="oa-decision-empty-note">사용자에게 설명할 수 있는 추론 경로가 아직 저장되지 않았습니다.</p>',
+      '</section>',
+      '<section class="oa-case-overview-section"><header><strong>비교한 가설</strong>' + renderDecisionInfoButton("competing-hypothesis", "한 방향의 설명만 선택하지 않고 지지와 반박을 함께 비교합니다.") + '</header>' + renderInvestmentCaseScenarios(detail) + '</section>'
     ].join("");
   }
 
@@ -24097,11 +24225,12 @@
     var decision = detail.decision || {};
     var action = decisionActionMeta(decision.action, decision.action);
     var active = state.investmentCaseDetailTabs[key] || "summary";
+    if (active === "scenarios") active = "reasoning";
     if (active === "trace" && !investmentCaseOperatorAccess()) active = "summary";
     var content = active === "evidence"
       ? renderInvestmentCaseEvidence(detail)
-      : (active === "scenarios"
-        ? renderInvestmentCaseScenarios(detail)
+      : (active === "reasoning" || active === "scenarios"
+        ? renderInvestmentCaseReasoning(detail)
         : (active === "history"
           ? renderInvestmentCaseHistory(key)
           : (active === "trace" ? renderInvestmentCaseTrace(key) : renderInvestmentCaseSummary(detail, key))));
@@ -32225,6 +32354,14 @@
         event.preventDefault();
         state.consoleDecisionView = decisionView.getAttribute("data-decision-view") || "action";
         state.consolePages.decision = 1;
+        render({ transition: "section" });
+        return;
+      }
+      var decisionSelect = event.target.closest && event.target.closest("[data-decision-select]");
+      if (decisionSelect && app.contains(decisionSelect)) {
+        event.preventDefault();
+        state.activeDecisionCaseId = String(decisionSelect.getAttribute("data-decision-select") || "");
+        if (state.activeDecisionCaseId) loadInvestmentFlowDetail(state.activeDecisionCaseId, false);
         render({ transition: "section" });
         return;
       }

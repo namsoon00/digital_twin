@@ -76,6 +76,22 @@ class InvestmentCaseQueryService:
         status_counts = Counter(item.status for item in snapshots)
         readiness_counts = Counter(item.readiness_state for item in snapshots)
         phase_counts = Counter(item.phase for item in snapshots)
+        decision_state_counts = Counter(
+            text(next((row for row in item.status_dimensions if row.get("id") == "decision"), {}).get("state")) or "warning"
+            for item in snapshots
+        )
+        data_state_counts = Counter(
+            text(next((row for row in item.status_dimensions if row.get("id") == "data"), {}).get("state")) or "warning"
+            for item in snapshots
+        )
+        inference_state_counts = Counter(
+            text(next((row for row in item.status_dimensions if row.get("id") == "inference"), {}).get("state")) or "warning"
+            for item in snapshots
+        )
+        ai_state_counts = Counter(
+            text(next((row for row in item.status_dimensions if row.get("id") == "ai"), {}).get("state")) or "warning"
+            for item in snapshots
+        )
         operator_view = {"loaded": False, "stages": [], "issues": []}
         if include_operator:
             flow_items = [
@@ -105,6 +121,12 @@ class InvestmentCaseQueryService:
                 # Compatibility for clients that still read the old validation summary.
                 "validation": dict(readiness_counts),
                 "attentionRequired": len(items) - readiness_counts.get("pass", 0),
+                "dimensions": {
+                    "decision": dict(decision_state_counts),
+                    "data": dict(data_state_counts),
+                    "inference": dict(inference_state_counts),
+                    "ai": dict(ai_state_counts),
+                },
             },
             "items": items,
             "operatorView": operator_view,
@@ -121,7 +143,7 @@ class InvestmentCaseQueryService:
         payload.update({
             "status": "ok",
             "readOnly": True,
-            "availableViews": ["summary", "evidence", "scenarios", "history"],
+            "availableViews": ["summary", "evidence", "reasoning", "history"],
             "historyEndpoint": f"/api/investment-cases/{snapshot.case_id}/history",
             "traceEndpoint": f"/api/investment-cases/{snapshot.case_id}/trace",
         })
@@ -167,6 +189,9 @@ class InvestmentCaseQueryService:
         payload = self.flow_service.detail(snapshot.episode_id)
         if payload.get("status") != "ok":
             return self._not_found(case_id)
+        payload["caseExplanation"] = dict(snapshot.explanation)
+        payload["statusDimensions"] = [dict(item) for item in snapshot.status_dimensions]
+        payload["evidence"] = dict(snapshot.evidence)
         return {
             "version": INVESTMENT_CASE_VERSION,
             "status": "ok",

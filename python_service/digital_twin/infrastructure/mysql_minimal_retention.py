@@ -291,6 +291,7 @@ class MySQLMinimalRetentionRepository:
                 ("worldProjection:failedPayload", self._compact_failed_world_projection_payloads, (cutoffs["failedWorldProjectionPayload"],)),
                 ("worldProjection:failed", self._delete_failed_world_projection_rows, (cutoffs["failedWorldProjection"],)),
                 ("notifications:terminal", self._delete_terminal_notifications, (policy.delivered_notification_keep_count, cutoffs["terminalNotifications"])),
+                ("notifications:decisionReceipts", self._delete_decision_notification_receipts, (cutoffs["decisionNotificationReceipts"],)),
                 ("snapshots:history", self._delete_snapshot_history, (policy.snapshot_history_keep_count,)),
                 ("projectionRuns:payload", self._compact_projection_payloads, (cutoffs["projectionPayload"],)),
                 ("projectionRuns:history", self._delete_projection_runs, (cutoffs["projectionPayload"],)),
@@ -804,6 +805,26 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("notification_jobs", deleted, bytes_deleted)
+
+    def _delete_decision_notification_receipts(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT job_id, 256 AS payload_bytes FROM `decision_notification_receipts` "
+            "WHERE updated_at < " + _cutoff_sql()
+            + " ORDER BY updated_at, job_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "job_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "decision_notification_receipts",
+            "job_id",
+            candidates,
+            "updated_at < " + _cutoff_sql(),
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("decision_notification_receipts", deleted, bytes_deleted)
 
     def _delete_snapshot_history(self, policy, budget, keep_count) -> Dict[str, object]:
         account_rows = _fetchall(_execute(

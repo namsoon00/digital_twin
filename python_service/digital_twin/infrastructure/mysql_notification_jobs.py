@@ -284,7 +284,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         episode_ids: Iterable[str],
         limit: int = 200,
     ) -> List[Dict[str, object]]:
-        """Return flow-stage metadata without decoding immutable AI traces."""
+        """Return compact delivery linkage after large notification bodies expire."""
 
         ids = list(dict.fromkeys(
             str(item or "").strip()
@@ -298,7 +298,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT job_id, decision_episode_id, message_type, status, created_at, updated_at "
-                "FROM notification_jobs WHERE decision_episode_id IN (" + placeholders + ") "
+                "FROM decision_notification_receipts WHERE decision_episode_id IN (" + placeholders + ") "
                 "ORDER BY updated_at DESC, job_id DESC LIMIT %s",
                 params,
             ).fetchall()
@@ -866,40 +866,68 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 job.job_id,
             ),
         )
-        if cursor.rowcount:
-            return
-        connection.execute(
-            """
-            INSERT INTO notification_jobs (
-                job_id, account_id, account_label, message_type, source_event_id, source_event_name,
-                symbol, decision_episode_id, decision_key, api_source, data_quality, is_mock, dedupe_key, status, attempts,
-                created_at, updated_at, last_error, text, payload_json
+        if not cursor.rowcount:
+            connection.execute(
+                """
+                INSERT INTO notification_jobs (
+                    job_id, account_id, account_label, message_type, source_event_id, source_event_name,
+                    symbol, decision_episode_id, decision_key, api_source, data_quality, is_mock, dedupe_key, status, attempts,
+                    created_at, updated_at, last_error, text, payload_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    job.job_id,
+                    job.account_id,
+                    job.account_label,
+                    job.message_type,
+                    job.source_event_id,
+                    job.source_event_name,
+                    linkage["symbol"],
+                    linkage["decisionEpisodeId"],
+                    linkage["decisionKey"],
+                    linkage["apiSource"],
+                    linkage["dataQuality"],
+                    int(linkage["isMock"]),
+                    dedupe_value,
+                    job.status,
+                    job.attempts,
+                    job.created_at,
+                    job.updated_at,
+                    job.last_error,
+                    job.text,
+                    json_dumps(payload),
+                ),
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                job.job_id,
-                job.account_id,
-                job.account_label,
-                job.message_type,
-                job.source_event_id,
-                job.source_event_name,
-                linkage["symbol"],
-                linkage["decisionEpisodeId"],
-                linkage["decisionKey"],
-                linkage["apiSource"],
-                linkage["dataQuality"],
-                int(linkage["isMock"]),
-                dedupe_value,
-                job.status,
-                job.attempts,
-                job.created_at,
-                job.updated_at,
-                job.last_error,
-                job.text,
-                json_dumps(payload),
-            ),
-        )
+        decision_episode_id = str(linkage.get("decisionEpisodeId") or "").strip()[:191]
+        if decision_episode_id:
+            connection.execute(
+                """
+                INSERT INTO decision_notification_receipts (
+                    job_id, decision_episode_id, decision_key, account_id, symbol,
+                    message_type, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    decision_episode_id = VALUES(decision_episode_id),
+                    decision_key = VALUES(decision_key),
+                    account_id = VALUES(account_id),
+                    symbol = VALUES(symbol),
+                    message_type = VALUES(message_type),
+                    status = VALUES(status),
+                    updated_at = VALUES(updated_at)
+                """,
+                (
+                    job.job_id,
+                    decision_episode_id,
+                    str(linkage.get("decisionKey") or "")[:191],
+                    str(job.account_id or "")[:191],
+                    str(linkage.get("symbol") or "")[:64],
+                    str(job.message_type or "notification")[:191],
+                    str(job.status or "pending")[:32],
+                    str(job.created_at or ""),
+                    str(job.updated_at or job.created_at or ""),
+                ),
+            )
 
     def upsert_job(self, job: NotificationJob) -> None:
         with self.transaction() as connection:

@@ -310,6 +310,13 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
         self.assertIn("WHERE NOT EXISTS", schema)
         self.assertIn("heads.decision_episode_id = episodes.episode_id", schema)
 
+    def test_decision_notification_trace_survives_large_body_retention(self):
+        schema = "\n".join(MYSQL_SCHEMA)
+
+        self.assertIn("CREATE TABLE IF NOT EXISTS decision_notification_receipts", schema)
+        self.assertIn("idx_decision_notification_episode_time", schema)
+        self.assertIn("INSERT IGNORE INTO decision_notification_receipts", schema)
+
 
 if __name__ == "__main__":
     unittest.main()

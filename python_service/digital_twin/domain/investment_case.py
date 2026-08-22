@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional
 
@@ -63,11 +64,14 @@ class InvestmentCaseSnapshot:
     outcome: Dict[str, object] = field(default_factory=dict)
     evidence: Dict[str, object] = field(default_factory=dict)
     trace_refs: Dict[str, object] = field(default_factory=dict)
+    status_dimensions: List[Dict[str, object]] = field(default_factory=list)
+    explanation: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self, compact: bool = False) -> Dict[str, object]:
         stages = [dict(item) for item in self.stages]
         decision = dict(self.decision)
         outcome = dict(self.outcome)
+        explanation = dict(self.explanation)
         if compact:
             stages = [{
                 **item,
@@ -87,11 +91,23 @@ class InvestmentCaseSnapshot:
                     "dataState",
                     "validationState",
                     "validationLabel",
+                    "state",
+                    "stateLabel",
+                    "reasonCode",
                 )
             }
             outcome = {
                 "state": outcome.get("state"),
                 "count": outcome.get("count", 0),
+            }
+            explanation = {
+                "primaryCause": dict(explanation.get("primaryCause") or {}),
+                "supportingCauses": [dict(item) for item in (explanation.get("supportingCauses") or [])[:2]],
+                "counterCauses": [dict(item) for item in (explanation.get("counterCauses") or [])[:2]],
+                "constraints": [dict(item) for item in (explanation.get("constraints") or [])[:2]],
+                "dataGaps": [dict(item) for item in (explanation.get("dataGaps") or [])[:2]],
+                "changeConditions": list(explanation.get("changeConditions") or [])[:2],
+                "comparison": dict(explanation.get("comparison") or {}),
             }
         payload = {
             "version": INVESTMENT_CASE_VERSION,
@@ -115,6 +131,8 @@ class InvestmentCaseSnapshot:
             "signals": dict(self.signals),
             "decision": decision,
             "outcome": outcome,
+            "statusDimensions": [dict(item) for item in self.status_dimensions],
+            "explanation": explanation,
         }
         if not compact:
             payload.update({
@@ -177,26 +195,84 @@ def _hypotheses(episode: Mapping[str, object]) -> List[Dict[str, object]]:
 
 
 def _human_descriptions(items: Iterable[object], limit: int = 20) -> List[str]:
-    result = []
+    return [item["text"] for item in _structured_descriptions(items, limit=limit)]
+
+
+def _humanize_embedded_payloads(value: object) -> str:
+    """Replace embedded legacy dict reprs with their user-facing label and effect."""
+
+    raw = text(value)
+    for candidate in re.findall(r"\{[^{}]+\}", raw):
+        try:
+            payload = item_dict(ast.literal_eval(candidate))
+        except (SyntaxError, ValueError):
+            payload = {}
+        if not payload:
+            continue
+        label = text(payload.get("label") or payload.get("key"))
+        detail = text(payload.get("effect") or payload.get("reason") or payload.get("detail"))
+        replacement = ": ".join(item for item in (label, detail) if item) or "확인 자료"
+        raw = raw.replace(candidate, replacement)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _humanize_change_condition(value: object) -> str:
+    raw = _humanize_embedded_payloads(value)
+    if raw.startswith("TypeDB 조건 ") and "다음 추론 세대" in raw:
+        return "현재 관계 규칙이 다음 추론에서도 유지되는지, 반대 근거가 더 강해지는지 확인합니다."
+    return raw
+
+
+def _structured_descriptions(items: Iterable[object], limit: int = 20) -> List[Dict[str, object]]:
+    """Normalize legacy strings and structured gaps without leaking Python reprs."""
+
+    result: List[Dict[str, object]] = []
     for value in items or []:
-        payload = item_dict(value)
         raw = text(value)
-        if not payload and raw.startswith("{") and raw.endswith("}"):
-            try:
-                parsed = ast.literal_eval(raw)
+        payloads = [item_dict(value)] if item_dict(value) else []
+        if not payloads and raw:
+            candidates = [raw] if raw.startswith("{") and raw.endswith("}") else re.findall(r"\{[^{}]+\}", raw)
+            for candidate in candidates:
+                try:
+                    parsed = ast.literal_eval(candidate)
+                except (SyntaxError, ValueError):
+                    continue
                 payload = item_dict(parsed)
-            except (SyntaxError, ValueError):
-                payload = {}
-        if payload:
+                if payload:
+                    payloads.append(payload)
+        if not payloads and raw:
+            payloads = [{"description": raw}]
+        for payload in payloads:
             label = text(payload.get("label") or payload.get("key"))
-            effect = text(payload.get("effect") or payload.get("reason") or payload.get("description"))
-            current = ": ".join(item for item in (label, effect) if item)
-        else:
-            current = raw
-        if current and current not in result:
-            result.append(current)
-        if len(result) >= limit:
-            break
+            detail = text(
+                payload.get("effect")
+                or payload.get("reason")
+                or payload.get("detail")
+                or payload.get("description")
+            )
+            current = ": ".join(item for item in (label, detail) if item)
+            if not current:
+                continue
+            status = text(payload.get("status")) or "unknown"
+            lower = (current + " " + status).lower()
+            applicability = "not-applicable" if (
+                status in {"not-applicable", "not_applicable", "market-closed"}
+                or "휴장" in current
+                or "해당 시장에서 제공" in current
+            ) else "applicable"
+            row = {
+                "label": label or "확인 항목",
+                "detail": detail or current,
+                "text": current,
+                "status": status,
+                "source": text(payload.get("source")),
+                "applicability": applicability,
+                "reasonCode": text(payload.get("reasonCode") or payload.get("reason_code")),
+            }
+            if row["text"] not in [item["text"] for item in result]:
+                result.append(row)
+            if len(result) >= limit:
+                return result
     return result
 
 
@@ -209,6 +285,7 @@ def _scenario(item: Mapping[str, object], selected_id: str) -> Dict[str, object]
         values(item.get("invalidationConditions") or item.get("invalidation_conditions")),
         limit=20,
     )
+    knowledge_basis = item_dict(item.get("knowledgeBasis") or item.get("knowledge_basis"))
     return {
         "id": current_id,
         "title": text(item.get("templateLabel") or item.get("template_label")) or "검토 시나리오",
@@ -230,6 +307,18 @@ def _scenario(item: Mapping[str, object], selected_id: str) -> Dict[str, object]
             + list(values(item.get("counterRuleIds") or item.get("counter_rule_ids"))),
             limit=50,
         ),
+        "relationIds": unique_texts(values(item.get("causalPathIds") or item.get("causal_path_ids")), limit=50),
+        "candidateAction": text(item.get("candidateAction") or item.get("candidate_action")),
+        "allowedActions": unique_texts(values(item.get("allowedActions") or item.get("allowed_actions"))),
+        "blockedActions": unique_texts(values(item.get("blockedActions") or item.get("blocked_actions"))),
+        "decisionEligibility": text(item.get("decisionEligibility") or item.get("decision_eligibility")),
+        "decisionEligibilityReasons": _human_descriptions(
+            values(item.get("decisionEligibilityReasons") or item.get("decision_eligibility_reasons")),
+        ),
+        "predictionTarget": text(item.get("predictionTarget") or item.get("prediction_target")),
+        "expectedOutcome": text(item.get("expectedOutcome") or item.get("expected_outcome")),
+        "outcomeMetric": text(item.get("outcomeMetric") or item.get("outcome_metric")),
+        "plainLanguageBasis": text(knowledge_basis.get("plainLanguageBasis") or knowledge_basis.get("plain_language_basis")),
     }
 
 
@@ -239,16 +328,243 @@ def _guardrail_rows(episode: Mapping[str, object]) -> List[Dict[str, object]]:
         item = item_dict(value)
         if not item:
             continue
+        missing_rows = _structured_descriptions(values(item.get("missingData") or item.get("missing_data")))
         result.append({
             "id": text(item.get("guardrailId") or item.get("guardrail_id")),
             "label": text(item.get("label")) or "확인 조건",
-            "reason": text(item.get("reason")),
+            "reason": _humanize_embedded_payloads(item.get("reason")),
             "status": text(item.get("status")) or "active",
             "blockedActions": unique_texts(values(item.get("blockedActions") or item.get("blocked_actions"))),
             "requiredChecks": _human_descriptions(values(item.get("requiredChecks") or item.get("required_checks"))),
-            "missingData": _human_descriptions(values(item.get("missingData") or item.get("missing_data"))),
+            "missingData": [row["text"] for row in missing_rows],
+            "missingDataItems": missing_rows,
         })
     return result
+
+
+def _dimension(
+    dimension_id: str,
+    label: str,
+    state: str,
+    state_label: str,
+    reason_code: str,
+    reason: str,
+    effect: str,
+) -> Dict[str, object]:
+    return {
+        "id": dimension_id,
+        "label": label,
+        "state": state,
+        "stateLabel": state_label,
+        "reasonCode": reason_code,
+        "reason": text(reason),
+        "effect": effect,
+    }
+
+
+def _status_dimensions(
+    *,
+    action: str,
+    data_state: str,
+    validation_state: str,
+    source_snapshot_id: str,
+    inference_generation_id: str,
+    relation_count: int,
+    selected_id: str,
+    abstention: Mapping[str, object],
+    outcome_count: int,
+) -> List[Dict[str, object]]:
+    abstained = bool(abstention)
+    if abstained:
+        decision = _dimension(
+            "decision",
+            "판단 상태",
+            "blocked",
+            "판단 유보",
+            "AI_HYPOTHESIS_COMPARISON_INCOMPLETE",
+            text(abstention.get("reason")) or "AI가 현재 가설을 모두 비교하지 못했습니다.",
+            "매수·매도 행동을 확정하지 않습니다.",
+        )
+    elif action:
+        decision = _dimension(
+            "decision", "판단 상태", "pass", "판단 가능", "DECISION_COMPLETED",
+            "현재 추론 세대에서 투자 의견이 저장되었습니다.", "현재 행동 의견을 사용할 수 있습니다.",
+        )
+    else:
+        decision = _dimension(
+            "decision", "판단 상태", "warning", "추가 관찰", "DECISION_NOT_FINAL",
+            "최종 투자 의견이 아직 저장되지 않았습니다.", "관찰은 가능하지만 행동 판단은 확정하지 않습니다.",
+        )
+
+    normalized_data = data_state.lower()
+    if source_snapshot_id and normalized_data == "sufficient":
+        data = _dimension(
+            "data", "자료 상태", "pass", "자료 충분", "DATA_SUFFICIENT",
+            "판단 시점의 원천 자료가 고정되어 있습니다.", "현재 판단의 사실 입력으로 사용했습니다.",
+        )
+    elif source_snapshot_id:
+        data = _dimension(
+            "data", "자료 상태", "warning", "일부 자료만 사용", "DATA_PARTIAL",
+            "판단 시점 자료는 저장됐지만 일부 확인 항목이 남아 있습니다.", "확인된 자료만 사용하고 판단 강도를 제한합니다.",
+        )
+    else:
+        data = _dimension(
+            "data", "자료 상태", "blocked", "원천 자료 없음", "SOURCE_SNAPSHOT_MISSING",
+            "판단 시점의 원천 자료를 연결하지 못했습니다.", "투자 행동 판단을 사용할 수 없습니다.",
+        )
+
+    if inference_generation_id and relation_count:
+        inference = _dimension(
+            "inference", "추론 상태", "pass", "추론 완료", "INFERENCE_COMPLETE",
+            f"같은 추론 세대에서 {relation_count}개 관계 경로를 확인했습니다.", "규칙과 가설의 근거로 사용했습니다.",
+        )
+    elif inference_generation_id:
+        inference = _dimension(
+            "inference", "추론 상태", "warning", "관계 확인 필요", "INFERENCE_WITHOUT_RELATION",
+            "추론 세대는 있지만 사용자에게 설명할 관계 경로가 없습니다.", "행동 근거로 사용하지 않습니다.",
+        )
+    else:
+        inference = _dimension(
+            "inference", "추론 상태", "blocked", "추론 없음", "INFERENCE_GENERATION_MISSING",
+            "TypeDB 추론 세대가 연결되지 않았습니다.", "투자 행동 판단을 사용할 수 없습니다.",
+        )
+
+    if abstained:
+        ai = _dimension(
+            "ai", "AI 상태", "blocked", "비교 미완료", "AI_COMPARISON_INCOMPLETE",
+            text(abstention.get("reason")) or "AI 가설 비교가 완료되지 않았습니다.", "TypeDB 관계는 보존하지만 AI 최종 의견은 사용하지 않습니다.",
+        )
+    elif selected_id:
+        ai = _dimension(
+            "ai", "AI 상태", "pass", "검증 완료", "AI_VALIDATED",
+            "AI가 경쟁 가설을 비교하고 선택 가설을 저장했습니다.", "TypeDB 행동 범위 안에서 최종 의견을 작성했습니다.",
+        )
+    else:
+        ai = _dimension(
+            "ai", "AI 상태", "warning", "조건부 사용", "AI_SELECTION_NOT_RECORDED",
+            "선택 가설이 명시적으로 저장되지 않았습니다.", "AI 문장은 참고하되 선택 근거를 재확인합니다.",
+        )
+
+    outcome = _dimension(
+        "outcome",
+        "결과 추적",
+        "pass" if outcome_count else "pending",
+        "관측 완료" if outcome_count else "관측 대기",
+        "OUTCOME_RECORDED" if outcome_count else "OUTCOME_PENDING",
+        f"판단 이후 결과 {outcome_count}건을 관측했습니다." if outcome_count else "판단 이후 성과를 아직 관측 중입니다.",
+        "과거 판단의 성과 검증에 사용합니다." if outcome_count else "현재 투자 의견을 차단하지 않습니다.",
+    )
+    if validation_state in {"blocked", "error"} and decision["state"] == "pass":
+        decision = {**decision, "state": "warning", "stateLabel": "조건부 판단", "reasonCode": "DECISION_VALIDATION_LIMITED"}
+    return [decision, data, inference, ai, outcome]
+
+
+def _case_explanation(
+    *,
+    action: str,
+    headline: str,
+    scenarios: List[Dict[str, object]],
+    selected_id: str,
+    guardrails: List[Dict[str, object]],
+    missing_data_items: List[Dict[str, object]],
+    abstention: Mapping[str, object],
+    source_snapshot_id: str,
+    inference_generation_id: str,
+) -> Dict[str, object]:
+    selected = next((item for item in scenarios if item.get("selected")), {})
+    candidate_scope = [selected] if selected else scenarios
+    primary = {
+        "id": "decision-primary",
+        "layer": "ai" if abstention else "hypothesis" if selected else "decision",
+        "role": "constraint" if abstention else "support",
+        "status": "confirmed" if not abstention else "incomplete",
+        "title": "AI 가설 비교 미완료" if abstention else text(selected.get("title")) or "현재 판단",
+        "summary": text(abstention.get("reason")) if abstention else text(selected.get("claim")) or headline,
+        "effect": "행동 판단을 유보합니다." if abstention else f"{action or '현재'} 의견의 핵심 설명입니다.",
+        "reasonCode": "AI_HYPOTHESIS_COMPARISON_INCOMPLETE" if abstention else "SELECTED_HYPOTHESIS",
+    }
+    supporting = []
+    counter = []
+    paths = []
+    for index, scenario in enumerate(candidate_scope[:6]):
+        support_count = int(scenario.get("supportCount") or 0)
+        counter_count = int(scenario.get("counterCount") or 0)
+        row = {
+            "id": text(scenario.get("id")) or f"scenario:{index}",
+            "layer": "hypothesis",
+            "role": "support",
+            "status": "confirmed" if support_count else "conditional",
+            "title": text(scenario.get("title")) or "투자 가설",
+            "summary": text(scenario.get("plainLanguageBasis")) or text(scenario.get("claim")),
+            "effect": f"지지 {support_count}건 · 반박 {counter_count}건",
+            "reasonCode": "TYPE_DB_HYPOTHESIS",
+        }
+        if support_count or scenario.get("selected"):
+            supporting.append(row)
+        if counter_count:
+            counter.append({
+                **row,
+                "id": row["id"] + ":counter",
+                "role": "counter",
+                "title": row["title"] + "의 반대 근거",
+                "effect": f"반박 근거 {counter_count}건이 판단 강도를 낮춥니다.",
+                "reasonCode": "COUNTER_EVIDENCE_PRESENT",
+            })
+        paths.append({
+            "id": row["id"] + ":path",
+            "title": row["title"],
+            "selected": bool(scenario.get("selected")),
+            "eligibility": text(scenario.get("decisionEligibility")) or "unknown",
+            "nodes": [
+                {"layer": "fact", "label": "판단 시점 사실", "refIds": [source_snapshot_id] if source_snapshot_id else []},
+                {"layer": "relation", "label": "TypeDB 관계", "refIds": list(scenario.get("relationIds") or [])},
+                {"layer": "rule", "label": "성립 규칙", "refIds": list(scenario.get("ruleIds") or [])},
+                {"layer": "hypothesis", "label": text(scenario.get("title")) or "투자 가설", "refIds": [text(scenario.get("id"))]},
+                {"layer": "decision", "label": action or "판단 유보", "refIds": []},
+            ],
+            "inferenceGenerationId": inference_generation_id,
+        })
+
+    constraints = []
+    for guardrail in guardrails[:8]:
+        blocked_actions = list(guardrail.get("blockedActions") or [])
+        constraints.append({
+            "id": text(guardrail.get("id")),
+            "layer": "guardrail",
+            "role": "constraint",
+            "status": text(guardrail.get("status")) or "active",
+            "title": text(guardrail.get("label")) or "판단 안전 제한",
+            "summary": text(guardrail.get("reason")),
+            "effect": ("차단 행동: " + ", ".join(blocked_actions)) if blocked_actions else "판단 강도와 다음 확인 조건에 반영합니다.",
+            "reasonCode": "ACTION_GUARDRAIL" if blocked_actions else "DECISION_GUARDRAIL",
+        })
+
+    change_conditions = unique_texts(
+        _humanize_change_condition(condition)
+        for scenario in scenarios
+        for condition in scenario.get("invalidationConditions") or []
+    )
+    type_db_actions = unique_texts(
+        scenario.get("candidateAction")
+        for scenario in scenarios
+        if text(scenario.get("candidateAction"))
+    )
+    return {
+        "primaryCause": primary,
+        "supportingCauses": supporting[:5],
+        "counterCauses": counter[:5],
+        "constraints": constraints,
+        "dataGaps": missing_data_items,
+        "changeConditions": change_conditions[:8],
+        "causalPaths": paths,
+        "comparison": {
+            "typeDbCandidateActions": type_db_actions,
+            "aiFinalAction": action,
+            "selectedHypothesisId": selected_id,
+            "different": bool(type_db_actions and action not in type_db_actions),
+            "reason": text(abstention.get("reason")) if abstention else headline,
+        },
+    }
 
 
 def _outcomes(episode: Mapping[str, object]) -> List[Dict[str, object]]:
@@ -286,30 +602,40 @@ def investment_case_snapshot(
     outcomes = _outcomes(episode)
     notifications = list(flow.get("notifications") or [])
 
+    evidence_scenarios = [selected] if selected else scenarios
     supporting_ids = unique_texts(
         list(values(episode.get("evidenceIds") or episode.get("evidence_ids")))
-        + list(selected.get("supportingEvidenceIds") or []),
+        + [
+            evidence_id
+            for scenario in evidence_scenarios
+            for evidence_id in scenario.get("supportingEvidenceIds") or []
+        ],
     )
     counter_ids = unique_texts(
         list(values(episode.get("counterEvidenceIds") or episode.get("counter_evidence_ids")))
-        + list(selected.get("counterEvidenceIds") or []),
+        + [
+            evidence_id
+            for scenario in evidence_scenarios
+            for evidence_id in scenario.get("counterEvidenceIds") or []
+        ],
     )
-    missing_data = unique_texts(
+    missing_data_items = _structured_descriptions(
         value
         for guardrail in guardrails
-        for value in guardrail.get("missingData") or []
+        for value in guardrail.get("missingDataItems") or guardrail.get("missingData") or []
     )
+    missing_data = [item["text"] for item in missing_data_items]
     required_checks = unique_texts(
-        list(values(episode.get("unresolvedQuestions") or episode.get("unresolved_questions")))
+        _human_descriptions(values(episode.get("unresolvedQuestions") or episode.get("unresolved_questions")))
         + [value for guardrail in guardrails for value in guardrail.get("requiredChecks") or []],
         limit=30,
     )
 
     fact_state = text(flow_stages.get("source", {}).get("state")) or "warning"
-    signal_state = _worst_state([
-        flow_stages.get("evidence", {}).get("state"),
-        flow_stages.get("relation", {}).get("state"),
-    ])
+    relation_count = len(flow.get("relationIds") or [])
+    signal_state = "pass" if supporting_ids or counter_ids or relation_count else (
+        "warning" if text(flow.get("inferenceGenerationId")) else "blocked"
+    )
     case_state = _worst_state([
         flow_stages.get("hypothesis", {}).get("state"),
         flow_stages.get("inference", {}).get("state"),
@@ -354,24 +680,69 @@ def investment_case_snapshot(
         ),
     ]
 
-    readiness_state = _worst_state([fact_state, signal_state, case_state, decision_state])
-    blocking = next((item for item in stages[:4] if item.get("state") in {"error", "blocked"}), None)
-    if not blocking:
-        blocking = next((item for item in stages[:4] if item.get("state") in {"warning", "pending"}), None)
-    phase = text((blocking or stages[-1]).get("id"))
-    headline = text(episode.get("decisionSummary") or episode.get("decision_summary"))
-    if not headline:
-        headline = text((blocking or {}).get("detail")) or "판단 근거를 계속 관찰하고 있습니다."
-
     abstention = item_dict(episode.get("decisionAbstention") or episode.get("decision_abstention"))
     facts_at_decision = item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
     source_snapshot_id = text(flow.get("sourceAboxSnapshotId"))
+    inference_generation_id = text(flow.get("inferenceGenerationId"))
+    action = text(flow.get("action")) or "HOLD"
+    dimensions = _status_dimensions(
+        action=action,
+        data_state=text(flow.get("dataState")),
+        validation_state=text(flow.get("validationState")),
+        source_snapshot_id=source_snapshot_id,
+        inference_generation_id=inference_generation_id,
+        relation_count=relation_count,
+        selected_id=selected_id,
+        abstention=abstention,
+        outcome_count=len(outcomes),
+    )
+    dimension_by_id = {item["id"]: item for item in dimensions}
+    decision_dimension = dimension_by_id["decision"]
+    inference_dimension = dimension_by_id["inference"]
+    data_dimension = dimension_by_id["data"]
+    if decision_dimension["state"] == "blocked":
+        readiness_state = "blocked"
+        phase = "decision"
+    elif inference_dimension["state"] == "blocked" or data_dimension["state"] == "blocked":
+        readiness_state = "blocked"
+        phase = "case" if inference_dimension["state"] == "blocked" else "fact"
+    elif any(item["state"] in {"warning", "pending"} for item in dimensions[:4]):
+        readiness_state = "warning"
+        phase = "case" if dimension_by_id["ai"]["state"] == "warning" else "signal"
+    else:
+        readiness_state = "pass"
+        phase = "outcome"
+    headline = text(episode.get("decisionSummary") or episode.get("decision_summary"))
+    if not headline:
+        headline = text(decision_dimension.get("reason")) or "판단 근거를 계속 관찰하고 있습니다."
+
     latest_outcome = outcomes[0] if outcomes else {}
     latest_notification = notifications[0] if notifications else {}
     engine_manifest = item_dict(facts_at_decision.get("engineManifest"))
     case_status = "blocked" if readiness_state in {"blocked", "error"} else (
         "review" if readiness_state in {"warning", "pending"} else "active"
     )
+
+    explanation = _case_explanation(
+        action=action,
+        headline=headline,
+        scenarios=scenarios,
+        selected_id=selected_id,
+        guardrails=guardrails,
+        missing_data_items=missing_data_items,
+        abstention=abstention,
+        source_snapshot_id=source_snapshot_id,
+        inference_generation_id=inference_generation_id,
+    )
+    change_conditions = list(explanation.get("changeConditions") or [])
+    if abstention:
+        next_action = "시스템이 비교하지 못한 가설을 다시 검증한 뒤 AI 판단을 자동 갱신해야 합니다."
+    elif change_conditions:
+        next_action = change_conditions[0]
+    elif required_checks:
+        next_action = required_checks[0]
+    else:
+        next_action = text(flow.get("nextAction")) or "판단과 무효화 조건의 변화를 계속 관찰하세요."
 
     return InvestmentCaseSnapshot(
         case_id=investment_case_id(flow.get("accountId"), flow.get("symbol")),
@@ -385,7 +756,7 @@ def investment_case_snapshot(
         readiness_state=readiness_state,
         readiness_label=FLOW_STATE_LABELS.get(readiness_state, "확인 필요"),
         headline=headline,
-        next_action=text(flow.get("nextAction")) or "판단과 무효화 조건의 변화를 계속 관찰하세요.",
+        next_action=next_action,
         decided_at=text(flow.get("decidedAt")),
         updated_at=text(flow.get("updatedAt")),
         stages=stages,
@@ -405,7 +776,10 @@ def investment_case_snapshot(
         },
         scenarios=scenarios,
         decision={
-            "action": text(flow.get("action")) or "HOLD",
+            "action": action,
+            "state": text(decision_dimension.get("state")),
+            "stateLabel": text(decision_dimension.get("stateLabel")),
+            "reasonCode": text(decision_dimension.get("reasonCode")),
             "reviewLevel": text(flow.get("reviewLevel")),
             "dataState": text(flow.get("dataState")),
             "validationState": text(flow.get("validationState")),
@@ -436,14 +810,16 @@ def investment_case_snapshot(
             "supportingIds": supporting_ids,
             "counterIds": counter_ids,
             "missingData": missing_data,
+            "missingDataItems": missing_data_items,
             "requiredChecks": required_checks,
             "sourceSnapshotId": source_snapshot_id,
+            "scope": "selected-hypothesis" if selected else "all-candidate-hypotheses",
         },
         trace_refs={
             "flowId": text(flow.get("flowId")),
             "episodeId": text(flow.get("episodeId")),
             "sourceAboxSnapshotId": source_snapshot_id,
-            "inferenceGenerationId": text(flow.get("inferenceGenerationId")),
+            "inferenceGenerationId": inference_generation_id,
             "selectedHypothesisId": selected_id,
             "ruleIds": list(flow.get("ruleIds") or []),
             "relationIds": list(flow.get("relationIds") or []),
@@ -457,8 +833,18 @@ def investment_case_snapshot(
                 "promptVersion": text(engine_manifest.get("promptVersion")),
                 "modelVersion": text(engine_manifest.get("modelVersion")),
                 "decisionContractVersion": text(engine_manifest.get("decisionContractVersion")),
+                "lineageState": "complete" if (
+                    text(engine_manifest.get("deploymentId"))
+                    and text(engine_manifest.get("releaseFingerprint"))
+                ) else "partial",
+                "lineageLabel": "판단 당시 모델 확인 완료" if (
+                    text(engine_manifest.get("deploymentId"))
+                    and text(engine_manifest.get("releaseFingerprint"))
+                ) else "판단 당시 모델 식별자 일부 미저장",
             },
         },
+        status_dimensions=dimensions,
+        explanation=explanation,
     )
 
 

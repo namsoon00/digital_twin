@@ -87,7 +87,7 @@ class OntologyInferenceLedgerApiTests(unittest.TestCase):
         self.assertNotIn("rawCandidates", run["stages"][0]["detail"])
         self.assertNotIn("detail", run["rules"][0])
 
-    def test_default_request_returns_mysql_read_model_without_starting_typedb_work(self):
+    def test_default_request_returns_mysql_read_model_and_schedules_background_refresh(self):
         cache = FakeReadModelCache({
             "payload": {},
             "hasData": False,
@@ -109,7 +109,7 @@ class OntologyInferenceLedgerApiTests(unittest.TestCase):
         self.assertEqual("degraded", payload["status"])
         self.assertTrue(payload["usable"])
         self.assertEqual(1, payload["executionHistory"]["runCount"])
-        self.assertEqual(0, cache.scheduled)
+        self.assertEqual(1, cache.scheduled)
         repository.rulebox_snapshot.assert_not_called()
 
     def test_direct_request_reports_unavailable_when_dependency_refresh_fails(self):

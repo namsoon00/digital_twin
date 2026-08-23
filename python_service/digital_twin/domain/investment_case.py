@@ -90,8 +90,6 @@ class InvestmentCaseSnapshot:
                 "detail": (
                     f"비교 시나리오 {item.get('scenarioCount', 0)}개"
                     if item.get("id") == "case"
-                    else f"{item.get('action', decision.get('action', 'HOLD'))} 판단"
-                    if item.get("id") == "decision"
                     else item.get("detail", "")
                 ),
             } for item in stages]
@@ -480,6 +478,37 @@ def _normalized_abstention(
         return {}
     raw_reason = text(payload.get("reason"))
     normalized_reason = raw_reason.lower().rstrip(".")
+    internal_reason = ""
+    internal_title = ""
+    internal_next_action = ""
+    if "deferred-pending-scoped-manifest" in normalized_reason:
+        internal_title = "추론 기록 생성 대기"
+        internal_reason = "판단에 필요한 추론 기록이 아직 준비되지 않아 최종 의견을 만들지 않았습니다."
+        internal_next_action = "추론 기록이 생성되면 관계와 가설을 다시 검증합니다."
+    elif "evidence-index-incomplete" in normalized_reason:
+        internal_title = "근거 색인 준비 미완료"
+        internal_reason = "판단 근거 색인이 완성되지 않아 가설을 비교하지 못했습니다."
+        internal_next_action = "근거 색인이 준비되면 지지·반박 가설을 다시 비교합니다."
+    elif (
+        "데이터베이스 쓰기 경계" in raw_reason
+        or ("typedb" in normalized_reason and "write" in normalized_reason)
+        or ("world" in normalized_reason and "boundary" in normalized_reason)
+    ):
+        internal_title = "추론 저장 작업 대기"
+        internal_reason = "다른 추론 저장 작업이 진행 중이어서 이번 판단을 완료하지 못했습니다."
+        internal_next_action = "진행 중인 저장 작업이 끝나면 추론과 가설 비교를 다시 실행합니다."
+    elif re.fullmatch(r"[a-z0-9]+(?:[-_.][a-z0-9]+){2,}", normalized_reason):
+        internal_title = "내부 처리 단계 미완료"
+        internal_reason = "판단에 필요한 내부 처리 단계가 완료되지 않아 최종 의견을 만들지 않았습니다."
+        internal_next_action = "내부 처리가 완료되면 관계와 가설을 다시 검증합니다."
+    if internal_reason:
+        return {
+            **payload,
+            "title": internal_title,
+            "reason": internal_reason,
+            "nextAction": internal_next_action,
+            "technicalReason": raw_reason,
+        }
     generic_selection_failure = normalized_reason in {
         "no validated final hypothesis selection",
         "no final hypothesis selection",
@@ -939,11 +968,21 @@ def investment_case_snapshot(
         limit=30,
     )
 
+    source_snapshot_id = text(flow.get("sourceAboxSnapshotId"))
+    inference_generation_id = text(flow.get("inferenceGenerationId"))
+    action = text(flow.get("action")) or "HOLD"
     facts_at_decision = item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
     stored_fact_count = len(facts_at_decision)
     data_state = text(flow.get("dataState")).lower()
     source_fact_state = text(flow_stages.get("source", {}).get("state")) or "warning"
-    if data_state in {"insufficient", "unavailable"}:
+    if not source_snapshot_id:
+        fact_state = "blocked"
+        fact_detail = (
+            f"{stored_fact_count}개 값은 남아 있지만 원천 스냅샷이 없어 판단 근거로 검증할 수 없습니다."
+            if stored_fact_count else
+            "판단 시점의 원천 스냅샷이 없어 사실 입력을 검증할 수 없습니다."
+        )
+    elif data_state in {"insufficient", "unavailable"}:
         fact_state = "blocked"
         fact_detail = (
             f"{stored_fact_count}개 기록은 저장됐지만 투자 판단 자료로 사용할 수 없습니다."
@@ -961,15 +1000,15 @@ def investment_case_snapshot(
             "최신 원천 데이터 연결이 필요합니다."
         )
     relation_count = len(flow.get("relationIds") or [])
-    signal_state = "pass" if supporting_ids or counter_ids or relation_count else (
+    local_signal_state = "pass" if supporting_ids or counter_ids or relation_count else (
         "warning" if text(flow.get("inferenceGenerationId")) else "blocked"
     )
-    case_state = _worst_state([
+    local_case_state = _worst_state([
         flow_stages.get("hypothesis", {}).get("state"),
         flow_stages.get("inference", {}).get("state"),
         assurance.get("state"),
     ])
-    decision_state = text(flow_stages.get("decision", {}).get("state")) or "warning"
+    local_decision_state = text(flow_stages.get("decision", {}).get("state")) or "warning"
     outcome_state = "pass" if outcomes else "pending"
     abstention = _normalized_abstention(
         item_dict(episode.get("decisionAbstention") or episode.get("decision_abstention")),
@@ -984,45 +1023,6 @@ def investment_case_snapshot(
         or "판단 보류"
     )
 
-    stages = [
-        _stage(
-            "fact",
-            fact_state,
-            fact_detail,
-            count=stored_fact_count,
-        ),
-        _stage(
-            "signal",
-            signal_state,
-            f"지지 {len(supporting_ids)}개 · 반박 {len(counter_ids)}개 · 관계 {len(flow.get('relationIds') or [])}개",
-            supportCount=len(supporting_ids),
-            counterCount=len(counter_ids),
-            relationCount=len(flow.get("relationIds") or []),
-        ),
-        _stage(
-            "case",
-            case_state,
-            text(selected.get("claim")) or (f"비교 시나리오 {len(scenarios)}개" if scenarios else "비교할 투자 시나리오가 없습니다."),
-            scenarioCount=len(scenarios),
-            selectedScenarioId=selected_id,
-        ),
-        _stage(
-            "decision",
-            decision_state,
-            decision_detail,
-            action=text(flow.get("action")) or "HOLD",
-        ),
-        _stage(
-            "outcome",
-            outcome_state,
-            f"관측 결과 {len(outcomes)}건" if outcomes else "다음 관측 결과를 기다리는 중입니다.",
-            outcomeCount=len(outcomes),
-        ),
-    ]
-
-    source_snapshot_id = text(flow.get("sourceAboxSnapshotId"))
-    inference_generation_id = text(flow.get("inferenceGenerationId"))
-    action = text(flow.get("action")) or "HOLD"
     dimensions = _status_dimensions(
         action=action,
         data_state=text(flow.get("dataState")),
@@ -1039,7 +1039,12 @@ def investment_case_snapshot(
     decision_dimension = dimension_by_id["decision"]
     inference_dimension = dimension_by_id["inference"]
     data_dimension = dimension_by_id["data"]
-    if decision_dimension["state"] == "blocked":
+    ai_dimension = dimension_by_id["ai"]
+    integrity = validate_decision_episode_integrity(episode)
+    if text(integrity.get("state")) == "blocked":
+        readiness_state = "blocked"
+        phase = "fact"
+    elif decision_dimension["state"] == "blocked":
         readiness_state = "blocked"
         phase = "decision"
     elif inference_dimension["state"] == "blocked" or data_dimension["state"] == "blocked":
@@ -1048,6 +1053,9 @@ def investment_case_snapshot(
     elif any(item["state"] in {"warning", "pending"} for item in dimensions[:4]):
         readiness_state = "warning"
         phase = "case" if dimension_by_id["ai"]["state"] == "warning" else "signal"
+    elif text(integrity.get("state")) in {"warning", "pending"}:
+        readiness_state = "warning"
+        phase = "fact"
     else:
         readiness_state = "pass"
         phase = "outcome"
@@ -1057,11 +1065,76 @@ def investment_case_snapshot(
     if not headline:
         headline = text(decision_dimension.get("reason")) or "판단 근거를 계속 관찰하고 있습니다."
 
+    fact_state = text(data_dimension.get("state")) or fact_state
+    signal_state = _worst_state([local_signal_state, inference_dimension.get("state"), fact_state])
+    case_state = _worst_state([local_case_state, ai_dimension.get("state"), signal_state])
+    decision_state = _worst_state([local_decision_state, readiness_state])
+    signal_detail = f"지지 {len(supporting_ids)}개 · 반박 {len(counter_ids)}개 · 관계 {relation_count}개"
+    if signal_state == "blocked" and text(inference_dimension.get("state")) == "blocked":
+        signal_detail = text(inference_dimension.get("reason")) or signal_detail
+    elif signal_state == "blocked" and fact_state == "blocked":
+        signal_detail = "원천 사실을 검증할 수 없어 저장된 신호를 판단 근거로 사용할 수 없습니다."
+    case_detail = text(selected.get("claim")) or (
+        f"비교 시나리오 {len(scenarios)}개" if scenarios else "비교할 투자 시나리오가 없습니다."
+    )
+    if case_state == "blocked" and text(ai_dimension.get("state")) == "blocked":
+        case_detail = text(ai_dimension.get("reason")) or case_detail
+    elif case_state == "blocked" and (scenarios or selected):
+        case_detail = f"비교 시나리오 {len(scenarios)}개는 저장됐지만 앞 단계가 차단되어 최종 판단에 사용할 수 없습니다."
+    if decision_state == "blocked" and text(decision_dimension.get("state")) != "blocked":
+        blocking_dimension = next(
+            (item for item in dimensions if text(item.get("state")) in {"blocked", "error"}),
+            {},
+        )
+        blocked_reason = text(blocking_dimension.get("reason")) or text(
+            next(iter(integrity.get("issues") or []), {}).get("detail")
+        )
+        action_label = {
+            "BUY": "매수",
+            "ADD": "추가매수",
+            "HOLD": "유지",
+            "TRIM": "축소",
+            "SELL": "매도",
+            "AVOID": "진입 회피",
+            "NO_ACTION": "판단 유보",
+        }.get(action.upper(), "현재")
+        decision_detail = (
+            f"{action_label} 의견은 저장됐지만 현재 사용할 수 없습니다. "
+            f"{blocked_reason or '판단 근거를 검증할 수 없습니다.'}"
+        )
+    elif decision_state == "blocked":
+        decision_detail = headline
+
+    stages = [
+        _stage("fact", fact_state, fact_detail, count=stored_fact_count),
+        _stage(
+            "signal",
+            signal_state,
+            signal_detail,
+            supportCount=len(supporting_ids),
+            counterCount=len(counter_ids),
+            relationCount=relation_count,
+        ),
+        _stage(
+            "case",
+            case_state,
+            case_detail,
+            scenarioCount=len(scenarios),
+            selectedScenarioId=selected_id,
+        ),
+        _stage("decision", decision_state, decision_detail, action=action),
+        _stage(
+            "outcome",
+            outcome_state,
+            f"관측 결과 {len(outcomes)}건" if outcomes else "다음 관측 결과를 기다리는 중입니다.",
+            outcomeCount=len(outcomes),
+        ),
+    ]
+
     latest_outcome = outcomes[0] if outcomes else {}
     latest_notification = notifications[0] if notifications else {}
     engine_manifest = item_dict(facts_at_decision.get("engineManifest"))
     reasoning_detail = reasoning_detail_from_episode(episode, scenarios, guardrails)
-    integrity = validate_decision_episode_integrity(episode)
     current_state = _current_state(facts_at_decision, reasoning_detail, text(flow.get("decidedAt")))
     freshness = {
         "decisionAsOf": text(flow.get("decidedAt")),

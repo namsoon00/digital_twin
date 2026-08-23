@@ -782,7 +782,10 @@ function checkWorkflowConsoleContract() {
       code.indexOf("renderDecisionStatusDimensions") >= 0 &&
       code.indexOf("renderInvestmentDecisionRationale") >= 0 &&
       code.indexOf("renderInvestmentFlowStateLegend") >= 0 &&
-      code.indexOf("색상은 처리 상태를 뜻하며") >= 0 &&
+      code.indexOf("왜 현재 의견을 사용할 수 없나") >= 0 &&
+      code.indexOf("빨간 ×는 판단 차단, 빨간 !는 운영 오류") >= 0 &&
+      code.indexOf("userFacingTechnicalNarrative") >= 0 &&
+      code.indexOf("사용 제한 이유") >= 0 &&
       code.indexOf("renderInvestmentCaseReasoning") >= 0 &&
       code.indexOf("decisionOutcomeBoardWorkDetailPayload") >= 0 &&
       code.indexOf('data-work-detail="decision-outcome-board"') >= 0 &&
@@ -885,7 +888,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260824-decision-explanation-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260824-decision-state-audit-v2") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(

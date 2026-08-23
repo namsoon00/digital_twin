@@ -311,6 +311,55 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertIn("사용할 수", result.stages[0]["detail"])
         self.assertEqual(result.headline, result.stages[3]["detail"])
 
+    def test_internal_abstention_reasons_are_user_facing_and_auditable(self):
+        cases = [
+            (
+                "deferred-pending-scoped-manifest",
+                "추론 기록이 아직 준비되지 않아",
+            ),
+            (
+                "native-manifest-evidence-index-incomplete",
+                "판단 근거 색인이 완성되지 않아",
+            ),
+            (
+                "다른 World 투영이 TypeDB 데이터베이스 쓰기 경계를 사용 중입니다.",
+                "다른 추론 저장 작업이 진행 중이어서",
+            ),
+        ]
+        for raw_reason, expected in cases:
+            with self.subTest(raw_reason=raw_reason):
+                row = episode()
+                row["selectedHypothesisId"] = ""
+                row["hypothesisSet"]["hypotheses"] = []
+                row["decisionAbstention"] = {
+                    "abstained": True,
+                    "reason": raw_reason,
+                }
+
+                result = investment_case_snapshot(row)
+
+                self.assertIn(expected, result.headline)
+                self.assertNotIn(raw_reason, result.headline)
+                self.assertEqual(raw_reason, result.decision["abstention"]["technicalReason"])
+
+    def test_missing_source_snapshot_blocks_dependent_stages_and_keeps_plain_detail(self):
+        row = episode()
+        row["sourceAboxSnapshotId"] = ""
+        row["factsAtDecision"] = {"currentPrice": 220.0}
+
+        result = investment_case_snapshot(row)
+        compact = result.to_dict(compact=True)
+
+        self.assertEqual("blocked", result.readiness_state)
+        self.assertEqual(
+            ["blocked", "blocked", "blocked", "blocked"],
+            [item["state"] for item in result.stages[:4]],
+        )
+        self.assertIn("원천 스냅샷", result.stages[0]["detail"])
+        self.assertIn("현재 사용할 수 없습니다", result.stages[3]["detail"])
+        self.assertEqual(result.stages[3]["detail"], compact["stages"][3]["detail"])
+        self.assertNotIn("HOLD 판단", compact["stages"][3]["detail"])
+
     def test_legacy_embedded_gap_payloads_are_rendered_as_plain_language(self):
         row = episode()
         row["unresolvedQuestions"] = [

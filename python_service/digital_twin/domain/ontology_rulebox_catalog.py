@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from functools import lru_cache
 from typing import Dict, List
 
 from .hypothesis_scoping import condition_scope_profile
@@ -813,7 +814,8 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
         ))
     return rules
 
-def default_graph_inference_rules() -> List[GraphInferenceRule]:
+@lru_cache(maxsize=1)
+def governed_graph_inference_rules() -> List[GraphInferenceRule]:
     rules = [
         GraphInferenceRule(
             rule_id="graph.loss_guard.breakdown.v1",
@@ -7547,5 +7549,19 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
     governed = with_rulebox_v3_governance(
         with_rulebox_execution_guidance(with_market_evidence_guards(rules))
     )
+    return governed
+
+
+@lru_cache(maxsize=1)
+def _production_graph_inference_rules() -> tuple[GraphInferenceRule, ...]:
+    """Compile the production RuleBox once for the lifetime of the process."""
+
     from .statistical_signals import production_model_signal_rulebox
-    return production_model_signal_rulebox(governed)
+
+    return tuple(production_model_signal_rulebox(governed_graph_inference_rules()))
+
+
+def default_graph_inference_rules() -> List[GraphInferenceRule]:
+    """Return the executable RuleBox after predictive-model conversion."""
+
+    return list(_production_graph_inference_rules())

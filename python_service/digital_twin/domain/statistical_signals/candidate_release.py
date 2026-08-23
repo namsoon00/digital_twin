@@ -6,6 +6,7 @@ import json
 from typing import Dict, Iterable, List
 
 from ..hypothesis_scoping import condition_scope_profile
+from ..ontology_change_impact import rule_condition_dependency_profile
 from ..ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
@@ -17,13 +18,15 @@ from .rule_contracts import (
     FLOW_SIGNALS,
     PRICE_TREND_SIGNALS,
     VALUATION_SIGNALS,
+    model_signal_type_for_rule,
     rule_statistical_signal_contract,
 )
 from .registry import model_release, signal_hypothesis_family
 
 
-STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION = "statistical-rule-candidate-release-v1"
-STATISTICAL_RULE_PRODUCTION_RELEASE_VERSION = "statistical-rule-model-signal-production-v2"
+STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION = "statistical-rule-candidate-release-v2"
+STATISTICAL_RULE_PRODUCTION_RELEASE_VERSION = "statistical-rule-model-signal-production-v4"
+MODEL_INPUT_ROUTING_CONTRACT_VERSION = "predictive-model-input-routing-v1"
 EMPIRICAL_PRICE_THEORIES = {
     "behavioral-momentum-and-trend",
     "behavioral-mean-reversion",
@@ -36,48 +39,22 @@ MODEL_SIGNAL_LABELS = {
     "flow-accumulation-support": "수급 축적 신호",
     "flow-distribution-risk": "수급 분산 신호",
     "flow-price-divergence-risk": "가격·수급 괴리 신호",
+    "cross-asset-residual-support": "교차자산 상대 강도 신호",
+    "cross-asset-residual-risk": "교차자산 상대 약세 신호",
+    "regime-transition-risk": "시장 국면 전환 위험 신호",
+    "valuation-relative-opportunity": "상대가치 기회 신호",
+    "valuation-relative-stretch-risk": "상대가치 부담 신호",
+    "event-abnormal-return-support": "사건 반응 지지 신호",
+    "event-abnormal-return-risk": "사건 반응 위험 신호",
+    "event-response-persistence": "사건 반응 지속 신호",
 }
 
 
 def _candidate_signal_type(rule: GraphInferenceRule) -> str:
-    rule_id = str(rule.rule_id or "").lower()
-    theory = str(rule.resolved_knowledge_basis.theory_family or "")
-    risk = any(value in rule_id for value in (
-        "risk", "break", "failure", "failed", "outflow", "sell_pressure",
-        "distribution", "dilution", "stretch", "decline", "underperformance",
-    ))
-    if theory == "market-microstructure-and-investor-flow":
-        if "divergence" in rule_id or "price_up" in rule_id:
-            return "flow-price-divergence-risk"
-        return "flow-distribution-risk" if risk else "flow-accumulation-support"
-    if theory == "cross-asset-and-regime-transmission":
-        if any(value in rule_id for value in ("regime", "inversion", "volatility")):
-            return "regime-transition-risk"
-        return "cross-asset-residual-risk" if risk else "cross-asset-residual-support"
-    if theory == "fundamental-valuation-and-factors":
-        return "valuation-relative-stretch-risk" if risk else "valuation-relative-opportunity"
-    if theory == "event-information-diffusion":
-        if "persistence" in rule_id or "price_reaction" in rule_id:
-            return "event-response-persistence"
-        return "event-abnormal-return-risk" if risk else "event-abnormal-return-support"
-    if theory == "authored-investment-thesis":
-        contract = rule_statistical_signal_contract(rule)
-        choices = list(contract.get("signalTypes") or [])
-        risk_choices = [value for value in choices if value.endswith("risk")]
-        support_choices = [value for value in choices if value.endswith("support")]
-        if risk and risk_choices:
-            return risk_choices[0]
-        if not risk and support_choices:
-            return support_choices[0]
-        if choices:
-            return choices[0]
-    if any(value in rule_id for value in ("acceleration", "persistent_decline", "weakness_accumulation")):
-        return "price-downside-acceleration-risk"
-    if any(value in rule_id for value in ("break", "failure", "failed", "distribution", "protect", "risk")):
-        return "price-trend-break-risk"
-    if any(value in rule_id for value in ("rebound", "recovery", "reclaim", "reversal", "deceleration")):
-        return "price-recovery-support"
-    return "price-trend-continuation-support"
+    return model_signal_type_for_rule(
+        rule.rule_id,
+        rule.resolved_knowledge_basis.theory_family,
+    )
 
 
 def _retained_context_conditions(rule: GraphInferenceRule) -> List[GraphRuleCondition]:
@@ -85,12 +62,36 @@ def _retained_context_conditions(rule: GraphInferenceRule) -> List[GraphRuleCond
     rows = []
     for index, condition in enumerate(rule.conditions or []):
         profile = condition_scope_profile(condition.to_dict(), index)
-        if (
-            str(profile.get("scope") or "") == "account"
-            or str(condition.relation_type or "").upper() in {"HAS_INSTRUMENT_PROFILE"}
-        ):
+        if str(profile.get("scope") or "") == "account":
             rows.append(condition)
     return rows
+
+
+def _model_input_routing_contract(rule: GraphInferenceRule) -> Dict[str, object]:
+    profiles = [
+        rule_condition_dependency_profile(condition.to_dict())
+        for index, condition in enumerate(rule.conditions or [])
+        if str(condition_scope_profile(condition.to_dict(), index).get("scope") or "") == "market"
+    ]
+    return {
+        "version": MODEL_INPUT_ROUTING_CONTRACT_VERSION,
+        "hypothesisContractId": rule.rule_id,
+        "sourceRuleVersion": rule.version,
+        "scopeFamilies": sorted({
+            family
+            for profile in profiles
+            for family in profile.get("scopeFamilies") or []
+            if str(family or "").strip()
+        }),
+        "dependencyKeys": sorted({
+            key
+            for profile in profiles
+            for key in profile.get("dependencyKeys") or []
+            if str(key or "").strip()
+        }),
+        "conditionProfiles": profiles,
+        "conservative": any(bool(profile.get("conservative")) for profile in profiles),
+    }
 
 
 def compile_price_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInferenceRule:
@@ -104,11 +105,7 @@ def compile_model_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
     contract = rule_statistical_signal_contract(rule)
     if not bool(contract.get("required")):
         raise ValueError("Rule does not own a statistical hypothesis: " + rule.rule_id)
-    signal_types = (
-        list(contract.get("signalTypes") or [])
-        if str(contract.get("migrationState") or "") == "model-signal-production"
-        else [_candidate_signal_type(rule)]
-    )
+    signal_types = list(contract.get("signalTypes") or []) or [_candidate_signal_type(rule)]
     supported = set(
         PRICE_TREND_SIGNALS
         + FLOW_SIGNALS
@@ -139,9 +136,10 @@ def compile_model_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
             description="역사적 재생과 시점 고정 검증을 통과한 통계 신호가 존재합니다.",
             relation_type="HAS_MODEL_SIGNAL",
             direction="out",
-            target_kind="statistical-model-signal",
+            target_kind="statistical-model-hypothesis-evidence",
             target_property_filters={
                 "signalType": signal_type,
+                "hypothesisContractId": rule.rule_id,
                 "hypothesisFamilyId": signal_hypothesis_family(signal_type),
                 "releaseId": release_id,
                 "strengthBand": "strong",
@@ -203,6 +201,7 @@ def compile_model_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
         execution_stage="candidate-model-signal",
         failure_policy="block",
         cost_hint="compact-model-signal",
+        model_input_contract=_model_input_routing_contract(rule),
         enabled=False,
     )
 
@@ -254,7 +253,7 @@ def promote_model_signal_rule(rule: GraphInferenceRule) -> GraphInferenceRule:
         candidate,
         rule_id=rule.rule_id,
         label=rule.label + " · 모델 신호",
-        version=rule.version,
+        version=STATISTICAL_RULE_PRODUCTION_RELEASE_VERSION,
         knowledge_basis=basis,
         derivations=[
             replace(
@@ -285,7 +284,9 @@ def promote_model_signal_rule(rule: GraphInferenceRule) -> GraphInferenceRule:
         ),
         execution_stage="production-model-signal",
         failure_policy="block",
-        enabled=True,
+        # Conversion changes the decision boundary, not catalog governance.
+        # Duplicate or operator-disabled hypotheses must remain disabled.
+        enabled=rule.enabled,
     )
 
 

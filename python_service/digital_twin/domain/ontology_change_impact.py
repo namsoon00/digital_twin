@@ -21,8 +21,8 @@ from .fact_changes import scope_families_for_fact_types
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v14"
-DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v2"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v15-model-input-routing"
+DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -598,11 +598,34 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
         rule_id = _clean(rule.get("rule_id") or rule.get("ruleId"))
         conditions = rule.get("conditions") or []
         enabled = bool(rule.get("enabled", True))
+        model_input_contract = (
+            rule.get("model_input_contract")
+            or rule.get("modelInputContract")
+            or {}
+        )
     else:
         rule_id = _clean(getattr(rule, "rule_id", ""))
         conditions = getattr(rule, "conditions", []) or []
         enabled = bool(getattr(rule, "enabled", True))
-    condition_profiles = [rule_condition_dependency_profile(item) for item in conditions]
+        model_input_contract = getattr(rule, "model_input_contract", {}) or {}
+    executable_profiles = [rule_condition_dependency_profile(item) for item in conditions]
+    model_profiles = [
+        dict(item)
+        for item in (
+            model_input_contract.get("conditionProfiles") or []
+            if isinstance(model_input_contract, Mapping)
+            else []
+        )
+        if isinstance(item, Mapping)
+    ]
+    if model_profiles:
+        condition_profiles = [
+            item for item in executable_profiles
+            if str(item.get("targetKind") or "")
+            != "statistical-model-hypothesis-evidence"
+        ] + model_profiles
+    else:
+        condition_profiles = executable_profiles
     families = sorted({family for item in condition_profiles for family in item["scopeFamilies"]})
     dependency_keys = sorted({
         key

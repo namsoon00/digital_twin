@@ -1,6 +1,7 @@
 import unittest
 
 from digital_twin.domain.ontology_change_impact import (
+    CHANGE_IMPACT_VERSION,
     DEPENDENCY_FINGERPRINT_VERSION,
     build_inference_impact_plan,
     compact_inference_impact_plan,
@@ -217,7 +218,10 @@ class OntologyChangeImpactTests(unittest.TestCase):
         )
 
         self.assertEqual(["market"], plan["changedScopeFamilies"])
-        self.assertEqual([], plan["candidateRuleIds"])
+        self.assertEqual(
+            ["graph.company.market.fundamental_confirmation.support.v1"],
+            plan["candidateRuleIds"],
+        )
         self.assertEqual(
             first["scopeGenerationIds"]["symbol:005930:fundamental"],
             second["scopeGenerationIds"]["symbol:005930:fundamental"],
@@ -940,7 +944,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         self.assertEqual(["market"], plan["changedScopeFamilies"])
         self.assertLess(plan["candidateRuleCount"], len(catalog))
-        self.assertNotIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
+        self.assertIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
         self.assertTrue(all(
             next(rule for rule in catalog if rule.rule_id == rule_id).enabled
             for rule_id in plan["candidateRuleIds"]
@@ -1584,7 +1588,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         trace = inference.entities[0]
         self.assertEqual("inference:test", trace.properties["inferenceGenerationId"])
-        self.assertEqual("abox-change-impact-v14", trace.properties["impactPlanVersion"])
+        self.assertEqual(CHANGE_IMPACT_VERSION, trace.properties["impactPlanVersion"])
         self.assertEqual(["005930"], trace.properties["inferenceImpactPlan"]["inferenceTargetSymbols"])
         self.assertEqual("subject-dependency-selected-native-evaluation", trace.properties["ruleExecutionScope"])
         self.assertFalse(trace.properties["nativeRuleSelectionApplied"])

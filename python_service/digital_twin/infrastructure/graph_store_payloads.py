@@ -397,6 +397,7 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "eligibilityStatus",
     "uncertaintyStatus",
     "hypothesisFamilyId",
+    "hypothesisContractId",
     "outcomeMetric",
     "knowledgeCutoffAt",
     "featureSetVersion",

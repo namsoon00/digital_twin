@@ -5,7 +5,10 @@ import json
 
 from typing import Dict, Iterable, List
 
-from .ontology_change_impact import rule_dependency_profile
+from .ontology_change_impact import (
+    rule_condition_dependency_profile,
+    rule_dependency_profile,
+)
 from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_rule_knowledge import resolved_rule_knowledge_basis
 from .ontology_rule_ownership import validate_rule_ownership
@@ -15,9 +18,9 @@ from .statistical_signals.rule_contracts import (
 )
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v6"
-RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v2"
-RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v1"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v7-model-input-routing"
+RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v3"
+RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v2"
 
 ASSESSMENT_SCOPES = (
     "evidence-quality",
@@ -327,8 +330,18 @@ def rule_domain_manifest(
     lifecycle_payload = lifecycle.to_dict() if hasattr(lifecycle, "to_dict") else dict(lifecycle or {}) if isinstance(lifecycle, dict) else {}
     knowledge_basis = resolved_rule_knowledge_basis(rule).to_dict()
     statistical_signal_contract = rule_statistical_signal_contract(rule)
-    condition_contracts = rule_condition_contracts(dependency)
-    invalidation_contract = rule_invalidation_contract(condition_contracts, lifecycle_payload)
+    routing_condition_contracts = rule_condition_contracts(dependency)
+    executable_dependency = {
+        "conditionProfiles": [
+            rule_condition_dependency_profile(item)
+            for item in _items(_value(rule, "conditions"))
+        ],
+    }
+    executable_condition_contracts = rule_condition_contracts(executable_dependency)
+    invalidation_contract = rule_invalidation_contract(
+        routing_condition_contracts,
+        lifecycle_payload,
+    )
     derived_outputs = rule_derived_outputs(rule)
     policy_keys = []
     rule_id = str(_value(rule, "rule_id", "ruleId") or "")
@@ -345,11 +358,11 @@ def rule_domain_manifest(
         "questionTypes": rule_question_types(rule, module),
         "inputFactFamilies": families,
         "triggerFamilies": [value for value in families if value != "unknown"],
-        "triggerDependencies": condition_contracts,
+        "triggerDependencies": routing_condition_contracts,
         "evidenceFamilies": rule_evidence_families(dependency),
         "requiredFacts": list(dependency.get("dependencyKeys") or []),
         "dependencyKeys": list(dependency.get("dependencyKeys") or []),
-        "requiredContext": condition_contracts,
+        "requiredContext": executable_condition_contracts,
         "contextCompletenessPolicy": {
             "aboxReadMode": "complete-active-world",
             "ruleExecutionMode": "dependency-selected-single-pass",
@@ -381,6 +394,9 @@ def rule_domain_manifest(
         "decisionEligibility": knowledge_basis.get("decisionEligibility"),
         "requiresHypothesis": bool(knowledge_basis.get("requiresHypothesis")),
         "statisticalSignalContract": statistical_signal_contract,
+        "modelInputContract": dict(
+            _value(rule, "model_input_contract", "modelInputContract") or {}
+        ),
         "executionStage": execution.get("executionStage"),
         "failurePolicy": execution.get("failurePolicy"),
         "costHint": execution.get("costHint"),
@@ -480,6 +496,9 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
                 add("contextByDependencyKey", key, rule_id)
             for family in families:
                 add("contextByFamily", family, rule_id)
+        for condition in manifest.get("triggerDependencies") or []:
+            dependency_keys = list(condition.get("dependencyKeys") or [])
+            families = list(condition.get("scopeFamilies") or [])
             if bool(condition.get("canTriggerEvaluation", True)):
                 for key in dependency_keys:
                     add("triggerByDependencyKey", key, rule_id)
@@ -494,9 +513,8 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         for key in list(values):
             values[key] = sorted(values[key])
     statistical_signals = statistical_signal_reverse_index(manifests)
-    # Statistical migration metadata is governance-only. It must not change
-    # the executable dependency fingerprint until a candidate rule is
-    # explicitly promoted into the RuleBox.
+    # Predictive model-input routing is part of the release fingerprint. It
+    # selects which contracts are rescored but never evaluates their values.
     fingerprint_payload = {
         "version": RULE_DEPENDENCY_INDEX_VERSION,
         "manifestVersion": ONTOLOGY_RULE_MANIFEST_VERSION,

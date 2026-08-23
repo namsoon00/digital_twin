@@ -308,6 +308,11 @@ def build_rulebox_rules_from_rows(
                 or props.get("hypothesis_lifecycle")
                 or {}
             ),
+            "model_input_contract": (
+                props.get("modelInputContract")
+                or props.get("model_input_contract")
+                or {}
+            ),
             "knowledge_basis": (
                 props.get("knowledgeBasis")
                 or props.get("knowledge_basis")

@@ -2,12 +2,21 @@ import unittest
 
 from digital_twin.application.statistical_signals import StatisticalSignalPipelineService
 from digital_twin.application.statistical_signals import observe_model_signal_outcome
-from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.hypothesis_scoping import condition_scope_profile
+from digital_twin.domain.ontology_contracts import (
+    OntologyEntity,
+    OntologyRelation,
+    PortfolioOntology,
+)
 from digital_twin.domain.ontology_rule_manifest import (
     rule_dependency_reverse_index,
     validate_rule_domain_manifests,
 )
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_change_impact import rule_dependency_profile
+from digital_twin.domain.ontology_rulebox_catalog import (
+    default_graph_inference_rules,
+    governed_graph_inference_rules,
+)
 from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 from digital_twin.domain.ontology_schema import add_entity
 from digital_twin.domain.portfolio import PortfolioSummary, Position
@@ -16,6 +25,12 @@ from digital_twin.domain.portfolio_ontology_statistical_concepts import (
     add_position_statistical_signal_concepts,
 )
 from digital_twin.domain.statistical_signals import (
+    DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
+    DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+    DEFAULT_EVENT_SIGNAL_RELEASE_ID,
+    DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+    DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+    DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
     model_signal_evaluation_report,
     price_signal_rule_candidates,
     score_flow_feature_snapshot,
@@ -24,6 +39,9 @@ from digital_twin.domain.statistical_signals import (
     validate_signal_hypothesis_mapping,
 )
 from digital_twin.domain.time_series_storage import TemporalFeatureSnapshot, TimeSeriesWatermark
+from digital_twin.infrastructure.ontology_projection import (
+    rule_catalog_requires_statistical_signal_scoring,
+)
 from digital_twin.infrastructure.mysql_statistical_signals import MySQLStatisticalModelSignalStore
 
 
@@ -111,6 +129,11 @@ class MemorySignalStore:
         }
 
 
+class FailingSignalStore:
+    def save(self, _snapshot):
+        raise RuntimeError("signal persistence unavailable")
+
+
 class FakeCursor:
     def __init__(self, rows=None, rowcount=0):
         self.rows = list(rows or [])
@@ -138,6 +161,17 @@ class FakeSignalConnection:
 
 
 class StatisticalSignalTests(unittest.TestCase):
+    def test_model_scoring_runs_once_in_shared_world_and_skips_account_overlay(self):
+        self.assertTrue(rule_catalog_requires_statistical_signal_scoring(None))
+        self.assertTrue(rule_catalog_requires_statistical_signal_scoring({
+            "rules": [{"ruleId": "shared-model-contract"}],
+            "inputRelationTypes": ["HAS_MODEL_SIGNAL"],
+        }))
+        self.assertFalse(rule_catalog_requires_statistical_signal_scoring({
+            "rules": [{"ruleId": "account-overlay-contract"}],
+            "inputRelationTypes": ["HAS_SHARED_MARKET_PREMISE"],
+        }))
+
     def test_price_signal_is_immutable_conditional_score_only(self):
         snapshot = feature_snapshot()
         first = score_temporal_feature_snapshot(snapshot)
@@ -416,8 +450,8 @@ class StatisticalSignalTests(unittest.TestCase):
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
         self.assertEqual(43, len(migration["not-applicable"]))
-        self.assertEqual(16, len(migration["model-signal-production"]))
-        self.assertEqual(59, len(migration["shadow-signal-required"]))
+        self.assertEqual(75, len(migration["model-signal-production"]))
+        self.assertEqual([], migration.get("shadow-signal-required") or [])
         flow_rule = next(
             item for item in predictive
             if item.get("ruleId") == "graph.flow.sell_pressure.v1"
@@ -462,7 +496,7 @@ class StatisticalSignalTests(unittest.TestCase):
                 self.assertIn(filters["validationStatus"], {"validated-deterministic", "replay-required"})
                 self.assertIn(filters["decisionEligibility"], {"conditional", "reference-only"})
 
-    def test_high_consequence_recovery_rules_require_price_and_flow_model_signals(self):
+    def test_high_consequence_recovery_rules_require_exact_hypothesis_contract(self):
         rules = {rule.rule_id: rule for rule in default_graph_inference_rules()}
 
         for rule_id in {
@@ -476,19 +510,18 @@ class StatisticalSignalTests(unittest.TestCase):
                 for condition in rule.conditions
                 if condition.relation_type == "HAS_MODEL_SIGNAL"
             ]
-            self.assertEqual(2, len(signal_conditions))
+            self.assertEqual(1, len(signal_conditions))
             self.assertEqual(
-                {"price-recovery-support", "flow-accumulation-support"}
-                if rule_id != "graph.winner_momentum.add_buy_review.v1"
-                else {"price-trend-continuation-support", "flow-accumulation-support"},
-                {
-                    condition.target_property_filters.get("signalType")
-                    for condition in signal_conditions
-                },
+                rule_id,
+                signal_conditions[0].target_property_filters.get("hypothesisContractId"),
+            )
+            self.assertEqual(
+                "statistical-model-hypothesis-evidence",
+                signal_conditions[0].target_kind,
             )
             self.assertIn("원시 임계치", rule.prompt_hint)
 
-    def test_production_rulebox_replaces_raw_price_and_flow_conditions(self):
+    def test_production_rulebox_replaces_all_predictive_market_conditions(self):
         rules = default_graph_inference_rules()
         predictive = [
             rule for rule in rules
@@ -503,9 +536,13 @@ class StatisticalSignalTests(unittest.TestCase):
             if rule.resolved_knowledge_basis.migration_disposition == "awaiting-governed-model-scorer"
         ]
 
-        self.assertEqual(16, len(production))
-        self.assertEqual(59, len(waiting))
-        self.assertTrue(all(rule.enabled for rule in production))
+        self.assertEqual(75, len(production))
+        self.assertEqual(0, len(waiting))
+        self.assertEqual(74, sum(rule.enabled for rule in production))
+        self.assertEqual(
+            ["graph.holding.trend_transition.risk.v1"],
+            [rule.rule_id for rule in production if not rule.enabled],
+        )
         self.assertTrue(all(not rule.enabled for rule in waiting))
         self.assertTrue(all(
             any(condition.relation_type == "HAS_MODEL_SIGNAL" for condition in rule.conditions)
@@ -523,6 +560,305 @@ class StatisticalSignalTests(unittest.TestCase):
             rule.resolved_knowledge_basis.decision_authority == "typedb-model-signal-rule"
             for rule in production
         ))
+        for rule in production:
+            for index, condition in enumerate(rule.conditions):
+                if condition.relation_type == "HAS_MODEL_SIGNAL":
+                    continue
+                self.assertEqual(
+                    "account",
+                    condition_scope_profile(condition.to_dict(), index)["scope"],
+                    rule.rule_id + ":" + condition.condition_id,
+                )
+
+    def test_every_converted_rule_preserves_its_original_change_routing_contract(self):
+        governed = {
+            rule.rule_id: rule
+            for rule in governed_graph_inference_rules()
+            if rule.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
+        }
+        production = {
+            rule.rule_id: rule
+            for rule in default_graph_inference_rules()
+            if rule.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
+        }
+
+        self.assertEqual(set(governed), set(production))
+        for rule_id, source_rule in governed.items():
+            converted_rule = production[rule_id]
+            source_dependency = rule_dependency_profile(source_rule)
+            converted_dependency = rule_dependency_profile(converted_rule)
+            self.assertEqual(
+                source_dependency["scopeFamilies"],
+                converted_dependency["scopeFamilies"],
+                rule_id,
+            )
+            self.assertEqual(
+                source_dependency["dependencyKeys"],
+                converted_dependency["dependencyKeys"],
+                rule_id,
+            )
+            self.assertEqual(
+                "predictive-model-input-routing-v1",
+                converted_rule.model_input_contract.get("version"),
+                rule_id,
+            )
+
+    def test_all_six_model_families_emit_exact_contract_evidence(self):
+        snapshot = flow_feature_snapshot(1)
+        graph = PortfolioOntology("portfolio:account-1")
+        graph.entities.append(OntologyEntity(
+            "stock:NVDA",
+            "NVIDIA",
+            "stock",
+            {"symbol": "NVDA", "source": "holding", "profitLossRate": -5},
+        ))
+
+        evidence = [
+            (
+                "temporal:risk",
+                "temporal-window",
+                "HAS_TEMPORAL_WINDOW",
+                {
+                    "windowKey": "5D",
+                    "hasSufficientHistory": True,
+                    "coverageRatio": 1,
+                    "validObservationRatio": 1,
+                    "staleObservationCount": 0,
+                    "priceChangePct": -4,
+                    "recentPriceChangePct": -3,
+                    "priceVelocityChangePct": -2,
+                    "consecutiveDeclineCount": 3,
+                },
+            ),
+            (
+                "leveraged:flow",
+                "leveraged-flow-signal",
+                "HAS_LEVERAGED_FLOW_SIGNAL",
+                {"field": "leverageFactor", "value": 2.5},
+            ),
+            (
+                "quality:judgement",
+                "data-availability-assessment",
+                "HAS_DATA_QUALITY",
+                {"field": "judgementEvidence", "dataState": "sufficient"},
+            ),
+            (
+                "fx:usdkrw",
+                "fx-rate",
+                "HAS_FX_EXPOSURE",
+                {"pair": "USDKRW", "value": 1500},
+            ),
+            (
+                "earnings:risk",
+                "earnings-calendar-event",
+                "HAS_EXTERNAL_SIGNAL",
+                {"surprisePercentage": -8},
+            ),
+            (
+                "valuation:risk",
+                "margin-of-safety",
+                "HAS_MARGIN_OF_SAFETY",
+                {
+                    "marginOfSafetyPct": -15,
+                    "valuationDataState": "sufficient",
+                    "valuationDecisionEligible": 1,
+                },
+            ),
+        ]
+        for entity_id, kind, relation_type, properties in evidence:
+            graph.entities.append(OntologyEntity(entity_id, entity_id, kind, properties))
+            graph.relations.append(OntologyRelation("stock:NVDA", entity_id, relation_type))
+
+        release_ids = (
+            DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+            DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+            DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+            DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+            DEFAULT_EVENT_SIGNAL_RELEASE_ID,
+            DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
+        )
+        result = StatisticalSignalPipelineService(
+            model_release_ids=release_ids,
+        ).run(
+            "account-1",
+            "test-time-series",
+            snapshot.windows,
+            snapshot.as_of,
+            graph=graph,
+            rules=governed_graph_inference_rules(),
+        )
+
+        snapshots = result["signalSnapshots"]
+        self.assertEqual(set(release_ids), {item.model_release_id for item in snapshots})
+        self.assertTrue(all(
+            any(signal.hypothesis_contract_ids for signal in item.signals)
+            for item in snapshots
+        ))
+        exact_contract_ids = {
+            contract_id
+            for signal in result["signalBundle"].signals
+            for contract_id in signal.hypothesis_contract_ids
+        }
+        self.assertTrue({
+            "graph.temporal.persistent_decline.risk.v1",
+            "graph.security_line.leveraged_flow_amplification.v1",
+            "graph.averaging_down.risk_guard.v1",
+            "graph.fx.usdkrw.exposure.regime.v1",
+            "graph.earnings.surprise.risk.v1",
+            "graph.valuation.negative_margin.risk.v1",
+        }.issubset(exact_contract_ids))
+
+    def test_price_contract_is_ineligible_without_family_feature_snapshot(self):
+        graph = PortfolioOntology(
+            "portfolio:account-1",
+            entities=[
+                OntologyEntity("stock:NVDA", "NVIDIA", "stock", {"symbol": "NVDA"}),
+                OntologyEntity("level:ma20", "MA20", "key-level", {
+                    "levelType": "ma20",
+                    "value": 5,
+                }),
+                OntologyEntity("quality:market", "Market quality", "data-quality-status", {
+                    "dataScope": "market-microstructure",
+                    "dataState": "available",
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:NVDA", "level:ma20", "HAS_TECHNICAL_INDICATOR"),
+                OntologyRelation("stock:NVDA", "quality:market", "HAS_DATA_QUALITY"),
+            ],
+        )
+        result = StatisticalSignalPipelineService().run(
+            "account-1",
+            "test-time-series",
+            {},
+            "2026-08-10T07:00:00Z",
+            graph=graph,
+            rules=governed_graph_inference_rules(),
+        )
+        price_contract_signals = [
+            signal for signal in result["signalBundle"].signals
+            if signal.model_release_id == DEFAULT_PRICE_SIGNAL_RELEASE_ID
+            and signal.hypothesis_contract_ids
+        ]
+
+        self.assertTrue(price_contract_signals)
+        self.assertTrue(all(signal.eligibility.status == "ineligible" for signal in price_contract_signals))
+        self.assertTrue(all(
+            "family-feature-snapshot-unavailable" in signal.eligibility.reasons
+            for signal in price_contract_signals
+        ))
+
+    def test_graph_scorer_emits_rule_specific_contract_evidence(self):
+        snapshot = feature_snapshot()
+        position = Position(
+            symbol="NVDA",
+            name="NVIDIA",
+            market="US",
+            currency="USD",
+            quantity=1,
+            current_price=110,
+            average_price=100,
+            change_rate=2,
+            ma5=105,
+            ma20=100,
+            ma60=98,
+            ma5_distance=4.76,
+            ma20_distance=10,
+            ma60_distance=12.24,
+            volume=1_000_000,
+            volume_ratio=1.4,
+            updated_at=snapshot.as_of,
+            source_as_of=snapshot.as_of,
+            data_quality="actual",
+        )
+        portfolio = PortfolioSummary(110, 110, 0, [], [], 100)
+        runtime_context = {
+            "asOf": snapshot.as_of,
+            "settings": {
+                "temporalWindowPeriods": "1D=1d:2\n3D=3d:3\n5D=5d:4\n20D=20d:5",
+            },
+            "temporalObservationWindows": snapshot.windows,
+        }
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="account-1",
+            runtime_context=runtime_context,
+            include_tbox=False,
+            include_presentation=False,
+            include_derived_decision_items=False,
+        )
+        result = StatisticalSignalPipelineService().run(
+            "account-1",
+            "test-time-series",
+            snapshot.windows,
+            snapshot.as_of,
+            graph=graph,
+            rules=governed_graph_inference_rules(),
+        )
+        contract_id = "graph.price.reclaim.thesis_support.v1"
+        self.assertTrue(any(
+            contract_id in signal.hypothesis_contract_ids
+            for signal in result["signalBundle"].signals
+        ))
+
+        add_position_statistical_signal_concepts(
+            graph,
+            "stock:NVDA",
+            "NVDA",
+            {"statisticalSignalSnapshot": result["signalBundle"].to_dict()},
+        )
+        contract_entities = [
+            item for item in graph.entities
+            if item.kind == "statistical-model-hypothesis-evidence"
+            and item.properties.get("hypothesisContractId") == contract_id
+        ]
+        self.assertEqual(1, len(contract_entities))
+        self.assertTrue(any(
+            relation.relation_type == "DERIVED_FROM_MODEL_SIGNAL"
+            and relation.source == contract_entities[0].entity_id
+            for relation in graph.relations
+        ))
+
+    def test_production_model_evidence_is_ineligible_when_snapshot_persistence_fails(self):
+        snapshot = flow_feature_snapshot(1)
+        graph = PortfolioOntology(
+            "portfolio:account-1",
+            entities=[
+                OntologyEntity("stock:NVDA", "NVIDIA", "stock", {"symbol": "NVDA"}),
+                OntologyEntity("temporal:risk", "Risk path", "temporal-window", {
+                    "windowKey": "5D",
+                    "hasSufficientHistory": True,
+                    "coverageRatio": 1,
+                    "validObservationRatio": 1,
+                    "staleObservationCount": 0,
+                    "priceChangePct": -4,
+                    "recentPriceChangePct": -3,
+                    "priceVelocityChangePct": -2,
+                    "consecutiveDeclineCount": 3,
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:NVDA", "temporal:risk", "HAS_TEMPORAL_WINDOW"),
+            ],
+        )
+        result = StatisticalSignalPipelineService(
+            MemoryFeatureStore(),
+            FailingSignalStore(),
+            model_release_ids=(DEFAULT_PRICE_SIGNAL_RELEASE_ID,),
+        ).run(
+            "account-1",
+            "test-time-series",
+            snapshot.windows,
+            snapshot.as_of,
+            graph=graph,
+            rules=governed_graph_inference_rules(),
+        )
+
+        self.assertTrue(result["signalBundle"].signals)
+        self.assertEqual("evidence-not-durable", result["status"])
+        self.assertFalse(result["decisionEligible"])
+        self.assertIn("model-signal-persistence-failed", result["decisionBlockers"])
 
     def test_uncalibrated_outcomes_cannot_pass_promotion_gate(self):
         signal = next(

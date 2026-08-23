@@ -69,8 +69,12 @@ class ReasoningEnginePlatformService:
         from ..domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
         from ..infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
         from ..domain.statistical_signals import (
+            DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
+            DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+            DEFAULT_EVENT_SIGNAL_RELEASE_ID,
             DEFAULT_FLOW_SIGNAL_RELEASE_ID,
             DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+            DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
         )
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
@@ -130,12 +134,16 @@ class ReasoningEnginePlatformService:
                     self.settings.get("statisticalFlowSignalReleaseId")
                     or DEFAULT_FLOW_SIGNAL_RELEASE_ID
                 ),
+                DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+                DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+                DEFAULT_EVENT_SIGNAL_RELEASE_ID,
+                DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
             ]),
             source_contract_versions=(
                 "typedb-semantic-storage-v2",
                 TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "time-series-storage-contract-v1",
-                "statistical-model-signal-v1",
+                "statistical-model-signal-v2",
             ),
             runtime_revision=str(runtime.get("revision") or "unknown"),
         )

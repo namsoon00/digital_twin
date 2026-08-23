@@ -13,7 +13,7 @@ Orbit Alpha separates transactional truth, semantic reasoning, execution, and de
 | Investment Mandate | Risk tolerance, loss budget, cash floor, position/sector/currency limits, allowed actions | Versioned MySQL mandate | Policy version and TBox policy facts |
 | Asset Knowledge | Company, security, listing line, market, sector, currency | Existing symbol/company stores | Stable identity graph |
 | Market Observation | Quote, volume, flow, technical, macro, provenance and freshness | Existing time-series and source stores | Observation ABox facts |
-| Statistical Signal | Point-in-time features, versioned model scores, calibration and promotion evidence | Immutable feature/signal snapshots and latest heads | Reference or validated `ModelSignalObservation` ABox facts |
+| Statistical Signal | Point-in-time features, six versioned model families, exact hypothesis contracts, calibration and validation evidence | Immutable feature/signal snapshots and latest heads | `ModelSignalObservation` and exact `ModelHypothesisEvidence` ABox facts |
 | Research Evidence | News, disclosure, claim, verification and counter-evidence | Existing research stores | Verified evidence ABox facts |
 | Risk Exposure | Raw position, sector, currency and factor exposure | Derived immutable snapshot | Policy deltas for TypeDB rules |
 | Allocation Rebalance | Target bands, drift and review-only rebalance proposals | MySQL proposal store | Bounded rebalance legs |
@@ -46,7 +46,7 @@ Writes use stable IDs and unique source references. Broker fills use provider ex
 TypeDB owns the semantic read model:
 
 - TBox classes, relation types, bounded contexts, and TypeDB schema functions
-- Current ABox observations with provenance and freshness
+- Current compact ABox observations and exact model-contract evidence with provenance and freshness
 - Generation-scoped InferenceBox relations and traces
 - Links between mandate, exposure, decision, execution, and outcome concepts
 
@@ -56,10 +56,10 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 
 1. A source context persists a fact and publishes a compact domain event.
 2. Projection builds only the affected ABox fact families and records provenance, observation time, and policy version.
-3. The statistical-signal stage reads one immutable temporal snapshot and emits versioned scores plus explicit sample, freshness, calibration, and decision-eligibility state.
-4. Question routing selects rules by input fact family, dependency key, world scope, freshness requirement, decision stage, and cost hint.
-5. TypeDB schema functions evaluate ABox facts and materialize one immutable InferenceBox generation.
-6. The investment brain builds competing hypotheses from active traces and explicit counter-evidence.
+3. The statistical-model stage reads one immutable temporal and factual market ABox, evaluates all affected predictive contracts in one indexed shared-world pass, and emits versioned exact-contract evidence plus sample, freshness, validation, and decision-eligibility state.
+4. Question routing selects model contracts and TypeDB resolvers by input fact family, dependency key, world scope, freshness requirement, decision stage, and cost hint.
+5. TypeDB schema functions join exact model evidence with semantic, private account, policy, quality, and execution facts and materialize one immutable InferenceBox generation.
+6. The investment brain builds competing hypotheses from exact contracts, active TypeDB traces, and explicit counter-evidence.
 7. The decision-continuity assembler loads the immediately prior decision plus its bounded follow-up, observed outcome, account-activity, execution, and review facts.
 8. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.
 9. A `DecisionEpisode` and review-only `ActionPlan` are persisted atomically.
@@ -67,13 +67,12 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 11. Later observations create attribution and a `DecisionReview`; learning changes remain review-only proposals.
 12. Notification delivery applies channel policy after the investment decision is complete.
 
-Statistical signals have no implicit action authority. A shadow release is
-`reference-only`; existing raw-fact RuleBox inputs remain projected and the
-disabled model-signal candidate rules cannot publish a decision. Replacing a
-raw temporal path requires point-in-time replay, minimum outcome coverage,
-probability calibration, positive economic utility, action-envelope parity,
-latency parity, an approved production model release, and a separately
-versioned RuleBox release.
+Statistical signals have no implicit action authority. All predictive rules use
+the production model-contract path, but only exact `hypothesisContractId`
+evidence can satisfy its corresponding TypeDB resolver. Broad family signals
+remain diagnostic. Semantic, policy, quality, execution, and delivery contracts
+remain TypeDB-owned. A missing or failed model release blocks its predictive
+path instead of restoring the former raw-fact predicate.
 
 `DecisionContinuityPacket` is a read-only memory contract, not another inference engine. It distinguishes `observed`, `not-observed`, `pending`, and `not-applicable`; an unchanged balance never means the user deliberately chose `HOLD`. A quantity change is linked to the prior decision for comparison but explicitly carries `causalityClaimed=false`. The packet is captured once when an AI request enters the durable queue and the worker reuses the same packet, so later database changes cannot mutate an in-flight judgement.
 

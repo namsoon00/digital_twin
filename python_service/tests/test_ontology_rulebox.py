@@ -9,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.domain.ontology_prompting import prompt_payload
 from digital_twin.domain.ontology_inference_ledger import inference_trace_ledger_payload
 from digital_twin.domain.instrument_profiles import market_signal_profiles, parse_instrument_profiles_text
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_catalog import (
+    default_graph_inference_rules,
+    governed_graph_inference_rules,
+)
 from digital_twin.domain.ontology_tbox import tbox_class_def
 from digital_twin.domain.ontology_threshold_policy import default_ontology_threshold_policy
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
@@ -42,7 +45,10 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_rule_profile,
     typedb_planned_candidate_symbols,
 )
-from digital_twin.infrastructure.graph_store_rulebox import derivation_payload_from_row
+from digital_twin.infrastructure.graph_store_rulebox import (
+    build_rulebox_rules_from_rows,
+    derivation_payload_from_row,
+)
 from digital_twin.domain.ontology_rulebox_governance import (
     rulebox_governance_candidates,
     rulebox_rules_hash,
@@ -120,7 +126,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual(0, values["validObservationCount"])
 
     def test_external_raw_fact_rules_compile_to_native_typedb_queries(self):
-        rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
+        rules_by_id = {item.rule_id: item for item in governed_graph_inference_rules()}
         expected_rule_ids = {
             "graph.macro.rate.rise.confirmed_risk.v1",
             "graph.macro.rate.fall.confirmed_support.v1",
@@ -187,14 +193,20 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn('ontology-event-type "crypto-market-24h-down-watch"', direct_crypto_query)
 
     def test_rulebox_v3_has_explicit_governance_and_removes_false_generic_paths(self):
-        rules = default_graph_inference_rules()
+        rules = governed_graph_inference_rules()
         rules_by_id = {item.rule_id: item for item in rules}
+        executable = default_graph_inference_rules()
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(58, sum(item.enabled for item in rules))
+        self.assertEqual(116, sum(item.enabled for item in executable))
+        self.assertEqual(75, sum(
+            item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
+            and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"
+            for item in executable
+        ))
         self.assertTrue(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
-        self.assertTrue(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
+        self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
         self.assertTrue(any(
             item.relation_type == "BLOCKS_ACTION"
             for item in rules_by_id["graph.data_quality.microstructure_gap.v1"].derivations
@@ -252,7 +264,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             rulebox_rules_from_payload({"rules": invalid_rules}, strict_governance=True)
 
     def test_rulebox_v3_counts_independent_any_evidence_and_bounds_crypto_watch(self):
-        rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
+        rules_by_id = {item.rule_id: item for item in governed_graph_inference_rules()}
         recovery = rules_by_id["graph.strategy_profile.aggressive_recovery_room.v1"]
         normal_query = typedb_native_match_query(recovery.to_dict(), target_symbols=["005930"])["query"]
         self.assertEqual(1, normal_query.count("smart-money-confirmation"))
@@ -363,6 +375,56 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("observe", threshold_payload["minimumReviewLevel"])
         self.assertEqual(("sufficient", "partial"), tuple(threshold_payload["usableDataStates"]))
         self.assertTrue(any(item.relation_type == "DEFINES_POLICY" for item in graph.relations))
+
+    def test_model_input_routing_contract_survives_rulebox_graph_round_trip(self):
+        original = next(
+            rule
+            for rule in default_graph_inference_rules()
+            if rule.model_input_contract
+        )
+        graph = rulebox_graph_from_rules([original], include_tbox=False)
+        rule_entity = next(
+            item
+            for item in graph.entities
+            if item.kind == "rule"
+            and (item.properties or {}).get("ruleId") == original.rule_id
+        )
+        condition_entities = [
+            item
+            for item in graph.entities
+            if item.kind == "rule-condition"
+            and (item.properties or {}).get("ruleId") == original.rule_id
+        ]
+        derivation_entities = [
+            item
+            for item in graph.entities
+            if item.kind == "relation-template"
+            and (item.properties or {}).get("ruleId") == original.rule_id
+        ]
+
+        restored = build_rulebox_rules_from_rows(
+            [{
+                "ruleId": original.rule_id,
+                "propertiesJson": json.dumps(rule_entity.properties),
+            }],
+            [{
+                "ruleId": original.rule_id,
+                "conditionId": (item.properties or {}).get("conditionId"),
+                "conditionIndex": (item.properties or {}).get("conditionIndex"),
+                "propertiesJson": json.dumps(item.properties),
+            } for item in condition_entities],
+            [{
+                "ruleId": original.rule_id,
+                "derivationIndex": (item.properties or {}).get("derivationIndex"),
+                "propertiesJson": json.dumps(item.properties),
+            } for item in derivation_entities],
+        )
+
+        self.assertEqual(1, len(restored))
+        self.assertEqual(original.model_input_contract, restored[0].model_input_contract)
+        self.assertTrue(
+            restored[0].model_input_contract.get("conditionProfiles")
+        )
 
     def test_rulebox_derivation_and_investor_flow_classes_exist_in_tbox(self):
         class_names = set()
@@ -1129,9 +1191,11 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("graph.loss_guard.breakdown.v1", rule_row["ruleId"])
         self.assertEqual("relation", condition_row["conditionKind"])
         self.assertEqual("HAS_MODEL_SIGNAL", condition_row["conditionRelationType"])
-        self.assertEqual("statistical-model-signal", condition_row["conditionTargetKind"])
+        self.assertEqual("statistical-model-hypothesis-evidence", condition_row["conditionTargetKind"])
         self.assertIn("signalType", condition_row["conditionTargetFields"])
         self.assertIn("hypothesisFamilyId", condition_row["conditionTargetFields"])
+        self.assertIn("hypothesisContractId", condition_row["conditionTargetFields"])
+        self.assertIn("graph.loss_guard.breakdown.v1", condition_row["propertiesJson"])
         self.assertEqual("HAS_INFERRED_RISK", template_row["derivationRelationType"])
         self.assertEqual("risk", template_row["derivationTargetKind"])
         self.assertEqual("LOSS_REDUCE", template_row["derivationDecisionStage"])
@@ -1162,8 +1226,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
     def test_default_rulebox_contains_valuation_margin_rules(self):
         rules = default_graph_inference_rules()
+        governed_rules = governed_graph_inference_rules()
         rule_ids = {item.rule_id for item in rules}
-        graph = rulebox_graph_from_rules(rules)
+        graph = rulebox_graph_from_rules(governed_rules)
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         condition_rows = repository.rows_for_entities(graph)
         schema_text = repository.schema_query()
@@ -1191,6 +1256,19 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("conservativeMarginOfSafetyPct", margin_condition["conditionTargetFields"])
         self.assertIn("attribute ontology-valuation-decision-eligible", schema_text)
         self.assertIn("attribute ontology-fair-value-low", schema_text)
+        executable = next(
+            item for item in rules
+            if item.rule_id == "graph.valuation.margin_of_safety.opportunity.v1"
+        )
+        self.assertEqual(1, len(executable.conditions))
+        self.assertEqual(
+            "statistical-model-hypothesis-evidence",
+            executable.conditions[0].target_kind,
+        )
+        self.assertEqual(
+            executable.rule_id,
+            executable.conditions[0].target_property_filters["hypothesisContractId"],
+        )
 
     def test_typedb_run_rulebox_materializes_inferencebox_from_typedb_projection(self):
         class CapturingTypeDBRepository(TypeDBOntologyGraphRepository):
@@ -1303,10 +1381,13 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
     def test_default_rulebox_covers_materiality_and_trend_transition_rules(self):
         rules = default_graph_inference_rules()
+        governed_rules = governed_graph_inference_rules()
         rule_ids = {item.rule_id for item in rules}
         graph = rulebox_graph_from_rules(rules)
+        governed_graph = rulebox_graph_from_rules(governed_rules)
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         condition_rows = repository.rows_for_entities(graph)
+        governed_condition_rows = repository.rows_for_entities(governed_graph)
         support_transition = next(
             item
             for item in condition_rows
@@ -1324,12 +1405,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         direct_news_risk = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.news.direct_material_risk.v1:direct-material-risk"
         )
         direct_news_context = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.news.direct_material_context.v1:direct-material-context"
         )
         fact_change_gate = next(
@@ -1354,7 +1435,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         price_reclaim_quality = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.price.reclaim.thesis_support.v1:microstructure-data-usable"
         )
         portfolio_concentration = next(
@@ -1389,17 +1470,17 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         retail_dip_buying = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.investor_flow.retail_dip_buying_risk.v1:retail-dip-buying-risk"
         )
         add_buy_volume = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.loss_smart_money.add_buy_review.v1:volume-confirmation"
         )
         add_buy_gap_guard = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.loss_smart_money.add_buy_review.v1:no-severe-microstructure-gap"
         )
         winner_add_ma5 = next(
@@ -1454,7 +1535,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         profile_averaging_policy = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.averaging_down_policy.v1:profile-avoid-averaging-down"
         )
         coverage_gap = next(
@@ -1464,52 +1545,52 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         bitcoin_profile = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1:btc-sensitive-archetype"
         )
         bitcoin_exposure = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1:btc-exposure"
         )
         preferred_rate_factor = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.preferred_income.rate_sensitivity.v1:rate-sensitive-factor"
         )
         preferred_rate_signal = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.preferred_income.rate_sensitivity.v1:preferred-rate-rise"
         )
         cyclical_growth_profile = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.cyclical_growth.recovery_add_review.v1:growth-cyclical-archetype"
         )
         macro_sensitivity = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.macro.rate.rise.confirmed_risk.v1:rate-factor-sensitivity"
         )
         macro_rate_rise = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.macro.rate.rise.confirmed_risk.v1:rate-five-observation-rise"
         )
         crypto_exposure = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.crypto.exposure.volatility_risk.v1:crypto-exposure-source"
         )
         crypto_downside = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.crypto.exposure.volatility_risk.v1:crypto-24h-downside"
         )
         fx_exposure = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.fx.usdkrw.exposure.regime.v1:usdkrw-high-exposure"
         )
         news_quality = next(
@@ -1564,9 +1645,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
         self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
         self.assertEqual("HAS_MODEL_SIGNAL", support_transition["conditionRelationType"])
-        self.assertEqual("statistical-model-signal", support_transition["conditionTargetKind"])
+        self.assertEqual("statistical-model-hypothesis-evidence", support_transition["conditionTargetKind"])
         self.assertEqual("HAS_MODEL_SIGNAL", risk_transition["conditionRelationType"])
-        self.assertEqual("statistical-model-signal", risk_transition["conditionTargetKind"])
+        self.assertEqual("statistical-model-hypothesis-evidence", risk_transition["conditionTargetKind"])
         self.assertEqual("HAS_MODEL_SIGNAL", sell_pressure["conditionRelationType"])
         self.assertIn("signalType", sell_pressure["conditionTargetFields"])
         self.assertEqual(["direct"], direct_news_risk["conditionTargetRelationScopes"])
@@ -1658,6 +1739,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
     def test_default_rulebox_covers_priority_relation_axes(self):
         rules = default_graph_inference_rules()
+        governed_rules = governed_graph_inference_rules()
         rule_ids = {item.rule_id for item in rules}
         expected_rule_ids = {
             "graph.instrument_profile.strategy_fit.support.v1",
@@ -1679,11 +1761,13 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(expected_rule_ids.issubset(rule_ids))
 
         graph = rulebox_graph_from_rules(rules)
+        governed_graph = rulebox_graph_from_rules(governed_rules)
         repository = TypeDBOntologyGraphRepository("http://typedb.example.test")
         condition_rows = repository.rows_for_entities(graph)
+        governed_condition_rows = repository.rows_for_entities(governed_graph)
         strategy_fit_profile = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.instrument_profile.strategy_fit.support.v1:profile-allows-strength-add"
         )
         strategy_loss_budget = next(
@@ -1703,12 +1787,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         news_reaction = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.news.price_reaction.risk_confirmed.v1:direct-material-risk"
         )
         disclosure_action = next(
             item
-            for item in condition_rows
+            for item in governed_condition_rows
             if item["id"] == "rule-condition:graph.disclosure.financing_or_dilution.risk.v1:corporate-action-signal"
         )
 
@@ -1737,6 +1821,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
     def test_symbol_decision_rules_do_not_depend_on_portfolio_rebalance_weight(self):
         rules = default_graph_inference_rules()
+        governed_rules = governed_graph_inference_rules()
         violations = []
         for rule in rules:
             if rule.action_group == "rebalance":
@@ -1746,7 +1831,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                     violations.append(rule.rule_id + ":" + condition.key)
 
         self.assertEqual([], violations)
-        versions = {rule.rule_id: rule.version for rule in rules}
+        versions = {rule.rule_id: rule.version for rule in governed_rules}
         for rule_id in {
             "graph.instrument_profile.strategy_fit.support.v1",
             "graph.strategy_profile.loss_tolerance_breach.v1",
@@ -1759,7 +1844,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             self.assertEqual("v3", versions[rule_id])
         self.assertEqual("v3", versions["graph.strategy_profile.aggressive_recovery_room.v1"])
         aggressive = next(
-            rule for rule in rules
+            rule for rule in governed_rules
             if rule.rule_id == "graph.strategy_profile.aggressive_recovery_room.v1"
         )
         evidence_profile = next(
@@ -1774,8 +1859,9 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("volume-confirmation", {item.condition_id for item in aggressive.conditions})
 
     def test_microstructure_rules_persist_market_capability_guards(self):
+        governed_rules = {rule.rule_id: rule for rule in governed_graph_inference_rules()}
         rules = {rule.rule_id: rule for rule in default_graph_inference_rules()}
-        investor_rule = rules["graph.averaging_down.risk_guard.v1"]
+        investor_rule = governed_rules["graph.averaging_down.risk_guard.v1"]
         investor_conditions = {item.condition_id: item for item in investor_rule.conditions}
         self.assertIn("market-evidence-profile-eligible", investor_conditions)
         unavailable = investor_conditions["market-evidence-investorFlow-unavailable"]

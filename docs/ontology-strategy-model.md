@@ -133,9 +133,9 @@ RuleBox 조건은 선택적으로 `hypothesisScope`를 `market`, `account`, `mix
 
 ABox의 기간 경로에는 `HAS_TEMPORAL_WINDOW`, `WINDOW_CONTAINS_OBSERVATION`, `PRECEDES` 관계를 투영하고, 자료가 부족하면 별도로 `HAS_COVERAGE_GAP`을 남긴다. 시작·중간·최신 관측점은 원시 가격·수급·시각·출처·품질을 보존한다. 실제 수급 관측이 없거나 오래된 경우에는 수급값을 `0`으로 만들지 않고 `smartMoneyDataState`를 `unavailable` 또는 `partial`로 둔다. `PersistentDecline`, `FailedRecovery`, `DeclineDeceleration`, `RecoveryAttempt`, `AccumulationDuringWeakness`, `DistributionDuringBounce` 같은 이름과 위험·지지 방향은 Python이 붙이지 않는다.
 
-TypeDB schema function은 원시 기간 속성을 직접 비교해 `DERIVES_TREND_EPISODE`, `HAS_TREND_TRANSITION`, `HAS_INFERRED_RISK`, `HAS_INFERRED_SUPPORT`, `BLOCKS_VALIDATION_OF`를 InferenceBox에 만든다. 임계값은 TypeDB 규칙 JSON에만 있으며 웹 규칙 관리 화면에서 조회·수정할 수 있다. 오래된 관측이 하나라도 있거나 유효 관측 비율이 부족하면 방향 규칙은 성립하지 않고 별도 신선도 차단 관계가 만들어진다. 수급 변화 규칙은 값이 존재하는 것만으로 성립하지 않으며, 서로 다른 실제 수급 관측이 두 개 이상이어야 한다.
+예측 모델 제어 영역은 원시 기간·가격·수급·회사·사건 속성을 한 번 색인해 각 예측 규칙의 시장 조건을 평가한다. 조건이 성립하면 모델 릴리스, 원본 특징 스냅샷, 표본 수, 커버리지, 신선도, 검증 상태, 정확한 `hypothesisContractId`를 가진 `ModelHypothesisEvidence`를 ABox에 넣는다. 오래되거나 표본이 부족한 관측은 해당 계약을 판단 적격으로 만들 수 없고, 수급 변화 계약은 서로 다른 실제 수급 관측이 필요한 원래 조건을 그대로 지킨다.
 
-통계 모델 경계는 이 규칙 경계를 대체하지 않고 앞단의 수치 패턴 계산을 모듈화한다. `TemporalFeatureSnapshot`에서 계산한 `ModelSignalObservation`은 모델 릴리스, 원본 특징 스냅샷, 표본 수, 커버리지, 신선도, 교정 상태와 함께 ABox에 들어간다. 현재 shadow 릴리스의 상승 지속·추세 이탈·하락 가속·회복 점수는 모두 `reference-only`이며 확률이나 매수·매도 판단이 아니다. 가격·추세 RuleBox 중 27개에는 통계 신호 전환 계약과 비활성 후보가 있지만, point-in-time 재생과 교정 게이트를 통과하고 별도 RuleBox 릴리스로 승인되기 전에는 기존 기간 관측과 운영 규칙을 그대로 사용한다.
+TypeDB schema function은 이 정확한 모델 근거와 계정의 보유·손익·성향·한도·실행 가능성·자료 품질을 결합해 `DERIVES_TREND_EPISODE`, `HAS_TREND_TRANSITION`, `HAS_INFERRED_RISK`, `HAS_INFERRED_SUPPORT`, `BLOCKS_VALIDATION_OF` 같은 InferenceBox 관계를 만든다. 예측 임계값은 감사 가능한 원본 RuleBox 계약에 있고, 운영 TypeDB 규칙은 계정 조건과 정확한 모델 계약 참조만 가진다. 75개 예측 규칙은 6개 운영 모델군으로 전환됐으며, 정책·품질·실행·알림 규칙은 TypeDB에 남는다. 모델 근거만으로 매수·매도 행동을 만들 수는 없다.
 
 우선적으로 강화한 추론 관계 축은 다음 5개다.
 

@@ -94,7 +94,15 @@ def investment_product_readiness(
     minimum_comparisons = max(5, _count(settings_payload.get("investmentLaunchMinimumComparisonSamples") or 20))
     p95_ms = _latency_p95_ms(active_health)
     maximum_p95_ms = max(15000, _count(settings_payload.get("investmentLaunchMaximumP95Ms") or 60000))
-    migration_remaining = _count(migration_counts.get("shadow-signal-required"))
+    migration_remaining = sum(
+        _count(migration_counts.get(key))
+        for key in (
+            "awaiting-governed-model-scorer",
+            "shadow-signal-required",
+            "unmapped",
+            "missing",
+        )
+    )
     release_rule_ready = bool(inventory.get("releaseReady"))
     performance_ready = bool(
         str(performance.get("status") or "") == "ok"

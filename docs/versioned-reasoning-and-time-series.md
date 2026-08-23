@@ -62,14 +62,14 @@ into V1. A later V3 can replace any of these stages behind the same engine and
 source-event contracts.
 
 The temporal feature set and statistical model release are separate release
-coordinates. A reasoning release fingerprint includes both. The current
-`price-path-statistics-shadow-v1` release emits deterministic reference scores
-without probabilities or investment-action authority. MySQL stores immutable
-changed snapshots and one latest head per account, subject, signal type, and
-model release. TypeDB receives compact signal, model-release, feature-reference,
-and eligibility ABox concepts. Raw temporal anchors remain active until a
-calibrated production release and its TypeDB candidate rules are explicitly
-promoted.
+coordinates. A reasoning release fingerprint includes both. Six production
+model families emit deterministic exact-contract evidence without probabilities
+or investment-action authority. MySQL stores immutable changed snapshots and
+one latest head per account, subject, signal type, and model release. TypeDB
+receives compact signal, exact hypothesis-contract, model-release,
+feature-reference, and eligibility ABox concepts. Raw predictive market
+predicates are retained in the governed source catalog for audit but are not a
+runtime fallback.
 
 ## InvestmentReasoning Module
 
@@ -450,9 +450,11 @@ investment facts.
 The projection worker passes its just-persisted, manifest-verified ABox graph
 to native rule execution. A complete target graph can prove negative
 conditions. A verified partial graph may optimize only the subjects it
-contains; missing subjects stay unknown, so their rules cannot be pruned.
-TypeDB still evaluates every surviving rule and remains the sole investment
-rule evaluator.
+contains; missing subjects stay unknown, so their contracts cannot be pruned.
+The model control plane evaluates predictive market contracts once in the
+shared world. TypeDB evaluates their exact-evidence resolvers plus all semantic,
+account, policy, quality, and execution rules and remains the sole owner of
+final relation and action-envelope materialization.
 
 The expensive durable ABox reread is disabled in the realtime path by default
 with `TYPEDB_NATIVE_RULE_DURABLE_PREFLIGHT_FALLBACK_ENABLED=0`. It can be

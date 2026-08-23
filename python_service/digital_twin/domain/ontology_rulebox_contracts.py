@@ -1,7 +1,7 @@
 import re
 from dataclasses import asdict, dataclass, field as dataclass_field
 from functools import cached_property
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 
 from .hypothesis_outcome_contract import HypothesisOutcomeContract
 from .ontology_rule_knowledge import RuleKnowledgeBasis, resolved_rule_knowledge_basis
@@ -339,6 +339,11 @@ class GraphInferenceRule:
     execution_stage: str = ""
     failure_policy: str = ""
     cost_hint: str = ""
+    # Predictive production rules replace market predicates with one exact
+    # model-evidence predicate. This immutable routing contract retains the
+    # original market dependencies so source changes still rescore the model
+    # without making TypeDB execute the removed predicates.
+    model_input_contract: Dict[str, object] = dataclass_field(default_factory=dict)
     enabled: bool = True
 
     def resolved_hypothesis_lifecycle(self) -> HypothesisLifecyclePolicy:
@@ -433,6 +438,11 @@ class GraphInferenceRule:
             for condition in conditions
             if str(condition.role or "required").lower() not in {"optional", "negative", "exclude", "not"}
         ]
+        raw_model_input_contract = (
+            payload.get("model_input_contract")
+            or payload.get("modelInputContract")
+            or {}
+        )
         return GraphInferenceRule(
             rule_id=rule_id,
             label=str(payload.get("label") or rule_id),
@@ -475,5 +485,10 @@ class GraphInferenceRule:
                 or payload.get("costHintOverride")
                 or ""
             ).strip(),
+            model_input_contract=(
+                dict(raw_model_input_contract)
+                if isinstance(raw_model_input_contract, Mapping)
+                else {}
+            ),
             enabled=bool(payload.get("enabled")) if "enabled" in payload else True,
         )

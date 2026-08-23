@@ -17,7 +17,7 @@ from .registry import (
 )
 
 
-RULE_SIGNAL_CONTRACT_VERSION = "rule-statistical-signal-contract-v1"
+RULE_SIGNAL_CONTRACT_VERSION = "rule-statistical-signal-contract-v2"
 
 # A production release may emit a broad signal family, but that does not prove
 # every historical rule in the same theory family. Keep this mapping explicit
@@ -49,6 +49,15 @@ PRODUCTION_RULE_SIGNAL_TYPES = {
     "graph.flow.accumulation.entry.v1": "flow-accumulation-support",
     "graph.flow.sell_pressure.v1": "flow-distribution-risk",
     "graph.flow.price_up_smart_money_outflow.divergence.v1": "flow-price-divergence-risk",
+    "graph.profit_harvest.path_deceleration.v1": "price-trend-break-risk",
+    "graph.profit_protect.short_term_recovery.counter.v1": "price-recovery-support",
+    "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1": "cross-asset-residual-support",
+    "graph.instrument_profile.preferred_income.rate_sensitivity.v1": "regime-transition-risk",
+    "graph.security_line.leveraged_flow_amplification.v1": "flow-distribution-risk",
+    "graph.watchlist.pullback.entry.v1": "price-recovery-support",
+    "graph.temporal.weakness_accumulation.defense.v1": "price-recovery-support",
+    "graph.temporal.risk_event_absorption.support.v1": "price-recovery-support",
+    "graph.valuation.high_beta_or_expensive.review.v1": "valuation-relative-stretch-risk",
 }
 
 PRICE_TREND_SIGNALS = (
@@ -98,35 +107,71 @@ def _rule_id(rule: object) -> str:
     return _text(getattr(rule, "rule_id", ""))
 
 
+def model_signal_type_for_rule(rule_id: object, theory_family: object) -> str:
+    """Return one auditable family signal for a predictive hypothesis contract.
+
+    The exact RuleBox rule id is carried separately on the emitted model
+    evidence. A broad signal therefore cannot prove another rule merely
+    because both rules belong to the same theory family.
+    """
+
+    identifier = _text(rule_id).lower()
+    theory = _text(theory_family)
+    configured = PRODUCTION_RULE_SIGNAL_TYPES.get(_text(rule_id))
+    if configured:
+        return configured if isinstance(configured, str) else tuple(configured)[0]
+    risk = any(value in identifier for value in (
+        "risk", "break", "failure", "failed", "outflow", "sell_pressure",
+        "distribution", "dilution", "stretch", "decline", "underperformance",
+        "fragile", "trap", "unsupported", "negative", "inversion",
+    ))
+    if theory == "market-microstructure-and-investor-flow":
+        if "divergence" in identifier or "price_up" in identifier:
+            return "flow-price-divergence-risk"
+        return "flow-distribution-risk" if risk else "flow-accumulation-support"
+    if theory == "cross-asset-and-regime-transmission":
+        if any(value in identifier for value in ("regime", "inversion", "volatility")):
+            return "regime-transition-risk"
+        return "cross-asset-residual-risk" if risk else "cross-asset-residual-support"
+    if theory == "fundamental-valuation-and-factors":
+        return "valuation-relative-stretch-risk" if risk else "valuation-relative-opportunity"
+    if theory == "event-information-diffusion":
+        if risk:
+            return "event-abnormal-return-risk"
+        if any(value in identifier for value in ("support", "surprise")):
+            return "event-abnormal-return-support"
+        return "event-response-persistence"
+    if any(value in identifier for value in ("acceleration", "persistent_decline", "weakness_accumulation")):
+        return "price-downside-acceleration-risk"
+    if any(value in identifier for value in ("break", "failure", "failed", "distribution", "protect", "risk")):
+        return "price-trend-break-risk"
+    if any(value in identifier for value in ("rebound", "recovery", "reclaim", "reversal", "deceleration")):
+        return "price-recovery-support"
+    return "price-trend-continuation-support"
+
+
 def _signal_mapping(rule_id: str, theory_family: str):
-    production_signal_types = PRODUCTION_RULE_SIGNAL_TYPES.get(rule_id)
-    if production_signal_types:
-        if isinstance(production_signal_types, str):
-            production_signal_types = (production_signal_types,)
-        release_ids = tuple(dict.fromkeys(
-            DEFAULT_FLOW_SIGNAL_RELEASE_ID
-            if signal_type in FLOW_SIGNALS
-            else DEFAULT_PRICE_SIGNAL_RELEASE_ID
-            for signal_type in production_signal_types
-        ))
-        return tuple(production_signal_types), "model-signal-production", release_ids, 1
-    if theory_family in {"behavioral-momentum-and-trend", "behavioral-mean-reversion"}:
-        return PRICE_TREND_SIGNALS, "shadow-signal-required", (DEFAULT_PRICE_SIGNAL_RELEASE_ID,), 1
+    signal_type = model_signal_type_for_rule(rule_id, theory_family)
+    if not signal_type:
+        return (), "unmapped", (), 9
     if theory_family == "market-microstructure-and-investor-flow":
-        return FLOW_SIGNALS, "shadow-signal-required", (DEFAULT_FLOW_SIGNAL_RELEASE_ID,), 3
-    if theory_family == "cross-asset-and-regime-transmission":
-        return CROSS_ASSET_SIGNALS, "shadow-signal-required", (DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,), 2
-    if theory_family == "fundamental-valuation-and-factors":
-        return VALUATION_SIGNALS, "shadow-signal-required", (DEFAULT_VALUATION_SIGNAL_RELEASE_ID,), 4
-    if theory_family == "event-information-diffusion":
-        return EVENT_SIGNALS, "shadow-signal-required", (DEFAULT_EVENT_SIGNAL_RELEASE_ID,), 5
-    if theory_family == "authored-investment-thesis":
+        release_id, priority = DEFAULT_FLOW_SIGNAL_RELEASE_ID, 3
+    elif theory_family == "cross-asset-and-regime-transmission":
+        release_id, priority = DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, 2
+    elif theory_family == "fundamental-valuation-and-factors":
+        release_id, priority = DEFAULT_VALUATION_SIGNAL_RELEASE_ID, 4
+    elif theory_family == "event-information-diffusion":
+        release_id, priority = DEFAULT_EVENT_SIGNAL_RELEASE_ID, 5
+    elif theory_family == "authored-investment-thesis":
         if "bitcoin" in rule_id or "crypto" in rule_id or "rate_sensitivity" in rule_id:
-            return CROSS_ASSET_SIGNALS, "shadow-signal-required", (DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,), 2
-        if "leveraged_flow" in rule_id:
-            return FLOW_SIGNALS, "shadow-signal-required", (DEFAULT_FLOW_SIGNAL_RELEASE_ID,), 3
-        return PRICE_TREND_SIGNALS, "shadow-signal-required", (DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,), 6
-    return (), "unmapped", (), 9
+            release_id, priority = DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, 2
+        elif "leveraged_flow" in rule_id:
+            release_id, priority = DEFAULT_FLOW_SIGNAL_RELEASE_ID, 3
+        else:
+            release_id, priority = DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, 6
+    else:
+        release_id, priority = DEFAULT_PRICE_SIGNAL_RELEASE_ID, 1
+    return (signal_type,), "model-signal-production", (release_id,), priority
 
 
 def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
@@ -157,8 +202,11 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
         for signal_type in signal_types
     }
     promotion_blockers = []
-    if state == "shadow-signal-required":
-        promotion_blockers.append("governed-scorer-not-implemented")
+    if any(
+        signal_type not in release.signal_types
+        for signal_type, release in zip(signal_types, releases)
+    ):
+        promotion_blockers.append("signal-type-not-declared-by-model-release")
     if any(release.status != "production" for release in releases):
         promotion_blockers.append("model-release-not-production")
     if any(
@@ -177,6 +225,7 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
             for release in releases
         )
         and all(release.decision_eligibility in {"eligible", "conditional"} for release in releases)
+        and not promotion_blockers
     )
     return {
         "version": RULE_SIGNAL_CONTRACT_VERSION,
@@ -187,6 +236,8 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
             else "disabled-awaiting-model-signal"
         ),
         "candidateDecisionAuthority": "typedb-model-signal-rule",
+        "hypothesisContractBinding": "exact-rule-id",
+        "hypothesisContractId": rule_id,
         "signalTypes": list(signal_types),
         "releaseIds": list(release_ids),
         "signalReleaseIdsByType": release_by_type,
@@ -210,10 +261,9 @@ def rule_statistical_signal_contract(rule: object) -> Dict[str, object]:
         "productionEligible": production_eligible,
         "shadowOnly": not production_eligible,
         "promotionGates": [
-            "point-in-time-replay-complete",
-            "minimum-outcome-sample-count-met",
-            "probability-calibration-approved",
-            "economic-utility-not-worse",
+            "point-in-time-input-contract-verified",
+            "deterministic-contract-replay-approved",
+            "outcome-monitoring-active",
             "no-action-envelope-regression",
             "latency-slo-not-worse",
         ],

@@ -1958,7 +1958,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260824-decision-state-audit-v2", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260824-model-rule-conversion-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -12989,8 +12989,8 @@
       ["실행 규칙", counts.executableRules, rulebox.status || "확인 대기"],
       ["예측 가설 규칙", ruleKnowledge.hypothesisRuleCount, "결과 검증 대상"],
       ["가드레일 규칙", ruleKnowledge.guardrailRuleCount, "정책·품질·실행 제약"],
-      ["통계 신호 연결", signalMigration["shadow-signal-available"] || 0, "가격·추세 후보"],
-      ["통계 전환 예정", signalMigration.planned || 0, "검증 모델 필요"],
+      ["모델 전환 완료", signalMigration["model-signal-production"] || 0, "6개 모델 계열"],
+      ["모델 전환 대기", ["awaiting-governed-model-scorer", "shadow-signal-required", "unmapped", "missing"].reduce(function (sum, key) { return sum + Number(signalMigration[key] || 0); }, 0), "0이어야 정상"],
       ["현재 가설", counts.hypotheses, hypotheses.complete === false ? "일부 집계" : "전체 집계"],
       ["추론 세대", inferencebox.inferenceGenerationId ? 1 : "-", inferencebox.status || "계정 필요"]
     ];
@@ -13203,6 +13203,7 @@
       '<p><span>모델 릴리스</span><strong>' + escapeHtml((statisticalContract.releaseIds || []).join(", ") || "-") + '</strong></p>',
       '<p><span>릴리스 상태</span><strong>' + escapeHtml([statisticalContract.releaseStatus, statisticalContract.releaseValidationStatus].filter(Boolean).join(" · ") || "-") + '</strong></p>',
       '<p><span>운영 적격</span><strong>' + escapeHtml(statisticalContract.productionEligible ? "예" : "아니오") + '</strong></p>',
+      '<p><span>규칙 결합</span><strong>' + escapeHtml(statisticalContract.hypothesisContractBinding === "exact-rule-id" ? "규칙 ID 정확 일치" : statisticalContract.hypothesisContractBinding || "-") + '</strong></p>',
       '<p><span>전환 우선순위</span><strong>' + escapeHtml(statisticalContract.migrationPriority == null ? "-" : statisticalContract.migrationPriority) + '</strong></p>',
       '</div>',
       '<p class="ontology-rule-knowledge-explanation">필요 신호: ' + escapeHtml((statisticalContract.signalTypes || []).join(", ") || "없음") + '</p>',

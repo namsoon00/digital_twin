@@ -458,6 +458,67 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         self.assertNotIn("WATCHES", [item.relation_type for item in shared.relations])
         self.assertNotIn(account_id, [item.entity_id for item in shared.entities])
 
+    def test_shared_premise_world_preserves_exact_public_model_contract_identity(self):
+        rule = GraphInferenceRule(
+            rule_id="graph.test.model-contract.v1",
+            label="model contract test",
+            version="1",
+            source_kind="stock",
+            conditions=[GraphRuleCondition(
+                "exact-model-contract",
+                "relation",
+                "exact model contract",
+                relation_type="HAS_MODEL_SIGNAL",
+                target_kind="statistical-model-hypothesis-evidence",
+                target_property_filters={
+                    "hypothesisContractId": "graph.test.model-contract.v1",
+                    "decisionEligibility": "conditional",
+                },
+                hypothesis_scope="market",
+            )],
+            derivations=[derivation()],
+            action_group="quality",
+            action_level="observe",
+            prompt_hint="test",
+        )
+        partition = compile_world_partitioned_rules([rule])
+        stock_id = entity_id("stock", "NVDA")
+        evidence_id = entity_id(
+            "statistical-model-hypothesis-evidence",
+            "NVDA:graph.test.model-contract.v1",
+        )
+        graph = PortfolioOntology(
+            "acct",
+            entities=[
+                OntologyEntity(stock_id, "NVIDIA", "stock", {"ontologyBox": "ABox"}),
+                OntologyEntity(evidence_id, "model evidence", "statistical-model-hypothesis-evidence", {
+                    "ontologyBox": "ABox",
+                    "hypothesisContractId": "graph.test.model-contract.v1",
+                    "hypothesisFamilyId": "trend-break",
+                    "decisionEligibility": "conditional",
+                    "aiPrompt": "must-not-cross-shared-world",
+                }),
+            ],
+            relations=[
+                OntologyRelation(stock_id, evidence_id, "HAS_MODEL_SIGNAL", properties={"ontologyBox": "ABox"}),
+            ],
+        )
+
+        shared = shared_premise_world_graph(
+            graph,
+            partition["sharedRules"],
+            shared_premise_world("us"),
+        )
+        evidence = next(item for item in shared.entities if item.entity_id == evidence_id)
+
+        self.assertEqual(
+            "graph.test.model-contract.v1",
+            evidence.properties["hypothesisContractId"],
+        )
+        self.assertEqual("trend-break", evidence.properties["hypothesisFamilyId"])
+        self.assertEqual("conditional", evidence.properties["decisionEligibility"])
+        self.assertNotIn("aiPrompt", evidence.properties)
+
     def test_direct_shared_premise_evidence_does_not_need_legacy_service(self):
         projection = {
             "inferenceBox": {

@@ -13,7 +13,10 @@ from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call, patch
 
 from digital_twin import service_manager
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_catalog import (
+    default_graph_inference_rules,
+    governed_graph_inference_rules,
+)
 from digital_twin.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
@@ -101,6 +104,13 @@ def executable_catalog_rule(rule_id: str) -> GraphInferenceRule:
     """Opt a catalog rule into execution for an isolated planner test."""
 
     rule = next(item for item in default_graph_inference_rules() if item.rule_id == rule_id)
+    return GraphInferenceRule.from_dict({**rule.to_dict(), "enabled": True})
+
+
+def governed_catalog_rule(rule_id: str) -> GraphInferenceRule:
+    """Return the governed model-input contract for compiler-focused tests."""
+
+    rule = next(item for item in governed_graph_inference_rules() if item.rule_id == rule_id)
     return GraphInferenceRule.from_dict({**rule.to_dict(), "enabled": True})
 
 
@@ -3880,8 +3890,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         graph = PortfolioOntology("planner-topology")
         graph.entities.extend([
             OntologyEntity("stock:005930", "Samsung", "stock", {"symbol": "005930"}),
-            OntologyEntity("signal:005930", "Signal", "statistical-model-signal", {
+            OntologyEntity("signal:005930", "Signal", "statistical-model-hypothesis-evidence", {
                 "signalType": "price-trend-break-risk",
+                "hypothesisContractId": "graph.loss_guard.breakdown.v1",
+                "hypothesisFamilyId": "trend-break",
                 "releaseId": "price-path-statistics-production-v2",
                 "strengthBand": "strong",
                 "validationStatus": "validated-deterministic",
@@ -5259,7 +5271,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         skipped = {item["ruleId"]: item for item in plan["skippedEntries"]}
 
         self.assertGreater(len(selected_ids), 1)
-        self.assertIn("graph.holding.trend_transition.risk.v1", selected_ids)
+        self.assertNotIn("graph.holding.trend_transition.risk.v1", selected_ids)
+        self.assertIn("graph.temporal.downside_acceleration.risk.v1", selected_ids)
         self.assertIn("graph.winner_momentum.add_buy_review.v1", selected_ids)
         self.assertNotIn("graph.loss_guard.breakdown.v1", skipped)
         self.assertFalse(any(
@@ -5308,7 +5321,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([rule.rule_id], [item["ruleId"] for item in legacy_plan["selectedEntries"]])
 
     def test_manifest_relation_evidence_prunes_a_proven_news_filter_mismatch(self):
-        rule = executable_catalog_rule("graph.news.direct_material_support.v1")
+        rule = governed_catalog_rule("graph.news.direct_material_support.v1")
         relation_evidence = {
             "005930": [
                 {
@@ -5358,10 +5371,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([rule.rule_id], [item["ruleId"] for item in incomplete_plan["selectedEntries"]])
 
     def test_manifest_evidence_combines_subject_and_relation_any_conditions(self):
-        rule = next(
-            item for item in default_graph_inference_rules()
-            if item.rule_id == "graph.strategy_profile.aggressive_recovery_room.v1"
-        )
+        rule = governed_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
         relation_evidence = {
             "005930": [
                 {
@@ -5625,9 +5635,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "symbol": "005930",
                 "source": "watchlist",
             }),
-            OntologyEntity("signal:005930", "가격 회복 모델 신호", "statistical-model-signal", {
+            OntologyEntity("signal:005930", "가격 회복 모델 신호", "statistical-model-hypothesis-evidence", {
                 "ontologyBox": "ABox",
                 "signalType": "price-recovery-support",
+                "hypothesisContractId": "graph.watchlist.temporal.recovery_entry.v1",
                 "hypothesisFamilyId": "mean-reversion",
                 "releaseId": "price-path-statistics-production-v2",
                 "strengthBand": "strong",
@@ -5667,7 +5678,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([rule.rule_id], [item["ruleId"] for item in matching_plan["selectedEntries"]])
 
     def test_typedb_native_rule_preflight_keeps_incoming_relation_rules_when_endpoint_scan_is_deferred(self):
-        rule = executable_catalog_rule("graph.news.ai_direct_risk.v1")
+        rule = governed_catalog_rule("graph.news.ai_direct_risk.v1")
         graph = PortfolioOntology(
             "typedb-preflight-incoming",
             entities=[OntologyEntity("stock:005930", "삼성전자", "stock", {
@@ -8087,7 +8098,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_native_rule_query_uses_stored_semantic_subtypes(self):
         rule = next(
             item
-            for item in default_graph_inference_rules()
+            for item in governed_graph_inference_rules()
             if item.rule_id == "graph.news.direct_material_support.v1"
         )
 
@@ -8401,6 +8412,38 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             },
             set(migration["addedRuleIds"]),
         )
+
+    def test_model_rule_migration_activates_only_automatically_disabled_waiting_rule(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        expected = next(
+            deepcopy(item) for item in bootstrap
+            if item["rule_id"] == "graph.loss_guard.breakdown.v1"
+        )
+        waiting = deepcopy(expected)
+        waiting["version"] = "legacy-raw-market-rule-v1"
+        waiting["enabled"] = False
+        waiting["knowledge_basis"]["migrationDisposition"] = "awaiting-governed-model-scorer"
+
+        migration = migrate_typedb_rule_catalog([waiting], bootstrap)
+        migrated = {item["rule_id"]: item for item in migration["rules"]}
+
+        self.assertTrue(migrated[waiting["rule_id"]]["enabled"])
+        self.assertIn(waiting["rule_id"], migration["modelSignalUpdatedRuleIds"])
+
+    def test_model_rule_migration_preserves_operator_disabled_production_rule(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        stored = next(
+            deepcopy(item) for item in bootstrap
+            if item["rule_id"] == "graph.loss_guard.breakdown.v1"
+        )
+        stored["version"] = "statistical-rule-model-signal-production-v2"
+        stored["enabled"] = False
+
+        migration = migrate_typedb_rule_catalog([stored], bootstrap)
+        migrated = {item["rule_id"]: item for item in migration["rules"]}
+
+        self.assertFalse(migrated[stored["rule_id"]]["enabled"])
+        self.assertIn(stored["rule_id"], migration["modelSignalUpdatedRuleIds"])
 
     def test_typedb_rule_catalog_migration_restores_normalized_execution_metrics(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
@@ -13013,7 +13056,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("($source: ontology-node)", definition["body"])
 
     def test_typedb_any_group_check_uses_typeql_distinct_condition_aggregation(self):
-        rule = executable_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
+        rule = governed_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
 
         query = typedb_native_any_group_check_query(
             rule.to_dict(),
@@ -13027,7 +13070,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
 
     def test_typedb_any_group_check_uses_manifest_rows_for_multi_condition_group(self):
-        rule = executable_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
+        rule = governed_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
 
         plan = typedb_native_any_group_check_query(
             rule.to_dict(),
@@ -13053,7 +13096,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             native_rule_query_timeout_seconds=10,
             native_rule_execution_budget_seconds=105,
         )
-        rule = executable_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
+        rule = governed_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
         evidence_index = {
             "status": "verified",
             "index": {
@@ -13086,7 +13129,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             native_rule_query_timeout_seconds=10,
             native_rule_execution_budget_seconds=105,
         )
-        rule = executable_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
+        rule = governed_catalog_rule("graph.strategy_profile.aggressive_recovery_room.v1")
         with patch.object(repository, "read_rows_in_transaction", return_value=[]) as read_rows:
             result = repository.verify_typedb_native_any_conditions(
                 object(),
@@ -13105,7 +13148,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_any_group_check_uses_direct_existence_for_one_of_many(self):
         rule = next(
             item
-            for item in default_graph_inference_rules()
+            for item in governed_graph_inference_rules()
             if item.rule_id == "graph.valuation.high_beta_or_expensive.review.v1"
         )
 
@@ -13131,7 +13174,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_typedb_any_group_check_indexes_different_relation_branches_to_active_manifest(self):
         rule = next(
             item
-            for item in default_graph_inference_rules()
+            for item in governed_graph_inference_rules()
             if item.rule_id == "graph.valuation.high_beta_or_expensive.review.v1"
         )
 
@@ -13412,9 +13455,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         execution_plan = {
             "selectedEntries": [
                 {"rule": capacity_rule},
-                {"rule": source_only_rule},
             ],
-            "skippedEntries": [{"ruleId": "graph.not-applicable"}],
+            "skippedEntries": [{"ruleId": source_only_rule.rule_id}],
         }
 
         plan = typedb_native_rule_function_sync_plan(
@@ -13443,7 +13485,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, plan["preflightSkippedRuleCount"])
         self.assertEqual("forced-complete-execution", forced["candidateSource"])
         self.assertEqual(
-            {capacity_rule.rule_id},
+            {capacity_rule.rule_id, source_only_rule.rule_id},
             set(forced["schemaFunctionRuleIds"]),
         )
         self.assertEqual([], forced["indexedEvidenceRuleIds"])
@@ -13523,7 +13565,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_typedb_any_group_check_does_not_repeat_schema_function_base_conditions(self):
         rule = next(
-            item for item in default_graph_inference_rules()
+            item for item in governed_graph_inference_rules()
             if item.rule_id == "graph.strategy_profile.aggressive_recovery_room.v1"
         )
 

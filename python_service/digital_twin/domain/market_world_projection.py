@@ -99,7 +99,7 @@ ACCOUNT_PROPERTY_KEYS = {
 # cognitive workspace. Bump this value whenever the projection contract
 # becomes stricter so existing shared Manifests are rebuilt rather than
 # preserving a legacy property slice indefinitely.
-SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v5"
+SHARED_WORLD_PROJECTION_CONTRACT_VERSION = "shared-world-projection-v6-model-contracts"
 
 
 def _property_key(value: object) -> str:
@@ -151,6 +151,15 @@ _SHARED_WORLD_PRIVATE_PROPERTY_PREFIXES = (
     "targetposition",
 )
 
+_SHARED_WORLD_PUBLIC_MODEL_CONTRACT_PROPERTY_KEYS = {
+    _property_key(value)
+    for value in {
+        "hypothesisContractId",
+        "hypothesisFamilyId",
+        "decisionEligibility",
+    }
+}
+
 
 def shared_world_property_allowed(key: object, relation: bool = False) -> bool:
     """Reject account policy and AI working state before a graph is shared."""
@@ -164,6 +173,8 @@ def shared_world_property_allowed(key: object, relation: bool = False) -> bool:
         return False
     if relation and raw in SHARED_WORLD_RELATION_EXCLUDED_PROPERTY_KEYS:
         return False
+    if compact in _SHARED_WORLD_PUBLIC_MODEL_CONTRACT_PROPERTY_KEYS:
+        return True
     if compact in _SHARED_WORLD_PRIVATE_PROPERTY_KEYS:
         return False
     return not any(compact.startswith(prefix) for prefix in _SHARED_WORLD_PRIVATE_PROPERTY_PREFIXES)
@@ -216,6 +227,7 @@ MARKET_WORLD_ENTITY_KINDS = {
     "temporal-feature-snapshot-reference",
     "statistical-model-release",
     "statistical-model-signal",
+    "statistical-model-hypothesis-evidence",
     "signal-eligibility-assessment",
     "market-session-phase",
     "fact-change",
@@ -267,6 +279,7 @@ MARKET_WORLD_RELATION_TYPES = {
     "HAS_TECHNICAL_INDICATOR",
     "HAS_TEMPORAL_WINDOW",
     "HAS_MODEL_SIGNAL",
+    "DERIVED_FROM_MODEL_SIGNAL",
     "GENERATED_BY_MODEL_RELEASE",
     "BASED_ON_FEATURE_SNAPSHOT",
     "HAS_SIGNAL_ELIGIBILITY",
@@ -443,6 +456,8 @@ def _graph_observed_at(graph: PortfolioOntology, fallback: object = "") -> str:
 
 def is_account_entity(entity: OntologyEntity) -> bool:
     kind = _clean(entity.kind).lower()
+    if kind == "statistical-model-hypothesis-evidence":
+        return False
     if kind in ACCOUNT_ENTITY_KINDS:
         return True
     return any(token in kind for token in ("position", "portfolio", "decision", "hypothesis", "execution", "learning"))

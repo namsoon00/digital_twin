@@ -8,8 +8,8 @@ import json
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 
-MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v1"
-MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v1"
+MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v2"
+MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v2"
 SIGNAL_ELIGIBILITY_CONTRACT_VERSION = "statistical-signal-eligibility-v1"
 
 
@@ -142,6 +142,7 @@ class ModelSignal:
     probability_lower: Optional[float] = None
     probability_upper: Optional[float] = None
     hypothesis_family_id: str = ""
+    hypothesis_contract_ids: Tuple[str, ...] = field(default_factory=tuple)
     outcome_metric: str = ""
     knowledge_cutoff_at: str = ""
     uncertainty_status: str = "uncalibrated"
@@ -170,6 +171,7 @@ class ModelSignal:
         probability_lower: object = None,
         probability_upper: object = None,
         hypothesis_family_id: object = "",
+        hypothesis_contract_ids: Iterable[object] = (),
         outcome_metric: object = "",
         knowledge_cutoff_at: object = "",
         uncertainty_status: object = "uncalibrated",
@@ -181,6 +183,11 @@ class ModelSignal:
         normalized_upper = None if probability_upper in (None, "") else _bounded(probability_upper)
         if normalized_lower is not None and normalized_upper is not None and normalized_lower > normalized_upper:
             raise ValueError("Model signal probability interval is inverted")
+        normalized_contract_ids = tuple(sorted({
+            _text(value)
+            for value in hypothesis_contract_ids or []
+            if _text(value)
+        }))
         material = {
             "contractVersion": MODEL_SIGNAL_CONTRACT_VERSION,
             "signalType": _text(signal_type).lower(),
@@ -201,6 +208,7 @@ class ModelSignal:
             "probabilityLower": normalized_lower,
             "probabilityUpper": normalized_upper,
             "hypothesisFamilyId": _text(hypothesis_family_id),
+            "hypothesisContractIds": list(normalized_contract_ids),
             "outcomeMetric": _text(outcome_metric),
             "knowledgeCutoffAt": _text(knowledge_cutoff_at) or _text(observed_at),
             "uncertaintyStatus": _text(uncertainty_status).lower() or "uncalibrated",
@@ -233,6 +241,7 @@ class ModelSignal:
             probability_lower=normalized_lower,
             probability_upper=normalized_upper,
             hypothesis_family_id=str(material["hypothesisFamilyId"]),
+            hypothesis_contract_ids=normalized_contract_ids,
             outcome_metric=str(material["outcomeMetric"]),
             knowledge_cutoff_at=str(material["knowledgeCutoffAt"]),
             uncertainty_status=str(material["uncertaintyStatus"]),
@@ -254,6 +263,7 @@ class ModelSignal:
             "probabilityLower": self.probability_lower,
             "probabilityUpper": self.probability_upper,
             "hypothesisFamilyId": self.hypothesis_family_id,
+            "hypothesisContractIds": list(self.hypothesis_contract_ids),
             "outcomeMetric": self.outcome_metric,
             "knowledgeCutoffAt": self.knowledge_cutoff_at,
             "uncertaintyStatus": self.uncertainty_status,

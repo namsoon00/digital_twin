@@ -237,6 +237,30 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
         ))
         self.assertFalse(rulebox_catalog_requires_bootstrap_repair(migration["rules"]))
 
+    def test_missing_model_input_routing_contract_triggers_bootstrap_repair(self):
+        stored = rulebox_rules_payload(default_graph_inference_rules())
+        target = next(
+            item
+            for item in stored
+            if (item.get("knowledge_basis") or {}).get("migrationDisposition")
+            == "model-signal-production"
+        )
+        target["model_input_contract"] = {}
+
+        self.assertTrue(rulebox_catalog_requires_bootstrap_repair(stored))
+        migration = migrate_typedb_rule_catalog(
+            stored,
+            rulebox_rules_payload(default_graph_inference_rules()),
+        )
+        migrated = next(
+            item
+            for item in migration["rules"]
+            if item.get("rule_id") == target.get("rule_id")
+        )
+
+        self.assertTrue(migrated.get("model_input_contract"))
+        self.assertFalse(rulebox_catalog_requires_bootstrap_repair(migration["rules"]))
+
     def test_non_predictive_legacy_candidate_action_is_removed_during_bootstrap_repair(self):
         bootstrap = rulebox_rules_payload(default_graph_inference_rules())
         stored = deepcopy(bootstrap)

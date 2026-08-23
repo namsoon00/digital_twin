@@ -22,8 +22,14 @@ from .registry import (
 )
 from .scoring import score_temporal_feature_snapshot
 from .flow_scoring import score_flow_feature_snapshot
+from .graph_scoring import (
+    MODEL_HYPOTHESIS_SCORER_VERSION,
+    evaluate_market_hypothesis_contract,
+    score_graph_hypothesis_contracts,
+)
 from .rule_contracts import (
     RULE_SIGNAL_CONTRACT_VERSION,
+    model_signal_type_for_rule,
     rule_statistical_signal_contract,
     statistical_signal_reverse_index,
 )
@@ -61,6 +67,7 @@ __all__ = [
     "StatisticalModelRelease",
     "STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION",
     "RULE_SIGNAL_CONTRACT_VERSION",
+    "MODEL_HYPOTHESIS_SCORER_VERSION",
     "default_statistical_model_registry",
     "signal_hypothesis_family",
     "validate_signal_hypothesis_mapping",
@@ -68,11 +75,14 @@ __all__ = [
     "compile_model_signal_rule_candidate",
     "model_signal_evaluation_report",
     "model_signal_rule_candidates",
+    "model_signal_type_for_rule",
     "production_model_signal_rulebox",
     "price_signal_rule_candidates",
     "rule_statistical_signal_contract",
     "score_temporal_feature_snapshot",
     "score_flow_feature_snapshot",
+    "score_graph_hypothesis_contracts",
+    "evaluate_market_hypothesis_contract",
     "statistical_signal_reverse_index",
     "statistical_rule_candidate_release",
 ]

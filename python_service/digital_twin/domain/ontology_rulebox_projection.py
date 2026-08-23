@@ -43,6 +43,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "promptHint": rule.prompt_hint,
             "hypothesisFamilyKey": rule.hypothesis_family_key,
             "hypothesisLifecycle": rule.resolved_hypothesis_lifecycle().to_dict(),
+            "modelInputContract": dict(rule.model_input_contract or {}),
             "anyConditionMinCount": rule.any_condition_min_count,
             "executionStage": execution_profile["executionStage"],
             "failurePolicy": execution_profile["failurePolicy"],
@@ -158,6 +159,89 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "dependencyKeys": list(dependency.get("dependencyKeys") or []),
                     "evaluationAuthority": "typedb",
                     "enabled": bool(dependency.get("canInvalidatePriorResult", True)),
+                }),
+            ))
+        for dependency_index, dependency in enumerate(
+            (rule.model_input_contract or {}).get("conditionProfiles") or []
+        ):
+            if not isinstance(dependency, dict):
+                continue
+            condition_id_value = str(
+                dependency.get("conditionId")
+                or "model-input-" + str(dependency_index + 1)
+            )
+            dependency_id = entity_id(
+                "rule-dependency",
+                rule.rule_id + ":model-input:" + condition_id_value,
+            )
+            graph.entities.append(OntologyEntity(
+                dependency_id,
+                "모델 입력 · " + condition_id_value,
+                "rule-dependency",
+                rulebox_properties({
+                    "tboxClass": "RuleDependency",
+                    "tboxClasses": ["RuleDependency", "InferenceInvalidator"],
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition_id_value,
+                    "dependencyRole": "model-input-routing",
+                    "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+                    "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+                    "conditionKind": dependency.get("conditionKind"),
+                    "field": dependency.get("field"),
+                    "relationType": dependency.get("relationType"),
+                    "targetKind": dependency.get("targetKind"),
+                    "role": dependency.get("role"),
+                    "conservative": bool(dependency.get("conservative")),
+                    "canTriggerEvaluation": bool(
+                        dependency.get("canTriggerEvaluation", True)
+                    ),
+                    "canInvalidatePriorResult": bool(
+                        dependency.get("canInvalidatePriorResult", True)
+                    ),
+                    "contextOnly": False,
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "HAS_RULE_DEPENDENCY",
+                weight=1.0,
+                properties=rulebox_relation_properties("HAS_RULE_DEPENDENCY", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition_id_value,
+                    "dependencyRole": "model-input-routing",
+                    "scopeFamilies": list(dependency.get("scopeFamilies") or []),
+                    "conservative": bool(dependency.get("conservative")),
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "TRIGGERS_EVALUATION",
+                weight=1.0,
+                properties=rulebox_relation_properties("TRIGGERS_EVALUATION", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition_id_value,
+                    "dependencyRole": "model-input-routing",
+                    "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+                    "enabled": bool(dependency.get("canTriggerEvaluation", True)),
+                    "evaluationAuthority": "statistical-model",
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                rule_id,
+                dependency_id,
+                "INVALIDATED_BY",
+                weight=1.0,
+                properties=rulebox_relation_properties("INVALIDATED_BY", {
+                    "ruleId": rule.rule_id,
+                    "conditionId": condition_id_value,
+                    "dependencyRole": "model-input-routing",
+                    "dependencyKeys": list(dependency.get("dependencyKeys") or []),
+                    "evaluationAuthority": "statistical-model",
+                    "enabled": bool(
+                        dependency.get("canInvalidatePriorResult", True)
+                    ),
                 }),
             ))
         for index, derivation in enumerate(rule.derivations):

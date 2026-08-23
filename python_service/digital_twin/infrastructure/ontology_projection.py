@@ -13,7 +13,10 @@ from ..application.investment_outcome_observation_service import InvestmentOutco
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.crypto_market_signals import crypto_markets_by_symbol
-from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
+from ..domain.ontology_rulebox_catalog import (
+    default_graph_inference_rules,
+    governed_graph_inference_rules,
+)
 from ..domain.ontology_rulebox_governance import (
     rulebox_rules_hash as compute_rulebox_rules_hash,
 )
@@ -32,6 +35,7 @@ from ..domain.ontology_projection_fingerprint import (
 from ..domain.reasoning_shadow import (
     frozen_projection_runtime_context,
     pack_projection_runtime_contexts,
+    unpack_projection_runtime_contexts,
 )
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
@@ -84,9 +88,17 @@ from ..domain.ontology_runtime_operations import (
     native_rule_failure_diagnostic,
     native_replay_validation,
 )
-from ..domain.ontology_schema import tbox_fingerprint
+from ..domain.ontology_schema import (
+    abox_lifecycle_metadata,
+    apply_abox_lifecycle,
+    tbox_fingerprint,
+)
 from ..domain.ontology_validator import validate_ontology
 from ..domain.portfolio_ontology_builder import build_portfolio_ontology
+from ..domain.portfolio_ontology_outputs import dedupe_entities, dedupe_relations
+from ..domain.portfolio_ontology_statistical_concepts import (
+    add_position_statistical_signal_concepts,
+)
 from ..domain.portfolio_ontology_coverage import CATEGORY_RELATIONS
 from ..domain.ontology_native_rule_planning import (
     merge_native_rule_planner_topology,
@@ -378,18 +390,33 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         if item.get("enabled") is not False
     ):
         return True
+    expected_model_rules = {
+        rule.rule_id: rule
+        for rule in default_graph_inference_rules()
+        if rule.resolved_knowledge_basis.owner == "statistical-model"
+    }
     for item in rules:
         basis = item.get("knowledge_basis") or item.get("knowledgeBasis") or {}
         if str(basis.get("owner") or "") != "statistical-model":
             continue
-        if str(basis.get("migrationDisposition") or "") not in {
-            "model-signal-production",
-            "awaiting-governed-model-scorer",
-        }:
+        if str(basis.get("migrationDisposition") or "") != "model-signal-production":
             return True
+        expected = expected_model_rules.get(rule_id_from_payload(item))
+        if expected and str(item.get("version") or "").strip() != expected.version:
+            return True
+        stored_model_input = (
+            item.get("model_input_contract")
+            or item.get("modelInputContract")
+            or {}
+        )
         if (
-            str(basis.get("migrationDisposition") or "") == "awaiting-governed-model-scorer"
-            and item.get("enabled") is not False
+            expected
+            and expected.model_input_contract
+            and (
+                not isinstance(stored_model_input, Mapping)
+                or str(stored_model_input.get("version") or "")
+                != str(expected.model_input_contract.get("version") or "")
+            )
         ):
             return True
     if any(
@@ -405,6 +432,9 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         return True
     for item in rules:
         rule_id = rule_id_from_payload(item)
+        basis = item.get("knowledge_basis") or item.get("knowledgeBasis") or {}
+        if str(basis.get("owner") or "") == "statistical-model":
+            continue
         expected_version = RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS.get(rule_id)
         if expected_version and str(item.get("version") or "").strip() != expected_version:
             return True
@@ -752,8 +782,28 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v8-filtered-context-boundary"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v10-model-input-routing"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
+
+
+def rule_catalog_requires_statistical_signal_scoring(
+    rule_catalog: Mapping[str, object] = None,
+) -> bool:
+    """Return whether this world phase owns market-model scoring.
+
+    An omitted catalog keeps the compatibility path enabled. A partitioned
+    account overlay has an explicit catalog without ``HAS_MODEL_SIGNAL`` and
+    consumes shared premises instead of scoring the market ABox again.
+    """
+
+    catalog = dict(rule_catalog or {})
+    relation_types = {
+        str(value or "").upper().strip()
+        for value in catalog.get("inputRelationTypes") or []
+        if str(value or "").strip()
+    }
+    has_contract = bool(catalog.get("rules") or relation_types)
+    return not has_contract or "HAS_MODEL_SIGNAL" in relation_types
 
 
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
@@ -869,22 +919,41 @@ def migrate_typedb_rule_catalog(
         default_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis") or {}
         default_model_disposition = str(default_basis.get("migrationDisposition") or "")
         stored_model_disposition = str(stored_basis.get("migrationDisposition") or "")
+        default_model_input = (
+            default_rule.get("model_input_contract")
+            or default_rule.get("modelInputContract")
+            or {}
+        )
+        stored_model_input = (
+            rule.get("model_input_contract")
+            or rule.get("modelInputContract")
+            or {}
+        )
+        model_input_contract_changed = bool(default_model_input) and (
+            not isinstance(stored_model_input, Mapping)
+            or str(stored_model_input.get("version") or "")
+            != str(default_model_input.get("version") or "")
+        )
         if (
             str(default_basis.get("owner") or "") == "statistical-model"
-            and default_model_disposition in {
-                "model-signal-production",
-                "awaiting-governed-model-scorer",
-            }
+            and default_model_disposition == "model-signal-production"
             and (
                 stored_model_disposition != default_model_disposition
-                or (
-                    default_model_disposition == "awaiting-governed-model-scorer"
-                    and rule.get("enabled") is not False
-                )
+                or stored_version != default_version
+                or model_input_contract_changed
             )
         ):
             replacement = deepcopy(default_rule)
-            if rule.get("enabled") is False and replacement.get("enabled") is not False:
+            if (
+                rule.get("enabled") is False
+                and stored_model_disposition not in {
+                    "awaiting-governed-model-scorer",
+                    "candidate-awaiting-promotion",
+                    "shadow-signal-required",
+                    "disabled-awaiting-model-signal",
+                }
+                and replacement.get("enabled") is not False
+            ):
                 replacement["enabled"] = False
             migrated.append(replacement)
             updated.append(rule_id)
@@ -4192,6 +4261,14 @@ class PortfolioOntologyProjectionRecorder:
         )
         emit("memory_cache.done", runtimeMs=stage_timings["graphAssemblyCacheReadMs"], status=str(cache_result.get("status") or ""))
         if str(cache_result.get("status") or "") == "hit":
+            try:
+                cached_contexts = unpack_projection_runtime_contexts(
+                    cache_result.get("runtimeContextPacket") or {}
+                )
+                if snapshot.account_id in cached_contexts:
+                    self.last_runtime_contexts[snapshot.account_id] = cached_contexts[snapshot.account_id]
+            except ValueError:
+                pass
             return (
                 cache_result["graph"],
                 cache_result["persistenceGraph"],
@@ -4228,6 +4305,14 @@ class PortfolioOntologyProjectionRecorder:
                 self.graph_assembly_cache_max_entries(),
                 persistent_cache_result.get("runtimeContextPacket") or {},
             )
+            try:
+                cached_contexts = unpack_projection_runtime_contexts(
+                    persistent_cache_result.get("runtimeContextPacket") or {}
+                )
+                if snapshot.account_id in cached_contexts:
+                    self.last_runtime_contexts[snapshot.account_id] = cached_contexts[snapshot.account_id]
+            except ValueError:
+                pass
             return (
                 deepcopy(graph),
                 deepcopy(persistence_graph),
@@ -4264,6 +4349,140 @@ class PortfolioOntologyProjectionRecorder:
             include_derived_decision_items=False,
             reference_positions=observation_input.get("referencePositions") or [],
         )
+        statistical_scoring_required = bool(
+            self.statistical_signal_service
+            and rule_catalog_requires_statistical_signal_scoring(rule_catalog)
+        )
+        stage_timings["statisticalSignalScoringRequired"] = (
+            1 if statistical_scoring_required else 0
+        )
+        if statistical_scoring_required:
+            emit("statistical_signals.start", symbolCount=len(input_symbols))
+            signal_started = time.perf_counter()
+            statistical_signal_context = {}
+            statistical_result = {}
+            try:
+                statistical_result = self.statistical_signal_service.run(
+                    account_id=snapshot.account_id,
+                    backend_id=str(
+                        self.settings.get("_reasoningTimeSeriesBackendId")
+                        or self.settings.get("timeSeriesActiveBackendId")
+                        or "market-time-series"
+                    ),
+                    windows=runtime_context.get("temporalObservationWindows") or {},
+                    as_of=str(snapshot.generated_at or runtime_context.get("asOf") or ""),
+                    source_event_id=str(
+                        ((runtime_context.get("metadata") or {}).get("sourceEventId") or "")
+                        if isinstance(runtime_context.get("metadata"), dict)
+                        else ""
+                    ),
+                    graph=graph,
+                    rules=governed_graph_inference_rules(),
+                )
+                feature_snapshot = statistical_result.get("featureSnapshot")
+                signal_snapshot = statistical_result.get("signalSnapshot")
+                signal_bundle = statistical_result.get("signalBundle")
+                statistical_signal_context = {
+                    "temporalFeatureSnapshot": (
+                        feature_snapshot.to_dict(include_windows=False)
+                        if hasattr(feature_snapshot, "to_dict")
+                        else {}
+                    ),
+                    "statisticalSignalSnapshot": (
+                        signal_bundle.to_dict()
+                        if hasattr(signal_bundle, "to_dict")
+                        else signal_snapshot.to_dict()
+                        if hasattr(signal_snapshot, "to_dict")
+                        else {}
+                    ),
+                    "statisticalSignalPipeline": {
+                        "status": str(statistical_result.get("status") or ""),
+                        "decisionEligible": bool(statistical_result.get("decisionEligible")),
+                        "decisionBlockers": list(
+                            statistical_result.get("decisionBlockers") or []
+                        ),
+                        "timings": dict(statistical_result.get("timings") or {}),
+                        "persistence": dict(statistical_result.get("persistence") or {}),
+                        "pointInTime": dict(statistical_result.get("pointInTime") or {}),
+                        "skippedModelReleaseIds": list(
+                            statistical_result.get("skippedModelReleaseIds") or []
+                        ),
+                    },
+                }
+            except Exception as error:  # noqa: BLE001 - fail closed: no model contract, no predictive rule.
+                statistical_signal_context = {
+                    "statisticalSignalPipeline": {
+                        "status": "error",
+                        "reason": str(error)[:300],
+                    },
+                }
+            runtime_context = {
+                **dict(runtime_context or {}),
+                **statistical_signal_context,
+            }
+            if bool(statistical_result.get("decisionEligible")):
+                stock_entities = [item for item in graph.entities if item.kind == "stock"]
+                for stock in stock_entities:
+                    symbol = str((stock.properties or {}).get("symbol") or "").upper().strip()
+                    if symbol:
+                        add_position_statistical_signal_concepts(
+                            graph,
+                            stock.entity_id,
+                            symbol,
+                            runtime_context,
+                        )
+            graph.entities = dedupe_entities(graph.entities)
+            graph.relations = dedupe_relations(graph.relations)
+            apply_abox_lifecycle(
+                graph,
+                abox_lifecycle_metadata(
+                    graph.portfolio_id,
+                    runtime_context,
+                    active_tbox,
+                ),
+            )
+            frozen_context = frozen_projection_runtime_context(runtime_context)
+            self.last_runtime_contexts[snapshot.account_id] = frozen_context
+            try:
+                runtime_context_packet = pack_projection_runtime_contexts({
+                    snapshot.account_id: frozen_context,
+                })
+            except ValueError:
+                runtime_context_packet = {}
+            stage_timings["statisticalSignalPipelineMs"] = int(
+                (time.perf_counter() - signal_started) * 1000
+            )
+            emit(
+                "statistical_signals.done",
+                runtimeMs=stage_timings["statisticalSignalPipelineMs"],
+                status=str(
+                    statistical_signal_context.get("statisticalSignalPipeline", {}).get("status")
+                    or "unavailable"
+                ),
+                signalCount=int(
+                    statistical_signal_context.get("statisticalSignalSnapshot", {}).get("signalCount")
+                    or 0
+                ),
+            )
+        elif self.statistical_signal_service:
+            runtime_context = {
+                **dict(runtime_context or {}),
+                "statisticalSignalPipeline": {
+                    "status": "not-required-account-overlay",
+                    "reason": (
+                        "The PortfolioWorld consumes verified shared-premise references; "
+                        "market model contracts are scored once in SharedPremiseWorld."
+                    ),
+                },
+            }
+            frozen_context = frozen_projection_runtime_context(runtime_context)
+            self.last_runtime_contexts[snapshot.account_id] = frozen_context
+            try:
+                runtime_context_packet = pack_projection_runtime_contexts({
+                    snapshot.account_id: frozen_context,
+                })
+            except ValueError:
+                runtime_context_packet = {}
         emit("ontology_graph.done", runtimeMs=int((time.perf_counter() - assembly_started) * 1000))
         emit("persistence_graph.start")
         persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
@@ -7573,64 +7792,14 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=selected_symbols,
         )
         emit("temporal_windows.done", symbolCount=len(temporal_windows))
-        statistical_signal_context = {}
-        if self.statistical_signal_service:
-            emit("statistical_signals.start", symbolCount=len(temporal_windows))
-            try:
-                statistical_result = self.statistical_signal_service.run(
-                    account_id=snapshot.account_id,
-                    backend_id=str(
-                        self.settings.get("_reasoningTimeSeriesBackendId")
-                        or self.settings.get("timeSeriesActiveBackendId")
-                        or "market-time-series"
-                    ),
-                    windows=temporal_windows,
-                    as_of=str(snapshot.generated_at or as_of),
-                    source_event_id=str(metadata.get("sourceEventId") or ""),
-                )
-                feature_snapshot = statistical_result.get("featureSnapshot")
-                signal_snapshot = statistical_result.get("signalSnapshot")
-                signal_bundle = statistical_result.get("signalBundle")
-                statistical_signal_context = {
-                    "temporalFeatureSnapshot": (
-                        feature_snapshot.to_dict(include_windows=False)
-                        if hasattr(feature_snapshot, "to_dict")
-                        else {}
-                    ),
-                    "statisticalSignalSnapshot": (
-                        signal_bundle.to_dict()
-                        if hasattr(signal_bundle, "to_dict")
-                        else signal_snapshot.to_dict()
-                        if hasattr(signal_snapshot, "to_dict")
-                        else {}
-                    ),
-                    "statisticalSignalPipeline": {
-                        "status": str(statistical_result.get("status") or ""),
-                        "timings": dict(statistical_result.get("timings") or {}),
-                        "persistence": dict(statistical_result.get("persistence") or {}),
-                        "skippedModelReleaseIds": list(
-                            statistical_result.get("skippedModelReleaseIds") or []
-                        ),
-                    },
-                }
-            except Exception as error:  # noqa: BLE001 - reference-only signals cannot block TypeDB.
-                statistical_signal_context = {
-                    "statisticalSignalPipeline": {
-                        "status": "error",
-                        "reason": str(error)[:300],
-                    },
-                }
-            emit(
-                "statistical_signals.done",
-                status=str(
-                    statistical_signal_context.get("statisticalSignalPipeline", {}).get("status")
-                    or "unavailable"
-                ),
-                signalCount=int(
-                    statistical_signal_context.get("statisticalSignalSnapshot", {}).get("signalCount")
-                    or 0
-                ),
-            )
+        # Model scoring runs after the factual ABox is complete. This lets all
+        # six model families inspect the exact company, valuation, event,
+        # cross-asset, price and flow facts that TypeDB will receive.
+        statistical_signal_context = {
+            "statisticalSignalPipeline": {
+                "status": "pending-factual-abox",
+            },
+        } if self.statistical_signal_service else {}
         portfolio_lifecycle = {}
         if self.investment_domain_store and hasattr(self.investment_domain_store, "ontology_portfolio_lifecycle_context"):
             emit("portfolio_lifecycle.start")

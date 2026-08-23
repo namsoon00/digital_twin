@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Mapping, Set
 from .ontology_contracts import PortfolioOntology
 
 
-NATIVE_RULE_PLANNER_TOPOLOGY_VERSION = "native-rule-planner-topology-v1"
+NATIVE_RULE_PLANNER_TOPOLOGY_VERSION = "native-rule-planner-topology-v2-model-contracts"
 
 # These are the raw source attributes referenced by the current TypeDB
 # schema-function RuleBox.  Persisting this bounded negative-planning index
@@ -75,6 +75,7 @@ NATIVE_RULE_PLANNER_RELATION_TARGET_PROPERTY_FIELDS = {
     "freeCashFlowMarginPct",
     "group",
     "hasSufficientHistory",
+    "hypothesisContractId",
     "hypothesisFamilyId",
     "impactPolarity",
     "increaseCount20d",

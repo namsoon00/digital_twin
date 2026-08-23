@@ -10,6 +10,7 @@ from ...domain.statistical_signals import (
     DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
     ModelSignalBundle,
+    score_graph_hypothesis_contracts,
     score_flow_feature_snapshot,
     score_temporal_feature_snapshot,
 )
@@ -157,6 +158,8 @@ class StatisticalSignalPipelineService:
         windows: Mapping[str, object],
         as_of: object = "",
         source_event_id: object = "",
+        graph=None,
+        rules: Iterable[object] = (),
     ) -> Dict[str, object]:
         started = time.perf_counter()
         point_in_time_windows, point_in_time = _point_in_time_windows(windows, as_of)
@@ -190,14 +193,38 @@ class StatisticalSignalPipelineService:
             DEFAULT_PRICE_SIGNAL_RELEASE_ID: score_temporal_feature_snapshot,
             DEFAULT_FLOW_SIGNAL_RELEASE_ID: score_flow_feature_snapshot,
         }
-        signal_snapshots = []
+        baseline_snapshots = []
         skipped_releases = []
-        for release_id in self.model_release_ids:
+        baseline_release_ids = tuple(dict.fromkeys((
+            DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+            DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+        )))
+        for release_id in baseline_release_ids:
             scorer = scorers.get(release_id)
             if not scorer:
-                skipped_releases.append(release_id)
                 continue
-            signal_snapshots.append(scorer(feature_snapshot, release_id=release_id))
+            baseline_snapshots.append(scorer(feature_snapshot, release_id=release_id))
+        if graph is not None and rules:
+            scored = score_graph_hypothesis_contracts(
+                graph,
+                feature_snapshot,
+                rules,
+                baseline_snapshots=baseline_snapshots,
+            )
+            requested = set(self.model_release_ids)
+            signal_snapshots = [
+                item for item in scored
+                if item.model_release_id in requested
+            ]
+            skipped_releases = sorted(requested - {item.model_release_id for item in signal_snapshots})
+        else:
+            signal_snapshots = [
+                item for item in baseline_snapshots
+                if item.model_release_id in set(self.model_release_ids)
+            ]
+            skipped_releases = sorted(
+                set(self.model_release_ids) - {item.model_release_id for item in signal_snapshots}
+            )
         signal_bundle = ModelSignalBundle.create(
             account_id=feature_snapshot.account_id,
             as_of=knowledge_cutoff_at,
@@ -240,9 +267,46 @@ class StatisticalSignalPipelineService:
                 "unchangedSignalCount": 0,
             }),
         )
+        production_evidence_requested = bool(graph is not None and rules)
+        signal_persistence_ready = bool(
+            self.signal_store
+            and not signal_errors
+            and all(
+                str(receipt.get("status") or "") in {"changed", "unchanged"}
+                for receipt in signal_receipts.values()
+            )
+            and len(signal_receipts) == len(signal_snapshots)
+        )
+        durable_evidence_ready = bool(
+            not production_evidence_requested
+            or (
+                self.feature_snapshot_store
+                and not feature_error
+                and signal_persistence_ready
+            )
+        )
+        decision_blockers = []
+        if production_evidence_requested and not self.feature_snapshot_store:
+            decision_blockers.append("feature-snapshot-store-not-configured")
+        if production_evidence_requested and feature_error:
+            decision_blockers.append("feature-snapshot-persistence-failed")
+        if production_evidence_requested and not self.signal_store:
+            decision_blockers.append("model-signal-store-not-configured")
+        if production_evidence_requested and signal_errors:
+            decision_blockers.append("model-signal-persistence-failed")
+        if production_evidence_requested and self.signal_store and not signal_persistence_ready:
+            decision_blockers.append("model-signal-persistence-unverified")
         finished = time.perf_counter()
         return {
-            "status": "ready" if signal_bundle.signals else "empty",
+            "status": (
+                "ready"
+                if signal_bundle.signals and durable_evidence_ready
+                else "evidence-not-durable"
+                if signal_bundle.signals
+                else "empty"
+            ),
+            "decisionEligible": bool(signal_bundle.signals and durable_evidence_ready),
+            "decisionBlockers": sorted(set(decision_blockers)),
             "featureSnapshot": feature_snapshot,
             "signalSnapshot": signal_snapshot,
             "signalSnapshots": tuple(signal_snapshots),

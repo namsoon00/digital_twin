@@ -92,9 +92,10 @@ class OntologyInferenceQualityTests(unittest.TestCase):
             "freshnessStatus": "fresh",
             "source": "Toss",
         })
-        model_signal = OntologyEntity("model-signal:trend-break", "추세 훼손 모델 신호", "statistical-model-signal", {
+        model_signal = OntologyEntity("model-signal:trend-break", "추세 훼손 모델 신호", "statistical-model-hypothesis-evidence", {
             "ontologyBox": "ABox",
             "signalType": "price-trend-break-risk",
+            "hypothesisContractId": "graph.loss_guard.breakdown.v1",
             "hypothesisFamilyId": "trend-break",
             "releaseId": "price-path-statistics-production-v2",
             "strengthBand": "strong",
@@ -130,6 +131,10 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         model_condition = conditions["validated-model-signal:graph.loss_guard.breakdown.v1"]
         self.assertEqual("relation:model-signal", model_condition["relationId"])
         self.assertEqual("price-trend-break-risk", model_condition["matchedTargetProperties"]["signalType"])
+        self.assertEqual(
+            "graph.loss_guard.breakdown.v1",
+            model_condition["matchedTargetProperties"]["hypothesisContractId"],
+        )
         self.assertEqual("fresh", model_condition["freshnessStatus"])
         self.assertEqual("sufficient", trace.properties["dataState"])
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])

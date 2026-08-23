@@ -2,11 +2,14 @@
 
 ## Purpose
 
-TypeDB decides whether an authored rule matches the active ABox. Knowledge
-governance does not re-evaluate those conditions and does not choose an
-investment action. It records why the rule exists, what judgement it may
-influence, and whether a match is a competing investment hypothesis or a
-decision guardrail.
+The versioned statistical-model control plane evaluates falsifiable market
+hypothesis contracts against an immutable point-in-time ABox. TypeDB combines
+the resulting exact-contract evidence with account, policy, quality, and
+execution facts and materializes the final semantic relation. Knowledge
+governance records why each contract exists, what judgement it may influence,
+and whether the result is a competing investment hypothesis or a decision
+guardrail. Neither the model scorer nor governance chooses a final investment
+action directly.
 
 ## Rule Roles
 
@@ -43,29 +46,33 @@ The ownership contract records `inputContract`, `outputContract`,
 rules receive a sandbox-only owner while being validated. They are not
 production rules until an explicit catalog ID is approved.
 
-## Statistical Transition
+## Statistical Model Contract
 
-Predictive rules currently retain their raw-fact TypeDB authority until all
-promotion gates pass. The migration is deliberately visible rather than
-silent:
+All 75 predictive-hypothesis rules use the production model contract path.
+Seventy-four are enabled; one known duplicate remains disabled. The remaining
+43 rules are semantic, account-policy, data-quality, execution, or delivery
+contracts and intentionally remain TypeDB-owned.
 
-1. An immutable point-in-time feature snapshot is assembled from the time-series store.
-2. Each model family produces and stores its own immutable signal snapshot.
-3. A read-only signal bundle carries the independently versioned releases into the ABox.
-4. `ModelSignalObservation`, `StatisticalModelRelease`, and
-   `SignalEligibilityAssessment` preserve scorer, feature, validation, and
-   source lineage.
-5. Disabled candidate TypeDB rules consume only signals marked `calibrated`
-   and `eligible`.
-6. Point-in-time replay, minimum outcomes, calibration, economic utility,
-   action-envelope parity, and latency must pass before a candidate replaces
-   the raw-fact rule.
+1. An immutable point-in-time feature snapshot and factual market ABox are
+   assembled from source stores.
+2. One indexed pass evaluates the market-owned conditions of every enabled
+   predictive contract across six model families: price path, investor flow,
+   cross asset, valuation, event response, and authored thesis.
+3. A matched contract emits `ModelHypothesisEvidence` carrying the exact
+   `hypothesisContractId`, source evidence IDs, model release, feature snapshot,
+   eligibility, and knowledge cutoff.
+4. A broad family signal without an exact contract ID is diagnostic only and
+   cannot satisfy another rule.
+5. TypeDB joins exact model evidence with private account conditions and then
+   materializes the relation, trace, hypothesis, guardrail, and action envelope.
+6. A missing, failed, stale, or ineligible model result fails that predictive
+   path closed; TypeDB does not fall back to the old raw market predicate.
 
-Price-path and investor-flow scorers are implemented as shadow releases.
-Cross-asset, valuation, event-response, and authored-thesis releases remain
-explicitly blocked until their point-in-time feature contracts and scorers
-exist. Shadow scores are reference-only and never produce a probability or
-expand the current action envelope.
+The raw governed predictive catalog remains the versioned model input contract
+and audit source. The executable RuleBox is generated from it and contains only
+private/account predicates plus one exact model-evidence predicate per
+predictive rule. See `docs/predictive-model-rule-conversion.md` for the runtime
+boundary and release procedure.
 
 Crypto thresholds illustrate the ownership split. The market-observation
 module classifies the configured 24-hour and 7-day thresholds into a stable
@@ -96,14 +103,18 @@ validates a project-specific threshold by itself.
 
 ## Hypothesis and Guardrail Flow
 
-1. A data event updates the active ABox.
-2. TypeDB evaluates only dependency-selected RuleBox functions.
-3. Matched inference rows retain the rule's `knowledgeBasis` and lineage IDs.
-4. `predictive-hypothesis` matches enter the competing hypothesis set.
-5. Policy, execution, quality, and context matches become decision guardrails.
-6. Hypothesis readiness counts independent evidence keys, not raw rule or time-window counts.
-7. The AI compares only eligible hypotheses within the TypeDB action envelope.
-8. Outcome observation and replay may support a later governance promotion; runtime performance never edits a rule automatically.
+1. A data event updates the affected immutable market ABox.
+2. The dependency router selects relevant model contracts and the model control
+   plane emits exact, eligible contract evidence once in `SharedPremiseWorld`.
+3. TypeDB evaluates dependency-selected resolver, policy, execution, quality,
+   and semantic functions in the shared and account worlds.
+4. Matched inference rows retain the rule's `knowledgeBasis`, model release,
+   source evidence, and TypeDB trace lineage.
+5. `predictive-hypothesis` matches enter the competing hypothesis set.
+6. Policy, execution, quality, and context matches become decision guardrails.
+7. Hypothesis readiness counts independent evidence keys, not raw rule or time-window counts.
+8. The AI compares only eligible hypotheses within the TypeDB action envelope.
+9. Outcome observation and replay may support a later governance promotion; runtime performance never edits a rule automatically.
 
 ## Operator Review
 

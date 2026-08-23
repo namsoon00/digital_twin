@@ -1683,7 +1683,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v12"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v14"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -2076,6 +2076,7 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "eligibilityStatus": "ontology-model-eligibility-status",
     "uncertaintyStatus": "ontology-model-uncertainty-status",
     "hypothesisFamilyId": "ontology-hypothesis-family-id",
+    "hypothesisContractId": "ontology-hypothesis-contract-id",
     "outcomeMetric": "ontology-model-outcome-metric",
     "knowledgeCutoffAt": "ontology-model-knowledge-cutoff-at",
     "featureSetVersion": "ontology-model-feature-set-version",

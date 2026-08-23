@@ -6,10 +6,10 @@ from typing import Dict, Iterable, Tuple
 
 DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-production-v2"
 DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-production-v2"
-DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-shadow-v1"
-DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-shadow-v1"
-DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-shadow-v1"
-DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID = "authored-thesis-statistics-shadow-v1"
+DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-production-v2"
+DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-production-v2"
+DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-production-v2"
+DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID = "authored-thesis-statistics-production-v2"
 
 
 SIGNAL_HYPOTHESIS_FAMILY_BY_TYPE = {
@@ -120,13 +120,13 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "cross-asset-residual-risk",
                 "regime-transition-risk",
             ),
-            status="shadow",
-            validation_status="replay-required",
-            decision_eligibility="reference-only",
-            minimum_samples=60,
-            minimum_coverage_ratio=0.80,
-            scorer_version="cross-asset-score-v1",
-            description="시장·금리·환율·크립토 설명분을 제외한 종목 반응과 레짐 변화를 검증합니다.",
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
+            minimum_samples=1,
+            minimum_coverage_ratio=0.75,
+            scorer_version="cross-asset-hypothesis-contract-v2",
+            description="시점 고정 시장·금리·환율·크립토 사실을 규칙별 가설 계약으로 검증하는 조건부 신호입니다.",
         ),
         StatisticalModelRelease(
             release_id=DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
@@ -135,13 +135,13 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "valuation-relative-opportunity",
                 "valuation-relative-stretch-risk",
             ),
-            status="shadow",
-            validation_status="replay-required",
-            decision_eligibility="reference-only",
-            minimum_samples=60,
-            minimum_coverage_ratio=0.80,
-            scorer_version="valuation-factor-score-v1",
-            description="시점 재현 피어·과거 배수와 기업 품질을 함께 검증하는 상대가치 신호입니다.",
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
+            minimum_samples=1,
+            minimum_coverage_ratio=0.75,
+            scorer_version="valuation-hypothesis-contract-v2",
+            description="시점 재현 재무·가치·가격 사실을 규칙별 가설 계약으로 검증하는 조건부 신호입니다.",
         ),
         StatisticalModelRelease(
             release_id=DEFAULT_EVENT_SIGNAL_RELEASE_ID,
@@ -151,13 +151,13 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "event-abnormal-return-risk",
                 "event-response-persistence",
             ),
-            status="shadow",
-            validation_status="replay-required",
-            decision_eligibility="reference-only",
-            minimum_samples=30,
-            minimum_coverage_ratio=0.80,
-            scorer_version="event-response-score-v1",
-            description="검증된 사건의 비정상 가격 반응과 지속성을 사건 종류별로 평가합니다.",
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
+            minimum_samples=1,
+            minimum_coverage_ratio=0.75,
+            scorer_version="event-response-hypothesis-contract-v2",
+            description="검증된 뉴스·공시·사건과 가격 반응을 규칙별 가설 계약으로 평가하는 조건부 신호입니다.",
         ),
         StatisticalModelRelease(
             release_id=DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
@@ -170,13 +170,13 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "flow-accumulation-support",
                 "flow-distribution-risk",
             ),
-            status="shadow",
-            validation_status="replay-required",
-            decision_eligibility="reference-only",
-            minimum_samples=60,
-            minimum_coverage_ratio=0.80,
-            scorer_version="authored-thesis-score-v1",
-            description="프로젝트 고유 투자 논리를 검증 가능한 신호 계열로 분해하는 후보 릴리스입니다.",
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
+            minimum_samples=1,
+            minimum_coverage_ratio=0.75,
+            scorer_version="authored-thesis-hypothesis-contract-v2",
+            description="프로젝트 고유 투자 논리를 규칙별로 식별하고 재현 가능한 사실 계약으로 검증합니다.",
         ),
     )
 
@@ -192,7 +192,7 @@ def model_release(release_id: object = "") -> StatisticalModelRelease:
 def model_registry_payload(releases: Iterable[StatisticalModelRelease] = None) -> Dict[str, object]:
     rows = tuple(releases or default_statistical_model_registry())
     return {
-        "version": "statistical-model-registry-v1",
+        "version": "statistical-model-registry-v2",
         "releaseCount": len(rows),
         "releases": [item.to_dict() for item in rows],
     }

@@ -166,6 +166,7 @@ def add_position_statistical_signal_concepts(
                 "probabilityLower": signal.get("probabilityLower"),
                 "probabilityUpper": signal.get("probabilityUpper"),
                 "hypothesisFamilyId": str(signal.get("hypothesisFamilyId") or ""),
+                "hypothesisContractCount": len(signal.get("hypothesisContractIds") or []),
                 "outcomeMetric": str(signal.get("outcomeMetric") or ""),
                 "knowledgeCutoffAt": str(signal.get("knowledgeCutoffAt") or signal.get("observedAt") or ""),
                 "uncertaintyStatus": str(signal.get("uncertaintyStatus") or "uncalibrated"),
@@ -216,6 +217,67 @@ def add_position_statistical_signal_concepts(
         add_relation(graph, signal_id, release_node_id, "GENERATED_BY_MODEL_RELEASE", properties=relation_properties)
         add_relation(graph, signal_id, feature_node_id, "BASED_ON_FEATURE_SNAPSHOT", properties=relation_properties)
         add_relation(graph, signal_id, assessment_id, "HAS_SIGNAL_ELIGIBILITY", properties=relation_properties)
+        for contract_id in sorted({
+            str(value or "").strip()
+            for value in signal.get("hypothesisContractIds") or []
+            if str(value or "").strip()
+        }):
+            contract_properties = {
+                **relation_properties,
+                "tboxClass": "ModelHypothesisEvidence",
+                "tboxClasses": ["Observation", "ModelHypothesisEvidence"],
+                "symbol": str(symbol or "").upper(),
+                "hypothesisContractId": contract_id,
+                "hypothesisFamilyId": str(signal.get("hypothesisFamilyId") or ""),
+                "score": round(_number(signal.get("score")), 8),
+                "strengthBand": str(signal.get("strengthBand") or "weak"),
+                "confidence": round(_number(signal.get("confidence")), 8),
+                "releaseId": str(signal.get("modelReleaseId") or release_id),
+                "eligibilityStatus": str(eligibility.get("status") or "ineligible"),
+                "observedAt": str(signal.get("observedAt") or ""),
+                "knowledgeCutoffAt": str(
+                    signal.get("knowledgeCutoffAt") or signal.get("observedAt") or ""
+                ),
+                "materialHash": str(signal.get("materialHash") or ""),
+                "modelEvidenceIds": list(
+                    (_mapping(signal.get("inputFeatures"))).get("evidenceIds") or []
+                )[:64],
+            }
+            contract_node_id = add_entity(
+                graph,
+                "statistical-model-hypothesis-evidence",
+                str(signal.get("signalId") or signal_type) + ":" + contract_id,
+                str(symbol or "") + " " + contract_id + " 모델 근거",
+                contract_properties,
+            )
+            add_relation(
+                graph,
+                stock_id,
+                contract_node_id,
+                "HAS_MODEL_SIGNAL",
+                properties=contract_properties,
+            )
+            add_relation(
+                graph,
+                contract_node_id,
+                signal_id,
+                "DERIVED_FROM_MODEL_SIGNAL",
+                properties=contract_properties,
+            )
+            add_relation(
+                graph,
+                contract_node_id,
+                release_node_id,
+                "GENERATED_BY_MODEL_RELEASE",
+                properties=contract_properties,
+            )
+            add_relation(
+                graph,
+                contract_node_id,
+                assessment_id,
+                "HAS_SIGNAL_ELIGIBILITY",
+                properties=contract_properties,
+            )
         hypothesis_family_id = str(signal.get("hypothesisFamilyId") or "").strip()
         if hypothesis_family_id:
             family = hypothesis_family_definition(hypothesis_family_id)

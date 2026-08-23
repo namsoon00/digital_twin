@@ -18,7 +18,10 @@ from digital_twin.domain.notification_ai_gate_validation import ai_decision_inpu
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.ontology_prompting import build_ai_inference_packet, prompt_payload
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
-from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_rulebox_catalog import (
+    default_graph_inference_rules,
+    governed_graph_inference_rules,
+)
 from digital_twin.domain.portfolio import PortfolioSummary, Position
 from digital_twin.domain.portfolio_ontology_company_concepts import add_company_knowledge_concepts
 from digital_twin.infrastructure.graph_store_payloads import (
@@ -410,6 +413,9 @@ class CompanyKnowledgeTests(unittest.TestCase):
 
     def test_company_rules_compile_to_native_typedb_functions(self):
         rules = {item.rule_id: item for item in default_graph_inference_rules()}
+        governed_rules = {
+            item.rule_id: item for item in governed_graph_inference_rules()
+        }
         expected = {
             "graph.company.market.fundamental_confirmation.support.v1",
             "graph.company.market.structural_decline.risk.v1",
@@ -432,9 +438,20 @@ class CompanyKnowledgeTests(unittest.TestCase):
             rules["graph.company.market.structural_decline.risk.v1"].to_dict(),
             target_symbols=["TEST"],
         )["query"]
-        self.assertIn("ontology-company-revenue-growth-pct", query)
-        self.assertIn("ontology-company-operating-income-growth-pct", query)
-        self.assertIn("ontology-ma20-distance", query)
+        self.assertIn("ontology-relation-has-model-signal", query)
+        self.assertIn(
+            'ontology-hypothesis-contract-id "graph.company.market.structural_decline.risk.v1"',
+            query,
+        )
+        self.assertNotIn("ontology-company-revenue-growth-pct", query)
+
+        governed_query = typedb_native_match_query(
+            governed_rules["graph.company.market.structural_decline.risk.v1"].to_dict(),
+            target_symbols=["TEST"],
+        )["query"]
+        self.assertIn("ontology-company-revenue-growth-pct", governed_query)
+        self.assertIn("ontology-company-operating-income-growth-pct", governed_query)
+        self.assertIn("ontology-ma20-distance", governed_query)
 
     def test_company_abox_fields_are_promoted_into_typedb_attributes(self):
         self.assertEqual(

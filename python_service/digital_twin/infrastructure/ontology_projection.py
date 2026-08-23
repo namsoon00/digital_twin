@@ -359,6 +359,25 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         if item.get("enabled") is not False
     ):
         return True
+    if any(
+        str(
+            (item.get("knowledge_basis") or item.get("knowledgeBasis") or {}).get("ruleKind")
+            or ""
+        ).strip()
+        != "predictive-hypothesis"
+        and any(
+            str(
+                (derivation or {}).get("candidate_action")
+                or (derivation or {}).get("candidateAction")
+                or ""
+            ).strip()
+            for derivation in item.get("derivations") or []
+            if isinstance(derivation, dict)
+        )
+        for item in rules
+        if item.get("enabled") is not False
+    ):
+        return True
     for item in rules:
         basis = item.get("knowledge_basis") or item.get("knowledgeBasis") or {}
         if str(basis.get("owner") or "") != "statistical-model":
@@ -925,6 +944,30 @@ def migrate_typedb_rule_catalog(
             changed = True
             knowledge_basis_updated.append(rule_id)
             ownership_contract_updated.append(rule_id)
+        effective_basis = rule.get("knowledge_basis") or rule.get("knowledgeBasis") or {}
+        if str((effective_basis or {}).get("ruleKind") or "") != "predictive-hypothesis":
+            for index, derivation in enumerate(rule.get("derivations") or []):
+                if not isinstance(derivation, dict):
+                    continue
+                candidate_action = str(
+                    derivation.get("candidate_action")
+                    or derivation.get("candidateAction")
+                    or ""
+                ).strip()
+                if not candidate_action:
+                    continue
+                default_derivation = default_derivations[index] if index < len(default_derivations) else {}
+                default_candidate_action = str(
+                    (default_derivation or {}).get("candidate_action")
+                    or (default_derivation or {}).get("candidateAction")
+                    or ""
+                ).strip()
+                if default_candidate_action:
+                    derivation["candidate_action"] = default_candidate_action
+                else:
+                    derivation.pop("candidate_action", None)
+                    derivation.pop("candidateAction", None)
+                changed = True
         for index, derivation in enumerate(rule.get("derivations") or []):
             if not isinstance(derivation, dict):
                 continue

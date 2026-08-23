@@ -237,6 +237,28 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
         ))
         self.assertFalse(rulebox_catalog_requires_bootstrap_repair(migration["rules"]))
 
+    def test_non_predictive_legacy_candidate_action_is_removed_during_bootstrap_repair(self):
+        bootstrap = rulebox_rules_payload(default_graph_inference_rules())
+        stored = deepcopy(bootstrap)
+        target = next(
+            item
+            for item in stored
+            if item.get("enabled") is not False
+            and (item.get("knowledge_basis") or {}).get("ruleKind") != "predictive-hypothesis"
+            and item.get("derivations")
+        )
+        target["derivations"][0]["candidate_action"] = "HOLD"
+
+        self.assertTrue(rulebox_catalog_requires_bootstrap_repair(stored))
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+        migrated = next(
+            item for item in migration["rules"]
+            if item.get("rule_id") == target.get("rule_id")
+        )
+
+        self.assertNotIn("candidate_action", migrated["derivations"][0])
+        self.assertFalse(rulebox_catalog_requires_bootstrap_repair(migration["rules"]))
+
 
 if __name__ == "__main__":
     unittest.main()

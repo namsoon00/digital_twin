@@ -1231,12 +1231,15 @@
 }
 
 .tab-icon[data-tab-icon="overview"] { --tab-icon: url("icons/house.svg"); }
+.tab-icon[data-tab-icon="portfolio"] { --tab-icon: url("icons/wallet-cards.svg"); }
 .tab-icon[data-tab-icon="feed"] { --tab-icon: url("icons/chart-no-axes-combined.svg"); }
 .tab-icon[data-tab-icon="modeling"] { --tab-icon: url("icons/brain-circuit.svg"); }
 .tab-icon[data-tab-icon="notifications"] { --tab-icon: url("icons/bell.svg"); }
 .tab-icon[data-tab-icon="calendar"] { --tab-icon: url("icons/calendar-days.svg"); }
 .tab-icon[data-tab-icon="settings"] { --tab-icon: url("icons/settings.svg"); }
+.tab-icon[data-tab-icon="operations"] { --tab-icon: url("icons/server-cog.svg"); }
 .tab-icon[data-tab-icon="experiments"] { --tab-icon: url("icons/flask-conical.svg"); }
+.tab-icon[data-tab-icon="more"] { --tab-icon: url("icons/ellipsis.svg"); }
 
 .console-shell.is-tab-transitioning .workspace-main > * {
   animation: oa-tab-enter 180ms ease-out both;
@@ -16515,7 +16518,7 @@ body {
 
 .oa-metric-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   min-width: 0;
   border: 1px solid var(--oa-surface-border);
   border-radius: 7px;
@@ -34581,7 +34584,7 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
 /* Market workspace: one stable mobile route for owned, discoverable and contextual data. */
 .market-workspace-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);

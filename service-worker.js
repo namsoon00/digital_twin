@@ -1,12 +1,14 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260824-model-rule-conversion-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260824-console-ia-v1";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=20260824-model-rule-conversion-v1",
+  "./styles.css?v=20260824-console-ia-v1",
+  "./console-workspaces.css?v=20260824-console-ia-v1",
   "./app-default-settings.js?v=20260821-stable-share-v1",
-  "./app.js?v=20260824-model-rule-conversion-v1",
+  "./console-workspaces.js?v=20260824-console-ia-v1",
+  "./app.js?v=20260824-console-ia-v1",
   "./vendor/lightweight-charts.standalone.production.js",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",
@@ -14,6 +16,9 @@ const APP_SHELL = [
   "./icons/bell.svg",
   "./icons/calendar-days.svg",
   "./icons/settings.svg",
+  "./icons/wallet-cards.svg",
+  "./icons/server-cog.svg",
+  "./icons/ellipsis.svg",
   "./icons/download.svg",
   "./icons/refresh-cw.svg",
   "./icons/search.svg",
@@ -70,7 +75,7 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  const isMutableAppAsset = ["/app.js", "/app-default-settings.js", "/styles.css"].some(function (pathname) {
+  const isMutableAppAsset = ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css"].some(function (pathname) {
     return url.pathname.endsWith(pathname);
   });
   if (isMutableAppAsset) {

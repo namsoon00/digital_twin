@@ -252,6 +252,52 @@ class ReasoningEnginePlatformService:
             }
         return reasoning_release_identity(row, health.get("ruleboxFingerprint") or "")
 
+    def synchronize_control_capabilities(self, control) -> Dict[str, object]:
+        """Make persisted display capabilities agree with control authority."""
+
+        update = getattr(self.registry, "update_capabilities", None)
+        if not callable(update):
+            return {"status": "unsupported", "updatedDeploymentIds": []}
+        control_mapping = control if isinstance(control, Mapping) else {}
+        active = str(
+            getattr(control, "active_deployment_id", "")
+            or control_mapping.get("active_deployment_id")
+            or control_mapping.get("activeDeploymentId")
+            or ""
+        )
+        delivery = str(
+            getattr(control, "delivery_deployment_id", "")
+            or control_mapping.get("delivery_deployment_id")
+            or control_mapping.get("deliveryDeploymentId")
+            or ""
+        )
+        candidate = str(
+            getattr(control, "candidate_deployment_id", "")
+            or control_mapping.get("candidate_deployment_id")
+            or control_mapping.get("candidateDeploymentId")
+            or ""
+        )
+        production_ids = {value for value in (active, delivery) if value}
+        updated = []
+        for deployment_id in dict.fromkeys(
+            value for value in (active, delivery, candidate) if value
+        ):
+            row = dict(self.registry.get(deployment_id) or {})
+            if not row:
+                continue
+            capabilities = dict(row.get("capabilities") or {})
+            production_delivery = deployment_id in production_ids
+            expected = {
+                **capabilities,
+                "productionDelivery": production_delivery,
+                "shadowComparison": not production_delivery,
+            }
+            if capabilities == expected:
+                continue
+            update(deployment_id, expected)
+            updated.append(deployment_id)
+        return {"status": "synchronized", "updatedDeploymentIds": updated}
+
     def initialize(self) -> Dict[str, object]:
         descriptors = self.descriptors()
         for descriptor in descriptors:
@@ -287,6 +333,7 @@ class ReasoningEnginePlatformService:
                 configured_v2 = str(self.settings.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow")
                 candidate = configured_v2 if configured_v2 not in {active, delivery} else ""
             control = self.registry.set_control(active, delivery, candidate)
+        capability_sync = self.synchronize_control_capabilities(control)
         retirement = {}
         retire = getattr(self.registry, "retire_unselected", None)
         if callable(retire):
@@ -302,6 +349,7 @@ class ReasoningEnginePlatformService:
             "control": control.to_dict(),
             "deployments": self.registry.list(),
             "deploymentRetirement": retirement,
+            "controlCapabilitySync": capability_sync,
         }
         candidate_id = str(control.candidate_deployment_id or "")
         configured_v2_id = str(
@@ -760,12 +808,14 @@ class ReasoningEnginePlatformService:
             previous,
             expected_version=control.version,
         )
+        capability_sync = self.synchronize_control_capabilities(next_control)
         cleanup = self.supersede_inactive_pending_work(previous)
         return {
             "status": "promoted",
             "control": next_control.to_dict(),
             "promotionReadiness": dict(readiness or {}),
             "previousDeploymentQueueCleanup": cleanup,
+            "controlCapabilitySync": capability_sync,
         }
 
     def supersede_inactive_pending_work(self, deployment_id: str) -> Dict[str, object]:
@@ -809,7 +859,12 @@ class ReasoningEnginePlatformService:
             previous,
             expected_version=control.version,
         )
-        return {"status": "promoted", "control": next_control.to_dict()}
+        capability_sync = self.synchronize_control_capabilities(next_control)
+        return {
+            "status": "promoted",
+            "control": next_control.to_dict(),
+            "controlCapabilitySync": capability_sync,
+        }
 
     def rollback(self) -> Dict[str, object]:
         control = self.registry.control()
@@ -832,9 +887,11 @@ class ReasoningEnginePlatformService:
             control.active_deployment_id,
             expected_version=control.version,
         )
+        capability_sync = self.synchronize_control_capabilities(next_control)
         cleanup = self.supersede_inactive_pending_work(control.active_deployment_id)
         return {
             "status": "rolled-back",
             "control": next_control.to_dict(),
             "previousDeploymentQueueCleanup": cleanup,
+            "controlCapabilitySync": capability_sync,
         }

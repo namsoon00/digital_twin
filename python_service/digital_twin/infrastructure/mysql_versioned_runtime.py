@@ -348,6 +348,28 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
                 (canonical_json(dict(health or {})), iso_utc(), str(deployment_id or "")),
             )
 
+    def update_capabilities(
+        self,
+        deployment_id: str,
+        capabilities: Mapping[str, object],
+    ) -> None:
+        """Persist control-derived capabilities without rewriting a release bundle."""
+
+        with self.connect() as connection:
+            result = connection.execute(
+                "UPDATE reasoning_engine_deployments SET capabilities_json = %s, updated_at = %s "
+                "WHERE deployment_id = %s",
+                (
+                    canonical_json(dict(capabilities or {})),
+                    iso_utc(),
+                    str(deployment_id or ""),
+                ),
+            )
+        if int(getattr(result, "rowcount", 0) or 0) == 0:
+            raise ValueError(
+                "Unknown reasoning engine deployment: " + str(deployment_id or "")
+            )
+
     def retire_unselected(self, engine_version: str, keep_deployment_ids: Iterable[str]) -> Dict[str, object]:
         """Retire obsolete logical deployments and terminalize their work."""
 

@@ -214,6 +214,135 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertFalse(candidate.capabilities["productionDelivery"])
         self.assertTrue(candidate.capabilities["shadowComparison"])
 
+    def test_initialize_repairs_persisted_capabilities_from_control_authority(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "ontology-v2-production-r17": {
+                        "deploymentId": "ontology-v2-production-r17",
+                        "engineVersion": "v2",
+                        "status": "candidate",
+                        "capabilities": {
+                            "productionDelivery": True,
+                            "shadowComparison": False,
+                        },
+                    },
+                    "ontology-v2-production-r20": {
+                        "deploymentId": "ontology-v2-production-r20",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "capabilities": {
+                            "productionDelivery": False,
+                            "shadowComparison": True,
+                        },
+                    },
+                }
+                self.control_value = EngineControlState(
+                    "ontology-v2-production-r20",
+                    "ontology-v2-production-r20",
+                    "ontology-v2-production-r17",
+                    45,
+                )
+
+            def upsert(self, item):
+                self.rows[item.deployment_id] = item.to_dict()
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
+        registry = Registry()
+        state = ReasoningEnginePlatformService(
+            registry,
+            {
+                "reasoningEngineV2DeploymentId": "ontology-v2-production-r20",
+                "reasoningEngineV1DeploymentId": "ontology-v1-active",
+            },
+        ).initialize()
+
+        self.assertTrue(
+            registry.rows["ontology-v2-production-r20"]["capabilities"]["productionDelivery"]
+        )
+        self.assertFalse(
+            registry.rows["ontology-v2-production-r20"]["capabilities"]["shadowComparison"]
+        )
+        self.assertFalse(
+            registry.rows["ontology-v2-production-r17"]["capabilities"]["productionDelivery"]
+        )
+        self.assertTrue(
+            registry.rows["ontology-v2-production-r17"]["capabilities"]["shadowComparison"]
+        )
+        self.assertEqual(
+            ["ontology-v2-production-r17"],
+            state["controlCapabilitySync"]["updatedDeploymentIds"],
+        )
+
+    def test_activate_synchronizes_new_active_and_rollback_candidate_capabilities(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-r20": {
+                        "deploymentId": "v2-r20",
+                        "status": "active",
+                        "capabilities": {
+                            "productionDelivery": True,
+                            "shadowComparison": False,
+                        },
+                    },
+                    "v2-r21": {
+                        "deploymentId": "v2-r21",
+                        "status": "candidate",
+                        "capabilities": {
+                            "productionDelivery": False,
+                            "shadowComparison": True,
+                        },
+                    },
+                }
+                self.control_value = EngineControlState("v2-r20", "v2-r20", "v2-r21", 7)
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def control(self):
+                return self.control_value
+
+            def transition(self, deployment_id, status):
+                self.rows[deployment_id]["status"] = status
+                return self.rows[deployment_id]
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                self.assert_expected_version = expected_version
+                self.control_value = EngineControlState(active, delivery, candidate, 8)
+                return self.control_value
+
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
+        registry = Registry()
+        result = ReasoningEnginePlatformService(registry, {}).activate(
+            "v2-r21",
+            {"ready": True},
+        )
+
+        self.assertEqual("v2-r21", result["control"]["active_deployment_id"])
+        self.assertEqual(7, registry.assert_expected_version)
+        self.assertTrue(registry.rows["v2-r21"]["capabilities"]["productionDelivery"])
+        self.assertFalse(registry.rows["v2-r21"]["capabilities"]["shadowComparison"])
+        self.assertFalse(registry.rows["v2-r20"]["capabilities"]["productionDelivery"])
+        self.assertTrue(registry.rows["v2-r20"]["capabilities"]["shadowComparison"])
+        self.assertEqual(
+            ["v2-r21", "v2-r20"],
+            result["controlCapabilitySync"]["updatedDeploymentIds"],
+        )
+
     def test_initialize_repoints_an_obsolete_candidate_to_the_configured_v2_release(self):
         class Registry:
             def __init__(self):

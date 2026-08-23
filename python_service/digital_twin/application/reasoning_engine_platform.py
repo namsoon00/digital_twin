@@ -201,6 +201,67 @@ class ReasoningEnginePlatformService:
             raise ValueError("Unknown reasoning engine deployment: " + str(deployment_id or ""))
         return str(row.get("engineVersion") or "").strip().lower()
 
+    def deployment_descriptor(self, deployment_id: str) -> ReasoningEngineDescriptor:
+        """Rehydrate the immutable descriptor stored at release registration."""
+
+        row = dict(self.registry.get(str(deployment_id or "")) or {})
+        if not row:
+            raise ValueError(
+                "Unknown reasoning engine deployment: " + str(deployment_id or "")
+            )
+        bundle = dict(row.get("releaseBundle") or {})
+
+        def bundle_value(snake: str, camel: str, fallback=""):
+            return bundle.get(snake) if snake in bundle else bundle.get(camel, fallback)
+
+        return ReasoningEngineDescriptor(
+            engine_family=str(row.get("engineFamily") or row.get("engine_family") or ""),
+            engine_version=str(row.get("engineVersion") or row.get("engine_version") or ""),
+            deployment_id=str(row.get("deploymentId") or row.get("deployment_id") or ""),
+            status=str(row.get("status") or "registered"),
+            graph_store_binding=str(
+                row.get("graphStoreBinding") or row.get("graph_store_binding") or ""
+            ),
+            time_series_backend_id=str(
+                row.get("timeSeriesBackendId") or row.get("time_series_backend_id") or ""
+            ),
+            release_bundle=EngineReleaseBundle(
+                tbox_release_id=str(bundle_value("tbox_release_id", "tboxReleaseId")),
+                rulebox_release_id=str(bundle_value("rulebox_release_id", "ruleboxReleaseId")),
+                prompt_release_id=str(bundle_value("prompt_release_id", "promptReleaseId")),
+                feature_set_version=str(bundle_value("feature_set_version", "featureSetVersion")),
+                model_signal_release_id=str(
+                    bundle_value("model_signal_release_id", "modelSignalReleaseId")
+                ),
+                source_contract_versions=tuple(
+                    str(value or "")
+                    for value in bundle_value(
+                        "source_contract_versions",
+                        "sourceContractVersions",
+                        [],
+                    ) or []
+                    if str(value or "")
+                ),
+                release_id=str(bundle_value("release_id", "releaseId")),
+                runtime_contract_version=str(
+                    bundle_value(
+                        "runtime_contract_version",
+                        "runtimeContractVersion",
+                        "",
+                    )
+                ),
+                runtime_revision=str(bundle_value("runtime_revision", "runtimeRevision")),
+                comparison_contract_version=str(
+                    bundle_value(
+                        "comparison_contract_version",
+                        "comparisonContractVersion",
+                        "",
+                    )
+                ),
+            ),
+            capabilities=dict(row.get("capabilities") or {}),
+        )
+
     def release_identity(self, deployment_id: str) -> Dict[str, str]:
         row = self.registry.get(deployment_id)
         health = dict(row.get("health") or {})

@@ -1998,14 +1998,11 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
 
     platform = build_reasoning_engine_platform(configured)
     platform.initialize()
-    descriptor = next(
-        (
-            item for item in platform.descriptors()
-            if str(item.engine_version or "") == "v2"
-        ),
-        None,
-    )
-    if descriptor is None:
+    deployment_id = str(
+        configured.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"
+    ).strip()
+    descriptor = platform.deployment_descriptor(deployment_id)
+    if str(descriptor.engine_version or "").lower() != "v2":
         raise RuntimeError("The V2 reasoning deployment descriptor is unavailable")
 
     candidate_settings = dict(configured)

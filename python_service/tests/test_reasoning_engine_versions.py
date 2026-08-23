@@ -214,6 +214,37 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertFalse(candidate.capabilities["productionDelivery"])
         self.assertTrue(candidate.capabilities["shadowComparison"])
 
+    def test_registered_descriptor_keeps_its_backend_after_control_promotion(self):
+        class Registry:
+            def __init__(self):
+                self.row = descriptor().to_dict()
+                self.row["deploymentId"] = "v2-r22"
+                self.row["timeSeriesBackendId"] = "mysql-primary"
+                self.row["status"] = "active"
+
+            def get(self, deployment_id):
+                return self.row if deployment_id == "v2-r22" else {}
+
+            def control(self):
+                return EngineControlState("v2-r22", "v2-r22", "v2-r20", 48)
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEngineV2DeploymentId": "v2-r22",
+                "timeSeriesActiveBackendId": "questdb-shadow",
+                "timeSeriesShadowBackendId": "mysql-primary",
+            },
+        )
+
+        frozen = platform.deployment_descriptor("v2-r22")
+
+        self.assertEqual("mysql-primary", frozen.time_series_backend_id)
+        self.assertEqual(
+            descriptor().release_bundle.runtime_revision,
+            frozen.release_bundle.runtime_revision,
+        )
+
     def test_initialize_repairs_persisted_capabilities_from_control_authority(self):
         class Registry:
             def __init__(self):

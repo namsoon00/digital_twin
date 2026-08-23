@@ -210,7 +210,13 @@ def _attention_summary(
         "reason": text(item.get("reason")),
         "effect": text(item.get("effect")),
         "reasonCode": text(item.get("reasonCode")),
-    } for item in rows if text(item.get("state")) not in {"pass"}]
+    } for item in rows if (
+        text(item.get("state")) not in {"pass"}
+        and not (
+            text(item.get("id")) == "outcome"
+            and text(item.get("state")) == "pending"
+        )
+    )]
     integrity_state = text(integrity.get("state")) or "warning"
     if integrity_state != "pass":
         issue_rows.append({

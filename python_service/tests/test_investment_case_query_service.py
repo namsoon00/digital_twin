@@ -337,6 +337,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         by_symbol = {item["symbol"]: item for item in result["items"]}
 
         self.assertTrue(by_symbol["AAPL"]["attention"]["userActionable"])
+        self.assertNotIn("outcome", {item["id"] for item in by_symbol["AAPL"]["attention"]["issues"]})
         self.assertFalse(by_symbol["TSLA"]["attention"]["userActionable"])
         self.assertEqual("blocked", by_symbol["TSLA"]["attention"]["state"])
         self.assertEqual(1, result["summary"]["actionRequired"])

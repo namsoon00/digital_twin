@@ -189,6 +189,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         current = next(item for item in platform.descriptors() if item.engine_version == "v2")
 
         self.assertEqual("questdb-shadow", current.time_series_backend_id)
+        self.assertTrue(current.capabilities["productionDelivery"])
+        self.assertFalse(current.capabilities["shadowComparison"])
 
     def test_candidate_v2_keeps_the_shadow_time_series_backend(self):
         class Registry:
@@ -209,6 +211,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         candidate = next(item for item in platform.descriptors() if item.engine_version == "v2")
 
         self.assertEqual("mysql-primary", candidate.time_series_backend_id)
+        self.assertFalse(candidate.capabilities["productionDelivery"])
+        self.assertTrue(candidate.capabilities["shadowComparison"])
 
     def test_initialize_repoints_an_obsolete_candidate_to_the_configured_v2_release(self):
         class Registry:

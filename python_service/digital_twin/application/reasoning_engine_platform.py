@@ -78,6 +78,9 @@ class ReasoningEnginePlatformService:
         configured_v2_id = str(
             self.settings.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"
         )
+        configured_v1_id = str(
+            self.settings.get("reasoningEngineV1DeploymentId") or "ontology-v1-active"
+        )
         control_reader = getattr(self.registry, "control", None)
         try:
             control = control_reader() if callable(control_reader) else None
@@ -140,7 +143,7 @@ class ReasoningEnginePlatformService:
             ReasoningEngineDescriptor(
                 engine_family="ontology-investment-brain",
                 engine_version="v1",
-                deployment_id=str(self.settings.get("reasoningEngineV1DeploymentId") or "ontology-v1-active"),
+                deployment_id=configured_v1_id,
                 status="active",
                 graph_store_binding=v1_graph_database,
                 time_series_backend_id=active_backend,
@@ -150,8 +153,8 @@ class ReasoningEnginePlatformService:
                 ),
                 capabilities={
                     "typedbNativeInference": True,
-                    "productionDelivery": True,
-                    "shadowComparison": False,
+                    "productionDelivery": configured_v1_id in active_ids,
+                    "shadowComparison": configured_v1_id not in active_ids,
                     "versionedFeatureSnapshot": True,
                 },
             ),
@@ -168,8 +171,8 @@ class ReasoningEnginePlatformService:
                 ),
                 capabilities={
                     "typedbNativeInference": True,
-                    "productionDelivery": False,
-                    "shadowComparison": True,
+                    "productionDelivery": configured_v2_id in active_ids,
+                    "shadowComparison": configured_v2_id not in active_ids,
                     "versionedFeatureSnapshot": True,
                     "independentExecution": self.independent_v2_enabled(),
                     "directSourceEvents": self.independent_v2_enabled(),

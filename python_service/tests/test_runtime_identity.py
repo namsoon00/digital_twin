@@ -62,6 +62,21 @@ class RuntimeIdentityTests(unittest.TestCase):
 
         self.assertEqual("127.0.0.1:1739", settings["typedbAddress"])
 
+    def test_legacy_shadow_price_signal_release_is_migrated_at_read_time(self):
+        with patch.object(runtime_settings_module, "load_local_env"), patch.object(
+            runtime_settings_module,
+            "read_settings_store",
+            return_value={
+                "statisticalPriceSignalReleaseId": "price-path-statistics-shadow-v1"
+            },
+        ), patch.dict(os.environ, {}, clear=True):
+            settings = runtime_settings_module.runtime_settings()
+
+        self.assertEqual(
+            "price-path-statistics-production-v2",
+            settings["statisticalPriceSignalReleaseId"],
+        )
+
     def test_projection_writer_replaces_stale_cached_runtime_identity(self):
         current = {
             "contract": "orbit-runtime-identity-v1",

@@ -64,11 +64,44 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         self.assertEqual("ready", readiness["status"])
         self.assertEqual("matched", readiness["tboxReleasePreflight"]["status"])
+        self.assertEqual("matched", readiness["modelSignalReleasePreflight"]["status"])
         self.assertEqual("migrated", readiness["ruleCatalogMigration"]["status"])
         self.assertEqual(["snapshot", "save", "snapshot", "snapshot"], repository.calls)
         self.assertEqual(
             "ontology-rule-ownership-v1",
             snapshot["rules"][0]["knowledge_basis"]["ownershipContractVersion"],
+        )
+
+    def test_v2_release_preflight_rejects_unavailable_model_signal_release(self):
+        from digital_twin.infrastructure.service_factory import (
+            v2_model_signal_release_contract,
+        )
+
+        contract = v2_model_signal_release_contract(
+            {
+                "rules": [
+                    {
+                        "enabled": True,
+                        "conditions": [
+                            {
+                                "relation_type": "HAS_MODEL_SIGNAL",
+                                "target_property_filters": {
+                                    "releaseId": "event-statistics-production-v3"
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            {
+                "statisticalPriceSignalReleaseId": "price-path-statistics-production-v2",
+                "statisticalFlowSignalReleaseId": "flow-statistics-production-v2",
+            },
+        )
+
+        self.assertEqual("mismatch", contract["status"])
+        self.assertEqual(
+            ["event-statistics-production-v3"], contract["missingReleaseIds"]
         )
 
     def test_v2_watch_waits_for_release_database_without_process_exit(self):

@@ -13,6 +13,7 @@ from ..domain.ontology_relation_reasoning import (
     default_ontology_relation_reasoning_text,
 )
 from ..domain.parsing import parse_assignments
+from ..domain.statistical_signals import DEFAULT_PRICE_SIGNAL_RELEASE_ID
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -1843,7 +1844,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "statisticalPriceSignalReleaseId": value(
             "statisticalPriceSignalReleaseId",
             "STATISTICAL_PRICE_SIGNAL_RELEASE_ID",
-            "price-path-statistics-shadow-v1",
+            DEFAULT_PRICE_SIGNAL_RELEASE_ID,
         ),
         "ontologyLabEnabled": value("ontologyLabEnabled", "ONTOLOGY_LAB_ENABLED", "1"),
         "ontologyLabIntervalSeconds": value("ontologyLabIntervalSeconds", "ONTOLOGY_LAB_INTERVAL_SECONDS", "300"),
@@ -2759,6 +2760,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "opendartApiKey": value("opendartApiKey", "OPENDART_API_KEY"),
         "fxRates": value("fxRates", "FX_RATES", "KRW=1\nUSD=1400"),
     }
+    # The pre-production price scorer was persisted by older installations.
+    # Promote that exact legacy value unless an operator explicitly pins a
+    # release through the environment; release preflight will reject any
+    # explicit value that the active RuleBox cannot consume.
+    if (
+        settings.get("statisticalPriceSignalReleaseId")
+        == "price-path-statistics-shadow-v1"
+        and not configured(os.environ.get("STATISTICAL_PRICE_SIGNAL_RELEASE_ID"))
+    ):
+        settings["statisticalPriceSignalReleaseId"] = DEFAULT_PRICE_SIGNAL_RELEASE_ID
     return settings
 
 

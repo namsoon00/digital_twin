@@ -149,6 +149,10 @@ from .questdb_time_series import QuestDBTimeSeriesAdapter
 from .time_series_factory import build_temporal_feature_snapshot_service, build_time_series_adapters
 from .statistical_signal_factory import build_statistical_signal_pipeline_service
 from ..domain.ontology_schema import default_tbox_metadata
+from ..domain.statistical_signals import (
+    DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+    DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+)
 
 
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -169,6 +173,52 @@ def typedb_capacity_guard(settings, role: str, state_store=None) -> TypeDBCapaci
         role=role,
         capacity_state_loader=reader if callable(reader) else None,
     )
+
+
+def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
+    """Resolve model releases required by enabled rules and runtime scorers."""
+
+    required = set()
+    for rule in (rulebox_snapshot or {}).get("rules") or []:
+        if not bool(rule.get("enabled", True)):
+            continue
+        for condition in rule.get("conditions") or []:
+            relation_type = str(
+                condition.get("relation_type")
+                or condition.get("relationType")
+                or ""
+            ).strip()
+            if relation_type != "HAS_MODEL_SIGNAL":
+                continue
+            filters = (
+                condition.get("target_property_filters")
+                or condition.get("targetPropertyFilters")
+                or {}
+            )
+            release_id = str(
+                filters.get("releaseId") or filters.get("release_id") or ""
+            ).strip()
+            if release_id:
+                required.add(release_id)
+    configured = dict(settings or {})
+    available = {
+        str(
+            configured.get("statisticalPriceSignalReleaseId")
+            or DEFAULT_PRICE_SIGNAL_RELEASE_ID
+        ).strip(),
+        str(
+            configured.get("statisticalFlowSignalReleaseId")
+            or DEFAULT_FLOW_SIGNAL_RELEASE_ID
+        ).strip(),
+    }
+    available.discard("")
+    missing = sorted(required - available)
+    return {
+        "status": "matched" if not missing else "mismatch",
+        "requiredReleaseIds": sorted(required),
+        "availableReleaseIds": sorted(available),
+        "missingReleaseIds": missing,
+    }
 
 
 def prepare_v2_rulebox_release(repository, settings=None):
@@ -193,6 +243,13 @@ def prepare_v2_rulebox_release(repository, settings=None):
         ) from error
     if str(snapshot.get("status") or "") != "ok" or not snapshot.get("rules"):
         raise RuntimeError("The independent V2 RuleBox release is unavailable or empty")
+    model_signal_contract = v2_model_signal_release_contract(snapshot, settings)
+    if model_signal_contract["status"] != "matched":
+        raise RuntimeError(
+            "The independent V2 RuleBox requires model-signal releases that the "
+            "runtime scorer does not produce: "
+            + ", ".join(model_signal_contract["missingReleaseIds"])
+        )
     expected_tbox = default_tbox_metadata()
     try:
         deployed_tbox = dict(repository.active_tbox_metadata() or {})
@@ -217,6 +274,7 @@ def prepare_v2_rulebox_release(repository, settings=None):
         )
     readiness = {
         **dict(readiness or {}),
+        "modelSignalReleasePreflight": model_signal_contract,
         "tboxReleasePreflight": {
             "status": "matched",
             "version": str(expected_tbox.get("version") or ""),

@@ -307,6 +307,8 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual(result.headline, dimensions["decision"]["reason"])
         self.assertEqual("blocked", dimensions["data"]["state"])
         self.assertEqual("판단 자료 부족", dimensions["data"]["stateLabel"])
+        self.assertEqual("blocked", result.stages[0]["state"])
+        self.assertIn("사용할 수", result.stages[0]["detail"])
         self.assertEqual(result.headline, result.stages[3]["detail"])
 
     def test_legacy_embedded_gap_payloads_are_rendered_as_plain_language(self):

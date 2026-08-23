@@ -939,7 +939,27 @@ def investment_case_snapshot(
         limit=30,
     )
 
-    fact_state = text(flow_stages.get("source", {}).get("state")) or "warning"
+    facts_at_decision = item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
+    stored_fact_count = len(facts_at_decision)
+    data_state = text(flow.get("dataState")).lower()
+    source_fact_state = text(flow_stages.get("source", {}).get("state")) or "warning"
+    if data_state in {"insufficient", "unavailable"}:
+        fact_state = "blocked"
+        fact_detail = (
+            f"{stored_fact_count}개 기록은 저장됐지만 투자 판단 자료로 사용할 수 없습니다."
+            if stored_fact_count else
+            "투자 판단에 사용할 수 있는 원천 자료가 없습니다."
+        )
+    elif data_state == "partial" and source_fact_state == "pass":
+        fact_state = "warning"
+        fact_detail = f"{stored_fact_count}개 기록 중 확인된 자료만 제한적으로 사용합니다."
+    else:
+        fact_state = source_fact_state
+        fact_detail = (
+            "판단 시점 데이터가 저장되어 투자 판단 자료로 사용할 수 있습니다."
+            if fact_state == "pass" else
+            "최신 원천 데이터 연결이 필요합니다."
+        )
     relation_count = len(flow.get("relationIds") or [])
     signal_state = "pass" if supporting_ids or counter_ids or relation_count else (
         "warning" if text(flow.get("inferenceGenerationId")) else "blocked"
@@ -968,8 +988,8 @@ def investment_case_snapshot(
         _stage(
             "fact",
             fact_state,
-            "판단 시점 데이터가 저장되었습니다." if fact_state == "pass" else "최신 원천 데이터 연결이 필요합니다.",
-            count=max(1, len(item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision")))) if fact_state == "pass" else 0,
+            fact_detail,
+            count=stored_fact_count,
         ),
         _stage(
             "signal",
@@ -1000,7 +1020,6 @@ def investment_case_snapshot(
         ),
     ]
 
-    facts_at_decision = item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
     source_snapshot_id = text(flow.get("sourceAboxSnapshotId"))
     inference_generation_id = text(flow.get("inferenceGenerationId"))
     action = text(flow.get("action")) or "HOLD"

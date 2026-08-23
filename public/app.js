@@ -1958,7 +1958,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260823-decision-workspace-v6", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260824-decision-explanation-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -14806,7 +14806,7 @@
 
   function renderInvestmentFlowStateLegend() {
     var items = [
-      { state: "pass", label: "완료", detail: "다음 단계에 사용 가능" },
+      { state: "pass", label: "완료", detail: "해당 단계 결과 사용 가능" },
       { state: "warning", label: "확인 필요", detail: "일부 조건을 더 확인" },
       { state: "blocked", label: "판단 차단", detail: "행동 의견에 사용 불가" },
       { state: "pending", label: "처리 대기", detail: "아직 실행·관측 전" }

@@ -197,6 +197,40 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             changed_engine["executionNamespaceId"],
         )
 
+    def test_shared_inference_reuse_never_expands_a_predecessor_without_slot_proof(self):
+        class Repository:
+            store_key = "typedb"
+
+            @staticmethod
+            def inferencebox_recovery_metadata(world_id=""):
+                return {
+                    "status": "ok",
+                    "worldId": world_id,
+                    "inferenceGenerationId": "generation:previous",
+                    "sourceAboxSnapshotId": "abox:active",
+                    "targetSymbols": ["NVDA"],
+                    "nativeTypeDbReasoningCompleted": True,
+                }
+
+            @staticmethod
+            def inferencebox_snapshot(**_kwargs):
+                raise AssertionError("detailed predecessor inference must not be read")
+
+        recorder = PortfolioOntologyProjectionRecorder(Repository())
+
+        existing, reuse_mode = recorder.compact_shared_inference_reuse(
+            active_abox={"aboxSnapshotId": "abox:active"},
+            selection_context={"reusable": False},
+            symbols=["NVDA"],
+            world_id="premise:shared:global",
+        )
+
+        self.assertEqual(
+            "skipped-missing-compact-result-slot-proof",
+            existing["status"],
+        )
+        self.assertEqual("compact-result-slot-proof-unavailable", reuse_mode)
+
     EXECUTION_NAMESPACE = {
         "engineDeploymentId": "ontology-v2-shadow",
         "graphDatabase": "orbit_alpha_ontology_shadow_v2",

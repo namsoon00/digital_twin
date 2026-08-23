@@ -1113,6 +1113,49 @@ class PortfolioOntologyProjectionRecorder:
             "namespaceVersion": RULE_EVALUATION_NAMESPACE_VERSION,
         }
 
+    def compact_shared_inference_reuse(
+        self,
+        active_abox: Dict[str, object],
+        selection_context: Dict[str, object],
+        symbols: List[str],
+        world_id: str,
+    ) -> tuple:
+        """Reuse shared inference only through the compact result-slot proof.
+
+        The detailed InferenceBox can be large and belongs to a physical graph
+        database shared by successive engine releases.  Reading it merely to
+        discover that its execution namespace is incompatible made the first
+        request after a release substantially slower than a fresh native pass.
+        Result slots already bind reuse to the RuleBox, TBox, deployment and
+        native-engine namespace, so a missing slot proof must fall through to
+        new inference without expanding the previous generation.
+        """
+        recovery_metadata = {}
+        try:
+            recovery_metadata = self.repository_world_call(
+                "inferencebox_recovery_metadata",
+                world_id=world_id,
+            )
+        except Exception:
+            recovery_metadata = {}
+        existing = shared_inference_from_result_slot_proof(
+            world_id=world_id,
+            active_abox=active_abox,
+            recovery_metadata=recovery_metadata,
+            selection_context=selection_context,
+            symbols=symbols,
+        )
+        if existing:
+            return existing, "typedb-result-slot-generation"
+        return {
+            "status": "skipped-missing-compact-result-slot-proof",
+            "reason": (
+                "The prior SharedPremiseWorld generation has no compatible "
+                "compact result-slot proof. Native TypeDB inference will run "
+                "without expanding the detailed predecessor InferenceBox."
+            ),
+        }, "compact-result-slot-proof-unavailable"
+
     def world_partitioned_reasoning_enabled(self) -> bool:
         value = self.settings.get("ontologyWorldPartitionedReasoningEnabled")
         if value is None:
@@ -1471,65 +1514,16 @@ class PortfolioOntologyProjectionRecorder:
                 ),
             }
         else:
-            recovery_metadata = {}
             stage_started = time.perf_counter()
-            try:
-                recovery_metadata = self.repository_world_call(
-                    "inferencebox_recovery_metadata",
-                    world_id=shared_world.world_id,
-                )
-            except Exception:
-                recovery_metadata = {}
+            existing, existing_reuse_mode = self.compact_shared_inference_reuse(
+                active_abox,
+                selection_context,
+                symbols,
+                shared_world.world_id,
+            )
             runtime_stages["existingInferenceMetadataMs"] = int(
                 (time.perf_counter() - stage_started) * 1000
             )
-            existing = shared_inference_from_result_slot_proof(
-                world_id=shared_world.world_id,
-                active_abox=active_abox,
-                recovery_metadata=recovery_metadata,
-                selection_context=selection_context,
-                symbols=symbols,
-            )
-            if existing:
-                existing_reuse_mode = "typedb-result-slot-generation"
-            else:
-                recovery_targets = {
-                    str(symbol or "").upper().strip()
-                    for symbol in recovery_metadata.get("targetSymbols") or []
-                    if str(symbol or "").strip()
-                }
-                recovery_can_cover_request = bool(
-                    str(recovery_metadata.get("status") or "") == "ok"
-                    and recovery_metadata.get("nativeTypeDbReasoningCompleted")
-                    and str(recovery_metadata.get("sourceAboxSnapshotId") or "")
-                    == str((active_abox or {}).get("aboxSnapshotId") or "")
-                    and set(symbols).issubset(recovery_targets)
-                )
-                if recovery_can_cover_request:
-                    stage_started = time.perf_counter()
-                    try:
-                        existing = self.repository_world_call(
-                            "inferencebox_snapshot",
-                            symbols=symbols,
-                            limit=self.inference_snapshot_limit(),
-                            world_id=shared_world.world_id,
-                        )
-                    except Exception:
-                        existing = {}
-                    runtime_stages["existingInferenceReadMs"] = int(
-                        (time.perf_counter() - stage_started) * 1000
-                    )
-                    if existing:
-                        existing_reuse_mode = "typedb-detailed-inferencebox"
-                else:
-                    existing = {
-                        "status": "skipped-incompatible-active-inference-metadata",
-                        "reason": (
-                            "The active InferenceBox metadata cannot cover the "
-                            "requested SharedPremiseWorld generation."
-                        ),
-                    }
-                    existing_reuse_mode = "metadata-proved-not-reusable"
         existing_reusable = bool(
             projection_status != "staged-scoped-manifest"
             and

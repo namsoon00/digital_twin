@@ -467,6 +467,52 @@ def _dimension(
     }
 
 
+def _normalized_abstention(
+    value: Mapping[str, object],
+    *,
+    relation_count: int,
+    scenario_count: int,
+) -> Dict[str, object]:
+    """Keep the audit reason while exposing a concrete user-facing cause."""
+
+    payload = dict(value or {})
+    if not payload:
+        return {}
+    raw_reason = text(payload.get("reason"))
+    normalized_reason = raw_reason.lower().rstrip(".")
+    generic_selection_failure = normalized_reason in {
+        "no validated final hypothesis selection",
+        "no final hypothesis selection",
+    }
+    if not generic_selection_failure:
+        return {
+            **payload,
+            "title": text(payload.get("title")) or "가설 비교 미완료",
+            "reason": raw_reason or "비교 가설의 검증이 완료되지 않아 최종 의견을 만들지 않았습니다.",
+            "nextAction": text(payload.get("nextAction")) or "비교하지 못한 가설과 근거를 다시 검증합니다.",
+        }
+
+    if not relation_count and not scenario_count:
+        title = "관계와 비교 가설 부족"
+        reason = "판단에 사용할 관계 경로와 비교 가설이 없어 매수·매도 의견을 만들지 않았습니다."
+        next_action = "새 관계나 근거가 확인되면 비교 가설을 다시 생성하고 판단합니다."
+    elif not scenario_count:
+        title = "비교 가설 생성 필요"
+        reason = "관계는 확인됐지만 비교할 투자 가설이 생성되지 않아 최종 의견을 만들지 않았습니다."
+        next_action = "확인된 관계로 지지·반박 가설을 생성한 뒤 다시 비교합니다."
+    else:
+        title = "검증된 가설 선택 실패"
+        reason = f"비교 가설 {scenario_count}개를 검토했지만 검증된 최종 가설을 선택하지 못했습니다."
+        next_action = "가설별 지지·반박 근거와 검증 상태를 보완한 뒤 다시 판단합니다."
+    return {
+        **payload,
+        "title": title,
+        "reason": reason,
+        "nextAction": next_action,
+        "technicalReason": raw_reason,
+    }
+
+
 def _status_dimensions(
     *,
     action: str,
@@ -518,6 +564,16 @@ def _status_dimensions(
         data = _dimension(
             "data", "자료 상태", "pass", "자료 충분", "DATA_SUFFICIENT",
             "판단 시점의 원천 자료가 고정되어 있습니다.", "현재 판단의 사실 입력으로 사용했습니다.",
+        )
+    elif normalized_data in {"insufficient", "unavailable"}:
+        data = _dimension(
+            "data", "자료 상태", "blocked", "판단 자료 부족", "DATA_UNUSABLE",
+            (
+                "판단 시점 기록은 남아 있지만 투자 의견에 필요한 자료를 사용할 수 없습니다."
+                if source_snapshot_id else
+                "판단 시점의 원천 자료를 연결하지 못했습니다."
+            ),
+            "자료가 보완되기 전에는 투자 행동 판단을 사용하지 않습니다.",
         )
     elif source_snapshot_id:
         data = _dimension(
@@ -608,7 +664,11 @@ def _case_explanation(
         "layer": "ai" if abstention else "hypothesis" if selected else "decision",
         "role": "constraint" if abstention else "support",
         "status": "confirmed" if not abstention else "incomplete",
-        "title": "AI 가설 비교 미완료" if abstention else text(selected.get("title")) or "현재 판단",
+        "title": (
+            text(abstention.get("title")) or "AI 가설 비교 미완료"
+            if abstention else
+            text(selected.get("title")) or "현재 판단"
+        ),
         "summary": text(abstention.get("reason")) if abstention else text(selected.get("claim")) or headline,
         "effect": "행동 판단을 유보합니다." if abstention else f"{action or '현재'} 의견의 핵심 설명입니다.",
         "reasonCode": "AI_HYPOTHESIS_COMPARISON_INCOMPLETE" if abstention else "SELECTED_HYPOTHESIS",
@@ -891,6 +951,18 @@ def investment_case_snapshot(
     ])
     decision_state = text(flow_stages.get("decision", {}).get("state")) or "warning"
     outcome_state = "pass" if outcomes else "pending"
+    abstention = _normalized_abstention(
+        item_dict(episode.get("decisionAbstention") or episode.get("decision_abstention")),
+        relation_count=relation_count,
+        scenario_count=len(scenarios),
+    )
+    decision_detail = (
+        text(abstention.get("reason"))
+        if abstention else
+        text(episode.get("decisionSummary") or episode.get("decision_summary"))
+        or text(flow.get("action"))
+        or "판단 보류"
+    )
 
     stages = [
         _stage(
@@ -917,7 +989,7 @@ def investment_case_snapshot(
         _stage(
             "decision",
             decision_state,
-            text(episode.get("decisionSummary") or episode.get("decision_summary")) or text(flow.get("action")) or "판단 보류",
+            decision_detail,
             action=text(flow.get("action")) or "HOLD",
         ),
         _stage(
@@ -928,7 +1000,6 @@ def investment_case_snapshot(
         ),
     ]
 
-    abstention = item_dict(episode.get("decisionAbstention") or episode.get("decision_abstention"))
     facts_at_decision = item_dict(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
     source_snapshot_id = text(flow.get("sourceAboxSnapshotId"))
     inference_generation_id = text(flow.get("inferenceGenerationId"))
@@ -961,7 +1032,9 @@ def investment_case_snapshot(
     else:
         readiness_state = "pass"
         phase = "outcome"
-    headline = text(episode.get("decisionSummary") or episode.get("decision_summary"))
+    headline = text(abstention.get("reason")) if abstention else text(
+        episode.get("decisionSummary") or episode.get("decision_summary")
+    )
     if not headline:
         headline = text(decision_dimension.get("reason")) or "판단 근거를 계속 관찰하고 있습니다."
 
@@ -1005,7 +1078,7 @@ def investment_case_snapshot(
     attention = _attention_summary(action, dimensions, integrity)
     change_conditions = list(explanation.get("changeConditions") or [])
     if abstention:
-        next_action = "시스템이 비교하지 못한 가설을 다시 검증한 뒤 AI 판단을 자동 갱신해야 합니다."
+        next_action = text(abstention.get("nextAction")) or "비교하지 못한 가설을 다시 검증한 뒤 판단을 갱신합니다."
     elif change_conditions:
         next_action = change_conditions[0]
     elif required_checks:

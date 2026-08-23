@@ -780,6 +780,9 @@ function checkWorkflowConsoleContract() {
       code.indexOf('["reasoning", "추론 과정"]') >= 0 &&
       code.indexOf('["history", "변화·결과"]') >= 0 &&
       code.indexOf("renderDecisionStatusDimensions") >= 0 &&
+      code.indexOf("renderInvestmentDecisionRationale") >= 0 &&
+      code.indexOf("renderInvestmentFlowStateLegend") >= 0 &&
+      code.indexOf("색상은 처리 상태를 뜻하며") >= 0 &&
       code.indexOf("renderInvestmentCaseReasoning") >= 0 &&
       code.indexOf("decisionOutcomeBoardWorkDetailPayload") >= 0 &&
       code.indexOf('data-work-detail="decision-outcome-board"') >= 0 &&
@@ -791,6 +794,8 @@ function checkWorkflowConsoleContract() {
       code.indexOf("openWorkDetailLayer(decisionDetailType, state.activeDecisionCaseId)") >= 0 &&
       styles.indexOf(".oa-case-detail-tabs") >= 0 &&
       styles.indexOf(".oa-decision-master-detail") >= 0 &&
+      styles.indexOf(".oa-decision-rationale") >= 0 &&
+      styles.indexOf(".oa-flow-state-legend") >= 0 &&
       styles.indexOf(".oa-case-causal-paths") >= 0 &&
       styles.indexOf(".oa-reasoning-snapshot") >= 0 &&
       styles.indexOf(".oa-reasoning-inventory") >= 0,

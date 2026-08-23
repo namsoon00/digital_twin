@@ -282,6 +282,33 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             result.explanation["primaryCause"]["reasonCode"],
         )
 
+    def test_generic_abstention_explains_the_missing_relation_and_hypothesis(self):
+        row = episode()
+        row["dataState"] = "unavailable"
+        row["selectedHypothesisId"] = ""
+        row["hypothesisSet"]["hypotheses"] = []
+        row["evidenceIds"] = []
+        row["counterEvidenceIds"] = []
+        row["decisionAbstention"] = {
+            "abstained": True,
+            "reason": "No validated final hypothesis selection.",
+        }
+
+        result = investment_case_snapshot(row)
+        dimensions = {item["id"]: item for item in result.status_dimensions}
+
+        self.assertEqual("관계와 비교 가설 부족", result.explanation["primaryCause"]["title"])
+        self.assertIn("관계 경로와 비교 가설이 없어", result.headline)
+        self.assertNotIn("No validated", result.headline)
+        self.assertEqual(
+            "No validated final hypothesis selection.",
+            result.decision["abstention"]["technicalReason"],
+        )
+        self.assertEqual(result.headline, dimensions["decision"]["reason"])
+        self.assertEqual("blocked", dimensions["data"]["state"])
+        self.assertEqual("판단 자료 부족", dimensions["data"]["stateLabel"])
+        self.assertEqual(result.headline, result.stages[3]["detail"])
+
     def test_legacy_embedded_gap_payloads_are_rendered_as_plain_language(self):
         row = episode()
         row["unresolvedQuestions"] = [

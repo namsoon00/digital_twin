@@ -37,12 +37,14 @@ class InvestmentCaseQueryService:
         monitor_store=None,
         evidence_repository=None,
         investment_domain_store=None,
+        symbol_repository=None,
     ):
         self.decision_episode_store = decision_episode_store
         self.notification_job_store = notification_job_store
         self.monitor_store = monitor_store
         self.evidence_repository = evidence_repository
         self.investment_domain_store = investment_domain_store
+        self.symbol_repository = symbol_repository
         self.flow_service = InvestmentFlowQueryService(
             decision_episode_store=decision_episode_store,
             notification_job_store=notification_job_store,
@@ -72,7 +74,7 @@ class InvestmentCaseQueryService:
             if not key[1] or key in seen:
                 continue
             seen.add(key)
-            latest.append(payload)
+            latest.append(self._with_canonical_subject(payload))
 
         episode_ids = [text(row.get("episodeId") or row.get("episode_id")) for row in latest]
         jobs_by_episode = self.flow_service._jobs_by_episode(episode_ids)
@@ -155,7 +157,7 @@ class InvestmentCaseQueryService:
             return self._not_found(case_id)
         episode_id = snapshot.episode_id
         jobs = self.flow_service._jobs_by_episode([episode_id]).get(episode_id, [])
-        snapshot = investment_case_snapshot(episode, jobs)
+        snapshot = investment_case_snapshot(self._with_canonical_subject(item_dict(episode)), jobs)
         payload = snapshot.to_dict(compact=False)
         payload["liveComparison"] = self._live_comparison(snapshot)
         payload["evidence"] = self._evidence_detail(snapshot, payload.get("evidence") or {})
@@ -189,7 +191,7 @@ class InvestmentCaseQueryService:
         jobs_by_episode = self.flow_service._jobs_by_episode(episode_ids)
         snapshots = [
             investment_case_snapshot(
-                row,
+                self._with_canonical_subject(item_dict(row)),
                 jobs_by_episode.get(text(item_dict(row).get("episodeId") or item_dict(row).get("episode_id")), []),
             )
             for row in rows
@@ -215,6 +217,31 @@ class InvestmentCaseQueryService:
             "count": len(items),
             "items": items,
         }
+
+    def _with_canonical_subject(self, payload: Mapping[str, object]) -> Dict[str, object]:
+        row = dict(payload or {})
+        symbol = text(row.get("symbol")).upper()
+        current = text(row.get("subjectName") or row.get("subject_name") or row.get("name"))
+        if not symbol or (current and current.upper() != symbol):
+            return row
+        repository = self.symbol_repository
+        if repository is None or not hasattr(repository, "get"):
+            return row
+        try:
+            resolved = repository.get(symbol)
+        except Exception:  # noqa: BLE001 - display metadata cannot block decision history.
+            return row
+        if isinstance(resolved, Mapping):
+            name = text(resolved.get("name"))
+        elif resolved is not None and hasattr(resolved, "to_dict"):
+            name = text((resolved.to_dict() or {}).get("name"))
+        else:
+            name = text(getattr(resolved, "name", ""))
+        if name and name.upper() != symbol:
+            row["subjectName"] = name
+            row["subject_name"] = name
+            row["name"] = name
+        return row
 
     @staticmethod
     def _number(value: object):

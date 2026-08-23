@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +26,7 @@ from typing import Dict, List
 
 from ..application.account_service import AccountApplicationService
 from ..application.account_watchlist_service import AccountWatchlistService
+from ..application.console_read_model_service import ConsoleReadModelService
 from ..application.notification_ai_gate_message import (
     compact_invalidation_line,
     compact_next_action_line,
@@ -1437,6 +1438,7 @@ def investment_case_api_payload(
         monitor_store=stores.monitor_store(settings) if case_id else None,
         evidence_repository=stores.research_evidence_store(settings) if case_id else None,
         investment_domain_store=stores.investment_domain_store(settings) if case_id else None,
+        symbol_repository=stores.symbol_universe_store(settings),
     )
     if case_id and section == "history":
         return service.history(
@@ -4893,14 +4895,48 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
     decision = dict(decision)
     compact["tossDecision"] = decision
 
+    market_item_keys = {
+        "symbol", "name", "symbolName", "displayName", "market", "exchange", "currency", "sector",
+        "source", "currentPrice", "changeRate", "quantity", "averagePrice", "marketValue",
+        "marketValueKrw", "profitLoss", "profitLossRate", "ma5", "ma20", "ma60", "volume",
+        "volumeRatio", "tradeStrength", "buyVolume", "sellVolume", "bidAskImbalance",
+        "foreignBuyVolume", "foreignSellVolume", "foreignNet", "foreignNetVolume",
+        "institutionBuyVolume", "institutionSellVolume", "institutionNet", "institutionNetVolume", "individualNet",
+        "individualNetVolume", "marketSignalCoverage", "freshnessStatus", "quoteStatus", "quoteSource",
+        "provider", "sourceAsOf", "updatedAt", "dataQuality", "dataMode", "isMock",
+    }
+    decision_item_keys = market_item_keys | {
+        "decision", "action", "actionCode", "reviewLevel", "reason", "nextAction", "decisionBasis",
+        "portfolioRole", "accountId", "accountLabel", "decisionKey", "decisionEpisodeId", "updatedAt",
+    }
+
+    def compact_rows(value, allowed_keys):
+        if not isinstance(value, list):
+            return value
+        return [
+            {key: item.get(key) for key in sorted(allowed_keys) if key in item}
+            for item in value
+            if isinstance(item, dict)
+        ]
+
     toss = compact.get("toss")
     if isinstance(toss, dict):
         toss = dict(toss)
+        for key in ["positions", "watchlistQuotes", "watchlist"]:
+            toss[key] = compact_rows(toss.get(key), market_item_keys)
         external = toss.get("externalSignals")
         if isinstance(external, dict):
             external = dict(external)
             omitted = []
-            for key in ["yfinanceData", "researchEvidence", "companyOverviews", "earningsReports", "secFilings"]:
+            for key in [
+                "yfinanceData",
+                "researchEvidence",
+                "companyOverviews",
+                "earningsReports",
+                "secFilings",
+                "dartDisclosures",
+                "companyKnowledge",
+            ]:
                 value = external.pop(key, None)
                 if value not in (None, [], {}, ""):
                     omitted.append(key)
@@ -4915,8 +4951,24 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
             proxies = metadata.pop("marketProxyQuotes", None)
             if isinstance(proxies, (list, dict)):
                 metadata["marketProxyQuoteCount"] = len(proxies)
+            omitted_metadata = []
+            for key in ["cryptoTransitionBaseline", "marketObservationBaselines", "ontology", "kis"]:
+                value = metadata.pop(key, None)
+                if value not in (None, [], {}, ""):
+                    omitted_metadata.append(key)
+            metadata["detailLevel"] = "summary"
+            metadata["heavyFieldsOmitted"] = omitted_metadata
             toss["metadata"] = metadata
         compact["toss"] = toss
+
+    portfolio = compact.get("portfolio")
+    if isinstance(portfolio, dict):
+        portfolio = dict(portfolio)
+        portfolio["positions"] = compact_rows(portfolio.get("positions"), market_item_keys)
+        compact["portfolio"] = portfolio
+
+    for key in ["positions", "items"]:
+        decision[key] = compact_rows(decision.get(key), decision_item_keys)
 
     strategy = decision.get("ontologyStrategy")
     if isinstance(strategy, dict):
@@ -4957,6 +5009,7 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
         reasoning_cards = analysis.pop("reasoningCards", None)
         if isinstance(reasoning_cards, list):
             analysis["reasoningCardCount"] = len(reasoning_cards)
+        analysis["actionQueue"] = compact_rows(analysis.get("actionQueue"), decision_item_keys)
         analysis["detailLevel"] = "summary"
         analysis["detailAvailable"] = True
         decision["investmentAnalysis"] = analysis
@@ -4974,6 +5027,7 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
                 omitted.append(key)
                 if isinstance(value, list):
                     root_analysis[key + "Count"] = len(value)
+        root_analysis["actionQueue"] = compact_rows(root_analysis.get("actionQueue"), decision_item_keys)
         root_analysis["detailLevel"] = "summary"
         root_analysis["detailAvailable"] = True
         root_analysis["heavyFieldsOmitted"] = omitted
@@ -5046,6 +5100,86 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         payload = compact_flow_lens_payload(payload)
         payload["readModel"] = result.metadata()
     return payload
+
+
+def console_read_model_service(settings: Dict[str, object] = None) -> ConsoleReadModelService:
+    configured_settings = settings or operational_read_settings()
+    return ConsoleReadModelService(symbol_repository=stores.symbol_universe_store(configured_settings))
+
+
+def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = operational_read_settings()
+    account_id = first_query(query, "accountId") or "default"
+    snapshot = flow_lens_read_payload(query)
+    try:
+        lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle("portfolio:" + account_id)
+    except Exception as error:  # noqa: BLE001 - dashboard sections degrade independently.
+        lifecycle = {"status": "unavailable", "error": str(error)[:240]}
+    try:
+        cases = investment_case_api_payload({"accountId": [account_id], "limit": ["100"]})
+    except Exception as error:  # noqa: BLE001
+        cases = {"status": "unavailable", "items": [], "error": str(error)[:240]}
+    try:
+        calendar_query = {
+            "from": [datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")],
+            "limit": ["40"],
+        }
+        calendar = investment_calendar_payload(calendar_query)
+    except Exception as error:  # noqa: BLE001
+        calendar = {"events": [], "summary": {}, "error": str(error)[:240]}
+    return console_read_model_service(settings).dashboard_summary(snapshot, lifecycle, cases, calendar)
+
+
+def console_portfolio_api_payload(query: Dict[str, List[str]], view: str) -> Dict[str, object]:
+    settings = operational_read_settings()
+    account_id = first_query(query, "accountId") or "default"
+    portfolio_id = first_query(query, "portfolioId") or "portfolio:" + account_id
+    lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle(portfolio_id)
+    return console_read_model_service(settings).portfolio(lifecycle, view)
+
+
+def console_market_instruments_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = operational_read_settings()
+    return console_read_model_service(settings).market_instruments(flow_lens_read_payload(query))
+
+
+def console_market_evidence_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    requested_limit = safe_int(first_query(query, "limit"), 12, 1, 100)
+    source_query = {key: list(value) for key, value in query.items()}
+    source_query["limit"] = [str(min(100, max(50, requested_limit * 5)))]
+    payload = research_evidence_payload(source_query)
+    return console_read_model_service().market_evidence(payload, requested_limit)
+
+
+def console_decisions_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    settings = operational_read_settings()
+    payload = investment_case_api_payload(query)
+    return console_read_model_service(settings).decision_heads(payload)
+
+
+def console_operations_health_api_payload() -> Dict[str, object]:
+    readers = {
+        "realtime": realtime_status_payload,
+        "external": external_data_status_payload,
+        "reasoning": ontology_reasoning_status_payload,
+        "engine": reasoning_engine_platform_status_payload,
+        "timeSeries": time_series_platform_status_payload,
+    }
+    payloads = {}
+    executor = ThreadPoolExecutor(max_workers=len(readers), thread_name_prefix="console-health")
+    futures = {key: executor.submit(reader) for key, reader in readers.items()}
+    _completed, pending = wait(futures.values(), timeout=8)
+    for key, future in futures.items():
+        if future in pending:
+            payloads[key] = {"status": "unavailable", "error": "status read timed out after 8 seconds"}
+            future.cancel()
+            continue
+        try:
+            payloads[key] = future.result()
+        except Exception as error:  # noqa: BLE001 - one status source cannot hide the others.
+            payloads[key] = {"status": "unavailable", "error": str(error)[:240]}
+    executor.shutdown(wait=False, cancel_futures=True)
+    return console_read_model_service().operations_health(payloads)
 
 
 def category_for(value: str) -> str:
@@ -6036,6 +6170,40 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/flow-lens" and self.command == "GET":
             return self.send_payload(200, flow_lens_read_payload(query), cache_control="no-store")
+
+        if path == "/api/dashboard/summary" and self.command == "GET":
+            return self.send_payload(200, console_dashboard_api_payload(query), cache_control="no-store")
+
+        portfolio_console_views = {
+            "/api/portfolio/summary": "summary",
+            "/api/portfolio/positions": "positions",
+            "/api/portfolio/rebalance": "rebalance",
+            "/api/portfolio/activity": "activity",
+        }
+        if path in portfolio_console_views and self.command == "GET":
+            return self.send_payload(
+                200,
+                console_portfolio_api_payload(query, portfolio_console_views[path]),
+                cache_control="no-store",
+            )
+
+        if path == "/api/market/instruments" and self.command == "GET":
+            return self.send_payload(200, console_market_instruments_api_payload(query), cache_control="no-store")
+
+        if path == "/api/market/evidence" and self.command == "GET":
+            return self.send_payload(200, console_market_evidence_api_payload(query), cache_control="no-store")
+
+        if path == "/api/decisions" and self.command == "GET":
+            return self.send_payload(200, console_decisions_api_payload(query), cache_control="no-store")
+
+        console_decision_match = re.match(r"^/api/decisions/([^/]+)$", path)
+        if console_decision_match and self.command == "GET":
+            case_id = urllib.parse.unquote(console_decision_match.group(1))
+            payload = investment_case_api_payload(query, case_id=case_id)
+            return self.send_payload(200 if payload.get("status") == "ok" else 404, payload, cache_control="no-store")
+
+        if path == "/api/operations/health" and self.command == "GET":
+            return self.send_payload(200, console_operations_health_api_payload(), cache_control="no-store")
 
         if path == "/api/investment-model" and self.command == "GET":
             return self.send_payload(200, investment_model_api_payload(

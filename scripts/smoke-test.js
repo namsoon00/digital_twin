@@ -243,6 +243,7 @@ function checkWorkflowConsoleContract() {
   const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
   const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
+  const consoleWorkspacesCode = fs.readFileSync(path.join(rootDir, "public", "console-workspaces.js"), "utf8");
   const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "public", "manifest.webmanifest"), "utf8"));
   const serviceWorker = fs.readFileSync(path.join(rootDir, "public", "service-worker.js"), "utf8");
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
@@ -256,16 +257,17 @@ function checkWorkflowConsoleContract() {
   const webRestart = fs.readFileSync(path.join(rootDir, "scripts", "restart-web-service.js"), "utf8");
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
-  const activeTabs = ["overview", "calendar", "feed", "modeling", "notifications", "experiments", "settings"];
-  const tabLabels = ["오늘", "캘린더", "시장", "판단", "알림", "근거 점검", "설정"];
-  assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "7개 업무 탭 ID가 모두 정의되지 않았습니다.");
-  assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "7개 업무 탭명이 모두 정의되지 않았습니다.");
-  assertOk((tabBlock.match(/\{ id:/g) || []).length === 7, "상위 업무 탭은 정확히 7개여야 합니다.");
+  const activeTabs = ["overview", "portfolio", "calendar", "feed", "modeling", "notifications", "experiments", "settings", "operations"];
+  const tabLabels = ["오늘", "포트폴리오", "캘린더", "시장", "판단", "알림", "근거 점검", "설정", "운영"];
+  assertOk(activeTabs.every(function (id) { return tabBlock.indexOf('id: "' + id + '"') >= 0; }), "업무·관리 탭 ID가 모두 정의되지 않았습니다.");
+  assertOk(tabLabels.every(function (label) { return tabBlock.indexOf('label: "' + label + '"') >= 0; }), "업무·관리 탭명이 모두 정의되지 않았습니다.");
+  assertOk((tabBlock.match(/\{ id:/g) || []).length === 9, "사용자 화면 8개와 숨겨진 근거 점검 화면이 정확히 정의되어야 합니다.");
   assertOk(
-    code.indexOf('var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];') >= 0
+    code.indexOf('var bottomTabIds = ["overview", "portfolio", "feed", "modeling", "notifications"];') >= 0
+      && code.indexOf('data-tab-icon="more"') >= 0
       && code.indexOf("var managementTabIds = [];") >= 0
       && code.indexOf("var pageModeEnabledTabs = [];") >= 0,
-    "모바일 핵심 6탭과 판단 내부 근거 점검 구성이 일치하지 않습니다."
+    "모바일 핵심 5탭·더보기와 판단 내부 근거 점검 구성이 일치하지 않습니다."
   );
   assertOk(
     indexHtml.indexOf('viewport-fit=cover') >= 0
@@ -295,10 +297,23 @@ function checkWorkflowConsoleContract() {
     appAssetVersion
       && appAssetVersion === serviceWorkerVersion
       && serviceWorker.indexOf("isMutableAppAsset") >= 0
+      && indexHtml.indexOf("console-workspaces.js?v=" + appAssetVersion) >= 0
+      && indexHtml.indexOf("console-workspaces.css?v=" + appAssetVersion) >= 0
       && serviceWorker.indexOf('cache.put(request, copy)') >= 0
       && webServer.indexOf('"app.js",') >= 0
       && webServer.indexOf('"styles.css",') >= 0,
     "앱 셸 핵심 자산의 버전 동기화 또는 네트워크 우선 갱신 계약이 없습니다."
+  );
+  const consoleWorkspacesSandbox = { window: {} };
+  vm.runInNewContext(consoleWorkspacesCode, consoleWorkspacesSandbox, { filename: "console-workspaces.js" });
+  const consoleWorkspaces = consoleWorkspacesSandbox.window.OrbitAlphaConsoleWorkspaces;
+  const portfolioWorkspaceHtml = consoleWorkspaces.renderPortfolio({ version: "console-read-model-v1", summary: {}, positions: [] }, "summary", {});
+  const operationsWorkspaceHtml = consoleWorkspaces.renderOperations({ version: "console-read-model-v1", summary: {}, components: [] }, "health", {});
+  assertOk(
+    portfolioWorkspaceHtml.indexOf('data-portfolio-view="rebalance"') >= 0
+      && operationsWorkspaceHtml.indexOf('data-operations-view="reasoning"') >= 0
+      && operationsWorkspaceHtml.indexOf('data-operations-view="governance"') >= 0,
+    "포트폴리오 또는 운영 워크스페이스의 독립 화면 계약이 없습니다."
   );
   assertOk(
     code.indexOf("function renderShareRuntimePanel") >= 0
@@ -377,8 +392,7 @@ function checkWorkflowConsoleContract() {
     "selectConsolePortfolio",
     "selectConsoleInstrumentRows",
     "selectConsoleDecisionRows",
-    "selectConsoleAlertRows",
-    "selectConsoleOperationSources"
+    "selectConsoleAlertRows"
   ].forEach(function (selector) {
     assertOk(code.indexOf("function " + selector) >= 0, "업무 화면 selector가 없습니다: " + selector);
   });
@@ -388,7 +402,9 @@ function checkWorkflowConsoleContract() {
     "renderDecisionConsole",
     "renderAlertsConsole",
     "renderValidationConsole",
-    "renderOperationsConsole"
+    "renderPortfolioConsole",
+    "renderOperationsHealthConsole",
+    "renderSettingsConsole"
   ].forEach(function (renderer) {
     assertOk(code.indexOf("function " + renderer) >= 0, "업무 화면 renderer가 없습니다: " + renderer);
   });
@@ -416,10 +432,12 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(
     code.indexOf('var settingsSections = [') >= 0 &&
-      ["계정", "내 환경", "운영 관리"].every(function (label) { return code.indexOf('label: "' + label + '"') >= 0; }) &&
+      ["계정", "내 환경"].every(function (label) { return code.indexOf('label: "' + label + '"') >= 0; }) &&
+      code.indexOf('{ id: "operations", label: "운영"') >= 0 &&
       code.indexOf("data-settings-section") >= 0 &&
-      code.indexOf("writeSettingsSectionHistory") >= 0,
-    "설정 탭이 계정·앱 환경·시스템 운영 범위로 분리되지 않았습니다."
+      code.indexOf("writeSettingsSectionHistory") >= 0 &&
+      code.indexOf("renderOperationsHealthConsole") >= 0,
+    "계정·앱 환경 설정과 시스템 운영 화면이 독립 경계로 분리되지 않았습니다."
   );
   assertOk(
     [
@@ -548,7 +566,10 @@ function checkWorkflowConsoleContract() {
     "판단 상세의 쉬운 결론·근거·다음 행동 또는 모바일 헤더 계약이 없습니다."
   );
   assertOk(code.indexOf("researchEvidenceKoreanSummary(item)") >= 0 && code.indexOf("researchEvidenceImpactMeta(item)") >= 0, "뉴스 목록에 한글 본문 요약과 주가 영향 분석이 없습니다.");
-  assertOk(code.indexOf('state.activeTab === "notifications" || notificationDetailNeedsEvidence') >= 0, "알림 상세가 연결된 뉴스 근거를 지연 로드하지 않습니다.");
+  assertOk(
+    code.indexOf('state.activeTab === "feed" || notificationDetailNeedsEvidence') >= 0,
+    "시장 피드 또는 알림 상세가 연결된 뉴스 근거를 지연 로드하지 않습니다."
+  );
   assertOk(code.indexOf("원문/출처") >= 0 && code.indexOf("기사 분석") >= 0, "알림 상세의 하단 기사 원문 진입 구조가 없습니다.");
   assertOk(code.indexOf('"settings-investment-language"') >= 0, "운영 화면에 보편언어 관리 진입점이 없습니다.");
   assertOk(code.indexOf("투자 보편언어 관리") >= 0, "보편언어 관리 상세 화면이 없습니다.");
@@ -772,7 +793,7 @@ function checkWorkflowConsoleContract() {
     "정적 자산 cache key 버전 규칙이 반영되지 않았습니다."
   );
   assertOk(
-    code.indexOf('return "/api/investment-cases?"') >= 0 &&
+    code.indexOf('return "/api/decisions?"') >= 0 &&
       code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
       code.indexOf('["summary", "요약"]') >= 0 &&
       code.indexOf('["current", "판단 당시·현재"]') >= 0 &&
@@ -793,10 +814,10 @@ function checkWorkflowConsoleContract() {
       code.indexOf("실제로 확인된 조건") >= 0 &&
       code.indexOf("전체 추론 상세") >= 0 &&
       code.indexOf("renderDecisionInfoButton") >= 0 &&
-      code.indexOf('data-decision-detail-type="') >= 0 &&
-      code.indexOf("openWorkDetailLayer(decisionDetailType, state.activeDecisionCaseId)") >= 0 &&
+      code.indexOf("function renderDecisionConsoleRow") >= 0 &&
+      code.indexOf('data-decision-select="') < 0 &&
+      code.indexOf('class="oa-decision-master-detail"') < 0 &&
       styles.indexOf(".oa-case-detail-tabs") >= 0 &&
-      styles.indexOf(".oa-decision-master-detail") >= 0 &&
       styles.indexOf(".oa-decision-rationale") >= 0 &&
       styles.indexOf(".oa-flow-state-legend") >= 0 &&
       styles.indexOf(".oa-case-causal-paths") >= 0 &&
@@ -3037,6 +3058,10 @@ async function checkNormalMode(port, context) {
   assertOk(Array.isArray(investmentCasesPayload.items), "투자 케이스 API items가 배열이 아닙니다.");
   assertOk(investmentCasesPayload.summary && typeof investmentCasesPayload.summary === "object", "투자 케이스 API summary가 없습니다.");
   assertOk(investmentCasesPayload.operatorView && investmentCasesPayload.operatorView.loaded === false, "투자 케이스 사용자 목록이 운영 진단을 즉시 로드했습니다.");
+  const consoleDecisions = await request(port, "/api/decisions?limit=10");
+  assertOk(consoleDecisions.statusCode === 200, "판단 워크스페이스 API 응답 코드가 200이 아닙니다: " + consoleDecisions.statusCode);
+  const consoleDecisionsPayload = JSON.parse(consoleDecisions.body);
+  assertOk(consoleDecisionsPayload.version === "investment-case-v4" && Array.isArray(consoleDecisionsPayload.items), "판단 워크스페이스 API가 투자 케이스 계약을 유지하지 않습니다.");
   const operatorInvestmentCases = await request(port, "/api/investment-cases?limit=10&audience=operator");
   const operatorInvestmentCasesPayload = JSON.parse(operatorInvestmentCases.body);
   assertOk(operatorInvestmentCasesPayload.operatorView && operatorInvestmentCasesPayload.operatorView.loaded === true && Array.isArray(operatorInvestmentCasesPayload.operatorView.stages), "투자 케이스 운영 진단이 없습니다.");
@@ -3118,6 +3143,31 @@ async function checkNormalMode(port, context) {
   assertOk(tossPayload.portfolio.total > 2700000, "미국장 USD 평가액이 KRW 기준 총 평가액에 환산되지 않았습니다.");
   assertOk(!Array.isArray(tossPayload.news), "토스 전용 판단 API가 뉴스 배열을 내려주고 있습니다.");
   assertOk(!Array.isArray(tossPayload.social), "토스 전용 판단 API가 소셜 배열을 내려주고 있습니다.");
+
+  const dashboardSummary = await request(port, "/api/dashboard/summary?mock=1");
+  assertOk(dashboardSummary.statusCode === 200, "오늘 요약 API 응답 코드가 200이 아닙니다: " + dashboardSummary.statusCode);
+  const dashboardSummaryPayload = JSON.parse(dashboardSummary.body);
+  assertOk(dashboardSummaryPayload.version === "console-read-model-v1" && dashboardSummaryPayload.tasks.length <= 3 && dashboardSummaryPayload.blockerGroups.length <= 3, "오늘 요약이 행동·차단 원인을 제한된 읽기 모델로 반환하지 않습니다.");
+
+  const portfolioSummary = await request(port, "/api/portfolio/summary?accountId=default");
+  assertOk(portfolioSummary.statusCode === 200, "포트폴리오 요약 API 응답 코드가 200이 아닙니다: " + portfolioSummary.statusCode);
+  const portfolioSummaryPayload = JSON.parse(portfolioSummary.body);
+  assertOk(portfolioSummaryPayload.version === "console-read-model-v1" && portfolioSummaryPayload.view === "summary", "포트폴리오 요약이 독립 읽기 모델 계약을 반환하지 않습니다.");
+
+  const marketInstruments = await request(port, "/api/market/instruments?mock=1");
+  assertOk(marketInstruments.statusCode === 200, "시장 종목 API 응답 코드가 200이 아닙니다: " + marketInstruments.statusCode);
+  const marketInstrumentsPayload = JSON.parse(marketInstruments.body);
+  assertOk(marketInstrumentsPayload.version === "console-read-model-v1" && Array.isArray(marketInstrumentsPayload.items), "시장 종목 API가 정규화된 목록을 반환하지 않습니다.");
+
+  const marketEvidence = await request(port, "/api/market/evidence?limit=8");
+  assertOk(marketEvidence.statusCode === 200, "시장 근거 API 응답 코드가 200이 아닙니다: " + marketEvidence.statusCode);
+  const marketEvidencePayload = JSON.parse(marketEvidence.body);
+  assertOk(marketEvidencePayload.version === "console-read-model-v1" && marketEvidencePayload.items.length <= 8, "시장 근거 API가 필터 후 페이지 제한을 지키지 않습니다.");
+
+  const operationsHealth = await request(port, "/api/operations/health");
+  assertOk(operationsHealth.statusCode === 200, "운영 상태 API 응답 코드가 200이 아닙니다: " + operationsHealth.statusCode);
+  const operationsHealthPayload = JSON.parse(operationsHealth.body);
+  assertOk(operationsHealthPayload.version === "console-read-model-v1" && Array.isArray(operationsHealthPayload.components), "운영 상태 API가 구성요소 읽기 모델을 반환하지 않습니다.");
 
   const tossLensFull = await requestReadyFlowLens(port, "/api/flow-lens?mock=1&detail=full");
   assertOk(tossLensFull.statusCode === 200, "토스 판단 상세 API 응답 코드가 200이 아닙니다: " + tossLensFull.statusCode);

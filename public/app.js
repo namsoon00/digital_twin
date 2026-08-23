@@ -20,12 +20,14 @@
 
   var tabs = [
     { id: "overview", label: "오늘", description: "판단·일정·위험", groupId: "workspace" },
+    { id: "portfolio", label: "포트폴리오", description: "보유·위험·리밸런싱", groupId: "workspace" },
     { id: "calendar", label: "캘린더", description: "일정·리서치·알림", groupId: "workspace" },
     { id: "feed", label: "시장", description: "종목·뉴스·수급", groupId: "workspace" },
     { id: "modeling", label: "판단", description: "액션·근거", groupId: "workspace" },
     { id: "notifications", label: "알림", description: "변화·전달", groupId: "workspace" },
-    { id: "experiments", label: "근거 점검", description: "부족 자료·차단", groupId: "workspace" },
-    { id: "settings", label: "설정", description: "계정·환경·운영", groupId: "workspace" }
+    { id: "experiments", label: "근거 점검", description: "부족 자료·차단", groupId: "workspace", hidden: true },
+    { id: "settings", label: "설정", description: "계정·내 환경", groupId: "utility" },
+    { id: "operations", label: "운영", description: "데이터·추론·전달", groupId: "utility" }
   ];
   var appBrandName = "Orbit Alpha";
   var appBrandSubtitle = "포트폴리오 신호 궤도 관제";
@@ -36,10 +38,11 @@
     pageClass: "web-style-page",
     commandClass: "web-style-command-strip"
   };
-  var bottomTabIds = ["overview", "feed", "modeling", "notifications", "calendar", "settings"];
+  var bottomTabIds = ["overview", "portfolio", "feed", "modeling", "notifications"];
   var managementTabIds = [];
   var navigationGroups = [
-    { id: "workspace", label: "투자 콘솔", description: "오늘의 시장과 판단", tabIds: bottomTabIds }
+    { id: "workspace", label: "투자 콘솔", description: "계좌·시장·판단", tabIds: ["overview", "portfolio", "feed", "modeling", "notifications", "calendar"] },
+    { id: "utility", label: "관리", description: "설정·운영", tabIds: ["settings", "operations"] }
   ];
   var pageStructureCatalog = {
     overview: {
@@ -47,6 +50,12 @@
       entity: "오늘의 작업 큐",
       objective: "포트폴리오, 판단, 일정, 운영 이상 중 지금 처리할 일만 우선순위로 봅니다.",
       workflow: ["핵심 상태", "우선순위", "다음 행동"]
+    },
+    portfolio: {
+      layer: "계좌 포트폴리오",
+      entity: "보유·위험·리밸런싱",
+      objective: "현재 보유, 정책 이탈, 리밸런싱 대안과 원장 활동을 계좌 기준으로 봅니다.",
+      workflow: ["보유 확인", "위험 점검", "배분 검토"]
     },
     accounts: {
       layer: "계정 원장",
@@ -104,9 +113,15 @@
     },
     settings: {
       layer: "설정 관리",
-      entity: "계정·앱 환경·시스템 운영",
-      objective: "투자 계정, 개인 화면 환경, 시스템 운영 설정을 적용 범위에 맞게 분리해 관리합니다.",
-      workflow: ["범위 선택", "상태 확인", "설정 편집"]
+      entity: "계정·앱 환경",
+      objective: "투자 계정과 개인 화면·알림 수신 환경을 관리합니다.",
+      workflow: ["계정 선택", "환경 확인", "설정 편집"]
+    },
+    operations: {
+      layer: "운영 관제",
+      entity: "데이터·추론·전달 파이프라인",
+      objective: "외부 데이터, 워커, TypeDB 추론, AI 판단과 알림 전달 상태를 운영자가 점검합니다.",
+      workflow: ["상태 확인", "병목 진단", "관리 도구"]
     }
   };
   var notificationSections = [
@@ -125,8 +140,7 @@
   ];
   var settingsSections = [
     { id: "account", label: "계정", description: "투자 계정과 증권사 연결", scope: "계정별" },
-    { id: "preferences", label: "내 환경", description: "화면과 알림 수신", scope: "사용자 환경" },
-    { id: "operations", label: "운영 관리", description: "데이터와 실행 상태", scope: "시스템 전체" }
+    { id: "preferences", label: "내 환경", description: "화면과 알림 수신", scope: "사용자 환경" }
   ];
   var strategySections = [
     { id: "overview", label: "오늘의 판단", description: "액션 큐" },
@@ -422,6 +436,20 @@
     error: "",
     snapshot: cachedSnapshot,
     snapshotFromCache: Boolean(cachedSnapshot),
+    dashboardSummary: null,
+    dashboardSummaryLoading: false,
+    dashboardSummaryError: "",
+    marketReadModel: null,
+    marketReadModelLoading: false,
+    marketReadModelError: "",
+    portfolioReadModels: {},
+    portfolioReadModelLoading: false,
+    portfolioReadModelError: "",
+    activePortfolioView: initialPortfolioView(),
+    operationsHealth: null,
+    operationsHealthLoading: false,
+    operationsHealthError: "",
+    activeOperationsView: initialOperationsView(),
     researchEvidence: null,
     researchEvidenceLoading: false,
     researchEvidenceError: "",
@@ -512,7 +540,6 @@
     consoleDecisionQuality: "all",
     consoleDecisionStatus: "all",
     consoleDecisionView: "action",
-    activeDecisionCaseId: "",
     investmentFlow: null,
     investmentFlowLoading: false,
     investmentFlowLoaded: false,
@@ -1958,7 +1985,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260824-model-rule-conversion-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260824-console-ia-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -2033,7 +2060,31 @@
 
   function initialTab() {
     var params = new URLSearchParams(window.location.search);
+    if (String(params.get("tab") || "").toLowerCase() === "settings"
+        && ["operations", "operation", "runtime", "system", "data", "diagnostics"].indexOf(String(params.get("settings") || "").toLowerCase()) >= 0) {
+      return "operations";
+    }
     return normalizeTabId(params.get("tab"));
+  }
+
+  function normalizePortfolioView(value) {
+    var requested = String(value || "").toLowerCase();
+    return ["summary", "positions", "rebalance", "activity"].indexOf(requested) >= 0 ? requested : "summary";
+  }
+
+  function initialPortfolioView() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizePortfolioView(params.get("portfolioView") || params.get("portfolio"));
+  }
+
+  function normalizeOperationsView(value) {
+    var requested = String(value || "").toLowerCase();
+    return ["health", "data", "reasoning", "delivery", "governance"].indexOf(requested) >= 0 ? requested : "health";
+  }
+
+  function initialOperationsView() {
+    var params = new URLSearchParams(window.location.search);
+    return normalizeOperationsView(params.get("operationsView") || params.get("operations"));
   }
 
   function initialWorkDetailLayer() {
@@ -2240,6 +2291,9 @@
     var aliases = {
       more: "overview",
       today: "overview",
+      holdings: "portfolio",
+      portfolio: "portfolio",
+      rebalance: "portfolio",
       market: "feed",
       watchlist: "feed",
       symbols: "feed",
@@ -2251,8 +2305,8 @@
       validation: "experiments",
       lab: "experiments",
       experiment: "experiments",
-      system: "experiments",
-      operations: "settings",
+      system: "operations",
+      operations: "operations",
       accounts: "settings"
     };
     requested = aliases[requested] || requested;
@@ -2280,7 +2334,6 @@
     var requested = String(value || "").toLowerCase();
     if (["accounts", "identity", "connections", "brokerage"].indexOf(requested) >= 0) return "account";
     if (["personal", "environment", "display", "app"].indexOf(requested) >= 0) return "preferences";
-    if (["operation", "runtime", "system", "data", "diagnostics"].indexOf(requested) >= 0) return "operations";
     return settingsSections.some(function (section) { return section.id === requested; }) ? requested : "account";
   }
 
@@ -2448,6 +2501,8 @@
     if (normalized !== "feed") params.delete("feed");
     if (normalized !== "feed") params.delete("marketView");
     if (normalized !== "settings") params.delete("settings");
+    if (normalized !== "portfolio") params.delete("portfolioView");
+    if (normalized !== "operations") params.delete("operationsView");
     if (normalized !== "experiments") {
       params.delete("lab");
       params.delete("experimentId");
@@ -2466,6 +2521,23 @@
     var query = params.toString();
     var hash = window.location.hash || "";
     return path + (query ? "?" + query : "") + hash;
+  }
+
+  function consoleWorkspaceViewUrl(tab, key, value, defaultValue) {
+    var params = new URLSearchParams(window.location.search);
+    params.set("tab", tab);
+    if (value === defaultValue) params.delete(key);
+    else params.set(key, value);
+    params.delete("detail");
+    params.delete("detailKey");
+    var path = window.location.pathname || "/";
+    var query = params.toString();
+    return path + (query ? "?" + query : "") + (window.location.hash || "");
+  }
+
+  function writeConsoleWorkspaceViewHistory(tab, key, value, defaultValue) {
+    if (!window.history || !window.history.replaceState) return;
+    window.history.replaceState({ tab: tab, view: value }, "", consoleWorkspaceViewUrl(tab, key, value, defaultValue));
   }
 
   function accountSectionUrl(section) {
@@ -3294,10 +3366,10 @@
     if ((active === "overview" || active === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
     }
-    if (active === "calendar" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
-      loadInvestmentCalendarCandidates(false);
-    }
+    if (active === "overview" && !state.dashboardSummary && !state.dashboardSummaryLoading) loadDashboardSummary(false);
+    if (active === "portfolio") loadPortfolioReadModel(state.activePortfolioView, false);
     if (active === "feed") {
+      if (!state.marketReadModel && !state.marketReadModelLoading) loadMarketReadModel(false);
       if (!state.researchEvidence && !state.researchEvidenceLoading) loadResearchEvidence(false);
       if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
       if (normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) {
@@ -3305,17 +3377,13 @@
       }
     }
     if (active === "notifications") {
-      if (!state.researchEvidence && !state.researchEvidenceLoading) loadResearchEvidence(false);
       if (!state.notificationJobsLoaded && !state.notificationJobsLoading) loadNotificationJobs();
-      if (!state.notificationTemplatesLoaded && !state.notificationTemplatesLoading) loadNotificationTemplates();
-      if (!state.notificationRulesLoaded && !state.notificationRulesLoading) loadNotificationRules();
     }
     if (active === "settings") {
       if (!state.serverSettingsLoaded && !state.serverSettingsLoading) loadServerSettings();
       if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
-      if (!state.ontologyReasoningStatusLoaded && !state.ontologyReasoningStatusLoading) loadOntologyReasoningStatus(false);
-      if (!state.portfolioLifecycle && !state.portfolioLifecycleLoading) loadPortfolioLifecycle(false);
     }
+    if (active === "operations" && !state.operationsHealth && !state.operationsHealthLoading) loadOperationsHealth(false);
     if (active === "modeling" || active === "experiments") {
       if ((!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) loadInvestmentFlow(false);
       if (shouldLoadStrategyProposals() && strategyProposalsNeedLoad() && !state.strategyProposalsLoading) loadStrategyProposals(false);
@@ -3355,6 +3423,8 @@
     var nextMarketWorkspaceMode = initialMarketWorkspaceMode();
     var nextExperimentSection = initialExperimentSection();
     var nextOntologyExperimentId = initialOntologyExperimentId();
+    var nextPortfolioView = initialPortfolioView();
+    var nextOperationsView = initialOperationsView();
     var nextPageMode = initialPageModeForTab(nextTab);
     var nextWorkDetailLayer = initialWorkDetailLayer();
     var currentDetailType = String((state.workDetailLayer || {}).type || "");
@@ -3371,6 +3441,8 @@
     var marketWorkspaceChanged = nextMarketWorkspaceMode !== state.marketWorkspaceMode;
     var experimentSectionChanged = nextExperimentSection !== state.activeExperimentSection;
     var ontologyExperimentChanged = nextOntologyExperimentId !== state.activeOntologyExperimentId;
+    var portfolioViewChanged = nextPortfolioView !== state.activePortfolioView;
+    var operationsViewChanged = nextOperationsView !== state.activeOperationsView;
     var pageModeChanged = activePageMode(nextTab) !== nextPageMode;
     if (!state.pageViewModes) state.pageViewModes = {};
     state.pageViewModes[nextTab] = nextPageMode;
@@ -3383,6 +3455,8 @@
     state.marketWorkspaceMode = nextMarketWorkspaceMode;
     state.activeExperimentSection = nextExperimentSection;
     state.activeOntologyExperimentId = nextOntologyExperimentId;
+    state.activePortfolioView = nextPortfolioView;
+    state.activeOperationsView = nextOperationsView;
     state.workDetailLayer = nextWorkDetailLayer;
     if (detailChanged && nextDetailType === "notification-job" && nextDetailKey) {
       loadNotificationJobDetail(nextDetailKey);
@@ -3399,6 +3473,8 @@
         || (feedSectionChanged && nextTab === "feed")
         || (marketWorkspaceChanged && nextTab === "feed")
         || ((experimentSectionChanged || ontologyExperimentChanged) && nextTab === "experiments")
+        || (portfolioViewChanged && nextTab === "portfolio")
+        || (operationsViewChanged && nextTab === "operations")
         || pageModeChanged;
       if (shouldRender) render({ transition: detailChanged ? (nextWorkDetailLayer ? "detail-open" : "detail-close") : "section" });
       if (detailChanged && !nextWorkDetailLayer) restoreWorkDetailFocus();
@@ -6668,12 +6744,160 @@
       });
   }
 
+  function consoleReadModelAccountId() {
+    return activeOntologyAccountId() || "default";
+  }
+
+  function loadDashboardSummary(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.dashboardSummaryLoading) return activeJsonRequests["dashboard-summary"] || Promise.resolve(state.dashboardSummary);
+    if (state.dashboardSummary && !force) return Promise.resolve(state.dashboardSummary);
+    state.dashboardSummaryLoading = true;
+    state.dashboardSummaryError = "";
+    var params = new URLSearchParams();
+    params.set("accountId", consoleReadModelAccountId());
+    return requestJson("/api/dashboard/summary?" + params.toString(), {
+      key: "dashboard-summary",
+      force: Boolean(force),
+      timeoutMs: 15000
+    }).then(function (payload) {
+      state.dashboardSummary = payload || {};
+      return state.dashboardSummary;
+    }).catch(function (error) {
+      state.dashboardSummaryError = error.message || "오늘 요약을 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.dashboardSummaryLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadMarketReadModel(force) {
+    if (isStaticPreviewHost()) return Promise.resolve(null);
+    if (state.marketReadModelLoading) return activeJsonRequests["market-instruments"] || Promise.resolve(state.marketReadModel);
+    if (state.marketReadModel && !force) return Promise.resolve(state.marketReadModel);
+    state.marketReadModelLoading = true;
+    state.marketReadModelError = "";
+    var params = new URLSearchParams();
+    var symbols = allAccountWatchlistSymbols();
+    if (!symbols.length) symbols = watchlistSymbols();
+    if (symbols.length) params.set("watchlistSymbols", symbols.join(","));
+    return requestJson("/api/market/instruments" + (params.toString() ? "?" + params.toString() : ""), {
+      key: "market-instruments",
+      force: Boolean(force),
+      timeoutMs: 12000
+    }).then(function (payload) {
+      state.marketReadModel = payload || {};
+      return state.marketReadModel;
+    }).catch(function (error) {
+      state.marketReadModelError = error.message || "시장 종목 요약을 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.marketReadModelLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadPortfolioReadModel(view, force) {
+    var normalized = normalizePortfolioView(view || state.activePortfolioView);
+    if (isStaticPreviewHost()) {
+      var previewPortfolio = selectConsolePortfolio(state.snapshot || {});
+      var previewPositions = instrumentItems(state.snapshot || {}).filter(function (item) {
+        return String(item.source || "") !== "watchlist";
+      }).map(function (item) {
+        return Object.assign({}, item, {
+          name: stockDisplayName(item.symbol, item),
+          marketValueKrw: numeric(item.marketValueKrw || item.marketValue)
+        });
+      });
+      state.portfolioReadModels[normalized] = {
+        version: "console-read-model-v1",
+        view: normalized,
+        summary: {
+          total: previewPortfolio.total,
+          cash: previewPortfolio.cash,
+          positionCount: previewPositions.length,
+          status: "preview",
+          reconciliationStatus: "preview",
+          rebalanceStatus: "not-available"
+        },
+        positions: previewPositions,
+        policyBreaches: [],
+        risk: {},
+        proposal: {},
+        candidates: [],
+        ledgerEntries: [],
+        activityEpisodes: []
+      };
+      return Promise.resolve(state.portfolioReadModels[normalized]);
+    }
+    if (state.portfolioReadModelLoading) return activeJsonRequests["portfolio-read-model:" + normalized] || Promise.resolve(state.portfolioReadModels[normalized]);
+    if (state.portfolioReadModels[normalized] && !force) return Promise.resolve(state.portfolioReadModels[normalized]);
+    state.portfolioReadModelLoading = true;
+    state.portfolioReadModelError = "";
+    var paths = {
+      summary: "/api/portfolio/summary",
+      positions: "/api/portfolio/positions",
+      rebalance: "/api/portfolio/rebalance",
+      activity: "/api/portfolio/activity"
+    };
+    var params = new URLSearchParams();
+    params.set("accountId", consoleReadModelAccountId());
+    return requestJson(paths[normalized] + "?" + params.toString(), {
+      key: "portfolio-read-model:" + normalized,
+      force: Boolean(force),
+      timeoutMs: 15000
+    }).then(function (payload) {
+      state.portfolioReadModels[normalized] = payload || {};
+      return state.portfolioReadModels[normalized];
+    }).catch(function (error) {
+      state.portfolioReadModelError = error.message || "포트폴리오 원장을 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.portfolioReadModelLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
+  function loadOperationsHealth(force) {
+    if (isStaticPreviewHost()) {
+      state.operationsHealth = {
+        version: "console-read-model-v1",
+        state: "unknown",
+        generatedAt: (state.snapshot || {}).generatedAt || "",
+        summary: { unknown: 1 },
+        components: [{ id: "preview", label: "정적 미리보기", state: "unknown", detail: "운영 상태는 로컬 앱에서 확인합니다." }],
+        providers: [],
+        queues: {}
+      };
+      return Promise.resolve(state.operationsHealth);
+    }
+    if (state.operationsHealthLoading) return activeJsonRequests["operations-health"] || Promise.resolve(state.operationsHealth);
+    if (state.operationsHealth && !force) return Promise.resolve(state.operationsHealth);
+    state.operationsHealthLoading = true;
+    state.operationsHealthError = "";
+    return requestJson("/api/operations/health", {
+      key: "operations-health",
+      force: Boolean(force),
+      timeoutMs: 15000
+    }).then(function (payload) {
+      state.operationsHealth = payload || {};
+      return state.operationsHealth;
+    }).catch(function (error) {
+      state.operationsHealthError = error.message || "운영 상태를 읽지 못했습니다.";
+      return null;
+    }).finally(function () {
+      state.operationsHealthLoading = false;
+      if (state.snapshot) render();
+    });
+  }
+
   function investmentFlowPath() {
     var params = new URLSearchParams();
     var accountId = activeOntologyAccountId();
     if (accountId) params.set("accountId", accountId);
     params.set("limit", "200");
-    return "/api/investment-cases?" + params.toString();
+    return "/api/decisions?" + params.toString();
   }
 
   function loadInvestmentFlow(force) {
@@ -6765,7 +6989,7 @@
     if (state.investmentFlowDetailLoading[key] && !force) return Promise.resolve(null);
     state.investmentFlowDetailLoading[key] = true;
     state.investmentFlowDetailErrors[key] = "";
-    var request = requestJson("/api/investment-cases/" + encodeURIComponent(key), {
+    var request = requestJson("/api/decisions/" + encodeURIComponent(key), {
       key: "investment-case-detail:" + key,
       force: Boolean(force),
       timeoutMs: 15000
@@ -6782,7 +7006,7 @@
           ? String((String(current.caseId || "") === key ? current.episodeId : current.caseId) || "")
           : "";
         if (!alternateKey || alternateKey === key) throw originalError;
-        return requestJson("/api/investment-cases/" + encodeURIComponent(alternateKey), {
+        return requestJson("/api/decisions/" + encodeURIComponent(alternateKey), {
           key: "investment-case-detail-fallback:" + key,
           force: true,
           timeoutMs: 15000
@@ -9174,7 +9398,7 @@
 
     var promise = isStaticPreviewHost()
       ? Promise.resolve(staticResearchEvidencePayload("정적 미리보기"))
-      : requestJson("/api/research-evidence" + researchEvidenceQueryString());
+      : requestJson("/api/market/evidence" + researchEvidenceQueryString());
 
     return promise
       .then(function (payload) {
@@ -11302,6 +11526,12 @@
         state.ontologyStrategyDetailError = "";
         state.error = "";
         writeCachedSnapshot(snapshot);
+        if (options.refresh) {
+          state.dashboardSummary = null;
+          state.marketReadModel = null;
+          state.portfolioReadModels = {};
+          state.operationsHealth = null;
+        }
         primeActiveTabData(state.activeTab);
       })
       .catch(function (error) {
@@ -11714,8 +11944,20 @@
       ensureInstrumentEventGroupTimeline(state.workDetailLayer.key);
     }
     var notificationDetailNeedsEvidence = state.workDetailLayer && state.workDetailLayer.type === "notification-job";
-    if ((state.activeTab === "feed" || state.activeTab === "notifications" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
+    if ((state.activeTab === "feed" || notificationDetailNeedsEvidence) && !state.researchEvidence && !state.researchEvidenceLoading) {
       loadResearchEvidence(false);
+    }
+    if (state.activeTab === "overview" && !state.dashboardSummary && !state.dashboardSummaryLoading) {
+      loadDashboardSummary(false);
+    }
+    if (state.activeTab === "portfolio" && !state.portfolioReadModels[state.activePortfolioView] && !state.portfolioReadModelLoading) {
+      loadPortfolioReadModel(state.activePortfolioView, false);
+    }
+    if (state.activeTab === "feed" && !state.marketReadModel && !state.marketReadModelLoading) {
+      loadMarketReadModel(false);
+    }
+    if (state.activeTab === "operations" && !state.operationsHealth && !state.operationsHealthLoading) {
+      loadOperationsHealth(false);
     }
     if (state.activeTab === "feed" && !state.serviceAccountsLoaded && !state.serviceAccountsLoading) {
       loadServiceAccounts();
@@ -11729,17 +11971,8 @@
     if ((state.activeTab === "overview" || state.activeTab === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
       loadInvestmentCalendar(false);
     }
-    if (state.activeTab === "calendar" && !state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) {
-      loadInvestmentCalendarCandidates(false);
-    }
     if (state.activeTab === "notifications" && !state.notificationJobsLoaded && !state.notificationJobsLoading) {
       loadNotificationJobs();
-    }
-    if (state.activeTab === "notifications" && !state.notificationTemplatesLoaded && !state.notificationTemplatesLoading) {
-      loadNotificationTemplates();
-    }
-    if (state.activeTab === "notifications" && !state.notificationRulesLoaded && !state.notificationRulesLoading) {
-      loadNotificationRules();
     }
     if (state.activeTab === "settings" && !state.serverSettingsLoaded && !state.serverSettingsLoading) {
       loadServerSettings();
@@ -11747,16 +11980,10 @@
     if (state.activeTab === "settings" && !state.serviceAccountsLoaded && !state.serviceAccountsLoading) {
       loadServiceAccounts();
     }
-    if (state.activeTab === "settings" && !state.ontologyReasoningStatusLoaded && !state.ontologyReasoningStatusLoading) {
-      loadOntologyReasoningStatus(false);
-    }
-    if (state.activeTab === "settings" && !state.portfolioLifecycle && !state.portfolioLifecycleLoading) {
-      loadPortfolioLifecycle(false);
-    }
     if (shouldLoadStrategyProposals() && strategyProposalsNeedLoad() && !state.strategyProposalsLoading) {
       loadStrategyProposals(false);
     }
-    if ((state.activeTab === "overview" || state.activeTab === "modeling" || state.activeTab === "experiments") && (!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) {
+    if ((state.activeTab === "modeling" || state.activeTab === "experiments") && (!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) {
       loadInvestmentFlow(false);
     }
     if (state.activeTab === "modeling" && !state.investmentLanguageLoaded && !state.investmentLanguageLoading) {
@@ -11792,6 +12019,18 @@
     }
     if (state.workDetailLayer && state.workDetailLayer.type === "settings-investment-language") {
       if (!state.investmentLanguageLoaded && !state.investmentLanguageLoading) loadInvestmentLanguage(false);
+    }
+    if (state.workDetailLayer && state.workDetailLayer.type === "calendar-candidate-board") {
+      if (!state.investmentCalendarCandidates && !state.investmentCalendarCandidatesLoading) loadInvestmentCalendarCandidates(false);
+    }
+    if (state.workDetailLayer && ["notification-policy-board", "notification-diagnostics-board"].indexOf(state.workDetailLayer.type) >= 0) {
+      if (!state.notificationRulesLoaded && !state.notificationRulesLoading) loadNotificationRules();
+    }
+    if (state.workDetailLayer && state.workDetailLayer.type === "notification-templates-board") {
+      if (!state.notificationTemplatesLoaded && !state.notificationTemplatesLoading) loadNotificationTemplates();
+    }
+    if (state.workDetailLayer && ["settings-data-sources", "settings-runtime", "settings-ai-runtime", "settings-operations-notifications", "settings-diagnostics"].indexOf(state.workDetailLayer.type) >= 0) {
+      if (!state.serverSettingsLoaded && !state.serverSettingsLoading) loadServerSettings();
     }
     if (state.workDetailLayer && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0 && state.workDetailLayer.key) {
       if (!state.investmentFlowDetails[state.workDetailLayer.key] && !state.investmentFlowDetailLoading[state.workDetailLayer.key]) {
@@ -12164,6 +12403,7 @@
   function workDetailPayload(type, key) {
     if (type === "screen-info") return screenInfoWorkDetailPayload(key);
     if (type === "today-work-queue") return todayQueueWorkDetailPayload();
+    if (type === "calendar-candidate-board") return calendarCandidateBoardWorkDetailPayload();
     if (type === "decision-action-queue") return decisionQueueWorkDetailPayload();
     if (type === "market-instrument") return marketInstrumentWorkDetailPayload(key);
     if (type === "instrument-event-group") return instrumentEventGroupWorkDetailPayload(key);
@@ -13624,12 +13864,14 @@
 
   function renderTabs() {
     var bottomTabs = bottomTabIds.map(tabById).filter(Boolean);
+    var moreActive = bottomTabIds.indexOf(state.activeTab) < 0;
     return [
-      '<nav class="tab-bar" aria-label="주요 탭" style="--tab-count:' + bottomTabs.length + '">',
+      '<nav class="tab-bar" aria-label="주요 탭" style="--tab-count:' + (bottomTabs.length + 1) + '">',
       bottomTabs.map(function (tab) {
         var active = state.activeTab === tab.id || (tab.id === "modeling" && state.activeTab === "experiments");
         return '<button type="button" class="' + (active ? "active" : "") + '" data-tab="' + escapeHtml(tab.id) + '"' + (active ? ' aria-current="page"' : "") + '><span class="tab-icon" data-tab-icon="' + escapeHtml(tab.id) + '" aria-hidden="true"></span><span class="tab-label">' + escapeHtml(tab.label) + '</span><span class="tab-description">' + escapeHtml(tab.description || "") + '</span></button>';
       }).join(""),
+      '<button type="button" class="' + (moreActive ? "active" : "") + '" data-action="command-palette"' + (moreActive ? ' aria-current="page"' : '') + '><span class="tab-icon" data-tab-icon="more" aria-hidden="true"></span><span class="tab-label">더보기</span><span class="tab-description">일정·설정·운영</span></button>',
       '</nav>'
     ].join("");
   }
@@ -13930,7 +14172,9 @@
     var evidenceMap = consoleEvidenceBySymbol();
     var decisionMap = consoleDecisionBySymbol(snapshot);
     var accountId = String(((snapshot || {}).toss || {}).accountId || ((snapshot || {}).accountId || "default"));
-    return instrumentItems(snapshot || {}).map(function (item) {
+    var readModelItems = Array.isArray((state.marketReadModel || {}).items) ? state.marketReadModel.items : [];
+    var sourceItems = readModelItems.length ? readModelItems : instrumentItems(snapshot || {});
+    return sourceItems.map(function (item) {
       var symbol = String(item.symbol || "").toUpperCase();
       var evidence = evidenceMap[symbol] || [];
       var decision = decisionMap[symbol] || null;
@@ -13984,7 +14228,7 @@
         impact: impact,
         decision: decision,
         quality: quality,
-        apiSource: item.apiSource || item.provider || item.sourceApi || ((((snapshot || {}).toss || {}).mode === "live") ? "Toss Open API" : "로컬 저장 시세"),
+        apiSource: item.quoteSource || item.apiSource || item.provider || item.sourceApi || ((((snapshot || {}).toss || {}).mode === "live") ? "Toss Open API" : "로컬 저장 시세"),
         isMock: Boolean(item.isMock || item.mock || item.dataMode === "mock" || (snapshot || {}).preview),
         updatedAt: item.updatedAt || ((snapshot || {}).generatedAt || ""),
         raw: item
@@ -14015,8 +14259,10 @@
     if (cases.length) {
       return cases.map(function (item) {
         var decision = item.decision || {};
+        var itemSymbol = String(item.symbol || "").toUpperCase();
+        var itemName = String(item.name || "").trim();
         var matched = rows.filter(function (row) {
-          return String(row.symbol || "").toUpperCase() === String(item.symbol || "").toUpperCase();
+          return String(row.symbol || "").toUpperCase() === itemSymbol;
         })[0] || {};
         var action = decisionActionMeta(decision.state === "blocked" ? "BLOCKED" : decision.action, decision.action);
         var dataState = String(decision.dataState || (item.facts || {}).dataState || "partial");
@@ -14029,8 +14275,8 @@
           decisionEpisodeId: String(item.episodeId || ""),
           accountId: String(item.accountId || matched.accountId || "default"),
           accountLabel: String(matched.accountLabel || "기본 계정"),
-          symbol: String(item.symbol || "").toUpperCase(),
-          name: String(item.name || stockDisplayName(item.symbol, matched)),
+          symbol: itemSymbol,
+          name: itemName && itemName.toUpperCase() !== itemSymbol ? itemName : stockDisplayName(itemSymbol, matched),
           decision: action.label,
           actionCode: action.code,
           actionLabel: action.label,
@@ -14214,21 +14460,41 @@
   function selectConsoleTodayTasks(snapshot, options) {
     options = options || {};
     var tasks = [];
-    selectConsoleDecisionRows(snapshot).forEach(function (row) {
-      tasks.push({
-        key: "decision:" + row.key,
-        priority: row.tone === "danger" ? 1 : (row.tone === "caution" ? 2 : 3),
-        kind: "판단",
-        target: row.name || row.symbol,
-        reason: row.reason,
-        state: row.decision,
-        tone: row.tone,
-        action: "판단 상세",
-        detailType: "investment-action",
-        detailKey: row.key,
-        updatedAt: row.updatedAt
+    var dashboardTasks = Array.isArray((state.dashboardSummary || {}).tasks) ? state.dashboardSummary.tasks : [];
+    if (dashboardTasks.length || (state.dashboardSummary || {}).version) {
+      dashboardTasks.forEach(function (row) {
+        var action = decisionActionMeta(row.action, row.action);
+        tasks.push({
+          key: "decision:" + (row.id || row.symbol),
+          priority: ["SELL", "TRIM", "AVOID"].indexOf(String(row.action || "").toUpperCase()) >= 0 ? 1 : 2,
+          kind: "판단",
+          target: row.name || row.symbol,
+          reason: formatConsoleNarrative(row.headline || row.nextAction || "행동 조건을 확인하세요."),
+          state: action.label,
+          tone: action.tone,
+          action: "판단 상세",
+          detailType: "investment-case",
+          detailKey: row.id || "",
+          updatedAt: row.updatedAt
+        });
       });
-    });
+    } else {
+      selectConsoleDecisionRows(snapshot).forEach(function (row) {
+        tasks.push({
+          key: "decision:" + row.key,
+          priority: row.tone === "danger" ? 1 : (row.tone === "caution" ? 2 : 3),
+          kind: "판단",
+          target: row.name || row.symbol,
+          reason: row.reason,
+          state: row.decision,
+          tone: row.tone,
+          action: "판단 상세",
+          detailType: "investment-action",
+          detailKey: row.key,
+          updatedAt: row.updatedAt
+        });
+      });
+    }
     (state.notificationJobItems || []).filter(function (job) {
       return job.status === "failed" || job.status === "pending" || job.recoverableProcessing;
     }).forEach(function (job, index) {
@@ -14247,32 +14513,34 @@
         updatedAt: recordChangedAt(job)
       });
     });
-    var calendarEvents = investmentCalendarUpcomingEvents();
-    if (options.collapseCalendar) {
-      var seenCalendarTypes = {};
-      calendarEvents = calendarEvents.filter(function (event) {
-        var key = String(event.type || event.title || "event").trim().toLowerCase();
-        if (seenCalendarTypes[key]) return false;
-        seenCalendarTypes[key] = true;
-        return true;
+    if (!(state.dashboardSummary || {}).version) {
+      var calendarEvents = investmentCalendarUpcomingEvents();
+      if (options.collapseCalendar) {
+        var seenCalendarTypes = {};
+        calendarEvents = calendarEvents.filter(function (event) {
+          var key = String(event.type || event.title || "event").trim().toLowerCase();
+          if (seenCalendarTypes[key]) return false;
+          seenCalendarTypes[key] = true;
+          return true;
+        });
+      }
+      calendarEvents.forEach(function (event, index) {
+        var eventKey = event.eventId || event.id || event.title || String(index);
+        tasks.push({
+          key: "calendar:" + eventKey,
+          priority: Number(event.importance || 0) >= 80 ? 2 : 4,
+          kind: "일정",
+          target: investmentCalendarDisplayTitle(event, "투자 이벤트"),
+          reason: formatConsoleNarrative(investmentCalendarImpactText(event)),
+          state: formatClock(event.startsAt),
+          tone: Number(event.importance || 0) >= 80 ? "caution" : "hold",
+          action: "일정 상세",
+          detailType: "investment-calendar-event",
+          detailKey: eventKey,
+          updatedAt: recordChangedAt(event)
+        });
       });
     }
-    calendarEvents.forEach(function (event, index) {
-      var eventKey = event.eventId || event.id || event.title || String(index);
-      tasks.push({
-        key: "calendar:" + eventKey,
-        priority: Number(event.importance || 0) >= 80 ? 2 : 4,
-        kind: "일정",
-        target: investmentCalendarDisplayTitle(event, "투자 이벤트"),
-        reason: formatConsoleNarrative(investmentCalendarImpactText(event)),
-        state: formatClock(event.startsAt),
-        tone: Number(event.importance || 0) >= 80 ? "caution" : "hold",
-        action: "일정 상세",
-        detailType: "investment-calendar-event",
-        detailKey: eventKey,
-        updatedAt: recordChangedAt(event)
-      });
-    });
     var toss = (snapshot || {}).toss || {};
     if (toss.mode !== "live") {
       tasks.push({
@@ -14324,34 +14592,35 @@
 
   function renderTodayConsole(snapshot) {
     var portfolio = selectConsolePortfolio(snapshot);
+    var dashboard = state.dashboardSummary || {};
+    var dashboardPortfolio = dashboard.portfolio || {};
     var tasks = selectConsoleTodayTasks(snapshot, { collapseCalendar: true });
     var urgent = tasks.filter(function (task) { return task.priority <= 2; }).length;
-    var upcoming = investmentCalendarUpcomingEvents();
-    var riskHoldings = latestChangedFirst(portfolio.holdings, function (item) {
-      return recordChangedAt(item, snapshot.generatedAt);
-    }).slice(0, 5);
+    var upcoming = Array.isArray(dashboard.upcomingEvents) && dashboard.upcomingEvents.length ? dashboard.upcomingEvents : investmentCalendarUpcomingEvents();
+    var blockers = Array.isArray(dashboard.blockerGroups) ? dashboard.blockerGroups : [];
+    var totalValue = hasNumericValue(dashboardPortfolio.total) ? numeric(dashboardPortfolio.total) : portfolio.total;
+    var positionCount = hasNumericValue(dashboardPortfolio.positionCount) ? numeric(dashboardPortfolio.positionCount) : portfolio.holdingCount;
     var metrics = [
-      { label: "총 평가", value: formatMoney(portfolio.total), detail: portfolio.holdingCount + "개 보유", target: { type: "market", value: "mine", scope: "holding" } },
-      { label: "평가 손익", value: portfolio.pnlAvailable ? formatMoney(portfolio.pnl) : "-", detail: portfolio.pnlAvailable ? "현재 보유 기준" : "손익 미수집", tone: portfolio.pnl < 0 ? "danger" : "watch", target: { type: "market", value: "mine", scope: "holding" } },
+      { label: "총 평가", value: formatMoney(totalValue), detail: positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
+      { label: "현금", value: hasNumericValue(dashboardPortfolio.cash) ? formatMoney(dashboardPortfolio.cash) : formatMoney(portfolio.cash), detail: "포트폴리오 원장", target: { type: "tab", value: "portfolio" } },
       { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch", target: { type: "detail", value: "today-work-queue" } },
       { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음", target: upcoming[0] ? { type: "detail", value: "investment-calendar-event", key: upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "" } : { type: "tab", value: "calendar" } },
       { label: "데이터", value: portfolio.freshness.label, detail: portfolio.freshness.detail, tone: portfolio.freshness.tone, target: { type: "detail", value: "feed-source-board" } }
     ];
-    var taskBody = tasks.length ? '<div class="oa-work-list" data-console-keyed-list="today-primary">' + tasks.slice(0, 8).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("오늘 처리할 작업이 없습니다", "새 판단, 알림 실패, 예정 일정이 생기면 우선순위에 따라 표시합니다.");
+    var taskBody = tasks.length ? '<div class="oa-work-list" data-console-keyed-list="today-primary">' + tasks.slice(0, 3).map(renderConsoleTaskRow).join("") + '</div>' : renderConsoleEmpty("오늘 처리할 작업이 없습니다", "새 판단이나 전달 실패가 생기면 우선순위에 따라 표시합니다.");
     var contextBody = [
-      '<div class="oa-context-list" data-console-keyed-list="today-context">',
-      riskHoldings.length ? riskHoldings.map(function (item) {
-        var hasPnl = hasNumericValue(item.profitLossRate);
-        var tone = hasPnl && numeric(item.profitLossRate) < 0 ? "danger" : "hold";
-        return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(String(item.symbol || "")) + '" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(item.symbol || "") + '"><span><strong>' + escapeHtml(stockDisplayName(item.symbol, item)) + '</strong><em>' + escapeHtml(item.symbol || "") + '</em>' + renderRecordChangedAt(item, snapshot.generatedAt) + '</span><b class="' + escapeHtml(tone) + '">' + escapeHtml(optionalSignedPct(item.profitLossRate, hasPnl)) + '</b></button>';
-      }).join("") : '<div class="oa-context-row"><span><strong>보유 데이터 없음</strong><em>시장 화면에서 종목을 확인하세요.</em></span></div>',
+      '<div class="oa-context-list" data-console-keyed-list="today-blockers">',
+      blockers.length ? blockers.slice(0, 3).map(function (item) {
+        var blockerTone = ["error", "blocked"].indexOf(String(item.state || "")) >= 0 ? "danger" : "caution";
+        return '<button type="button" class="oa-context-row" data-console-row-key="' + escapeHtml(item.id || item.label) + '" data-tab="experiments"><span><strong>' + escapeHtml(item.label || "근거 점검") + '</strong><em>' + escapeHtml(formatConsoleNarrative(item.reason || item.effect || "판단 조건을 더 확인해야 합니다.")) + '</em></span><b class="' + blockerTone + '">' + escapeHtml((item.count || 0) + "건") + '</b></button>';
+      }).join("") : '<div class="oa-context-row"><span><strong>묶인 차단 원인 없음</strong><em>현재 판단 기록에서 공통 차단 원인이 발견되지 않았습니다.</em></span></div>',
       '</div>',
       upcoming[0] ? '<button type="button" class="oa-next-event" data-work-detail="investment-calendar-event" data-work-detail-key="' + escapeHtml(upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "") + '"><span>다음 일정</span><strong>' + escapeHtml(upcoming[0].title || "투자 이벤트") + '</strong><em>' + escapeHtml(formatClock(upcoming[0].startsAt)) + '</em><b aria-hidden="true">&rarr;</b></button>' : '',
     ].join("");
     return renderConsoleManagedPage("overview", metrics, [
       '<div class="oa-console-grid oa-console-grid-primary">',
-      renderConsoleSurface({ kicker: "PRIORITY QUEUE", title: "지금 처리할 일", description: "판단·알림·일정·데이터 이상을 한 큐로 정렬합니다.", meta: Math.min(tasks.length, 8) + " / " + tasks.length + "건", actions: tasks.length > 8 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
-      renderConsoleSurface({ kicker: "PORTFOLIO CONTEXT", title: "현재 노출", description: "상세 분석이 아니라 손익 위험과 다음 일정만 참조합니다.", body: renderConsoleLiveRegion("today-context-body", contextBody) }),
+      renderConsoleSurface({ kicker: "PRIORITY QUEUE", title: "지금 처리할 일", description: "실행 또는 재확인이 필요한 판단과 전달 실패만 최대 3개 표시합니다.", meta: Math.min(tasks.length, 3) + " / " + tasks.length + "건", actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
+      renderConsoleSurface({ kicker: "BLOCKER GROUPS", title: "공통 확인 원인", description: "같은 원인으로 막힌 종목을 데이터·추론·AI 단계별로 묶습니다.", body: renderConsoleLiveRegion("today-context-body", contextBody) }),
       '</div>'
     ].join(""));
   }
@@ -14486,12 +14755,10 @@
     ].join(""));
   }
 
-  function renderDecisionConsoleRow(row, selectable) {
-    selectable = selectable === true;
+  function renderDecisionConsoleRow(row) {
     var detailType = row.caseId || row.decisionEpisodeId ? "investment-case" : "investment-action";
     var detailKey = row.caseId || row.decisionEpisodeId || row.key;
     var readinessTone = row.attentionState === "action" ? "watch" : investmentFlowStateTone(row.readinessState || (row.blocked ? "blocked" : "warning"));
-    var selected = selectable && String(state.activeDecisionCaseId || "") === String(detailKey || "");
     var primary = (row.explanation || {}).primaryCause || {};
     var attention = row.attention && typeof row.attention === "object" ? row.attention : {};
     var primaryIssue = attention.primaryIssue && typeof attention.primaryIssue === "object"
@@ -14503,11 +14770,11 @@
       ? (primaryIssue.reason || primary.summary || row.reason || "현재 의견을 사용할 수 없는 이유를 확인하세요.")
       : (primary.summary || row.reason || "판단 근거를 확인하세요.");
     return [
-      '<button class="oa-case-row' + (selected ? " selected" : "") + '" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '"' + (selectable ? ' data-decision-select="' + escapeHtml(detailKey) + '" data-decision-detail-type="' + escapeHtml(detailType) + '" aria-current="' + (selected ? "true" : "false") + '"' : ' data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '"') + '>',
+      '<button class="oa-case-row" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '" data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '">',
       '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.attentionLabel || row.readinessLabel || "확인 필요") + '</em></span></header>',
       '<div class="oa-case-reason"><span>' + escapeHtml(causeLabel) + '</span><strong>' + escapeHtml(causeText) + '</strong></div>',
       '<div class="oa-case-next"><span>' + escapeHtml(row.phaseLabel || "투자 케이스") + '</span><p>' + escapeHtml(row.nextAction || row.invalidation || "무효화 조건과 다음 확인을 살펴보세요.") + '</p></div>',
-      '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">' + escapeHtml(selectable ? "상세 보기 →" : "케이스 보기 →") + '</b></footer>',
+      '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">케이스 보기 →</b></footer>',
       '</button>'
     ].join("");
   }
@@ -14593,38 +14860,6 @@
       '<div class="oa-decision-rationale-body"><strong>' + escapeHtml(title) + '</strong><p>' + escapeHtml(summary) + '</p></div>',
       facts.length ? '<dl>' + facts.map(function (item) { return '<div><dt>' + escapeHtml(item.label) + '</dt><dd>' + escapeHtml(item.value) + '</dd></div>'; }).join("") + '</dl>' : '',
       '<footer><span>판단에 미친 영향</span><strong>' + escapeHtml(effect) + '</strong></footer>',
-      '</section>'
-    ].join("");
-  }
-
-  function selectedDecisionRow(rows) {
-    rows = Array.isArray(rows) ? rows : [];
-    var selected = rows.filter(function (row) {
-      return String(row.caseId || row.decisionEpisodeId || row.key) === String(state.activeDecisionCaseId || "");
-    })[0];
-    return selected || rows[0] || null;
-  }
-
-  function renderSelectedDecisionSummary(row) {
-    if (!row) return renderConsoleEmpty("선택할 투자 의견이 없습니다", "필터를 조정하면 현재 판단을 비교할 수 있습니다.");
-    var detailKey = row.caseId || row.decisionEpisodeId || row.key;
-    var detail = state.investmentFlowDetails[detailKey] || row.raw || {};
-    var explanation = detail.explanation || row.explanation || {};
-    var dimensions = detail.statusDimensions || row.statusDimensions || [];
-    var support = decisionExplanationRows(explanation, "supportingCauses");
-    var counter = decisionExplanationRows(explanation, "counterCauses").concat(decisionExplanationRows(explanation, "constraints"));
-    var conditions = Array.isArray(explanation.changeConditions) ? explanation.changeConditions : [];
-    var detailDecision = detail.decision || {};
-    var action = decisionActionMeta(detailDecision.state === "blocked" ? "BLOCKED" : (detailDecision.action || row.actionCode), row.actionLabel);
-    return [
-      '<section class="oa-decision-selected" aria-label="선택한 투자 의견">',
-      '<header class="oa-decision-selected-head"><div><span>선택한 판단</span><h2>' + escapeHtml(detail.name || row.name || row.symbol) + '</h2><p>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심 종목" : "보유 종목"].filter(Boolean).join(" · ")) + '</p></div><div><strong class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(action.label) + '</strong><span>' + escapeHtml(detail.readinessLabel || row.readinessLabel || "확인 필요") + '</span></div></header>',
-      renderInvestmentDecisionRationale(detail, true),
-      '<section class="oa-decision-selected-section"><header><strong>판단을 나눠서 보기</strong>' + renderDecisionInfoButton("decision-readiness", "투자 의견, 자료, 관계 추론, AI 검토와 결과 추적을 분리해 표시합니다.") + '</header>' + renderDecisionStatusDimensions(dimensions, true) + '</section>',
-      '<section class="oa-decision-selected-section"><header><strong>판단에 채택된 근거</strong>' + renderDecisionInfoButton("reasoning-rule", "성립한 규칙과 가설 중 현재 의견에 실제로 채택된 근거입니다.") + '</header>' + renderDecisionCauseList(support, "선택된 가설이 없어 채택된 핵심 근거가 없습니다.") + '</section>',
-      '<section class="oa-decision-selected-section"><header><strong>반대로 볼 점</strong>' + renderDecisionInfoButton("competing-hypothesis", "현재 의견을 약화하거나 다른 행동을 지지하는 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 저장된 반대 근거나 제한 조건이 없습니다.") + '</section>',
-      '<section class="oa-decision-change-conditions"><strong>판단이 달라지는 조건</strong>' + (conditions.length ? '<ul>' + conditions.slice(0, 3).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '<p>' + escapeHtml(detail.nextAction || row.nextAction || "다음 관측에서 같은 관계가 유지되는지 확인합니다.") + '</p>') + '</section>',
-      '<footer><button class="text-button primary" type="button" data-investment-case-tab="summary" data-investment-case-key="' + escapeHtml(detailKey) + '">전체 판단 보기</button><button class="text-button" type="button" data-investment-case-tab="reasoning" data-investment-case-key="' + escapeHtml(detailKey) + '">추론 과정 보기</button></footer>',
       '</section>'
     ].join("");
   }
@@ -14731,18 +14966,13 @@
       { label: "결과 대기", value: awaitingOutcome + "건", detail: "성과 관측", target: { type: "decision", value: "all", key: "all", quality: "all" } }
     ];
     var viewLabels = { action: "행동이 필요한 의견", recent: "최근 달라진 의견", all: "전체 투자 의견" };
-    var selected = selectedDecisionRow(page.items);
-    if (selected) state.activeDecisionCaseId = selected.caseId || selected.decisionEpisodeId || selected.key;
-    var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(function (row) { return renderDecisionConsoleRow(row, true); }).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", state.consoleDecisionView === "action" ? "현재 즉시 검토할 행동이 없습니다. 전체 의견에서 관찰 상태를 확인할 수 있습니다." : "검색어나 필터를 조정하세요.", '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
+    var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", state.consoleDecisionView === "action" ? "현재 즉시 검토할 행동이 없습니다. 전체 의견에서 관찰 상태를 확인할 수 있습니다." : "검색어나 필터를 조정하세요.", '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
     return renderConsoleManagedPage("modeling", metrics, [
       '<section class="oa-decision-context"><span>DECISION WORKSPACE</span><strong>판단은 주문이 아니라 현재 근거에 따른 투자 의견입니다.</strong><p>의견이 달라졌거나 행동이 필요한 종목부터 확인하고, 부족한 근거는 별도 점검 화면에서 보완합니다.</p></section>',
       renderDecisionViewSwitch(allRows),
       renderDecisionFilterToolbar(),
       '<div data-console-monitor-destination="decisions" tabindex="-1">',
-      '<div class="oa-decision-master-detail">',
-      renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[state.consoleDecisionView] || viewLabels.action, description: "회사를 선택하면 오른쪽에서 판단과 원인을 비교합니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
-      renderSelectedDecisionSummary(selected),
-      '</div>',
+      renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[state.consoleDecisionView] || viewLabels.action, description: "회사를 열면 판단 당시 데이터, 근거, 추론 과정과 결과 이력을 전체 화면에서 확인합니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
       '</div>'
     ].join(""), { leading: renderDecisionWorkspaceNavigation("modeling") });
   }
@@ -14971,27 +15201,9 @@
     return renderValidationUserConsole(snapshot);
   }
 
-  function selectConsoleOperationSources(snapshot) {
-    var toss = (snapshot || {}).toss || {};
-    var parts = ontologyStrategyParts(snapshot || {});
-    var diagnostics = state.ontologyDiagnostics || {};
-    var shareRuntime = state.shareRuntime && typeof state.shareRuntime === "object" ? state.shareRuntime : {};
-    var researchCount = consoleResearchItems().length;
-    return [
-      { label: "Toss Open API", state: toss.mode === "live" ? "정상" : "확인", detail: toss.status || "계정 데이터", updatedAt: snapshot.generatedAt, tone: toss.mode === "live" ? "watch" : "danger", detailType: "account-connections-board" },
-      { label: "실시간 WebSocket", state: state.realtime.connected ? "연결" : "폴링", detail: state.realtime.lastEvent || "실시간 이벤트", updatedAt: state.realtime.lastEventAt, tone: state.realtime.connected ? "watch" : "caution", detailType: "notification-diagnostics-board" },
-      { label: "TypeDB InferenceBox", state: parts.aboxEntities.length ? "준비" : "확인", detail: diagnostics.reason || parts.strategy.reasoningMode || "그래프 추론", updatedAt: diagnostics.updatedAt || snapshot.generatedAt, tone: parts.aboxEntities.length ? "watch" : "danger", detailType: "strategy-trace-board" },
-      { label: "리서치 근거", state: researchCount ? "수집" : "대기", detail: researchCount + "건 저장", updatedAt: (currentResearchEvidence().summary || {}).latestSeenAt, tone: researchCount ? "watch" : "hold", detailType: "feed-source-board" },
-      { label: "운영 설정 DB", state: state.serverSettingsLoaded ? "연결" : "확인", detail: "MySQL 운영 설정", updatedAt: snapshot.generatedAt, tone: state.serverSettingsLoaded ? "watch" : "caution", detailType: "settings-runtime" },
-      { label: "웹 공유 연결", state: shareRuntime.active ? "연결" : (shareRuntime.enabled ? "확인" : "꺼짐"), detail: shareRuntime.targetPublishStatus === "published" ? "고정 주소 반영됨" : "고정 주소 상태 확인", updatedAt: shareRuntime.updatedAt, tone: shareRuntime.active && shareRuntime.targetPublishStatus === "published" ? "watch" : (shareRuntime.enabled ? "caution" : "hold"), detailType: "settings-diagnostics" }
-    ];
-  }
-
-  function renderOperationsConsole(snapshot) {
+  function renderSettingsConsole(snapshot) {
     var accounts = serviceAccounts();
     var activeAccounts = enabledServiceAccounts();
-    var sources = selectConsoleOperationSources(snapshot);
-    var failures = sources.filter(function (source) { return source.tone === "danger" || source.tone === "caution"; }).length;
     var section = normalizeSettingsSection(state.activeSettingsSection);
     var activeAccount = activeWatchAccount();
     var metrics = section === "account" ? [
@@ -15000,32 +15212,16 @@
       { label: "현재 계정", value: activeAccount ? (activeAccount.label || accountIdOf(activeAccount)) : "미선택", detail: activeAccount ? accountIdOf(activeAccount) : "계정 등록 필요", target: { type: "detail", value: "account-identity-board" } },
       { label: "관심 종목", value: activeAccount ? accountWatchlistSymbols(activeAccount).length + "개" : "0개", detail: "현재 계정", target: { type: "market", value: "mine", scope: "watchlist" } },
       { label: "수정 권한", value: state.serverSettingsLocked ? "읽기전용" : "수정 가능", detail: state.serverSettingsLocked ? "공유 화면" : "로컬 소유자", tone: state.serverSettingsLocked ? "caution" : "watch", target: { type: "detail", value: "settings-runtime" } }
-    ] : (section === "preferences" ? [
+    ] : [
       { label: "테마", value: appThemeLabel(settingValue("appTheme") || defaultSettings.appTheme), detail: "앱 표시", target: { type: "detail", value: "settings-preferences" } },
       { label: "시간대", value: currentAppTimezone(), detail: "날짜·캘린더", target: { type: "detail", value: "settings-preferences" } },
       { label: "기본 시각", value: settingValue("investmentCalendarCandidateDefaultTime") || defaultSettings.investmentCalendarCandidateDefaultTime || "09:00", detail: "캘린더 후보", target: { type: "detail", value: "settings-preferences" } },
       { label: "투자 알림", value: settingValue("notifyProvider") || "telegram", detail: "사용자 채널", target: { type: "detail", value: "settings-user-notifications" } },
       { label: "저장 상태", value: settingsStatusLabel(), detail: "앱 설정 DB", tone: settingsStatusTone(), target: { type: "detail", value: "settings-preferences" } }
-    ] : [
-      { label: "데이터 소스", value: sources.filter(function (source) { return source.tone === "watch"; }).length + "/" + sources.length, detail: "정상·준비", target: { type: "detail", value: "settings-data-sources" } },
-      { label: "운영 이상", value: failures + "건", detail: "확인 필요", tone: failures ? "danger" : "watch", target: { type: "detail", value: "settings-diagnostics" } },
-      { label: "실시간", value: state.realtime.connected ? "연결" : "폴링", detail: "WebSocket", tone: state.realtime.connected ? "watch" : "caution", target: { type: "detail", value: "notification-diagnostics-board" } },
-      { label: "외부 API", value: configuredCount(["alphaVantageApiKey", "coingeckoApiKey", "fredApiKey", "opendartApiKey"]) + "/4", detail: "키 준비도", target: { type: "detail", value: "settings-data-sources" } },
-      { label: "설정 DB", value: state.serverSettingsLoaded ? "연결" : "확인", detail: "시스템 전체", tone: state.serverSettingsLoaded ? "watch" : "caution", target: { type: "detail", value: "settings-runtime" } }
-    ]);
-    var sourceList = '<div class="oa-operation-list" data-console-keyed-list="operation-sources">' + sources.map(function (source) {
-      return [
-        '<button type="button" class="oa-operation-row" data-console-row-key="' + escapeHtml(source.detailType) + '" data-work-detail="' + escapeHtml(source.detailType) + '" data-work-detail-key="">',
-        '<span><strong>' + escapeHtml(source.label) + '</strong><em>' + escapeHtml(source.detail) + '</em></span>',
-        '<span class="tone-chip ' + escapeHtml(source.tone) + '">' + escapeHtml(source.state) + '</span>',
-        renderRecordChangedAt(source),
-        '<b>점검 &rarr;</b>',
-        '</button>'
-      ].join("");
-    }).join("") + '</div>';
+    ];
     var content = section === "account"
       ? renderAccountSettingsScope(snapshot, accounts, activeAccount)
-      : (section === "preferences" ? renderPreferenceSettingsScope() : renderSystemOperationsScope(sourceList));
+      : renderPreferenceSettingsScope();
     return renderConsoleManagedPage("settings", metrics, content, {
       leading: renderSettingsScopeNavigation()
     });
@@ -15104,27 +15300,6 @@
       '<div class="oa-console-grid settings-scope-content settings-preference-scope">',
       renderConsoleSurface({ kicker: "APP PREFERENCES", title: "내 환경", description: "투자 데이터나 워커 동작을 바꾸지 않는 표시 설정입니다.", body: renderScopedSettingsList("preference-settings", items) }),
       renderConsoleSurface({ kicker: "SCOPE GUIDE", title: "설정 경계", description: "값이 적용되는 범위를 확인하고 변경합니다.", body: boundary }),
-      '</div>'
-    ].join("");
-  }
-
-  function renderSystemOperationsScope(sourceList) {
-    var items = [
-      { title: "외부 데이터와 API", description: "시세·수급·뉴스·공시·거시 API 키와 수집 정책", scope: "시스템 전체", tone: "operations", detailType: "settings-data-sources", action: "편집" },
-      { title: "AI 추론 실행", description: "AI 사용 여부, 병렬 워커와 추론 깊이", scope: "시스템 전체", tone: "operations", detailType: "settings-ai-runtime", action: "편집" },
-      { title: "운영자 알림 채널", description: "연결 장애, 파이프라인과 추론 상태 전용 채널", scope: "관리자 전용", tone: "operations", detailType: "settings-operations-notifications", action: "편집" },
-      { title: "웹 공유 연결", description: "고정 접속 주소, 현재 터널과 실행 코드 버전", scope: "관리자 전용", tone: "operations", detailType: "settings-diagnostics", action: "확인" },
-      { title: "저장소와 실행 진단", description: "설정 DB, 외부 API, 추론 대기열과 최근 오류", scope: "관리자 전용", tone: "operations", detailType: "settings-diagnostics", action: "진단" }
-    ];
-    var governance = [
-      { title: "투자모델 관리", description: "활성 릴리스, 입력 데이터, 규칙, 가설, 검증·승격과 롤백", scope: "관리자 전용", tone: "governance", detailType: "investment-model-management", action: "관리" },
-      { title: "투자 보편언어", description: "온톨로지 식별자와 사용자 표현의 승인 체계", scope: "온톨로지", tone: "governance", detailType: "settings-investment-language", action: "관리" }
-    ];
-    return [
-      '<div class="oa-console-grid oa-operations-grid settings-scope-content settings-operations-scope">',
-      renderConsoleSurface({ kicker: "SYSTEM HEALTH", title: "운영 상태", description: "연결·신선도·실패 단계만 점검합니다.", body: renderConsoleLiveRegion("operation-source-body", sourceList) }),
-      renderConsoleSurface({ kicker: "SYSTEM SETTINGS", title: "운영 설정", description: "모든 계정과 백그라운드 작업에 적용됩니다.", body: renderScopedSettingsList("operation-settings", items) }),
-      renderConsoleSurface({ kicker: "MODEL GOVERNANCE", title: "투자모델 관리", description: "추론·가설·규칙·승격을 하나의 버전 관리 체계로 운영합니다.", className: "settings-governance-surface", body: renderScopedSettingsList("governance-settings", governance) }),
       '</div>'
     ].join("");
   }
@@ -15438,14 +15613,41 @@
     };
   }
 
+  function renderPortfolioConsole() {
+    var workspace = window.OrbitAlphaConsoleWorkspaces;
+    var view = normalizePortfolioView(state.activePortfolioView);
+    var payload = state.portfolioReadModels[view] || {};
+    var body = workspace && typeof workspace.renderPortfolio === "function"
+      ? workspace.renderPortfolio(payload, view, {
+          loading: state.portfolioReadModelLoading,
+          error: state.portfolioReadModelError
+        })
+      : renderConsoleEmpty("포트폴리오 화면을 준비하지 못했습니다", "웹 자산을 새로고침하세요.");
+    return '<div class="managed-page oa-console-page oa-console-page-portfolio" data-console-workspace="portfolio">' + body + '</div>';
+  }
+
+  function renderOperationsHealthConsole() {
+    var workspace = window.OrbitAlphaConsoleWorkspaces;
+    var view = normalizeOperationsView(state.activeOperationsView);
+    var body = workspace && typeof workspace.renderOperations === "function"
+      ? workspace.renderOperations(state.operationsHealth || {}, view, {
+          loading: state.operationsHealthLoading,
+          error: state.operationsHealthError
+        })
+      : renderConsoleEmpty("운영 화면을 준비하지 못했습니다", "웹 자산을 새로고침하세요.");
+    return '<div class="managed-page oa-console-page oa-console-page-operations" data-console-workspace="operations">' + body + '</div>';
+  }
+
   function renderActiveTab(snapshot) {
     if (state.activeTab === "overview") return renderTodayConsole(snapshot);
+    if (state.activeTab === "portfolio") return renderPortfolioConsole();
     if (state.activeTab === "calendar") return renderInvestmentCalendarPage(snapshot);
     if (state.activeTab === "feed") return renderMarketConsole(snapshot);
     if (state.activeTab === "modeling") return renderDecisionConsole(snapshot);
     if (state.activeTab === "notifications") return renderAlertsConsole();
     if (state.activeTab === "experiments") return renderValidationConsole(snapshot);
-    if (state.activeTab === "settings") return renderOperationsConsole(snapshot);
+    if (state.activeTab === "settings") return renderSettingsConsole(snapshot);
+    if (state.activeTab === "operations") return renderOperationsHealthConsole();
     return renderTodayConsole(snapshot);
   }
 
@@ -15470,9 +15672,17 @@
       renderInvestmentCalendarMonthPanel(),
       renderInvestmentCalendarRailPanel(),
       '</div>',
-      renderInvestmentCalendarCandidatePanel(),
       '</section>'
     ].join(""));
+  }
+
+  function calendarCandidateBoardWorkDetailPayload() {
+    return editorWorkDetailPayload(
+      "Calendar Governance",
+      "캘린더 후보 검토",
+      "공식 일정 확인·승인·제외",
+      renderInvestmentCalendarCandidatePanel()
+    );
   }
 
   function investmentCalendarEvents() {
@@ -32896,18 +33106,6 @@
         render({ transition: "section" });
         return;
       }
-      var decisionSelect = event.target.closest && event.target.closest("[data-decision-select]");
-      if (decisionSelect && app.contains(decisionSelect)) {
-        event.preventDefault();
-        state.activeDecisionCaseId = String(decisionSelect.getAttribute("data-decision-select") || "");
-        var decisionDetailType = String(decisionSelect.getAttribute("data-decision-detail-type") || "investment-case");
-        if (state.activeDecisionCaseId) {
-          openWorkDetailLayer(decisionDetailType, state.activeDecisionCaseId);
-        } else {
-          render({ transition: "section" });
-        }
-        return;
-      }
       var flowRefresh = event.target.closest && event.target.closest('[data-action="refresh-investment-flow"]');
       if (flowRefresh && app.contains(flowRefresh)) {
         event.preventDefault();
@@ -34696,6 +34894,30 @@
         state.marketWorkspaceMode = mode;
         writeMarketWorkspaceHistory(mode);
         if (mode === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) loadSymbolUniverse();
+        render({ transition: "section" });
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-portfolio-view]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var view = normalizePortfolioView(button.getAttribute("data-portfolio-view"));
+        if (view === state.activePortfolioView) return;
+        rememberRenderedPageScrollPosition();
+        state.activePortfolioView = view;
+        writeConsoleWorkspaceViewHistory("portfolio", "portfolioView", view, "summary");
+        loadPortfolioReadModel(view, false);
+        render({ transition: "section" });
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-operations-view]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var view = normalizeOperationsView(button.getAttribute("data-operations-view"));
+        if (view === state.activeOperationsView) return;
+        rememberRenderedPageScrollPosition();
+        state.activeOperationsView = view;
+        writeConsoleWorkspaceViewHistory("operations", "operationsView", view, "health");
+        if (!state.operationsHealth && !state.operationsHealthLoading) loadOperationsHealth(false);
         render({ transition: "section" });
       });
     });

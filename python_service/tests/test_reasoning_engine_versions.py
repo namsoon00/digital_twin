@@ -131,6 +131,46 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("ontology-v2-green", platform.graph_database_for("ontology-v2-shadow"))
         self.assertEqual("v2", platform.engine_version_for("ontology-v2-shadow"))
 
+    def test_active_v2_uses_the_active_time_series_backend(self):
+        class Registry:
+            def control(self):
+                return EngineControlState(
+                    active_deployment_id="ontology-v2-production-r15",
+                    delivery_deployment_id="ontology-v2-production-r15",
+                    candidate_deployment_id="ontology-v2-production-r14",
+                    version=8,
+                )
+
+        platform = ReasoningEnginePlatformService(Registry(), {
+            "reasoningEngineV2DeploymentId": "ontology-v2-production-r15",
+            "timeSeriesActiveBackendId": "questdb-shadow",
+            "timeSeriesShadowBackendId": "mysql-primary",
+        })
+
+        current = next(item for item in platform.descriptors() if item.engine_version == "v2")
+
+        self.assertEqual("questdb-shadow", current.time_series_backend_id)
+
+    def test_candidate_v2_keeps_the_shadow_time_series_backend(self):
+        class Registry:
+            def control(self):
+                return EngineControlState(
+                    active_deployment_id="ontology-v2-production-r15",
+                    delivery_deployment_id="ontology-v2-production-r15",
+                    candidate_deployment_id="ontology-v2-production-r16",
+                    version=9,
+                )
+
+        platform = ReasoningEnginePlatformService(Registry(), {
+            "reasoningEngineV2DeploymentId": "ontology-v2-production-r16",
+            "timeSeriesActiveBackendId": "questdb-shadow",
+            "timeSeriesShadowBackendId": "mysql-primary",
+        })
+
+        candidate = next(item for item in platform.descriptors() if item.engine_version == "v2")
+
+        self.assertEqual("mysql-primary", candidate.time_series_backend_id)
+
     def test_initialize_repoints_an_obsolete_candidate_to_the_configured_v2_release(self):
         class Registry:
             def __init__(self):

@@ -41,9 +41,12 @@ flowchart LR
 
 ## Current Deployment
 
-- `mysql-primary`: active temporal read backend and durable compatibility source.
-- `questdb-shadow`: live shadow write target. It cannot affect investment
-  judgement while MySQL remains active.
+- `mysql-primary` and `questdb-shadow` are stable deployment identifiers, not
+  permanent role names. Their current role comes from the time-series control
+  plane (`activeBackendId`, `shadowBackendId`, and `deliveryBackendId`).
+- Investment-model projections and reasoning deployments use the live
+  control-plane role. A stored release binding remains available for audit and
+  is reported as a mismatch only when it differs from the active backend.
 - `ontology-v1-active`: active and delivery-authorized reasoning deployment.
 - `ontology-v2-shadow`: independently executable candidate deployment in
   `orbit_alpha_ontology_shadow_v2`. The same durable source event is inserted

@@ -1460,6 +1460,7 @@ def investment_case_api_payload(
 def _investment_model_source_payload() -> Dict[str, object]:
     loaders = {
         "platform": reasoning_engine_platform_status_payload,
+        "timeSeries": time_series_platform_status_payload,
         "rulebox": ontology_rulebox_payload,
         "catalog": lambda: ontology_catalog_api_payload("summary", {}),
         "experiments": ontology_experiments_status_payload,
@@ -1480,6 +1481,7 @@ def _investment_model_source_payload() -> Dict[str, object]:
         results.get("catalog"),
         results.get("experiments"),
         runtime_settings(),
+        results.get("timeSeries"),
     )
     payload["diagnostics"] = {"partial": bool(errors), "errors": errors}
     return payload

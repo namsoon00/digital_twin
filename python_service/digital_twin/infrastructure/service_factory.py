@@ -146,7 +146,7 @@ from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from .questdb_time_series import QuestDBTimeSeriesAdapter
-from .time_series_factory import build_temporal_feature_snapshot_service
+from .time_series_factory import build_temporal_feature_snapshot_service, build_time_series_adapters
 from .statistical_signal_factory import build_statistical_signal_pipeline_service
 
 
@@ -1924,9 +1924,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     candidate_settings["typedbDatabase"] = platform.graph_database_for(
         descriptor.deployment_id
     )
-    candidate_settings["timeSeriesActiveBackendId"] = str(
-        configured.get("timeSeriesShadowBackendId") or "questdb-shadow"
-    )
+    candidate_settings["timeSeriesActiveBackendId"] = descriptor.time_series_backend_id
     candidate_settings["typedbNativeRuleExecutionEnabled"] = "1"
     candidate_settings["ontologyReasoningTypeDbNativeRuleExecutionEnabled"] = "1"
     candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
@@ -1991,12 +1989,18 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     candidate_settings["_reasoningEngineValidationCohortId"] = str(
         release_identity.get("validationCohortId") or ""
     )
-    reasoning_time_series_store = QuestDBTimeSeriesAdapter(
-        candidate_settings,
-        descriptor.time_series_backend_id,
+    reasoning_time_series_adapters = build_time_series_adapters(candidate_settings)
+    reasoning_time_series_store = reasoning_time_series_adapters.get(
+        descriptor.time_series_backend_id
     )
-    # V2 reads temporal features from QuestDB. Notification bookkeeping owns
-    # a MySQL transaction and therefore receives the versioned write boundary.
+    if reasoning_time_series_store is None:
+        raise RuntimeError(
+            "The V2 reasoning time-series backend is unavailable: "
+            + str(descriptor.time_series_backend_id or "unknown")
+        )
+    # V2 reads through the backend frozen into its deployment descriptor.
+    # Notification bookkeeping owns a MySQL transaction and therefore receives
+    # the versioned write boundary independently of the reasoning read adapter.
     delivery_time_series_store = stores.market_time_series_store(store_settings)
     registry_store = stores.reasoning_engine_registry_store(store_settings)
     shared_world_projection_outbox = ActiveDeploymentWorldProjectionSink(

@@ -401,7 +401,9 @@ function checkWorkflowConsoleContract() {
   assertOk(
     code.indexOf("function renderInvestmentModelOverview") >= 0 &&
       code.indexOf('data-work-detail="investment-model-overview"') >= 0 &&
-      code.indexOf("사실</span><b>&rarr;</b><span>관계") >= 0 &&
+      code.indexOf("function renderInvestmentModelContractNavigation") >= 0 &&
+      code.indexOf('data-model-contract-stage="') >= 0 &&
+      code.indexOf("function renderInvestmentModelBindings") >= 0 &&
       styles.indexOf(".investment-model-overview") >= 0,
     "판단 기준에서 활성 투자모델·관계·가설·추론 계약을 확인할 수 없습니다."
   );
@@ -3034,10 +3036,11 @@ async function checkNormalMode(port, context) {
   const investmentModel = await request(port, "/api/investment-model");
   assertOk(investmentModel.statusCode === 200, "투자모델 API 응답 코드가 200이 아닙니다: " + investmentModel.statusCode + " · " + investmentModel.body.slice(0, 500));
   const investmentModelPayload = JSON.parse(investmentModel.body);
-  assertOk(investmentModelPayload.version === "investment-model-v2", "투자모델 읽기 계약이 없습니다.");
+  assertOk(investmentModelPayload.version === "investment-model-v3", "투자모델 읽기 계약이 없습니다.");
   assertOk(investmentModelPayload.readOnly === true, "투자모델 기본 API가 읽기 전용이 아닙니다.");
   assertOk(investmentModelPayload.model && investmentModelPayload.model.contract === "facts-relations-hypotheses-inference-decision", "투자모델 판단 생성 계약이 없습니다.");
   assertOk(investmentModelPayload.inventory && typeof investmentModelPayload.inventory.rules === "number", "투자모델 규칙 인벤토리가 없습니다.");
+  assertOk(investmentModelPayload.bindings && typeof investmentModelPayload.bindings.timeSeriesAlignmentState === "string", "투자모델 활성 시계열 저장소 정합성 계약이 없습니다.");
 
   const emptyAccounts = await request(port, "/api/service-accounts");
   assertOk(emptyAccounts.statusCode === 200, "계정 DB API 응답 코드가 200이 아닙니다: " + emptyAccounts.statusCode + " · " + emptyAccounts.body.slice(0, 500));

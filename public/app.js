@@ -12361,6 +12361,43 @@
     ].join("");
   }
 
+  function renderInvestmentModelContractNavigation() {
+    var stages = [
+      { id: "facts", label: "사실", detail: "입력·근거", target: "strategy-evidence-board" },
+      { id: "relations", label: "관계", detail: "온톨로지", target: "strategy-graphs-board", section: "relations" },
+      { id: "hypotheses", label: "가설", detail: "대안·반증", target: "strategy-graphs-board", section: "hypotheses" },
+      { id: "inferences", label: "추론", detail: "규칙 실행", target: "strategy-graphs-board", section: "inferences" },
+      { id: "decisions", label: "현재 의견", detail: "종목별 판단", target: "decision-action-queue" }
+    ];
+    return '<nav class="investment-model-contract" aria-label="판단 구조 상세 탐색">' + stages.map(function (stage, index) {
+      return '<button type="button" data-work-detail="' + escapeHtml(stage.target) + '" data-work-detail-key="" data-model-contract-stage="' + escapeHtml(stage.id) + '"' + (stage.section ? ' data-ontology-catalog-section="' + escapeHtml(stage.section) + '"' : '') + '><span>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</span><strong>' + escapeHtml(stage.label) + '</strong><em>' + escapeHtml(stage.detail) + '</em></button>';
+    }).join("") + '</nav>';
+  }
+
+  function investmentStorageStatusLabel(status, health) {
+    var currentStatus = String(status || "").toLowerCase();
+    var currentHealth = String(health || "").toLowerCase();
+    var role = currentStatus === "active" ? "활성" : (currentStatus === "candidate" ? "후보" : "상태 확인");
+    var condition = ["ready", "healthy", "ok"].indexOf(currentHealth) >= 0 ? "정상" : (currentHealth ? "점검 필요" : "상태 확인");
+    return role + " · " + condition;
+  }
+
+  function renderInvestmentModelBindings(bindings, release) {
+    var graphId = String(bindings.graphStore || "");
+    var timeSeriesId = String(bindings.timeSeries || "");
+    var declaredTimeSeriesId = String(bindings.timeSeriesDeclared || "");
+    var alignmentState = String(bindings.timeSeriesAlignmentState || "unknown");
+    var mismatch = alignmentState === "mismatch";
+    return [
+      '<section class="investment-model-bindings" aria-label="활성 데이터 저장소">',
+      '<div><span>그래프 저장소</span><strong>' + escapeHtml(bindings.graphStoreLabel || (graphId ? "TypeDB" : "미기록")) + '</strong><em>' + escapeHtml(String(bindings.graphStoreStatus || "active").toLowerCase() === "active" ? "활성" : "상태 확인") + '</em><small>' + escapeHtml(graphId || "저장소 ID 미기록") + '</small></div>',
+      '<div data-binding-state="' + escapeHtml(mismatch ? "mismatch" : alignmentState) + '"><span>시계열 저장소</span><strong>' + escapeHtml(bindings.timeSeriesLabel || timeSeriesId || "미기록") + '</strong><em>' + escapeHtml(investmentStorageStatusLabel(bindings.timeSeriesStatus, bindings.timeSeriesHealth)) + '</em><small>' + escapeHtml(timeSeriesId || "백엔드 ID 미기록") + '</small></div>',
+      '<div><span>마지막 추론</span><strong>' + escapeHtml(formatClock(release.lastRunAt || release.updatedAt) || "-") + '</strong><em>' + escapeHtml(release.deploymentId || "배포 ID 미기록") + '</em></div>',
+      mismatch ? '<p class="investment-model-binding-warning"><strong>저장소 연결 기록 점검</strong><span>릴리스 기록 ' + escapeHtml(declaredTimeSeriesId || "미기록") + ' · 현재 활성 ' + escapeHtml(timeSeriesId || "미기록") + '</span></p>' : '',
+      '</section>'
+    ].join("");
+  }
+
   function renderInvestmentModelOverview(operator) {
     var payload = investmentModelPayload();
     if ((state.investmentModelLoading && !state.investmentModelLoaded) || payload.status === "warming") {
@@ -12384,7 +12421,7 @@
     var blockers = Array.isArray(validation.blockers) ? validation.blockers : [];
     var modelContract = operator ? [
       '<section class="investment-model-metrics">',
-      '<div><span>실행 규칙</span><strong>' + escapeHtml(Number(inventory.rules || 0)) + '</strong><em>RuleBox</em></div>',
+      '<div><span>실행 규칙</span><strong>' + escapeHtml(Number(inventory.rules || 0)) + '</strong><em>성립 조건 ' + escapeHtml(Number(inventory.conditions || 0)) + '</em></div>',
       '<div><span>관계 유형</span><strong>' + escapeHtml(Number(inventory.relations || 0)) + '</strong><em>TBox</em></div>',
       '<div><span>가설</span><strong>' + escapeHtml(Number(inventory.hypotheses || 0)) + '</strong><em>수명주기 포함</em></div>',
       '<div><span>승격 상태</span><strong>' + escapeHtml(validation.label || "확인") + '</strong><em>' + escapeHtml(validation.cohortId || "검증 코호트 없음") + '</em></div>',
@@ -12406,10 +12443,10 @@
       '<div><span class="label">ACTIVE RELEASE</span><h3>' + escapeHtml(model.name || "Orbit Alpha 투자 판단 모델") + '</h3><p>' + escapeHtml(model.thesis || "관계와 반대 근거를 비교해 현재 투자 의견을 결정합니다.") + '</p></div>',
       '<aside><span class="status-pill ' + escapeHtml(meta.tone) + '">' + escapeHtml(meta.label) + '</span><strong>' + escapeHtml(release.deploymentId || "활성 릴리스 없음") + '</strong><em>release ' + escapeHtml(release.releaseShortHash || "-") + '</em></aside>',
       '</section>',
-      '<section class="investment-model-contract" aria-label="판단 생성 계약"><span>사실</span><b>&rarr;</b><span>관계</span><b>&rarr;</b><span>가설</span><b>&rarr;</b><span>추론</span><b>&rarr;</b><span>현재 의견</span></section>',
+      renderInvestmentModelContractNavigation(),
       modelContract,
       readinessMarkup,
-      '<section class="investment-model-bindings"><div><span>그래프 저장소</span><strong>' + escapeHtml(bindings.graphStore || "미기록") + '</strong></div><div><span>시계열</span><strong>' + escapeHtml(bindings.timeSeries || "미기록") + '</strong></div><div><span>마지막 실행</span><strong>' + escapeHtml(formatClock(release.lastRunAt || release.updatedAt) || "-") + '</strong></div></section>',
+      renderInvestmentModelBindings(bindings, release),
       operator ? '<section class="investment-model-governance"><header><div><span class="label">RELEASE GOVERNANCE</span><strong>변경·승격 절차</strong></div><em>자동 승격 없음</em></header><div class="investment-model-lifecycle">' + lifecycle + '</div>' + (blockers.length ? '<div class="investment-model-blockers"><strong>운영 승격 차단</strong>' + blockers.map(function (item) { return '<span>' + escapeHtml(item) + '</span>'; }).join("") + '</div>' : '<p>현재 릴리스는 운영 구조 검증을 통과했습니다. 제품 출시는 위 품질·성과·지연 게이트를 별도로 통과해야 합니다.</p>') + '</section>' : '<section class="investment-model-note"><strong>운영 상태와 출시 품질은 별도 기준입니다.</strong><p>규칙 편집과 승격은 운영 관리에서만 수행하며 AI 제안은 자동 반영하지 않습니다.</p></section>',
       '<div class="investment-model-refresh"><button class="text-button" type="button" data-action="refresh-investment-model"' + (state.investmentModelLoading || cache.refreshing ? " disabled" : "") + '>' + escapeHtml(state.investmentModelLoading || cache.refreshing ? "최신 상태 확인 중" : "상태 새로고침") + '</button>' + (!operator ? renderWorkDetailButton("investment-model-management", "", "운영자 모델 관리", "text-button compact") : "") + '</div>',
       '</div>'
@@ -32823,6 +32860,8 @@
         event.preventDefault();
         var detailType = detailButton.getAttribute("data-work-detail");
         var detailKey = detailButton.getAttribute("data-work-detail-key") || "";
+        var ontologyCatalogSection = String(detailButton.getAttribute("data-ontology-catalog-section") || "");
+        if (ontologyCatalogSection) state.activeOntologyCatalogTab = ontologyCatalogSection;
         if (detailType === "notification-job") {
           var unreadJob = notificationJobByKey(detailKey);
           if (unreadJob && !unreadJob.readAt) updateNotificationReceipt(detailKey, { read: true });

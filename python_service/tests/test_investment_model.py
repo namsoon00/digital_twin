@@ -60,6 +60,15 @@ class InvestmentModelProjectionTests(unittest.TestCase):
                 "modelHypothesis": "반대 근거를 함께 비교한다.",
                 "tossToken": "must-not-leak",
             },
+            {
+                "control": {"activeBackendId": "questdb"},
+                "deployments": [{
+                    "backendId": "questdb",
+                    "adapterName": "questdb",
+                    "status": "active",
+                    "health": {"status": "ready"},
+                }],
+            },
         )
 
         self.assertEqual("ready", result["status"])
@@ -72,6 +81,9 @@ class InvestmentModelProjectionTests(unittest.TestCase):
         self.assertTrue(result["candidate"]["eligibleForPromotion"])
         self.assertEqual("ontology-v2-release-r16", result["candidate"]["releaseId"])
         self.assertEqual(118, result["inventory"]["rules"])
+        self.assertEqual("QuestDB", result["bindings"]["timeSeriesLabel"])
+        self.assertEqual("aligned", result["bindings"]["timeSeriesAlignmentState"])
+        self.assertTrue(result["bindings"]["timeSeriesAligned"])
         self.assertTrue(result["validation"]["promotionReady"])
         self.assertEqual("internal-validation", result["productReadiness"]["stage"])
         self.assertFalse(result["productReadiness"]["releaseRecommended"])
@@ -108,6 +120,37 @@ class InvestmentModelProjectionTests(unittest.TestCase):
         self.assertEqual("older", result["candidate"]["relationToActive"])
         self.assertEqual("rollback-reference", result["candidate"]["role"])
         self.assertFalse(result["candidate"]["eligibleForPromotion"])
+
+    def test_current_time_series_control_wins_over_stale_release_metadata(self):
+        result = investment_model_projection(
+            {
+                "control": {"active_deployment_id": "ontology-v2-production-r15"},
+                "deployments": [{
+                    "deploymentId": "ontology-v2-production-r15",
+                    "status": "active",
+                    "timeSeriesBackendId": "mysql-primary",
+                }],
+            },
+            {},
+            {},
+            {},
+            {},
+            {
+                "control": {"activeBackendId": "questdb-shadow"},
+                "deployments": [{
+                    "backendId": "questdb-shadow",
+                    "adapterName": "questdb",
+                    "status": "active",
+                    "health": {"status": "ready"},
+                }],
+            },
+        )
+
+        self.assertEqual("questdb-shadow", result["bindings"]["timeSeries"])
+        self.assertEqual("QuestDB", result["bindings"]["timeSeriesLabel"])
+        self.assertEqual("mysql-primary", result["bindings"]["timeSeriesDeclared"])
+        self.assertEqual("mismatch", result["bindings"]["timeSeriesAlignmentState"])
+        self.assertFalse(result["bindings"]["timeSeriesAligned"])
 
 
 if __name__ == "__main__":

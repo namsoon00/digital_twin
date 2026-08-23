@@ -70,6 +70,34 @@ class ReasoningEnginePlatformService:
         from ..domain.statistical_signals import DEFAULT_PRICE_SIGNAL_RELEASE_ID
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
+        shadow_backend = str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow")
+        configured_v2_id = str(
+            self.settings.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"
+        )
+        control_reader = getattr(self.registry, "control", None)
+        try:
+            control = control_reader() if callable(control_reader) else None
+        except Exception:  # noqa: BLE001 - descriptor fallback remains deterministic without control state.
+            control = None
+        control_mapping = control if isinstance(control, Mapping) else {}
+        active_ids = {
+            str(
+                getattr(control, "active_deployment_id", "")
+                or control_mapping.get("active_deployment_id")
+                or control_mapping.get("activeDeploymentId")
+                or ""
+            ),
+            str(
+                getattr(control, "delivery_deployment_id", "")
+                or control_mapping.get("delivery_deployment_id")
+                or control_mapping.get("deliveryDeploymentId")
+                or ""
+            ),
+        }
+        configured_v2_backend = str(
+            self.settings.get("reasoningEngineV2TimeSeriesBackendId")
+            or (active_backend if configured_v2_id in active_ids else shadow_backend)
+        )
         v1_graph_database = str(
             self.settings.get("reasoningEngineV1TypeDbDatabase")
             or self.settings.get("typedbDatabase")
@@ -120,10 +148,10 @@ class ReasoningEnginePlatformService:
             ReasoningEngineDescriptor(
                 engine_family="ontology-investment-brain",
                 engine_version="v2",
-                deployment_id=str(self.settings.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"),
+                deployment_id=configured_v2_id,
                 status="provisioning",
                 graph_store_binding=v2_graph_database,
-                time_series_backend_id=str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow"),
+                time_series_backend_id=configured_v2_backend,
                 release_bundle=EngineReleaseBundle(
                     **common_bundle_values,
                     release_id=str(self.settings.get("reasoningEngineCandidateReleaseId") or "ontology-v2-release-r2"),

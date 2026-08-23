@@ -13,7 +13,7 @@ from .investment_product_readiness import investment_product_readiness
 from .investment_reasoning.rule_inventory import reasoning_rule_inventory
 
 
-INVESTMENT_MODEL_VERSION = "investment-model-v2"
+INVESTMENT_MODEL_VERSION = "investment-model-v3"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -46,12 +46,59 @@ def _release_revision(value: object) -> int:
         return 0
 
 
+def _backend_label(adapter_name: object, backend_id: object) -> str:
+    adapter = _text(adapter_name).lower()
+    backend = _text(backend_id).lower()
+    if adapter == "questdb" or backend.startswith("questdb"):
+        return "QuestDB"
+    if adapter == "mysql" or backend.startswith("mysql"):
+        return "MySQL"
+    return _text(adapter_name) or _text(backend_id) or "시계열 저장소"
+
+
+def _time_series_binding(active: Mapping[str, object], platform_value: object) -> Dict[str, object]:
+    platform = _mapping(platform_value)
+    control = _mapping(platform.get("control"))
+    declared_backend_id = _text(active.get("timeSeriesBackendId"))
+    active_backend_id = _text(control.get("activeBackendId"))
+    deployments = [
+        _mapping(item)
+        for item in platform.get("deployments") or []
+        if isinstance(item, Mapping)
+    ]
+    deployment = next((
+        item for item in deployments
+        if _text(item.get("backendId")) == active_backend_id
+    ), {})
+    health = _mapping(deployment.get("health"))
+    resolved_backend_id = active_backend_id or declared_backend_id
+    alignment_state = (
+        "aligned"
+        if active_backend_id and declared_backend_id and active_backend_id == declared_backend_id
+        else "mismatch"
+        if active_backend_id and declared_backend_id
+        else "unknown"
+    )
+    return {
+        "timeSeries": resolved_backend_id,
+        "timeSeriesLabel": _backend_label(deployment.get("adapterName"), resolved_backend_id),
+        "timeSeriesAdapter": _text(deployment.get("adapterName")),
+        "timeSeriesStatus": _text(deployment.get("status")),
+        "timeSeriesHealth": _text(health.get("status")),
+        "timeSeriesDeclared": declared_backend_id,
+        "timeSeriesAlignmentState": alignment_state,
+        "timeSeriesAligned": alignment_state == "aligned",
+        "timeSeriesSource": "platform-control" if active_backend_id else "reasoning-release",
+    }
+
+
 def investment_model_projection(
     platform_value: object,
     rulebox_value: object,
     catalog_value: object,
     experiments_value: object,
     settings_value: object,
+    time_series_value: object = None,
 ) -> Dict[str, object]:
     platform = _mapping(platform_value)
     rulebox = _mapping(rulebox_value)
@@ -115,6 +162,7 @@ def investment_model_projection(
         comparison=comparison,
         settings=settings,
     )
+    time_series_binding = _time_series_binding(active, time_series_value)
     return {
         "version": INVESTMENT_MODEL_VERSION,
         "status": status,
@@ -156,7 +204,9 @@ def investment_model_projection(
         },
         "bindings": {
             "graphStore": _text(active.get("graphStoreBinding")),
-            "timeSeries": _text(active.get("timeSeriesBackendId")),
+            "graphStoreLabel": "TypeDB" if _text(active.get("graphStoreBinding")) else "그래프 저장소",
+            "graphStoreStatus": _text(active.get("status")) or status,
+            **time_series_binding,
             "sourceEventsDirect": bool(
                 active_capabilities.get("directSourceEvents")
                 or active_health.get("directSourceEvents")

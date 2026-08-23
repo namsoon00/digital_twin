@@ -19,12 +19,23 @@ from .rule_contracts import (
     VALUATION_SIGNALS,
     rule_statistical_signal_contract,
 )
+from .registry import model_release, signal_hypothesis_family
 
 
 STATISTICAL_RULE_CANDIDATE_RELEASE_VERSION = "statistical-rule-candidate-release-v1"
+STATISTICAL_RULE_PRODUCTION_RELEASE_VERSION = "statistical-rule-model-signal-production-v2"
 EMPIRICAL_PRICE_THEORIES = {
     "behavioral-momentum-and-trend",
     "behavioral-mean-reversion",
+}
+MODEL_SIGNAL_LABELS = {
+    "price-trend-continuation-support": "가격 경로 추세 지속 신호",
+    "price-trend-break-risk": "가격 경로 추세 훼손 신호",
+    "price-downside-acceleration-risk": "가격 경로 하락 가속 신호",
+    "price-recovery-support": "가격 경로 회복 신호",
+    "flow-accumulation-support": "수급 축적 신호",
+    "flow-distribution-risk": "수급 분산 신호",
+    "flow-price-divergence-risk": "가격·수급 괴리 신호",
 }
 
 
@@ -69,11 +80,15 @@ def _candidate_signal_type(rule: GraphInferenceRule) -> str:
     return "price-trend-continuation-support"
 
 
-def _account_conditions(rule: GraphInferenceRule) -> List[GraphRuleCondition]:
+def _retained_context_conditions(rule: GraphInferenceRule) -> List[GraphRuleCondition]:
+    """Keep account policy and structural instrument facts outside the scorer."""
     rows = []
     for index, condition in enumerate(rule.conditions or []):
         profile = condition_scope_profile(condition.to_dict(), index)
-        if str(profile.get("scope") or "") == "account":
+        if (
+            str(profile.get("scope") or "") == "account"
+            or str(condition.relation_type or "").upper() in {"HAS_INSTRUMENT_PROFILE"}
+        ):
             rows.append(condition)
     return rows
 
@@ -89,7 +104,11 @@ def compile_model_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
     contract = rule_statistical_signal_contract(rule)
     if not bool(contract.get("required")):
         raise ValueError("Rule does not own a statistical hypothesis: " + rule.rule_id)
-    signal_type = _candidate_signal_type(rule)
+    signal_types = (
+        list(contract.get("signalTypes") or [])
+        if str(contract.get("migrationState") or "") == "model-signal-production"
+        else [_candidate_signal_type(rule)]
+    )
     supported = set(
         PRICE_TREND_SIGNALS
         + FLOW_SIGNALS
@@ -97,44 +116,65 @@ def compile_model_signal_rule_candidate(rule: GraphInferenceRule) -> GraphInfere
         + VALUATION_SIGNALS
         + EVENT_SIGNALS
     )
-    if signal_type not in supported:
-        raise ValueError("Unsupported statistical signal type: " + signal_type)
-    release_ids = list(contract.get("releaseIds") or [])
-    release_id = str(release_ids[0] if release_ids else "")
-    signal_condition = GraphRuleCondition(
-        condition_id="validated-model-signal:" + rule.rule_id,
-        kind="relation",
-        description="역사적 재생과 확률 교정을 통과한 통계 신호가 존재합니다.",
-        relation_type="HAS_MODEL_SIGNAL",
-        direction="out",
-        target_kind="statistical-model-signal",
-        target_property_filters={
-            "signalType": signal_type,
-            "releaseId": release_id,
-            "strengthBand": "strong",
-            "validationStatus": "calibrated",
-            "decisionEligibility": "eligible",
-            "eligibilityStatus": "eligible",
-        },
-        role="required",
-        hypothesis_scope="market",
-        evidence_group_key="validated-model-signal:" + signal_type,
-        change_trigger=True,
-        invalidation_trigger=True,
-    )
-    account_conditions = _account_conditions(rule)
-    conditions = [*account_conditions, signal_condition]
+    unsupported = [signal_type for signal_type in signal_types if signal_type not in supported]
+    if unsupported:
+        raise ValueError("Unsupported statistical signal type: " + unsupported[0])
+    release_ids_by_type = dict(contract.get("signalReleaseIdsByType") or {})
+    signal_conditions = []
+    releases = []
+    for index, signal_type in enumerate(signal_types):
+        release_id = str(release_ids_by_type.get(signal_type) or "")
+        release = model_release(release_id)
+        releases.append(release)
+        eligibility_status = (
+            "conditional" if release.decision_eligibility == "conditional" else "eligible"
+        )
+        signal_conditions.append(GraphRuleCondition(
+            condition_id=(
+                "validated-model-signal:" + rule.rule_id
+                if index == 0
+                else "validated-model-signal-" + str(index + 1) + ":" + rule.rule_id
+            ),
+            kind="relation",
+            description="역사적 재생과 시점 고정 검증을 통과한 통계 신호가 존재합니다.",
+            relation_type="HAS_MODEL_SIGNAL",
+            direction="out",
+            target_kind="statistical-model-signal",
+            target_property_filters={
+                "signalType": signal_type,
+                "hypothesisFamilyId": signal_hypothesis_family(signal_type),
+                "releaseId": release_id,
+                "strengthBand": "strong",
+                "validationStatus": release.validation_status,
+                "decisionEligibility": release.decision_eligibility,
+                "eligibilityStatus": eligibility_status,
+            },
+            role="required",
+            hypothesis_scope="market",
+            evidence_group_key="validated-model-signal:" + signal_type,
+            change_trigger=True,
+            invalidation_trigger=True,
+        ))
+    release = releases[0]
+    context_conditions = _retained_context_conditions(rule)
+    conditions = [*context_conditions, *signal_conditions]
     formation_ids = [item.condition_id for item in conditions]
     lifecycle = rule.resolved_hypothesis_lifecycle()
+    required_domains = ["model-signal"]
+    next_data_requirements = []
+    model_families = {item.model_family for item in releases}
+    if "price-path-statistics" in model_families:
+        required_domains.append("price-path")
+        next_data_requirements.append("다음 시점 고정 가격 경로와 모델 신호 변화")
+    if "investor-flow-statistics" in model_families:
+        required_domains.append("investor-flow")
+        next_data_requirements.append("다음 투자자 수급과 가격 반응의 동조 여부")
     candidate_lifecycle = HypothesisLifecyclePolicy(
         formation_condition_ids=formation_ids,
-        invalidation_condition_ids=[signal_condition.condition_id],
+        invalidation_condition_ids=[item.condition_id for item in signal_conditions],
         validity_minutes=lifecycle.validity_minutes,
-        required_freshness_domains=sorted(set([
-            *list(lifecycle.required_freshness_domains or []),
-            "model-signal",
-        ])),
-        next_data_requirements=list(lifecycle.next_data_requirements or []),
+        required_freshness_domains=sorted(set(required_domains)),
+        next_data_requirements=next_data_requirements,
         invalidation_mode="typedb-rule-not-materialized",
         outcome_contract=lifecycle.outcome_contract,
     )
@@ -182,6 +222,97 @@ def model_signal_rule_candidates(rules: Iterable[GraphInferenceRule]) -> List[Gr
         for rule in rules or []
         if bool(rule_statistical_signal_contract(rule).get("required"))
     ]
+
+
+def promote_model_signal_rule(rule: GraphInferenceRule) -> GraphInferenceRule:
+    """Replace one raw predictive rule with its governed model-signal form."""
+
+    contract = rule_statistical_signal_contract(rule)
+    if not bool(contract.get("productionEligible")):
+        raise ValueError("Rule has no production model signal: " + rule.rule_id)
+    candidate = compile_model_signal_rule_candidate(rule)
+    release_id = str((contract.get("releaseIds") or [""])[0])
+    release = model_release(release_id)
+    signal_labels = [
+        MODEL_SIGNAL_LABELS.get(signal_type, signal_type)
+        for signal_type in contract.get("signalTypes") or []
+    ]
+    signal_summary = " + ".join(signal_labels) or "검증된 모델 신호"
+    basis = replace(
+        candidate.resolved_knowledge_basis,
+        threshold_origin="governed-model-score-contract",
+        validation_status=release.validation_status,
+        decision_eligibility=release.decision_eligibility,
+        decision_authority="typedb-model-signal-rule",
+        migration_disposition="model-signal-production",
+        plain_language_basis=(
+            rule.resolved_knowledge_basis.plain_language_basis
+            + " 원시 숫자 조건 대신 시점 고정 모델 신호를 TypeDB가 해석합니다."
+        ).strip(),
+    )
+    return replace(
+        candidate,
+        rule_id=rule.rule_id,
+        label=rule.label + " · 모델 신호",
+        version=rule.version,
+        knowledge_basis=basis,
+        derivations=[
+            replace(
+                derivation,
+                belief_label=(
+                    signal_summary
+                    + "가 강하고 규칙의 계정·구조 조건을 충족해 '"
+                    + str(derivation.target_label or derivation.target_key or "관계 후보")
+                    + "' 관계를 지지합니다."
+                ),
+                ai_influence_label=(
+                    signal_summary
+                    + " · "
+                    + str(
+                        derivation.candidate_action_label
+                        or derivation.decision_label
+                        or derivation.ai_influence_label
+                        or derivation.target_label
+                    )
+                ),
+            )
+            for derivation in candidate.derivations
+        ],
+        prompt_hint=(
+            signal_summary
+            + "와 규칙에 남은 계정·구조 조건만 설명하고, 제거된 원시 임계치가 "
+            + "직접 확인된 것처럼 재서술하지 않습니다."
+        ),
+        execution_stage="production-model-signal",
+        failure_policy="block",
+        enabled=True,
+    )
+
+
+def production_model_signal_rulebox(rules: Iterable[GraphInferenceRule]) -> List[GraphInferenceRule]:
+    """Fail closed for every predictive rule that lacks a governed scorer."""
+
+    result = []
+    for rule in rules or []:
+        contract = rule_statistical_signal_contract(rule)
+        if not bool(contract.get("required")):
+            result.append(rule)
+        elif bool(contract.get("productionEligible")):
+            result.append(promote_model_signal_rule(rule))
+        else:
+            basis = replace(
+                rule.resolved_knowledge_basis,
+                decision_eligibility="reference-only",
+                decision_authority="disabled-awaiting-model-signal",
+                migration_disposition="awaiting-governed-model-scorer",
+            )
+            result.append(replace(
+                rule,
+                knowledge_basis=basis,
+                execution_stage="awaiting-model-signal",
+                enabled=False,
+            ))
+    return result
 
 
 def statistical_rule_candidate_release(rules: Iterable[GraphInferenceRule]) -> Dict[str, object]:

@@ -32,6 +32,7 @@ from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.investment_reasoning import (
     CASE_BLOCKED,
     CASE_DECISION_SYNTHESIZED,
+    CASE_EXPIRED,
     CASE_PUBLISHED,
     CASE_SUPPRESSED,
     CASE_SUPERSEDED,
@@ -64,8 +65,49 @@ class InMemoryReasoningCaseRepository:
             None,
         )
 
+    def expire_stale_nonterminal(self, cutoff_iso, limit=100, reason="reasoning-case-stale-timeout"):
+        del cutoff_iso
+        expired = []
+        for reasoning_case in list(self.cases.values())[:limit]:
+            if reasoning_case.stage in {
+                "COMPLETED", "PUBLISHED", "BLOCKED", "FAILED",
+                "SUPPRESSED", "SUPERSEDED", "EXPIRED",
+            }:
+                continue
+            reasoning_case.transition(CASE_EXPIRED, reason)
+            self.save(reasoning_case)
+            expired.append(reasoning_case)
+        return expired
+
+
+class InMemoryDecisionEpisodeStore:
+    def __init__(self):
+        self.episodes = {}
+
+    def save(self, episode):
+        self.episodes[episode.episode_id] = episode
+        return episode
+
 
 class ReasoningCaseDispositionTests(unittest.TestCase):
+    def test_stale_case_expiry_is_terminal_and_projected_to_decision_history(self):
+        repository = InMemoryReasoningCaseRepository()
+        decision_store = InMemoryDecisionEpisodeStore()
+        orchestrator = InvestmentReasoningOrchestrator(
+            repository,
+            decision_episode_store=decision_store,
+        )
+        reasoning_case = orchestrator.start(reasoning_request())
+
+        result = orchestrator.expire_stale_cases("2026-08-23T00:00:00Z")
+
+        self.assertEqual("expired", result["status"])
+        self.assertEqual(1, result["expiredCount"])
+        self.assertEqual(CASE_EXPIRED, repository.get(reasoning_case.case_id).stage)
+        self.assertEqual(1, len(decision_store.episodes))
+        episode = next(iter(decision_store.episodes.values()))
+        self.assertEqual("EXPIRED", episode.facts_at_decision["reasoningCaseStage"])
+
     def test_suppressed_and_superseded_are_terminal_explained_outcomes(self):
         repository = InMemoryReasoningCaseRepository()
         orchestrator = InvestmentReasoningOrchestrator(repository)
@@ -121,6 +163,8 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
                 "selectedHypothesisId": "hypothesis:recovery",
                 "validationState": "verified",
                 "disagreementReason": "거래 확인이 부족해 실행을 보류합니다.",
+                "summary": "가격 회복 근거는 있지만 거래 확인 전까지 보류합니다.",
+                "supportingEvidenceIds": ["evidence:price-window"],
             },
         )
 
@@ -132,7 +176,11 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
 
     def test_validated_context_observation_completes_when_delivery_is_suppressed(self):
         repository = InMemoryReasoningCaseRepository()
-        orchestrator = InvestmentReasoningOrchestrator(repository)
+        decision_store = InMemoryDecisionEpisodeStore()
+        orchestrator = InvestmentReasoningOrchestrator(
+            repository,
+            decision_episode_store=decision_store,
+        )
         reasoning_case = orchestrator.start(reasoning_request())
         orchestrator.input_ready(reasoning_case.case_id)
         orchestrator.inference_completed(
@@ -170,6 +218,15 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
         self.assertEqual("COMPLETED", completed.stage)
         self.assertTrue(completed.completed_at)
         self.assertEqual("typedb-delivery-suppressed", completed.final_decision.source)
+        self.assertEqual(1, len(decision_store.episodes))
+        episode = next(iter(decision_store.episodes.values()))
+        self.assertEqual("independent-reasoning-v2", episode.engine_version)
+        self.assertEqual("v2-reasoning-case", episode.source)
+        self.assertEqual(completed.case_id, episode.facts_at_decision["investmentReasoningCaseId"])
+        self.assertEqual("generation:1", episode.inference_generation_id)
+        self.assertEqual("abox:1", episode.source_abox_snapshot_id)
+        self.assertEqual("COMPLETED", episode.facts_at_decision["reasoningCaseStage"])
+        self.assertFalse(episode.facts_at_decision["calibrationPolicy"]["eligible"])
 
 
 def reasoning_request(fact_types=None):
@@ -233,6 +290,7 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
                             "supportingRuleIds": ["graph.price.recovery.v1"],
                             "supportingEvidenceIds": ["evidence:price-window"],
                             "counterEvidenceIds": ["evidence:weak-volume"],
+                            "causalPathIds": ["trace:price-recovery"],
                             "invalidationConditions": ["price recovery fails"],
                             "theoryFamily": knowledge_basis["theoryFamily"],
                             "thesisFamily": "trend-continuation",
@@ -694,6 +752,35 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertTrue(synthesis.graph_trace_complete)
         self.assertIn("SELL", synthesis.blocked_actions)
 
+    def test_action_envelope_conflict_is_blocked_and_blocked_action_wins(self):
+        relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]
+        relation.update({
+            "sourceAboxSnapshotId": "abox:conflict:1",
+            "generationAligned": True,
+            "allowedActions": ["BUY", "HOLD"],
+            "blockedActions": ["BUY", "SELL"],
+            "decision": {
+                "candidateAction": "BUY",
+                "selectedRuleId": "graph.price.recovery.v1",
+            },
+            "graphStoreInference": {
+                "sourceAboxSnapshotId": "abox:conflict:1",
+                "inferenceGenerationId": "generation:1",
+                "relations": [{
+                    "ruleId": "graph.price.recovery.v1",
+                    "candidateAction": "BUY",
+                }],
+                "traces": [{"id": "trace:price-recovery"}],
+            },
+        })
+
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+
+        self.assertEqual(("HOLD",), synthesis.allowed_actions)
+        self.assertIn("BUY", synthesis.blocked_actions)
+        self.assertEqual("action-envelope-conflict", synthesis.conflict_state)
+        self.assertTrue(synthesis.judgement_blocked)
+
     def test_reasoning_case_persists_decision_synthesis_before_ai(self):
         repository = InMemoryReasoningCaseRepository()
         orchestrator = InvestmentReasoningOrchestrator(repository)
@@ -866,6 +953,7 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual(("trend-break",), graph_hypotheses[0].competing_family_ids)
         self.assertEqual("benchmark-adjusted-return", graph_hypotheses[0].outcome_metric)
         self.assertEqual("opposite transition is observed", graph_hypotheses[0].falsification_contract)
+        self.assertEqual(("trace:price-recovery",), graph_hypotheses[0].causal_trace_ids)
         self.assertEqual((), invented_hypotheses)
 
     def test_hypothesis_manager_filters_other_subjects_and_generations(self):
@@ -927,6 +1015,8 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
                 "selectedHypothesisId": "hypothesis:recovery",
                 "validationState": "verified",
                 "summary": "Recovery hypothesis is supported.",
+                "supportingEvidenceIds": ["evidence:price-window"],
+                "nextChecks": ["다음 가격 경로에서 회복이 유지되는지 확인"],
             },
         )
         request_stub = SimpleNamespace(notification_job_id="notification:1")

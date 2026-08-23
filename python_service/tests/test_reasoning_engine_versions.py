@@ -53,11 +53,17 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 self.rules = deepcopy(payload["rules"])
                 return {"saved": True, "status": "ok", "ruleCount": len(self.rules)}
 
+            def active_tbox_metadata(self):
+                from digital_twin.domain.ontology_schema import default_tbox_metadata
+
+                return {**default_tbox_metadata(), "status": "ok", "source": "test"}
+
         repository = Repository()
 
         snapshot, readiness = prepare_v2_rulebox_release(repository, {})
 
         self.assertEqual("ready", readiness["status"])
+        self.assertEqual("matched", readiness["tboxReleasePreflight"]["status"])
         self.assertEqual("migrated", readiness["ruleCatalogMigration"]["status"])
         self.assertEqual(["snapshot", "save", "snapshot", "snapshot"], repository.calls)
         self.assertEqual(
@@ -418,6 +424,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first["releaseFingerprint"], changed_rules["releaseFingerprint"])
         self.assertNotEqual(first["releaseFingerprint"], changed_runtime["releaseFingerprint"])
+        self.assertNotEqual(first["releaseId"], changed_runtime["releaseId"])
+        self.assertEqual(first["baseReleaseId"], changed_runtime["baseReleaseId"])
         self.assertTrue(first["validationCohortId"].startswith("reasoning-cohort:"))
 
     def test_shadow_must_become_candidate_before_active(self):
@@ -530,6 +538,47 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(readiness["ready"])
         self.assertEqual("independent-v2", readiness["mode"])
         self.assertEqual([], readiness["blockers"])
+        self.assertEqual(1250, readiness["endToEndP95Ms"])
+
+    def test_independent_v2_gate_blocks_slow_end_to_end_delivery(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": {"status": "ready", "independentExecution": True},
+                    "releaseBundle": {},
+                }
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200):
+                del deployment_id, lookback
+                return {
+                    "sampleCount": 8,
+                    "successfulRunCount": 8,
+                    "traceCompleteRunCount": 8,
+                    "candidateEventRunCount": 3,
+                    "distinctSymbolCount": 4,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "durationP95Ms": 50000,
+                    "queueWaitP95Ms": 50000,
+                    "endToEndP95Ms": 100000,
+                    "latestCompletedAt": "2099-01-01T00:00:00Z",
+                    "pendingCount": 0,
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        readiness = ReasoningEnginePlatformService(
+            Registry(),
+            {
+                "reasoningEngineV2IndependentEnabled": "1",
+                "reasoningEnginePromotionMaximumEndToEndP95Ms": "90000",
+            },
+            independent_job_store=Jobs(),
+        ).promotion_readiness("ontology-v2-shadow")
+
+        self.assertIn("candidate-end-to-end-latency-slo-breached", readiness["blockers"])
 
     def test_independent_v2_gate_can_approve_only_a_drained_historical_queue_wait(self):
         class Registry:

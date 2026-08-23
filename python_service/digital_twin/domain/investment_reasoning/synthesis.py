@@ -172,6 +172,27 @@ def decision_synthesis_from_relation_context(
         relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId") or ""
     )
     traces = [item for item in graph.get("traces") or [] if isinstance(item, Mapping)]
+    allowed_actions = _texts(
+        relation.get("allowedActions")
+        or decision.get("allowedActions")
+        or envelope.get("allowedActions"),
+        uppercase=True,
+    )
+    blocked_actions = _texts(
+        relation.get("blockedActions")
+        or decision.get("blockedActions")
+        or envelope.get("blockedActions"),
+        uppercase=True,
+    )
+    overlap = tuple(action for action in allowed_actions if action in set(blocked_actions))
+    allowed_actions = tuple(action for action in allowed_actions if action not in set(blocked_actions))
+    candidate_contract_conflict = bool(
+        investment_view_action
+        and (
+            investment_view_action in set(blocked_actions)
+            or (allowed_actions and investment_view_action not in set(allowed_actions))
+        )
+    )
     return DecisionSynthesis(
         synthesis_id=_stable_id(
             account_id,
@@ -192,18 +213,8 @@ def decision_synthesis_from_relation_context(
             or recommended_plan.get("status")
             or "judgement-blocked"
         ),
-        allowed_actions=() if context_observation else _texts(
-            relation.get("allowedActions")
-            or decision.get("allowedActions")
-            or envelope.get("allowedActions"),
-            uppercase=True,
-        ),
-        blocked_actions=() if context_observation else _texts(
-            relation.get("blockedActions")
-            or decision.get("blockedActions")
-            or envelope.get("blockedActions"),
-            uppercase=True,
-        ),
+        allowed_actions=() if context_observation else allowed_actions,
+        blocked_actions=() if context_observation else blocked_actions,
         alternatives=tuple(alternatives),
         eligible_hypothesis_ids=_texts(eligible_ids),
         reference_hypothesis_ids=_texts(reference_ids),
@@ -220,7 +231,11 @@ def decision_synthesis_from_relation_context(
         review_level=str(relation.get("reviewLevel") or decision.get("reviewLevel") or ""),
         data_state=str(relation.get("dataState") or decision.get("dataState") or ""),
         change_state=str(relation.get("changeState") or ""),
-        conflict_state=str(relation.get("conflictState") or ""),
+        conflict_state=(
+            "action-envelope-conflict"
+            if overlap or candidate_contract_conflict
+            else str(relation.get("conflictState") or "")
+        ),
         missing_data=_texts(relation.get("missingData")),
         next_checks=_texts(decision.get("nextChecks") or envelope.get("nextChecks")),
         reversal_conditions=_texts(
@@ -230,6 +245,8 @@ def decision_synthesis_from_relation_context(
             envelope.get("judgementBlocked")
             or quality_assessment.get("judgementBlocked")
             or not investment_view_action
+            or overlap
+            or candidate_contract_conflict
         ),
         graph_trace_complete=bool(
             source_abox_snapshot_id

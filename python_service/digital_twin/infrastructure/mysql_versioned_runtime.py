@@ -1948,7 +1948,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         pending = sum(counts.get(status, 0) for status in ["queued", "retry", "processing"])
         return {
             "status": "active" if pending else "waiting" if counts.get("awaiting_world_projection", 0) else "idle",
-            "probeMode": "versioned-reasoning-live-queue-v1",
+            "probeMode": "active-v2-reasoning-live-queue",
             "deploymentId": clean_deployment_id,
             "effectivePendingCount": pending,
             "pendingCount": pending,
@@ -2113,6 +2113,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     ) if previous_stage.get("startedAt") or row.get("stage_started_at") else "",
                     "updatedAt": str(row.get("stage_updated_at") or ""),
                 }
+        duration_values = [int(row.get("duration_ms") or 0) for row in run_rows]
+        queue_wait_values = [int(row.get("queue_wait_ms") or 0) for row in run_rows]
+        end_to_end_values = [
+            int(row.get("duration_ms") or 0) + int(row.get("queue_wait_ms") or 0)
+            for row in run_rows
+        ]
         return {
             "deploymentId": str(deployment_id or ""),
             "releaseFingerprint": str(release_fingerprint or ""),
@@ -2128,8 +2134,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "shadowDeliveryAuthorizedRunCount": len(shadow_delivery_authorized),
             "distinctSymbolCount": len(symbols),
             "symbols": symbols[:200],
-            "durationP95Ms": self.percentile([int(row.get("duration_ms") or 0) for row in run_rows]),
-            "queueWaitP95Ms": self.percentile([int(row.get("queue_wait_ms") or 0) for row in run_rows]),
+            "durationP95Ms": self.percentile(duration_values),
+            "queueWaitP95Ms": self.percentile(queue_wait_values),
+            "endToEndP95Ms": self.percentile(end_to_end_values),
             "stageDurationP95Ms": {
                 stage: self.percentile(values)
                 for stage, values in sorted(stage_values.items())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Iterable, Mapping
 
+from ...domain.market_time_series import parse_timestamp
 from ...domain.statistical_signals import (
     DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
@@ -20,11 +21,86 @@ from ...domain.time_series_storage import (
 
 
 def _row_timestamp(row: Mapping[str, object]) -> str:
+    for key in (
+        "knownAt", "known_at", "receivedAt", "received_at",
+        "generatedAt", "observed_at", "observedAt", "updatedAt",
+        "bucketAt", "bucket_at",
+    ):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _event_timestamp(row: Mapping[str, object]) -> str:
     for key in ("bucketAt", "bucket_at", "generatedAt", "observed_at", "observedAt"):
         value = str(row.get(key) or "").strip()
         if value:
             return value
     return ""
+
+
+def _point_in_time_windows(
+    windows: Mapping[str, object],
+    cutoff_at: object,
+) -> tuple[Dict[str, object], Dict[str, object]]:
+    """Exclude observations that were not knowable at the decision cutoff."""
+
+    cutoff_text = str(cutoff_at or "").strip()
+    cutoff = parse_timestamp(cutoff_text)
+    if not cutoff:
+        return dict(windows or {}), {
+            "status": "unbounded",
+            "knowledgeCutoffAt": cutoff_text,
+            "keptRowCount": 0,
+            "removedFutureRowCount": 0,
+            "removedUndatedRowCount": 0,
+            "affectedWindows": [],
+        }
+    result: Dict[str, object] = {}
+    kept_count = 0
+    future_count = 0
+    undated_count = 0
+    affected = []
+    for symbol, by_window in dict(windows or {}).items():
+        if not isinstance(by_window, Mapping):
+            continue
+        filtered_windows = {}
+        for window, rows in by_window.items():
+            if not isinstance(rows, list):
+                continue
+            filtered_rows = []
+            removed_here = 0
+            for raw in rows:
+                if not isinstance(raw, Mapping):
+                    undated_count += 1
+                    removed_here += 1
+                    continue
+                row = dict(raw)
+                knowledge_at = parse_timestamp(_row_timestamp(row))
+                event_at = parse_timestamp(_event_timestamp(row))
+                if not knowledge_at or not event_at:
+                    undated_count += 1
+                    removed_here += 1
+                    continue
+                if knowledge_at > cutoff or event_at > cutoff:
+                    future_count += 1
+                    removed_here += 1
+                    continue
+                filtered_rows.append(row)
+                kept_count += 1
+            filtered_windows[str(window)] = filtered_rows
+            if removed_here:
+                affected.append(str(symbol).upper() + ":" + str(window).upper())
+        result[str(symbol)] = filtered_windows
+    return result, {
+        "status": "filtered" if future_count or undated_count else "verified",
+        "knowledgeCutoffAt": cutoff_text,
+        "keptRowCount": kept_count,
+        "removedFutureRowCount": future_count,
+        "removedUndatedRowCount": undated_count,
+        "affectedWindows": sorted(set(affected)),
+    }
 
 
 def _latest_observed_at(windows: Mapping[str, object], fallback: object = "") -> str:
@@ -83,7 +159,9 @@ class StatisticalSignalPipelineService:
         source_event_id: object = "",
     ) -> Dict[str, object]:
         started = time.perf_counter()
-        latest_observed_at = _latest_observed_at(windows, as_of)
+        point_in_time_windows, point_in_time = _point_in_time_windows(windows, as_of)
+        latest_observed_at = _latest_observed_at(point_in_time_windows, as_of)
+        knowledge_cutoff_at = str(as_of or latest_observed_at).strip()
         watermark = TimeSeriesWatermark(
             backend_id=str(backend_id or ""),
             observed_through=latest_observed_at,
@@ -94,8 +172,8 @@ class StatisticalSignalPipelineService:
         feature_snapshot = TemporalFeatureSnapshot.create(
             backend_id=backend_id,
             account_id=account_id,
-            as_of=latest_observed_at,
-            windows=windows,
+            as_of=knowledge_cutoff_at,
+            windows=point_in_time_windows,
             watermark=watermark,
             feature_set_version=self.feature_set_version,
         )
@@ -122,7 +200,7 @@ class StatisticalSignalPipelineService:
             signal_snapshots.append(scorer(feature_snapshot, release_id=release_id))
         signal_bundle = ModelSignalBundle.create(
             account_id=feature_snapshot.account_id,
-            as_of=latest_observed_at,
+            as_of=knowledge_cutoff_at,
             source_feature_snapshot_id=feature_snapshot.snapshot_id,
             feature_set_version=feature_snapshot.feature_set_version,
             snapshots=signal_snapshots,
@@ -170,6 +248,7 @@ class StatisticalSignalPipelineService:
             "signalSnapshots": tuple(signal_snapshots),
             "signalBundle": signal_bundle,
             "skippedModelReleaseIds": skipped_releases,
+            "pointInTime": point_in_time,
             "persistence": {
                 "featureSnapshotInserted": feature_persisted,
                 "featureSnapshotError": feature_error,

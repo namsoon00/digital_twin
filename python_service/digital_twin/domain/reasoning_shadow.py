@@ -466,6 +466,7 @@ def reasoning_comparison_summary(
     status_counts: Dict[str, int] = {}
     symbols, markets, actions, matched_rule_ids = set(), set(), set(), set()
     fact_values, rule_values, baseline_durations, candidate_durations, queue_waits = [], [], [], [], []
+    candidate_end_to_end_durations = []
     baseline_stage_values: Dict[str, list] = {}
     candidate_stage_values: Dict[str, list] = {}
     unexplained = shadow_deliveries = nonempty_decisions = nonempty_native = decision_subjects = 0
@@ -498,6 +499,10 @@ def reasoning_comparison_summary(
             baseline_durations.append(int(payload.get("baselineDurationMs") or 0))
             candidate_durations.append(int(payload.get("candidateDurationMs") or 0))
             queue_waits.append(int(payload.get("queueWaitMs") or 0))
+            candidate_end_to_end_durations.append(
+                int(payload.get("candidateDurationMs") or 0)
+                + int(payload.get("queueWaitMs") or 0)
+            )
             for stage, value in _mapping(payload.get("baselinePhaseDurationsMs")).items():
                 baseline_stage_values.setdefault(str(stage), []).append(value)
             for stage, value in _mapping(payload.get("candidatePhaseDurationsMs")).items():
@@ -530,6 +535,7 @@ def reasoning_comparison_summary(
         "baselineP95DurationMs": _percentile95(baseline_durations),
         "candidateP95DurationMs": _percentile95(candidate_durations),
         "queueWaitP95Ms": _percentile95(queue_waits),
+        "candidateEndToEndP95Ms": _percentile95(candidate_end_to_end_durations),
         "baselinePhaseP95Ms": {key: _percentile95(values) for key, values in sorted(baseline_stage_values.items())},
         "candidatePhaseP95Ms": {key: _percentile95(values) for key, values in sorted(candidate_stage_values.items())},
         "latestComparisonAt": str(items[0].get("createdAt") or "") if items else "",

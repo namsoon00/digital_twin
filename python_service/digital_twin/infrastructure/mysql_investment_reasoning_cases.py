@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional
 
-from ..domain.investment_reasoning import ReasoningCase
+from ..domain.investment_reasoning import CASE_TERMINAL_STAGES, ReasoningCase
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
@@ -126,6 +126,59 @@ class MySQLInvestmentReasoningCaseStore(MySQLOperationalConnection):
                 for row in rows or []
             },
         }
+
+    def expire_stale_nonterminal(
+        self,
+        cutoff_iso: str,
+        limit: int = 100,
+        reason: str = "reasoning-case-stale-timeout",
+    ) -> List[ReasoningCase]:
+        """Atomically close abandoned lifecycle rows without racing live workers."""
+
+        terminal_stages = tuple(sorted(CASE_TERMINAL_STAGES))
+        placeholders = ", ".join(["%s"] * len(terminal_stages))
+        bounded_limit = max(1, min(500, int(limit or 100)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM investment_reasoning_cases "
+                "WHERE stage NOT IN (" + placeholders + ") AND updated_at < %s "
+                "ORDER BY updated_at, case_id LIMIT %s",
+                (*terminal_stages, str(cutoff_iso or ""), bounded_limit),
+            ).fetchall()
+            expired = []
+            for row in rows or []:
+                reasoning_case = self.case_from_row(row)
+                if not reasoning_case or reasoning_case.stage in CASE_TERMINAL_STAGES:
+                    continue
+                previous_stage = reasoning_case.stage
+                previous_version = reasoning_case.version
+                reasoning_case.transition(
+                    "EXPIRED",
+                    reason,
+                    {
+                        "cutoffAt": str(cutoff_iso or ""),
+                        "previousStage": previous_stage,
+                    },
+                )
+                cursor = connection.execute(
+                    "UPDATE investment_reasoning_cases SET stage = %s, payload_json = %s, "
+                    "case_version = %s, updated_at = %s, completed_at = %s "
+                    "WHERE case_id = %s AND stage = %s AND case_version = %s AND updated_at < %s",
+                    (
+                        reasoning_case.stage,
+                        json_dumps(reasoning_case.to_dict()),
+                        reasoning_case.version,
+                        reasoning_case.updated_at,
+                        reasoning_case.completed_at,
+                        reasoning_case.case_id,
+                        previous_stage,
+                        previous_version,
+                        str(cutoff_iso or ""),
+                    ),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) == 1:
+                    expired.append(reasoning_case)
+        return expired
 
     @staticmethod
     def case_from_row(row) -> Optional[ReasoningCase]:

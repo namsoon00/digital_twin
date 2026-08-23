@@ -200,6 +200,43 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
 
         self.assertTrue(rulebox_catalog_requires_bootstrap_repair(stored))
 
+    def test_raw_statistical_rule_is_replaced_once_by_model_signal_contract(self):
+        bootstrap = rulebox_rules_payload(default_graph_inference_rules())
+        stored = deepcopy(bootstrap)
+        target = next(
+            item for item in stored
+            if (item.get("knowledge_basis") or {}).get("migrationDisposition")
+            == "model-signal-production"
+        )
+        target["knowledge_basis"]["decisionAuthority"] = "typedb-raw-fact-rule"
+        target["knowledge_basis"]["migrationDisposition"] = "replace-with-model-signal-rule"
+        target["conditions"] = [{
+            "condition_id": "legacy-raw-price",
+            "kind": "subject_property",
+            "description": "legacy raw price threshold",
+            "field": "profitLossRate",
+            "operator": "<=",
+            "value": -8,
+        }]
+
+        self.assertTrue(rulebox_catalog_requires_bootstrap_repair(stored))
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+        migrated = next(
+            item for item in migration["rules"]
+            if item.get("rule_id") == target.get("rule_id")
+        )
+
+        self.assertIn(target["rule_id"], migration["modelSignalUpdatedRuleIds"])
+        self.assertEqual(
+            "model-signal-production",
+            migrated["knowledge_basis"]["migrationDisposition"],
+        )
+        self.assertTrue(any(
+            item.get("relation_type") == "HAS_MODEL_SIGNAL"
+            for item in migrated["conditions"]
+        ))
+        self.assertFalse(rulebox_catalog_requires_bootstrap_repair(migration["rules"]))
+
 
 if __name__ == "__main__":
     unittest.main()

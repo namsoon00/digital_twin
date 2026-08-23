@@ -85,6 +85,31 @@ class InvestmentProductReadinessTests(unittest.TestCase):
         self.assertEqual(64544, result["metrics"]["p95TotalDurationMs"])
         self.assertIn("latency-slo", result["blockers"])
 
+    def test_latency_prefers_end_to_end_queue_time(self):
+        result = investment_product_readiness(
+            operational_promotion_ready=True,
+            rule_inventory={"releaseReady": True},
+            catalog={
+                "decisionPerformance": {
+                    "status": "ok",
+                    "calibrationEligibleEpisodeCount": 80,
+                    "outcomeCoveragePct": 90.0,
+                    "governance": {"quarantineRecommendedRuleIds": []},
+                },
+                "statisticalSignals": {"migrationCounts": {"shadow-signal-required": 0}},
+            },
+            experiments={"activeCount": 1},
+            active_health={"queue": {"durationP95Ms": 1000, "endToEndP95Ms": 65000}},
+            comparison={"sampleCount": 30},
+            settings={
+                "investmentProductSoakTestPassed": True,
+                "investmentProductComplianceReviewed": True,
+            },
+        )
+
+        self.assertEqual(65000, result["metrics"]["p95TotalDurationMs"])
+        self.assertIn("latency-slo", result["blockers"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,7 @@ from .candidate_release import (
     compile_price_signal_rule_candidate,
     compile_model_signal_rule_candidate,
     model_signal_rule_candidates,
+    production_model_signal_rulebox,
     price_signal_rule_candidates,
     statistical_rule_candidate_release,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "compile_model_signal_rule_candidate",
     "model_signal_evaluation_report",
     "model_signal_rule_candidates",
+    "production_model_signal_rulebox",
     "price_signal_rule_candidates",
     "rule_statistical_signal_contract",
     "score_temporal_feature_snapshot",

@@ -92,11 +92,25 @@ class OntologyInferenceQualityTests(unittest.TestCase):
             "freshnessStatus": "fresh",
             "source": "Toss",
         })
-        graph.entities.extend([stock, risk_budget, level, wrong_level])
+        model_signal = OntologyEntity("model-signal:trend-break", "추세 훼손 모델 신호", "statistical-model-signal", {
+            "ontologyBox": "ABox",
+            "signalType": "price-trend-break-risk",
+            "hypothesisFamilyId": "trend-break",
+            "releaseId": "price-path-statistics-production-v2",
+            "strengthBand": "strong",
+            "validationStatus": "validated-deterministic",
+            "decisionEligibility": "conditional",
+            "eligibilityStatus": "conditional",
+            "observedAt": "2026-07-20T00:00:00Z",
+            "freshnessStatus": "fresh",
+            "judgementEvidenceUsable": True,
+        })
+        graph.entities.extend([stock, risk_budget, level, wrong_level, model_signal])
         graph.relations.extend([
             OntologyRelation("stock:005930", "risk-budget:main", "HAS_RISK_BUDGET", 1.0, properties={"_relationId": "relation:risk-budget"}),
             OntologyRelation("stock:005930", "key-level:005930:ma20", "HAS_TECHNICAL_INDICATOR", 0.8, properties={"_relationId": "relation:ma20"}),
             OntologyRelation("stock:005930", "key-level:005930:ma5", "HAS_TECHNICAL_INDICATOR", 0.99, properties={"_relationId": "relation:wrong-ma5"}),
+            OntologyRelation("stock:005930", "model-signal:trend-break", "HAS_MODEL_SIGNAL", 0.86, properties={"_relationId": "relation:model-signal"}),
         ])
 
         materialize_rule_inference(graph, rule, stock, {
@@ -104,7 +118,7 @@ class OntologyInferenceQualityTests(unittest.TestCase):
                 {"conditionId": "holding-source", "kind": "subject_property"},
                 {"conditionId": "strategy-risk-budget", "kind": "relation"},
                 {"conditionId": "holding-loss", "kind": "subject_property"},
-                {"conditionId": "ma-break", "kind": "relation"},
+                {"conditionId": "validated-model-signal:graph.loss_guard.breakdown.v1", "kind": "relation"},
             ],
             "evidenceRelationIds": [],
             "confidence": 0.86,
@@ -113,9 +127,10 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         trace = next(item for item in graph.entities if item.kind == "inference-trace")
         conditions = {item["conditionId"]: item for item in trace.properties["matchedConditions"]}
         self.assertEqual(-12.5, conditions["holding-loss"]["observedValue"])
-        self.assertEqual("relation:ma20", conditions["ma-break"]["relationId"])
-        self.assertEqual({"levelType": "ma20"}, conditions["ma-break"]["matchedTargetProperties"])
-        self.assertEqual("fresh", conditions["ma-break"]["freshnessStatus"])
+        model_condition = conditions["validated-model-signal:graph.loss_guard.breakdown.v1"]
+        self.assertEqual("relation:model-signal", model_condition["relationId"])
+        self.assertEqual("price-trend-break-risk", model_condition["matchedTargetProperties"]["signalType"])
+        self.assertEqual("fresh", model_condition["freshnessStatus"])
         self.assertEqual("sufficient", trace.properties["dataState"])
         self.assertEqual("typedb-match+abox-grounding", trace.properties["conditionDetailSource"])
         self.assertTrue(trace.properties["evidenceUsableForJudgement"])
@@ -123,8 +138,8 @@ class OntologyInferenceQualityTests(unittest.TestCase):
         self.assertEqual("stock", trace.properties["ruleSourceKind"])
         self.assertTrue(trace.properties["ruleScopeFamilies"])
         self.assertEqual(
-            {"levelType": ["ma20", "ma60"], "maxValue": -5.0},
-            trace.properties["ruleConditionShapes"][3]["targetPropertyFilters"],
+            "price-trend-break-risk",
+            trace.properties["ruleConditionShapes"][3]["targetPropertyFilters"]["signalType"],
         )
         primary_relation = next(item for item in graph.relations if item.relation_type == "HAS_INFERRED_RISK")
         self.assertEqual("loss-guard-breakdown", primary_relation.properties["hypothesisFamilyKey"])

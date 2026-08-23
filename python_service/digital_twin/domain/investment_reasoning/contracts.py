@@ -170,7 +170,12 @@ class HypothesisRecord:
             supporting_rule_ids=supporting_rule_ids,
             supporting_evidence_ids=_texts(payload.get("supportingEvidenceIds") or payload.get("supporting_evidence_ids")),
             counter_evidence_ids=_texts(payload.get("counterEvidenceIds") or payload.get("counter_evidence_ids")),
-            causal_trace_ids=_texts(payload.get("causalTraceIds") or payload.get("causal_trace_ids")),
+            causal_trace_ids=_texts(
+                payload.get("causalTraceIds")
+                or payload.get("causalPathIds")
+                or payload.get("causal_trace_ids")
+                or payload.get("causal_path_ids")
+            ),
             assumptions=_texts(payload.get("assumptions")),
             invalidation_conditions=_texts(
                 payload.get("invalidationConditions") or payload.get("invalidation_conditions")
@@ -421,6 +426,26 @@ class AIJudgmentResult:
     @classmethod
     def from_result(cls, result, response: Mapping[str, object]) -> "AIJudgmentResult":
         payload = dict(response or {})
+        comparison = payload.get("hypothesisComparison")
+        comparison = dict(comparison or {}) if isinstance(comparison, Mapping) else {}
+        selected_id = str(
+            payload.get("selectedHypothesisId")
+            or comparison.get("selectedHypothesisId")
+            or ""
+        )
+        reviews = [
+            dict(item)
+            for item in (
+                comparison.get("hypotheses")
+                or payload.get("hypotheses")
+                or []
+            )
+            if isinstance(item, Mapping)
+        ]
+        selected_review = next((
+            item for item in reviews
+            if str(item.get("hypothesisId") or "") == selected_id
+        ), {})
         confidence = payload.get("confidence") or payload.get("judgmentStrength") or 0
         try:
             confidence_value = float(confidence or 0)
@@ -431,7 +456,7 @@ class AIJudgmentResult:
             result_id=str(getattr(result, "result_id", "") or ""),
             action=str(payload.get("action") or "").upper(),
             confidence=confidence_value,
-            selected_hypothesis_id=str(payload.get("selectedHypothesisId") or ""),
+            selected_hypothesis_id=selected_id,
             validation_state=str(
                 payload.get("validationState")
                 or getattr(result, "validation_state", "")
@@ -439,10 +464,16 @@ class AIJudgmentResult:
             ),
             rationale=str(payload.get("summary") or payload.get("opinion") or ""),
             supporting_evidence_ids=_texts(
-                payload.get("supportingEvidenceIds") or payload.get("evidenceIds")
+                payload.get("supportingEvidenceIds")
+                or payload.get("evidenceIds")
+                or selected_review.get("reviewedSupportingEvidenceIds")
+                or selected_review.get("supportingEvidenceIds")
             ),
             opposing_evidence_ids=_texts(
-                payload.get("opposingEvidenceIds") or payload.get("counterEvidenceIds")
+                payload.get("opposingEvidenceIds")
+                or payload.get("counterEvidenceIds")
+                or selected_review.get("reviewedCounterEvidenceIds")
+                or selected_review.get("counterEvidenceIds")
             ),
             rejected_candidate_reason=str(
                 payload.get("candidateAdjustmentReason")

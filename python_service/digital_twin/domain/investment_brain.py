@@ -98,6 +98,21 @@ def stable_id(prefix: str, *parts: object) -> str:
     return prefix + ":" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
+def reasoning_case_decision_episode_id(
+    case_id: object,
+    account_id: object,
+    symbol: object,
+) -> str:
+    """Keep the V2 reasoning case and notification projection on one episode."""
+
+    return stable_id(
+        "decision-episode-v2",
+        str(case_id or "").strip(),
+        str(account_id or "").strip(),
+        str(symbol or "").strip().upper(),
+    )
+
+
 def scoped_decision_follow_ups(
     episode_id: str,
     conditions: Iterable[Dict[str, object]],
@@ -550,10 +565,11 @@ class DecisionEpisode:
     research_plan: Dict[str, object] = field(default_factory=dict)
     research_audit: Dict[str, object] = field(default_factory=dict)
     outcomes: List[ObservedOutcome] = field(default_factory=list)
+    engine_version: str = INVESTMENT_BRAIN_VERSION
 
     def to_dict(self) -> Dict[str, object]:
         payload = camelize(asdict(self))
-        payload["engineVersion"] = INVESTMENT_BRAIN_VERSION
+        payload["engineVersion"] = str(self.engine_version or INVESTMENT_BRAIN_VERSION)
         payload["question"] = self.question.to_dict()
         payload["hypothesisSet"] = self.hypothesis_set.to_dict()
         payload["hypothesisReviews"] = [item.to_dict() for item in self.hypothesis_reviews]
@@ -919,6 +935,11 @@ class DecisionEpisode:
             research_plan=dict(payload.get("researchPlan") or {}),
             research_audit=dict(payload.get("researchAudit") or {}),
             outcomes=outcomes,
+            engine_version=str(
+                payload.get("engineVersion")
+                or payload.get("engine_version")
+                or INVESTMENT_BRAIN_VERSION
+            ),
         )
 
 
@@ -3009,13 +3030,22 @@ def decision_episode_from_context(
     })
     raw_decided_at = str(validated_response.get("referenceDate") or context.get("referenceDate") or utc_now_iso())
     decided_at = canonical_investment_timestamp(raw_decided_at) or utc_now_iso()
-    episode_id = stable_id(
-        "decision-episode",
-        context.get("accountId"),
-        seed_episode.symbol,
-        relation_context.get("inferenceGenerationId"),
-        job_id or context.get("jobId"),
-        validated_response.get("action"),
+    reasoning_case_id = str(context.get("investmentReasoningCaseId") or "").strip()
+    episode_id = (
+        reasoning_case_decision_episode_id(
+            reasoning_case_id,
+            context.get("accountId"),
+            seed_episode.symbol,
+        )
+        if reasoning_case_id
+        else stable_id(
+            "decision-episode",
+            context.get("accountId"),
+            seed_episode.symbol,
+            relation_context.get("inferenceGenerationId"),
+            job_id or context.get("jobId"),
+            validated_response.get("action"),
+        )
     )
     comparison = hypothesis_comparison_audit(
         [item.to_dict() for item in seed_episode.hypothesis_set.hypotheses],
@@ -3129,6 +3159,11 @@ def decision_episode_from_context(
         },
         research_plan=dict(brain.get("researchPlan") or relation_context.get("researchPlan") or {}),
         research_audit=dict(relation_context.get("researchCycle") or {}),
+        engine_version=str(
+            relation_context.get("engineVersion")
+            or relation_context.get("reasoningEngineVersion")
+            or INVESTMENT_BRAIN_VERSION
+        ),
     )
 
 
@@ -3261,6 +3296,11 @@ def selected_hypothesis_outcome_contract(
         "accountIndependenceKey": stable_id(
             "account-hypothesis-outcome-episode", account_identity, generation_id
         ),
+        "predictionTarget": hypothesis.prediction_target,
+        "expectedDirection": hypothesis.expected_direction,
+        "expectedOutcome": hypothesis.expected_outcome,
+        "outcomeMetric": hypothesis.outcome_metric,
+        "falsificationContract": hypothesis.falsification_contract,
     }
     payload["contractFingerprint"] = outcome_contract_fingerprint(payload)
     return payload

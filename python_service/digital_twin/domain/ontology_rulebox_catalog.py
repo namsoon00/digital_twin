@@ -7544,6 +7544,8 @@ def default_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
     ]
-    return with_rulebox_v3_governance(
+    governed = with_rulebox_v3_governance(
         with_rulebox_execution_guidance(with_market_evidence_guards(rules))
     )
+    from .statistical_signals import production_model_signal_rulebox
+    return production_model_signal_rulebox(governed)

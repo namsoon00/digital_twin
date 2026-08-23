@@ -239,6 +239,36 @@ class FakeDecisionEpisodeStore:
         return list(self.saved)[:limit]
 
 
+def governed_outcome_contract(hypothesis_id, rule_id, horizon=60):
+    return {
+        "contractVersion": "rulebox-hypothesis-outcome-contract-v2",
+        "contractFingerprint": "sha256:test-contract",
+        "criteriaOrigin": "rulebox",
+        "selectedHypothesisId": hypothesis_id,
+        "sourceRuleIds": [rule_id],
+        "inferenceGenerationId": "generation:test",
+        "outcomeHorizonMinutes": [horizon],
+        "requiredObservationDomains": ["quote"],
+        "minimumIndependentEpisodes": 3,
+        "maximumObservationDelayMinutes": 180,
+        "predictionTarget": "instrument-return",
+        "expectedDirection": "directional",
+        "outcomeMetric": "instrumentReturnPct",
+        "falsificationContract": "opposite material return invalidates the hypothesis",
+        "criteria": [{
+            "criterionId": "directional-result",
+            "label": "directional result",
+            "role": "result",
+            "metric": "instrumentReturnPct",
+            "operator": ">=",
+            "threshold": 0.5,
+            "horizonMinutes": horizon,
+            "required": True,
+            "requiredObservationDomains": ["quote"],
+        }],
+    }
+
+
 class FakeEvidenceStore:
     def __init__(self, cached=None):
         self.cached = list(cached or [])
@@ -383,6 +413,9 @@ class InvestmentBrainTest(unittest.TestCase):
                 "accountId": "account-1",
                 "symbol": "005930",
                 "selectedHypothesisId": "hypothesis-" + str(index),
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    "hypothesis-" + str(index), "rule:" + family_id, horizon
+                )},
                 "hypothesisSet": {"hypotheses": [{
                     "hypothesisId": "hypothesis-" + str(index),
                     "templateId": "template:" + family_id,
@@ -429,6 +462,9 @@ class InvestmentBrainTest(unittest.TestCase):
                 "symbol": "005930",
                 "action": "TRIM",
                 "selectedHypothesisId": "hypothesis-" + str(index),
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    "hypothesis-" + str(index), "rule:risk", 1440
+                )},
                 "hypothesisSet": {
                     "hypotheses": [{
                         "hypothesisId": "hypothesis-" + str(index),
@@ -467,6 +503,9 @@ class InvestmentBrainTest(unittest.TestCase):
                 "symbol": "005930",
                 "action": "HOLD",
                 "selectedHypothesisId": "hypothesis-risk",
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    "hypothesis-risk", "rule:risk", 60
+                )},
                 "hypothesisSet": {"hypotheses": [{
                     "hypothesisId": "hypothesis-risk",
                     "templateId": "template:risk",
@@ -501,6 +540,9 @@ class InvestmentBrainTest(unittest.TestCase):
                 "symbol": "005930",
                 "action": "BUY",
                 "selectedHypothesisId": "hypothesis-poor",
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    "hypothesis-poor", "rule:poor", 1440
+                )},
                 "hypothesisSet": {"hypotheses": [{
                     "hypothesisId": "hypothesis-poor",
                     "templateId": "template:poor",
@@ -535,6 +577,9 @@ class InvestmentBrainTest(unittest.TestCase):
                 "episodeId": "episode-mixed-" + str(index),
                 "action": "BUY",
                 "selectedHypothesisId": "hypothesis-mixed",
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    "hypothesis-mixed", "rule:mixed", 60
+                )},
                 "hypothesisSet": {"hypotheses": [{
                     "hypothesisId": "hypothesis-mixed",
                     "supportingRuleIds": ["rule:mixed"],
@@ -1532,6 +1577,11 @@ class InvestmentBrainTest(unittest.TestCase):
                 "symbol": "005930",
                 "subjectName": "삼성전자",
                 "selectedHypothesisId": selected["hypothesisId"],
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    selected["hypothesisId"],
+                    (selected.get("supportingRuleIds") or ["rule:test"])[0],
+                    60,
+                )},
                 "hypothesisSet": hypothesis_set,
                 "outcomes": [{
                     "outcomeId": "outcome-" + str(index),

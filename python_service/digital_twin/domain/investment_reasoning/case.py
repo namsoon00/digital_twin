@@ -86,6 +86,7 @@ class ReasoningCase:
     validation_cohort_id: str
     stage: str
     fact_delta: FactDelta
+    release_manifest: Dict[str, object] = field(default_factory=dict)
     input_fingerprint: str = ""
     hypotheses: Tuple[HypothesisRecord, ...] = ()
     decision_syntheses: Tuple[DecisionSynthesis, ...] = ()
@@ -114,6 +115,7 @@ class ReasoningCase:
             validation_cohort_id=str(release.get("validationCohortId") or ""),
             stage=CASE_CREATED,
             fact_delta=FactDelta.from_request(request),
+            release_manifest=release,
             input_fingerprint=str(getattr(request, "input_fingerprint", "") or ""),
             created_at=stamp,
             updated_at=stamp,
@@ -165,6 +167,7 @@ class ReasoningCase:
             "validationCohortId": self.validation_cohort_id,
             "stage": self.stage,
             "factDelta": self.fact_delta.to_dict(),
+            "releaseManifest": dict(self.release_manifest or {}),
             "inputFingerprint": self.input_fingerprint,
             "hypotheses": [item.to_dict() for item in self.hypotheses],
             "decisionSyntheses": [item.to_dict() for item in self.decision_syntheses],
@@ -196,6 +199,7 @@ class ReasoningCase:
             validation_cohort_id=str(payload.get("validationCohortId") or payload.get("validation_cohort_id") or ""),
             stage=str(payload.get("stage") or CASE_CREATED),
             fact_delta=FactDelta.from_dict(payload.get("factDelta") or payload.get("fact_delta") or {"version": FACT_DELTA_VERSION}),
+            release_manifest=dict(payload.get("releaseManifest") or payload.get("release_manifest") or {}),
             input_fingerprint=str(payload.get("inputFingerprint") or payload.get("input_fingerprint") or ""),
             hypotheses=tuple(
                 HypothesisRecord.from_dict(item)

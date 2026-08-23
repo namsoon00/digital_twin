@@ -1,15 +1,11 @@
-"""Governed statistical-model release registry.
-
-The initial release emits replay-required reference scores. It intentionally
-does not claim calibrated probabilities or authorize an investment action.
-"""
+"""Governed statistical-model release registry."""
 
 from dataclasses import dataclass
 from typing import Dict, Iterable, Tuple
 
 
-DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-shadow-v1"
-DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-shadow-v1"
+DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-production-v2"
+DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-production-v2"
 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-shadow-v1"
 DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-shadow-v1"
 DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-shadow-v1"
@@ -89,15 +85,15 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "price-downside-acceleration-risk",
                 "price-recovery-support",
             ),
-            status="shadow",
-            validation_status="replay-required",
-            decision_eligibility="reference-only",
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
             minimum_samples=5,
             minimum_coverage_ratio=0.75,
             scorer_version="price-path-score-v1",
             description=(
-                "가격 경로를 표준화한 재현 가능 점수입니다. 역사적 재생과 확률 교정 전에는 "
-                "TypeDB 행동 후보를 만들 수 없습니다."
+                "시점 고정 가격 경로를 표준화한 재현 가능 점수입니다. 확률 예측이 아닌 "
+                "조건부 점수이며 TypeDB가 가설 후보를 만들 때만 사용합니다."
             ),
         ),
         StatisticalModelRelease(
@@ -108,13 +104,13 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
                 "flow-distribution-risk",
                 "flow-price-divergence-risk",
             ),
-            status="shadow",
-            validation_status="replay-required",
-            decision_eligibility="reference-only",
+            status="production",
+            validation_status="validated-deterministic",
+            decision_eligibility="conditional",
             minimum_samples=20,
             minimum_coverage_ratio=0.75,
             scorer_version="flow-score-v1",
-            description="투자자별 수급, 체결과 가격 괴리를 검증하는 통계 신호입니다.",
+            description="시점 고정 투자자별 수급, 체결과 가격 괴리를 검증하는 조건부 통계 신호입니다.",
         ),
         StatisticalModelRelease(
             release_id=DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,

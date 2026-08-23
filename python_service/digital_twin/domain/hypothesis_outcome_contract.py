@@ -355,6 +355,57 @@ def resolved_outcome_contract(
     ).to_dict()
 
 
+def outcome_contract_completeness(value: Mapping[str, object] = None) -> Dict[str, object]:
+    """Validate an authored prediction contract without applying fallbacks."""
+
+    source = dict(value or {}) if isinstance(value, Mapping) else {}
+    parsed = HypothesisOutcomeContract.from_dict(source)
+    missing = []
+    if text(source.get("criteriaOrigin")) != "rulebox":
+        missing.append("rulebox-criteria-origin")
+    if not text(source.get("contractVersion")):
+        missing.append("contract-version")
+    if not text(source.get("contractFingerprint")):
+        missing.append("contract-fingerprint")
+    if not text(source.get("selectedHypothesisId")):
+        missing.append("selected-hypothesis")
+    if not unique_strings(list_values(source.get("sourceRuleIds"))):
+        missing.append("source-rule")
+    if not text(source.get("inferenceGenerationId")):
+        missing.append("inference-generation")
+    if not parsed.outcome_horizon_minutes:
+        missing.append("outcome-horizon")
+    if not parsed.required_observation_domains:
+        missing.append("observation-domain")
+    if parsed.minimum_independent_episodes <= 0:
+        missing.append("minimum-independent-episodes")
+    if parsed.maximum_observation_delay_minutes <= 0:
+        missing.append("maximum-observation-delay")
+    if not parsed.criteria:
+        missing.append("outcome-criteria")
+    directional = [
+        criterion
+        for criterion in parsed.criteria
+        if criterion.required and criterion.role in {"result", "invalidation"}
+    ]
+    if not directional:
+        missing.append("directional-result-or-invalidation-criterion")
+    for field_name, key in [
+        ("prediction-target", "predictionTarget"),
+        ("expected-direction", "expectedDirection"),
+        ("outcome-metric", "outcomeMetric"),
+        ("falsification-contract", "falsificationContract"),
+    ]:
+        if not text(source.get(key)):
+            missing.append(field_name)
+    return {
+        "complete": not missing,
+        "missing": missing,
+        "criteriaCount": len(parsed.criteria),
+        "directionalCriterionCount": len(directional),
+    }
+
+
 def merge_outcome_contracts(
     contracts: Iterable[Mapping[str, object]],
     fallback_horizons: Iterable[object] = None,

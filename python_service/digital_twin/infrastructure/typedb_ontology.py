@@ -1955,6 +1955,11 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "institutionalOwnershipPct": "ontology-institutional-ownership-pct",
     "insiderOwnershipPct": "ontology-insider-ownership-pct",
     "executiveCount": "ontology-executive-count",
+    "score": "ontology-model-signal-score",
+    "confidence": "ontology-model-signal-confidence",
+    "probability": "ontology-model-signal-probability",
+    "probabilityLower": "ontology-model-signal-probability-lower",
+    "probabilityUpper": "ontology-model-signal-probability-upper",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -2058,6 +2063,23 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "companyFactRevision": "ontology-company-fact-revision",
     "companyDataState": "ontology-company-data-state",
     "ceoName": "ontology-ceo-name",
+    # Statistical model outputs are first-class ABox evidence. RuleBox
+    # functions must bind these immutable release and eligibility fields from
+    # TypeDB attributes rather than inspect the JSON display payload.
+    "signalType": "ontology-model-signal-type",
+    "signalFamily": "ontology-model-signal-family",
+    "horizon": "ontology-model-signal-horizon",
+    "strengthBand": "ontology-model-signal-strength-band",
+    "releaseId": "ontology-model-release-id",
+    "validationStatus": "ontology-model-validation-status",
+    "decisionEligibility": "ontology-model-decision-eligibility",
+    "eligibilityStatus": "ontology-model-eligibility-status",
+    "uncertaintyStatus": "ontology-model-uncertainty-status",
+    "hypothesisFamilyId": "ontology-hypothesis-family-id",
+    "outcomeMetric": "ontology-model-outcome-metric",
+    "knowledgeCutoffAt": "ontology-model-knowledge-cutoff-at",
+    "featureSetVersion": "ontology-model-feature-set-version",
+    "materialHash": "ontology-model-signal-material-hash",
     "personName": "ontology-person-name",
     "executiveTitle": "ontology-executive-title",
     "executiveResponsibility": "ontology-executive-responsibility",
@@ -16388,7 +16410,8 @@ relation ontology-assertion,
         rule_ids = sorted({
             str(getattr(rule, "rule_id", "") or "").strip()
             for rule in rules or []
-            if str(getattr(rule, "rule_id", "") or "").strip()
+            if typedb_rule_is_enabled(rule)
+            and str(getattr(rule, "rule_id", "") or "").strip()
         })
         completed["schemaFunctionSync"] = {
             "status": "deferred",
@@ -17620,7 +17643,7 @@ relation ontology-assertion,
         stable_abox_write_lease_held: bool = False,
         evidence_read_index: Dict[str, object] = None,
     ) -> Dict[str, object]:
-        rules = list(rules or [])
+        rules = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
         clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
         if (
             stable_abox_write_lease_held
@@ -19771,6 +19794,8 @@ relation ontology-assertion,
     def probe_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule], world_id: str = "") -> Dict[str, object]:
         ready_rules = []
         for rule in rules or []:
+            if not typedb_rule_is_enabled(rule):
+                continue
             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
             if typedb_native_rule_profile(rule_payload).get("status") == "ready":
                 ready_rules.append((rule, rule_payload))
@@ -19900,7 +19925,7 @@ relation ontology-assertion,
     def sync_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule], force: bool = False, world_id: str = "") -> Dict[str, object]:
         if not self.address:
             return {"status": "disabled", "configured": False, "graphStore": "typedb", "syncedCount": 0}
-        rules = list(rules or [])
+        rules = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
         self.begin_schema_function_sync_trace(world_id, len(rules))
         definitions: List[Dict[str, object]] = []
         skipped: List[Dict[str, object]] = []
@@ -20734,7 +20759,7 @@ relation ontology-assertion,
                 "pendingRuleIds": [],
                 "reason": "TypeDB ontology storage is not configured.",
             }
-        rule_list = list(rules or [])
+        rule_list = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
         ready_rules = []
         for rule in rule_list:
             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
@@ -20862,7 +20887,11 @@ relation ontology-assertion,
             }
         rows = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
         try:
-            rules = rulebox_rules_from_payload({"rules": rows})
+            rules = [
+                rule
+                for rule in rulebox_rules_from_payload({"rules": rows})
+                if typedb_rule_is_enabled(rule)
+            ]
         except ValueError as error:
             return {
                 "status": "error",
@@ -21633,7 +21662,11 @@ relation ontology-assertion,
             }
         native_stage_timings: Dict[str, int] = {}
         try:
-            parsed_rules = rulebox_rules_from_payload({"rules": rules})
+            parsed_rules = [
+                rule
+                for rule in rulebox_rules_from_payload({"rules": rules})
+                if typedb_rule_is_enabled(rule)
+            ]
             full_parsed_rule_count = len(parsed_rules)
             rule_execution_phase = str(
                 payload.get("ruleExecutionPhase")
@@ -24162,13 +24195,30 @@ relation ontology-assertion,
                 "typedbNativeRuleReasoningUsed": False,
             })
         apply_inference_target_coverage(snapshot, clean_symbols)
-        snapshot["hypothesisCalibration"] = self.hypothesis_calibration_snapshot(
-            clean_symbols,
-            min(40, safe_limit),
-            world_id,
-            source_abox_snapshot_id=source_abox_snapshot_id,
-            generation_aligned=bool(snapshot.get("generationAligned")),
+        calibration_eligible = bool(
+            snapshot.get("generationAligned")
+            and snapshot.get("targetCoverageComplete", True)
+            and str(snapshot.get("status") or "") in {"ok", "empty"}
         )
+        if calibration_eligible:
+            snapshot["hypothesisCalibration"] = self.hypothesis_calibration_snapshot(
+                clean_symbols,
+                min(40, safe_limit),
+                world_id,
+                source_abox_snapshot_id=source_abox_snapshot_id,
+                generation_aligned=True,
+            )
+        else:
+            snapshot["hypothesisCalibration"] = {
+                "status": "not-eligible",
+                "source": "typedb-abox-hypothesis-calibration",
+                "reason": "Only an aligned and target-complete InferenceBox generation can load calibration evidence.",
+                "calibrations": [],
+                "calibrationCount": 0,
+                "generationAligned": bool(snapshot.get("generationAligned")),
+                "automaticDeployment": False,
+                "decisionEligibility": "historical-review-only",
+            }
         return snapshot
 
     def load_graph_from_typedb(self, boxes: Iterable[str] = None, world_id: str = "") -> PortfolioOntology:
@@ -25489,6 +25539,8 @@ def typedb_native_rule_execution_plan(
     }
     entries: List[Dict[str, object]] = []
     for rule in rules or []:
+        if not typedb_rule_is_enabled(rule):
+            continue
         rule_id = str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "")
         required_relation_types = typedb_native_rule_required_relation_types(rule)
         any_relation_types, any_relation_minimum = typedb_native_rule_any_relation_requirement(rule)
@@ -25784,7 +25836,7 @@ def typedb_native_rule_execution_selection(
     revision to the complete rule catalog; unchanged outcomes remain owned by
     their prior result slots and reconciliation is handled separately.
     """
-    all_rules = [rule for rule in rules or [] if getattr(rule, "enabled", True)]
+    all_rules = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
     all_ids = [str(getattr(rule, "rule_id", "") or "").strip() for rule in all_rules]
     all_ids = [rule_id for rule_id in all_ids if rule_id]
     available = set(all_ids)
@@ -27241,7 +27293,7 @@ def typedb_native_rule_function_sync_plan(
     exclude only facts that the existing native preflight has already proven
     impossible; it never marks a rule as matched.
     """
-    all_rules = [rule for rule in rules or [] if rule]
+    all_rules = [rule for rule in rules or [] if rule and typedb_rule_is_enabled(rule)]
     plan = dict(execution_plan or {})
     if force_schema_function_sync:
         candidate_rules = list(all_rules)
@@ -27250,7 +27302,9 @@ def typedb_native_rule_function_sync_plan(
         candidate_rules = [
             item.get("rule")
             for item in plan.get("selectedEntries") or []
-            if isinstance(item, dict) and item.get("rule")
+            if isinstance(item, dict)
+            and item.get("rule")
+            and typedb_rule_is_enabled(item.get("rule"))
         ]
         candidate_source = "native-preflight-selected"
     else:
@@ -28129,11 +28183,20 @@ def entity_node_kind(row: Dict[str, object]) -> str:
     return str(row.get("nodeKind") or row.get("kind") or "")
 
 
+def typedb_rule_is_enabled(rule: object) -> bool:
+    """Return whether a stored RuleBox row belongs to the executable slice."""
+
+    if isinstance(rule, dict):
+        return rule.get("enabled") is not False
+    return bool(getattr(rule, "enabled", True))
+
+
 def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object]:
     rule_payloads = [
         item.to_dict() if hasattr(item, "to_dict") else dict(item)
         for item in (rules or [])
-        if isinstance(item, dict) or hasattr(item, "to_dict")
+        if (isinstance(item, dict) or hasattr(item, "to_dict"))
+        and typedb_rule_is_enabled(item)
     ]
     rule_profiles = [typedb_native_rule_profile(rule) for rule in rule_payloads]
     ready = [item for item in rule_profiles if item.get("status") == "ready"]

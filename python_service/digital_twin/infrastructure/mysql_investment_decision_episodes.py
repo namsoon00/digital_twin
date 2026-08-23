@@ -14,6 +14,7 @@ from ..domain.investment_brain import (
 from ..domain.decision_follow_up import evaluate_follow_up_conditions
 from ..domain.hypothesis_outcome_contract import (
     observation_domain_status,
+    outcome_contract_completeness,
     resolved_outcome_contract,
 )
 from ..domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
@@ -80,7 +81,9 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 ON DUPLICATE KEY UPDATE selected_hypothesis_id = VALUES(selected_hypothesis_id),
                     action = VALUES(action), review_level = VALUES(review_level),
                     data_state = VALUES(data_state), validation_state = VALUES(validation_state),
-                    status = VALUES(status),
+                    inference_generation_id = VALUES(inference_generation_id),
+                    status = VALUES(status), decided_at = VALUES(decided_at),
+                    source = VALUES(source),
                     payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
                 """,
                 (
@@ -246,10 +249,21 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             "inferenceGenerationId",
             "marketIndependenceKey",
             "accountIndependenceKey",
+            "predictionTarget",
+            "expectedDirection",
+            "expectedOutcome",
+            "outcomeMetric",
+            "falsificationContract",
         ]:
             if raw.get(key) not in (None, "", [], {}):
                 resolved[key] = raw.get(key)
         return resolved
+
+    @staticmethod
+    def episode_outcome_contract_completeness(episode: DecisionEpisode) -> Dict[str, object]:
+        facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
+        raw = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
+        return outcome_contract_completeness(raw)
 
     def episode_outcome_horizons(self, episode: DecisionEpisode) -> List[int]:
         return outcome_horizon_minutes(self.episode_outcome_contract(episode).get("outcomeHorizonMinutes"))
@@ -678,6 +692,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episodes = self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
         targets: List[Dict[str, object]] = []
         for episode in episodes:
+            if not self.episode_outcome_contract_completeness(episode).get("complete"):
+                continue
             contract = self.episode_outcome_contract(episode)
             benchmark_symbol = contract_benchmark_symbol(contract, episode.facts_at_decision)
             for horizon_minutes in due_outcome_horizon_minutes_all(episode, observed_stamp, self.episode_outcome_horizons(episode)):
@@ -723,6 +739,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episodes = self.list(account_id=account_id, symbol=symbol, limit=self.outcome_batch_size())
         requests: List[Dict[str, object]] = []
         for episode in episodes:
+            if not self.episode_outcome_contract_completeness(episode).get("complete"):
+                continue
             outcome_horizon_minutes = due_outcome_horizon_minutes(
                 episode,
                 observed_at,
@@ -820,6 +838,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 continue
             horizon_minutes = int(item["horizonMinutes"])
             contract = self.episode_outcome_contract(episode)
+            contract_completeness = self.episode_outcome_contract_completeness(episode)
             if horizon_minutes not in self.episode_outcome_horizons(episode) or outcome_horizon_recorded(episode, horizon_minutes):
                 continue
             target_at = outcome_target_at(episode, horizon_minutes)
@@ -845,12 +864,14 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             )
             missing_criterion_metrics = list(evaluation.get("missingRequiredMetricIds") or [])
             calibration_eligible = (
-                delay_minutes <= self.episode_outcome_max_delay_minutes(episode)
+                bool(contract_completeness.get("complete"))
+                and delay_minutes <= self.episode_outcome_max_delay_minutes(episode)
                 and not list(contract_observation.get("missingObservationDomains") or [])
                 and not missing_criterion_metrics
             )
             eligibility = (
                 "eligible" if calibration_eligible
+                else "excluded-incomplete-prediction-contract" if not contract_completeness.get("complete")
                 else "excluded-contract-data-gap" if contract_observation.get("missingObservationDomains")
                 else "excluded-criterion-data-gap" if missing_criterion_metrics
                 else "excluded-delayed-observation"
@@ -901,6 +922,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "observationDelayMinutes": round(delay_minutes, 2),
                     "observationTiming": "on-time" if delay_minutes <= self.episode_outcome_max_delay_minutes(episode) else "delayed",
                     "calibrationEligibility": eligibility,
+                    "predictionContractCompleteness": contract_completeness,
                 },
             )
             self.save_outcome(episode, outcome)

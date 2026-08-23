@@ -6,6 +6,7 @@ import math
 from statistics import mean
 from typing import Dict, Iterable, List, Mapping
 
+from ..market_time_series import parse_timestamp
 from ..time_series_storage import TemporalFeatureSnapshot
 from .contracts import ModelSignal, ModelSignalSnapshot, SignalEligibility
 from ..hypothesis_catalog import hypothesis_family_definition
@@ -60,13 +61,23 @@ def _ordered_daily_rows(rows: Iterable[Mapping[str, object]]) -> List[Dict[str, 
     return sorted(by_day.values(), key=_observed_at)
 
 
-def _flow_metrics(windows: Mapping[str, object], minimum_samples: int) -> Dict[str, object]:
+def _flow_metrics(
+    windows: Mapping[str, object],
+    minimum_samples: int,
+    cutoff_at: object = "",
+) -> Dict[str, object]:
     source_rows = []
     for name in ("20D", "5D", "3D", "1D"):
         if isinstance(windows.get(name), list) and windows.get(name):
             source_rows = list(windows.get(name) or [])
             break
-    rows = _ordered_daily_rows(source_rows)
+    cutoff = parse_timestamp(cutoff_at)
+    bounded_rows = []
+    for row in source_rows:
+        stamp = parse_timestamp(_observed_at(row))
+        if not cutoff or (stamp and stamp <= cutoff):
+            bounded_rows.append(row)
+    rows = _ordered_daily_rows(bounded_rows)
     usable = [
         row for row in rows
         if any(field in row and row.get(field) not in (None, "") for field in FLOW_FIELDS)
@@ -146,11 +157,14 @@ def _eligibility(metrics: Mapping[str, object], release) -> SignalEligibility:
         reasons.append("flow-field-coverage-insufficient")
     if bool(metrics.get("stale")):
         reasons.append("latest-observation-stale")
-    if release.validation_status != "calibrated":
+    if release.validation_status not in {"calibrated", "validated-deterministic"}:
         reasons.append("historical-replay-and-calibration-required")
     quality = "stale" if metrics.get("stale") else "sufficient" if len(reasons) == 1 else "insufficient"
     return SignalEligibility.create(
-        "reference-only" if release.decision_eligibility == "reference-only" else "ineligible" if reasons else "eligible",
+        "reference-only" if release.decision_eligibility == "reference-only"
+        else "ineligible" if reasons
+        else "conditional" if release.decision_eligibility == "conditional"
+        else "eligible",
         reasons,
         data_quality=quality,
         validation_status=release.validation_status,
@@ -206,7 +220,7 @@ def score_flow_feature_snapshot(
     signals = []
     latest_observed_at = ""
     for symbol, windows in sorted(dict(snapshot.windows or {}).items()):
-        metrics = _flow_metrics(dict(windows or {}), release.minimum_samples)
+        metrics = _flow_metrics(dict(windows or {}), release.minimum_samples, snapshot.as_of)
         if not metrics:
             continue
         latest_observed_at = max(latest_observed_at, str(metrics.get("latestObservedAt") or ""))
@@ -238,12 +252,15 @@ def score_flow_feature_snapshot(
                 probability=None,
                 hypothesis_family_id=hypothesis_family_id,
                 outcome_metric=hypothesis_family.outcome_metric if hypothesis_family else "",
-                knowledge_cutoff_at=str(metrics.get("latestObservedAt") or snapshot.as_of),
-                uncertainty_status="uncalibrated",
+                knowledge_cutoff_at=str(snapshot.as_of or metrics.get("latestObservedAt") or ""),
+                uncertainty_status=(
+                    "score-only" if release.validation_status == "validated-deterministic"
+                    else "uncalibrated"
+                ),
             ))
     return ModelSignalSnapshot.create(
         account_id=snapshot.account_id,
-        as_of=latest_observed_at or snapshot.as_of,
+        as_of=snapshot.as_of or latest_observed_at,
         source_feature_snapshot_id=snapshot.snapshot_id,
         feature_set_version=snapshot.feature_set_version,
         model_release_id=release.release_id,

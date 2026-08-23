@@ -5,7 +5,7 @@ import json
 import threading
 import time
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
 from ..domain.context_observation_notifications import is_typedb_context_observation_notification
@@ -1252,6 +1252,8 @@ class IndependentReasoningJobRunner:
         self._shutdown_result: Dict[str, object] = {}
         self._progress_lock = threading.Lock()
         self._current_progress: Dict[str, object] = {}
+        self._last_case_expiry_at = 0.0
+        self._last_case_expiry: Dict[str, object] = {"status": "not-run", "expiredCount": 0}
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -1260,6 +1262,7 @@ class IndependentReasoningJobRunner:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
+        case_expiry = self.expire_stale_reasoning_cases()
         route_reconciliation = self.reconcile_ingress_route()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
@@ -1292,6 +1295,7 @@ class IndependentReasoningJobRunner:
                 "backlogCompaction": backlog_compaction,
                 "queue": health["queue"],
                 "routeReconciliation": route_reconciliation,
+                "reasoningCaseExpiry": case_expiry,
             }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
@@ -1326,6 +1330,7 @@ class IndependentReasoningJobRunner:
                 "backlogCompaction": backlog_compaction,
                 "queue": self.queue_summary(descriptor.deployment_id),
                 "routeReconciliation": route_reconciliation,
+                "reasoningCaseExpiry": case_expiry,
             }
         jobs, resharded = self.reshard_oversized_jobs(jobs)
         if not jobs:
@@ -1338,6 +1343,7 @@ class IndependentReasoningJobRunner:
                 "leaseRecovery": lease_recovery,
                 "backlogCompaction": backlog_compaction,
                 "queue": self.queue_summary(descriptor.deployment_id),
+                "reasoningCaseExpiry": case_expiry,
             }
         batch_key = self.batch_compatibility_key(jobs[0])
         reasoning_lane = self.reasoning_lane(jobs[0])
@@ -1573,6 +1579,7 @@ class IndependentReasoningJobRunner:
                 "result": result,
                 "queue": health["queue"],
                 "routeReconciliation": route_reconciliation,
+                "reasoningCaseExpiry": case_expiry,
             }
         except Exception as error:  # noqa: BLE001 - durable retry owns recovery.
             retries = [
@@ -1609,7 +1616,52 @@ class IndependentReasoningJobRunner:
                 "reason": str(error)[:300],
                 "retries": retries,
                 "routeReconciliation": route_reconciliation,
+                "reasoningCaseExpiry": case_expiry,
             }
+
+    def expire_stale_reasoning_cases(self) -> Dict[str, object]:
+        interval = _int_setting(
+            self.settings,
+            "investmentReasoningCaseExpiryIntervalSeconds",
+            60,
+            10,
+            3600,
+        )
+        now_monotonic = time.monotonic()
+        if self._last_case_expiry_at and now_monotonic - self._last_case_expiry_at < interval:
+            return dict(self._last_case_expiry)
+        self._last_case_expiry_at = now_monotonic
+        orchestrator = getattr(self.engine, "reasoning_orchestrator", None)
+        expire = getattr(orchestrator, "expire_stale_cases", None)
+        if not callable(expire):
+            self._last_case_expiry = {"status": "not-configured", "expiredCount": 0}
+            return dict(self._last_case_expiry)
+        stale_minutes = _int_setting(
+            self.settings,
+            "investmentReasoningCaseStaleMinutes",
+            180,
+            15,
+            7 * 24 * 60,
+        )
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+        try:
+            self._last_case_expiry = dict(expire(
+                cutoff.isoformat().replace("+00:00", "Z"),
+                limit=_int_setting(
+                    self.settings,
+                    "investmentReasoningCaseExpiryBatchSize",
+                    100,
+                    1,
+                    500,
+                ),
+            ) or {})
+        except Exception as error:  # Lifecycle repair must not stop live inference.
+            self._last_case_expiry = {
+                "status": "error",
+                "expiredCount": 0,
+                "reason": str(error)[:240],
+            }
+        return dict(self._last_case_expiry)
 
     def reconcile_ingress_route(self) -> Dict[str, object]:
         interval = _int_setting(

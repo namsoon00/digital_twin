@@ -1301,6 +1301,12 @@ def action_envelope_from_inference(
         for code in WATCHLIST_BLOCKED_ACTIONS:
             if code not in blocked_actions:
                 blocked_actions.append(code)
+    action_envelope_conflicts = [
+        code for code in allowed_actions if code in set(blocked_actions)
+    ]
+    allowed_actions = [
+        code for code in allowed_actions if code not in set(blocked_actions)
+    ]
 
     by_effect = {effect: [item for item in entries if item["effect"] == effect] for effect in ("support", "defer", "constrain", "block")}
     partial = [item for item in entries if str(item["match"].data_state or "").lower() == "partial"]
@@ -1315,11 +1321,18 @@ def action_envelope_from_inference(
         selected_entry = min(opinion_entries, key=lambda item: semantic_relation_sort_key(item["relation"]))
         selected_opinion_rule_id = selected_entry["match"].rule_id
     investment_view_action = str(investment_opinion.get("candidateAction") or "").strip().upper()
+    candidate_contract_conflict = bool(
+        investment_view_action
+        and (
+            investment_view_action in set(blocked_actions)
+            or (allowed_actions and investment_view_action not in set(allowed_actions))
+        )
+    )
     opinion_effect_counts = dict(investment_opinion.get("decisionEffectCounts") or {})
     opinion_deferred = bool(opinion_effect_counts.get("defer"))
     quality_blocked = bool(evidence_quality.get("judgementBlocked"))
     execution_blocked = execution_readiness.get("status") == "blocked"
-    if not investment_view_action or quality_blocked or execution_blocked:
+    if not investment_view_action or quality_blocked or execution_blocked or candidate_contract_conflict:
         execution_action = "NO_ACTION"
     elif target_role == WATCHLIST_TARGET_ROLE and investment_view_action == "BUY" and opinion_deferred:
         execution_action = "HOLD"
@@ -1330,7 +1343,7 @@ def action_envelope_from_inference(
     else:
         execution_action = investment_view_action
 
-    if not investment_view_action or quality_blocked:
+    if not investment_view_action or quality_blocked or candidate_contract_conflict:
         status = "JUDGEMENT_BLOCKED"
     elif target_role == WATCHLIST_TARGET_ROLE and investment_view_action == "BUY" and execution_action == "BUY":
         status = "ENTRY_ELIGIBLE"
@@ -1416,7 +1429,14 @@ def action_envelope_from_inference(
         "aiAllowedActions": ai_allowed_actions,
         "aiMayUpgradeToBuy": bool(target_role == WATCHLIST_TARGET_ROLE and status == "ENTRY_ELIGIBLE"),
         "aiMayDowngrade": bool(preferred_action and len(ai_allowed_actions) > 1),
-        "judgementBlocked": bool(not investment_view_action or quality_blocked),
+        "judgementBlocked": bool(
+            not investment_view_action
+            or quality_blocked
+            or candidate_contract_conflict
+            or action_envelope_conflicts
+        ),
+        "actionEnvelopeConflicts": action_envelope_conflicts,
+        "candidateContractConflict": candidate_contract_conflict,
         "dataReadiness": data_readiness,
         "missingDecisionEffectRuleIds": missing_effect_rule_ids,
         "supportRuleIds": rule_ids("support"),

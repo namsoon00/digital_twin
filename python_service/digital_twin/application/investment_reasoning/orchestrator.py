@@ -29,6 +29,7 @@ from ...domain.investment_reasoning import (
     ReasoningCase,
     DecisionSynthesis,
 )
+from .episode_projection import V2DecisionEpisodeProjector
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -116,9 +117,15 @@ def _prompt_hypotheses(reasoning_case: ReasoningCase, relation: Mapping[str, obj
 class InvestmentReasoningOrchestrator:
     """One public lifecycle over replaceable TypeDB and AI worker stages."""
 
-    def __init__(self, repository, hypothesis_manager=None):
+    def __init__(self, repository, hypothesis_manager=None, decision_episode_store=None):
         self.repository = repository
         self.hypothesis_manager = hypothesis_manager or GraphHypothesisManager()
+        self.episode_projector = V2DecisionEpisodeProjector(decision_episode_store)
+
+    def _persist(self, reasoning_case: ReasoningCase) -> ReasoningCase:
+        saved = self.repository.save(reasoning_case)
+        self.episode_projector.project(saved)
+        return saved
 
     def start(self, request, release_identity: Mapping[str, object] = None) -> ReasoningCase:
         existing = self.repository.get_by_request(str(getattr(request, "request_id", "") or ""))
@@ -130,7 +137,7 @@ class InvestmentReasoningOrchestrator:
         reasoning_case = self.required(case_id)
         if reasoning_case.stage in {CASE_CREATED, CASE_DEFERRED}:
             reasoning_case.transition(CASE_INPUT_READY, "point-in-time-input-ready")
-            self.repository.save(reasoning_case)
+            self._persist(reasoning_case)
         return reasoning_case
 
     def defer(self, case_id: str, reason: str, retryable: bool = True) -> ReasoningCase:
@@ -138,7 +145,7 @@ class InvestmentReasoningOrchestrator:
         reasoning_case.record_error(reasoning_case.stage, reason, retryable)
         if reasoning_case.stage in {CASE_CREATED, CASE_INPUT_READY, CASE_DEFERRED}:
             reasoning_case.transition(CASE_DEFERRED if retryable else CASE_BLOCKED, reason)
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def inference_completed(
@@ -187,7 +194,7 @@ class InvestmentReasoningOrchestrator:
                 "typedb-inference-completed",
                 {"verifiedAccounts": len(verified), "failedAccounts": len(failed)},
             )
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def hypotheses_ready(self, case_id: str, candidates: Iterable[object]) -> ReasoningCase:
@@ -209,7 +216,7 @@ class InvestmentReasoningOrchestrator:
                 "graph-hypotheses-captured",
                 {"hypothesisCount": len(reasoning_case.hypotheses)},
             )
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def decisions_synthesized(
@@ -237,7 +244,7 @@ class InvestmentReasoningOrchestrator:
                     }),
                 },
             )
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def attach_case_context(self, case_id: str, events: Iterable[object]) -> None:
@@ -290,7 +297,7 @@ class InvestmentReasoningOrchestrator:
                 enriched["ontologyRelationContext"] = relation
         enriched["investmentReasoningCaseId"] = reasoning_case.case_id
         enriched["investmentReasoningCase"] = self.compact_context(reasoning_case)
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return enriched
 
     def ai_queued(self, case_id: str, request_id: str, notification_job_id: str) -> ReasoningCase:
@@ -299,7 +306,7 @@ class InvestmentReasoningOrchestrator:
         reasoning_case.notification_job_id = str(notification_job_id or "")
         if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
             reasoning_case.transition(CASE_AI_PENDING, "ai-judgment-queued")
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def ai_completed(self, request, context: Mapping[str, object], result) -> Optional[ReasoningCase]:
@@ -323,7 +330,7 @@ class InvestmentReasoningOrchestrator:
         if not valid:
             reasoning_case.record_error(CASE_AI_COMPLETED, reason, False)
             reasoning_case.transition(CASE_BLOCKED, reason)
-            self.repository.save(reasoning_case)
+            self._persist(reasoning_case)
             return reasoning_case
         reasoning_case.final_decision = FinalDecision(
             action=judgment.action,
@@ -335,7 +342,7 @@ class InvestmentReasoningOrchestrator:
             published=False,
         )
         reasoning_case.transition(CASE_VALIDATED, "ai-judgment-validated")
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def validate_ai_result(self, context: Mapping[str, object], result):
@@ -363,7 +370,7 @@ class InvestmentReasoningOrchestrator:
             )
         if reasoning_case.stage == CASE_VALIDATED:
             reasoning_case.transition(CASE_PUBLISHED, "notification-delivery-completed")
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def context_observation_validated(
@@ -405,7 +412,7 @@ class InvestmentReasoningOrchestrator:
                 "synthesisCount": len(reasoning_case.decision_syntheses),
             },
         )
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def notification_suppressed(
@@ -435,7 +442,7 @@ class InvestmentReasoningOrchestrator:
                 str(reason or "notification-delivery-suppressed"),
                 {"published": False},
             )
-            self.repository.save(reasoning_case)
+            self._persist(reasoning_case)
         return reasoning_case
 
     def case_superseded(self, case_id: str, reason: str) -> Optional[ReasoningCase]:
@@ -455,7 +462,7 @@ class InvestmentReasoningOrchestrator:
         reasoning_case.record_error(CASE_AI_PENDING, reason, False)
         if reasoning_case.stage in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED, CASE_AI_PENDING}:
             reasoning_case.transition(CASE_BLOCKED, "ai-judgment-failed")
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def ai_fallback_completed(
@@ -499,7 +506,7 @@ class InvestmentReasoningOrchestrator:
                 "typedb-inference-fallback-ready",
                 {"aiAvailable": False},
             )
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
 
     def complete_without_ai(self, case_id: str, reason: str, source: str = "typedb-shadow") -> ReasoningCase:
@@ -519,8 +526,29 @@ class InvestmentReasoningOrchestrator:
             CASE_VALIDATED,
         }:
             reasoning_case.transition(CASE_COMPLETED, reason)
-        self.repository.save(reasoning_case)
+        self._persist(reasoning_case)
         return reasoning_case
+
+    def expire_stale_cases(
+        self,
+        cutoff_iso: str,
+        limit: int = 100,
+        reason: str = "reasoning-case-stale-timeout",
+    ) -> Dict[str, object]:
+        """Close abandoned cases through the same terminal episode projection."""
+
+        expire = getattr(self.repository, "expire_stale_nonterminal", None)
+        if not callable(expire):
+            return {"status": "not-supported", "expiredCount": 0, "caseIds": []}
+        expired = list(expire(cutoff_iso, limit=limit, reason=reason) or [])
+        for reasoning_case in expired:
+            self.episode_projector.project(reasoning_case)
+        return {
+            "status": "expired" if expired else "unchanged",
+            "expiredCount": len(expired),
+            "caseIds": [item.case_id for item in expired],
+            "cutoffAt": str(cutoff_iso or ""),
+        }
 
     @staticmethod
     def validate_judgment(reasoning_case: ReasoningCase, judgment: AIJudgmentResult):
@@ -543,6 +571,18 @@ class InvestmentReasoningOrchestrator:
             and not str(judgment.rejected_candidate_reason or "").strip()
         ):
             return False, "AI judgment differs from the selected TypeDB hypothesis without an explicit disagreement reason."
+        if not str(judgment.rationale or "").strip():
+            return False, "AI judgment has no decision rationale."
+        if not selected_hypothesis or not selected_hypothesis.causal_trace_ids:
+            return False, "Selected TypeDB hypothesis has no causal trace lineage."
+        known_support_ids = set(selected_hypothesis.supporting_evidence_ids)
+        if not known_support_ids:
+            return False, "Selected TypeDB hypothesis has no supporting evidence lineage."
+        reviewed_support_ids = set(judgment.supporting_evidence_ids)
+        if not reviewed_support_ids:
+            return False, "AI judgment did not review a supporting evidence identifier."
+        if not reviewed_support_ids.intersection(known_support_ids):
+            return False, "AI judgment supporting evidence is outside the selected TypeDB hypothesis."
         if reasoning_case.decision_syntheses:
             eligible_ids = {
                 hypothesis_id
@@ -569,6 +609,14 @@ class InvestmentReasoningOrchestrator:
             }
             if allowed_actions and judgment.action not in allowed_actions:
                 return False, "AI judgment action is outside the TypeDB action envelope."
+            if not all(synthesis.graph_trace_complete for synthesis in applicable):
+                return False, "AI judgment synthesis has incomplete TypeDB graph lineage."
+            if any(synthesis.judgement_blocked for synthesis in applicable):
+                return False, "AI judgment synthesis is blocked by its TypeDB decision contract."
+        if judgment.action in {"BUY", "ADD", "TRIM", "SELL"} and not (
+            judgment.next_observations or judgment.reversal_conditions
+        ):
+            return False, "Actionable AI judgment has no follow-up or reversal condition."
         if str(judgment.validation_state or "").lower() in {"blocked", "invalid", "failed", "error"}:
             return False, "AI judgment validation state blocks publication."
         return True, ""

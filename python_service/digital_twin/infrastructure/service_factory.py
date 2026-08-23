@@ -148,6 +148,7 @@ from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from .questdb_time_series import QuestDBTimeSeriesAdapter
 from .time_series_factory import build_temporal_feature_snapshot_service, build_time_series_adapters
 from .statistical_signal_factory import build_statistical_signal_pipeline_service
+from ..domain.ontology_schema import default_tbox_metadata
 
 
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -192,6 +193,37 @@ def prepare_v2_rulebox_release(repository, settings=None):
         ) from error
     if str(snapshot.get("status") or "") != "ok" or not snapshot.get("rules"):
         raise RuntimeError("The independent V2 RuleBox release is unavailable or empty")
+    expected_tbox = default_tbox_metadata()
+    try:
+        deployed_tbox = dict(repository.active_tbox_metadata() or {})
+    except Exception as error:
+        raise RuntimeError(
+            "The independent V2 TBox release cannot be verified: " + str(error)[:220]
+        ) from error
+    if (
+        str(deployed_tbox.get("status") or "") != "ok"
+        or str(deployed_tbox.get("version") or "") != str(expected_tbox.get("version") or "")
+        or str(deployed_tbox.get("fingerprint") or "") != str(expected_tbox.get("fingerprint") or "")
+    ):
+        raise RuntimeError(
+            "The independent V2 TypeDB TBox does not match the source release: "
+            + str(deployed_tbox.get("version") or "unknown")
+            + "/"
+            + str(deployed_tbox.get("fingerprint") or "unknown")
+            + " != "
+            + str(expected_tbox.get("version") or "unknown")
+            + "/"
+            + str(expected_tbox.get("fingerprint") or "unknown")
+        )
+    readiness = {
+        **dict(readiness or {}),
+        "tboxReleasePreflight": {
+            "status": "matched",
+            "version": str(expected_tbox.get("version") or ""),
+            "fingerprint": str(expected_tbox.get("fingerprint") or ""),
+            "source": str(deployed_tbox.get("source") or ""),
+        },
+    }
     return snapshot, readiness
 
 
@@ -502,7 +534,8 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     news_digest_reconciler = None
     if not dry_run:
         reasoning_orchestrator = InvestmentReasoningOrchestrator(
-            stores.investment_reasoning_case_store(settings)
+            stores.investment_reasoning_case_store(settings),
+            decision_episode_store=decision_episode_store,
         )
         ai_request_enqueuer = NotificationAIRequestEnqueuer(
             stores.ai_inference_queue_store(settings),
@@ -580,7 +613,8 @@ def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunn
         continuity_service=continuity_service,
         action_planning_service=build_decision_action_planning_service(settings),
         reasoning_orchestrator=InvestmentReasoningOrchestrator(
-            stores.investment_reasoning_case_store(settings)
+            stores.investment_reasoning_case_store(settings),
+            decision_episode_store=decision_episode_store,
         ),
         worker_id=worker_id,
     )
@@ -1095,15 +1129,11 @@ def build_ontology_reasoning_queue_probe(settings=None):
             )
             if str(versioned_value.get("status") or "") != "not-active-v2":
                 value = {
-                    **dict(legacy_value or {}),
-                    "status": str(versioned_value.get("status") or "unknown"),
-                    "probeMode": "active-engine-composite-queue-v1",
-                    "effectivePendingCount": int(
-                        versioned_value.get("effectivePendingCount") or 0
-                    ),
-                    "pendingCount": int(versioned_value.get("pendingCount") or 0),
-                    "oldestRequestAt": str(versioned_value.get("oldestRequestAt") or ""),
+                    **dict(versioned_value or {}),
+                    "probeMode": "active-v2-authoritative-queue",
+                    "queueMode": str(versioned_value.get("status") or "unknown"),
                     "activeReasoningEngineQueue": versioned_value,
+                    "compatibilityQueueIncluded": True,
                     "legacyReasoningQueue": legacy_value,
                 }
             else:
@@ -2049,11 +2079,17 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     rule_inventory = reasoning_rule_inventory(candidate_rulebox.get("rules") or [])
     existing_health.update({
         "candidateReleaseId": release_identity.get("releaseId"),
+        "candidateBaseReleaseId": release_identity.get("baseReleaseId"),
         "candidateRuntimeRevision": release_identity.get("runtimeRevision"),
         "candidateReleaseFingerprint": release_identity.get("releaseFingerprint"),
         "releaseFingerprint": release_identity.get("releaseFingerprint"),
         "validationCohortId": release_identity.get("validationCohortId"),
         "ruleboxFingerprint": release_identity.get("ruleboxFingerprint"),
+        "tboxFingerprint": release_identity.get("tboxFingerprint"),
+        "tboxReleaseId": release_identity.get("tboxReleaseId"),
+        "ruleboxReleaseId": release_identity.get("ruleboxReleaseId"),
+        "promptReleaseId": release_identity.get("promptReleaseId"),
+        "modelSignalReleaseId": release_identity.get("modelSignalReleaseId"),
         "independentExecution": True,
         "directSourceEvents": True,
         "monitorRunnerUsed": False,
@@ -2116,7 +2152,8 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         settings=candidate_settings,
         release_identity=release_identity,
         reasoning_orchestrator=InvestmentReasoningOrchestrator(
-            stores.investment_reasoning_case_store(store_settings)
+            stores.investment_reasoning_case_store(store_settings),
+            decision_episode_store=stores.investment_decision_episode_store(store_settings),
         ),
         shared_inference_service=shared_inference_service,
     )

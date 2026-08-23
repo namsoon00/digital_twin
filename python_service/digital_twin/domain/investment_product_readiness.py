@@ -55,6 +55,7 @@ def _latency_p95_ms(active_health: Mapping[str, object]) -> int:
         _mapping(health.get("runPerformance")).get("p95TotalDurationMs"),
         _mapping(health.get("queuePerformance")).get("p95TotalDurationMs"),
         _mapping(health.get("performance")).get("p95TotalDurationMs"),
+        _mapping(health.get("queue")).get("endToEndP95Ms"),
         _mapping(health.get("queue")).get("durationP95Ms"),
     ]
     return max((_count(value) for value in candidates), default=0)

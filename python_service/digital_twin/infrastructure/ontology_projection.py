@@ -359,6 +359,20 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         if item.get("enabled") is not False
     ):
         return True
+    for item in rules:
+        basis = item.get("knowledge_basis") or item.get("knowledgeBasis") or {}
+        if str(basis.get("owner") or "") != "statistical-model":
+            continue
+        if str(basis.get("migrationDisposition") or "") not in {
+            "model-signal-production",
+            "awaiting-governed-model-scorer",
+        }:
+            return True
+        if (
+            str(basis.get("migrationDisposition") or "") == "awaiting-governed-model-scorer"
+            and item.get("enabled") is not False
+        ):
+            return True
     if any(
         str(
             (item.get("knowledge_basis") or item.get("knowledgeBasis") or {}).get(
@@ -817,6 +831,7 @@ def migrate_typedb_rule_catalog(
     ownership_contract_updated = []
     added = []
     runtime_shape_updated = []
+    model_signal_updated = []
     stored_rule_ids = set()
     for raw_rule in stored_rules or []:
         if not isinstance(raw_rule, dict):
@@ -831,6 +846,35 @@ def migrate_typedb_rule_catalog(
         default_rule = defaults_by_id.get(rule_id) or {}
         default_version = str(default_rule.get("version") or "").strip()
         stored_version = str(rule.get("version") or "").strip()
+        stored_basis = rule.get("knowledge_basis") or rule.get("knowledgeBasis") or {}
+        default_basis = default_rule.get("knowledge_basis") or default_rule.get("knowledgeBasis") or {}
+        default_model_disposition = str(default_basis.get("migrationDisposition") or "")
+        stored_model_disposition = str(stored_basis.get("migrationDisposition") or "")
+        if (
+            str(default_basis.get("owner") or "") == "statistical-model"
+            and default_model_disposition in {
+                "model-signal-production",
+                "awaiting-governed-model-scorer",
+            }
+            and (
+                stored_model_disposition != default_model_disposition
+                or (
+                    default_model_disposition == "awaiting-governed-model-scorer"
+                    and rule.get("enabled") is not False
+                )
+            )
+        ):
+            replacement = deepcopy(default_rule)
+            if rule.get("enabled") is False and replacement.get("enabled") is not False:
+                replacement["enabled"] = False
+            migrated.append(replacement)
+            updated.append(rule_id)
+            runtime_shape_updated.append(rule_id)
+            model_signal_updated.append(rule_id)
+            if not isinstance(stored_basis, dict) or not str(stored_basis.get("ruleKind") or "").strip():
+                knowledge_basis_updated.append(rule_id)
+                ownership_contract_updated.append(rule_id)
+            continue
         if (
             rule_id in RULEBOX_RUNTIME_CONTRACT_RULE_IDS
             and bool(default_version)
@@ -921,6 +965,7 @@ def migrate_typedb_rule_catalog(
         "knowledgeBasisUpdatedRuleIds": sorted(set(knowledge_basis_updated)),
         "ownershipContractUpdatedRuleIds": sorted(set(ownership_contract_updated)),
         "rawAboxRuntimeUpdatedRuleIds": sorted(set(runtime_shape_updated)),
+        "modelSignalUpdatedRuleIds": sorted(set(model_signal_updated)),
     }
 
 

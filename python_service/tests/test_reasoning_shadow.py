@@ -308,6 +308,7 @@ class ReasoningShadowTests(unittest.TestCase):
         self.assertEqual(2, summary["distinctMatchedRuleCount"])
         self.assertEqual(2, summary["marketClassCount"])
         self.assertEqual(2, summary["candidatePhaseP95Ms"]["typedb.preflightReadMs"])
+        self.assertEqual(150, summary["candidateEndToEndP95Ms"])
 
     def test_equal_source_scope_ignores_different_retained_store_history(self):
         baseline_projection = projection("baseline-history")

@@ -16,6 +16,7 @@ from .case import (
     CASE_PUBLISHED,
     CASE_SUPPRESSED,
     CASE_SUPERSEDED,
+    CASE_TERMINAL_STAGES,
     CASE_VALIDATED,
     ReasoningCase,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "CASE_PUBLISHED",
     "CASE_SUPPRESSED",
     "CASE_SUPERSEDED",
+    "CASE_TERMINAL_STAGES",
     "CASE_VALIDATED",
     "FactDelta",
     "DecisionSynthesis",

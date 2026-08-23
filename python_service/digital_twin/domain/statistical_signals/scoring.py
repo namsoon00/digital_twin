@@ -6,6 +6,7 @@ import math
 from statistics import mean, pstdev
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
+from ..market_time_series import parse_timestamp
 from ..time_series_storage import TemporalFeatureSnapshot
 from .contracts import ModelSignal, ModelSignalSnapshot, SignalEligibility
 from ..hypothesis_catalog import hypothesis_family_definition
@@ -45,6 +46,21 @@ def _ordered_rows(rows: Iterable[Mapping[str, object]]) -> List[Dict[str, object
         result,
         key=lambda row: str(_first(row, "bucketAt", "bucket_at", "generatedAt", "observed_at") or ""),
     )
+
+
+def _rows_at_or_before(rows: Iterable[Mapping[str, object]], cutoff_at: object) -> List[Dict[str, object]]:
+    cutoff = parse_timestamp(cutoff_at)
+    if not cutoff:
+        return [dict(item) for item in rows or [] if isinstance(item, Mapping)]
+    result = []
+    for item in rows or []:
+        if not isinstance(item, Mapping):
+            continue
+        stamp = parse_timestamp(_first(item, "generatedAt", "observedAt", "observed_at", "bucketAt", "bucket_at"))
+        event_stamp = parse_timestamp(_first(item, "bucketAt", "bucket_at", "generatedAt", "observedAt", "observed_at"))
+        if stamp and event_stamp and stamp <= cutoff and event_stamp <= cutoff:
+            result.append(dict(item))
+    return result
 
 
 def _prices(rows: Sequence[Mapping[str, object]]) -> List[float]:
@@ -128,11 +144,14 @@ def _signal_eligibility(metrics: Mapping[str, object], release) -> SignalEligibi
         reasons.append("minimum-coverage-not-met")
     if bool(metrics.get("stale")):
         reasons.append("latest-observation-stale")
-    if release.validation_status != "calibrated":
+    if release.validation_status not in {"calibrated", "validated-deterministic"}:
         reasons.append("historical-replay-and-calibration-required")
     quality = "stale" if metrics.get("stale") else "sufficient" if not reasons[:2] else "insufficient"
     return SignalEligibility.create(
-        "reference-only" if release.decision_eligibility == "reference-only" else "ineligible" if reasons else "eligible",
+        "reference-only" if release.decision_eligibility == "reference-only"
+        else "ineligible" if reasons
+        else "conditional" if release.decision_eligibility == "conditional"
+        else "eligible",
         reasons,
         data_quality=quality,
         validation_status=release.validation_status,
@@ -185,9 +204,12 @@ def _score_components(metrics: Mapping[str, object]) -> Dict[str, float]:
     }
 
 
-def _combined_metrics(windows: Mapping[str, object]) -> Dict[str, object]:
+def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "") -> Dict[str, object]:
     metrics = {
-        key: _window_metrics(windows.get(key) or [], WINDOW_MINIMUM_SAMPLES[key])
+        key: _window_metrics(
+            _rows_at_or_before(windows.get(key) or [], cutoff_at),
+            WINDOW_MINIMUM_SAMPLES[key],
+        )
         for key in WINDOW_MINIMUM_SAMPLES
         if isinstance(windows.get(key), list)
     }
@@ -220,7 +242,7 @@ def score_temporal_feature_snapshot(
     signals = []
     latest_observed_at = ""
     for symbol, windows in sorted(dict(snapshot.windows or {}).items()):
-        metrics = _combined_metrics(dict(windows or {}))
+        metrics = _combined_metrics(dict(windows or {}), snapshot.as_of)
         if not metrics:
             continue
         latest_observed_at = max(latest_observed_at, str(metrics.get("latestObservedAt") or ""))
@@ -270,12 +292,15 @@ def score_temporal_feature_snapshot(
                 probability=None,
                 hypothesis_family_id=hypothesis_family_id,
                 outcome_metric=hypothesis_family.outcome_metric if hypothesis_family else "",
-                knowledge_cutoff_at=str(metrics.get("latestObservedAt") or snapshot.as_of),
-                uncertainty_status="uncalibrated",
+                knowledge_cutoff_at=str(snapshot.as_of or metrics.get("latestObservedAt") or ""),
+                uncertainty_status=(
+                    "score-only" if release.validation_status == "validated-deterministic"
+                    else "uncalibrated"
+                ),
             ))
     return ModelSignalSnapshot.create(
         account_id=snapshot.account_id,
-        as_of=latest_observed_at or snapshot.as_of,
+        as_of=snapshot.as_of or latest_observed_at,
         source_feature_snapshot_id=snapshot.snapshot_id,
         feature_set_version=snapshot.feature_set_version,
         model_release_id=release.release_id,

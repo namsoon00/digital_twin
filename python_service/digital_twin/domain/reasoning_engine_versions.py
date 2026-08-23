@@ -133,10 +133,19 @@ def reasoning_release_identity(
         separators=(",", ":"),
     ).encode("utf-8")
     fingerprint = hashlib.sha256(encoded).hexdigest()
+    tbox_release_id = str(semantic_payload["releaseBundle"].get("tboxReleaseId") or "")
+    tbox_fingerprint = tbox_release_id.rsplit("@", 1)[-1] if "@" in tbox_release_id else ""
+    immutable_release_id = logical_release_id + "@" + fingerprint[:16]
     return {
         "identityVersion": REASONING_ENGINE_RELEASE_IDENTITY_VERSION,
-        "releaseId": logical_release_id,
+        "releaseId": immutable_release_id,
+        "baseReleaseId": logical_release_id,
         "runtimeRevision": runtime_revision,
+        "tboxReleaseId": tbox_release_id,
+        "tboxFingerprint": tbox_fingerprint,
+        "ruleboxReleaseId": str(semantic_payload["releaseBundle"].get("ruleboxReleaseId") or ""),
+        "promptReleaseId": str(semantic_payload["releaseBundle"].get("promptReleaseId") or ""),
+        "modelSignalReleaseId": str(semantic_payload["releaseBundle"].get("modelSignalReleaseId") or ""),
         "ruleboxFingerprint": str(rulebox_fingerprint or "").strip(),
         "releaseFingerprint": fingerprint,
         "validationCohortId": "reasoning-cohort:" + fingerprint[:24],

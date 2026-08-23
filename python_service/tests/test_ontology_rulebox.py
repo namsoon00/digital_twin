@@ -191,10 +191,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         rules_by_id = {item.rule_id: item for item in rules}
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(116, sum(item.enabled for item in rules))
+        self.assertEqual(58, sum(item.enabled for item in rules))
         self.assertTrue(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
-        self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
+        self.assertTrue(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)
         self.assertTrue(any(
             item.relation_type == "BLOCKS_ACTION"
             for item in rules_by_id["graph.data_quality.microstructure_gap.v1"].derivations
@@ -253,7 +253,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
     def test_rulebox_v3_counts_independent_any_evidence_and_bounds_crypto_watch(self):
         rules_by_id = {item.rule_id: item for item in default_graph_inference_rules()}
-        recovery = rules_by_id["graph.price.recovery.confirmed_by_flow.v1"]
+        recovery = rules_by_id["graph.strategy_profile.aggressive_recovery_room.v1"]
         normal_query = typedb_native_match_query(recovery.to_dict(), target_symbols=["005930"])["query"]
         self.assertEqual(1, normal_query.count("smart-money-confirmation"))
         self.assertIn("$anyConditionCount >= 2", normal_query)
@@ -1115,7 +1115,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         rule_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule:graph.loss_guard.breakdown.v1")
         stock_class_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-class:Stock")
         holds_relation_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "tbox-relation:HOLDS")
-        condition_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule-condition:graph.loss_guard.breakdown.v1:ma-break")
+        condition_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "rule-condition:graph.loss_guard.breakdown.v1:validated-model-signal:graph.loss_guard.breakdown.v1")
         template_row = next(item for item in repository.rows_for_entities(graph) if item["id"] == "relation-template:graph.loss_guard.breakdown.v1:0")
         schema_text = repository.schema_query()
         query_text = "\n".join(repository.insert_queries(graph))
@@ -1128,9 +1128,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(rule_row["tboxVersion"])
         self.assertEqual("graph.loss_guard.breakdown.v1", rule_row["ruleId"])
         self.assertEqual("relation", condition_row["conditionKind"])
-        self.assertEqual("HAS_TECHNICAL_INDICATOR", condition_row["conditionRelationType"])
-        self.assertEqual(["ma20", "ma60"], condition_row["conditionTargetLevelTypes"])
-        self.assertEqual([], condition_row["conditionTargetFields"])
+        self.assertEqual("HAS_MODEL_SIGNAL", condition_row["conditionRelationType"])
+        self.assertEqual("statistical-model-signal", condition_row["conditionTargetKind"])
+        self.assertIn("signalType", condition_row["conditionTargetFields"])
+        self.assertIn("hypothesisFamilyId", condition_row["conditionTargetFields"])
         self.assertEqual("HAS_INFERRED_RISK", template_row["derivationRelationType"])
         self.assertEqual("risk", template_row["derivationTargetKind"])
         self.assertEqual("LOSS_REDUCE", template_row["derivationDecisionStage"])
@@ -1309,22 +1310,17 @@ class OntologyRuleBoxTests(unittest.TestCase):
         support_transition = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.watchlist.trend_transition.support.v1:support-transition"
+            if item["id"] == "rule-condition:graph.watchlist.trend_transition.support.v1:validated-model-signal:graph.watchlist.trend_transition.support.v1"
         )
         risk_transition = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.holding.trend_transition.risk.v1:risk-transition"
+            if item["id"] == "rule-condition:graph.holding.trend_transition.risk.v1:validated-model-signal:graph.holding.trend_transition.risk.v1"
         )
         sell_pressure = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.flow.sell_pressure.v1:ask-pressure"
-        )
-        sell_volume = next(
-            item
-            for item in condition_rows
-            if item["id"] == "rule-condition:graph.flow.sell_pressure.v1:volume-confirmation"
+            if item["id"] == "rule-condition:graph.flow.sell_pressure.v1:validated-model-signal:graph.flow.sell_pressure.v1"
         )
         direct_news_risk = next(
             item
@@ -1384,12 +1380,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         loss_smart_money = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:foreign-net-buy"
+            if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:validated-model-signal:graph.loss_smart_money.defense.v1"
         )
         investor_flow_accumulation = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.investor_flow.smart_money_accumulation.v1:smart-money-accumulation"
+            if item["id"] == "rule-condition:graph.investor_flow.smart_money_accumulation.v1:validated-model-signal:graph.investor_flow.smart_money_accumulation.v1"
         )
         retail_dip_buying = next(
             item
@@ -1409,27 +1405,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
         winner_add_ma5 = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:ma5-reclaim"
+            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:validated-model-signal:graph.winner_momentum.add_buy_review.v1"
         )
         winner_add_profile = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:instrument-profile-allows-strength-add"
+            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:holding-profit"
         )
         winner_add_volume = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:volume-confirmation"
+            if item["id"] == "rule-condition:graph.winner_momentum.add_buy_review.v1:validated-model-signal:graph.winner_momentum.add_buy_review.v1"
         )
         loss_rebound_ma5 = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.loss_rebound.trim_moderation.v1:short-price-rebound"
+            if item["id"] == "rule-condition:graph.loss_rebound.trim_moderation.v1:validated-model-signal:graph.loss_rebound.trim_moderation.v1"
         )
         loss_rebound_smart_money = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.loss_rebound.trim_moderation.v1:smart-money-net-positive"
+            if item["id"] == "rule-condition:graph.loss_rebound.trim_moderation.v1:holding-loss"
         )
         aggressive_profile = next(
             item
@@ -1444,7 +1440,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         profit_momentum_ma20 = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.profit_momentum.hold_add_review.v1:ma20-not-broken"
+            if item["id"] == "rule-condition:graph.profit_momentum.hold_add_review.v1:validated-model-signal:graph.profit_momentum.hold_add_review.v1"
         )
         watchlist_direct_role = next(
             item
@@ -1454,7 +1450,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         watchlist_direct_volume = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.watchlist.direct_momentum.entry.v1:volume-confirmation"
+            if item["id"] == "rule-condition:graph.watchlist.direct_momentum.entry.v1:validated-model-signal:graph.watchlist.direct_momentum.entry.v1"
         )
         profile_averaging_policy = next(
             item
@@ -1567,14 +1563,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("graph.news.quality.validation_state.v1", rule_ids)
         self.assertIn("graph.valuation.high_beta_or_expensive.review.v1", rule_ids)
         self.assertIn("graph.portfolio.concentration.review.v1", rule_ids)
-        self.assertEqual("HAS_TEMPORAL_WINDOW", support_transition["conditionRelationType"])
-        self.assertEqual("temporal-window", support_transition["conditionTargetKind"])
-        self.assertEqual("HAS_TEMPORAL_WINDOW", risk_transition["conditionRelationType"])
-        self.assertEqual("temporal-window", risk_transition["conditionTargetKind"])
-        self.assertEqual(["bidAskImbalance"], sell_pressure["conditionTargetFields"])
-        self.assertEqual(-15.0, sell_pressure["conditionTargetMaxValue"])
-        self.assertEqual(["volumeRatio"], sell_volume["conditionTargetFields"])
-        self.assertEqual(1.2, sell_volume["conditionTargetMinValue"])
+        self.assertEqual("HAS_MODEL_SIGNAL", support_transition["conditionRelationType"])
+        self.assertEqual("statistical-model-signal", support_transition["conditionTargetKind"])
+        self.assertEqual("HAS_MODEL_SIGNAL", risk_transition["conditionRelationType"])
+        self.assertEqual("statistical-model-signal", risk_transition["conditionTargetKind"])
+        self.assertEqual("HAS_MODEL_SIGNAL", sell_pressure["conditionRelationType"])
+        self.assertIn("signalType", sell_pressure["conditionTargetFields"])
         self.assertEqual(["direct"], direct_news_risk["conditionTargetRelationScopes"])
         self.assertEqual(["risk"], direct_news_risk["conditionTargetPolarities"])
         self.assertTrue(direct_news_risk["conditionTargetMaterialityPassed"])
@@ -1604,39 +1598,28 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("profit-policy", strategy_profit_policy["conditionTargetKind"])
         self.assertEqual("HAS_POSITION_ROLE", watchlist_strategy_role["conditionRelationType"])
         self.assertEqual("position-role", watchlist_strategy_role["conditionTargetKind"])
-        self.assertEqual("foreignNetVolume", loss_smart_money["conditionField"])
-        self.assertEqual(">", loss_smart_money["conditionOperator"])
-        self.assertEqual(0.0, loss_smart_money["conditionValueNumber"])
-        self.assertEqual("foreignNetVolume", investor_flow_accumulation["conditionField"])
-        self.assertEqual(">", investor_flow_accumulation["conditionOperator"])
+        self.assertEqual("HAS_MODEL_SIGNAL", loss_smart_money["conditionRelationType"])
+        self.assertEqual("HAS_MODEL_SIGNAL", investor_flow_accumulation["conditionRelationType"])
         self.assertEqual("foreignNetVolume", retail_dip_buying["conditionField"])
         self.assertEqual("<", retail_dip_buying["conditionOperator"])
         self.assertEqual("any", add_buy_volume["conditionRole"])
         self.assertEqual(["volumeRatio"], add_buy_volume["conditionTargetFields"])
         self.assertEqual(1.0, add_buy_volume["conditionTargetMinValue"])
         self.assertEqual("not", add_buy_gap_guard["conditionRole"])
-        self.assertEqual("HAS_TECHNICAL_INDICATOR", winner_add_ma5["conditionRelationType"])
-        self.assertEqual(["ma5"], winner_add_ma5["conditionTargetLevelTypes"])
-        self.assertEqual("HAS_INSTRUMENT_PROFILE", winner_add_profile["conditionRelationType"])
-        self.assertEqual("instrument-profile", winner_add_profile["conditionTargetKind"])
-        self.assertEqual(["allowAddOnStrength"], winner_add_profile["conditionTargetFields"])
-        self.assertEqual("any", winner_add_volume["conditionRole"])
-        self.assertEqual(["volumeRatio"], winner_add_volume["conditionTargetFields"])
-        self.assertEqual(1.0, winner_add_volume["conditionTargetMinValue"])
-        self.assertEqual("ma5Distance", loss_rebound_ma5["conditionField"])
-        self.assertEqual(0.0, loss_rebound_ma5["conditionValueNumber"])
-        self.assertEqual("smartMoneyNetVolume", loss_rebound_smart_money["conditionField"])
+        self.assertEqual("HAS_MODEL_SIGNAL", winner_add_ma5["conditionRelationType"])
+        self.assertEqual("profitLossRate", winner_add_profile["conditionField"])
+        self.assertEqual("HAS_MODEL_SIGNAL", winner_add_volume["conditionRelationType"])
+        self.assertEqual("HAS_MODEL_SIGNAL", loss_rebound_ma5["conditionRelationType"])
+        self.assertEqual("profitLossRate", loss_rebound_smart_money["conditionField"])
         self.assertEqual("investmentStrategyProfile", aggressive_profile["conditionField"])
         self.assertEqual("aggressive", aggressive_profile["conditionValueString"])
         self.assertEqual("investmentStrategyProfile", profit_momentum_profile["conditionField"])
         self.assertIn("growth", profit_momentum_profile["conditionValueString"])
         self.assertIn("aggressive", profit_momentum_profile["conditionValueString"])
-        self.assertEqual("ma20Distance", profit_momentum_ma20["conditionField"])
-        self.assertEqual(-3.0, profit_momentum_ma20["conditionValueNumber"])
+        self.assertEqual("HAS_MODEL_SIGNAL", profit_momentum_ma20["conditionRelationType"])
         self.assertEqual("positionRole", watchlist_direct_role["conditionField"])
         self.assertEqual("watchlist", watchlist_direct_role["conditionValueString"])
-        self.assertEqual("any", watchlist_direct_volume["conditionRole"])
-        self.assertEqual("volumeRatio", watchlist_direct_volume["conditionField"])
+        self.assertEqual("HAS_MODEL_SIGNAL", watchlist_direct_volume["conditionRelationType"])
         self.assertEqual("HAS_INSTRUMENT_PROFILE", profile_averaging_policy["conditionRelationType"])
         self.assertEqual(["avoidAveragingDown"], profile_averaging_policy["conditionTargetFields"])
         self.assertEqual("HAS_COVERAGE_GAP", coverage_gap["conditionRelationType"])
@@ -1711,12 +1694,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
         price_recovery = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.price.recovery.confirmed_by_flow.v1:reclaim-ma5-or-ma20"
+            if item["id"] == "rule-condition:graph.watchlist.temporal.recovery_entry.v1:validated-model-signal:graph.watchlist.temporal.recovery_entry.v1"
         )
         flow_divergence = next(
             item
             for item in condition_rows
-            if item["id"] == "rule-condition:graph.flow.price_up_smart_money_outflow.divergence.v1:investor-flow-risk"
+            if item["id"] == "rule-condition:graph.flow.price_up_smart_money_outflow.divergence.v1:validated-model-signal:graph.flow.price_up_smart_money_outflow.divergence.v1"
         )
         news_reaction = next(
             item
@@ -1732,10 +1715,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("HAS_INSTRUMENT_PROFILE", strategy_fit_profile["conditionRelationType"])
         self.assertEqual("instrument-profile", strategy_fit_profile["conditionTargetKind"])
         self.assertEqual("HAS_RISK_BUDGET", strategy_loss_budget["conditionRelationType"])
-        self.assertEqual("HAS_TECHNICAL_INDICATOR", price_recovery["conditionRelationType"])
-        self.assertEqual(["ma5", "ma20"], price_recovery["conditionTargetLevelTypes"])
-        self.assertEqual("smartMoneyNetVolume", flow_divergence["conditionField"])
-        self.assertEqual("<", flow_divergence["conditionOperator"])
+        self.assertEqual("HAS_MODEL_SIGNAL", price_recovery["conditionRelationType"])
+        self.assertEqual("HAS_MODEL_SIGNAL", flow_divergence["conditionRelationType"])
         self.assertEqual("HAS_EXTERNAL_SIGNAL", news_reaction["conditionRelationType"])
         self.assertEqual(["risk"], news_reaction["conditionTargetPolarities"])
         self.assertEqual("HAS_EXTERNAL_SIGNAL", disclosure_action["conditionRelationType"])
@@ -1805,7 +1786,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         generic = rules["graph.profit_momentum.hold_add_review.v1"]
         generic_ids = {item.condition_id for item in generic.conditions}
-        self.assertIn("market-evidence-profile-eligible", generic_ids)
+        self.assertIn("validated-model-signal:graph.profit_momentum.hold_add_review.v1", generic_ids)
         self.assertNotIn("market-evidence-investorFlow-unavailable", generic_ids)
 
     def test_rulebox_admin_payload_roundtrips_to_graph(self):
@@ -2257,7 +2238,10 @@ class OntologyRuleBoxTests(unittest.TestCase):
         snapshot = rulebox_snapshot_from_rows(rowsets, source="test")
         loss_guard = next(item for item in snapshot["rules"] if item["rule_id"] == "graph.loss_guard.breakdown.v1")
         sell_pressure = next(item for item in snapshot["rules"] if item["rule_id"] == "graph.flow.sell_pressure.v1")
-        ask_pressure = next(item for item in sell_pressure["conditions"] if item["condition_id"] == "ask-pressure")
+        ask_pressure = next(
+            item for item in sell_pressure["conditions"]
+            if item["condition_id"] == "validated-model-signal:graph.flow.sell_pressure.v1"
+        )
 
         self.assertEqual("ok", snapshot["status"])
         self.assertEqual("test", snapshot["source"])
@@ -2268,8 +2252,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("constrain", loss_guard["derivations"][0]["decision_effect"])
         self.assertEqual("review", loss_guard["derivations"][0]["action_level"])
         self.assertEqual("risk", loss_guard["derivations"][0]["evidence_role"])
-        self.assertEqual("bidAskImbalance", ask_pressure["target_property_filters"]["field"])
-        self.assertEqual(-15, ask_pressure["target_property_filters"]["maxValue"])
+        self.assertEqual("flow-distribution-risk", ask_pressure["target_property_filters"]["signalType"])
+        self.assertEqual("flow-distribution", ask_pressure["target_property_filters"]["hypothesisFamilyId"])
         self.assertIn("HAS_INFERRED_RISK", snapshot["relationTypes"])
         self.assertEqual("test001", snapshot["versions"][0]["versionLabel"])
         self.assertTrue(snapshot["changeCandidates"])

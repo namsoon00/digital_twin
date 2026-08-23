@@ -65,9 +65,13 @@ class ReasoningEnginePlatformService:
 
     def descriptors(self):
         from ..domain.ontology_rulebox_release_manifest import RULEBOX_RELEASE_MANIFEST_VERSION
-        from ..domain.ontology_schema import ONTOLOGY_TBOX_VERSION
+        from ..domain.ontology_schema import ONTOLOGY_TBOX_VERSION, tbox_fingerprint
+        from ..domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
         from ..infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
-        from ..domain.statistical_signals import DEFAULT_PRICE_SIGNAL_RELEASE_ID
+        from ..domain.statistical_signals import (
+            DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+            DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+        )
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
         shadow_backend = str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow")
@@ -110,14 +114,20 @@ class ReasoningEnginePlatformService:
         )
         runtime = dict(self.settings.get("_runtimeIdentity") or {})
         common_bundle_values = dict(
-            tbox_release_id=ONTOLOGY_TBOX_VERSION,
+            tbox_release_id=ONTOLOGY_TBOX_VERSION + "@" + tbox_fingerprint(),
             rulebox_release_id=RULEBOX_RELEASE_MANIFEST_VERSION,
-            prompt_release_id="investment-notification-prompt-registry-current",
+            prompt_release_id=AI_DECISION_PROMPT_VERSION,
             feature_set_version=TEMPORAL_FEATURE_SET_VERSION,
-            model_signal_release_id=str(
-                self.settings.get("statisticalPriceSignalReleaseId")
-                or DEFAULT_PRICE_SIGNAL_RELEASE_ID
-            ),
+            model_signal_release_id="+".join([
+                str(
+                    self.settings.get("statisticalPriceSignalReleaseId")
+                    or DEFAULT_PRICE_SIGNAL_RELEASE_ID
+                ),
+                str(
+                    self.settings.get("statisticalFlowSignalReleaseId")
+                    or DEFAULT_FLOW_SIGNAL_RELEASE_ID
+                ),
+            ]),
             source_contract_versions=(
                 "typedb-semantic-storage-v2",
                 TYPEDB_NATIVE_RULE_ENGINE_VERSION,
@@ -197,7 +207,12 @@ class ReasoningEnginePlatformService:
             bundle.get("runtime_revision") or bundle.get("runtimeRevision") or "unknown"
         )
         health_matches_bundle = bool(
-            str(health.get("candidateReleaseId") or "") == bundle_release_id
+            str(
+                health.get("candidateBaseReleaseId")
+                or health.get("baseReleaseId")
+                or health.get("candidateReleaseId")
+                or ""
+            ) == bundle_release_id
             and str(health.get("candidateRuntimeRevision") or "") == bundle_runtime_revision
         )
         if health_matches_bundle and str(
@@ -209,12 +224,22 @@ class ReasoningEnginePlatformService:
                     or bundle_release_id
                     or deployment_id
                 ),
+                "baseReleaseId": str(
+                    health.get("candidateBaseReleaseId")
+                    or health.get("baseReleaseId")
+                    or bundle_release_id
+                ),
                 "runtimeRevision": str(
                     health.get("candidateRuntimeRevision")
                     or bundle_runtime_revision
                     or "unknown"
                 ),
                 "ruleboxFingerprint": str(health.get("ruleboxFingerprint") or ""),
+                "tboxFingerprint": str(health.get("tboxFingerprint") or ""),
+                "tboxReleaseId": str(health.get("tboxReleaseId") or ""),
+                "ruleboxReleaseId": str(health.get("ruleboxReleaseId") or ""),
+                "promptReleaseId": str(health.get("promptReleaseId") or ""),
+                "modelSignalReleaseId": str(health.get("modelSignalReleaseId") or ""),
                 "releaseFingerprint": str(
                     health.get("candidateReleaseFingerprint")
                     or health.get("releaseFingerprint")
@@ -501,6 +526,18 @@ class ReasoningEnginePlatformService:
         )
         if queue_wait_p95 > maximum_queue_wait_p95:
             blockers.append("candidate-queue-wait-slo-breached")
+        end_to_end_p95 = int(
+            summary.get("candidateEndToEndP95Ms")
+            or candidate_p95 + queue_wait_p95
+        )
+        maximum_end_to_end_p95 = self.int_setting(
+            "reasoningEnginePromotionMaximumEndToEndP95Ms",
+            maximum_candidate_p95 + maximum_queue_wait_p95,
+            1000,
+            3600000,
+        )
+        if end_to_end_p95 <= 0 or end_to_end_p95 > maximum_end_to_end_p95:
+            blockers.append("candidate-end-to-end-latency-slo-breached")
         latest = self.timestamp(summary.get("latestComparisonAt"))
         maximum_age = self.int_setting(
             "reasoningEnginePromotionMaximumComparisonAgeSeconds", 3600, 60, 7 * 24 * 60 * 60
@@ -523,6 +560,8 @@ class ReasoningEnginePlatformService:
             "release": release,
             "maximumCandidateP95Ms": maximum_candidate_p95,
             "maximumQueueWaitP95Ms": maximum_queue_wait_p95,
+            "endToEndP95Ms": end_to_end_p95,
+            "maximumEndToEndP95Ms": maximum_end_to_end_p95,
             "latestComparisonAgeSeconds": age_seconds,
             "maximumComparisonAgeSeconds": maximum_age,
         }
@@ -591,6 +630,27 @@ class ReasoningEnginePlatformService:
             blockers.append("candidate-queue-wait-slo-breached")
         elif recovered_queue_wait:
             warnings.append("historical-queue-wait-slo-breached-but-current-queue-drained")
+        end_to_end_p95 = int(
+            summary.get("endToEndP95Ms")
+            or candidate_p95 + queue_wait_p95
+        )
+        maximum_end_to_end_p95 = self.int_setting(
+            "reasoningEnginePromotionMaximumEndToEndP95Ms",
+            maximum_candidate_p95 + maximum_queue_wait_p95,
+            1000,
+            3600000,
+        )
+        recovered_end_to_end = bool(
+            recovered_queue_wait
+            and end_to_end_p95 > maximum_end_to_end_p95
+            and candidate_p95 <= maximum_candidate_p95
+        )
+        if end_to_end_p95 <= 0 or (
+            end_to_end_p95 > maximum_end_to_end_p95 and not recovered_end_to_end
+        ):
+            blockers.append("candidate-end-to-end-latency-slo-breached")
+        elif recovered_end_to_end:
+            warnings.append("historical-end-to-end-slo-breached-but-current-queue-drained")
 
         latest = self.timestamp(summary.get("latestCompletedAt"))
         maximum_age = self.int_setting(
@@ -619,6 +679,8 @@ class ReasoningEnginePlatformService:
             "minimumSuccessfulRuns": minimum_runs,
             "maximumCandidateP95Ms": maximum_candidate_p95,
             "maximumQueueWaitP95Ms": maximum_queue_wait_p95,
+            "endToEndP95Ms": end_to_end_p95,
+            "maximumEndToEndP95Ms": maximum_end_to_end_p95,
             "latestRunAgeSeconds": age_seconds,
             "maximumRunAgeSeconds": maximum_age,
             "recoveredQueueWaitOverrideApplied": recovered_queue_wait,

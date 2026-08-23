@@ -217,10 +217,7 @@ class OntologyChangeImpactTests(unittest.TestCase):
         )
 
         self.assertEqual(["market"], plan["changedScopeFamilies"])
-        self.assertEqual(
-            ["graph.company.market.fundamental_confirmation.support.v1"],
-            plan["candidateRuleIds"],
-        )
+        self.assertEqual([], plan["candidateRuleIds"])
         self.assertEqual(
             first["scopeGenerationIds"]["symbol:005930:fundamental"],
             second["scopeGenerationIds"]["symbol:005930:fundamental"],
@@ -943,7 +940,11 @@ class OntologyChangeImpactTests(unittest.TestCase):
 
         self.assertEqual(["market"], plan["changedScopeFamilies"])
         self.assertLess(plan["candidateRuleCount"], len(catalog))
-        self.assertIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
+        self.assertNotIn("graph.price.reclaim.thesis_support.v1", plan["candidateRuleIds"])
+        self.assertTrue(all(
+            next(rule for rule in catalog if rule.rule_id == rule_id).enabled
+            for rule_id in plan["candidateRuleIds"]
+        ))
         self.assertNotIn("graph.liquidity.execution_guard.v1", plan["candidateRuleIds"])
 
     def test_quality_only_macro_scope_change_uses_the_quality_rule_subset(self):

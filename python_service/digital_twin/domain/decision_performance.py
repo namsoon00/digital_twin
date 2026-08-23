@@ -2,6 +2,8 @@ import math
 
 from typing import Dict, Iterable, List
 
+from .hypothesis_outcome_contract import outcome_contract_completeness
+
 
 POSITIVE_ACTIONS = {"BUY", "ADD", "HOLD", "KEEP", "WATCH"}
 NEGATIVE_ACTIONS = {"SELL", "TRIM", "REDUCE", "EXIT", "CUT"}
@@ -62,13 +64,21 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
     for value in episodes or []:
         episode = episode_payload(value)
         hypothesis = selected_hypothesis(episode)
+        facts = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
+        raw_contract = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
+        contract_complete = bool(outcome_contract_completeness(raw_contract).get("complete"))
         for outcome in episode.get("outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
             payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
             status = str(outcome.get("selectedHypothesisStatus") or "inconclusive")
             raw_return = number(outcome.get("priceChangeFromDecisionPct"))
-            calibration_eligibility = str(payload.get("calibrationEligibility") or "legacy-unverified")
+            stored_eligibility = str(payload.get("calibrationEligibility") or "legacy-unverified")
+            calibration_eligibility = (
+                stored_eligibility
+                if contract_complete
+                else "excluded-incomplete-prediction-contract"
+            )
             observations.append({
                 "episodeId": str(episode.get("episodeId") or ""),
                 "independentEpisodeKey": str(payload.get("accountIndependenceKey") or episode.get("episodeId") or ""),

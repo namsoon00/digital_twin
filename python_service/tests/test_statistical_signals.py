@@ -138,7 +138,7 @@ class FakeSignalConnection:
 
 
 class StatisticalSignalTests(unittest.TestCase):
-    def test_price_signal_is_immutable_reference_only_until_replay(self):
+    def test_price_signal_is_immutable_conditional_score_only(self):
         snapshot = feature_snapshot()
         first = score_temporal_feature_snapshot(snapshot)
         second = score_temporal_feature_snapshot(snapshot)
@@ -146,15 +146,16 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual(first.snapshot_id, second.snapshot_id)
         self.assertEqual(4, len(first.signals))
         self.assertTrue(all(item.probability is None for item in first.signals))
-        self.assertTrue(all(item.eligibility.decision_eligibility == "reference-only" for item in first.signals))
-        self.assertTrue(all("historical-replay-and-calibration-required" in item.eligibility.reasons for item in first.signals))
+        self.assertTrue(all(item.eligibility.decision_eligibility == "conditional" for item in first.signals))
+        self.assertTrue(all(item.eligibility.status == "conditional" for item in first.signals))
         support = next(item for item in first.signals if item.signal_type == "price-trend-continuation-support")
         risk = next(item for item in first.signals if item.signal_type == "price-trend-break-risk")
         self.assertGreater(support.score, risk.score)
         self.assertEqual("trend-continuation", support.hypothesis_family_id)
         self.assertEqual("benchmark-adjusted-return", support.outcome_metric)
-        self.assertEqual(support.observed_at, support.knowledge_cutoff_at)
-        self.assertEqual("uncalibrated", support.uncertainty_status)
+        self.assertLessEqual(support.observed_at, support.knowledge_cutoff_at)
+        self.assertEqual(snapshot.as_of, support.knowledge_cutoff_at)
+        self.assertEqual("score-only", support.uncertainty_status)
         self.assertIsNone(support.probability_lower)
         self.assertIsNone(support.probability_upper)
 
@@ -170,13 +171,13 @@ class StatisticalSignalTests(unittest.TestCase):
         second_risk = next(item for item in second.signals if item.signal_type == "price-trend-break-risk")
         self.assertGreater(second_risk.score, first_risk.score)
 
-    def test_flow_signal_uses_independent_daily_samples_and_remains_reference_only(self):
+    def test_flow_signal_uses_independent_daily_samples_and_is_conditional(self):
         positive = score_flow_feature_snapshot(flow_feature_snapshot(1))
         negative = score_flow_feature_snapshot(flow_feature_snapshot(-1))
 
         self.assertEqual(3, len(positive.signals))
         self.assertTrue(all(item.sample_count == 20 for item in positive.signals))
-        self.assertTrue(all(item.eligibility.decision_eligibility == "reference-only" for item in positive.signals))
+        self.assertTrue(all(item.eligibility.decision_eligibility == "conditional" for item in positive.signals))
         positive_support = next(item for item in positive.signals if item.signal_type == "flow-accumulation-support")
         positive_risk = next(item for item in positive.signals if item.signal_type == "flow-distribution-risk")
         negative_risk = next(item for item in negative.signals if item.signal_type == "flow-distribution-risk")
@@ -212,7 +213,7 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual("unchanged", second["persistence"]["signalSnapshot"]["status"])
         self.assertEqual(first["signalSnapshot"].snapshot_id, second["signalSnapshot"].snapshot_id)
 
-    def test_later_worker_clock_does_not_change_same_observation_signal(self):
+    def test_distinct_knowledge_cutoff_changes_signal_contract(self):
         feature_store = MemoryFeatureStore()
         signal_store = MemorySignalStore()
         service = StatisticalSignalPipelineService(feature_store, signal_store)
@@ -222,8 +223,42 @@ class StatisticalSignalTests(unittest.TestCase):
         second = service.run("account-1", "questdb-shadow", snapshot.windows, "2026-08-10T09:00:00Z")
 
         self.assertEqual("changed", first["persistence"]["signalSnapshot"]["status"])
-        self.assertEqual("unchanged", second["persistence"]["signalSnapshot"]["status"])
-        self.assertEqual(first["signalSnapshot"].snapshot_id, second["signalSnapshot"].snapshot_id)
+        self.assertEqual("changed", second["persistence"]["signalSnapshot"]["status"])
+        self.assertNotEqual(first["signalSnapshot"].snapshot_id, second["signalSnapshot"].snapshot_id)
+
+    def test_pipeline_removes_rows_after_decision_knowledge_cutoff(self):
+        service = StatisticalSignalPipelineService(MemoryFeatureStore(), MemorySignalStore())
+        snapshot = feature_snapshot()
+        windows = {
+            **snapshot.windows,
+            "NVDA": {
+                **snapshot.windows["NVDA"],
+                "1D": [
+                    *snapshot.windows["NVDA"]["1D"],
+                    {
+                        "bucketAt": "2026-08-11T07:00:00Z",
+                        "generatedAt": "2026-08-11T07:01:00Z",
+                        "currentPrice": 999,
+                        "dataQuality": "actual",
+                    },
+                ],
+            },
+        }
+
+        result = service.run(
+            "account-1",
+            "questdb-shadow",
+            windows,
+            "2026-08-10T07:00:00Z",
+        )
+
+        self.assertEqual(2, result["pointInTime"]["removedFutureRowCount"])
+        self.assertEqual("filtered", result["pointInTime"]["status"])
+        self.assertEqual("2026-08-10T07:00:00Z", result["featureSnapshot"].as_of)
+        for signal in result["signalBundle"].signals:
+            self.assertEqual("2026-08-10T07:00:00Z", signal.knowledge_cutoff_at)
+            for metrics in (signal.input_features.get("windowMetrics") or {}).values():
+                self.assertLessEqual(metrics.get("latestObservedAt") or "", signal.knowledge_cutoff_at)
 
     def test_snapshot_identity_is_account_scoped_but_reuses_shared_market_material(self):
         first = score_temporal_feature_snapshot(feature_snapshot())
@@ -294,7 +329,7 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual(4, relation_types.count("SUPPORTS_HYPOTHESIS_FAMILY"))
         signal_entities = [item for item in graph.entities if item.kind == "statistical-model-signal"]
         self.assertEqual(4, len(signal_entities))
-        self.assertTrue(all(item.properties.get("decisionEligibility") == "reference-only" for item in signal_entities))
+        self.assertTrue(all(item.properties.get("decisionEligibility") == "conditional" for item in signal_entities))
         self.assertTrue(all(item.properties.get("hypothesisFamilyId") for item in signal_entities))
         family_entities = [item for item in graph.entities if item.kind == "hypothesis-family-definition"]
         self.assertEqual(3, len(family_entities))
@@ -381,15 +416,16 @@ class StatisticalSignalTests(unittest.TestCase):
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
         self.assertEqual(43, len(migration["not-applicable"]))
-        self.assertEqual(37, len(migration["shadow-signal-available"]))
-        self.assertEqual(38, len(migration["shadow-signal-required"]))
+        self.assertEqual(16, len(migration["model-signal-production"]))
+        self.assertEqual(59, len(migration["shadow-signal-required"]))
         flow_rule = next(
             item for item in predictive
             if item.get("ruleId") == "graph.flow.sell_pressure.v1"
         )
         flow_contract = flow_rule["statisticalSignalContract"]
         self.assertEqual("implemented", flow_contract["signalAvailability"])
-        self.assertIn("point-in-time-replay-and-calibration-required", flow_contract["promotionBlockers"])
+        self.assertTrue(flow_contract["productionEligible"])
+        self.assertEqual("typedb-model-signal-rule", flow_contract["currentDecisionAuthority"])
 
     def test_shadow_migration_metadata_does_not_change_executable_rulebox_hash(self):
         rule = default_graph_inference_rules()[0]
@@ -407,7 +443,7 @@ class StatisticalSignalTests(unittest.TestCase):
             rulebox_rules_hash([without_shadow_contract]),
         )
 
-    def test_all_predictive_rule_candidates_are_disabled_and_require_calibrated_signals(self):
+    def test_all_predictive_rule_candidates_are_disabled_and_require_governed_signals(self):
         release = statistical_rule_candidate_release(default_graph_inference_rules())
 
         self.assertEqual("disabled-candidate", release["status"])
@@ -420,10 +456,73 @@ class StatisticalSignalTests(unittest.TestCase):
                 item for item in rule["conditions"]
                 if item.get("relation_type") == "HAS_MODEL_SIGNAL"
             ]
-            self.assertEqual(1, len(signal_conditions))
-            filters = signal_conditions[0]["target_property_filters"]
-            self.assertEqual("calibrated", filters["validationStatus"])
-            self.assertEqual("eligible", filters["decisionEligibility"])
+            self.assertGreaterEqual(len(signal_conditions), 1)
+            for condition in signal_conditions:
+                filters = condition["target_property_filters"]
+                self.assertIn(filters["validationStatus"], {"validated-deterministic", "replay-required"})
+                self.assertIn(filters["decisionEligibility"], {"conditional", "reference-only"})
+
+    def test_high_consequence_recovery_rules_require_price_and_flow_model_signals(self):
+        rules = {rule.rule_id: rule for rule in default_graph_inference_rules()}
+
+        for rule_id in {
+            "graph.loss_rebound.trim_moderation.v1",
+            "graph.aggressive.loss_recovery.add_buy_review.v1",
+            "graph.winner_momentum.add_buy_review.v1",
+        }:
+            rule = rules[rule_id]
+            signal_conditions = [
+                condition
+                for condition in rule.conditions
+                if condition.relation_type == "HAS_MODEL_SIGNAL"
+            ]
+            self.assertEqual(2, len(signal_conditions))
+            self.assertEqual(
+                {"price-recovery-support", "flow-accumulation-support"}
+                if rule_id != "graph.winner_momentum.add_buy_review.v1"
+                else {"price-trend-continuation-support", "flow-accumulation-support"},
+                {
+                    condition.target_property_filters.get("signalType")
+                    for condition in signal_conditions
+                },
+            )
+            self.assertIn("원시 임계치", rule.prompt_hint)
+
+    def test_production_rulebox_replaces_raw_price_and_flow_conditions(self):
+        rules = default_graph_inference_rules()
+        predictive = [
+            rule for rule in rules
+            if rule.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
+        ]
+        production = [
+            rule for rule in predictive
+            if rule.resolved_knowledge_basis.migration_disposition == "model-signal-production"
+        ]
+        waiting = [
+            rule for rule in predictive
+            if rule.resolved_knowledge_basis.migration_disposition == "awaiting-governed-model-scorer"
+        ]
+
+        self.assertEqual(16, len(production))
+        self.assertEqual(59, len(waiting))
+        self.assertTrue(all(rule.enabled for rule in production))
+        self.assertTrue(all(not rule.enabled for rule in waiting))
+        self.assertTrue(all(
+            any(condition.relation_type == "HAS_MODEL_SIGNAL" for condition in rule.conditions)
+            for rule in production
+        ))
+        self.assertTrue(all(
+            all(
+                condition.target_property_filters.get("hypothesisFamilyId")
+                for condition in rule.conditions
+                if condition.relation_type == "HAS_MODEL_SIGNAL"
+            )
+            for rule in production
+        ))
+        self.assertTrue(all(
+            rule.resolved_knowledge_basis.decision_authority == "typedb-model-signal-rule"
+            for rule in production
+        ))
 
     def test_uncalibrated_outcomes_cannot_pass_promotion_gate(self):
         signal = next(

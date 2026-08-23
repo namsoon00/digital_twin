@@ -199,8 +199,8 @@ OWNER_DEFAULTS: Mapping[str, Tuple[str, str, str, str, str]] = {
         "predictive-hypothesis",
         "point-in-time-feature-snapshot",
         "governed-model-signal",
-        "typedb-raw-fact-rule",
-        "replace-with-model-signal-rule",
+        "typedb-model-signal-rule",
+        "model-signal-production-or-disabled",
     ),
     "market-observation": (
         "context-observation",

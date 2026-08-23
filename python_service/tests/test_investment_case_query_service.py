@@ -357,6 +357,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         )
         self.assertIn("원천 스냅샷", result.stages[0]["detail"])
         self.assertIn("현재 사용할 수 없습니다", result.stages[3]["detail"])
+        self.assertIn("앞 단계가 차단", compact["stages"][2]["detail"])
         self.assertEqual(result.stages[3]["detail"], compact["stages"][3]["detail"])
         self.assertNotIn("HOLD 판단", compact["stages"][3]["detail"])
 

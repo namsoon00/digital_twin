@@ -85,14 +85,6 @@ class InvestmentCaseSnapshot:
         outcome = dict(self.outcome)
         explanation = dict(self.explanation)
         if compact:
-            stages = [{
-                **item,
-                "detail": (
-                    f"비교 시나리오 {item.get('scenarioCount', 0)}개"
-                    if item.get("id") == "case"
-                    else item.get("detail", "")
-                ),
-            } for item in stages]
             decision = {
                 key: decision.get(key)
                 for key in (

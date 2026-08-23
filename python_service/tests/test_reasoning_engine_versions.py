@@ -281,8 +281,65 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             registry.rows["ontology-v2-production-r17"]["capabilities"]["shadowComparison"]
         )
         self.assertEqual(
-            ["ontology-v2-production-r17"],
+            ["ontology-v2-production-r20", "ontology-v2-production-r17"],
             state["controlCapabilitySync"]["updatedDeploymentIds"],
+        )
+
+    def test_initialize_never_rewrites_an_existing_release_bundle(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v1": {
+                        "deploymentId": "v1",
+                        "engineVersion": "v1",
+                        "status": "candidate",
+                        "releaseBundle": {"runtime_revision": "v1-frozen"},
+                        "capabilities": {},
+                    },
+                    "v2-r20": {
+                        "deploymentId": "v2-r20",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "releaseBundle": {"runtime_revision": "r20-frozen"},
+                        "capabilities": {
+                            "productionDelivery": True,
+                            "shadowComparison": False,
+                        },
+                    },
+                }
+                self.upserted = []
+                self.control_value = EngineControlState("v2-r20", "v2-r20", "v1", 4)
+
+            def upsert(self, item):
+                self.upserted.append(item.deployment_id)
+                self.rows[item.deployment_id] = item.to_dict()
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
+        registry = Registry()
+        ReasoningEnginePlatformService(
+            registry,
+            {
+                "reasoningEngineV1DeploymentId": "v1",
+                "reasoningEngineV2DeploymentId": "v2-r20",
+                "_runtimeIdentity": {"revision": "new-runtime"},
+            },
+        ).initialize()
+
+        self.assertEqual([], registry.upserted)
+        self.assertEqual(
+            "r20-frozen",
+            registry.rows["v2-r20"]["releaseBundle"]["runtime_revision"],
         )
 
     def test_activate_synchronizes_new_active_and_rollback_candidate_capabilities(self):
@@ -461,6 +518,9 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 self.control_value = EngineControlState(active, delivery, candidate, 12)
                 return self.control_value
 
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
         registry = Registry()
         platform = ReasoningEnginePlatformService(registry, {})
 
@@ -480,6 +540,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             result["deployment"]["releaseBundle"]["release_id"],
         )
         self.assertEqual("orbit-alpha-v2", result["deployment"]["graphStoreBinding"])
+        self.assertFalse(result["deployment"]["capabilities"]["productionDelivery"])
+        self.assertTrue(result["deployment"]["capabilities"]["shadowComparison"])
 
     def test_active_v2_status_reads_the_configured_worker_queue_not_rollback_queue(self):
         class Registry:

@@ -300,9 +300,13 @@ class ReasoningEnginePlatformService:
 
     def initialize(self) -> Dict[str, object]:
         descriptors = self.descriptors()
-        for descriptor in descriptors:
-            self.registry.upsert(descriptor)
         control = self.registry.control()
+        for descriptor in descriptors:
+            # A deployment ID is an immutable release identity. Runtime status
+            # must not silently rewrite its bundle after a code update; a new
+            # bundle is introduced only through register_v2_release().
+            if not self.registry.get(descriptor.deployment_id):
+                self.registry.upsert(descriptor)
         # A rolling V2 release has two valid descriptors at once: the active
         # historical release and the newly configured candidate.  The active
         # row remains authoritative until promotion switches control, even
@@ -477,10 +481,12 @@ class ReasoningEnginePlatformService:
             clean_deployment_id,
             expected_version=control.version,
         )
+        capability_sync = self.synchronize_control_capabilities(next_control)
         return {
             "status": "registered",
             "deployment": self.registry.get(clean_deployment_id),
             "control": next_control.to_dict(),
+            "controlCapabilitySync": capability_sync,
         }
 
     @staticmethod

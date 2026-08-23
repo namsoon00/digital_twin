@@ -532,6 +532,7 @@
     investmentModelLoaded: false,
     investmentModelError: "",
     investmentModelPollCount: 0,
+    investmentModelManagementTab: "release",
     commandPaletteOpen: false,
     commandPaletteQuery: "",
     consolePages: { today: 1, market: 1, decision: 1, alerts: 1, validation: 1 },
@@ -2038,9 +2039,11 @@
     var params = new URLSearchParams(window.location.search);
     var type = String(params.get("detail") || "").trim();
     if (!type) return null;
+    var key = String(params.get("detailKey") || "");
+    if (type === "investment-action" && key.indexOf("decision:") === 0) type = "investment-case";
     return {
       type: type,
-      key: String(params.get("detailKey") || "")
+      key: key
     };
   }
 
@@ -6786,6 +6789,14 @@
       });
     }).then(function (payload) {
       state.investmentFlowDetails[key] = payload && typeof payload === "object" ? payload : {};
+      var resolvedEpisodeId = String((payload || {}).episodeId || "").trim();
+      if ((payload || {}).resolvedFromLegacyKey && resolvedEpisodeId) {
+        state.investmentFlowDetails[resolvedEpisodeId] = state.investmentFlowDetails[key];
+        if (state.workDetailLayer && state.workDetailLayer.type === "investment-case" && String(state.workDetailLayer.key || "") === key) {
+          state.workDetailLayer.key = resolvedEpisodeId;
+          window.history.replaceState(null, "", workDetailUrl("investment-case", resolvedEpisodeId));
+        }
+      }
       return state.investmentFlowDetails[key];
     }).catch(function (error) {
       state.investmentFlowDetailErrors[key] = error.message || "투자 케이스 상세를 읽지 못했습니다. 목록을 새로고침해 주세요.";
@@ -11887,6 +11898,9 @@
 
   function openWorkDetailLayer(type, key) {
     if (!type) return;
+    if (type === "investment-action" && String(key || "").indexOf("decision:") === 0) {
+      type = "investment-case";
+    }
     var activeElement = document.activeElement;
     workDetailReturnFocus = activeElement && activeElement.getAttribute ? {
       type: activeElement.getAttribute("data-work-detail") || String(type || ""),
@@ -12036,7 +12050,6 @@
       "strategy-rulebox-editor",
       "strategy-prompt-editor",
       "strategy-model-policy-editor",
-      "investment-model-management",
       "settings-investment-language",
       "notification-delivery-settings",
       "notification-threshold-settings",
@@ -12064,6 +12077,7 @@
       "investment-case",
       "investment-flow",
       "investment-model-overview",
+      "investment-model-management",
       "market-instrument"
     ];
     var largeDetails = [
@@ -12259,9 +12273,58 @@
     return editorWorkDetailPayload(
       "Investment Model Management",
       "투자모델 관리",
-      "버전·규칙·가설·검증·승격",
-      renderInvestmentModelOverview(true) + renderInvestmentModelManagementActions() + renderAdminModelingPanel(state.snapshot || {})
+      "활성 릴리스와 변경 초안, 검증, 배포 이력을 분리해 관리합니다.",
+      renderInvestmentModelManagementWorkspace()
     );
+  }
+
+  function renderInvestmentModelManagementTabs() {
+    var payload = investmentModelPayload();
+    var sections = Array.isArray(((payload.governance || {}).managementSections)) ? payload.governance.managementSections : [
+      { id: "release", label: "활성 릴리스" }, { id: "inventory", label: "규칙·가설" },
+      { id: "validation", label: "검증 게이트" }, { id: "changes", label: "변경 초안" },
+      { id: "audit", label: "배포·감사" }
+    ];
+    return '<nav class="investment-model-management-tabs" role="tablist" aria-label="투자모델 관리 영역">' + sections.map(function (item) {
+      var selected = state.investmentModelManagementTab === item.id;
+      return '<button type="button" role="tab" data-investment-model-management-tab="' + escapeHtml(item.id) + '" aria-selected="' + (selected ? "true" : "false") + '"' + (selected ? ' class="active"' : '') + '>' + escapeHtml(item.label || item.id) + '</button>';
+    }).join("") + '</nav>';
+  }
+
+  function renderInvestmentModelInventoryManagement(payload) {
+    var inventory = payload.inventory || {};
+    return [
+      '<section class="investment-model-management-section"><header><span class="label">MODEL INVENTORY</span><strong>규칙과 가설의 운영 인벤토리</strong><p>활성 릴리스가 참조하는 개수이며 이 화면에서 원시 임계값을 직접 수정하지 않습니다.</p></header>',
+      '<div class="investment-model-metrics"><div><span>TBox 클래스</span><strong>' + escapeHtml(Number(inventory.classes || 0)) + '</strong><em>개념</em></div><div><span>관계 유형</span><strong>' + escapeHtml(Number(inventory.relations || 0)) + '</strong><em>관계</em></div><div><span>실행 규칙</span><strong>' + escapeHtml(Number(inventory.rules || 0)) + '</strong><em>TypeDB</em></div><div><span>가설</span><strong>' + escapeHtml(Number(inventory.hypotheses || 0)) + '</strong><em>수명주기 포함</em></div></div>',
+      renderInvestmentModelManagementActions(),
+      '<div class="investment-model-policy-separation"><strong>실시간 운영 정책은 별도 관리</strong><p>알림 주기와 런타임 설정은 활성 추론 릴리스의 규칙을 직접 변경하지 않습니다.</p>' + renderWorkDetailButton("strategy-model-policy-editor", "", "레거시 런타임 정책 확인", "text-button compact") + '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderInvestmentModelChangeDraft(payload) {
+    var active = payload.activeRelease || {};
+    var candidate = payload.candidate || {};
+    var relationLabels = { older: "활성보다 이전 버전", newer: "활성보다 신규 버전", same: "활성과 동일", unresolved: "비교 정보 부족" };
+    return '<section class="investment-model-management-section"><header><span class="label">CHANGE DRAFT</span><strong>활성 릴리스와 후보 포인터</strong><p>후보는 검증과 명시적 승인 전까지 알림을 발송하지 않습니다.</p></header><div class="investment-model-release-compare"><article><span>현재 활성</span><strong>' + escapeHtml(active.deploymentId || "활성 릴리스 없음") + '</strong><em>' + escapeHtml(active.releaseShortHash || active.runtimeRevision || "식별자 미기록") + '</em></article><b aria-hidden="true">→</b><article><span>후보</span><strong>' + escapeHtml(candidate.deploymentId || "후보 없음") + '</strong><em>' + escapeHtml(relationLabels[candidate.relationToActive] || "비교 정보 부족") + '</em></article></div><p class="investment-model-change-explanation">' + escapeHtml(candidate.explanation || "변경 초안이 등록되면 규칙·TBox·프롬프트·데이터 바인딩 차이를 표시합니다.") + '</p>' + renderWorkDetailButton("experiment-promotion-board", "", "후보 검증과 승격 이력", "text-button compact primary") + '</section>';
+  }
+
+  function renderInvestmentModelAudit(payload) {
+    var governance = payload.governance || {};
+    var release = payload.activeRelease || {};
+    var stages = Array.isArray(governance.stages) ? governance.stages : [];
+    return '<section class="investment-model-management-section"><header><span class="label">RELEASE AUDIT</span><strong>배포·롤백 감사</strong><p>현재 릴리스 식별자와 검증·승격 경로를 확인합니다.</p></header><dl class="investment-model-audit-ids"><div><dt>배포 ID</dt><dd>' + escapeHtml(release.deploymentId || "미기록") + '</dd></div><div><dt>릴리스 해시</dt><dd>' + escapeHtml(release.releaseFingerprint || "미기록") + '</dd></div><div><dt>RuleBox 해시</dt><dd>' + escapeHtml(release.ruleboxFingerprint || "미기록") + '</dd></div><div><dt>마지막 실행</dt><dd>' + escapeHtml(formatClock(release.lastRunAt) || "미기록") + '</dd></div></dl><div class="investment-model-lifecycle">' + stages.map(function (stage) { return '<span><i></i><strong>' + escapeHtml(stage) + '</strong></span>'; }).join("") + '</div><div class="investment-model-audit-actions">' + renderWorkDetailButton("experiment-audit-board", "", "배포 감사 원장", "text-button compact primary") + renderWorkDetailButton("strategy-trace-board", "", "추론 실행 원장", "text-button compact") + '</div></section>';
+  }
+
+  function renderInvestmentModelManagementWorkspace() {
+    var payload = investmentModelPayload();
+    var active = String(state.investmentModelManagementTab || "release");
+    var body = active === "inventory" ? renderInvestmentModelInventoryManagement(payload)
+      : active === "validation" ? renderInvestmentProductReadiness(payload.productReadiness || {})
+      : active === "changes" ? renderInvestmentModelChangeDraft(payload)
+      : active === "audit" ? renderInvestmentModelAudit(payload)
+      : renderInvestmentModelOverview(true);
+    return renderInvestmentModelManagementTabs() + '<div class="investment-model-management-content" role="tabpanel">' + body + '</div>';
   }
 
   function investmentModelPayload() {
@@ -12283,7 +12346,8 @@
     var stageTone = readiness.generalAvailabilityReady ? "watch" : (readiness.closedBetaReady ? "caution" : "danger");
     var gateMarkup = gates.map(function (gate) {
       var passed = !!gate.passed;
-      return '<li class="' + (passed ? "pass" : "blocked") + '"><span aria-hidden="true">' + (passed ? "✓" : "!") + '</span><div><strong>' + escapeHtml(gate.label || gate.id || "검증 항목") + '</strong><p>' + escapeHtml(gate.detail || "상세 기록 없음") + '</p></div><em>' + (passed ? "통과" : "보완 필요") + '</em></li>';
+      var detailTarget = String(gate.detailTarget || "investment-model-overview");
+      return '<li class="' + (passed ? "pass" : "blocked") + '"><span aria-hidden="true">' + (passed ? "✓" : "!") + '</span><div><strong>' + escapeHtml(gate.label || gate.id || "검증 항목") + '</strong><p>' + escapeHtml(gate.detail || "상세 기록 없음") + '</p></div><em>' + (passed ? "통과" : "보완 필요") + '</em>' + renderWorkDetailButton(detailTarget, "", "상세", "text-button compact") + '</li>';
     }).join("");
     return [
       '<section class="investment-product-readiness" data-readiness-stage="' + escapeHtml(stage) + '">',
@@ -24111,6 +24175,7 @@
   function renderInvestmentCaseDetailTabs(key, active) {
     var tabs = [
       ["summary", "요약"],
+      ["current", "현재 상태"],
       ["evidence", "근거·반대"],
       ["reasoning", "추론 과정"],
       ["history", "변화·결과"]
@@ -24129,6 +24194,9 @@
     var checks = Array.isArray(decision.requiredChecks) ? decision.requiredChecks : [];
     var latestOutcome = outcome.latest || {};
     var modelRelease = ((detail.traceRefs || {}).modelRelease || {});
+    var freshness = detail.freshness || {};
+    var integrity = detail.integrity || {};
+    var integrityIssues = Array.isArray(integrity.issues) ? integrity.issues : [];
     var explanation = detail.explanation || {};
     var support = decisionExplanationRows(explanation, "supportingCauses");
     var counter = decisionExplanationRows(explanation, "counterCauses").concat(decisionExplanationRows(explanation, "constraints"));
@@ -24143,6 +24211,7 @@
       '<p><strong>' + escapeHtml(detail.phaseLabel || "투자 케이스") + '</strong><span>' + escapeHtml(detail.headline || "판단 근거를 확인하고 있습니다.") + '</span></p>',
       renderRecordChangedAt(detail),
       '</section>',
+      '<section class="oa-case-record-contract" data-flow-state="' + escapeHtml(integrity.state || "warning") + '"><div><span>판단 기준 시각</span><strong>' + escapeHtml(formatClock(freshness.decisionAsOf || detail.decidedAt) || "기록 없음") + '</strong><em>원천 ' + escapeHtml(formatClock(freshness.sourceAsOf) || "기준 시각 미기록") + ' · 추론 ' + escapeHtml(formatClock(freshness.inferenceAsOf) || "기준 시각 미기록") + '</em></div><div><span>기록 무결성</span><strong>' + escapeHtml(integrity.label || "확인 필요") + '</strong><em>' + escapeHtml(integrityIssues.length ? integrityIssues[0].detail : "판단 당시 사실과 추론 상세가 연결되어 있습니다.") + '</em></div></section>',
       '<section class="oa-case-overview-section"><header><strong>판단 상태를 분리해서 보기</strong>' + renderDecisionInfoButton("decision-readiness", "자료 부족과 추론 실패, AI 보류를 하나의 상태로 합치지 않습니다.") + '</header>' + renderDecisionStatusDimensions(detail.statusDimensions, false) + '</section>',
       '<div class="oa-case-cause-columns"><section><header><strong>핵심 근거</strong>' + renderDecisionInfoButton("reasoning-rule", "현재 투자 의견을 지지한 관계와 규칙의 설명입니다.") + '</header>' + renderDecisionCauseList(support, decision.reason || detail.headline || "지지 근거를 확인 중입니다.") + '</section><section><header><strong>반대 근거와 제한</strong>' + renderDecisionInfoButton("competing-hypothesis", "다른 결론을 지지하거나 현재 의견의 강도를 낮춘 근거입니다.") + '</header>' + renderDecisionCauseList(counter, "현재 기록된 반대 근거나 제한 조건이 없습니다.") + '</section></div>',
       '<section class="oa-case-next-check"><header><span>다음 판단</span><strong>의견이 달라지는 조건</strong></header>',
@@ -24151,6 +24220,37 @@
       '<dl class="oa-case-key-facts"><div><dt>확인된 사실</dt><dd>' + escapeHtml((detail.facts || {}).summary || "데이터 확인 중") + '</dd></div><div><dt>결과 추적</dt><dd>' + escapeHtml(outcomeText) + '</dd></div></dl>',
       '<details class="oa-case-process"><summary><span><strong>처리 단계 보기</strong><em>사실에서 결과 추적까지의 진행 상태</em></span></summary><section class="oa-flow-detail-section oa-case-flow">' + renderInvestmentFlowStages(detail.stages, false, key) + '</section></details>',
       '<section class="oa-case-model-link"><span><strong>사용한 판단 기준</strong><em>' + escapeHtml(modelRelease.deploymentId || modelRelease.reasoningEngineVersion || modelRelease.lineageLabel || "릴리스 계보 확인") + '</em></span>' + renderWorkDetailButton("investment-model-overview", "", "판단 기준", "text-button compact") + '</section>'
+    ].join("");
+  }
+
+  function investmentCaseCurrentValue(item) {
+    var field = String((item || {}).field || "");
+    var value = (item || {}).value;
+    if (value === null || value === undefined || value === "") return "기록 없음";
+    if (typeof value === "number" && /(Rate|Distance|Slope|Weight|Imbalance|btcChange)/i.test(field)) {
+      return value.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "%";
+    }
+    return investmentReasoningValue(value);
+  }
+
+  function renderInvestmentCaseCurrentState(detail) {
+    var current = detail.currentState || {};
+    var groups = Array.isArray(current.groups) ? current.groups : [];
+    if (!groups.length) {
+      return renderConsoleEmpty("판단 당시 현재 상태가 없습니다", "과거 복원 기록에는 현재 상태의 일부 값만 남아 있을 수 있습니다.");
+    }
+    return [
+      '<section class="oa-case-current-head"><div><span>DECISION SNAPSHOT</span><strong>이 판단이 만들어질 때 확인한 상태</strong><p>현재 실시간 값이 아니라 판단 기준 시각에 고정된 값입니다.</p></div><time>' + escapeHtml(formatClock(current.asOf) || "기준 시각 미기록") + '</time></section>',
+      '<div class="oa-case-current-groups">',
+      groups.map(function (group) {
+        var items = Array.isArray(group.items) ? group.items : [];
+        return '<section><header><strong>' + escapeHtml(group.label || group.id || "현재 상태") + '</strong><span>' + escapeHtml(items.length + "개") + '</span></header><dl>' + items.map(function (item) {
+          var source = [item.source, formatClock(item.asOf)].filter(Boolean).join(" · ");
+          var sourceLink = /^https?:\/\//i.test(String(item.sourceUrl || "")) ? '<a href="' + escapeHtml(item.sourceUrl) + '" target="_blank" rel="noopener noreferrer">원문</a>' : '';
+          return '<div><dt>' + escapeHtml(item.label || item.field || "관측값") + '</dt><dd><strong>' + escapeHtml(investmentCaseCurrentValue(item)) + '</strong>' + (item.expected ? '<em>성립 기준 ' + escapeHtml(item.expected) + '</em>' : '') + (source ? '<small>' + escapeHtml(source) + '</small>' : '') + sourceLink + '</dd></div>';
+        }).join("") + '</dl></section>';
+      }).join(""),
+      '</div>'
     ].join("");
   }
 
@@ -24198,10 +24298,13 @@
 
   function renderInvestmentReasoningConditions(conditions) {
     if (!Array.isArray(conditions) || !conditions.length) return "";
-    return '<div class="oa-reasoning-conditions"><strong>실제로 맞은 조건</strong><ul>' + conditions.map(function (item) {
+    var verified = conditions.some(function (item) { return item.verified !== false && item.observedValue !== null && item.observedValue !== undefined && item.observedValue !== ""; });
+    return '<div class="oa-reasoning-conditions"><strong>' + escapeHtml(verified ? "실제로 확인된 조건" : "과거 기록에 남은 조건 식별자") + '</strong><ul>' + conditions.map(function (item) {
       var observed = investmentReasoningValue(item.observedValue);
       var expected = item.expected ? " · 기준 " + item.expected : "";
-      return '<li><span><b>' + escapeHtml(item.label || item.field || item.id || "성립 조건") + '</b><em>' + escapeHtml(investmentReasoningRoleLabel(item.role)) + '</em></span><p>관측 ' + escapeHtml(observed) + escapeHtml(expected) + '</p>' + ((item.source || item.asOf) ? '<small>' + escapeHtml([item.source, item.asOf].filter(Boolean).join(" · ")) + '</small>' : '') + '</li>';
+      var observation = item.verified === false || item.observedValue === null || item.observedValue === undefined || item.observedValue === "" ? "당시 관측값 미저장" : "관측 " + observed + expected;
+      var sourceLink = /^https?:\/\//i.test(String(item.sourceUrl || "")) ? '<a href="' + escapeHtml(item.sourceUrl) + '" target="_blank" rel="noopener noreferrer">원문</a>' : '';
+      return '<li><span><b>' + escapeHtml(item.label || item.field || item.id || "성립 조건") + '</b><em>' + escapeHtml(investmentReasoningRoleLabel(item.role)) + '</em></span><p>' + escapeHtml(observation) + '</p>' + ((item.source || item.asOf) ? '<small>' + escapeHtml([item.source, item.asOf].filter(Boolean).join(" · ")) + '</small>' : '') + sourceLink + '</li>';
     }).join("") + '</ul></div>';
   }
 
@@ -24235,7 +24338,7 @@
       if (knowledge.validationStatus) meta.push("검증 " + knowledge.validationStatus);
       if (knowledge.thresholdOrigin) meta.push("임계값 출처 " + knowledge.thresholdOrigin);
       var references = Array.isArray(knowledge.references) ? knowledge.references : [];
-      if (references.length) knowledgeDetail = '<div class="oa-reasoning-knowledge"><strong>규칙 지식 근거</strong><ul>' + references.map(function (reference) { return '<li><b>' + escapeHtml(reference.title || reference.referenceId || "근거 자료") + '</b>' + (reference.claim ? '<span>' + escapeHtml(reference.claim) + '</span>' : '') + (reference.applicability ? '<small>' + escapeHtml(reference.applicability) + '</small>' : '') + '</li>'; }).join("") + '</ul></div>';
+      if (references.length) knowledgeDetail = '<div class="oa-reasoning-knowledge"><strong>규칙 지식 근거</strong><ul>' + references.map(function (reference) { var body = '<b>' + escapeHtml(reference.title || reference.referenceId || "근거 자료") + '</b>' + (reference.claim ? '<span>' + escapeHtml(reference.claim) + '</span>' : '') + (reference.applicability ? '<small>' + escapeHtml(reference.applicability) + '</small>' : ''); return '<li>' + (/^https?:\/\//i.test(String(reference.url || "")) ? '<a href="' + escapeHtml(reference.url) + '" target="_blank" rel="noopener noreferrer">' + body + '</a>' : body) + '</li>'; }).join("") + '</ul></div>';
     } else if (layer === "hypothesis") {
       primary = '<p>' + escapeHtml(item.claim || "이 규칙 묶음이 설명하는 투자 가설입니다.") + '</p>';
       if (item.stateLabel || item.state) meta.push("근거 상태 " + (item.stateLabel || item.state));
@@ -24284,9 +24387,12 @@
     var typeDbActions = Array.isArray(comparison.typeDbCandidateActions) ? comparison.typeDbCandidateActions : [];
     var detailDecision = detail.decision || {};
     var finalAction = decisionActionMeta(detailDecision.state === "blocked" ? "BLOCKED" : (comparison.aiFinalAction || detailDecision.action), comparison.aiFinalAction).label;
+    var comparisonState = String(comparison.state || "unavailable");
+    var finalLabel = comparisonState === "typedb-only" ? "저장된 TypeDB 관찰" : (comparisonState === "ai-only" ? "AI 의견" : "최종 투자 의견");
+    var limitations = Array.isArray(reasoning.limitations) ? reasoning.limitations : [];
     return [
-      '<section class="oa-case-reasoning-compare"><header><strong>TypeDB 후보와 최종 의견</strong>' + renderDecisionInfoButton("type-db-action-candidate", "TypeDB 후보를 AI가 반대 근거와 제한 조건까지 비교한 뒤 최종 의견을 작성합니다.") + '</header><div><span><em>TypeDB 행동 후보</em><strong>' + escapeHtml(typeDbActions.length ? typeDbActions.map(function (value) { return decisionActionMeta(value, value).label; }).join(" · ") : "행동 후보 없음") + '</strong></span><b aria-hidden="true">→</b><span><em>최종 투자 의견</em><strong>' + escapeHtml(finalAction) + '</strong></span></div><p>' + escapeHtml(comparison.reason || "현재 추론 세대의 가설 비교 결과입니다.") + '</p></section>',
-      '<section class="oa-reasoning-snapshot" data-snapshot-state="' + escapeHtml(reasoning.snapshotState || "unknown") + '"><div><strong>' + escapeHtml(reasoning.snapshotStateLabel || "추론 상세 연결 상태") + '</strong><p>' + escapeHtml(reasoning.snapshotReason || "이 판단에 연결된 사실·관계·규칙을 확인합니다.") + '</p></div><dl><div><dt>사실</dt><dd>' + escapeHtml(counts.facts || 0) + '</dd></div><div><dt>관계</dt><dd>' + escapeHtml(counts.relations || 0) + '</dd></div><div><dt>규칙</dt><dd>' + escapeHtml(counts.rules || 0) + '</dd></div><div><dt>실행 기록</dt><dd>' + escapeHtml(counts.traces || 0) + '</dd></div></dl></section>',
+      '<section class="oa-case-reasoning-compare" data-comparison-state="' + escapeHtml(comparisonState) + '"><header><strong>' + escapeHtml(comparison.label || "TypeDB와 AI 비교 상태") + '</strong>' + renderDecisionInfoButton("type-db-action-candidate", "TypeDB 후보가 있을 때만 AI 최종 의견과 일치 또는 조정 여부를 비교합니다.") + '</header><div><span><em>TypeDB 행동 후보</em><strong>' + escapeHtml(typeDbActions.length ? typeDbActions.map(function (value) { return decisionActionMeta(value, value).label; }).join(" · ") : "비교 후보 없음") + '</strong></span><b aria-hidden="true">→</b><span><em>' + escapeHtml(finalLabel) + '</em><strong>' + escapeHtml(finalAction) + '</strong></span></div><p>' + escapeHtml(comparison.reason || "현재 추론 세대의 판단 참여 상태입니다.") + '</p></section>',
+      '<section class="oa-reasoning-snapshot" data-snapshot-state="' + escapeHtml(reasoning.snapshotState || "unknown") + '"><div><strong>' + escapeHtml(reasoning.snapshotStateLabel || "추론 상세 연결 상태") + '</strong><p>' + escapeHtml(reasoning.snapshotReason || "이 판단에 연결된 사실·관계·규칙을 확인합니다.") + '</p>' + (limitations.length ? '<ul>' + limitations.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("") + '</ul>' : '') + '</div><dl><div><dt>사실</dt><dd>' + escapeHtml(counts.facts || 0) + '</dd></div><div><dt>관계</dt><dd>' + escapeHtml(counts.relations || 0) + '</dd></div><div><dt>규칙</dt><dd>' + escapeHtml(counts.rules || 0) + '</dd></div><div><dt>실행 기록</dt><dd>' + escapeHtml(counts.traces || 0) + '</dd></div></dl></section>',
       '<section class="oa-case-overview-section"><header><strong>사실에서 의견까지 연결</strong>' + renderDecisionInfoButton("reasoning-rule", "사실과 관계가 규칙을 통과해 가설과 최종 의견으로 이어지는 경로입니다.") + '</header>',
       paths.length ? '<div class="oa-case-causal-paths">' + paths.map(function (path) { return '<article><header><strong>' + escapeHtml(path.title || "추론 경로") + '</strong><span>' + escapeHtml(path.selected ? "선택 경로" : "대안 경로") + '</span></header><ol>' + (Array.isArray(path.nodes) ? path.nodes : []).map(renderInvestmentReasoningNode).join("") + '</ol></article>'; }).join("") + '</div>' : '<p class="oa-decision-empty-note">사용자에게 설명할 수 있는 추론 경로가 아직 저장되지 않았습니다.</p>',
       '</section>',
@@ -24382,13 +24488,15 @@
     var active = state.investmentCaseDetailTabs[key] || "summary";
     if (active === "scenarios") active = "reasoning";
     if (active === "trace" && !investmentCaseOperatorAccess()) active = "summary";
-    var content = active === "evidence"
+    var content = active === "current"
+      ? renderInvestmentCaseCurrentState(detail)
+      : (active === "evidence"
       ? renderInvestmentCaseEvidence(detail)
       : (active === "reasoning" || active === "scenarios"
         ? renderInvestmentCaseReasoning(detail)
         : (active === "history"
           ? renderInvestmentCaseHistory(key)
-          : (active === "trace" ? renderInvestmentCaseTrace(key) : renderInvestmentCaseSummary(detail, key))));
+          : (active === "trace" ? renderInvestmentCaseTrace(key) : renderInvestmentCaseSummary(detail, key)))));
     return {
       kicker: "Investment Case",
       title: detail.name || detail.symbol || "투자 케이스 상세",
@@ -32534,6 +32642,13 @@
       if (investmentModelRefresh && app.contains(investmentModelRefresh)) {
         event.preventDefault();
         loadInvestmentModel(true);
+        return;
+      }
+      var investmentModelManagementTab = event.target.closest && event.target.closest("[data-investment-model-management-tab]");
+      if (investmentModelManagementTab && app.contains(investmentModelManagementTab)) {
+        event.preventDefault();
+        state.investmentModelManagementTab = String(investmentModelManagementTab.getAttribute("data-investment-model-management-tab") || "release");
+        render({ transition: "section" });
         return;
       }
       var flowRetry = event.target.closest && event.target.closest("[data-investment-flow-retry]");

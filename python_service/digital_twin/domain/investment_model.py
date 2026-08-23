@@ -81,6 +81,12 @@ def investment_model_projection(
     active_capabilities = _mapping(active.get("capabilities"))
     candidate_health = _mapping(candidate.get("health"))
     candidate_release = _mapping(candidate.get("releaseBundle"))
+    candidate_relation = (
+        "older" if _release_revision(candidate_id) and _release_revision(active_id) and _release_revision(candidate_id) < _release_revision(active_id)
+        else "newer" if _release_revision(candidate_id) > _release_revision(active_id)
+        else "same" if candidate_id and candidate_id == active_id
+        else "unresolved"
+    )
     counts = _mapping(catalog.get("counts"))
     blockers = [str(item) for item in promotion.get("blockers") or [] if str(item).strip()]
     promotion_ready = bool(promotion.get("ready")) and not blockers
@@ -189,15 +195,13 @@ def investment_model_projection(
             "releaseFingerprint": _text(candidate_health.get("releaseFingerprint")),
             "runtimeRevision": _text(candidate_release.get("runtime_revision") or candidate_health.get("candidateRuntimeRevision")),
             "updatedAt": _text(candidate.get("updatedAt") or candidate_health.get("lastRunAt")),
-            "relationToActive": (
-                "older" if _release_revision(candidate_id) and _release_revision(active_id) and _release_revision(candidate_id) < _release_revision(active_id)
-                else "newer" if _release_revision(candidate_id) > _release_revision(active_id)
-                else "same" if candidate_id and candidate_id == active_id
-                else "unresolved"
-            ),
+            "relationToActive": candidate_relation,
+            "role": "rollback-reference" if candidate_relation == "older" else "promotion-candidate" if candidate_id else "none",
+            "roleLabel": "롤백 보관본" if candidate_relation == "older" else "승격 후보" if candidate_id else "후보 없음",
+            "eligibleForPromotion": bool(candidate_id and candidate_relation == "newer"),
             "explanation": (
-                "후보 포인터가 활성 릴리스보다 오래된 배포를 가리킵니다. 승격 후보인지 롤백 보관본인지 확인해야 합니다."
-                if _release_revision(candidate_id) and _release_revision(active_id) and _release_revision(candidate_id) < _release_revision(active_id)
+                "활성 릴리스보다 오래된 배포로, 신규 승격 후보가 아니라 롤백 비교용 보관본입니다."
+                if candidate_relation == "older"
                 else "후보 릴리스는 검증 완료 전까지 알림을 발송하지 않습니다."
             ),
         },

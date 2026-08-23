@@ -17,11 +17,12 @@ def episode(
     validation_state="ready",
     decided_at="2026-08-20T02:00:00Z",
     outcomes=None,
+    symbol="AAPL",
 ):
     return {
         "episodeId": episode_id,
         "accountId": account_id,
-        "symbol": "AAPL",
+        "symbol": symbol,
         "subjectName": "Apple",
         "action": action,
         "reviewLevel": "observe",
@@ -96,6 +97,69 @@ class FakeNotificationStore:
         }] if episode_ids else []
 
 
+class FakeMonitorStore:
+    def load_previous(self):
+        return {
+            "default": {
+                "generatedAt": "2026-08-20T03:00:00Z",
+                "positions": {
+                    "AAPL": {
+                        "current_price": 120.0,
+                        "profit_loss_rate": 4.5,
+                        "quantity": 3,
+                        "ma20": 115.0,
+                        "quote_source": "test market",
+                        "source_as_of": "2026-08-20T02:59:59Z",
+                        "freshness_status": "fresh",
+                    },
+                },
+            },
+        }
+
+
+class FakeEvidenceStore:
+    def latest(self, symbol="", kind="", limit=50, include_inactive=False):
+        return [{
+            "evidenceId": "evidence:1",
+            "symbol": symbol,
+            "kind": "disclosure",
+            "source": "official filing",
+            "title": "실적 공시",
+            "summary": "매출이 증가했습니다.",
+            "url": "https://example.com/filing",
+            "publishedAt": "2026-08-20T01:00:00Z",
+            "dataState": "sufficient",
+            "validationState": "verified",
+            "lifecycleState": "active",
+        }]
+
+
+class FakeInvestmentDomainStore:
+    def execution_feedback_for_decisions(self, episode_ids):
+        return {episode_ids[0]: {
+            "actionPlans": [{"planId": "plan:1"}],
+            "executionEpisodes": [{"executionEpisodeId": "execution:1"}],
+            "fills": [{"executedAt": "2026-08-20T02:30:00Z", "side": "BUY", "quantity": 1, "price": 118}],
+        }}
+
+    def lifecycle_feedback_for_decisions(self, episode_ids):
+        return {episode_ids[0]: {
+            "performanceAttributions": [{"observedAt": "2026-08-20T03:00:00Z", "horizonMinutes": 60}],
+            "decisionReviews": [{"reviewedAt": "2026-08-20T03:01:00Z", "selectedHypothesisStatus": "supported"}],
+        }}
+
+    def decision_continuity_context(self, portfolio_id, account_id, symbol, decision_episode_id):
+        return {
+            "actionObservations": [{
+                "observedAt": "2026-08-20T02:40:00Z",
+                "observedDirection": "increased",
+                "previousQuantity": 2,
+                "observedQuantity": 3,
+            }],
+            "currentPosition": {"symbol": symbol, "quantity": 3, "observationState": "observed"},
+        }
+
+
 class InvestmentCaseQueryServiceTests(unittest.TestCase):
     def test_snapshot_has_stable_case_id_and_five_user_stages(self):
         current = investment_case_snapshot(episode())
@@ -117,7 +181,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         store = FakeDecisionStore([episode()])
         result = InvestmentCaseQueryService(store, FakeNotificationStore()).list_cases()
 
-        self.assertEqual("investment-case-v3", result["version"])
+        self.assertEqual("investment-case-v4", result["version"])
         self.assertEqual(1, result["count"])
         self.assertEqual(investment_case_id("default", "AAPL"), result["items"][0]["caseId"])
         self.assertEqual(1, store.head_reads)
@@ -261,6 +325,21 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual(1, result["summary"]["dimensions"]["data"]["pass"])
         self.assertEqual(1, result["summary"]["dimensions"]["inference"]["pass"])
         self.assertEqual(1, result["summary"]["dimensions"]["ai"]["pass"])
+        self.assertEqual(0, result["summary"]["actionRequired"])
+        self.assertEqual(1, result["summary"]["reviewRequired"])
+
+    def test_action_attention_does_not_count_blocked_judgement_as_user_action(self):
+        actionable = episode("decision-episode:buy", action="BUY", symbol="AAPL")
+        blocked = episode("decision-episode:blocked", action="SELL", symbol="TSLA")
+        blocked["decisionAbstention"] = {"abstained": True, "reason": "가설 비교가 끝나지 않았습니다."}
+
+        result = InvestmentCaseQueryService(FakeDecisionStore([actionable, blocked])).list_cases()
+        by_symbol = {item["symbol"]: item for item in result["items"]}
+
+        self.assertTrue(by_symbol["AAPL"]["attention"]["userActionable"])
+        self.assertFalse(by_symbol["TSLA"]["attention"]["userActionable"])
+        self.assertEqual("blocked", by_symbol["TSLA"]["attention"]["state"])
+        self.assertEqual(1, result["summary"]["actionRequired"])
 
     def test_detail_resolves_default_case_for_legacy_empty_account_rows(self):
         row = episode(account_id="")
@@ -325,6 +404,42 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("decision-episode:new", result["items"][0]["episodeId"])
         self.assertTrue(result["items"][0]["change"]["actionChanged"])
         self.assertTrue(result["items"][0]["change"]["validationChanged"])
+        self.assertEqual("action", result["items"][0]["change"]["type"])
+
+    def test_detail_joins_live_state_resolved_evidence_and_activity_without_typedb(self):
+        row = episode()
+        row["portfolioId"] = "portfolio:default"
+        row["factsAtDecision"] = {
+            "reasoningDetailSnapshot": {
+                "version": "investment-reasoning-detail-v2",
+                "snapshotState": "exact",
+                "snapshotStateLabel": "판단 당시 추론 상세",
+                "inferenceGenerationAt": "2026-08-20T01:59:59Z",
+                "facts": [{
+                    "id": "fact:currentPrice", "field": "currentPrice", "label": "현재가",
+                    "observedValue": 100.0, "source": "test market", "asOf": "2026-08-20T01:59:58Z",
+                }],
+                "relations": [], "rules": [], "traces": [], "hypotheses": [],
+                "counts": {"facts": 1, "relations": 0, "rules": 0, "traces": 0, "hypotheses": 0},
+            },
+        }
+        service = InvestmentCaseQueryService(
+            FakeDecisionStore([row]),
+            FakeNotificationStore(),
+            monitor_store=FakeMonitorStore(),
+            evidence_repository=FakeEvidenceStore(),
+            investment_domain_store=FakeInvestmentDomainStore(),
+        )
+
+        result = service.detail(investment_case_id("default", "AAPL"))
+
+        self.assertEqual("current", result["liveComparison"]["status"])
+        price = next(item for item in result["liveComparison"]["rows"] if item["field"] == "currentPrice")
+        self.assertEqual(20.0, price["delta"])
+        self.assertEqual("resolved", result["evidence"]["records"][0]["resolutionState"])
+        self.assertEqual(1, result["activity"]["summary"]["fillCount"])
+        self.assertEqual(4, len(result["activity"]["timeline"]))
+        self.assertFalse(result["activity"]["causalityClaimed"])
 
     def test_trace_is_lazy_and_keeps_internal_pipeline_for_operators(self):
         service = InvestmentCaseQueryService(FakeDecisionStore([episode()]))

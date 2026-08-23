@@ -1434,6 +1434,9 @@ def investment_case_api_payload(
         decision_episode_store=stores.investment_decision_episode_store(settings),
         notification_job_store=stores.notification_job_store(settings),
         hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
+        monitor_store=stores.monitor_store(settings) if case_id else None,
+        evidence_repository=stores.research_evidence_store(settings) if case_id else None,
+        investment_domain_store=stores.investment_domain_store(settings) if case_id else None,
     )
     if case_id and section == "history":
         return service.history(

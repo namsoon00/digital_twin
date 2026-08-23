@@ -30,7 +30,9 @@ from .decision_integrity import (
 )
 
 
-INVESTMENT_CASE_VERSION = "investment-case-v3"
+INVESTMENT_CASE_VERSION = "investment-case-v4"
+
+ACTIONABLE_INVESTMENT_ACTIONS = {"BUY", "ADD", "TRIM", "SELL", "AVOID"}
 
 CASE_STAGES = (
     ("fact", "확인된 사실"),
@@ -75,6 +77,7 @@ class InvestmentCaseSnapshot:
     current_state: Dict[str, object] = field(default_factory=dict)
     integrity: Dict[str, object] = field(default_factory=dict)
     freshness: Dict[str, object] = field(default_factory=dict)
+    attention: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self, compact: bool = False) -> Dict[str, object]:
         stages = [dict(item) for item in self.stages]
@@ -144,6 +147,7 @@ class InvestmentCaseSnapshot:
             "explanation": explanation,
             "integrity": dict(self.integrity),
             "freshness": dict(self.freshness),
+            "attention": dict(self.attention),
         }
         if not compact:
             payload.update({
@@ -188,6 +192,73 @@ def parse_investment_case_id(case_id: object) -> Optional[Dict[str, str]]:
 def _worst_state(states: Iterable[object], default: str = "warning") -> str:
     clean = [text(value) for value in states if text(value) in FLOW_STATE_RANK]
     return max(clean, key=lambda value: FLOW_STATE_RANK[value]) if clean else default
+
+
+def _attention_summary(
+    action: str,
+    dimensions: Iterable[Mapping[str, object]],
+    integrity: Mapping[str, object],
+) -> Dict[str, object]:
+    """Separate an investment action from a blocked or incomplete judgement."""
+
+    rows = [dict(item) for item in dimensions or [] if isinstance(item, Mapping)]
+    issue_rows = [{
+        "id": text(item.get("id")),
+        "label": text(item.get("label")) or "판단 상태",
+        "state": text(item.get("state")) or "warning",
+        "stateLabel": text(item.get("stateLabel")) or "확인 필요",
+        "reason": text(item.get("reason")),
+        "effect": text(item.get("effect")),
+        "reasonCode": text(item.get("reasonCode")),
+    } for item in rows if text(item.get("state")) not in {"pass"}]
+    integrity_state = text(integrity.get("state")) or "warning"
+    if integrity_state != "pass":
+        issue_rows.append({
+            "id": "integrity",
+            "label": "판단 기록",
+            "state": integrity_state,
+            "stateLabel": text(integrity.get("label")) or "기록 확인 필요",
+            "reason": text(next(iter(integrity.get("issues") or []), {}).get("detail")),
+            "effect": "복원된 기록은 당시 저장된 범위에서만 해석합니다.",
+            "reasonCode": "DECISION_RECORD_INTEGRITY",
+        })
+
+    decision = next((item for item in rows if text(item.get("id")) == "decision"), {})
+    inference = next((item for item in rows if text(item.get("id")) == "inference"), {})
+    ai = next((item for item in rows if text(item.get("id")) == "ai"), {})
+    normalized_action = text(action).upper() or "HOLD"
+    operational_error = any(text(item.get("state")) == "error" for item in rows)
+    blocked = (
+        integrity_state == "blocked"
+        or text(decision.get("state")) == "blocked"
+        or text(inference.get("state")) == "blocked"
+        or text(ai.get("state")) == "blocked"
+    )
+    actionable = (
+        normalized_action in ACTIONABLE_INVESTMENT_ACTIONS
+        and not blocked
+        and not operational_error
+    )
+    if operational_error:
+        state, label, category = "system", "운영 점검 필요", "system"
+    elif blocked:
+        state, label, category = "blocked", "판단 보류", "review"
+    elif actionable:
+        state, label, category = "action", "행동 검토", "investment"
+    elif issue_rows:
+        state, label, category = "review", "근거 확인", "review"
+    else:
+        state, label, category = "observe", "관찰 유지", "investment"
+    return {
+        "state": state,
+        "label": label,
+        "category": category,
+        "userActionable": actionable,
+        "investmentAction": normalized_action,
+        "issueCount": len(issue_rows),
+        "issues": issue_rows,
+        "primaryIssue": dict(issue_rows[0]) if issue_rows else {},
+    }
 
 
 def _stage(stage_id: str, state: str, detail: str, **extra) -> Dict[str, object]:
@@ -925,6 +996,7 @@ def investment_case_snapshot(
         reasoning_detail=reasoning_detail,
         episode=episode,
     )
+    attention = _attention_summary(action, dimensions, integrity)
     change_conditions = list(explanation.get("changeConditions") or [])
     if abstention:
         next_action = "시스템이 비교하지 못한 가설을 다시 검증한 뒤 AI 판단을 자동 갱신해야 합니다."
@@ -1040,6 +1112,7 @@ def investment_case_snapshot(
         current_state=current_state,
         integrity=integrity,
         freshness=freshness,
+        attention=attention,
     )
 
 
@@ -1052,6 +1125,38 @@ def investment_case_history_item(
     current_action = text(snapshot.decision.get("action"))
     prior_validation = text((previous.decision if previous else {}).get("validationState"))
     current_validation = text(snapshot.decision.get("validationState"))
+    prior_evidence = set((previous.evidence if previous else {}).get("supportingIds") or []) | set(
+        (previous.evidence if previous else {}).get("counterIds") or []
+    )
+    current_evidence = set(snapshot.evidence.get("supportingIds") or []) | set(
+        snapshot.evidence.get("counterIds") or []
+    )
+    prior_hypothesis = text((previous.trace_refs if previous else {}).get("selectedHypothesisId"))
+    current_hypothesis = text(snapshot.trace_refs.get("selectedHypothesisId"))
+    prior_readiness = text(previous.readiness_state if previous else "")
+    current_readiness = text(snapshot.readiness_state)
+    action_changed = bool(previous and current_action != prior_action)
+    hypothesis_changed = bool(previous and current_hypothesis != prior_hypothesis)
+    evidence_changed = bool(previous and current_evidence != prior_evidence)
+    validation_changed = bool(previous and current_validation != prior_validation)
+    readiness_changed = bool(previous and current_readiness != prior_readiness)
+    outcome_changed = bool(
+        previous and int(snapshot.outcome.get("count") or 0) != int(previous.outcome.get("count") or 0)
+    )
+    if not previous:
+        change_type, change_label = "baseline", "첫 판단"
+    elif action_changed:
+        change_type, change_label = "action", "투자 의견 변경"
+    elif hypothesis_changed:
+        change_type, change_label = "hypothesis", "핵심 가설 변경"
+    elif evidence_changed:
+        change_type, change_label = "evidence", "판단 근거 변경"
+    elif readiness_changed or validation_changed:
+        change_type, change_label = "readiness", "판단 가능 상태 변경"
+    elif outcome_changed:
+        change_type, change_label = "outcome", "사후 결과 추가"
+    else:
+        change_type, change_label = "unchanged", "이전과 같은 판단"
     return {
         "caseId": snapshot.case_id,
         "episodeId": snapshot.episode_id,
@@ -1064,13 +1169,26 @@ def investment_case_history_item(
         "phase": snapshot.phase,
         "phaseLabel": snapshot.phase_label,
         "outcome": current.get("outcome") or {},
+        "attention": dict(snapshot.attention),
         "change": {
             "hasPrevious": previous is not None,
-            "actionChanged": bool(previous and current_action != prior_action),
+            "type": change_type,
+            "label": change_label,
+            "actionChanged": action_changed,
             "previousAction": prior_action,
             "currentAction": current_action,
-            "validationChanged": bool(previous and current_validation != prior_validation),
+            "hypothesisChanged": hypothesis_changed,
+            "previousHypothesisId": prior_hypothesis,
+            "currentHypothesisId": current_hypothesis,
+            "evidenceChanged": evidence_changed,
+            "addedEvidenceIds": sorted(current_evidence - prior_evidence),
+            "removedEvidenceIds": sorted(prior_evidence - current_evidence),
+            "validationChanged": validation_changed,
             "previousValidationState": prior_validation,
             "currentValidationState": current_validation,
+            "readinessChanged": readiness_changed,
+            "previousReadinessState": prior_readiness,
+            "currentReadinessState": current_readiness,
+            "outcomeChanged": outcome_changed,
         },
     }

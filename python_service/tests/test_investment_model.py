@@ -68,6 +68,8 @@ class InvestmentModelProjectionTests(unittest.TestCase):
         self.assertEqual("active123456", result["activeRelease"]["releaseShortHash"])
         self.assertEqual("runtime-r15", result["activeRelease"]["runtimeRevision"])
         self.assertEqual("newer", result["candidate"]["relationToActive"])
+        self.assertEqual("promotion-candidate", result["candidate"]["role"])
+        self.assertTrue(result["candidate"]["eligibleForPromotion"])
         self.assertEqual("ontology-v2-release-r16", result["candidate"]["releaseId"])
         self.assertEqual(118, result["inventory"]["rules"])
         self.assertTrue(result["validation"]["promotionReady"])
@@ -84,6 +86,28 @@ class InvestmentModelProjectionTests(unittest.TestCase):
 
         self.assertEqual("unavailable", result["status"])
         self.assertFalse(result["validation"]["promotionReady"])
+
+    def test_older_candidate_is_classified_as_rollback_reference(self):
+        result = investment_model_projection(
+            {
+                "control": {
+                    "active_deployment_id": "ontology-v2-production-r15",
+                    "candidate_deployment_id": "ontology-v2-production-r14",
+                },
+                "deployments": [
+                    {"deploymentId": "ontology-v2-production-r15", "status": "active"},
+                    {"deploymentId": "ontology-v2-production-r14", "status": "candidate"},
+                ],
+            },
+            {},
+            {},
+            {},
+            {},
+        )
+
+        self.assertEqual("older", result["candidate"]["relationToActive"])
+        self.assertEqual("rollback-reference", result["candidate"]["role"])
+        self.assertFalse(result["candidate"]["eligibleForPromotion"])
 
 
 if __name__ == "__main__":

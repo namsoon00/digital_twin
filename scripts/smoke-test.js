@@ -773,12 +773,14 @@ function checkWorkflowConsoleContract() {
     code.indexOf('return "/api/investment-cases?"') >= 0 &&
       code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
       code.indexOf('["summary", "요약"]') >= 0 &&
-      code.indexOf('["current", "현재 상태"]') >= 0 &&
+      code.indexOf('["current", "판단 당시·현재"]') >= 0 &&
       code.indexOf('["evidence", "근거·반대"]') >= 0 &&
       code.indexOf('["reasoning", "추론 과정"]') >= 0 &&
       code.indexOf('["history", "변화·결과"]') >= 0 &&
       code.indexOf("renderDecisionStatusDimensions") >= 0 &&
       code.indexOf("renderInvestmentCaseReasoning") >= 0 &&
+      code.indexOf("decisionOutcomeBoardWorkDetailPayload") >= 0 &&
+      code.indexOf('data-work-detail="decision-outcome-board"') >= 0 &&
       code.indexOf("renderInvestmentReasoningInventory") >= 0 &&
       code.indexOf("실제로 확인된 조건") >= 0 &&
       code.indexOf("전체 추론 상세") >= 0 &&
@@ -876,7 +878,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260814-mobile-panel-rhythm-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=20260823-decision-workspace-v6") >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -3021,7 +3023,7 @@ async function checkNormalMode(port, context) {
   const investmentCases = await request(port, "/api/investment-cases?limit=10");
   assertOk(investmentCases.statusCode === 200, "투자 케이스 API 응답 코드가 200이 아닙니다: " + investmentCases.statusCode + " · " + investmentCases.body.slice(0, 500));
   const investmentCasesPayload = JSON.parse(investmentCases.body);
-  assertOk(investmentCasesPayload.version === "investment-case-v3", "투자 케이스 API v3 계약이 없습니다.");
+  assertOk(investmentCasesPayload.version === "investment-case-v4", "투자 케이스 API v4 계약이 없습니다.");
   assertOk(Array.isArray(investmentCasesPayload.items), "투자 케이스 API items가 배열이 아닙니다.");
   assertOk(investmentCasesPayload.summary && typeof investmentCasesPayload.summary === "object", "투자 케이스 API summary가 없습니다.");
   assertOk(investmentCasesPayload.operatorView && investmentCasesPayload.operatorView.loaded === false, "투자 케이스 사용자 목록이 운영 진단을 즉시 로드했습니다.");

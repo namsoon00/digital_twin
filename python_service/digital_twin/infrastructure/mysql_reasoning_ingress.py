@@ -84,12 +84,35 @@ class MySQLReasoningIngressRouter(MySQLOperationalConnection):
     def reconcile(self) -> Dict[str, object]:
         with self.transaction() as connection:
             active = active_reasoning_engine_with_connection(connection)
+            v2_targets = MySQLReasoningEngineJobStore.target_deployments_with_connection(
+                connection
+            )
+            boundary_rows = {
+                deployment_id: MySQLReasoningEngineJobStore.backfill_source_boundaries_with_connection(
+                    connection,
+                    deployment_id,
+                )
+                for deployment_id in v2_targets
+            }
+            boundary_backfill = {
+                "scannedCount": sum(
+                    int(row.get("scannedCount") or 0) for row in boundary_rows.values()
+                ),
+                "updatedCount": sum(
+                    int(row.get("updatedCount") or 0) for row in boundary_rows.values()
+                ),
+                "waitingCount": sum(
+                    int(row.get("waitingCount") or 0) for row in boundary_rows.values()
+                ),
+                "deployments": boundary_rows,
+            }
             if active["engineVersion"] != "v2":
                 return {
                     "status": "unchanged",
                     "activeDeploymentId": active["deploymentId"],
                     "activeEngineVersion": active["engineVersion"],
                     "retiredLegacyEntryCount": 0,
+                    "sourceBoundaryBackfill": boundary_backfill,
                 }
             stamp = utc_now()
             mailbox_count = int((connection.execute(
@@ -107,10 +130,6 @@ class MySQLReasoningIngressRouter(MySQLOperationalConnection):
                 "terminal_reason = %s, updated_at = %s "
                 "WHERE state IN ('pending', 'direct-pending')",
                 ("V2 is active; replay the domain event log only if V1 rollback is selected.", stamp),
-            )
-            boundary_backfill = MySQLReasoningEngineJobStore.backfill_source_boundaries_with_connection(
-                connection,
-                active["deploymentId"],
             )
             MySQLOntologyReasoningMailboxStore._refresh_queue_state_with_connection(connection)
         return {

@@ -1,8 +1,10 @@
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch
 
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.infrastructure.mysql_reasoning_ingress import (
+    MySQLReasoningIngressRouter,
     ingress_reasoning_event_with_connection,
 )
 from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningEngineJobStore
@@ -134,6 +136,61 @@ class ReasoningIngressRouterTests(unittest.TestCase):
             "2026-08-18T00:59:30Z",
             MySQLReasoningEngineJobStore.required_source_boundary_at(market_event),
         )
+
+    @patch(
+        "digital_twin.infrastructure.mysql_reasoning_ingress."
+        "MySQLOntologyReasoningMailboxStore._refresh_queue_state_with_connection"
+    )
+    @patch.object(
+        MySQLReasoningEngineJobStore,
+        "backfill_source_boundaries_with_connection",
+    )
+    def test_reconcile_backfills_the_configured_candidate_before_promotion(
+        self,
+        backfill,
+        _refresh,
+    ):
+        backfill.return_value = {
+            "scannedCount": 6,
+            "updatedCount": 6,
+            "waitingCount": 0,
+        }
+
+        class Connection:
+            def execute(self, sql, params=()):
+                if "FROM reasoning_engine_control control" in sql:
+                    return Cursor({
+                        "active_deployment_id": "v2-r17",
+                        "engine_version": "v2",
+                    })
+                if "FROM reasoning_engine_control WHERE" in sql:
+                    return Cursor({
+                        "active_deployment_id": "v2-r17",
+                        "delivery_deployment_id": "v2-r17",
+                        "candidate_deployment_id": "v2-r18",
+                    })
+                if "FROM reasoning_engine_deployments" in sql:
+                    return Cursor(many=[
+                        {"deployment_id": "v2-r17"},
+                        {"deployment_id": "v2-r18"},
+                    ])
+                if "FROM runtime_settings" in sql:
+                    return Cursor({"value": "v2-r18"})
+                if "COUNT(*) AS row_count" in sql:
+                    return Cursor({"row_count": 0})
+                if sql.lstrip().startswith(("DELETE", "UPDATE")):
+                    return Cursor()
+                raise AssertionError("unexpected SQL: " + sql)
+
+        class Router(MySQLReasoningIngressRouter):
+            def transaction(self):
+                return nullcontext(Connection())
+
+        result = Router.__new__(Router).reconcile()
+
+        backfill.assert_called_once()
+        self.assertEqual("v2-r18", backfill.call_args.args[1])
+        self.assertEqual(6, result["sourceBoundaryBackfill"]["updatedCount"])
 
 
 if __name__ == "__main__":

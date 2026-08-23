@@ -58,6 +58,7 @@
     "python:notifications:status": "python3 python_service/service.py notifications status",
     "python:notifications:watch": "python3 python_service/service.py notifications watch",
     "python:ai-inference:once": "python3 python_service/service.py ai-inference once",
+    "python:ai-inference:reconcile-decisions": "python3 python_service/service.py ai-inference reconcile-decisions",
     "python:ai-inference:status": "python3 python_service/service.py ai-inference status",
     "python:ai-inference:watch": "python3 python_service/service.py ai-inference watch",
     "python:ontology-reasoning:once": "python3 python_service/service.py ontology-reasoning once",

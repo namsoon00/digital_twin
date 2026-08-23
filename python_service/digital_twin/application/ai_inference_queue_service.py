@@ -474,7 +474,12 @@ class AIInferenceQueueRunner:
             quality_gate = ontology_quality_gate_context(context, self.settings)
             context["ontologyQualityGate"] = quality_gate
         apply_ontology_quality_gate_to_response(response, quality_gate)
-        episode = None if narrative_only else self.decision_episode_context(request, context, response)
+        episode = None if narrative_only else self.decision_episode_context(
+            request,
+            context,
+            response,
+            typedb_only=bool(fallback_reason),
+        )
         action_plan = None if narrative_only else self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
         continuity_packet = (
@@ -584,7 +589,12 @@ class AIInferenceQueueRunner:
                 fallback_reason = str(validation_reason)
                 response = typedb_inference_fallback_response(context, validation_reason)
                 apply_ontology_quality_gate_to_response(response, quality_gate)
-                episode = None
+                episode = self.decision_episode_context(
+                    request,
+                    context,
+                    response,
+                    typedb_only=True,
+                )
                 action_plan = None
                 enriched = context_with_validated_ai_response(context, response, self.settings)
                 execution_audit.update({
@@ -607,6 +617,24 @@ class AIInferenceQueueRunner:
                     latency_ms=latency_ms,
                     prompt_bytes=prompt_bytes,
                 )
+        if episode is not None:
+            is_current = getattr(self.queue, "is_current", None)
+            if callable(is_current) and not is_current(request.request_id, self.worker_id):
+                return request.request_id[:8] + " superseded-before-decision-persist"
+            saved_episode = self.storage_call_with_retry(
+                lambda: self.persist_decision_episode(request, context, episode, action_plan)
+            )
+            if saved_episode is not None:
+                enriched["investmentDecisionEpisodeId"] = saved_episode.episode_id
+                enriched["investmentDecisionEpisode"] = saved_episode.to_dict()
+                execution_audit["decisionPersistence"] = {
+                    "status": "stored",
+                    "episodeId": saved_episode.episode_id,
+                    "comparisonState": str(
+                        (saved_episode.facts_at_decision or {}).get("decisionComparisonState") or ""
+                    ),
+                }
+                enriched["notificationAiExecutionAudit"] = execution_audit
         published = self.storage_call_with_retry(
             lambda: self.queue.complete(request, self.worker_id, result, enriched)
         )
@@ -629,8 +657,6 @@ class AIInferenceQueueRunner:
                     )
             except Exception:  # noqa: BLE001 - notification publication remains authoritative.
                 pass
-        if not fallback_reason and not narrative_only:
-            self.persist_decision_episode(request, context, episode, action_plan)
         fallback = " typedb-fallback" if fallback_reason else ""
         return (
             request.request_id[:8]
@@ -663,6 +689,12 @@ class AIInferenceQueueRunner:
             quality_gate = ontology_quality_gate_context(context, self.settings)
             context["ontologyQualityGate"] = quality_gate
         apply_ontology_quality_gate_to_response(response, quality_gate)
+        episode = self.decision_episode_context(
+            request,
+            context,
+            response,
+            typedb_only=True,
+        )
         enriched = context_with_validated_ai_response(context, response, self.settings)
         fallback_reason = str(reason or "AI preparation failed")
         enriched["notificationAiExecutionAudit"] = {
@@ -702,6 +734,21 @@ class AIInferenceQueueRunner:
             latency_ms=0,
             prompt_bytes=0,
         )
+        if episode is not None:
+            is_current = getattr(self.queue, "is_current", None)
+            if callable(is_current) and not is_current(request.request_id, self.worker_id):
+                return request.request_id[:8] + " superseded-before-decision-persist"
+            saved_episode = self.storage_call_with_retry(
+                lambda: self.persist_decision_episode(request, context, episode)
+            )
+            if saved_episode is not None:
+                enriched["investmentDecisionEpisodeId"] = saved_episode.episode_id
+                enriched["investmentDecisionEpisode"] = saved_episode.to_dict()
+                enriched["notificationAiExecutionAudit"]["decisionPersistence"] = {
+                    "status": "stored",
+                    "episodeId": saved_episode.episode_id,
+                    "comparisonState": "typedb-only",
+                }
         published = self.storage_call_with_retry(
             lambda: self.queue.complete(request, self.worker_id, result, enriched)
         )
@@ -777,7 +824,7 @@ class AIInferenceQueueRunner:
                 if delay_ms:
                     time.sleep(delay_ms / 1000.0)
 
-    def decision_episode_context(self, request, context, response):
+    def decision_episode_context(self, request, context, response, *, typedb_only: bool = False):
         if request.message_type != INVESTMENT_INSIGHT:
             return None
         try:
@@ -785,6 +832,22 @@ class AIInferenceQueueRunner:
         except Exception:  # noqa: BLE001 - decision memory does not own alert delivery.
             return None
         if episode:
+            if typedb_only:
+                episode.source = "typedb-inference-fallback"
+                episode.status = "reference-only"
+                episode.selected_hypothesis_id = ""
+                episode.decision_abstention = {}
+                episode.hypothesis_selection_source = "typedb-fallback-no-ai-selection"
+                episode.facts_at_decision = {
+                    **dict(episode.facts_at_decision or {}),
+                    "decisionComparisonState": "typedb-only",
+                    "decisionWriter": "typedb",
+                }
+            else:
+                episode.facts_at_decision = {
+                    **dict(episode.facts_at_decision or {}),
+                    "decisionWriter": "ai",
+                }
             context["investmentDecisionEpisodeId"] = episode.episode_id
             context["investmentDecisionEpisode"] = episode.to_dict()
         return episode
@@ -806,24 +869,22 @@ class AIInferenceQueueRunner:
             }
             return None
 
-    def persist_decision_episode(self, request, context, episode, action_plan=None) -> None:
+    def persist_decision_episode(self, request, context, episode, action_plan=None):
         if not self.decision_episode_store or not episode:
-            return
-        try:
-            relation_context = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
-            subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
-            facts = dict(relation_context.get("facts") or {})
-            facts["inferenceGenerationId"] = relation_context.get("inferenceGenerationId") or ""
-            self.decision_episode_store.record_observation(
-                request.account_id,
-                str(subject.get("symbol") or request.symbol or ""),
-                facts,
-                str(relation_context.get("inferenceGenerationAt") or context.get("referenceDate") or ""),
-            )
-            saved_episode = self.decision_episode_store.save(episode)
-            if action_plan and self.action_planning_service:
-                self.action_planning_service.save(action_plan)
-            context["investmentDecisionEpisodeId"] = saved_episode.episode_id
-            context["investmentDecisionEpisode"] = saved_episode.to_dict()
-        except Exception:  # noqa: BLE001 - the validated notification is already atomically publishable.
-            return
+            return None
+        relation_context = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
+        subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}
+        facts = dict(relation_context.get("facts") or {})
+        facts["inferenceGenerationId"] = relation_context.get("inferenceGenerationId") or ""
+        self.decision_episode_store.record_observation(
+            request.account_id,
+            str(subject.get("symbol") or request.symbol or ""),
+            facts,
+            str(relation_context.get("inferenceGenerationAt") or context.get("referenceDate") or ""),
+        )
+        saved_episode = self.decision_episode_store.save(episode)
+        if action_plan and self.action_planning_service:
+            self.action_planning_service.save(action_plan)
+        context["investmentDecisionEpisodeId"] = saved_episode.episode_id
+        context["investmentDecisionEpisode"] = saved_episode.to_dict()
+        return saved_episode

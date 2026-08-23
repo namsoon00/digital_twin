@@ -10,6 +10,7 @@ from ..domain.investment_case import (
     investment_case_snapshot,
     parse_investment_case_id,
 )
+from ..domain.investment_analysis import investment_decision_key
 from ..domain.investment_flow import (
     FLOW_STAGE_LABELS,
     FLOW_STATE_LABELS,
@@ -143,7 +144,10 @@ class InvestmentCaseQueryService:
         payload.update({
             "status": "ok",
             "readOnly": True,
-            "availableViews": ["summary", "evidence", "reasoning", "history"],
+            "requestedKey": text(case_id),
+            "resolvedFromLegacyKey": text(case_id) not in {snapshot.case_id, snapshot.episode_id},
+            "canonicalUrl": f"/?tab=modeling&detail=investment-case&detailKey={snapshot.episode_id}",
+            "availableViews": ["summary", "current", "evidence", "reasoning", "history"],
             "historyEndpoint": f"/api/investment-cases/{snapshot.case_id}/history",
             "traceEndpoint": f"/api/investment-cases/{snapshot.case_id}/trace",
         })
@@ -232,6 +236,18 @@ class InvestmentCaseQueryService:
             for row in self.flow_service._episodes("", "", 500):
                 payload = item_dict(row)
                 if text(payload.get("flowId") or payload.get("flow_id")) == key:
+                    return self._resolved_pair(row)
+        if key.startswith("decision:"):
+            # Early action-list links were hashes over account, symbol, and an
+            # optional episode id. Resolve them against persisted heads so the
+            # link remains usable after the mutable action queue is refreshed.
+            for row in self.flow_service._episodes("", "", 500):
+                snapshot = investment_case_snapshot(row)
+                candidates = {
+                    investment_decision_key(snapshot.account_id, snapshot.symbol, snapshot.episode_id),
+                    investment_decision_key(snapshot.account_id, snapshot.symbol, ""),
+                }
+                if key in candidates:
                     return self._resolved_pair(row)
         return None, None
 

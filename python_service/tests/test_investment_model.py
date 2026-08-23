@@ -29,6 +29,17 @@ class InvestmentModelProjectionTests(unittest.TestCase):
                         "ruleInventoryReleaseReady": True,
                     },
                     "updatedAt": "2026-08-22T01:00:00Z",
+                }, {
+                    "deploymentId": "ontology-v2-production-r16",
+                    "engineFamily": "ontology-investment-brain",
+                    "engineVersion": "v2",
+                    "status": "candidate",
+                    "releaseBundle": {
+                        "release_id": "ontology-v2-release-r16",
+                        "runtime_revision": "runtime-r16",
+                    },
+                    "health": {"releaseFingerprint": "candidate1234567890"},
+                    "updatedAt": "2026-08-22T01:30:00Z",
                 }],
                 "promotionReadiness": {
                     "ready": True,
@@ -56,11 +67,16 @@ class InvestmentModelProjectionTests(unittest.TestCase):
         self.assertEqual("ontology-v2-release-r15", result["activeRelease"]["releaseId"])
         self.assertEqual("active123456", result["activeRelease"]["releaseShortHash"])
         self.assertEqual("runtime-r15", result["activeRelease"]["runtimeRevision"])
+        self.assertEqual("newer", result["candidate"]["relationToActive"])
+        self.assertEqual("ontology-v2-release-r16", result["candidate"]["releaseId"])
         self.assertEqual(118, result["inventory"]["rules"])
         self.assertTrue(result["validation"]["promotionReady"])
         self.assertEqual("internal-validation", result["productReadiness"]["stage"])
         self.assertFalse(result["productReadiness"]["releaseRecommended"])
         self.assertFalse(result["governance"]["automaticPromotion"])
+        self.assertEqual(5, len(result["governance"]["managementSections"]))
+        self.assertTrue(result["governance"]["legacyRuntimePolicySeparated"])
+        self.assertTrue(all(item.get("detailTarget") for item in result["productReadiness"]["gates"]))
         self.assertNotIn("tossToken", str(result))
 
     def test_missing_active_release_is_unavailable(self):

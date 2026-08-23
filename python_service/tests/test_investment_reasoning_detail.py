@@ -80,6 +80,8 @@ class InvestmentReasoningDetailTests(unittest.TestCase):
         self.assertEqual("condition:loss", result["rules"][0]["conditions"][0]["id"])
         self.assertEqual("trace:risk:1", result["traces"][0]["id"])
         self.assertTrue(result["hypotheses"][0]["selected"])
+        self.assertEqual("exact", result["recordCompleteness"])
+        self.assertEqual([], result["limitations"])
 
     def test_legacy_episode_is_marked_reconstructed_without_inventing_values(self):
         episode = {
@@ -106,6 +108,10 @@ class InvestmentReasoningDetailTests(unittest.TestCase):
         self.assertEqual(200.5, result["facts"][0]["observedValue"])
         self.assertIsNone(result["traces"][0]["conditions"][0]["observedValue"])
         self.assertIn("미저장 속성은 확정하지 않습니다", result["snapshotReason"])
+        self.assertEqual({}, result["rules"][0]["knowledgeBasis"])
+        self.assertEqual("unavailable-in-legacy-episode", result["rules"][0]["knowledgeBasisScope"])
+        self.assertEqual("partial", result["recordCompleteness"])
+        self.assertGreaterEqual(len(result["limitations"]), 1)
 
 
 if __name__ == "__main__":

@@ -170,6 +170,19 @@ def investment_product_readiness(
             required_for_closed_beta=False,
         ),
     ]
+    gate_targets = {
+        "operational-release": "investment-model-overview",
+        "rule-contract": "strategy-rulebox-editor",
+        "outcome-calibration": "hypothesis-governance",
+        "rule-performance": "experiment-validation-board",
+        "engine-comparison": "experiment-validation-board",
+        "latency-slo": "strategy-trace-board",
+        "statistical-signal-migration": "strategy-rulebox-editor",
+        "operational-soak": "experiment-validation-board",
+        "compliance-review": "settings-diagnostics",
+    }
+    for gate in gates:
+        gate["detailTarget"] = gate_targets.get(str(gate.get("id") or ""), "investment-model-overview")
     closed_beta_blockers = [
         item for item in gates
         if item["requiredForClosedBeta"] and not item["passed"]

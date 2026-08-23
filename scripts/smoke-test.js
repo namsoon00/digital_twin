@@ -773,13 +773,14 @@ function checkWorkflowConsoleContract() {
     code.indexOf('return "/api/investment-cases?"') >= 0 &&
       code.indexOf("renderInvestmentCaseDetailTabs") >= 0 &&
       code.indexOf('["summary", "요약"]') >= 0 &&
+      code.indexOf('["current", "현재 상태"]') >= 0 &&
       code.indexOf('["evidence", "근거·반대"]') >= 0 &&
       code.indexOf('["reasoning", "추론 과정"]') >= 0 &&
       code.indexOf('["history", "변화·결과"]') >= 0 &&
       code.indexOf("renderDecisionStatusDimensions") >= 0 &&
       code.indexOf("renderInvestmentCaseReasoning") >= 0 &&
       code.indexOf("renderInvestmentReasoningInventory") >= 0 &&
-      code.indexOf("실제로 맞은 조건") >= 0 &&
+      code.indexOf("실제로 확인된 조건") >= 0 &&
       code.indexOf("전체 추론 상세") >= 0 &&
       code.indexOf("renderDecisionInfoButton") >= 0 &&
       code.indexOf('data-decision-detail-type="') >= 0 &&
@@ -3020,7 +3021,7 @@ async function checkNormalMode(port, context) {
   const investmentCases = await request(port, "/api/investment-cases?limit=10");
   assertOk(investmentCases.statusCode === 200, "투자 케이스 API 응답 코드가 200이 아닙니다: " + investmentCases.statusCode + " · " + investmentCases.body.slice(0, 500));
   const investmentCasesPayload = JSON.parse(investmentCases.body);
-  assertOk(investmentCasesPayload.version === "investment-case-v2", "투자 케이스 API v2 계약이 없습니다.");
+  assertOk(investmentCasesPayload.version === "investment-case-v3", "투자 케이스 API v3 계약이 없습니다.");
   assertOk(Array.isArray(investmentCasesPayload.items), "투자 케이스 API items가 배열이 아닙니다.");
   assertOk(investmentCasesPayload.summary && typeof investmentCasesPayload.summary === "object", "투자 케이스 API summary가 없습니다.");
   assertOk(investmentCasesPayload.operatorView && investmentCasesPayload.operatorView.loaded === false, "투자 케이스 사용자 목록이 운영 진단을 즉시 로드했습니다.");
@@ -3031,7 +3032,7 @@ async function checkNormalMode(port, context) {
   const investmentModel = await request(port, "/api/investment-model");
   assertOk(investmentModel.statusCode === 200, "투자모델 API 응답 코드가 200이 아닙니다: " + investmentModel.statusCode + " · " + investmentModel.body.slice(0, 500));
   const investmentModelPayload = JSON.parse(investmentModel.body);
-  assertOk(investmentModelPayload.version === "investment-model-v1", "투자모델 읽기 계약이 없습니다.");
+  assertOk(investmentModelPayload.version === "investment-model-v2", "투자모델 읽기 계약이 없습니다.");
   assertOk(investmentModelPayload.readOnly === true, "투자모델 기본 API가 읽기 전용이 아닙니다.");
   assertOk(investmentModelPayload.model && investmentModelPayload.model.contract === "facts-relations-hypotheses-inference-decision", "투자모델 판단 생성 계약이 없습니다.");
   assertOk(investmentModelPayload.inventory && typeof investmentModelPayload.inventory.rules === "number", "투자모델 규칙 인벤토리가 없습니다.");

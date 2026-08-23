@@ -14,7 +14,11 @@ import re
 from typing import Dict, Iterable, List, Mapping, Optional
 
 
-REASONING_DETAIL_VERSION = "investment-reasoning-detail-v1"
+REASONING_DETAIL_VERSION = "investment-reasoning-detail-v2"
+SUPPORTED_REASONING_DETAIL_VERSIONS = {
+    "investment-reasoning-detail-v1",
+    REASONING_DETAIL_VERSION,
+}
 
 FACT_LABELS = {
     "currentPrice": "현재가",
@@ -188,6 +192,8 @@ def _condition_rows(trace: Mapping[str, object], facts: Mapping[str, object]) ->
             "observedValue": _safe_value(observed),
             "expected": _expected_text(item),
             "source": _text(item.get("provider") or item.get("source")),
+            "sourceUrl": _text(item.get("sourceUrl") or item.get("url")),
+            "evidenceId": _text(item.get("evidenceId") or item.get("evidence_id")),
             "asOf": _text(item.get("observedAt") or item.get("sourceAsOf") or item.get("asOf")),
             "dataState": _text(item.get("dataState")),
             "freshnessStatus": _text(item.get("freshnessStatus")),
@@ -400,6 +406,8 @@ def reasoning_detail_snapshot(
         "snapshotState": "exact",
         "snapshotStateLabel": "판단 당시 추론 상세",
         "snapshotReason": "판단 생성 시점의 TypeDB 관계 컨텍스트에서 고정 저장했습니다.",
+        "recordCompleteness": "exact",
+        "limitations": [],
         "sourceAboxSnapshotId": _text(relation.get("sourceAboxSnapshotId")),
         "inferenceGenerationId": _text(relation.get("inferenceGenerationId")),
         "inferenceGenerationAt": _text(relation.get("inferenceGenerationAt")),
@@ -493,7 +501,7 @@ def reasoning_detail_from_episode(
 
     facts = _mapping(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
     frozen = _mapping(facts.get("reasoningDetailSnapshot"))
-    if frozen.get("version") == REASONING_DETAIL_VERSION:
+    if frozen.get("version") in SUPPORTED_REASONING_DETAIL_VERSIONS:
         return frozen
 
     scenario_rows = [_mapping(item) for item in scenarios if isinstance(item, Mapping)]
@@ -528,7 +536,10 @@ def reasoning_detail_from_episode(
         "traceIds": _unique(path for item in scenario_rows if rule_id in item.get("ruleIds", []) for path in item.get("relationIds", [])),
         "relationIds": [],
         "conditions": [],
-        "knowledgeBasis": next((_mapping(item.get("knowledgeBasis")) for item in scenario_rows if rule_id in item.get("ruleIds", [])), {}),
+        # A legacy episode only preserved hypothesis-level knowledge.  Do not
+        # present that material as if it were the exact basis of every rule.
+        "knowledgeBasis": {},
+        "knowledgeBasisScope": "unavailable-in-legacy-episode",
     } for rule_id in rule_ids]
 
     relations = []
@@ -561,6 +572,7 @@ def reasoning_detail_from_episode(
                     "freshnessStatus": "",
                     "ruleIds": related_rules,
                     "traceIds": [path_id],
+                    "verified": False,
                 } for condition_id in list(scenario.get("accountConditionIds") or []) + list(scenario.get("marketConditionIds") or [])],
             })
         for relation_type in _unique(list(scenario.get("accountRelationTypes") or []) + list(scenario.get("marketRelationTypes") or []), 100):
@@ -608,6 +620,11 @@ def reasoning_detail_from_episode(
         "snapshotState": "reconstructed",
         "snapshotStateLabel": "저장된 판단에서 복원",
         "snapshotReason": "이전 판단에는 상세 추론 스냅샷이 없어 DecisionEpisode의 사실·가설·규칙 연결에서 복원했습니다. 당시 TypeDB의 미저장 속성은 확정하지 않습니다.",
+        "recordCompleteness": "partial",
+        "limitations": [
+            "개별 규칙의 실제 관측값과 연산자는 당시 저장되지 않아 확정할 수 없습니다.",
+            "가설 수준의 연구 근거를 개별 규칙의 지식 근거로 사용하지 않습니다.",
+        ],
         "sourceAboxSnapshotId": _text(episode.get("sourceAboxSnapshotId") or episode.get("source_abox_snapshot_id")),
         "inferenceGenerationId": _text(episode.get("inferenceGenerationId") or episode.get("inference_generation_id")),
         "inferenceGenerationAt": "",

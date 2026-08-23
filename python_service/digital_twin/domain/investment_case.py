@@ -24,9 +24,13 @@ from .investment_flow import (
     values,
 )
 from .investment_reasoning_detail import reasoning_detail_from_episode
+from .decision_integrity import (
+    decision_comparison_state,
+    validate_decision_episode_integrity,
+)
 
 
-INVESTMENT_CASE_VERSION = "investment-case-v2"
+INVESTMENT_CASE_VERSION = "investment-case-v3"
 
 CASE_STAGES = (
     ("fact", "확인된 사실"),
@@ -68,6 +72,9 @@ class InvestmentCaseSnapshot:
     status_dimensions: List[Dict[str, object]] = field(default_factory=list)
     explanation: Dict[str, object] = field(default_factory=dict)
     reasoning: Dict[str, object] = field(default_factory=dict)
+    current_state: Dict[str, object] = field(default_factory=dict)
+    integrity: Dict[str, object] = field(default_factory=dict)
+    freshness: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self, compact: bool = False) -> Dict[str, object]:
         stages = [dict(item) for item in self.stages]
@@ -135,6 +142,8 @@ class InvestmentCaseSnapshot:
             "outcome": outcome,
             "statusDimensions": [dict(item) for item in self.status_dimensions],
             "explanation": explanation,
+            "integrity": dict(self.integrity),
+            "freshness": dict(self.freshness),
         }
         if not compact:
             payload.update({
@@ -142,6 +151,7 @@ class InvestmentCaseSnapshot:
                 "evidence": dict(self.evidence),
                 "traceRefs": dict(self.trace_refs),
                 "reasoning": dict(self.reasoning),
+                "currentState": dict(self.current_state),
             })
         return payload
 
@@ -391,9 +401,21 @@ def _status_dimensions(
     selected_id: str,
     abstention: Mapping[str, object],
     outcome_count: int,
+    decision_source: str = "",
 ) -> List[Dict[str, object]]:
     abstained = bool(abstention)
-    if abstained:
+    typedb_only = "typedb" in decision_source.lower() and "fallback" in decision_source.lower()
+    if typedb_only:
+        decision = _dimension(
+            "decision",
+            "판단 상태",
+            "warning",
+            "TypeDB 관찰 가능",
+            "TYPE_DB_ONLY_DECISION",
+            "AI를 사용할 수 없어 TypeDB가 확인한 행동 범위와 관계만 저장했습니다.",
+            "자동 주문이나 AI 최종 의견으로 사용하지 않습니다.",
+        )
+    elif abstained:
         decision = _dimension(
             "decision",
             "판단 상태",
@@ -447,7 +469,13 @@ def _status_dimensions(
             "TypeDB 추론 세대가 연결되지 않았습니다.", "투자 행동 판단을 사용할 수 없습니다.",
         )
 
-    if abstained:
+    if typedb_only:
+        ai = _dimension(
+            "ai", "AI 상태", "warning", "AI 미사용", "AI_UNAVAILABLE_TYPE_DB_ONLY",
+            "AI 판단이 완료되지 않아 TypeDB 추론 결과만 기록했습니다.",
+            "확인된 관계는 볼 수 있지만 AI 최종 의견으로 표시하지 않습니다.",
+        )
+    elif abstained:
         ai = _dimension(
             "ai", "AI 상태", "blocked", "비교 미완료", "AI_COMPARISON_INCOMPLETE",
             text(abstention.get("reason")) or "AI 가설 비교가 완료되지 않았습니다.", "TypeDB 관계는 보존하지만 AI 최종 의견은 사용하지 않습니다.",
@@ -489,6 +517,7 @@ def _case_explanation(
     source_snapshot_id: str,
     inference_generation_id: str,
     reasoning_detail: Mapping[str, object],
+    episode: Mapping[str, object],
 ) -> Dict[str, object]:
     selected = next((item for item in scenarios if item.get("selected")), {})
     candidate_scope = scenarios
@@ -633,6 +662,9 @@ def _case_explanation(
         for scenario in scenarios
         if text(scenario.get("candidateAction"))
     )
+    comparison = decision_comparison_state(episode, type_db_actions, action)
+    comparison["selectedHypothesisId"] = selected_id
+    comparison["reason"] = text(abstention.get("reason")) if abstention else headline
     return {
         "primaryCause": primary,
         "supportingCauses": supporting[:5],
@@ -641,13 +673,7 @@ def _case_explanation(
         "dataGaps": missing_data_items,
         "changeConditions": change_conditions[:8],
         "causalPaths": paths,
-        "comparison": {
-            "typeDbCandidateActions": type_db_actions,
-            "aiFinalAction": action,
-            "selectedHypothesisId": selected_id,
-            "different": bool(type_db_actions and action not in type_db_actions),
-            "reason": text(abstention.get("reason")) if abstention else headline,
-        },
+        "comparison": comparison,
     }
 
 
@@ -666,6 +692,67 @@ def _outcomes(episode: Mapping[str, object]) -> List[Dict[str, object]]:
         "selectedHypothesisStatus": text(item.get("selectedHypothesisStatus") or item.get("selected_hypothesis_status")),
         "contradictedEvidenceIds": unique_texts(values(item.get("contradictedEvidenceIds") or item.get("contradicted_evidence_ids"))),
     } for item in rows]
+
+
+def _current_state(
+    facts_at_decision: Mapping[str, object],
+    reasoning_detail: Mapping[str, object],
+    decided_at: str,
+) -> Dict[str, object]:
+    """Expose only values actually frozen into the decision episode."""
+
+    group_by_field = {
+        "currentPrice": "price", "averagePrice": "price", "profitLossRate": "price",
+        "quantity": "price", "positionWeight": "portfolio", "positionAccountWeight": "portfolio",
+        "priceChangeRate": "trend", "ma5": "trend", "ma5Distance": "trend",
+        "ma20": "trend", "ma20Distance": "trend", "ma20Slope": "trend",
+        "ma60": "trend", "ma60Distance": "trend", "ma60Slope": "trend", "trendCurve": "trend",
+        "volume": "flow", "volumeRatio": "flow", "timeAdjustedVolumeRatio": "flow",
+        "tradeStrength": "flow", "buyVolume": "flow", "sellVolume": "flow",
+        "bidAskImbalance": "flow", "foreignNetVolume": "flow", "institutionNetVolume": "flow",
+        "jointSmartMoneyInflow": "flow", "usdKrwRate": "macro", "macroDgs10": "macro",
+        "macroDgs2": "macro", "btcPrice": "macro", "btcChange24h": "macro",
+        "directNewsCount": "event", "directRiskNewsCount": "event", "marketValue": "portfolio",
+    }
+    labels = {
+        "price": "가격·손익", "trend": "가격 경로", "flow": "거래·수급",
+        "portfolio": "포트폴리오", "macro": "외부 환경", "valuation": "기업가치", "event": "사건",
+    }
+    items = []
+    for raw in reasoning_detail.get("facts") or []:
+        row = item_dict(raw)
+        field_name = text(row.get("field"))
+        if not field_name or row.get("observedValue") in (None, ""):
+            continue
+        group = group_by_field.get(field_name, "valuation" if field_name.startswith("valuation.") else "event")
+        items.append({
+            "id": text(row.get("id")) or "fact:" + field_name,
+            "field": field_name,
+            "label": text(row.get("label")) or field_name,
+            "value": row.get("observedValue"),
+            "expected": text(row.get("expected")),
+            "group": group,
+            "groupLabel": labels[group],
+            "source": text(row.get("source")),
+            "sourceUrl": text(row.get("sourceUrl")),
+            "asOf": text(row.get("asOf")),
+            "dataState": text(row.get("dataState")),
+        })
+    source_as_of = next((text(item.get("asOf")) for item in items if text(item.get("asOf"))), "")
+    sources = unique_texts(item.get("source") for item in items if item.get("source"))
+    return {
+        "asOf": source_as_of or text(reasoning_detail.get("inferenceGenerationAt")) or decided_at,
+        "decisionAsOf": decided_at,
+        "sources": sources,
+        "items": items,
+        "groups": [{
+            "id": group_id,
+            "label": label,
+            "items": [dict(item) for item in items if item.get("group") == group_id],
+        } for group_id, label in labels.items() if any(item.get("group") == group_id for item in items)],
+        "factCount": len(items),
+        "snapshotState": text(reasoning_detail.get("snapshotState")) or "unknown",
+    }
 
 
 def investment_case_snapshot(
@@ -779,6 +866,7 @@ def investment_case_snapshot(
         selected_id=selected_id,
         abstention=abstention,
         outcome_count=len(outcomes),
+        decision_source=text(episode.get("source")),
     )
     dimension_by_id = {item["id"]: item for item in dimensions}
     decision_dimension = dimension_by_id["decision"]
@@ -804,9 +892,25 @@ def investment_case_snapshot(
     latest_notification = notifications[0] if notifications else {}
     engine_manifest = item_dict(facts_at_decision.get("engineManifest"))
     reasoning_detail = reasoning_detail_from_episode(episode, scenarios, guardrails)
+    integrity = validate_decision_episode_integrity(episode)
+    current_state = _current_state(facts_at_decision, reasoning_detail, text(flow.get("decidedAt")))
+    freshness = {
+        "decisionAsOf": text(flow.get("decidedAt")),
+        "sourceAsOf": text(current_state.get("asOf")),
+        "inferenceAsOf": text(reasoning_detail.get("inferenceGenerationAt")),
+        "updatedAt": text(flow.get("updatedAt")),
+        "snapshotState": text(reasoning_detail.get("snapshotState")) or "unknown",
+        "snapshotStateLabel": text(reasoning_detail.get("snapshotStateLabel")) or "기록 상태 확인",
+    }
     case_status = "blocked" if readiness_state in {"blocked", "error"} else (
         "review" if readiness_state in {"warning", "pending"} else "active"
     )
+    if integrity.get("state") == "blocked":
+        case_status = "blocked"
+        readiness_state = "blocked"
+        readiness_label = "판단 기록 연결 실패"
+    else:
+        readiness_label = FLOW_STATE_LABELS.get(readiness_state, "확인 필요")
 
     explanation = _case_explanation(
         action=action,
@@ -819,6 +923,7 @@ def investment_case_snapshot(
         source_snapshot_id=source_snapshot_id,
         inference_generation_id=inference_generation_id,
         reasoning_detail=reasoning_detail,
+        episode=episode,
     )
     change_conditions = list(explanation.get("changeConditions") or [])
     if abstention:
@@ -840,7 +945,7 @@ def investment_case_snapshot(
         phase=phase,
         phase_label=CASE_STAGE_LABELS.get(phase, "결과 추적"),
         readiness_state=readiness_state,
-        readiness_label=FLOW_STATE_LABELS.get(readiness_state, "확인 필요"),
+        readiness_label=readiness_label,
         headline=headline,
         next_action=next_action,
         decided_at=text(flow.get("decidedAt")),
@@ -932,6 +1037,9 @@ def investment_case_snapshot(
         status_dimensions=dimensions,
         explanation=explanation,
         reasoning=reasoning_detail,
+        current_state=current_state,
+        integrity=integrity,
+        freshness=freshness,
     )
 
 

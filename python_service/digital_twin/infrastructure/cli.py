@@ -46,6 +46,7 @@ from .notifications import queued_notifier_for_account, send_events
 from .ontology_graph_store import ontology_repository_from_settings
 from .service_factory import (
     build_ai_inference_queue_runner,
+    build_decision_episode_reconciliation_service,
     build_investment_calendar_candidate_service,
     build_investment_calendar_discovery_service,
     build_investment_calendar_research_service,
@@ -385,6 +386,13 @@ def ai_inference_command(args) -> int:
         print(json.dumps({"aiInferenceQueue": store.summary()}, ensure_ascii=False))
         return 0
     settings = runtime_settings()
+    if args.ai_inference_action == "reconcile-decisions":
+        result = build_decision_episode_reconciliation_service(settings).reconcile(
+            limit=int(args.limit or 500),
+            dry_run=bool(args.dry_run),
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") in {"ok", "preview"} else 1
     limit = int(args.limit or settings.get("notificationAiQueueBatchSize") or 1)
     worker_id = str(args.worker_id or os.environ.get("NOTIFICATION_AI_WORKER_ID") or "").strip()
     runner = build_ai_inference_queue_runner(worker_id=worker_id)
@@ -2003,6 +2011,12 @@ def build_parser() -> argparse.ArgumentParser:
     ai_watch.add_argument("--limit", default="")
     ai_watch.add_argument("--worker-id", default="")
     ai_inference_actions.add_parser("status")
+    ai_reconcile = ai_inference_actions.add_parser(
+        "reconcile-decisions",
+        help="Recover missing DecisionEpisode rows from immutable notification audit payloads",
+    )
+    ai_reconcile.add_argument("--limit", default="500")
+    ai_reconcile.add_argument("--dry-run", action="store_true")
     ai_inference.set_defaults(func=ai_inference_command)
 
     ontology_reasoning = subparsers.add_parser("ontology-reasoning", help="Run data-update driven ontology reasoning")

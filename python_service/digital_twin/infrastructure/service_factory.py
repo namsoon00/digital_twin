@@ -11,6 +11,7 @@ from ..application.ai_inference_queue_service import (
 )
 from ..application.data_pipeline_health_service import DataPipelineHealthNotificationEnqueuer, DataPipelineHealthService
 from ..application.decision_continuity_service import DecisionContinuityService
+from ..application.decision_episode_reconciliation_service import DecisionEpisodeReconciliationService
 from ..application.ontology_reasoning_queue_health_service import (
     OntologyReasoningQueueHealthNotificationEnqueuer,
     OntologyReasoningQueueHealthService,
@@ -582,6 +583,14 @@ def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunn
             stores.investment_reasoning_case_store(settings)
         ),
         worker_id=worker_id,
+    )
+
+
+def build_decision_episode_reconciliation_service(settings=None) -> DecisionEpisodeReconciliationService:
+    configured_settings = settings or runtime_settings()
+    return DecisionEpisodeReconciliationService(
+        stores.investment_decision_episode_store(configured_settings),
+        stores.notification_job_store(configured_settings),
     )
 
 

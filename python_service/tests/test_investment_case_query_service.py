@@ -6,6 +6,7 @@ from digital_twin.domain.investment_case import (
     investment_case_snapshot,
     parse_investment_case_id,
 )
+from digital_twin.domain.investment_analysis import investment_decision_key
 
 
 def episode(
@@ -116,7 +117,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         store = FakeDecisionStore([episode()])
         result = InvestmentCaseQueryService(store, FakeNotificationStore()).list_cases()
 
-        self.assertEqual("investment-case-v2", result["version"])
+        self.assertEqual("investment-case-v3", result["version"])
         self.assertEqual(1, result["count"])
         self.assertEqual(investment_case_id("default", "AAPL"), result["items"][0]["caseId"])
         self.assertEqual(1, store.head_reads)
@@ -160,6 +161,37 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             if item["layer"] == "rule"
         )
         self.assertEqual("rule:ai-demand", rule_node["items"][0]["id"])
+
+    def test_exact_episode_exposes_frozen_current_state_and_integrity(self):
+        row = episode()
+        row["factsAtDecision"] = {
+            "reasoningDetailSnapshot": {
+                "version": "investment-reasoning-detail-v2",
+                "snapshotState": "exact",
+                "snapshotStateLabel": "판단 당시 추론 상세",
+                "inferenceGenerationAt": "2026-08-20T01:59:59Z",
+                "facts": [{
+                    "id": "fact:currentPrice",
+                    "field": "currentPrice",
+                    "label": "현재가",
+                    "observedValue": 226.17,
+                    "source": "market provider",
+                    "asOf": "2026-08-20T01:59:58Z",
+                }],
+                "relations": [],
+                "rules": [],
+                "traces": [],
+                "hypotheses": [],
+                "counts": {"facts": 1, "relations": 0, "rules": 0, "traces": 0, "hypotheses": 0},
+            },
+        }
+
+        result = investment_case_snapshot(row)
+
+        self.assertEqual("pass", result.integrity["state"])
+        self.assertEqual("exact", result.current_state["snapshotState"])
+        self.assertEqual(226.17, result.current_state["groups"][0]["items"][0]["value"])
+        self.assertEqual("2026-08-20T01:59:58Z", result.freshness["sourceAsOf"])
 
     def test_unselected_hypothesis_evidence_is_kept_in_case_summary(self):
         row = episode()
@@ -251,6 +283,30 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(investment_case_id("default", "AAPL"), result["caseId"])
+
+    def test_detail_resolves_legacy_decision_hash_to_canonical_episode(self):
+        row = episode()
+        service = InvestmentCaseQueryService(FakeDecisionStore([row]))
+        legacy_key = investment_decision_key("default", "AAPL", row["episodeId"])
+
+        result = service.detail(legacy_key)
+
+        self.assertEqual("ok", result["status"])
+        self.assertTrue(result["resolvedFromLegacyKey"])
+        self.assertEqual("decision-episode:1", result["episodeId"])
+        self.assertIn("detailKey=decision-episode:1", result["canonicalUrl"])
+
+    def test_ai_only_episode_does_not_report_false_typedb_agreement(self):
+        row = episode()
+        row["hypothesisSet"]["hypotheses"][0]["candidateAction"] = ""
+        row["source"] = "notification-ai"
+
+        result = investment_case_snapshot(row)
+        comparison = result.explanation["comparison"]
+
+        self.assertEqual("ai-only", comparison["state"])
+        self.assertFalse(comparison["comparable"])
+        self.assertIsNone(comparison["different"])
 
     def test_missing_case_returns_actionable_error(self):
         result = InvestmentCaseQueryService(FakeDecisionStore([])).detail("case:missing")

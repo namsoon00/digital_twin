@@ -65,6 +65,19 @@ class FakeReviewer:
         )
 
 
+class RecordingDecisionStore:
+    def __init__(self):
+        self.saved = []
+        self.observations = []
+
+    def record_observation(self, account_id, symbol, facts, observed_at):
+        self.observations.append((account_id, symbol, dict(facts or {}), observed_at))
+
+    def save(self, episode):
+        self.saved.append(episode)
+        return episode
+
+
 class AIInferenceQueueTests(unittest.TestCase):
     def test_empty_routed_hypothesis_set_is_a_valid_abstention_contract(self):
         context = {
@@ -322,6 +335,20 @@ class AIInferenceQueueTests(unittest.TestCase):
 
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()
+        job.context["ontologyRelationContext"]["sourceAboxSnapshotId"] = "abox:timeout-fallback"
+        job.context["ontologyRelationContext"]["hypothesisSet"] = {
+            "hypothesisSetId": "hypothesis-set:timeout-fallback",
+            "comparisonRequired": False,
+            "minimumComparisonCount": 0,
+            "hypotheses": [{
+                "hypothesisId": "hypothesis:timeout-hold",
+                "templateLabel": "관계 변화 관찰",
+                "claim": "현재 관계의 다음 변화를 관찰합니다.",
+                "supportingRuleIds": ["rule:timeout-hold"],
+                "candidateAction": "HOLD",
+            }],
+        }
+        self.notifications.upsert_job(job)
         request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
         self.queue.enqueue(job, request)
 
@@ -333,6 +360,7 @@ class AIInferenceQueueTests(unittest.TestCase):
                 raise TimeoutError("notification AI command exceeded 120 seconds")
 
         reviewer = TimeoutReviewer()
+        decision_store = RecordingDecisionStore()
         runner = AIInferenceQueueRunner(
             self.queue,
             reviewer,
@@ -342,6 +370,7 @@ class AIInferenceQueueTests(unittest.TestCase):
                 "notificationAiQueueMaxAttempts": "2",
                 "notificationAiDeliveryDeadlineSeconds": "120",
             },
+            decision_episode_store=decision_store,
             worker_id="worker-timeout-fallback",
         )
 
@@ -357,6 +386,17 @@ class AIInferenceQueueTests(unittest.TestCase):
             delivered.context["notificationAiValidatedResponse"]["source"],
         )
         self.assertIn("typedb-fallback", runner.last_run_details[0])
+        self.assertEqual(1, len(decision_store.saved))
+        self.assertEqual("typedb-inference-fallback", decision_store.saved[0].source)
+        self.assertEqual("reference-only", decision_store.saved[0].status)
+        self.assertEqual(
+            "typedb-only",
+            decision_store.saved[0].facts_at_decision["decisionComparisonState"],
+        )
+        self.assertEqual(
+            decision_store.saved[0].episode_id,
+            delivered.context["investmentDecisionEpisodeId"],
+        )
 
     def test_expired_queue_deadline_skips_ai_and_releases_typedb_fallback(self):
         job = self.create_job()

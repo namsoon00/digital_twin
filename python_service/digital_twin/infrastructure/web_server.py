@@ -96,7 +96,7 @@ from ..domain.investment_ubiquitous_language import (
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_analysis import investment_decision_key
 from ..domain.investment_evidence_governance import claim_quality_summary
-from ..domain.investment_model import investment_model_projection
+from ..domain.investment_model import INVESTMENT_MODEL_VERSION, investment_model_projection
 from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
@@ -1497,6 +1497,30 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
         }
         return payload
     cached = INVESTMENT_MODEL_READ_MODEL.snapshot(key)
+    cached_payload = dict(cached.get("payload") or {})
+    contract_changed = bool(cached.get("hasData")) and str(
+        cached_payload.get("version") or ""
+    ) != INVESTMENT_MODEL_VERSION
+    if contract_changed:
+        refreshed = INVESTMENT_MODEL_READ_MODEL.refresh(key, _investment_model_source_payload)
+        payload = dict(refreshed.get("payload") or {})
+        if str(payload.get("version") or "") != INVESTMENT_MODEL_VERSION:
+            payload = investment_model_projection({}, {}, {}, {}, runtime_settings())
+            payload["status"] = "warming"
+            payload["diagnostics"] = {
+                "partial": True,
+                "errors": [
+                    str(refreshed.get("lastError") or "투자모델 읽기 계약 갱신을 기다리고 있습니다.")
+                ],
+            }
+        payload["cache"] = {
+            "stale": False,
+            "ageSeconds": refreshed.get("ageSeconds", 0),
+            "refreshing": False,
+            "contractMigrated": True,
+            "lastSuccessAt": refreshed.get("lastSuccessAt", ""),
+        }
+        return payload
     if cached.get("hasData"):
         refresh_started = False
         if cached.get("stale"):

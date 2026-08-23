@@ -1958,7 +1958,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260824-decision-explanation-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260824-decision-state-audit-v2", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -8292,8 +8292,27 @@
     return name || normalizedSymbol;
   }
 
+  function userFacingTechnicalNarrative(value) {
+    var raw = String(value == null ? "" : value).trim();
+    var exact = {
+      "deferred-pending-scoped-manifest": "판단에 필요한 추론 기록이 아직 준비되지 않았습니다.",
+      "native-manifest-evidence-index-incomplete": "판단 근거 색인이 아직 준비되지 않았습니다.",
+      "monitoring.alerts_detected": "새 투자 신호가 감지되었습니다.",
+      "research_evidence.collected": "새 뉴스·공시 근거가 수집되었습니다."
+    };
+    if (exact[raw]) return exact[raw];
+    var circuit = raw.match(/^circuit open until\s+(.+)$/i);
+    if (circuit) {
+      return "전송 오류가 반복되어 " + (formatClock(circuit[1]) || circuit[1]) + "까지 자동 재시도를 잠시 중단했습니다.";
+    }
+    if (/데이터베이스 쓰기 경계/.test(raw) || (/typedb/i.test(raw) && /write|boundary/i.test(raw))) {
+      return "다른 추론 저장 작업이 진행 중이어서 이번 처리를 완료하지 못했습니다.";
+    }
+    return raw;
+  }
+
   function formatConsoleNarrative(value) {
-    var text = String(value == null ? "" : value);
+    var text = userFacingTechnicalNarrative(value);
     text = text.replace(/([+-]?\d+\.\d{2,})\s*%/g, function (_match, raw) {
       var number = Number(raw);
       if (!Number.isFinite(number)) return _match;
@@ -14026,6 +14045,7 @@
           attentionState: String(attention.state || (readinessState === "blocked" ? "blocked" : "review")),
           attentionLabel: String(attention.label || item.readinessLabel || "확인 필요"),
           attentionIssues: Array.isArray(attention.issues) ? attention.issues : [],
+          attention: attention,
           reviewLevel: String(decision.reviewLevel || "observe"),
           dataState: dataState,
           changeState: stateValueFromSources([matched, matched.graph], ["changeState", "change_state"], "unchanged"),
@@ -14160,7 +14180,8 @@
       var symbol = notificationJobResolvedSymbol(job);
       var factors = notificationJobDecisionFactors(job);
       var movement = notificationJobDecisionRoute(job);
-      var title = textWithKnownDisplaySymbols(job.title || "", symbol, job) || (symbol ? stockDisplayName(symbol, job) : notificationJobTypeLabel(notificationJobTypeKey(job), [job]));
+      var eventTitle = realtimeEventLabel(String(job.title || ""));
+      var title = textWithKnownDisplaySymbols(eventTitle, symbol, job) || (symbol ? stockDisplayName(symbol, job) : notificationJobTypeLabel(notificationJobTypeKey(job), [job]));
       return {
         key: notificationJobKey(job),
         time: recordChangedAt(job),
@@ -14215,7 +14236,7 @@
         key: "notification:" + jobKey,
         priority: job.status === "failed" ? 1 : 2,
         kind: "알림",
-        target: textWithKnownDisplaySymbols(job.title || notificationJobTypeLabel(job.messageType, [job]), notificationJobResolvedSymbol(job), job),
+        target: textWithKnownDisplaySymbols(realtimeEventLabel(job.title || notificationJobTypeLabel(job.messageType, [job])), notificationJobResolvedSymbol(job), job),
         reason: formatConsoleNarrative(job.lastError || job.suppressionSummary || "전달 상태 확인 필요"),
         state: notificationJobStatusLabel(job.status),
         tone: notificationJobToneClass(job.status),
@@ -14471,10 +14492,19 @@
     var readinessTone = row.attentionState === "action" ? "watch" : investmentFlowStateTone(row.readinessState || (row.blocked ? "blocked" : "warning"));
     var selected = selectable && String(state.activeDecisionCaseId || "") === String(detailKey || "");
     var primary = (row.explanation || {}).primaryCause || {};
+    var attention = row.attention && typeof row.attention === "object" ? row.attention : {};
+    var primaryIssue = attention.primaryIssue && typeof attention.primaryIssue === "object"
+      ? attention.primaryIssue
+      : ((Array.isArray(row.attentionIssues) ? row.attentionIssues : [])[0] || {});
+    var readinessBlocked = ["blocked", "error"].indexOf(String(row.readinessState || "")) >= 0;
+    var causeLabel = readinessBlocked ? "사용 제한 이유" : "핵심 원인";
+    var causeText = readinessBlocked
+      ? (primaryIssue.reason || primary.summary || row.reason || "현재 의견을 사용할 수 없는 이유를 확인하세요.")
+      : (primary.summary || row.reason || "판단 근거를 확인하세요.");
     return [
       '<button class="oa-case-row' + (selected ? " selected" : "") + '" type="button" data-decision-tone="' + escapeHtml(row.tone || "hold") + '" data-flow-state="' + escapeHtml(row.readinessState || "warning") + '" data-console-row-key="' + escapeHtml(row.key) + '"' + (selectable ? ' data-decision-select="' + escapeHtml(detailKey) + '" data-decision-detail-type="' + escapeHtml(detailType) + '" aria-current="' + (selected ? "true" : "false") + '"' : ' data-work-detail="' + escapeHtml(detailType) + '" data-work-detail-key="' + escapeHtml(detailKey) + '"') + '>',
       '<header><span class="oa-case-identity"><strong>' + escapeHtml(row.name || row.symbol) + '</strong><em>' + escapeHtml([row.symbol, row.source === "watchlist" ? "관심" : "보유", row.accountLabel].filter(Boolean).join(" · ")) + '</em></span><span class="oa-case-state"><b class="' + escapeHtml(row.tone || "hold") + '">' + escapeHtml(row.actionLabel || "관찰") + '</b><em class="' + escapeHtml(readinessTone) + '">' + escapeHtml(row.attentionLabel || row.readinessLabel || "확인 필요") + '</em></span></header>',
-      '<div class="oa-case-reason"><span>핵심 원인</span><strong>' + escapeHtml(primary.summary || row.reason || "판단 근거를 확인하세요.") + '</strong></div>',
+      '<div class="oa-case-reason"><span>' + escapeHtml(causeLabel) + '</span><strong>' + escapeHtml(causeText) + '</strong></div>',
       '<div class="oa-case-next"><span>' + escapeHtml(row.phaseLabel || "투자 케이스") + '</span><p>' + escapeHtml(row.nextAction || row.invalidation || "무효화 조건과 다음 확인을 살펴보세요.") + '</p></div>',
       '<footer><span>' + renderRecordChangedAt(row) + '<em>' + escapeHtml(row.quality.label || "자료 확인") + ' · ' + escapeHtml(row.apiSource || "DecisionEpisode") + '</em></span><b aria-hidden="true">' + escapeHtml(selectable ? "상세 보기 →" : "케이스 보기 →") + '</b></footer>',
       '</button>'
@@ -14531,23 +14561,34 @@
     var decision = detail.decision && typeof detail.decision === "object" ? detail.decision : {};
     var explanation = detail.explanation && typeof detail.explanation === "object" ? detail.explanation : {};
     var primary = explanation.primaryCause && typeof explanation.primaryCause === "object" ? explanation.primaryCause : {};
-    var stateValue = String(decision.state || detail.readinessState || "warning");
+    var stateValue = String(detail.readinessState || decision.state || "warning");
     var blocked = stateValue === "blocked" || stateValue === "error";
-    var title = primary.title || (blocked ? "판단 조건을 충족하지 못했습니다" : "현재 의견의 핵심 근거");
-    var summary = primary.summary || decision.reason || detail.headline || "판단 이유를 확인하고 있습니다.";
-    var effect = primary.effect || (blocked ? "매수·매도 행동을 확정하지 않습니다." : "현재 투자 의견의 방향과 강도에 반영했습니다.");
+    var decisionBlocked = decision.state === "blocked" || decision.state === "error";
+    var availabilityLimited = blocked && !decisionBlocked;
+    var attention = detail.attention && typeof detail.attention === "object" ? detail.attention : {};
+    var primaryIssue = attention.primaryIssue && typeof attention.primaryIssue === "object" ? attention.primaryIssue : {};
+    var title = availabilityLimited
+      ? (primaryIssue.stateLabel || primaryIssue.label || "현재 의견 사용 제한")
+      : (primary.title || (blocked ? "판단 조건을 충족하지 못했습니다" : "현재 의견의 핵심 근거"));
+    var summary = availabilityLimited
+      ? (primaryIssue.reason || "현재 의견의 근거 기록을 완전하게 검증할 수 없습니다.")
+      : (primary.summary || decision.reason || detail.headline || "판단 이유를 확인하고 있습니다.");
+    var effect = availabilityLimited
+      ? (primaryIssue.effect || "근거가 복구되기 전에는 현재 의견을 투자 행동에 사용하지 않습니다.")
+      : (primary.effect || (blocked ? "매수·매도 행동을 확정하지 않습니다." : "현재 투자 의견의 방향과 강도에 반영했습니다."));
     var signal = investmentCaseStage(detail, "signal");
     var investmentCase = investmentCaseStage(detail, "case");
     var dimensions = Array.isArray(detail.statusDimensions) ? detail.statusDimensions : [];
     var dataDimension = dimensions.filter(function (item) { return item.id === "data"; })[0] || {};
     var facts = [
+      availabilityLimited && detail.headline ? { label: "저장된 의견 근거", value: detail.headline } : null,
       signal.detail ? { label: "핵심 신호", value: signal.detail } : null,
       investmentCase.detail ? { label: "비교 가설", value: investmentCase.detail } : null,
       dataDimension.stateLabel ? { label: "판단 자료", value: dataDimension.stateLabel } : null
     ].filter(Boolean);
     return [
       '<section class="oa-decision-rationale' + (compact ? " compact" : "") + '" data-flow-state="' + escapeHtml(stateValue) + '">',
-      '<header><div><span>' + escapeHtml(blocked ? "DECISION HOLD" : "DECISION BASIS") + '</span><strong>' + escapeHtml(blocked ? "왜 판단을 유보했나" : "왜 이런 판단인가") + '</strong></div><b>' + escapeHtml(decision.stateLabel || detail.readinessLabel || (blocked ? "판단 유보" : "판단 가능")) + '</b></header>',
+      '<header><div><span>' + escapeHtml(availabilityLimited ? "DECISION LIMITED" : (blocked ? "DECISION HOLD" : "DECISION BASIS")) + '</span><strong>' + escapeHtml(availabilityLimited ? "왜 현재 의견을 사용할 수 없나" : (blocked ? "왜 판단을 유보했나" : "왜 이런 판단인가")) + '</strong></div><b>' + escapeHtml(detail.readinessLabel || decision.stateLabel || (blocked ? "판단 유보" : "판단 가능")) + '</b></header>',
       '<div class="oa-decision-rationale-body"><strong>' + escapeHtml(title) + '</strong><p>' + escapeHtml(summary) + '</p></div>',
       facts.length ? '<dl>' + facts.map(function (item) { return '<div><dt>' + escapeHtml(item.label) + '</dt><dd>' + escapeHtml(item.value) + '</dd></div>'; }).join("") + '</dl>' : '',
       '<footer><span>판단에 미친 영향</span><strong>' + escapeHtml(effect) + '</strong></footer>',
@@ -14806,9 +14847,10 @@
 
   function renderInvestmentFlowStateLegend() {
     var items = [
-      { state: "pass", label: "완료", detail: "해당 단계 결과 사용 가능" },
+      { state: "pass", label: "준비됨", detail: "해당 단계 결과 사용 가능" },
       { state: "warning", label: "확인 필요", detail: "일부 조건을 더 확인" },
       { state: "blocked", label: "판단 차단", detail: "행동 의견에 사용 불가" },
+      { state: "error", label: "운영 오류", detail: "API·저장·작업 실패" },
       { state: "pending", label: "처리 대기", detail: "아직 실행·관측 전" }
     ];
     return [
@@ -14816,7 +14858,7 @@
       '<div>', items.map(function (item) {
         return '<span data-flow-state="' + item.state + '"><i aria-hidden="true"></i><b>' + escapeHtml(item.label) + '</b><em>' + escapeHtml(item.detail) + '</em></span>';
       }).join(""), '</div>',
-      '<p>색상은 처리 상태를 뜻하며 주가 상승·하락, 매수·매도 또는 투자 위험도를 의미하지 않습니다.</p>',
+      '<p>빨간 ×는 판단 차단, 빨간 !는 운영 오류입니다. 색상은 주가 방향이나 투자 위험도를 의미하지 않습니다.</p>',
       '</aside>'
     ].join("");
   }
@@ -14916,6 +14958,7 @@
     ];
     return renderConsoleManagedPage("experiments", metrics, [
       '<section class="oa-assurance-context"><span>EVIDENCE ASSURANCE</span><strong>현재 의견을 막는 이유만 확인합니다.</strong><p>모델 실험이나 알림 전달 상태는 이 목록에 포함하지 않습니다.</p></section>',
+      '<details class="oa-case-process"><summary><span><strong>상태 색상 기준</strong><em>판단 차단과 운영 오류를 구분합니다.</em></span></summary><section class="oa-flow-detail-section">' + renderInvestmentFlowStateLegend() + '</section></details>',
       renderConsoleSurface({ kicker: "REVIEW QUEUE", title: "근거 점검 대상", description: "부족한 단계별로 묶고 해결할 다음 행동을 함께 표시합니다.", meta: items.length + "건", body: renderConsoleLiveRegion("validation-subject-body", body), footer: renderConsolePager("validation", page) })
     ].join(""), {
       leading: renderDecisionWorkspaceNavigation("experiments"),
@@ -22425,8 +22468,9 @@
       "notification.test_requested": "테스트 알림 요청",
       "notification.job_queued": "알림 큐 적재",
       "monitoring.snapshot_collected": "모니터링 스냅샷",
-      "monitoring.alerts_detected": "모니터링 알림",
+      "monitoring.alerts_detected": "새 투자 신호 감지",
       "monitoring.cycle_completed": "모니터링 사이클",
+      "research_evidence.collected": "새 뉴스·공시 근거",
       "symbol_universe.refresh_requested": "전체 종목 갱신 시작",
       "symbol_universe.refresh_failed": "전체 종목 갱신 실패",
       "symbol_universe.refreshed": "전체 종목 갱신"
@@ -24682,6 +24726,7 @@
     var modelRelease = trace.modelRelease || {};
     return [
       '<section class="oa-flow-detail-section"><header><div><span>OPERATOR TRACE</span><strong>내부 처리 계보</strong></div><em>문제 복구와 감사에만 사용하는 기술 정보입니다.</em></header>',
+      renderInvestmentFlowStateLegend(),
       renderInvestmentFlowStages(stages, false),
       '</section>',
       gaps.length ? '<div class="oa-flow-gap-list">' + gaps.map(function (gap) { return '<div data-flow-state="' + escapeHtml(gap.state || "warning") + '"><strong>' + escapeHtml(gap.stageLabel || gap.stage) + '</strong><span>' + escapeHtml(gap.detail || "확인 필요") + '</span></div>'; }).join("") + '</div>' : '<p class="oa-flow-complete">차단된 내부 단계가 없습니다.</p>',
@@ -24762,8 +24807,8 @@
   function notificationJobDetailPayload(job) {
     var resolvedSymbol = notificationJobResolvedSymbol(job);
     var displaySymbol = resolvedSymbol ? stockDisplayName(resolvedSymbol, job) : "";
-    var title = textWithKnownDisplaySymbols(job.title || "", resolvedSymbol, job);
-    var preview = textWithKnownDisplaySymbols(job.lastError || job.textPreview || "-", resolvedSymbol, job);
+    var title = textWithKnownDisplaySymbols(realtimeEventLabel(String(job.title || "")), resolvedSymbol, job);
+    var preview = textWithKnownDisplaySymbols(formatConsoleNarrative(job.lastError || job.textPreview || "-"), resolvedSymbol, job);
     var fullText = notificationJobFullText(job, resolvedSymbol);
     var reasons = Array.isArray(job.deliveryReasons) ? job.deliveryReasons.slice(0, 6) : [];
     return {

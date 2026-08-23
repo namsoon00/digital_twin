@@ -37138,7 +37138,7 @@ html[data-theme="dark"] :where(
 
 .oa-flow-state-legend > div {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -37165,6 +37165,8 @@ html[data-theme="dark"] :where(
 .oa-flow-state-legend span[data-flow-state="pass"] i::after { content: "✓"; }
 .oa-flow-state-legend span[data-flow-state="blocked"] i { border-color: var(--red); background: var(--red); color: var(--ds-color-on-action); }
 .oa-flow-state-legend span[data-flow-state="blocked"] i::after { content: "×"; }
+.oa-flow-state-legend span[data-flow-state="error"] i { border-color: var(--red); background: var(--red); color: var(--ds-color-on-action); }
+.oa-flow-state-legend span[data-flow-state="error"] i::after { content: "!"; }
 .oa-flow-state-legend span[data-flow-state="pending"] i { border-color: var(--ds-card-status-neutral); color: var(--muted); }
 .oa-flow-state-legend span[data-flow-state="pending"] i::after { content: "…"; transform: translateY(-2px); }
 .oa-flow-state-legend b { color: var(--ink); font-size: 10px; }

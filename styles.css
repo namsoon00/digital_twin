@@ -483,17 +483,38 @@
 
 .investment-model-contract {
   display: grid;
-  grid-template-columns: repeat(9, max-content);
-  justify-content: center;
-  gap: 10px;
-  padding: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
   border-block: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
+  background: var(--panel);
 }
 
-.investment-model-contract b { color: var(--blue); }
+.investment-model-contract button {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 12px 18px 12px 12px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.investment-model-contract button:last-child { border-right: 0; }
+.investment-model-contract button::after { position: absolute; top: 50%; right: 7px; color: var(--blue); content: "›"; font-size: 17px; transform: translateY(-50%); }
+.investment-model-contract button:last-child::after { content: "→"; font-size: 13px; }
+.investment-model-contract button:hover,
+.investment-model-contract button:focus-visible { background: var(--blue-soft); color: var(--ink); }
+.investment-model-contract button > span { color: var(--blue); font-size: 9px; font-weight: 900; }
+.investment-model-contract button > strong { color: var(--ink); font-size: 11px; }
+.investment-model-contract button > em { overflow: hidden; color: var(--muted); font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .investment-model-metrics {
   display: grid;
@@ -548,6 +569,13 @@
 
 .investment-model-bindings > div { display: grid; gap: 4px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); }
 .investment-model-bindings strong { color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
+.investment-model-bindings em { color: var(--green); font-size: 9px; font-style: normal; font-weight: 850; }
+.investment-model-bindings small { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.investment-model-bindings > div[data-binding-state="mismatch"] { border-color: var(--amber); }
+.investment-model-bindings > div[data-binding-state="mismatch"] em { color: var(--amber); }
+.investment-model-binding-warning { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 10px 12px; border-left: 3px solid var(--amber); background: var(--panel-soft); }
+.investment-model-binding-warning strong { color: var(--amber); font-size: 10px; }
+.investment-model-binding-warning span { color: var(--muted); font-size: 9px; text-align: right; overflow-wrap: anywhere; }
 
 .investment-product-readiness {
   display: grid;
@@ -724,9 +752,9 @@
   .oa-alert-actions { width: 100%; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--line); }
   .investment-model-identity { grid-template-columns: minmax(0, 1fr); padding: 16px; }
   .investment-model-identity aside { justify-items: start; text-align: left; }
-  .investment-model-contract { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
-  .investment-model-contract b { display: none; }
-  .investment-model-contract span { text-align: center; }
+  .investment-model-contract { grid-auto-columns: minmax(96px, 1fr); grid-auto-flow: column; grid-template-columns: none; overflow-x: auto; scroll-snap-type: x proximity; }
+  .investment-model-contract button { min-height: 68px; padding: 10px 18px 10px 11px; scroll-snap-align: start; }
+  .investment-model-contract button > em { font-size: 8px; }
   .investment-model-metrics,
   .investment-model-bindings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .investment-model-user-contract { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -734,7 +762,9 @@
   .investment-model-user-contract > article:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .investment-model-metrics > div:nth-child(2) { border-right: 0; }
   .investment-model-metrics > div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
-  .investment-model-bindings > div:last-child { grid-column: 1 / -1; }
+  .investment-model-bindings > div:last-of-type { grid-column: 1 / -1; }
+  .investment-model-binding-warning { align-items: flex-start; flex-direction: column; }
+  .investment-model-binding-warning span { text-align: left; }
   .investment-product-readiness > header,
   .investment-product-readiness > footer { align-items: flex-start; flex-direction: column; }
   .investment-product-readiness ul { grid-template-columns: minmax(0, 1fr); }

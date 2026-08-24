@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,7 +18,12 @@ from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEM
 
 
 class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
+    @staticmethod
+    def recent_timestamp():
+        return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+
     def evidence(self):
+        published_at = self.recent_timestamp()
         evidence = ResearchEvidence(
             "research:AAPL:news:english-title",
             "AAPL",
@@ -26,9 +32,9 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
             "Apple launches a new services bundle for subscribers",
             "Apple announced a new services bundle with a lower monthly price for subscribers.",
             "https://example.test/apple-services",
-            "2026-07-25T01:00:00Z",
+            published_at,
             "context",
-            published_at="2026-07-25T01:00:00Z",
+            published_at=published_at,
             raw_payload={
                 "name": "Apple",
                 "market": "NASDAQ",
@@ -205,6 +211,7 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertEqual("ready", reasoning_event.payload["factChangeContract"]["status"])
 
     def test_ready_korean_local_analysis_waits_for_external_analysis(self):
+        published_at = self.recent_timestamp()
         evidence = ResearchEvidence(
             "research:005930:news:korean-ready",
             "005930",
@@ -213,9 +220,9 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
             "삼성전자가 신규 반도체 생산라인 투자를 발표했다",
             "삼성전자가 반도체 생산라인 투자 계획을 발표했습니다.",
             "https://example.test/samsung-investment",
-            "2026-07-25T01:00:00Z",
+            published_at,
             "context",
-            published_at="2026-07-25T01:00:00Z",
+            published_at=published_at,
             raw_payload={
                 "name": "삼성전자",
                 "relationScope": "direct",
@@ -267,6 +274,7 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
         self.assertGreater(runner.priority(governed), runner.priority(regular))
 
     def test_worker_retries_stored_summary_with_navigation_headline_contamination(self):
+        published_at = self.recent_timestamp()
         evidence = ResearchEvidence(
             "research:066570:news:navigation-contamination",
             "066570",
@@ -275,9 +283,9 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
             "LG전자, 미국 주방가전 신뢰도 1위",
             "LG전자가 미국 주방가전 시장 공략을 강화합니다.",
             "https://example.test/lg-kitchen",
-            "2026-07-25T01:00:00Z",
+            published_at,
             "context",
-            published_at="2026-07-25T01:00:00Z",
+            published_at=published_at,
             raw_payload={
                 "name": "LG전자",
                 "relationScope": "direct",

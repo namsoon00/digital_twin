@@ -1122,22 +1122,72 @@ def typedb_projection_recovery_health(ontology_repository, world_id: str) -> Dic
 
 
 def active_versioned_reasoning_queue_state(registry, job_store) -> Dict[str, object]:
-    """Read the active independent engine's live TypeDB-writer backlog."""
+    """Read every protected V2 deployment's live TypeDB-writer backlog.
+
+    Active and candidate releases can briefly coexist during an immutable
+    release switch. Low-priority TypeDB writers must yield to either queue;
+    observing only the active release lets maintenance or schema compilation
+    race a candidate projection that is already processing.
+    """
 
     try:
         control = registry.control()
-        deployment_id = str(control.active_deployment_id or "").strip()
-        deployment = dict(registry.get(deployment_id) or {}) if deployment_id else {}
-        engine_version = str(
-            deployment.get("engineVersion") or deployment.get("engine_version") or ""
-        ).strip().lower()
-        if not deployment_id or engine_version != "v2":
+        active_deployment_id = str(
+            getattr(control, "active_deployment_id", "") or ""
+        ).strip()
+        requested_ids = list(dict.fromkeys(
+            str(getattr(control, field, "") or "").strip()
+            for field in (
+                "active_deployment_id",
+                "delivery_deployment_id",
+                "candidate_deployment_id",
+            )
+            if str(getattr(control, field, "") or "").strip()
+        ))
+        v2_ids = []
+        for deployment_id in requested_ids:
+            deployment = dict(registry.get(deployment_id) or {})
+            engine_version = str(
+                deployment.get("engineVersion")
+                or deployment.get("engine_version")
+                or ""
+            ).strip().lower()
+            if engine_version == "v2":
+                v2_ids.append(deployment_id)
+        if not v2_ids:
             return {
                 "status": "not-active-v2",
-                "deploymentId": deployment_id,
+                "deploymentId": active_deployment_id,
+                "deploymentIds": [],
                 "effectivePendingCount": 0,
             }
-        return dict(job_store.live_queue_state(deployment_id) or {})
+        states = {
+            deployment_id: dict(job_store.live_queue_state(deployment_id) or {})
+            for deployment_id in v2_ids
+        }
+        effective_pending = sum(
+            max(0, int(state.get("effectivePendingCount") or 0))
+            for state in states.values()
+        )
+        processing = sum(
+            max(0, int(state.get("processingCount") or 0))
+            for state in states.values()
+        )
+        queued = sum(
+            max(0, int(state.get("queuedCount") or 0))
+            for state in states.values()
+        )
+        primary = dict(states.get(active_deployment_id) or states[v2_ids[0]])
+        return {
+            **primary,
+            "status": "active" if effective_pending else "idle",
+            "deploymentId": active_deployment_id or v2_ids[0],
+            "deploymentIds": v2_ids,
+            "effectivePendingCount": effective_pending,
+            "processingCount": processing,
+            "queuedCount": queued,
+            "queuesByDeployment": states,
+        }
     except Exception as error:  # Fail closed so background writes cannot race an unknown V2 state.
         return {
             "status": "error",
@@ -2113,7 +2163,10 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         investment_domain_store=stores.investment_domain_store(store_settings),
         world_projection_outbox=shared_world_projection_outbox,
         inference_detail_outbox=V2InferenceDetailReceiptSink(),
-        graph_assembly_cache_store=None,
+        # V2 workers are isolated processes. Reuse is still exact-source only:
+        # the cache key includes the source snapshot, TBox, RuleBox, model
+        # settings, target scope, and runtime context fingerprints.
+        graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(store_settings),
         statistical_signal_service=build_statistical_signal_pipeline_service({
             **store_settings,
             "_reasoningFeatureSetVersion": descriptor.release_bundle.feature_set_version,

@@ -1,6 +1,7 @@
 """Join RuleBox semantics with operational runtime samples for human audit."""
 
 from collections import Counter
+import json
 from typing import Dict, Iterable, List
 
 from .ontology_change_impact import rule_condition_dependency_profile
@@ -10,7 +11,7 @@ from .ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_know
 from .rule_claim_contract import resolved_rule_claim_contract, rule_claim_coverage
 
 
-RULE_AUDIT_VERSION = "ontology-rule-audit-v3"
+RULE_AUDIT_VERSION = "ontology-rule-audit-v4"
 
 
 def _text(value: object) -> str:
@@ -26,6 +27,33 @@ def _rule_value(rule: object, snake: str, camel: str = "") -> object:
 def _conditions(rule: object) -> List[object]:
     value = _rule_value(rule, "conditions")
     return list(value or []) if isinstance(value, (list, tuple)) else []
+
+
+def _contract_value(value: object) -> object:
+    if hasattr(value, "to_dict"):
+        value = value.to_dict()
+    if isinstance(value, dict):
+        return {
+            str(key): _contract_value(item)
+            for key, item in sorted(value.items())
+            if key not in {"description", "label"}
+            and item not in (None, "", [], {})
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_contract_value(item) for item in value]
+    return value
+
+
+def _rule_semantic_signature(rule: object, manifest: Dict[str, object]) -> str:
+    conditions = [_contract_value(item) for item in _conditions(rule)]
+    derivations = _rule_value(rule, "derivations") or []
+    payload = {
+        "assessmentScope": manifest.get("assessmentScope"),
+        "conditions": conditions,
+        "derivations": [_contract_value(item) for item in derivations],
+        "outputContract": _contract_value(manifest.get("outputContract") or {}),
+    }
+    return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 def rule_audit_payload(
@@ -134,6 +162,7 @@ def rule_audit_payload(
             "lastStatus": _text(sample.get("lastStatus")),
             "lastUpdatedAt": _text(sample.get("lastUpdatedAt")),
             "reviewReasons": review_reasons,
+            "semanticSignature": _rule_semantic_signature(rule, manifest),
             "retirementCandidate": bool(
                 enabled
                 and sample_count >= 50
@@ -145,12 +174,9 @@ def rule_audit_payload(
 
     signature_groups: Dict[tuple, List[Dict[str, object]]] = {}
     for row in rows:
-        manifest = row["domainManifest"]
         signature = (
             row.get("assessmentScope"),
-            tuple(manifest.get("dependencyKeys") or []),
-            tuple(manifest.get("decisionStages") or []),
-            tuple(manifest.get("decisionEffects") or []),
+            row.get("semanticSignature"),
         )
         signature_groups.setdefault(signature, []).append(row)
     duplicate_groups = []
@@ -164,6 +190,9 @@ def rule_audit_payload(
         for item in group:
             item["duplicateCandidateGroup"] = group_id
             item["reviewReasons"].append("의존성·출력 계약이 같은 중복 후보 " + str(len(group)) + "개")
+
+    for item in rows:
+        item.pop("semanticSignature", None)
 
     status_counts = Counter(item["status"] for item in rows)
     stage_counts = Counter(

@@ -86,6 +86,12 @@ The old `application/notification_service.py` and
    timeline. The notification detail UI displays it in stored chronological
    order and exposes the full JSON audit payload.
 
+Every admission result also stores `notification-delivery-trigger-ledger-v1`.
+This ledger keeps the configured condition, TypeDB relation-state change,
+cooldown or repeat release, and final delivery gate as separate records. It is
+delivery provenance only: it explains why a message was sent or withheld and
+must never be used as investment evidence or an action-selection input.
+
 ## Performance Rules
 
 - No TypeDB query or AI inference is added to notification ingress, admission,

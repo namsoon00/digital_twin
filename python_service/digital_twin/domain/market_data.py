@@ -156,9 +156,13 @@ def candle_close(candle: Dict[str, object]) -> float:
     return number(candle.get("closePrice") or candle.get("close") or candle.get("price"))
 
 
-def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> Dict[str, object]:
+def technical_indicators_from_candles(
+    candles: Iterable[Dict[str, object]],
+    adjustment_status: str = "",
+) -> Dict[str, object]:
     ordered = sorted_candles(candles)
-    closes = [candle_close(item) for item in ordered if candle_close(item) > 0]
+    price_rows = [item for item in ordered if candle_close(item) > 0]
+    closes = [candle_close(item) for item in price_rows]
     if not closes:
         return {}
     volumes = [number(item.get("volume")) for item in ordered if number(item.get("volume")) > 0]
@@ -172,7 +176,8 @@ def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> D
     ma200 = moving_average(closes, 200)
     prev_ma20 = previous_moving_average(closes, 20)
     prev_ma60 = previous_moving_average(closes, 60)
-    latest_row = ordered[-1] if ordered else {}
+    latest_row = price_rows[-1] if price_rows else {}
+    previous_row = price_rows[-2] if len(price_rows) >= 2 else {}
     latest_candle_at = str(
         latest_row.get("timestamp")
         or latest_row.get("date")
@@ -196,6 +201,70 @@ def technical_indicators_from_candles(candles: Iterable[Dict[str, object]]) -> D
         "volumeRatio": latest_volume / volume_ma20 if volume_ma20 else 0.0,
         "sourceAsOf": latest_candle_at,
         "latestCandleAt": latest_candle_at,
+        "latestCandleClose": latest,
+        "previousCandleAt": str(
+            previous_row.get("timestamp")
+            or previous_row.get("date")
+            or previous_row.get("tradingDate")
+            or previous_row.get("time")
+            or ""
+        ),
+        "previousCandleClose": closes[-2] if len(closes) >= 2 else 0.0,
+        "priceHistoryCloses": closes[-8:],
+        "priceHistoryAdjustment": str(adjustment_status or ""),
+    }
+
+
+def derived_price_change_facts(
+    current_price: object,
+    indicators: Dict[str, object],
+    latest_candle_is_current_session: object = None,
+) -> Dict[str, object]:
+    """Derive factual period returns only from explicitly adjusted candles."""
+
+    values = indicators if isinstance(indicators, dict) else {}
+    adjustment = str(values.get("priceHistoryAdjustment") or "").strip()
+    price = number(current_price)
+    closes = [
+        number(value)
+        for value in values.get("priceHistoryCloses") or []
+        if number(value) > 0
+    ]
+    if price <= 0 or adjustment != "provider-adjusted" or not closes:
+        return {}
+    latest_close = number(values.get("latestCandleClose")) or closes[-1]
+    if latest_candle_is_current_session is None:
+        latest_candle_is_current_session = bool(
+            latest_close
+            and abs(price - latest_close) <= max(0.01, abs(latest_close) * 0.0005)
+        )
+    effective_closes = list(closes)
+    if latest_candle_is_current_session:
+        effective_closes[-1] = price
+        alignment = "current-session-adjusted-candle"
+    else:
+        effective_closes.append(price)
+        alignment = "current-quote-after-latest-adjusted-candle"
+    if len(effective_closes) < 2:
+        return {}
+
+    def period_return(sessions: int):
+        if len(effective_closes) <= sessions:
+            return None
+        baseline = effective_closes[-(sessions + 1)]
+        return pct_distance(price, baseline) if baseline else None
+
+    previous_close = effective_closes[-2]
+    return {
+        "previousClose": previous_close,
+        "return1d": period_return(1),
+        "return3d": period_return(3),
+        "return5d": period_return(5),
+        "changeRate": period_return(1),
+        "priceChangeSource": "adjusted-daily-candles",
+        "priceChangeBasis": "current-price-vs-previous-session-close:" + alignment,
+        "priceHistoryAdjustment": adjustment,
+        "priceChangeUsable": True,
     }
 
 
@@ -571,6 +640,14 @@ def normalize_position(item: Dict[str, object]) -> Position:
         average_price=average_price,
         current_price=current_price,
         change_rate=optional_number(item, ["changeRate", "priceChangeRate", "changePercent", "changePct", "rate", "prdy_ctrt"]),
+        previous_close=first_number(item, ["previousClose", "previous_close", "previousDayClose", "prdy_clpr"]),
+        return_1d=optional_number(item, ["return1d", "return1D", "return_1d"]),
+        return_3d=optional_number(item, ["return3d", "return3D", "return_3d"]),
+        return_5d=optional_number(item, ["return5d", "return5D", "return_5d"]),
+        price_change_source=str(item.get("priceChangeSource") or item.get("price_change_source") or ""),
+        price_change_basis=str(item.get("priceChangeBasis") or item.get("price_change_basis") or ""),
+        price_history_adjustment=str(item.get("priceHistoryAdjustment") or item.get("price_history_adjustment") or ""),
+        price_change_usable=bool(item.get("priceChangeUsable") or item.get("price_change_usable")),
         quote_source=str(item.get("quoteSource") or item.get("quote_source") or item.get("provider") or ""),
         quote_status=str(item.get("quoteStatus") or item.get("quote_status") or ""),
         quote_message=str(item.get("quoteMessage") or item.get("quote_message") or ""),

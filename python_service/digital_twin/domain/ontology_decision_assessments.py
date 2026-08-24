@@ -12,7 +12,7 @@ from .ontology_decision_state import decision_effect_from_relation, semantic_rel
 from .ontology_rule_manifest import ASSESSMENT_SCOPES, rule_assessment_scope
 
 
-DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v1"
+DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v2"
 
 
 def _text(value: object) -> str:
@@ -124,9 +124,28 @@ def _entry(match: object, relation: Mapping[str, object]) -> Dict[str, object]:
 
 def _assessment(scope: str, entries: List[Dict[str, object]]) -> Dict[str, object]:
     effect_counts = Counter(_text(item.get("decisionEffect")) for item in entries if _text(item.get("decisionEffect")))
-    blocked = bool(effect_counts.get("block")) or any(item.get("judgementBlocked") for item in entries)
+    opinion_entries = entries
+    if scope == "investment-opinion":
+        supported_entries = [
+            item for item in entries
+            if _text(item.get("decisionEffect")) == "support"
+        ]
+        opinion_entries = supported_entries or entries
+    candidate_actions = _strings(
+        _text(item.get("candidateAction")).upper()
+        for item in opinion_entries
+        if _text(item.get("candidateAction"))
+    ) if scope == "investment-opinion" else []
+    action_conflict = scope == "investment-opinion" and len(candidate_actions) > 1
+    blocked = (
+        bool(effect_counts.get("block"))
+        or any(item.get("judgementBlocked") for item in entries)
+        or action_conflict
+    )
     if not entries:
         status = "not-evaluated"
+    elif action_conflict:
+        status = "conflicted"
     elif blocked:
         status = "blocked"
     elif effect_counts.get("constrain"):
@@ -137,7 +156,18 @@ def _assessment(scope: str, entries: List[Dict[str, object]]) -> Dict[str, objec
         status = "supported"
     else:
         status = "observed"
-    selected = min(entries, key=lambda item: semantic_relation_sort_key(item["relation"])) if entries else {}
+    selectable_entries = entries
+    if scope == "investment-opinion":
+        selectable_entries = [
+            item
+            for item in opinion_entries
+            if candidate_actions
+            and _text(item.get("candidateAction")).upper() == candidate_actions[0]
+        ] if not action_conflict else []
+    selected = (
+        min(selectable_entries, key=lambda item: semantic_relation_sort_key(item["relation"]))
+        if selectable_entries else {}
+    )
     public_entries = [{key: value for key, value in item.items() if key != "relation"} for item in entries]
     return {
         "assessmentScope": scope,
@@ -147,6 +177,20 @@ def _assessment(scope: str, entries: List[Dict[str, object]]) -> Dict[str, objec
         "selectedRuleId": _text(selected.get("ruleId")),
         "candidateAction": _text(selected.get("candidateAction")) if scope == "investment-opinion" else "",
         "candidateActionLabel": _text(selected.get("candidateActionLabel")) if scope == "investment-opinion" else "",
+        "candidateActions": candidate_actions,
+        "candidateRuleIdsByAction": {
+            action: _strings(
+                item.get("ruleId")
+                for item in opinion_entries
+                if _text(item.get("candidateAction")).upper() == action
+            )
+            for action in candidate_actions
+        },
+        "actionConflict": action_conflict,
+        "conflictReason": (
+            "multiple-typedb-investment-actions-without-unique-selection"
+            if action_conflict else ""
+        ),
         "decisionEffectCounts": dict(sorted(effect_counts.items())),
         "judgementBlocked": blocked,
         "entries": public_entries[:12],
@@ -180,7 +224,10 @@ def _recommended_plan(assessments: Mapping[str, Mapping[str, object]]) -> Dict[s
     portfolio = assessments["portfolio-fit"]
     execution = assessments["execution-readiness"]
     opinion_action = _text(opinion.get("candidateAction")).upper()
-    if quality.get("judgementBlocked") or not opinion_action:
+    if opinion.get("actionConflict"):
+        status = "judgement-conflicted"
+        option = "resolve-opinion-conflict"
+    elif quality.get("judgementBlocked") or not opinion_action:
         status = "judgement-blocked"
         option = "wait-for-usable-evidence"
     elif execution.get("status") == "blocked":
@@ -200,6 +247,8 @@ def _recommended_plan(assessments: Mapping[str, Mapping[str, object]]) -> Dict[s
         "status": status,
         "investmentAction": opinion_action,
         "investmentOpinionRuleId": _text(opinion.get("selectedRuleId")),
+        "candidateActions": list(opinion.get("candidateActions") or []),
+        "opinionConflict": bool(opinion.get("actionConflict")),
         "planOption": option,
         "portfolioConstraintRuleIds": list(portfolio.get("ruleIds") or []),
         "executionConstraintRuleIds": list(execution.get("ruleIds") or []),

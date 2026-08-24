@@ -406,6 +406,7 @@ class NotificationRuleDecision:
     validation_state: str = "conditional"
     reasons: List[str] = dataclass_field(default_factory=list)
     matched_conditions: List[str] = dataclass_field(default_factory=list)
+    trigger_ledger: List[Dict[str, object]] = dataclass_field(default_factory=list)
     fingerprint: str = ""
     similarity_enabled: bool = False
     similarity_window_minutes: int = 0
@@ -450,13 +451,74 @@ class NotificationRuleDecision:
         self.gate_state = "bypass"
         self.gate_reason = reason
 
+    def add_trigger(
+        self,
+        trigger_id: str,
+        kind: str,
+        label: str,
+        reason: str,
+        **values,
+    ) -> None:
+        clean_id = str(trigger_id or "").strip()
+        if not clean_id:
+            return
+        row = {
+            "triggerId": clean_id,
+            "kind": str(kind or "delivery-policy").strip(),
+            "label": str(label or "발송 조건").strip(),
+            "reason": str(reason or "").strip(),
+            "source": str(values.pop("source", "notification-admission") or "notification-admission"),
+            **{
+                key: value
+                for key, value in values.items()
+                if value not in (None, "", [], {})
+            },
+        }
+        self.trigger_ledger = [
+            item for item in self.trigger_ledger
+            if str(item.get("triggerId") or "") != clean_id
+        ]
+        self.trigger_ledger.append(row)
+
     def to_context(self) -> Dict[str, object]:
+        trigger_ledger = [dict(item) for item in self.trigger_ledger if isinstance(item, dict)]
+        if self.state_decision and self.state_reason:
+            trigger_ledger.append({
+                "triggerId": "state-policy:" + self.state_decision,
+                "kind": "state-cooldown",
+                "label": "이전 알림과 비교",
+                "reason": self.state_reason,
+                "status": "released" if self.should_send else "suppressed",
+                "previousValue": self.state_last_sent_age_minutes,
+                "threshold": self.state_cooldown_minutes,
+                "unit": "minutes",
+                "source": "notification-state-policy",
+            })
+        if self.similarity_bypassed and self.similarity_bypass_reason:
+            trigger_ledger.append({
+                "triggerId": "repeat-policy:bypass",
+                "kind": "repeat-policy",
+                "label": "반복 알림 보류 해제",
+                "reason": self.similarity_bypass_reason,
+                "status": "released",
+                "source": "notification-repeat-policy",
+            })
+        trigger_ledger.append({
+            "triggerId": "delivery-gate",
+            "kind": "delivery-gate",
+            "label": "최종 발송 판단",
+            "reason": self.gate_reason,
+            "status": "eligible" if self.should_send else "suppressed",
+            "source": "notification-admission",
+        })
         payload = {
             "deliveryDecision": self.delivery_state,
             "deliveryGateState": self.gate_state,
             "deliveryGateReason": self.gate_reason,
             "deliveryReasons": list(self.reasons or []),
             "deliveryMatchedConditions": list(self.matched_conditions or []),
+            "deliveryTriggerLedgerVersion": "notification-delivery-trigger-ledger-v1",
+            "deliveryTriggerLedger": trigger_ledger,
             "deliveryRuleEnabled": bool(self.enabled),
             "deliveryFingerprint": self.fingerprint,
             "deliveryReviewLevel": self.review_level,

@@ -123,6 +123,15 @@ class NotificationAdmissionPolicy:
             reason = "관계 그래프 변화: " + str(relation_diff.get("reason") or "의미 있는 관계 변화")
             if reason not in decision.reasons:
                 decision.reasons.append(reason)
+            decision.add_trigger(
+                "typedb-relation-change",
+                "typedb-relation-diff",
+                "관계 판단 변화",
+                reason,
+                status="matched",
+                currentValue=list(relation_diff.get("changedComponents") or []),
+                source="typedb-relation-delivery-diff",
+            )
         decision = apply_state_cooldown_rule(
             decision,
             rule,

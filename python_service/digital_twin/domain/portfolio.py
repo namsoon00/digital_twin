@@ -63,6 +63,14 @@ class Position:
     average_price: float = 0.0
     current_price: float = 0.0
     change_rate: Optional[float] = None
+    previous_close: float = 0.0
+    return_1d: Optional[float] = None
+    return_3d: Optional[float] = None
+    return_5d: Optional[float] = None
+    price_change_source: str = ""
+    price_change_basis: str = ""
+    price_history_adjustment: str = ""
+    price_change_usable: bool = False
     quote_source: str = ""
     quote_status: str = ""
     quote_message: str = ""

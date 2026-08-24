@@ -456,7 +456,15 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
             "audit": dict(ai_audit),
             "ontologyQualityGate": dict(quality_gate),
         },
-        delivery_audit=delivery,
+        delivery_audit={
+            **delivery,
+            "triggerLedgerVersion": values.get("deliveryTriggerLedgerVersion"),
+            "triggerLedger": [
+                dict(item)
+                for item in values.get("deliveryTriggerLedger") or []
+                if isinstance(item, dict)
+            ],
+        },
         missing_data=_missing_rows(relation, facts),
     )
     return report
@@ -467,6 +475,20 @@ def customer_alert_reason_lines(context: Dict[str, object]) -> List[str]:
     decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
     why_now = relation.get("whyNow") if isinstance(relation.get("whyNow"), dict) else {}
     rows = []
+    trigger_ledger = context.get("deliveryTriggerLedger")
+    for item in trigger_ledger if isinstance(trigger_ledger, list) else []:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status not in {"matched", "released", "eligible"}:
+            continue
+        reason = _text(item.get("reason"), 260)
+        label = _text(item.get("label"), 80)
+        if not reason or reason == "발송 가능한 이벤트입니다.":
+            continue
+        text = (label + ": " if label and label not in reason else "") + reason
+        if text not in rows:
+            rows.append(text)
     for item in _list(why_now.get("changeDrivers")):
         text = _text(item, 260)
         if text and "핵심 룰:" not in text and not re.search(r"[A-Z][A-Z0-9_]{3,}", text) and text not in rows:
@@ -477,12 +499,14 @@ def customer_alert_reason_lines(context: Dict[str, object]) -> List[str]:
     if not review_level:
         review_level = review_level_for(decision.get("actionLevel"), data_state)
     change_state = str(decision.get("changeState") or relation.get("changeState") or "unchanged")
-    rows.append(
+    relation_summary = (
         (label + " 관계가 성립했습니다. " if label else "투자 판단 관계가 성립했습니다. ")
         + "현재는 " + str(decision.get("reviewLabel") or relation.get("reviewLevelLabel") or REVIEW_LEVEL_LABELS.get(review_level, "변화 관찰"))
         + " 단계이고, " + str(decision.get("changeStateLabel") or relation.get("changeStateLabel") or CHANGE_STATE_LABELS.get(change_state, "이전과 같은 상태"))
         + "입니다."
     )
+    if relation_summary not in rows:
+        rows.append(relation_summary)
     state_reason = _text(context.get("cooldownReason") or context.get("repeatBypassReason"), 260)
     if state_reason and state_reason not in rows:
         rows.append("이전 알림과 비교: " + state_reason)

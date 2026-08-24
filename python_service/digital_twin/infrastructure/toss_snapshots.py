@@ -12,8 +12,16 @@ from ..domain.accounts import AccountConfig
 from ..domain.data_freshness import combine_quality, freshness_record, int_setting, parse_datetime
 from ..domain.instrument_profiles import market_signal_symbols
 from ..domain.investor_flow_psychology import INVESTOR_PARTY_FIELDS, investor_flow_observed_fields
-from ..domain.market_data import known_stock, normalize_position, number, pct_distance, technical_indicators_from_candles
+from ..domain.market_data import (
+    derived_price_change_facts,
+    known_stock,
+    normalize_position,
+    number,
+    pct_distance,
+    technical_indicators_from_candles,
+)
 from ..domain.market_hours import evaluate_market_hours
+from ..domain.market_time_series import market_session_date
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.position_identity import position_with_symbol_identity
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
@@ -885,6 +893,14 @@ class TossProvider:
             "currency": position.currency,
             "currentPrice": position.current_price,
             "changeRate": position.change_rate,
+            "previousClose": position.previous_close,
+            "return1d": position.return_1d,
+            "return3d": position.return_3d,
+            "return5d": position.return_5d,
+            "priceChangeSource": position.price_change_source,
+            "priceChangeBasis": position.price_change_basis,
+            "priceHistoryAdjustment": position.price_history_adjustment,
+            "priceChangeUsable": position.price_change_usable,
             "quoteSource": position.quote_source,
             "quoteStatus": position.quote_status,
             "quoteMessage": position.quote_message,
@@ -1088,10 +1104,85 @@ class TossProvider:
         ma60 = number(indicator_source.get("ma60")) or position.ma60
         ma20_distance = pct_distance(current_price, ma20) if current_price and ma20 else number(indicator_source.get("ma20Distance")) or position.ma20_distance
         ma60_distance = pct_distance(current_price, ma60) if current_price and ma60 else number(indicator_source.get("ma60Distance")) or position.ma60_distance
+        quote_change_rate = quote.get("changeRate")
+        selected_change_rate = (
+            quote_change_rate
+            if quote_change_rate is not None
+            else position.change_rate
+        )
+        candle_session = market_session_date(
+            indicator_source.get("latestCandleAt") or indicator_source.get("sourceAsOf"),
+            quote.get("market") or position.market or cached.get("market"),
+            quote.get("currency") or position.currency or cached.get("currency"),
+        )
+        quote_session = market_session_date(
+            source_as_of or selected_updated_at,
+            quote.get("market") or position.market or cached.get("market"),
+            quote.get("currency") or position.currency or cached.get("currency"),
+        )
+        same_session = (
+            candle_session == quote_session
+            if candle_session and quote_session
+            else None
+        )
+        derived_change = derived_price_change_facts(
+            current_price,
+            indicator_source,
+            same_session,
+        )
+        if selected_change_rate is None and derived_change:
+            selected_change_rate = derived_change.get("changeRate")
+        explicit_change = quote_change_rate is not None
+        previous_close = (
+            number(quote.get("previousClose"))
+            or number(cached.get("previousClose"))
+            or position.previous_close
+            or number(derived_change.get("previousClose"))
+        )
+        return_1d = (
+            selected_change_rate
+            if selected_change_rate is not None
+            else derived_change.get("return1d")
+        )
         return replace(
             position,
             current_price=current_price,
-            change_rate=quote.get("changeRate") if quote.get("changeRate") is not None else position.change_rate,
+            change_rate=selected_change_rate,
+            previous_close=previous_close,
+            return_1d=return_1d,
+            return_3d=(
+                derived_change.get("return3d")
+                if derived_change.get("return3d") is not None
+                else position.return_3d
+            ),
+            return_5d=(
+                derived_change.get("return5d")
+                if derived_change.get("return5d") is not None
+                else position.return_5d
+            ),
+            price_change_source=(
+                "provider-quote"
+                if explicit_change
+                else str(derived_change.get("priceChangeSource") or position.price_change_source or cached.get("priceChangeSource") or "")
+            ),
+            price_change_basis=(
+                "provider-reported-change-rate"
+                if explicit_change
+                else str(derived_change.get("priceChangeBasis") or position.price_change_basis or cached.get("priceChangeBasis") or "")
+            ),
+            price_history_adjustment=str(
+                derived_change.get("priceHistoryAdjustment")
+                or indicator_source.get("priceHistoryAdjustment")
+                or position.price_history_adjustment
+                or cached.get("priceHistoryAdjustment")
+                or ""
+            ),
+            price_change_usable=bool(
+                explicit_change
+                or derived_change.get("priceChangeUsable")
+                or position.price_change_usable
+                or cached.get("priceChangeUsable")
+            ),
             quote_source=quote_source or position.quote_source or str(cached.get("quoteSource") or ""),
             quote_status=quote_status or position.quote_status or str(cached.get("quoteStatus") or ""),
             quote_message=quote_message or position.quote_message or str(cached.get("quoteMessage") or ""),
@@ -1153,7 +1244,10 @@ class TossProvider:
                     time.sleep(0.22)
                 candles, token = self.fetch_daily_candles(token, position.symbol)
                 chart_calls += 1
-                indicators = technical_indicators_from_candles(candles)
+                indicators = technical_indicators_from_candles(
+                    candles,
+                    adjustment_status="provider-adjusted",
+                )
                 indicators["sourceFetchedAt"] = utc_now_iso()
                 indicators_live = bool(indicators)
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
@@ -1199,7 +1293,10 @@ class TossProvider:
                     time.sleep(0.22)
                 candles, token = self.fetch_daily_candles(token, normalized)
                 chart_calls += 1
-                indicators = technical_indicators_from_candles(candles)
+                indicators = technical_indicators_from_candles(
+                    candles,
+                    adjustment_status="provider-adjusted",
+                )
                 indicators["sourceFetchedAt"] = utc_now_iso()
                 indicators_live = bool(indicators)
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):

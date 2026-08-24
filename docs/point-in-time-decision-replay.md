@@ -22,6 +22,12 @@ Queued AI decisions can be finalized several minutes after their market
 snapshot. Facts fetched before final persistence are valid inputs even when
 their seconds are later than the minute-level market reference.
 
+Daily price-change facts retain the current quote clock, previous-session
+close, period-return formula, and adjustment status. A missing vendor change
+rate may be derived only from explicitly provider-adjusted candles aligned to
+the quote session. Unverified or unadjusted history cannot author a usable
+return fact.
+
 ## Strict Contract
 
 The immutable `factsAtDecision` payload is audited recursively. A timestamp

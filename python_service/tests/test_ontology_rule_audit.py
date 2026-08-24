@@ -39,6 +39,22 @@ class OntologyRuleAuditTest(unittest.TestCase):
         })
         self.assertFalse(audit["automaticRuleChange"])
 
+    def test_time_horizon_and_event_filter_variants_are_not_false_duplicates(self):
+        rule_ids = {
+            "graph.crypto.market.24h.up.major.v1",
+            "graph.crypto.market.7d.up.major.v1",
+        }
+        rules = [
+            rule for rule in default_graph_inference_rules()
+            if rule.rule_id in rule_ids
+        ]
+
+        audit = rule_audit_payload(rules, {})
+
+        self.assertEqual(2, audit["ruleCount"])
+        self.assertEqual([], audit["duplicateCandidateGroups"])
+        self.assertTrue(audit["ruleClaimCoverage"]["complete"])
+
 
 if __name__ == "__main__":
     unittest.main()

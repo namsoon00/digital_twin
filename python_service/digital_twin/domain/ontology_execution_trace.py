@@ -12,7 +12,7 @@ import json
 from typing import Dict, Iterable, List, Mapping
 
 
-ONTOLOGY_EXECUTION_TRACE_VERSION = "ontology-execution-trace-v1"
+ONTOLOGY_EXECUTION_TRACE_VERSION = "ontology-execution-trace-v2"
 TRACE_RETENTION_DAYS = 30
 ALERT_READ_SET_RETENTION_DAYS = 180
 
@@ -349,22 +349,41 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
         raw_rows.append(("deferred" if rule_id in deferred_ids else "selected", {"ruleId": rule_id}))
 
     records: List[Dict[str, object]] = []
+    normal_non_match_statuses = {
+        "not-applicable",
+        "not-applicable-preflight",
+        "planned",
+    }
     for index, (status_group, item) in enumerate(raw_rows):
         rule_id = _text(item.get("ruleId"))
         item_status = _text(item.get("status"))
+        normalized_item_status = item_status.lower()
         symbols = _symbols(item.get("candidateSymbols") or source_symbols)
         precise_match_symbols = matched_symbols_by_rule.get(rule_id, set())
         has_precise_match_identity = bool(match_identity_complete_by_rule.get(rule_id))
         matched_target_symbols = sorted(set(symbols).intersection(precise_match_symbols))
         record_matched = bool(matched_target_symbols)
-        if rule_id in matched_ids and not has_precise_match_identity:
-            # Older adapters did not expose a sourceId. Preserve their safe,
-            # conservative rule-level result until a precise TypeDB row is
-            # available rather than rewriting an existing match as false.
-            record_matched = True
-            matched_target_symbols = list(symbols)
+        unresolved_match_target = False
+        if normalized_item_status in normal_non_match_statuses:
+            record_matched = False
+            matched_target_symbols = []
+        elif rule_id in matched_ids and not has_precise_match_identity:
+            # A rule-level match proves that some subject matched, not that
+            # every subject in a batched run matched. Legacy rows without a
+            # sourceId remain usable only for a single unambiguous target.
+            if len(symbols) == 1:
+                record_matched = True
+                matched_target_symbols = list(symbols)
+            else:
+                record_matched = False
+                matched_target_symbols = []
+                unresolved_match_target = True
         if status_group == "executed":
-            status = "matched" if record_matched else "evaluated-no-match"
+            status = (
+                "matched-target-unresolved"
+                if unresolved_match_target
+                else "matched" if record_matched else "evaluated-no-match"
+            )
         elif status_group == "selected":
             status = "selected"
         elif status_group == "deferred":
@@ -406,6 +425,9 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
             "targetSymbols": symbols,
             "matchedTargetSymbols": matched_target_symbols,
             "matched": record_matched,
+            "matchIdentityComplete": bool(
+                record_matched and matched_target_symbols
+            ),
             "reused": status_group == "selected" and rule_id not in candidate_ids,
             "failureReason": _text(item.get("reason"))[:500],
             "costClass": cost_class,
@@ -429,7 +451,10 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
                     "executionProfileVersion",
                 ]
                 if item.get(key) not in (None, "", [], {})
-            },
+            } | ({
+                "ruleLevelMatched": True,
+                "matchIdentityStatus": "target-unresolved",
+            } if unresolved_match_target else {}),
         })
     return records
 

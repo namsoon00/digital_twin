@@ -381,6 +381,32 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 "saved": False,
                 "worldId": str(world_id or ""),
             }
+        if len(target_symbols) > 1:
+            reported_matches = {
+                str(rule_id or "").strip()
+                for key in ["typedbNativeRuleMatchedRuleIds", "matchedRuleIds"]
+                for rule_id in (
+                    execution_values.get(key)
+                    or inference_values.get(key)
+                    or []
+                )
+                if str(rule_id or "").strip()
+            }
+            precise_trace_rules = {
+                str(trace.get("ruleId") or trace.get("sourceRuleId") or "").strip()
+                for trace in inference_values.get("traces") or []
+                if isinstance(trace, Mapping)
+                and str(trace.get("symbol") or "").strip()
+            }
+            unresolved_matches = sorted(reported_matches - precise_trace_rules)
+            if unresolved_matches:
+                return {
+                    "status": "skipped-unresolved-match-target",
+                    "saved": False,
+                    "worldId": str(world_id or ""),
+                    "symbolCount": len(target_symbols),
+                    "unresolvedRuleIds": unresolved_matches,
+                }
 
         run_id = str(source_run_id or "").strip() or (
             "world-rule-slots:" + generation_id
@@ -439,7 +465,9 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 "ruleId": rule_id,
                 "ruleVersion": str(trace.get("ruleVersion") or ""),
                 "matched": True,
-                "matchedTargetSymbols": [symbol] if symbol else target_symbols,
+                "matchedTargetSymbols": [symbol] if symbol else [],
+                "targetSymbols": target_symbols,
+                "matchIdentityComplete": bool(symbol) or len(target_symbols) == 1,
             })
         result = {
             "status": "ok",
@@ -733,6 +761,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         rule_versions: Dict[str, str] = {}
         matched_rule_ids = set()
         precise_matches = set()
+        unresolved_match_rule_ids = set()
         for item in trace.get("ruleOutcomes") or trace.get("rules") or []:
             if not isinstance(item, Mapping):
                 continue
@@ -744,7 +773,12 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 continue
             matched_rule_ids.add(rule_id)
             raw_precise = item.get("matchedTargetSymbols")
-            if isinstance(raw_precise, (list, tuple, set)) and raw_precise:
+            identity_complete = item.get("matchIdentityComplete") is not False
+            if (
+                identity_complete
+                and isinstance(raw_precise, (list, tuple, set))
+                and raw_precise
+            ):
                 matched_targets = {
                     str(symbol or "").upper().strip()
                     for symbol in raw_precise
@@ -752,11 +786,9 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 }
                 precise_matches.add(rule_id)
             else:
-                matched_targets = {
-                    str(symbol or "").upper().strip()
-                    for symbol in item.get("targetSymbols") or targets
-                    if str(symbol or "").strip()
-                }
+                matched_targets = set(targets) if len(targets) == 1 else set()
+                if not matched_targets:
+                    unresolved_match_rule_ids.add(rule_id)
             for symbol in matched_targets.intersection(targets):
                 states_by_symbol[symbol][rule_id] = True
         for key in ["typedbNativeRuleMatchedRuleIds", "matchedRuleIds"]:
@@ -765,14 +797,18 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 for rule_id in execution.get(key) or inference.get(key) or result.get(key) or []
                 if str(rule_id or "").strip() in executed_rule_ids
             })
-        # Some TypeDB adapters report only the aggregate matched rule set. In
-        # that case mark every requested target. This may re-evaluate an extra
-        # rule later, but can never suppress a required rule evaluation.
+        # A complete result-slot generation must prove each target outcome.
+        # An aggregate rule-level match cannot provide that proof for a batch.
+        unresolved_match_rule_ids.update(
+            matched_rule_ids.difference(precise_matches)
+        )
+        unresolved_match_rule_ids.difference_update(precise_matches)
+        if len(targets) > 1 and unresolved_match_rule_ids:
+            return
         for rule_id in matched_rule_ids.difference(precise_matches):
             if any(states[rule_id] for states in states_by_symbol.values()):
                 continue
-            for states in states_by_symbol.values():
-                states[rule_id] = True
+            states_by_symbol[targets[0]][rule_id] = True
         common_input_fingerprint = hashlib.sha256("|".join([
             namespace_id,
             str(run.source_snapshot_fingerprint or ""),

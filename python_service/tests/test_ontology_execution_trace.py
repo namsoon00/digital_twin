@@ -48,6 +48,74 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         self.assertEqual(["005930"], outcome["matchedTargetSymbols"])
         self.assertEqual(["000660", "005930"], sorted(outcome["targetSymbols"]))
 
+    def test_rule_level_match_does_not_fan_out_across_multiple_symbols(self):
+        run = SimpleNamespace(
+            run_id="run:unresolved-subject",
+            world_id="portfolio:local:main",
+            account_id="main",
+            source_snapshot_at="2026-08-15T00:00:00Z",
+            source_symbols=["005930", "000660"],
+            started_at="2026-08-15T00:00:00Z",
+            completed_at="2026-08-15T00:00:01Z",
+            context_payload={},
+        )
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok",
+                "typedbNativeRuleMatchedRuleIds": ["rule.flow"],
+                "nativeMatchResult": {
+                    "matches": [{"ruleId": "rule.flow"}],
+                    "executedRules": [{
+                        "ruleId": "rule.flow",
+                        "candidateSymbols": ["005930", "000660"],
+                    }],
+                },
+            },
+            "inferenceBox": {"inferenceGenerationId": "generation:unresolved"},
+        }
+
+        outcome = reasoning_execution_trace_payload(run, result)["ruleOutcomes"][0]
+
+        self.assertFalse(outcome["matched"])
+        self.assertFalse(outcome["matchIdentityComplete"])
+        self.assertEqual([], outcome["matchedTargetSymbols"])
+        self.assertEqual("matched-target-unresolved", outcome["status"])
+        self.assertEqual("target-unresolved", outcome["detail"]["matchIdentityStatus"])
+
+    def test_preflight_not_applicable_rule_never_becomes_matched(self):
+        run = SimpleNamespace(
+            run_id="run:not-applicable",
+            world_id="portfolio:local:main",
+            account_id="main",
+            source_snapshot_at="2026-08-15T00:00:00Z",
+            source_symbols=["005930"],
+            started_at="2026-08-15T00:00:00Z",
+            completed_at="2026-08-15T00:00:01Z",
+            context_payload={},
+        )
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok",
+                "typedbNativeRuleMatchedRuleIds": ["rule.not-applicable"],
+                "nativeMatchResult": {
+                    "matches": [{"ruleId": "rule.not-applicable"}],
+                    "skippedRules": [{
+                        "ruleId": "rule.not-applicable",
+                        "status": "not-applicable-preflight",
+                    }],
+                },
+            },
+            "inferenceBox": {"inferenceGenerationId": "generation:not-applicable"},
+        }
+
+        outcome = reasoning_execution_trace_payload(run, result)["ruleOutcomes"][0]
+
+        self.assertFalse(outcome["matched"])
+        self.assertEqual([], outcome["matchedTargetSymbols"])
+        self.assertEqual("not-applicable-preflight", outcome["status"])
+
     def test_execution_trace_records_stages_rules_and_disabled_ai(self):
         run = SimpleNamespace(
             run_id="run:1",

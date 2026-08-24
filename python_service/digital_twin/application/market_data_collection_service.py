@@ -75,6 +75,14 @@ def position_payload(position: Position, base: Dict[str, object], collection_pur
         "assetType": str(base.get("assetType") or "STOCK"),
         "currentPrice": position.current_price,
         "changeRate": position.change_rate,
+        "previousClose": position.previous_close,
+        "return1d": position.return_1d,
+        "return3d": position.return_3d,
+        "return5d": position.return_5d,
+        "priceChangeSource": position.price_change_source,
+        "priceChangeBasis": position.price_change_basis,
+        "priceHistoryAdjustment": position.price_history_adjustment,
+        "priceChangeUsable": position.price_change_usable,
         "quoteSource": position.quote_source,
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
@@ -484,7 +492,10 @@ class MarketDataCollectionRunner:
                 candles, token = provider.fetch_daily_candles(token, symbol)
                 if candles:
                     candles_by_symbol[str(symbol or "").upper()] = list(candles)
-                indicators = technical_indicators_from_candles(candles)
+                indicators = technical_indicators_from_candles(
+                    candles,
+                    adjustment_status="provider-adjusted",
+                )
                 if indicators:
                     result[symbol] = indicators
             except Exception:

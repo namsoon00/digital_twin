@@ -3081,6 +3081,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     context = job.context or {}
     customer_text = notification_customer_text(job)
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
+    trigger_ledger = context.get("deliveryTriggerLedger") if isinstance(context.get("deliveryTriggerLedger"), list) else []
     title_source = context.get("headline") if job.message_type == INVESTMENT_INSIGHT else (context.get("title") or context.get("headline") or "")
     if job.message_type == INVESTMENT_INSIGHT:
         validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
@@ -3148,6 +3149,10 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "deliveryGateState": context.get("deliveryGateState") or "",
         "deliveryGateReason": context.get("deliveryGateReason") or "",
         "deliveryReasons": [str(item) for item in reasons],
+        "deliveryTriggerLedgerVersion": context.get("deliveryTriggerLedgerVersion") or "",
+        "deliveryTriggerLedger": [
+            dict(item) for item in trigger_ledger if isinstance(item, dict)
+        ] if detail else [],
         "deliveryFingerprint": context.get("deliveryFingerprint") or "",
         "deliveryReviewLevel": context.get("deliveryReviewLevel") or "",
         "deliveryDataState": context.get("deliveryDataState") or "",

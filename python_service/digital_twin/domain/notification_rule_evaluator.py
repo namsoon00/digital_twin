@@ -869,6 +869,7 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
     state = notification_state_context(job.context or {})
     reasons: List[str] = []
     matched_conditions: List[str] = []
+    trigger_ledger: List[Dict[str, object]] = []
     blob = job_search_blob(job)
     for condition in config.conditions:
         if not condition.enabled:
@@ -876,6 +877,21 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         if condition_matches(condition, job, blob):
             matched_conditions.append(condition.condition_id)
             reasons.append(condition.label)
+            current_value = field_value(job.context or {}, condition.field) if condition.field else ""
+            if isinstance(current_value, (dict, list, tuple, set)):
+                current_value = ""
+            trigger_ledger.append({
+                "triggerId": "condition:" + condition.condition_id,
+                "kind": "configured-condition",
+                "label": condition.label,
+                "reason": getattr(condition, "description", "") or condition.label,
+                "conditionType": condition.condition_type,
+                "field": condition.field,
+                "currentValue": current_value,
+                "threshold": condition.value,
+                "status": "matched",
+                "source": "notification-rule-config",
+            })
 
     message_type = str(job.message_type or config.message_type or "")
     decision = NotificationRuleDecision(
@@ -892,6 +908,7 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
         validation_state=state["validationState"],
         reasons=reasons,
         matched_conditions=matched_conditions,
+        trigger_ledger=trigger_ledger,
         fingerprint=notification_fingerprint(job, config),
         similarity_enabled=bool(config.similarity_enabled),
         similarity_window_minutes=int(config.similarity_window_minutes or 0),

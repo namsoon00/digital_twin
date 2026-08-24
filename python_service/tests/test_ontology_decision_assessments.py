@@ -146,6 +146,46 @@ class OntologyDecisionAssessmentTests(unittest.TestCase):
             envelope["portfolioConstraintRuleIds"],
         )
 
+    def test_conflicting_investment_actions_require_a_typedb_selection(self):
+        matches = [
+            match("rule.entry", "BUY"),
+            match("rule.exit", "TRIM"),
+        ]
+        relations = [
+            relation("rule.entry", "investment-opinion", "BUY"),
+            relation("rule.exit", "investment-opinion", "TRIM"),
+        ]
+
+        bundle = decision_assessment_bundle(matches, relations)
+        envelope = action_envelope_from_inference({}, matches, relations, bundle)
+
+        self.assertEqual("conflicted", bundle["investmentOpinion"]["status"])
+        self.assertEqual(["BUY", "TRIM"], bundle["investmentOpinion"]["candidateActions"])
+        self.assertEqual("", bundle["investmentOpinion"]["candidateAction"])
+        self.assertEqual("", bundle["investmentOpinion"]["selectedRuleId"])
+        self.assertEqual("judgement-conflicted", bundle["recommendedPlan"]["status"])
+        self.assertEqual("NO_ACTION", envelope["executionAction"])
+        self.assertTrue(envelope["opinionActionConflict"])
+
+    def test_same_action_from_multiple_rules_is_not_a_conflict(self):
+        matches = [
+            match("rule.entry.price", "BUY"),
+            match("rule.entry.flow", "BUY"),
+        ]
+        relations = [
+            relation("rule.entry.price", "investment-opinion", "BUY"),
+            relation("rule.entry.flow", "investment-opinion", "BUY"),
+        ]
+
+        bundle = decision_assessment_bundle(matches, relations)
+
+        self.assertFalse(bundle["investmentOpinion"]["actionConflict"])
+        self.assertEqual("BUY", bundle["investmentOpinion"]["candidateAction"])
+        self.assertEqual(
+            ["rule.entry.price", "rule.entry.flow"],
+            bundle["investmentOpinion"]["candidateRuleIdsByAction"]["BUY"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

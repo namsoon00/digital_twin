@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
@@ -1368,6 +1369,53 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual({"generation:current"}, {row[16] for row in inserts})
         self.assertEqual(1, len({row[19] for row in inserts}))
 
+    def test_multi_symbol_aggregate_match_cannot_create_false_complete_slots(self):
+        _snapshot, _graph, _fingerprint, base_run = self.build_run()
+        run = replace(base_run, source_symbols=["005930", "000660"])
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok",
+                "nativeRuleSelectionApplied": False,
+                "nativeRuleSelectionFullRuleCount": 1,
+                "typedbNativeRuleMatchedRuleIds": ["graph.rule.one"],
+            },
+            "inferenceBox": {
+                "generationAligned": True,
+                "inferenceGenerationId": "generation:aggregate",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+            },
+            "inferenceReuseProof": {
+                "scopePlanFingerprint": run.context_payload["scopeTopology"]["inferenceReuseScopePlanFingerprint"],
+            },
+            "_ruleResultSlotCatalogRuleIds": ["graph.rule.one"],
+        }
+        trace = {
+            "inferenceGenerationId": "generation:aggregate",
+            "ruleOutcomes": [{
+                "ruleId": "graph.rule.one",
+                "matched": True,
+                "targetSymbols": ["005930", "000660"],
+                "matchedTargetSymbols": [],
+                "matchIdentityComplete": False,
+            }],
+        }
+
+        store._upsert_rule_result_slots_with_connection(
+            connection,
+            run,
+            result,
+            trace,
+            "2026-08-25T00:00:00Z",
+        )
+
+        self.assertFalse(any(
+            "INSERT INTO ontology_reasoning_rule_result_slots" in sql
+            for sql, _params in connection.calls
+        ))
+
     def test_staged_abox_lifecycle_compacts_active_manifest_metadata(self):
         compact = compact_staged_abox_activation_lifecycle({
             "aboxActivationPreparation": {
@@ -1468,6 +1516,45 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual({"NVDA"}, {row[7] for row in inserts})
         self.assertEqual({"generation:shared:2"}, {row[16] for row in inserts})
         self.assertTrue(all(row[14] == 1 for row in inserts))
+
+    def test_direct_multi_symbol_slots_report_unresolved_match_target(self):
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.transaction = lambda: ConnectionContext(connection)
+
+        result = store.record_rule_result_slots(
+            world_id="premise:shared:us",
+            account_id="",
+            symbols=["NVDA", "MSTR"],
+            catalog_rule_ids=["shared.rule.one"],
+            rulebox_rules_hash="shared-rules:1",
+            tbox_fingerprint="tbox:1",
+            scope_plan_fingerprint="scope:shared:1",
+            source_abox_snapshot_id="abox:shared:3",
+            source_snapshot_fingerprint="facts:shared:3",
+            execution={
+                "status": "ok",
+                "nativeRuleSelectionApplied": False,
+                "nativeRuleSelectionFullRuleCount": 1,
+                "typedbNativeRuleMatchedRuleIds": ["shared.rule.one"],
+            },
+            inference={
+                "status": "ok",
+                "generationAligned": True,
+                "inferenceGenerationId": "generation:shared:3",
+                "sourceAboxSnapshotId": "abox:shared:3",
+                "traces": [{"ruleId": "shared.rule.one"}],
+            },
+            execution_namespace_id="namespace:v2",
+            engine_deployment_id="ontology-v2-production-r14",
+            graph_database="orbit_alpha_ontology",
+            release_fingerprint="release:r14",
+        )
+
+        self.assertFalse(result["saved"])
+        self.assertEqual("skipped-unresolved-match-target", result["status"])
+        self.assertEqual(["shared.rule.one"], result["unresolvedRuleIds"])
+        self.assertEqual([], connection.calls)
 
     def test_projection_audit_keeps_runtime_identity_and_patch_fallback(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()

@@ -12636,6 +12636,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 }):
             result = repository.run_rulebox({
                 "symbols": ["005930"],
+                "_nativeInferenceWriteLeaseHeld": True,
                 "nativeRuleAdaptiveTargetShardingProfile": adaptive_profile,
             })
 
@@ -12644,8 +12645,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertTrue(result["typedbSchemaFunctionDirectQueryFallbackUsed"])
         self.assertFalse(result["typedbSchemaFunctionUsed"])
         self.assertFalse(match.call_args.kwargs["use_schema_functions"])
-        self.assertEqual(1, match.call_args.kwargs["native_rule_parallelism"])
+        self.assertEqual(2, match.call_args.kwargs["native_rule_parallelism"])
         self.assertEqual(1, match.call_args.kwargs["native_rule_target_parallelism"])
+        self.assertEqual(2, result["typedbSchemaFunctionDirectQueryFallbackParallelismCap"])
         self.assertEqual(
             adaptive_profile,
             match.call_args.kwargs["adaptive_target_sharding_profile"],

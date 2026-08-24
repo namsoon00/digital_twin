@@ -22614,16 +22614,24 @@ relation ontology-assertion,
                 else 1
             )
             if schema_function_direct_query_fallback:
-                native_rule_parallelism = 1
+                # The projection coordinator prevents schema maintenance from
+                # overlapping a stable ABox write lease. Use two bounded rule
+                # readers in that proven state so a cold function receipt does
+                # not turn the compatibility path into a multi-minute serial
+                # scan. Unleased callers retain the conservative one-reader
+                # contract.
+                native_rule_parallelism = (
+                    min(2, self.native_rule_parallelism())
+                    if stable_abox_write_lease_held
+                    else 1
+                )
                 native_rule_target_parallelism = 1
-                # Direct TypeQL recovery has a separate one-reader safety
-                # contract. Adaptive shards retain that contract: the known
-                # slow rule's smaller target reads are still run serially,
-                # avoiding the initial bounded-read timeout without adding
-                # concurrent readers.
+                # Adaptive target shards remain serial. Parallelism is across
+                # independent rules for the same immutable ABox generation,
+                # never across target writes or schema transactions.
                 runtime_rulebox_metadata[
                     "typedbSchemaFunctionDirectQueryFallbackParallelismCap"
-                ] = 1
+                ] = native_rule_parallelism
             native_match_result = typedb_call_for_world(
                 self.match_typedb_native_rules,
                 execution_rules,

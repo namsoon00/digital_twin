@@ -1,5 +1,6 @@
 import argparse
 import faulthandler
+import inspect
 import json
 import os
 import signal
@@ -1164,11 +1165,24 @@ def watch_v2_reasoning_engine(
     worker_id: str = "",
     retry_seconds: float = 30.0,
     sleep=time.sleep,
+    worker_role: str = "configured",
+    deployment_id: str = "",
 ) -> int:
     """Keep the managed V2 process alive while its release DB is rebuilding."""
     while True:
         try:
-            runner = runner_factory(settings, worker_id=worker_id)
+            factory_parameters = inspect.signature(runner_factory).parameters
+            factory_kwargs = {"worker_id": worker_id}
+            if "worker_role" in factory_parameters:
+                factory_kwargs["worker_role"] = worker_role
+            if "deployment_id" in factory_parameters:
+                factory_kwargs["deployment_id"] = deployment_id
+            dynamic_binding = bool(
+                str(worker_role or "configured").strip().lower() != "configured"
+                or str(deployment_id or "").strip()
+            )
+            current_settings = runtime_settings() if dynamic_binding else settings
+            runner = runner_factory(current_settings, **factory_kwargs)
         except RuntimeError as error:
             print(
                 "Independent V2 reasoning deferred until its release is ready. reason="
@@ -1201,7 +1215,9 @@ def watch_v2_reasoning_engine(
                 stack_dump_registered = False
         try:
             runner.watch()
-            return 0
+            if str(worker_role or "configured").strip().lower() == "configured" and not deployment_id:
+                return 0
+            sleep(1.0)
         finally:
             if callable(shutdown):
                 shutdown()
@@ -1253,6 +1269,8 @@ def reasoning_engine_platform_command(args) -> int:
         result = build_v2_reasoning_job_runner(
             configured,
             worker_id=getattr(args, "worker_id", ""),
+            worker_role=getattr(args, "role", "configured"),
+            deployment_id=getattr(args, "deployment_id", ""),
         ).run_once()
         print(json.dumps(result, ensure_ascii=False))
         return 0
@@ -1261,6 +1279,8 @@ def reasoning_engine_platform_command(args) -> int:
             build_v2_reasoning_job_runner,
             configured,
             worker_id=getattr(args, "worker_id", ""),
+            worker_role=getattr(args, "role", "configured"),
+            deployment_id=getattr(args, "deployment_id", ""),
         )
     if args.reasoning_engine_action == "comparisons":
         release = platform.release_identity(args.deployment_id)
@@ -2276,8 +2296,16 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_shadow_watch.add_argument("--worker-id", default="")
     reasoning_v2_once = reasoning_engine_actions.add_parser("v2-once")
     reasoning_v2_once.add_argument("--worker-id", default="")
+    reasoning_v2_once.add_argument(
+        "--role", choices=["configured", "delivery", "candidate", "active"], default="configured"
+    )
+    reasoning_v2_once.add_argument("--deployment-id", default="")
     reasoning_v2_watch = reasoning_engine_actions.add_parser("v2-watch")
     reasoning_v2_watch.add_argument("--worker-id", default="")
+    reasoning_v2_watch.add_argument(
+        "--role", choices=["configured", "delivery", "candidate", "active"], default="configured"
+    )
+    reasoning_v2_watch.add_argument("--deployment-id", default="")
     reasoning_comparisons = reasoning_engine_actions.add_parser("comparisons")
     reasoning_comparisons.add_argument("--deployment-id", default="ontology-v2-shadow")
     reasoning_comparisons.add_argument("--limit", type=int, default=50)

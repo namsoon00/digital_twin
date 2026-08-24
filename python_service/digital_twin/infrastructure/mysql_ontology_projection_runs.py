@@ -1039,9 +1039,25 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             if not symbol:
                 continue
             namespace_id = str(row.get("execution_namespace_id") or "")
-            summary_key = namespace_id + "|" + symbol
+            world = str(row.get("world_id") or "")
+            account = str(row.get("account_id") or "")
+            rules_hash = str(row.get("rulebox_rules_hash") or "")
+            # SharedPremiseWorld and PortfolioWorld deliberately use different
+            # executable catalogues. Combining them by namespace and symbol
+            # turns two complete proofs (104 + 116) into one false 220/116
+            # coverage failure on the operational surface.
+            summary_key = "|".join([
+                namespace_id,
+                world,
+                account,
+                rules_hash,
+                symbol,
+            ])
             target = by_symbol.setdefault(summary_key, {
                 "symbol": symbol,
+                "worldId": world,
+                "accountId": account,
+                "worldType": "SharedPremiseWorld" if not account else "PortfolioWorld",
                 "executionNamespaceId": namespace_id,
                 "engineDeploymentId": str(row.get("engine_deployment_id") or ""),
                 "graphDatabase": str(row.get("graph_database") or ""),
@@ -1050,7 +1066,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 "catalogRuleCount": 0,
                 "matchedRuleCount": 0,
                 "matchedRuleIds": [],
-                "ruleboxRulesHash": str(row.get("rulebox_rules_hash") or ""),
+                "ruleboxRulesHash": rules_hash,
                 "tboxFingerprint": str(row.get("tbox_fingerprint") or ""),
                 "latestUpdatedAt": str(row.get("updated_at") or ""),
                 "provenance": set(),

@@ -93,13 +93,27 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-reasoning", "watch"],
         "needle": "python_service/service.py ontology-reasoning watch",
     },
+    "reasoning-engine-delivery": {
+        "label": "Python V2 delivery reasoning worker",
+        "pid": data_dir() / "python-reasoning-delivery.pid",
+        "log": data_dir() / "python-reasoning-delivery.log",
+        "command": [
+            sys.executable, "-u", "python_service/service.py", "reasoning-engine",
+            "v2-watch", "--role", "delivery", "--worker-id", "delivery",
+        ],
+        "needle": "python_service/service.py reasoning-engine v2-watch --role delivery",
+    },
     "reasoning-engine-shadow": {
-        "label": "Python independent V2 reasoning worker",
+        "label": "Python V2 candidate reasoning worker",
         "pid": data_dir() / "python-reasoning-shadow.pid",
         "log": data_dir() / "python-reasoning-shadow.log",
-        "command": [sys.executable, "-u", "python_service/service.py", "reasoning-engine", "v2-watch"],
-        "needle": "python_service/service.py reasoning-engine v2-watch",
+        "command": [
+            sys.executable, "-u", "python_service/service.py", "reasoning-engine",
+            "v2-watch", "--role", "candidate", "--worker-id", "candidate",
+        ],
+        "needle": "python_service/service.py reasoning-engine v2-watch --role candidate",
         "needles": [
+            "python_service/service.py reasoning-engine v2-watch --role candidate",
             "python_service/service.py reasoning-engine v2-watch",
             "python_service/service.py reasoning-engine shadow-watch",
         ],
@@ -685,7 +699,9 @@ def disabled_reasoning_worker_specs(
     """Return switched-out reasoning workers that still own a managed PID."""
     return {
         name: BASE_WORKERS[name]
-        for name in ("ontology-reasoning", "reasoning-engine-shadow")
+        for name in (
+            "ontology-reasoning", "reasoning-engine-delivery", "reasoning-engine-shadow"
+        )
         if name not in active_specs and read_pid(BASE_WORKERS[name]["pid"])
     }
 
@@ -718,12 +734,27 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     independent_v2_enabled = truthy(
         (settings or {}).get("reasoningEngineV2IndependentEnabled", "1")
     )
+    configured_v2_id = str(
+        (settings or {}).get("reasoningEngineV2DeploymentId") or ""
+    ).strip()
+    candidate_v2_id = str(
+        (settings or {}).get("reasoningEngineCandidateDeploymentId") or ""
+    ).strip()
+    candidate_worker_enabled = bool(
+        independent_v2_enabled
+        and configured_v2_id
+        and candidate_v2_id == configured_v2_id
+    )
     workers.update({
         name: spec
         for name, spec in BASE_WORKERS.items()
         if name != "ontology-rulebox-prewarm"
         and not (name == "ontology-reasoning" and active_engine_version != "v1")
-        and not (name == "reasoning-engine-shadow" and not independent_v2_enabled)
+        and not (
+            name in {"reasoning-engine-delivery", "reasoning-engine-shadow"}
+            and not independent_v2_enabled
+        )
+        and not (name == "reasoning-engine-shadow" and not candidate_worker_enabled)
     })
     # Zero is an explicit operational pause: keep collection and deterministic
     # notifications running without launching external AI inference workers.
@@ -762,6 +793,7 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
 GRAPH_DEPENDENT_WORKERS = {
     "ontology-rulebox-prewarm",
     "ontology-reasoning",
+    "reasoning-engine-delivery",
     "reasoning-engine-shadow",
     "ontology-world-projection",
     "ontology-inference-detail",

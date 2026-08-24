@@ -46,7 +46,7 @@ def event():
 
 
 class ReasoningIngressRouterTests(unittest.TestCase):
-    def test_v2_ingress_targets_only_the_configured_runnable_deployment(self):
+    def test_v2_ingress_targets_delivery_and_candidate_deployments(self):
         class Connection:
             def execute(self, sql, params=()):
                 if "FROM reasoning_engine_control" in sql:
@@ -62,11 +62,11 @@ class ReasoningIngressRouterTests(unittest.TestCase):
                     ])
                 if "FROM runtime_settings" in sql:
                     assert params == ("reasoningEngineV2DeploymentId",)
-                    return Cursor({"value": "v2-r15"})
+                    return Cursor({"value": "v2-r14"})
                 raise AssertionError("unexpected SQL: " + sql)
 
         self.assertEqual(
-            ["v2-r15"],
+            ["v2-r14", "v2-r15"],
             MySQLReasoningEngineJobStore.target_deployments_with_connection(Connection()),
         )
 
@@ -188,9 +188,12 @@ class ReasoningIngressRouterTests(unittest.TestCase):
 
         result = Router.__new__(Router).reconcile()
 
-        backfill.assert_called_once()
-        self.assertEqual("v2-r18", backfill.call_args.args[1])
-        self.assertEqual(6, result["sourceBoundaryBackfill"]["updatedCount"])
+        self.assertEqual(2, backfill.call_count)
+        self.assertEqual(
+            {"v2-r17", "v2-r18"},
+            {call.args[1] for call in backfill.call_args_list},
+        )
+        self.assertEqual(12, result["sourceBoundaryBackfill"]["updatedCount"])
 
 
 if __name__ == "__main__":

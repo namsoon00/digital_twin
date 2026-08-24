@@ -106,14 +106,20 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             "mysqlRuntimeManaged": "0",
             "reasoningEngineActiveVersion": "v2",
             "reasoningEngineV2IndependentEnabled": "1",
+            "reasoningEngineV2DeploymentId": "v2-r2",
+            "reasoningEngineCandidateDeploymentId": "v2-r2",
         }):
             specs = service_manager.worker_specs()
 
         self.assertNotIn("ontology-reasoning", specs)
+        self.assertIn("reasoning-engine-delivery", specs)
         self.assertIn("reasoning-engine-shadow", specs)
 
     def test_service_manager_finds_switched_out_reasoning_worker(self):
-        active_specs = {"reasoning-engine-shadow": service_manager.BASE_WORKERS["reasoning-engine-shadow"]}
+        active_specs = {
+            "reasoning-engine-delivery": service_manager.BASE_WORKERS["reasoning-engine-delivery"],
+            "reasoning-engine-shadow": service_manager.BASE_WORKERS["reasoning-engine-shadow"],
+        }
 
         with patch.object(service_manager, "read_pid", return_value=123):
             disabled = service_manager.disabled_reasoning_worker_specs(active_specs)

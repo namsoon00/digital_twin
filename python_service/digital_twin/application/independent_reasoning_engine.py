@@ -1375,6 +1375,7 @@ class IndependentReasoningJobRunner:
         event_reader=None,
         execution_guard=None,
         route_reconciler=None,
+        deployment_role: str = "configured",
     ):
         import os
         import socket
@@ -1387,6 +1388,7 @@ class IndependentReasoningJobRunner:
         self.event_reader = event_reader
         self.execution_guard = execution_guard
         self.route_reconciler = route_reconciler
+        self.deployment_role = str(deployment_role or "configured").strip().lower()
         self.route_reconciliation = None
         self.route_reconciled_at = 0.0
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
@@ -1395,6 +1397,7 @@ class IndependentReasoningJobRunner:
         self._current_progress: Dict[str, object] = {}
         self._last_case_expiry_at = 0.0
         self._last_case_expiry: Dict[str, object] = {"status": "not-run", "expiredCount": 0}
+        self._last_worker_heartbeat_at = 0.0
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -1403,10 +1406,21 @@ class IndependentReasoningJobRunner:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
+        control_binding = self.control_binding_status(descriptor.deployment_id)
+        if not control_binding.get("selected"):
+            return {
+                "status": "inactive-control-binding",
+                "processedCount": 0,
+                "deploymentId": descriptor.deployment_id,
+                "workerRole": self.deployment_role,
+                "controlBinding": control_binding,
+            }
+        self.publish_worker_heartbeat(descriptor.deployment_id)
         case_expiry = self.expire_stale_reasoning_cases()
         route_reconciliation = self.reconcile_ingress_route()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
+        stale_observations = self.supersede_stale_observations(descriptor.deployment_id)
         backlog_compaction = self.compact_backlog(descriptor.deployment_id)
         guard = self.execution_readiness()
         if not bool(guard.get("ready", True)):
@@ -1434,6 +1448,7 @@ class IndependentReasoningJobRunner:
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
                 "backlogCompaction": backlog_compaction,
+                "staleObservationCleanup": stale_observations,
                 "queue": health["queue"],
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
@@ -1469,6 +1484,7 @@ class IndependentReasoningJobRunner:
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
                 "backlogCompaction": backlog_compaction,
+                "staleObservationCleanup": stale_observations,
                 "queue": self.queue_summary(descriptor.deployment_id),
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
@@ -1483,6 +1499,7 @@ class IndependentReasoningJobRunner:
                 "repairedIngressCount": repaired,
                 "leaseRecovery": lease_recovery,
                 "backlogCompaction": backlog_compaction,
+                "staleObservationCleanup": stale_observations,
                 "queue": self.queue_summary(descriptor.deployment_id),
                 "reasoningCaseExpiry": case_expiry,
             }
@@ -2097,6 +2114,80 @@ class IndependentReasoningJobRunner:
                 "reason": str(error)[:180],
             }
 
+    def supersede_stale_observations(self, deployment_id: str) -> Dict[str, object]:
+        callback = getattr(self.queue, "supersede_stale_observation_jobs", None)
+        if not callable(callback):
+            return {"status": "unsupported", "supersededCount": 0}
+        try:
+            return dict(callback(
+                deployment_id,
+                maximum_age_seconds=_int_setting(
+                    self.settings,
+                    "reasoningEngineV2StaleObservationMaxAgeSeconds",
+                    900,
+                    60,
+                    24 * 60 * 60,
+                ),
+            ) or {"status": "unchanged", "supersededCount": 0})
+        except Exception as error:  # noqa: BLE001 - normal queue processing remains available.
+            return {
+                "status": "error",
+                "supersededCount": 0,
+                "reason": str(error)[:180],
+            }
+
+    def control_binding_status(self, deployment_id: str) -> Dict[str, object]:
+        """Fail closed when a long-lived worker no longer owns its control role."""
+
+        if self.deployment_role in {"", "configured"}:
+            return {
+                "selected": True,
+                "workerRole": "configured",
+                "expectedDeploymentId": str(deployment_id or ""),
+            }
+        try:
+            control = self.registry.control()
+        except Exception as error:  # noqa: BLE001 - do not consume an uncertain deployment.
+            return {
+                "selected": False,
+                "workerRole": self.deployment_role,
+                "expectedDeploymentId": "",
+                "reason": str(error)[:180],
+            }
+        expected = {
+            "delivery": str(control.delivery_deployment_id or control.active_deployment_id or ""),
+            "active": str(control.active_deployment_id or ""),
+            "candidate": str(control.candidate_deployment_id or ""),
+        }.get(self.deployment_role, "")
+        return {
+            "selected": bool(expected and expected == str(deployment_id or "")),
+            "workerRole": self.deployment_role,
+            "expectedDeploymentId": expected,
+            "deploymentId": str(deployment_id or ""),
+        }
+
+    def publish_worker_heartbeat(self, deployment_id: str) -> None:
+        """Persist bounded consumer liveness without writing on every poll."""
+
+        now = time.monotonic()
+        if self._last_worker_heartbeat_at and now - self._last_worker_heartbeat_at < 30:
+            return
+        self._last_worker_heartbeat_at = now
+        role = self.deployment_role if self.deployment_role not in {"", "configured"} else "configured"
+        try:
+            health = dict((self.registry.get(deployment_id) or {}).get("health") or {})
+            heartbeats = dict(health.get("workerHeartbeats") or {})
+            heartbeats[role] = {
+                "workerId": self.worker_id,
+                "workerRole": role,
+                "deploymentId": str(deployment_id or ""),
+                "updatedAt": utc_now_iso(),
+            }
+            health["workerHeartbeats"] = heartbeats
+            self.registry.update_health(deployment_id, health)
+        except Exception:  # noqa: BLE001 - queue leases remain the execution authority.
+            return
+
     def repair_ingress(self, deployment_id: str) -> int:
         reader = getattr(self.event_reader, "unmaterialized_reasoning_engine_events", None)
         ingress = getattr(self.queue, "ingress_event", None)
@@ -2127,6 +2218,8 @@ class IndependentReasoningJobRunner:
         interval = _int_setting(self.settings, "reasoningEngineV2IntervalSeconds", 5, 1, 300)
         while True:
             result = self.run_once()
+            if result.get("status") == "inactive-control-binding":
+                return
             if result.get("status") == "idle":
                 time.sleep(interval)
             elif result.get("status") in {"disabled", "deferred"}:

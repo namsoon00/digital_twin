@@ -25,6 +25,7 @@ from ..domain.independent_reasoning import (
 )
 from ..domain.events import DomainEvent
 from ..domain.investment_reasoning import FactDelta
+from ..domain.ontology_reasoning_queue import work_class_for_fact_types
 from ..domain.time_series_storage import (
     TemporalFeatureSnapshot,
     TimeSeriesBackendDescriptor,
@@ -788,11 +789,20 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             ("reasoningEngineV2DeploymentId",),
         ).fetchone() or {}
         configured = str(configured_row.get("value") or "").strip()
-        if configured and configured in deployments:
-            return [configured]
-        # A cold-start race is repaired from the append-only domain event log.
-        # Never invent an obsolete fallback deployment at ingress time.
-        return sorted(set(deployments))
+        deployment_set = set(deployments)
+        delivery_targets = {
+            str(control.get(key) or "").strip()
+            for key in ("active_deployment_id", "delivery_deployment_id")
+            if str(control.get(key) or "").strip() in deployment_set
+        }
+        candidate = str(control.get("candidate_deployment_id") or "").strip()
+        # After promotion the candidate pointer becomes a rollback identity.
+        # Only the explicitly configured validation release receives duplicate
+        # candidate work; the rollback release is rebuilt from the event log if
+        # it is selected again.
+        if candidate and candidate == configured and candidate in deployment_set:
+            delivery_targets.add(candidate)
+        return sorted(delivery_targets)
 
     @staticmethod
     def source_boundaries_with_connection(connection, event) -> List[Dict[str, object]]:
@@ -1381,6 +1391,94 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "compactedCount": compacted,
             "migratedCount": migrated,
             "queueAgeResetCount": age_resets,
+        }
+
+    @reasoning_queue_deadlock_retry("reasoning-engine-stale-observation-supersede")
+    def supersede_stale_observation_jobs(
+        self,
+        deployment_id: str,
+        maximum_age_seconds: int = 900,
+        limit: int = 500,
+    ) -> Dict[str, object]:
+        """Expire obsolete market snapshots without replaying stale alerts.
+
+        Price and portfolio observations are replaceable current-state inputs.
+        Context, disclosure, research and user-action events remain durable and
+        are never terminalized by this age policy.
+        """
+
+        bounded_age = max(60, min(24 * 60 * 60, int(maximum_age_seconds or 900)))
+        cutoff = iso_utc(utc_now() - timedelta(seconds=bounded_age))
+        stamp = iso_utc()
+        stale_ids = []
+        stale_classes = {}
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT job_id, request_json FROM reasoning_engine_jobs "
+                "WHERE deployment_id = %s AND supersedable = 1 "
+                "AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection') "
+                "AND created_at < %s ORDER BY created_at, job_id LIMIT %s FOR UPDATE SKIP LOCKED",
+                (
+                    str(deployment_id or ""),
+                    cutoff,
+                    max(1, min(5000, int(limit or 500))),
+                ),
+            ).fetchall()
+            for row in rows or []:
+                stored = json_value(row.get("request_json"), {})
+                source = stored.get("sourceEvent") if isinstance(stored, Mapping) else {}
+                payload = source.get("payload") if isinstance(source, Mapping) else {}
+                request = stored.get("request") if isinstance(stored, Mapping) else {}
+                request = request if isinstance(request, Mapping) else {}
+                context = request.get("context") if isinstance(request, Mapping) else {}
+                context = context if isinstance(context, Mapping) else {}
+                context_work_classes = [
+                    str(value or "").strip().upper()
+                    for value in context.get("workClasses") or []
+                    if str(value or "").strip()
+                ]
+                work_class = str(
+                    (payload or {}).get("workClass") or ""
+                ).strip().upper()
+                if not work_class and len(set(context_work_classes)) == 1:
+                    work_class = context_work_classes[0]
+                if not work_class:
+                    fact_types = (
+                        (payload or {}).get("factTypes")
+                        or request.get("fact_types")
+                        or context.get("factTypes")
+                        or []
+                    )
+                    work_class = work_class_for_fact_types(
+                        fact_types,
+                        trigger=(payload or {}).get("trigger") or request.get("trigger"),
+                    )
+                if work_class not in {"MARKET", "PORTFOLIO"}:
+                    continue
+                stale_ids.append(str(row.get("job_id") or ""))
+                stale_classes[work_class] = stale_classes.get(work_class, 0) + 1
+            if stale_ids:
+                placeholders = ",".join(["%s"] * len(stale_ids))
+                connection.execute(
+                    "UPDATE reasoning_engine_jobs SET job_status = 'superseded', "
+                    "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                    "current_stage = '', stage_started_at = '', stage_updated_at = '', "
+                    "stage_details_json = NULL, available_at = '', completed_at = %s, "
+                    "last_error = %s, updated_at = %s WHERE job_id IN (" + placeholders + ")",
+                    (
+                        stamp,
+                        "Obsolete current-state observation expired before replay; a fresh source event will be evaluated.",
+                        stamp,
+                        *stale_ids,
+                    ),
+                )
+        return {
+            "status": "superseded" if stale_ids else "unchanged",
+            "deploymentId": str(deployment_id or ""),
+            "supersededCount": len(stale_ids),
+            "workClassCounts": stale_classes,
+            "maximumAgeSeconds": bounded_age,
+            "cutoff": cutoff,
         }
 
     @reasoning_queue_deadlock_retry("reasoning-engine-local-lease-recovery")

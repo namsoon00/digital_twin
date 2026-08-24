@@ -1263,6 +1263,54 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertIn("graph_database = %s", connection.calls[0][0])
         self.assertNotIn("release_fingerprint = %s", connection.calls[0][0])
 
+    def test_rule_result_slot_summary_keeps_shared_and_portfolio_catalogues_separate(self):
+        rows = []
+        for world_id, account_id, rules_hash, rule_count in [
+            ("shared-premise:kr", "", "shared-rules", 2),
+            ("portfolio:local:main", "main", "portfolio-rules", 3),
+        ]:
+            for index in range(rule_count):
+                rows.append({
+                    "execution_namespace_id": "namespace:v2",
+                    "engine_deployment_id": "ontology-v2-production-r38",
+                    "graph_database": "orbit_alpha_ontology_blue",
+                    "release_fingerprint": "release:38",
+                    "world_id": world_id,
+                    "account_id": account_id,
+                    "symbol": "005930",
+                    "rule_id": f"{rules_hash}.{index}",
+                    "rule_version": "1",
+                    "rulebox_rules_hash": rules_hash,
+                    "tbox_fingerprint": "tbox:1",
+                    "result_state": "matched" if index == 0 else "not-matched",
+                    "matched": 1 if index == 0 else 0,
+                    "catalog_rule_count": rule_count,
+                    "inference_generation_id": f"generation:{rules_hash}",
+                    "source_abox_snapshot_id": f"abox:{rules_hash}",
+                    "source_run_id": f"run:{rules_hash}",
+                    "scope_plan_fingerprint": f"scope:{rules_hash}",
+                    "input_fingerprint": f"input:{rules_hash}",
+                    "revision_vector_json": "{}",
+                    "updated_at": "2026-08-24T00:00:00Z",
+                })
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        store.connect = lambda: ConnectionContext(connection)
+
+        summary = store.rule_result_slot_summary(symbols=["005930"])
+
+        self.assertEqual(5, summary["slotCount"])
+        self.assertEqual(2, summary["symbolCount"])
+        self.assertEqual(2, summary["completeSymbolCount"])
+        self.assertEqual(
+            {"SharedPremiseWorld", "PortfolioWorld"},
+            {item["worldType"] for item in summary["symbols"]},
+        )
+        self.assertEqual(
+            {2, 3},
+            {item["coveredRuleCount"] for item in summary["symbols"]},
+        )
+
     def test_incremental_slot_write_inherits_one_generation_and_replaces_executed_rules(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
         connection = RecordingConnection()

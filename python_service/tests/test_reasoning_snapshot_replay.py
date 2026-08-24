@@ -113,7 +113,9 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
                     "queuedCount": 2,
                 }
 
-        state = active_versioned_reasoning_queue_state(Registry(), Jobs())
+        state = active_versioned_reasoning_queue_state(
+            Registry(), Jobs(), configured_v2_deployment_id="v2-candidate"
+        )
 
         self.assertEqual("v2-production", state["deploymentId"])
         self.assertEqual(3, state["effectivePendingCount"])
@@ -141,12 +143,42 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
                     "queuedCount": 1 if pending else 0,
                 }
 
-        state = active_versioned_reasoning_queue_state(Registry(), Jobs())
+        state = active_versioned_reasoning_queue_state(
+            Registry(), Jobs(), configured_v2_deployment_id="v2-candidate"
+        )
 
         self.assertEqual(["v2-active", "v2-candidate"], state["deploymentIds"])
         self.assertEqual(2, state["effectivePendingCount"])
         self.assertEqual(1, state["processingCount"])
         self.assertEqual(1, state["queuedCount"])
+
+    def test_background_workers_ignore_rollback_candidate_backlog(self):
+        class Registry:
+            def control(self):
+                return SimpleNamespace(
+                    active_deployment_id="v2-active",
+                    delivery_deployment_id="v2-active",
+                    candidate_deployment_id="v2-rollback",
+                )
+
+            def get(self, _deployment_id):
+                return {"engineVersion": "v2", "status": "active"}
+
+        class Jobs:
+            def live_queue_state(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "effectivePendingCount": 9 if deployment_id == "v2-rollback" else 0,
+                    "processingCount": 0,
+                    "queuedCount": 0,
+                }
+
+        state = active_versioned_reasoning_queue_state(
+            Registry(), Jobs(), configured_v2_deployment_id="v2-active"
+        )
+
+        self.assertEqual(["v2-active"], state["deploymentIds"])
+        self.assertEqual(0, state["effectivePendingCount"])
 
     def test_only_active_delivery_deployment_can_advance_shared_worlds(self):
         class Outbox:

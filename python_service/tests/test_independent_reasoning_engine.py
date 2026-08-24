@@ -240,6 +240,71 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(0, state["effectivePendingCount"])
         self.assertEqual("", state["oldestRequestAt"])
 
+    def test_mysql_stale_observation_cleanup_uses_nested_fact_contract(self):
+        class Connection:
+            def __init__(self):
+                self.update_params = ()
+
+            def execute(self, sql, params=()):
+                if sql.lstrip().startswith("SELECT"):
+                    return SimpleNamespace(fetchall=lambda: [
+                        {
+                            "job_id": "job:market",
+                            "request_json": json.dumps({
+                                "request": {
+                                    "fact_types": ["MarketQuote", "TechnicalIndicator"],
+                                    "context": {"workClasses": []},
+                                    "trigger": "market-snapshot",
+                                },
+                                "sourceEvent": {"payload": {}},
+                            }),
+                        },
+                        {
+                            "job_id": "job:portfolio",
+                            "request_json": json.dumps({
+                                "request": {
+                                    "context": {
+                                        "workClasses": ["PORTFOLIO"],
+                                        "factTypes": ["PortfolioPosition"],
+                                    },
+                                },
+                                "sourceEvent": {"payload": {}},
+                            }),
+                        },
+                        {
+                            "job_id": "job:calendar",
+                            "request_json": json.dumps({
+                                "request": {
+                                    "fact_types": ["InvestmentCalendarEvent"],
+                                    "trigger": "investment-calendar-update",
+                                },
+                                "sourceEvent": {"payload": {}},
+                            }),
+                        },
+                    ])
+                self.update_params = tuple(params)
+                return SimpleNamespace(rowcount=2)
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        connection = Connection()
+        store = object.__new__(Store)
+        store.runtime_settings = {}
+
+        result = store.supersede_stale_observation_jobs(
+            "ontology-v2-production-r29",
+            maximum_age_seconds=900,
+        )
+
+        self.assertEqual(2, result["supersededCount"])
+        self.assertEqual({"MARKET": 1, "PORTFOLIO": 1}, result["workClassCounts"])
+        self.assertIn("job:market", connection.update_params)
+        self.assertIn("job:portfolio", connection.update_params)
+        self.assertNotIn("job:calendar", connection.update_params)
+
     def test_mysql_queue_recovers_only_confirmed_dead_local_worker_leases(self):
         class Connection:
             def __init__(self):
@@ -1432,6 +1497,74 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(2, first["releasedCount"])
         self.assertEqual(first, second)
         self.assertEqual(1, len(queue.calls))
+
+    def test_runner_stops_before_claim_when_delivery_control_moves(self):
+        class Queue:
+            @staticmethod
+            def claim(*_args, **_kwargs):
+                raise AssertionError("an inactive delivery worker must not claim jobs")
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+        class Registry:
+            @staticmethod
+            def control():
+                return SimpleNamespace(
+                    active_deployment_id="ontology-v2-production-r38",
+                    delivery_deployment_id="ontology-v2-production-r38",
+                    candidate_deployment_id="ontology-v2-shadow",
+                )
+
+        result = IndependentReasoningJobRunner(
+            Queue(),
+            Engine(),
+            Registry(),
+            deployment_role="delivery",
+        ).run_once()
+
+        self.assertEqual("inactive-control-binding", result["status"])
+        self.assertEqual(
+            "ontology-v2-production-r38",
+            result["controlBinding"]["expectedDeploymentId"],
+        )
+
+    def test_runner_applies_configured_stale_observation_age(self):
+        class Queue:
+            def __init__(self):
+                self.maximum_age_seconds = 0
+
+            def supersede_stale_observation_jobs(
+                self,
+                deployment_id,
+                maximum_age_seconds,
+            ):
+                self.maximum_age_seconds = maximum_age_seconds
+                return {
+                    "status": "superseded",
+                    "deploymentId": deployment_id,
+                    "supersededCount": 2,
+                }
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            Engine(),
+            SimpleNamespace(),
+            settings={"reasoningEngineV2StaleObservationMaxAgeSeconds": "1200"},
+        )
+
+        result = runner.supersede_stale_observations("ontology-v2-shadow")
+
+        self.assertEqual(2, result["supersededCount"])
+        self.assertEqual(1200, queue.maximum_age_seconds)
 
     def test_runner_supersedes_permanently_unrestorable_source_packet(self):
         class Queue:

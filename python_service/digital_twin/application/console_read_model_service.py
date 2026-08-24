@@ -573,12 +573,17 @@ class ConsoleReadModelService:
             or engine_control.get("deliveryDeploymentId")
             or engine_control.get("delivery_deployment_id")
         )
-        active_engine = next(
+        active_engine = _mapping(engine.get("activeDeployment")) or next(
             (item for item in _rows(engine.get("deployments")) if _text(item.get("deploymentId")) == active_deployment_id),
             {},
         )
         engine_guard = _mapping(_mapping(active_engine.get("health")).get("executionGuard"))
-        engine_state = self._generic_health_state(active_engine or (engine if not active_deployment_id else {}))
+        engine_state = self._generic_health_state(active_engine or engine)
+        platform_status = _text(engine.get("status")).lower()
+        if platform_status in {"unavailable", "blocked", "critical"}:
+            engine_state = "critical"
+        elif platform_status == "degraded" and engine_state != "critical":
+            engine_state = "warning"
         guard_state = _text(engine_guard.get("status")).lower()
         if guard_state in {"failed", "error", "critical", "blocked"}:
             engine_state = "critical"
@@ -657,6 +662,16 @@ class ConsoleReadModelService:
                 },
                 "ai": ai_summary,
                 "notifications": notification_summary,
+                "engine": {
+                    "status": _text(engine.get("status")),
+                    "reasons": list(engine.get("reasons") or []),
+                    "control": engine_control,
+                    "deployments": _mapping(engine.get("queues")),
+                    "workerLiveness": _mapping(engine.get("workerLiveness")),
+                    "activeDeployment": _mapping(engine.get("activeDeployment")),
+                    "deliveryDeployment": _mapping(engine.get("deliveryDeployment")),
+                    "candidateDeployment": _mapping(engine.get("candidateDeployment")),
+                },
             },
             "providers": providers,
         }

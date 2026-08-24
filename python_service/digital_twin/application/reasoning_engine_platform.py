@@ -507,6 +507,7 @@ class ReasoningEnginePlatformService:
                     schema_readiness.get("directTypeqlFallbackReady")
                 ),
             },
+            "workerHeartbeats": dict(health.get("workerHeartbeats") or {}),
             "lastRun": {
                 "status": str(last_result.get("status") or ""),
                 "requestId": str(last_result.get("request_id") or last_result.get("requestId") or ""),
@@ -582,12 +583,45 @@ class ReasoningEnginePlatformService:
                         "status": "unavailable",
                         "reason": str(error)[:180],
                     }
+        queue_ids = list(dict.fromkeys(
+            value for value in (active_id, delivery_id, candidate_id) if value
+        ))
+        queue_by_deployment = {}
+        for deployment_id in queue_ids:
+            if deployment_id == str(queue.get("deploymentId") or ""):
+                queue_by_deployment[deployment_id] = dict(queue)
+                continue
+            if self.independent_job_store is None:
+                continue
+            try:
+                queue_by_deployment[deployment_id] = dict(self.independent_queue_summary(
+                    deployment_id,
+                    self.release_identity(deployment_id),
+                ) or {})
+            except Exception as error:  # noqa: BLE001 - keep every role visible when one probe fails.
+                queue_by_deployment[deployment_id] = {
+                    "deploymentId": deployment_id,
+                    "status": "unavailable",
+                    "reason": str(error)[:180],
+                }
         schema = dict(active.get("schemaFunctionReadiness") or {})
         pending_count = int(queue.get("pendingCount") or 0)
         failure_count = int(queue.get("failureCount") or 0)
         oldest_pending_age = int(queue.get("oldestPendingAgeSeconds") or 0)
         functions_ready = bool(schema.get("functionsReady"))
         fallback_ready = bool(schema.get("directTypeqlFallbackReady"))
+        delivery_heartbeats = dict(delivery.get("workerHeartbeats") or {})
+        delivery_heartbeat = dict(delivery_heartbeats.get("delivery") or {})
+        delivery_heartbeat_at = self.timestamp(delivery_heartbeat.get("updatedAt"))
+        delivery_heartbeat_age = None
+        heartbeat_critical_seconds = self.int_setting(
+            "reasoningEngineWorkerHeartbeatCriticalSeconds", 90, 30, 3600
+        )
+        if delivery_heartbeat_at is not None:
+            delivery_heartbeat_age = max(
+                0,
+                int((datetime.now(timezone.utc) - delivery_heartbeat_at).total_seconds()),
+            )
         if not active_id or not active_row:
             status = "unavailable"
             reasons = ["active-reasoning-deployment-unavailable"]
@@ -601,6 +635,11 @@ class ReasoningEnginePlatformService:
                 "ontologyReasoningQueueCriticalAgeMinutes", 5, 1, 1440
             ) * 60:
                 reasons.append("reasoning-queue-critical-age")
+            if pending_count and (
+                delivery_heartbeat_age is None
+                or delivery_heartbeat_age > heartbeat_critical_seconds
+            ):
+                reasons.append("delivery-reasoning-worker-heartbeat-missing")
             if not functions_ready:
                 reasons.append(
                     "schema-functions-not-ready-direct-typeql-fallback"
@@ -619,6 +658,20 @@ class ReasoningEnginePlatformService:
             "activeDeployment": active,
             "deliveryDeployment": delivery,
             "candidateDeployment": candidate,
+            "workerLiveness": {
+                "delivery": {
+                    **delivery_heartbeat,
+                    "ageSeconds": delivery_heartbeat_age,
+                    "healthy": (
+                        delivery_heartbeat_age is not None
+                        and delivery_heartbeat_age <= heartbeat_critical_seconds
+                    ),
+                    "criticalAfterSeconds": heartbeat_critical_seconds,
+                },
+                "candidate": dict(
+                    (candidate.get("workerHeartbeats") or {}).get("candidate") or {}
+                ),
+            },
             "queue": {
                 "deploymentId": str(queue.get("deploymentId") or active_id),
                 "status": str(queue.get("status") or "available"),
@@ -642,11 +695,54 @@ class ReasoningEnginePlatformService:
                 "latestCompletedAt": str(queue.get("latestCompletedAt") or ""),
                 "jobRowCounts": dict(queue.get("jobRowCounts") or queue.get("counts") or {}),
             },
+            "queues": {
+                role: {
+                    "deploymentId": deployment_id,
+                    "workerRole": role,
+                    "productionDelivery": role in {"active", "delivery"},
+                    **self._compact_queue_summary(
+                        queue_by_deployment.get(deployment_id) or {}
+                    ),
+                }
+                for role, deployment_id in {
+                    "active": active_id,
+                    "delivery": delivery_id,
+                    "candidate": candidate_id,
+                }.items()
+                if deployment_id
+            },
         }
         if include_history:
             result["deployments"] = deployments
             result["releaseManagement"] = platform_state
         return result
+
+    @staticmethod
+    def _compact_queue_summary(summary: Mapping[str, object]) -> Dict[str, object]:
+        """Keep the role-level status payload bounded for polling clients."""
+
+        values = dict(summary or {})
+        return {
+            "status": str(values.get("status") or "available"),
+            "pendingCount": int(values.get("pendingCount") or 0),
+            "awaitingSourceCount": int(values.get("awaitingSourceCount") or 0),
+            "awaitingWorldProjectionCount": int(
+                values.get("awaitingWorldProjectionCount") or 0
+            ),
+            "failureCount": int(values.get("failureCount") or 0),
+            "oldestPendingAgeSeconds": int(values.get("oldestPendingAgeSeconds") or 0),
+            "uniqueCompletedRunCount": int(
+                values.get("uniqueCompletedRunCount")
+                or values.get("successfulRunCount")
+                or 0
+            ),
+            "durationP95Ms": int(values.get("durationP95Ms") or 0),
+            "queueWaitP95Ms": int(values.get("queueWaitP95Ms") or 0),
+            "endToEndP95Ms": int(values.get("endToEndP95Ms") or 0),
+            "latestCompletedAt": str(values.get("latestCompletedAt") or ""),
+            "jobRowCounts": dict(values.get("jobRowCounts") or values.get("counts") or {}),
+            "reason": str(values.get("reason") or ""),
+        }
 
     def register_v2_release(
         self,

@@ -101,6 +101,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             "typedb": {"role": "typedb"},
             "market-data": {},
             "news": {},
+            "reasoning-engine-delivery": {},
             "reasoning-engine-shadow": {},
             "ontology-world-projection": {},
         }
@@ -111,6 +112,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertLess(names.index("market-data"), names.index("typedb"))
         self.assertLess(names.index("news"), names.index("typedb"))
         self.assertLess(names.index("typedb"), names.index("reasoning-engine-shadow"))
+        self.assertLess(names.index("typedb"), names.index("reasoning-engine-delivery"))
         self.assertLess(names.index("typedb"), names.index("ontology-world-projection"))
 
     def test_managed_executable_finds_explicit_binary_outside_process_path(self):
@@ -219,6 +221,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             "timeSeriesQuestDbEnabled": "0",
             "reasoningEngineActiveVersion": "v2",
             "reasoningEngineV2IndependentEnabled": "1",
+            "reasoningEngineV2DeploymentId": "v2-r2",
+            "reasoningEngineCandidateDeploymentId": "v2-r2",
             "notificationAiQueueWorkerCount": "0",
             "managedBackgroundProcessNice": "7",
         }):

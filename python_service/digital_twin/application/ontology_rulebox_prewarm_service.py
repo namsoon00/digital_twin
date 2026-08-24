@@ -528,6 +528,7 @@ class OntologyRuleboxPrewarmRunner:
             "transport error",
             "connection reset",
             "connection closed",
+            "unable to connect to typedb server",
         ])
 
     def activity_cooldown_seconds(self, payload: Dict[str, object]) -> int:

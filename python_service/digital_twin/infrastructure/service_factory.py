@@ -1121,7 +1121,11 @@ def typedb_projection_recovery_health(ontology_repository, world_id: str) -> Dic
     }
 
 
-def active_versioned_reasoning_queue_state(registry, job_store) -> Dict[str, object]:
+def active_versioned_reasoning_queue_state(
+    registry,
+    job_store,
+    configured_v2_deployment_id: str = "",
+) -> Dict[str, object]:
     """Read every protected V2 deployment's live TypeDB-writer backlog.
 
     Active and candidate releases can briefly coexist during an immutable
@@ -1137,13 +1141,14 @@ def active_versioned_reasoning_queue_state(registry, job_store) -> Dict[str, obj
         ).strip()
         requested_ids = list(dict.fromkeys(
             str(getattr(control, field, "") or "").strip()
-            for field in (
-                "active_deployment_id",
-                "delivery_deployment_id",
-                "candidate_deployment_id",
-            )
+            for field in ("active_deployment_id", "delivery_deployment_id")
             if str(getattr(control, field, "") or "").strip()
         ))
+        candidate_id = str(
+            getattr(control, "candidate_deployment_id", "") or ""
+        ).strip()
+        if candidate_id and candidate_id == str(configured_v2_deployment_id or "").strip():
+            requested_ids.append(candidate_id)
         v2_ids = []
         for deployment_id in requested_ids:
             deployment = dict(registry.get(deployment_id) or {})
@@ -1242,6 +1247,9 @@ def build_ontology_reasoning_queue_probe(settings=None):
             versioned_value = active_versioned_reasoning_queue_state(
                 reasoning_registry,
                 versioned_job_store,
+                configured_v2_deployment_id=str(
+                    configured_settings.get("reasoningEngineV2DeploymentId") or ""
+                ),
             )
             if str(versioned_value.get("status") or "") != "not-active-v2":
                 value = {
@@ -2048,7 +2056,10 @@ def build_reasoning_engine_shadow_runner(settings=None, worker_id: str = "") -> 
     )
 
 
-def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
+def build_v2_reasoning_engine(
+    settings=None,
+    deployment_id: str = "",
+) -> V2ReasoningEngine:
     """Compose V2 from source ports without constructing MonitorRunner."""
 
     configured = dict(settings or runtime_settings())
@@ -2057,7 +2068,9 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     platform = build_reasoning_engine_platform(configured)
     platform.initialize()
     deployment_id = str(
-        configured.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"
+        deployment_id
+        or configured.get("reasoningEngineV2DeploymentId")
+        or "ontology-v2-shadow"
     ).strip()
     descriptor = platform.deployment_descriptor(deployment_id)
     if str(descriptor.engine_version or "").lower() != "v2":
@@ -2276,8 +2289,52 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
     )
 
 
-def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> IndependentReasoningJobRunner:
+def resolve_v2_reasoning_worker_deployment(
+    settings=None,
+    worker_role: str = "configured",
+    deployment_id: str = "",
+) -> str:
+    """Resolve one worker to an authoritative control-plane deployment."""
+
     configured = dict(settings or runtime_settings())
+    explicit = str(deployment_id or "").strip()
+    if explicit:
+        return explicit
+    role = str(worker_role or "configured").strip().lower()
+    if role == "configured":
+        return str(
+            configured.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"
+        ).strip()
+    registry = stores.reasoning_engine_registry_store(configured)
+    control = registry.control()
+    selected = {
+        "delivery": str(control.delivery_deployment_id or control.active_deployment_id or ""),
+        "active": str(control.active_deployment_id or ""),
+        "candidate": str(control.candidate_deployment_id or ""),
+    }.get(role, "")
+    if not selected:
+        raise RuntimeError("No V2 reasoning deployment is assigned to worker role: " + role)
+    row = dict(registry.get(selected) or {})
+    if str(row.get("engineVersion") or row.get("engine_version") or "").lower() != "v2":
+        raise RuntimeError(
+            "The deployment assigned to worker role " + role + " is not a V2 engine: " + selected
+        )
+    return selected
+
+
+def build_v2_reasoning_job_runner(
+    settings=None,
+    worker_id: str = "",
+    worker_role: str = "configured",
+    deployment_id: str = "",
+) -> IndependentReasoningJobRunner:
+    configured = dict(settings or runtime_settings())
+    selected_deployment_id = resolve_v2_reasoning_worker_deployment(
+        configured,
+        worker_role=worker_role,
+        deployment_id=deployment_id,
+    )
+    configured["reasoningEngineV2DeploymentId"] = selected_deployment_id
     store_settings = dict(configured)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
@@ -2285,7 +2342,10 @@ def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> Indepen
 
     return IndependentReasoningJobRunner(
         queue=stores.reasoning_engine_job_store(configured),
-        engine=build_v2_reasoning_engine(configured),
+        engine=build_v2_reasoning_engine(
+            configured,
+            deployment_id=selected_deployment_id,
+        ),
         registry=stores.reasoning_engine_registry_store(configured),
         settings=configured,
         worker_id=worker_id,
@@ -2296,6 +2356,7 @@ def build_v2_reasoning_job_runner(settings=None, worker_id: str = "") -> Indepen
             stores.operational_storage_capacity_state_store(store_settings),
         ),
         route_reconciler=MySQLReasoningIngressRouter(store_settings).reconcile,
+        deployment_role=worker_role,
     )
 
 

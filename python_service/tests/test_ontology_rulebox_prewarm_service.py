@@ -468,6 +468,26 @@ class OntologyRuleboxPrewarmRunnerTests(unittest.TestCase):
         self.assertEqual("cooldown", state_store.payloads[-1]["status"])
         self.assertEqual(900, int(state_store.payloads[-1]["expiresAtEpoch"] - now.timestamp()))
 
+    def test_typedb_connection_loss_during_schema_compile_also_enters_cooldown(self):
+        now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
+        state_store = MemoryPrewarmStateStore()
+        runner = OntologyRuleboxPrewarmRunner(
+            FakeRepository({
+                "status": "error",
+                "functionsReady": False,
+                "reason": "Unable to connect to TypeDB server(s) after schema compilation.",
+            }),
+            settings={"ontologyRuleboxPrewarmEnabled": "1"},
+            reasoning_queue_probe=lambda: {"status": "idle", "effectivePendingCount": 0},
+            now_provider=lambda: now,
+            prewarm_state_store=state_store,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("cooldown", result["prewarmActivity"]["status"])
+        self.assertEqual(900, int(state_store.payloads[-1]["expiresAtEpoch"] - now.timestamp()))
+
     def test_defers_a_second_compiler_while_a_durable_cooldown_is_active(self):
         now = datetime(2026, 7, 24, 0, 5, tzinfo=timezone.utc)
         state_store = MemoryPrewarmStateStore()

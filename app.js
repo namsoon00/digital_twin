@@ -3738,6 +3738,13 @@
     return defaultNotificationRuleMarketHoursEnabled(type) ? ["KR", "US"] : [];
   }
 
+  function defaultNotificationRuleOffHoursMode(messageType) {
+    var type = String(messageType || "");
+    return ["investmentInsight", "externalDartDisclosure"].indexOf(type) >= 0
+      ? "important_only"
+      : "defer_until_open";
+  }
+
   function defaultNotificationRule(messageType) {
     var type = String(messageType || "notification").trim() || "notification";
     return {
@@ -3754,6 +3761,7 @@
       stateCooldownMinutes: defaultNotificationRuleStateCooldownMinutes(type),
       marketHoursEnabled: defaultNotificationRuleMarketHoursEnabled(type),
       marketHoursMarkets: defaultNotificationRuleMarketHoursMarkets(type),
+      offHoursDeliveryMode: defaultNotificationRuleOffHoursMode(type),
       updatedAt: ""
     };
   }
@@ -4123,6 +4131,9 @@
     if (!normalized.marketHoursMarkets.length && defaultNotificationRuleMarketHoursEnabled(normalized.messageType)) {
       normalized.marketHoursMarkets = defaultNotificationRuleMarketHoursMarkets(normalized.messageType);
     }
+    normalized.offHoursDeliveryMode = ["important_only", "send_all", "defer_until_open"].indexOf(String(normalized.offHoursDeliveryMode || "")) >= 0
+      ? String(normalized.offHoursDeliveryMode)
+      : defaultNotificationRuleOffHoursMode(normalized.messageType);
     normalized.conditions = Array.isArray(normalized.conditions) && normalized.conditions.length
       ? normalized.conditions.map(function (condition) {
         return Object.assign({
@@ -4186,6 +4197,10 @@
       rule.marketHoursMarkets = Array.isArray(value)
         ? value.map(function (item) { return String(item || "").trim().toUpperCase(); }).filter(Boolean)
         : String(value || "").split(",").map(function (item) { return item.trim().toUpperCase(); }).filter(Boolean);
+    } else if (field === "offHoursDeliveryMode") {
+      rule.offHoursDeliveryMode = ["important_only", "send_all", "defer_until_open"].indexOf(String(value || "")) >= 0
+        ? String(value)
+        : defaultNotificationRuleOffHoursMode(messageType);
     }
     state.notificationRulesSaved = false;
     state.notificationRulesError = "";
@@ -26079,15 +26094,25 @@
     var sessions = state.notificationMarketHoursSessions.length ? state.notificationMarketHoursSessions : defaultMarketHoursSessions();
     var selected = Array.isArray(rule.marketHoursMarkets) ? rule.marketHoursMarkets : defaultNotificationRuleMarketHoursMarkets(messageType);
     selected = selected.map(function (market) { return String(market || "").trim().toUpperCase(); });
+    var offHoursLabel = {
+      important_only: "중요 판단만 장외 발송",
+      send_all: "모든 판단 장외 발송",
+      defer_until_open: "장 시작 후 재확인"
+    }[rule.offHoursDeliveryMode] || "중요 판단만 장외 발송";
     var summary = rule.marketHoursEnabled === false
       ? "장 시간 필터 꺼짐"
-      : (selected.length ? selected.join(", ") : "시장 미선택") + " 거래 세션에만 발송";
+      : (selected.length ? selected.join(", ") : "시장 미선택") + " · " + offHoursLabel;
     return [
       '<div class="notification-rule-market-hours">',
       '<div class="notification-rule-head notification-rule-subhead">',
       '<div><strong>장 시간 필터</strong><span>' + escapeHtml(summary) + '</span></div>',
       '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-market-hours-enabled="' + escapeHtml(messageType) + '"' + (rule.marketHoursEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
       '</div>',
+      '<label class="notification-rule-fields"><span>장외 발송 방식</span><select data-notification-rule-off-hours-mode="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>',
+      '<option value="important_only"' + (rule.offHoursDeliveryMode === "important_only" ? " selected" : "") + '>중요 판단만 즉시 발송</option>',
+      '<option value="send_all"' + (rule.offHoursDeliveryMode === "send_all" ? " selected" : "") + '>모든 판단 즉시 발송</option>',
+      '<option value="defer_until_open"' + (rule.offHoursDeliveryMode === "defer_until_open" ? " selected" : "") + '>장 시작 후 다시 확인</option>',
+      '</select></label>',
       '<div class="notification-rule-market-list">',
       sessions.map(function (session) {
         var market = String(session.market || "").toUpperCase();
@@ -34612,6 +34637,13 @@
           field.getAttribute("data-market"),
           field.checked
         );
+        render();
+      });
+    });
+
+    Array.prototype.slice.call(app.querySelectorAll("[data-notification-rule-off-hours-mode]")).forEach(function (field) {
+      field.addEventListener("change", function () {
+        updateNotificationRuleField(field.getAttribute("data-notification-rule-off-hours-mode"), "offHoursDeliveryMode", field.value);
         render();
       });
     });

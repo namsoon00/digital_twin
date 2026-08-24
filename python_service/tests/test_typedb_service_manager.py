@@ -342,6 +342,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             ReasoningEnginePlatformService,
         )
         from digital_twin.infrastructure.runtime_identity import runtime_identity
+        from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+        from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
 
         settings = {
             "reasoningEngineV2DeploymentId": "v2-r50",
@@ -390,13 +392,17 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 "health": {},
             },
         }
+        source_rulebox_fingerprint = rulebox_rules_hash([
+            rule.to_dict()
+            for rule in default_graph_inference_rules()
+        ])
 
         class FakeRepository:
             def rulebox_snapshot(self):
                 return {
                     "status": "ok",
                     "rules": [{"id": "rule:new"}],
-                    "sourceRulesHash": "new-rulebox",
+                    "sourceRulesHash": source_rulebox_fingerprint,
                 }
 
         result = service_manager.validate_typedb_candidate_release_contract(
@@ -413,7 +419,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertTrue(result["ready"])
         self.assertEqual("registered-candidate-ready", result["status"])
         self.assertEqual("v2-r50", result["candidateDeploymentId"])
-        self.assertEqual("new-rulebox", result["candidateRuleboxFingerprint"])
+        self.assertEqual(source_rulebox_fingerprint, result["candidateRuleboxFingerprint"])
 
     def test_blue_green_candidate_stops_before_world_rebuild_on_release_mismatch(self):
         with tempfile.TemporaryDirectory() as temp:

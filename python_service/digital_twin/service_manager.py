@@ -2486,9 +2486,19 @@ def validate_typedb_candidate_release_contract(
             frozen_candidate_fingerprint = str(
                 candidate_health.get("ruleboxFingerprint") or ""
             ).strip()
+            from .domain.ontology_rulebox_catalog import default_graph_inference_rules
+            from .domain.ontology_rulebox_governance import rulebox_rules_hash
+
+            source_rulebox_fingerprint = rulebox_rules_hash([
+                rule.to_dict()
+                for rule in default_graph_inference_rules()
+            ])
+            expected_rulebox_fingerprint = (
+                frozen_candidate_fingerprint or source_rulebox_fingerprint
+            )
             if (
-                frozen_candidate_fingerprint
-                and frozen_candidate_fingerprint != candidate_fingerprint
+                expected_rulebox_fingerprint
+                and expected_rulebox_fingerprint != candidate_fingerprint
             ):
                 return {
                     "status": "registered-candidate-fingerprint-mismatch",
@@ -2497,9 +2507,10 @@ def validate_typedb_candidate_release_contract(
                     "candidateDeploymentId": candidate_deployment_id,
                     "candidateRuleboxFingerprint": candidate_fingerprint,
                     "frozenRuleboxFingerprint": frozen_candidate_fingerprint,
+                    "sourceRuleboxFingerprint": source_rulebox_fingerprint,
                     "reason": (
-                        "The seeded RuleBox differs from the fingerprint already "
-                        "frozen for the registered candidate release."
+                        "The seeded RuleBox differs from the registered candidate's "
+                        "frozen or source-authored RuleBox fingerprint."
                     ),
                 }
             return {
@@ -2508,6 +2519,7 @@ def validate_typedb_candidate_release_contract(
                 "database": database_name,
                 "candidateDeploymentId": candidate_deployment_id,
                 "candidateRuleboxFingerprint": candidate_fingerprint,
+                "sourceRuleboxFingerprint": source_rulebox_fingerprint,
                 "governedDeployments": [{
                     "deploymentId": candidate_deployment_id,
                     "status": str(registered_candidate.get("status") or ""),

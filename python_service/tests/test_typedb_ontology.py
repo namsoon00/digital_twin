@@ -10959,6 +10959,27 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["schemaFunctionSyncUsed"])
         self.assertEqual([rule.rule_id], result["pendingRuleIds"])
 
+    def test_typedb_schema_function_prewarm_readiness_retains_verified_rules(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        ready_rule, pending_rule = default_graph_inference_rules()[:2]
+
+        with patch.object(repository, "probe_typedb_native_rule_functions", return_value={
+            "status": "missing",
+            "available": False,
+            "probedCount": 1,
+            "verifiedRuleIds": [ready_rule.rule_id],
+            "missingRuleIds": [pending_rule.rule_id],
+            "reasonCode": "typedbSchemaFunctionMissing",
+        }):
+            result = repository.schema_function_prewarm_readiness([ready_rule, pending_rule])
+
+        self.assertEqual("provisioning", result["status"])
+        self.assertEqual(
+            [{"ruleId": ready_rule.rule_id}],
+            result["syncedRules"],
+        )
+        self.assertEqual([pending_rule.rule_id], result["pendingRuleIds"])
+
     def test_typedb_rulebox_prewarm_prepares_only_active_parameterized_namespace(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]
@@ -12651,6 +12672,71 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(
             adaptive_profile,
             match.call_args.kwargs["adaptive_target_sharding_profile"],
+        )
+
+    def test_typedb_rulebox_uses_verified_functions_and_direct_queries_while_provisioning(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = default_graph_inference_rules()[:2]
+        ready_rule, pending_rule = rules
+        rule_snapshot = {
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "rules": [rule.to_dict() for rule in rules],
+            "ruleCount": len(rules),
+        }
+        function_sync = {
+            "status": "provisioning",
+            "reasonCode": "typedbSchemaFunctionProvisioning",
+            "syncedCount": 1,
+            "syncedFunctionCount": 1,
+            "syncedRules": [{"ruleId": ready_rule.rule_id}],
+            "skippedCount": 0,
+            "failedCount": 0,
+            "pendingRuleCount": 1,
+            "pendingRuleIds": [pending_rule.rule_id],
+        }
+        native_match = {
+            "status": "ok",
+            "graphStore": "typedb",
+            "nativeQueryUsed": True,
+            "schemaFunctionUsed": True,
+            "indexedEvidenceQueryUsed": False,
+            "executedRuleCount": 2,
+            "executedRuleWorkCount": 2,
+            "skippedRuleCount": 0,
+            "matchedCount": 0,
+            "matches": [],
+        }
+        with patch.object(repository, "has_box_rows", return_value=True), \
+                patch.object(repository, "active_abox_metadata", return_value={
+                    "status": "ok",
+                    "aboxSnapshotId": "abox-snapshot:test",
+                }), \
+                patch.object(repository, "rulebox_snapshot", return_value=rule_snapshot), \
+                patch.object(repository, "schema_function_prewarm_readiness", return_value=function_sync), \
+                patch.object(repository, "match_typedb_native_rules", return_value=native_match) as match, \
+                patch.object(repository, "load_graph_for_native_matches", return_value=PortfolioOntology("hybrid-fallback")), \
+                patch.object(repository, "write_inferencebox_graph", return_value={
+                    "configured": True,
+                    "saved": True,
+                    "status": "ok",
+                    "graphStore": "typedb",
+                }):
+            result = repository.run_rulebox({
+                "symbols": ["005930"],
+                "_nativeInferenceWriteLeaseHeld": True,
+            })
+
+        self.assertEqual("empty", result["status"])
+        self.assertTrue(result["typedbSchemaFunctionDirectQueryFallbackUsed"])
+        self.assertTrue(result["typedbSchemaFunctionHybridFallbackUsed"])
+        self.assertEqual(1, result["typedbSchemaFunctionReadyRuleCount"])
+        self.assertTrue(match.call_args.kwargs["use_schema_functions"])
+        self.assertEqual(
+            {ready_rule.rule_id},
+            match.call_args.kwargs["schema_function_ready_rule_ids"],
         )
 
     def test_typedb_direct_fallback_binds_the_active_manifest_for_non_any_rules(self):

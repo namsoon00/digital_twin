@@ -21280,7 +21280,10 @@ relation ontology-assertion,
                 "failedCount": 0,
                 "pendingRuleCount": 0,
                 "pendingRuleIds": [],
-                "syncedRules": [{"ruleId": item} for item in verified_rule_ids[:40]],
+                # Live inference needs the complete verified-rule set to mix
+                # deployed schema functions with bounded direct TypeQL reads.
+                # This list is an execution contract, not a display summary.
+                "syncedRules": [{"ruleId": item} for item in verified_rule_ids],
                 "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
                 "reason": "TypeDB schema-function deployment receipts are ready; live inference will not compile functions.",
             }
@@ -21291,6 +21294,11 @@ relation ontology-assertion,
             if str(item or "").strip()
         ]
         if probe_status == "missing":
+            verified_rule_ids = [
+                str(item or "").strip()
+                for item in probe_result.get("verifiedRuleIds") or []
+                if str(item or "").strip()
+            ]
             return {
                 "configured": True,
                 "status": "provisioning",
@@ -21308,6 +21316,9 @@ relation ontology-assertion,
                 "failedCount": 0,
                 "pendingRuleCount": len(pending_rule_ids),
                 "pendingRuleIds": pending_rule_ids[:80],
+                # Keep already deployed functions usable while the dedicated
+                # prewarm worker finishes the remaining physical definitions.
+                "syncedRules": [{"ruleId": item} for item in verified_rule_ids],
                 "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
                 "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionPrewarmPending"),
                 "reason": (
@@ -22491,8 +22502,10 @@ relation ontology-assertion,
                 for item in function_sync_result.get("syncedRules") or []
                 if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
             }
-            if not schema_function_sync_used:
-                verified_schema_function_rule_ids.clear()
+            schema_function_hybrid_fallback = bool(
+                schema_function_direct_query_fallback
+                and verified_schema_function_rule_ids
+            )
             indexed_rule_count = int(function_sync_plan.get("indexedEvidenceRuleCount") or 0)
             if schema_function_direct_query_fallback:
                 execution_mode = "typedb-native-direct-typeql-fallback"
@@ -22521,6 +22534,8 @@ relation ontology-assertion,
                 "typedbSchemaFunctionPendingRuleIds": list(function_sync_result.get("pendingRuleIds") or [])[:80],
                 "typedbSchemaFunctionDirectQueryFallbackEnabled": self.schema_function_direct_query_fallback_enabled(),
                 "typedbSchemaFunctionDirectQueryFallbackUsed": schema_function_direct_query_fallback,
+                "typedbSchemaFunctionHybridFallbackUsed": schema_function_hybrid_fallback,
+                "typedbSchemaFunctionReadyRuleCount": len(verified_schema_function_rule_ids),
                 "typedbSchemaFunctionDirectQueryFallbackReason": (
                     "Generated schema functions are still staging; TypeDB is evaluating the selected native rules with bounded direct TypeQL reads."
                     if schema_function_direct_query_fallback
@@ -22636,7 +22651,10 @@ relation ontology-assertion,
                 self.match_typedb_native_rules,
                 execution_rules,
                 target_symbols=target_symbols,
-                use_schema_functions=not schema_function_direct_query_fallback,
+                use_schema_functions=(
+                    not schema_function_direct_query_fallback
+                    or schema_function_hybrid_fallback
+                ),
                 schema_function_ready_rule_ids=verified_schema_function_rule_ids,
                 world_id=world_id,
                 planner_topology=(

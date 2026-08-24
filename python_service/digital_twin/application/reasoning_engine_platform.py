@@ -935,7 +935,7 @@ class ReasoningEnginePlatformService:
         if baseline_p95 > 0 and latency_ratio > max_latency_ratio:
             blockers.append("candidate-latency-regression")
         maximum_candidate_p95 = self.int_setting(
-            "reasoningEnginePromotionMaximumCandidateP95Ms", 90000, 1000, 3600000
+            "reasoningEnginePromotionMaximumCandidateP95Ms", 180000, 1000, 3600000
         )
         if candidate_p95 <= 0 or candidate_p95 > maximum_candidate_p95:
             blockers.append("candidate-absolute-latency-slo-breached")
@@ -1029,7 +1029,7 @@ class ReasoningEnginePlatformService:
 
         candidate_p95 = int(summary.get("durationP95Ms") or 0)
         maximum_candidate_p95 = self.int_setting(
-            "reasoningEnginePromotionMaximumCandidateP95Ms", 90000, 1000, 3600000
+            "reasoningEnginePromotionMaximumCandidateP95Ms", 180000, 1000, 3600000
         )
         if candidate_p95 <= 0 or candidate_p95 > maximum_candidate_p95:
             blockers.append("candidate-absolute-latency-slo-breached")

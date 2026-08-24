@@ -888,6 +888,45 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         self.assertIn("candidate-end-to-end-latency-slo-breached", readiness["blockers"])
 
+    def test_independent_v2_gate_allows_the_two_symbol_candidate_batch_budget(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": {"status": "ready", "independentExecution": True},
+                    "releaseBundle": {},
+                }
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200):
+                del deployment_id, lookback
+                return {
+                    "sampleCount": 8,
+                    "successfulRunCount": 8,
+                    "traceCompleteRunCount": 8,
+                    "candidateEventRunCount": 3,
+                    "distinctSymbolCount": 4,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "durationP95Ms": 179000,
+                    "queueWaitP95Ms": 50000,
+                    "endToEndP95Ms": 229000,
+                    "latestCompletedAt": "2099-01-01T00:00:00Z",
+                    "pendingCount": 0,
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        readiness = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(),
+        ).promotion_readiness("ontology-v2-shadow")
+
+        self.assertTrue(readiness["ready"])
+        self.assertEqual(180000, readiness["maximumCandidateP95Ms"])
+        self.assertEqual(240000, readiness["maximumEndToEndP95Ms"])
+
     def test_independent_v2_gate_can_approve_only_a_drained_historical_queue_wait(self):
         class Registry:
             def get(self, deployment_id):

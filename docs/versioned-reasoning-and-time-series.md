@@ -414,6 +414,12 @@ domain:
 - `REASONING_ENGINE_PROMOTION_MINIMUM_MARKET_CLASSES`
 - `REASONING_ENGINE_PROMOTION_MAXIMUM_CANDIDATE_P95_MS`
 - `REASONING_ENGINE_PROMOTION_MAXIMUM_QUEUE_WAIT_P95_MS`
+- `REASONING_ENGINE_PROMOTION_MAXIMUM_END_TO_END_P95_MS`
+
+The independent V2 candidate can evaluate two symbols in one native TypeDB
+batch. Promotion therefore defaults to a 180-second processing p95, equivalent
+to the 90-second per-symbol budget at the maximum batch width. Queue wait keeps
+its separate 60-second budget, and the end-to-end default is 240 seconds.
 
 ## Legacy Comparison Cohorts
 

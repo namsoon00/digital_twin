@@ -696,14 +696,34 @@ class ReasoningEnginePlatformService:
             for descriptor in self.descriptors()
             if str(descriptor.engine_version or "").lower() == "v2"
         )
+        active_row = dict(self.registry.get(str(control.active_deployment_id or "")) or {})
+        active_is_v2 = str(
+            active_row.get("engineVersion") or active_row.get("engine_version") or ""
+        ).strip().lower() == "v2"
+        inherited_graph_store = str(
+            active_row.get("graphStoreBinding")
+            or active_row.get("graph_store_binding")
+            or ""
+        ).strip() if active_is_v2 else ""
+        inherited_time_series = str(
+            active_row.get("timeSeriesBackendId")
+            or active_row.get("time_series_backend_id")
+            or ""
+        ).strip() if active_is_v2 else ""
         bundle = base.release_bundle
         descriptor = ReasoningEngineDescriptor(
             engine_family=base.engine_family,
             engine_version=base.engine_version,
             deployment_id=clean_deployment_id,
             status="provisioning",
-            graph_store_binding=str(graph_database or base.graph_store_binding).strip(),
-            time_series_backend_id=base.time_series_backend_id,
+            graph_store_binding=str(
+                graph_database or inherited_graph_store or base.graph_store_binding
+            ).strip(),
+            # A new immutable release of the active V2 engine is a code/model
+            # release, not a storage migration. Inherit the active V2 binding
+            # even when a previously configured candidate made descriptors()
+            # select the comparison backend.
+            time_series_backend_id=inherited_time_series or base.time_series_backend_id,
             release_bundle=EngineReleaseBundle(
                 tbox_release_id=bundle.tbox_release_id,
                 rulebox_release_id=bundle.rulebox_release_id,

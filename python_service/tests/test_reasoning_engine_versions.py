@@ -525,7 +525,10 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 self.rows = {
                     "ontology-v2-production-r13": {
                         "deploymentId": "ontology-v2-production-r13",
+                        "engineVersion": "v2",
                         "status": "active",
+                        "graphStoreBinding": "orbit-alpha-v2-active",
+                        "timeSeriesBackendId": "questdb-active",
                     }
                 }
                 self.control_value = EngineControlState(
@@ -571,6 +574,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             result["deployment"]["releaseBundle"]["release_id"],
         )
         self.assertEqual("orbit-alpha-v2", result["deployment"]["graphStoreBinding"])
+        self.assertEqual("questdb-active", result["deployment"]["timeSeriesBackendId"])
         self.assertFalse(result["deployment"]["capabilities"]["productionDelivery"])
         self.assertTrue(result["deployment"]["capabilities"]["shadowComparison"])
 

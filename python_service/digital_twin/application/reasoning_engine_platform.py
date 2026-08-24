@@ -75,6 +75,7 @@ class ReasoningEnginePlatformService:
             DEFAULT_FLOW_SIGNAL_RELEASE_ID,
             DEFAULT_PRICE_SIGNAL_RELEASE_ID,
             DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+            MODEL_SIGNAL_CONTRACT_VERSION,
         )
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
@@ -143,7 +144,7 @@ class ReasoningEnginePlatformService:
                 "typedb-semantic-storage-v2",
                 TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "time-series-storage-contract-v1",
-                "statistical-model-signal-v2",
+                MODEL_SIGNAL_CONTRACT_VERSION,
             ),
             runtime_revision=str(runtime.get("revision") or "unknown"),
         )
@@ -470,6 +471,165 @@ class ReasoningEnginePlatformService:
                 "health": dict(configured_v2.get("health") or {}),
             }
         return response
+
+    @staticmethod
+    def _compact_deployment(row: Mapping[str, object]) -> Dict[str, object]:
+        """Return the bounded identity used by current-state diagnostics.
+
+        The registry intentionally retains every immutable deployment, but a
+        live status probe must not serialize retired release histories or full
+        inference results. Those remain available from the historical view.
+        """
+
+        values = dict(row or {})
+        bundle = dict(values.get("releaseBundle") or {})
+        health = dict(values.get("health") or {})
+        last_result = dict(health.get("lastResult") or {})
+        schema_readiness = dict(health.get("schemaFunctionReadiness") or {})
+        return {
+            "deploymentId": str(values.get("deploymentId") or ""),
+            "engineVersion": str(values.get("engineVersion") or ""),
+            "status": str(values.get("status") or ""),
+            "graphStoreBinding": str(values.get("graphStoreBinding") or ""),
+            "timeSeriesBackendId": str(values.get("timeSeriesBackendId") or ""),
+            "releaseId": str(bundle.get("release_id") or bundle.get("releaseId") or ""),
+            "releaseFingerprint": str(
+                health.get("releaseFingerprint")
+                or health.get("candidateReleaseFingerprint")
+                or ""
+            ),
+            "validationCohortId": str(health.get("validationCohortId") or ""),
+            "capabilities": dict(values.get("capabilities") or {}),
+            "schemaFunctionReadiness": {
+                "status": str(schema_readiness.get("status") or "unknown"),
+                "functionsReady": bool(schema_readiness.get("functionsReady")),
+                "directTypeqlFallbackReady": bool(
+                    schema_readiness.get("directTypeqlFallbackReady")
+                ),
+            },
+            "lastRun": {
+                "status": str(last_result.get("status") or ""),
+                "requestId": str(last_result.get("request_id") or last_result.get("requestId") or ""),
+                "completedAt": str(
+                    last_result.get("completed_at") or last_result.get("completedAt") or ""
+                ),
+                "durationMs": int(last_result.get("duration_ms") or last_result.get("durationMs") or 0),
+                "traceComplete": bool(
+                    last_result.get("trace_complete") or last_result.get("traceComplete")
+                ),
+                "symbols": list(last_result.get("symbols") or [])[:20],
+            },
+        }
+
+    def current_status(
+        self,
+        state: Mapping[str, object] = None,
+        include_history: bool = False,
+    ) -> Dict[str, object]:
+        """Expose one authoritative active-engine status read model.
+
+        ``initialize`` remains the release-management view. This method is the
+        operational view consumed by CLI, web and health dashboards so a
+        retired V1 incident cannot masquerade as the current engine state.
+        """
+
+        platform_state = dict(state or self.initialize())
+        control = dict(platform_state.get("control") or {})
+        active_id = str(
+            control.get("active_deployment_id")
+            or control.get("activeDeploymentId")
+            or ""
+        )
+        delivery_id = str(
+            control.get("delivery_deployment_id")
+            or control.get("deliveryDeploymentId")
+            or ""
+        )
+        candidate_id = str(
+            control.get("candidate_deployment_id")
+            or control.get("candidateDeploymentId")
+            or ""
+        )
+        deployments = [
+            dict(item or {})
+            for item in platform_state.get("deployments") or []
+            if isinstance(item, Mapping)
+        ]
+        by_id = {
+            str(item.get("deploymentId") or item.get("deployment_id") or ""): item
+            for item in deployments
+        }
+        active_row = by_id.get(active_id) or {}
+        active = self._compact_deployment(active_row)
+        delivery = self._compact_deployment(by_id.get(delivery_id) or {})
+        candidate = self._compact_deployment(by_id.get(candidate_id) or {}) if candidate_id else {}
+        queue = dict(platform_state.get("independentQueue") or {})
+        if str(queue.get("deploymentId") or "") != active_id:
+            queue = {}
+        schema = dict(active.get("schemaFunctionReadiness") or {})
+        pending_count = int(queue.get("pendingCount") or 0)
+        failure_count = int(queue.get("failureCount") or 0)
+        oldest_pending_age = int(queue.get("oldestPendingAgeSeconds") or 0)
+        functions_ready = bool(schema.get("functionsReady"))
+        fallback_ready = bool(schema.get("directTypeqlFallbackReady"))
+        if not active_id or not active_row:
+            status = "unavailable"
+            reasons = ["active-reasoning-deployment-unavailable"]
+        else:
+            reasons = []
+            if delivery_id != active_id:
+                reasons.append("active-delivery-deployment-mismatch")
+            if failure_count:
+                reasons.append("reasoning-failures-present")
+            if oldest_pending_age >= self.int_setting(
+                "ontologyReasoningQueueCriticalAgeMinutes", 5, 1, 1440
+            ) * 60:
+                reasons.append("reasoning-queue-critical-age")
+            if not functions_ready:
+                reasons.append(
+                    "schema-functions-not-ready-direct-typeql-fallback"
+                    if fallback_ready
+                    else "schema-functions-not-ready"
+                )
+            status = "ready" if not reasons else "degraded"
+        result = {
+            "status": status,
+            "reasons": reasons,
+            "control": {
+                "activeDeploymentId": active_id,
+                "deliveryDeploymentId": delivery_id,
+                "candidateDeploymentId": candidate_id,
+            },
+            "activeDeployment": active,
+            "deliveryDeployment": delivery,
+            "candidateDeployment": candidate,
+            "queue": {
+                "deploymentId": str(queue.get("deploymentId") or active_id),
+                "pendingCount": pending_count,
+                "awaitingSourceCount": int(queue.get("awaitingSourceCount") or 0),
+                "awaitingWorldProjectionCount": int(
+                    queue.get("awaitingWorldProjectionCount") or 0
+                ),
+                "failureCount": failure_count,
+                "oldestPendingAgeSeconds": oldest_pending_age,
+                "uniqueCompletedRunCount": int(
+                    queue.get("uniqueCompletedRunCount")
+                    or queue.get("successfulRunCount")
+                    or 0
+                ),
+                "successfulRunCount": int(queue.get("successfulRunCount") or 0),
+                "traceCompleteRunCount": int(queue.get("traceCompleteRunCount") or 0),
+                "durationP95Ms": int(queue.get("durationP95Ms") or 0),
+                "queueWaitP95Ms": int(queue.get("queueWaitP95Ms") or 0),
+                "endToEndP95Ms": int(queue.get("endToEndP95Ms") or 0),
+                "latestCompletedAt": str(queue.get("latestCompletedAt") or ""),
+                "jobRowCounts": dict(queue.get("jobRowCounts") or queue.get("counts") or {}),
+            },
+        }
+        if include_history:
+            result["deployments"] = deployments
+            result["releaseManagement"] = platform_state
+        return result
 
     def register_v2_release(
         self,

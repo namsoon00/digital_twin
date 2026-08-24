@@ -19,6 +19,7 @@ FLOW_FIELDS = (
     "tradeStrength",
     "bidAskImbalance",
 )
+FLOW_SIGNAL_MAX_SOURCE_AGE_SECONDS = 4 * 24 * 60 * 60
 
 
 def _number(value: object) -> float:
@@ -130,6 +131,18 @@ def _flow_metrics(
         1 for field in FLOW_FIELDS
         if field in latest and latest.get(field) not in (None, "")
     )
+    latest_observed_at = _observed_at(latest)
+    latest_stamp = parse_timestamp(latest_observed_at)
+    source_age_seconds = None
+    if cutoff and latest_stamp:
+        source_age_seconds = max(0, int((cutoff - latest_stamp).total_seconds()))
+    freshness_compatible = bool(
+        not stale
+        and (
+            source_age_seconds is None
+            or source_age_seconds <= FLOW_SIGNAL_MAX_SOURCE_AGE_SECONDS
+        )
+    )
     return {
         "sampleCount": len(usable),
         "coverageRatio": _bounded(len(usable) / max(1.0, float(minimum_samples))),
@@ -142,7 +155,13 @@ def _flow_metrics(
         "tradeStrength": trade_strength,
         "bidAskImbalance": bid_ask,
         "volumeRatio": volume_ratio,
-        "latestObservedAt": _observed_at(latest),
+        "latestObservedAt": latest_observed_at,
+        "marketSession": str(
+            _first(latest, "marketSession", "market_session", "session") or ""
+        ).lower(),
+        "sourceAgeSeconds": source_age_seconds,
+        "maximumSourceAgeSeconds": FLOW_SIGNAL_MAX_SOURCE_AGE_SECONDS,
+        "freshnessCompatible": freshness_compatible,
         "stale": stale,
     }
 
@@ -157,6 +176,8 @@ def _eligibility(metrics: Mapping[str, object], release) -> SignalEligibility:
         reasons.append("flow-field-coverage-insufficient")
     if bool(metrics.get("stale")):
         reasons.append("latest-observation-stale")
+    if metrics.get("freshnessCompatible") is False:
+        reasons.append("source-age-exceeds-horizon-policy")
     if release.validation_status not in {"calibrated", "validated-deterministic"}:
         reasons.append("historical-replay-and-calibration-required")
     quality = "stale" if metrics.get("stale") else "sufficient" if len(reasons) == 1 else "insufficient"
@@ -249,6 +270,9 @@ def score_flow_feature_snapshot(
                 coverage_ratio=metrics.get("coverageRatio") or 0,
                 eligibility=eligibility,
                 input_features=metrics,
+                market_session=str(metrics.get("marketSession") or ""),
+                source_age_seconds=metrics.get("sourceAgeSeconds"),
+                freshness_compatible=bool(metrics.get("freshnessCompatible", True)),
                 probability=None,
                 hypothesis_family_id=hypothesis_family_id,
                 outcome_metric=hypothesis_family.outcome_metric if hypothesis_family else "",

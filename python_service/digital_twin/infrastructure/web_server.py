@@ -851,6 +851,8 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "ontologyReasoningRealtimeEventMaxAgeMinutes",
         "ontologyReasoningResearchEventMaxAgeMinutes",
         "ontologyReasoningTelemetryHistoryLimit",
+        "reasoningEngineSharedPremiseInlineRetryCount",
+        "reasoningEngineSharedPremiseInlineRetryMaxSeconds",
         "typedbNativeRuleTargetSymbolLimit",
         "typedbNativeRuleTargetParallelism",
         "typedbNativeRuleSubjectFanoutEnabled",
@@ -949,6 +951,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds",
         "ontologyRuleboxPrewarmIntervalSeconds",
         "ontologyRuleboxPrewarmIdleQuietSeconds",
+        "ontologyRuleboxPrewarmMaximumDeferralSeconds",
         "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
         "ontologyRuleboxPrewarmExecutionTimeoutGraceSeconds",
         "ontologyRuleboxPrewarmProcessIsolationEnabled",
@@ -1286,10 +1289,15 @@ def time_series_platform_status_payload() -> Dict[str, object]:
     }
 
 
-def reasoning_engine_platform_status_payload() -> Dict[str, object]:
+def reasoning_engine_platform_status_payload(
+    query: Dict[str, List[str]] = None,
+) -> Dict[str, object]:
     from .reasoning_engine_factory import build_reasoning_engine_platform
 
-    return build_reasoning_engine_platform(runtime_settings()).initialize()
+    platform = build_reasoning_engine_platform(runtime_settings())
+    state = platform.initialize()
+    include_history = request_bool(first_query(query or {}, "historical"), False)
+    return platform.current_status(state, include_history=include_history)
 
 
 def reasoning_engine_comparisons_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -5819,7 +5827,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, time_series_platform_status_payload())
 
         if path == "/api/reasoning-engine/status" and self.command == "GET":
-            return self.send_payload(200, reasoning_engine_platform_status_payload())
+            return self.send_payload(200, reasoning_engine_platform_status_payload(query))
 
         if path == "/api/reasoning-engine/comparisons" and self.command == "GET":
             return self.send_payload(200, reasoning_engine_comparisons_payload(query))

@@ -1683,7 +1683,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v14"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v15"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -1960,6 +1960,7 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "probability": "ontology-model-signal-probability",
     "probabilityLower": "ontology-model-signal-probability-lower",
     "probabilityUpper": "ontology-model-signal-probability-upper",
+    "sourceAgeSeconds": "ontology-model-source-age-seconds",
 }
 TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "investmentStrategyProfile": "ontology-investment-strategy-profile",
@@ -2079,6 +2080,7 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "hypothesisContractId": "ontology-hypothesis-contract-id",
     "outcomeMetric": "ontology-model-outcome-metric",
     "knowledgeCutoffAt": "ontology-model-knowledge-cutoff-at",
+    "marketSession": "ontology-model-market-session",
     "featureSetVersion": "ontology-model-feature-set-version",
     "materialHash": "ontology-model-signal-material-hash",
     "personName": "ontology-person-name",
@@ -20691,18 +20693,19 @@ relation ontology-assertion,
 
     @staticmethod
     def schema_function_prewarm_namespaces() -> List[Dict[str, str]]:
-        """Return every generated-function namespace used by live inference.
+        """Return the single generated-function namespace used by active V2.
 
-        Explicit ontology worlds share one parameterized TypeDB function body,
-        while an older global ABox uses its own legacy function name. Preparing
-        both avoids making the first request in either path compile a schema.
+        V2 inference always supplies an explicit world identifier. Compiling a
+        second legacy global-ABox copy doubled schema work and made readiness
+        depend on a path that no active or delivery deployment can execute.
+        Historical V1 data remains readable but is not an executable runtime
+        namespace.
         """
         return [
             {
                 "namespace": "world-parameterized",
                 "worldId": TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
             },
-            {"namespace": "legacy", "worldId": ""},
         ]
 
     @staticmethod

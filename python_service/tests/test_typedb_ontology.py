@@ -10858,7 +10858,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["schemaFunctionSyncUsed"])
         self.assertEqual([rule.rule_id], result["pendingRuleIds"])
 
-    def test_typedb_rulebox_prewarm_prepares_legacy_and_parameterized_namespaces(self):
+    def test_typedb_rulebox_prewarm_prepares_only_active_parameterized_namespace(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]
         snapshot = {
@@ -10874,15 +10874,10 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "pendingRuleIds": [rule.rule_id],
             "pendingRuleCount": 1,
         }
-        legacy = {
-            "status": "ok",
-            "syncedCount": 1,
-            "syncedFunctionCount": 1,
-        }
         with patch.object(repository, "rulebox_snapshot", return_value=snapshot), patch.object(
             repository,
             "sync_typedb_native_rule_functions",
-            side_effect=[parameterized, legacy],
+            return_value=parameterized,
         ) as sync:
             result = repository.prewarm_typedb_native_rule_functions()
 
@@ -10894,7 +10889,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
             sync.call_args_list[0].kwargs["world_id"],
         )
-        self.assertEqual("queued", result["namespaceResults"][1]["result"]["status"])
+        self.assertEqual(1, len(result["namespaceResults"]))
+        self.assertEqual("world-parameterized", result["namespaceResults"][0]["namespace"])
 
     def test_typedb_null_repository_is_explicitly_disabled(self):
         result = NullTypeDBOntologyGraphRepository().save_graph(PortfolioOntology("empty"))

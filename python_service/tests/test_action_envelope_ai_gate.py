@@ -99,7 +99,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("HOLD", response.execution_action)
         self.assertEqual("HOLD", response.action)
         self.assertEqual(["graph.portfolio.position_limit.v1"], response.portfolio_constraint_rule_ids)
-        self.assertIn("종목 의견: 소액 진입 검토", message)
+        self.assertIn("AI 해석", message)
+        self.assertNotIn("종목 의견: 소액 진입 검토", message)
         self.assertIn("관심 유지", message)
 
     def test_ai_input_receives_typedb_envelope_and_transition(self):
@@ -210,7 +211,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("투자 관점", message)
+        self.assertIn("AI 해석", message)
         self.assertIn("거래량", message)
         self.assertIn("현재 공급자 미지원", message)
 
@@ -486,6 +487,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
     def test_compact_message_exposes_graph_candidate_ai_disagreement(self):
         context = entry_context()
         context["messageDeliveryLevel"] = "beginner"
+        context["notificationDetailLevel"] = "concise"
         response = validated_response_from_payload(
             context,
             {
@@ -501,7 +503,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("TypeDB 후보 상태 소액 진입 조건 성립 · 최종 행동 관심 유지", message)
+        self.assertIn("<b>TypeDB 검토 가설</b>", message)
+        self.assertIn("TypeDB 검토 설명 소액 진입 조건 성립 · 최종 행동 관심 유지", message)
         self.assertIn("거래량 확인이 부족해 진입 후보를 바로 실행하지 않습니다.", message)
 
     def test_deferred_entry_message_separates_candidate_from_final_hold(self):
@@ -575,15 +578,15 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         self.assertIn("[AI] 지금은 매수하지 않고 관심종목으로 유지합니다.", message)
         self.assertIn("<b>TypeDB 경쟁 추론</b>", message)
-        self.assertIn("TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
+        self.assertIn("TypeDB 검토 설명 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
         self.assertIn("<b>핵심 근거</b>", message)
         self.assertIn("<b>반대 근거</b>", message)
         self.assertLess(
             message.index("<b>핵심 근거</b>"),
             message.index("<b>반대 근거</b>"),
         )
-        self.assertIn("TypeDB 후보 상태 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
-        self.assertNotIn("TypeDB 행동 후보 관심 유지 · AI 최종 의견 관심 유지", message)
+        self.assertIn("TypeDB 검토 설명 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
+        self.assertNotIn("TypeDB 검토 설명 관심 유지 · AI 최종 행동 관심 유지", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
         self.assertNotIn("현금 비중 0.1%", message)
         self.assertNotIn("전체 외화 비중 60.6%", message)
@@ -1207,10 +1210,10 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         rows = typedb_decision_assessment_rows(context)
 
-        self.assertIn("종목 의견: 소액 진입 검토", rows)
+        self.assertIn("TypeDB 검토 가설: 소액 진입 검토", rows)
         self.assertIn("계좌 적합성: 이번 판단 범위에서 제외", rows)
         self.assertIn("실행 가능성: 주문 전 실행 위험으로 보류", rows)
-        self.assertIn("최종 조합: 종목 의견은 유지하고 실행만 보류", rows)
+        self.assertIn("최종 조합: 검토 가설은 유지하고 실행만 보류", rows)
 
     def test_compact_message_includes_independent_ontology_assessments(self):
         context = entry_context()
@@ -1231,8 +1234,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertIn("온톨로지 판단 영역", message)
-        self.assertIn("종목 의견: 소액 진입 검토", message)
-        self.assertIn("최종 조합: 종목 의견과 실행 조건이 함께 성립", message)
+        self.assertIn("TypeDB 검토 설명: 소액 진입 검토", message)
+        self.assertIn("최종 조합: 검토 설명과 실행 조건이 함께 성립", message)
 
 
 if __name__ == "__main__":

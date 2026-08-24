@@ -75,7 +75,7 @@ class NotificationExplanationTests(unittest.TestCase):
 
         self.assertIn("<b>지금 행동</b>", message)
         self.assertIn("<b>핵심 근거</b>", message)
-        self.assertIn("<b>TypeDB 핵심 추론</b>", message)
+        self.assertIn("<b>TypeDB 검토 가설</b>", message)
         self.assertIn("<b>다음 판단 조건</b>", message)
         self.assertIn("웹에서 전체 근거 보기", message)
         self.assertNotIn("<b>TypeDB 경쟁 추론</b>", message)
@@ -111,7 +111,7 @@ class NotificationExplanationTests(unittest.TestCase):
         message = renderer.render(job)
 
         self.assertIn("<b>지금 행동</b>", message)
-        self.assertIn("<b>TypeDB 핵심 추론</b>", message)
+        self.assertIn("<b>TypeDB 검토 가설</b>", message)
         self.assertIn("$226.17", message)
         self.assertNotIn("수익률 0%", message)
         self.assertNotIn("<b>관계 규칙</b>", message)
@@ -273,7 +273,7 @@ class NotificationExplanationTests(unittest.TestCase):
         message = execution_telegram_message(context, self.response())
 
         self.assertIn("<b>현재 흐름</b>", message)
-        self.assertIn("<b>TypeDB 핵심 추론</b>", message)
+        self.assertIn("<b>TypeDB 검토 가설</b>", message)
         self.assertNotIn("<b>온톨로지 판단 영역</b>", message)
         self.assertNotIn("<b>판단에서 제외한 정보</b>", message)
 

@@ -477,10 +477,23 @@ def ontology_reasoning_command(args) -> int:
             "scope": "per-world-acquisition",
             "reason": "Dead local scoped ABox leases are recovered when their world next writes.",
         }
-    runner = build_ontology_reasoning_runner(settings)
     if args.ontology_reasoning_action == "status":
-        print(json.dumps(runner.status(), ensure_ascii=False))
+        # This command remains as a compatibility surface, but current
+        # operations must follow the active deployment pointer. Returning the
+        # retired V1 scheduler snapshot here previously produced false queue
+        # incidents after V2 promotion.
+        from .reasoning_engine_factory import build_reasoning_engine_platform
+
+        platform = build_reasoning_engine_platform(settings)
+        state = platform.initialize()
+        current = platform.current_status(state)
+        print(json.dumps({
+            **current,
+            "compatibilityCommand": "ontology-reasoning status",
+            "authoritativeSource": "active-reasoning-engine",
+        }, ensure_ascii=False))
         return 0
+    runner = build_ontology_reasoning_runner(settings)
     if args.ontology_reasoning_action == "once":
         result = runner.run_once(limit=limit, force=bool(getattr(args, "force", False)))
         if local_lease_recovery:
@@ -1215,7 +1228,13 @@ def reasoning_engine_platform_command(args) -> int:
     platform = build_reasoning_engine_platform(configured)
     state = platform.initialize()
     if args.reasoning_engine_action == "status":
-        print(json.dumps(state, ensure_ascii=False))
+        print(json.dumps(
+            platform.current_status(
+                state,
+                include_history=bool(getattr(args, "historical", False)),
+            ),
+            ensure_ascii=False,
+        ))
         return 0
     if args.reasoning_engine_action == "shadow-once":
         runner = build_reasoning_engine_shadow_runner(
@@ -2249,7 +2268,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     reasoning_engine = subparsers.add_parser("reasoning-engine", help="Manage versioned reasoning-engine deployments")
     reasoning_engine_actions = reasoning_engine.add_subparsers(dest="reasoning_engine_action", required=True)
-    reasoning_engine_actions.add_parser("status")
+    reasoning_engine_status = reasoning_engine_actions.add_parser("status")
+    reasoning_engine_status.add_argument("--historical", action="store_true")
     reasoning_shadow_once = reasoning_engine_actions.add_parser("shadow-once")
     reasoning_shadow_once.add_argument("--worker-id", default="")
     reasoning_shadow_watch = reasoning_engine_actions.add_parser("shadow-watch")

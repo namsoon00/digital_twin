@@ -466,11 +466,120 @@ class IndependentReasoningInputAssembler:
 class ScopedTypeDBInferenceExecutor:
     """Project only the requested scope and read the resulting InferenceBox."""
 
-    def __init__(self, projection_recorder, shared_inference_service=None):
+    def __init__(
+        self,
+        projection_recorder,
+        shared_inference_service=None,
+        settings: Mapping[str, object] = None,
+        sleep=time.sleep,
+    ):
         self.projection_recorder = projection_recorder
         self.shared_inference_service = shared_inference_service
+        self.settings = dict(settings or {})
+        self.sleep = sleep
         self.last_shared_publication = {"status": "not-configured"}
         self.last_shared_publication_ms = 0
+
+    def shared_premise_inline_retry_count(self) -> int:
+        # A production worker gets one cheap retry for a coordinator hand-off.
+        # Unit-level callers that do not provide runtime settings stay
+        # deterministic and do not sleep.
+        fallback = 1 if self.settings else 0
+        return _int_setting(
+            self.settings,
+            "reasoningEngineSharedPremiseInlineRetryCount",
+            fallback,
+            0,
+            2,
+        )
+
+    def shared_premise_inline_retry_max_seconds(self) -> int:
+        return _int_setting(
+            self.settings,
+            "reasoningEngineSharedPremiseInlineRetryMaxSeconds",
+            2,
+            0,
+            5,
+        )
+
+    @staticmethod
+    def shared_premise_retryable(payload: Mapping[str, object]) -> bool:
+        values = dict(payload or {})
+        if not bool(values.get("retryable")):
+            return False
+        status = str(values.get("status") or "").strip().lower()
+        reason_code = str(values.get("reasonCode") or "").strip().lower()
+        failure_stage = str(values.get("failureStage") or "").strip().lower()
+        return bool(
+            status in {
+                "shared-premise-projection-failed",
+                "shared-premise-inference-incomplete",
+                "shared-premise-preparation-error",
+            }
+            or reason_code in {
+                "deferred-projection-coordinator",
+                "deferred-inference-write-lease",
+                "shared-premise-projection-failed",
+            }
+            or failure_stage in {
+                "shared-premise-projection",
+                "shared-premise-inference",
+            }
+        )
+
+    def prepare_shared_premises(
+        self,
+        premise_builder,
+        snapshot,
+        request: IndependentReasoningRequest,
+        reasoning_context: Mapping[str, object],
+        progress,
+    ) -> Dict[str, object]:
+        attempts = []
+        retry_count = self.shared_premise_inline_retry_count()
+        for attempt in range(retry_count + 1):
+            try:
+                result = dict(
+                    premise_builder(
+                        snapshot,
+                        target_symbols=list(request.symbols),
+                        reasoning_context=dict(reasoning_context or {}),
+                        progress_callback=progress,
+                    ) or {}
+                )
+            except Exception as error:  # noqa: BLE001 - preserve the last usable generation.
+                result = {
+                    "status": "shared-premise-preparation-error",
+                    "ready": False,
+                    "retryable": True,
+                    "failureStage": "shared-premise-projection",
+                    "reason": str(error)[:240],
+                }
+            attempts.append({
+                "attempt": attempt + 1,
+                "status": str(result.get("status") or "unknown"),
+                "ready": bool(result.get("ready")),
+                "reasonCode": str(result.get("reasonCode") or ""),
+            })
+            if bool(result.get("ready")) or not self.shared_premise_retryable(result):
+                result["preparationAttempts"] = attempts
+                return result
+            if attempt >= retry_count:
+                break
+            requested_wait = int(result.get("recommendedRetryAfterSeconds") or 1)
+            delay = min(requested_wait, self.shared_premise_inline_retry_max_seconds())
+            progress(
+                "shared_premise.retry",
+                {
+                    "attempt": attempt + 2,
+                    "previousStatus": str(result.get("status") or ""),
+                    "delaySeconds": delay,
+                },
+            )
+            if delay > 0:
+                self.sleep(delay)
+        result["preparationAttempts"] = attempts
+        return result
 
     def execute(self, request: IndependentReasoningRequest, snapshots, progress_callback=None):
         results = {}
@@ -502,25 +611,16 @@ class ScopedTypeDBInferenceExecutor:
                     "prepare_shared_premises",
                     None,
                 )
-                try:
-                    premise_proof = dict(
-                        premise_builder(
-                            snapshot,
-                            target_symbols=list(request.symbols),
-                            reasoning_context=reasoning_context,
-                            progress_callback=progress,
-                        ) or {}
-                    ) if callable(premise_builder) else {
+                premise_proof = self.prepare_shared_premises(
+                    premise_builder,
+                    snapshot,
+                    request,
+                    reasoning_context,
+                    progress,
+                ) if callable(premise_builder) else {
                         "status": "shared-premise-builder-unavailable",
                         "ready": False,
                         "retryable": False,
-                    }
-                except Exception as error:  # noqa: BLE001 - fail closed before private projection.
-                    premise_proof = {
-                        "status": "shared-premise-preparation-error",
-                        "ready": False,
-                        "retryable": True,
-                        "reason": str(error)[:240],
                     }
                 if not bool(premise_proof.get("ready")):
                     evaluated_symbols = list(

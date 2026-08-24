@@ -948,6 +948,71 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("candidate", result["status"])
         self.assertEqual("candidate", registry.status)
 
+    def test_current_status_exposes_only_active_v2_and_unique_run_metrics(self):
+        platform = ReasoningEnginePlatformService(object(), {
+            "ontologyReasoningQueueCriticalAgeMinutes": "5",
+        })
+        state = {
+            "control": {
+                "active_deployment_id": "v2-r24",
+                "delivery_deployment_id": "v2-r24",
+                "candidate_deployment_id": "v2-r23",
+            },
+            "deployments": [
+                {
+                    "deploymentId": "v1-retired",
+                    "engineVersion": "v1",
+                    "status": "retired",
+                    "health": {"lastResult": {"status": "critical"}},
+                },
+                {
+                    "deploymentId": "v2-r24",
+                    "engineVersion": "v2",
+                    "status": "active",
+                    "releaseBundle": {"release_id": "release-r24"},
+                    "health": {
+                        "schemaFunctionReadiness": {
+                            "status": "provisioning",
+                            "functionsReady": False,
+                            "directTypeqlFallbackReady": True,
+                        },
+                        "lastResult": {
+                            "status": "ok",
+                            "request_id": "request-1",
+                            "duration_ms": 32000,
+                            "trace_complete": True,
+                            "symbols": ["005930"],
+                        },
+                    },
+                },
+                {
+                    "deploymentId": "v2-r23",
+                    "engineVersion": "v2",
+                    "status": "candidate",
+                },
+            ],
+            "independentQueue": {
+                "deploymentId": "v2-r24",
+                "counts": {"completed": 24},
+                "uniqueCompletedRunCount": 16,
+                "successfulRunCount": 16,
+                "traceCompleteRunCount": 16,
+                "pendingCount": 0,
+            },
+        }
+
+        result = platform.current_status(state)
+
+        self.assertEqual("degraded", result["status"])
+        self.assertEqual("v2-r24", result["activeDeployment"]["deploymentId"])
+        self.assertEqual(16, result["queue"]["uniqueCompletedRunCount"])
+        self.assertEqual({"completed": 24}, result["queue"]["jobRowCounts"])
+        self.assertNotIn("deployments", result)
+        self.assertIn(
+            "schema-functions-not-ready-direct-typeql-fallback",
+            result["reasons"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

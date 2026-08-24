@@ -283,6 +283,7 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "probability",
     "probabilityLower",
     "probabilityUpper",
+    "sourceAgeSeconds",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -308,6 +309,7 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "localSymbol",
     "companyName",
     "market",
+    "marketSession",
     "currency",
     "exchange",
     "adrSymbol",

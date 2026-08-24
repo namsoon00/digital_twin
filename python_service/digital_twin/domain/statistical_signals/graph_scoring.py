@@ -27,7 +27,7 @@ from .registry import (
 from .rule_contracts import rule_statistical_signal_contract
 
 
-MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v1"
+MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v2"
 
 
 def _number(value: object):
@@ -430,6 +430,7 @@ def score_graph_hypothesis_contracts(
         })[:64]
         contract_features = {
             "scorerVersion": MODEL_HYPOTHESIS_SCORER_VERSION,
+            "contractMatched": True,
             "hypothesisContractCount": len(contract_ids),
             "hypothesisContractIds": list(contract_ids),
             "contractMatches": [
@@ -448,15 +449,22 @@ def score_graph_hypothesis_contracts(
             contract_features["familyScore"] = base.score
             contract_features["familyConfidence"] = base.confidence
             contract_features["familyInputFeatures"] = dict(base.input_features or {})
+        signal_score = base.score if base else coverage
+        signal_confidence = min(
+            1.0,
+            coverage * (base.confidence if base else 1.0),
+        )
         signals_by_release[release_id].append(ModelSignal.create(
             signal_type=signal_type,
             signal_family=release.model_family,
             subject_id=symbol,
             horizon=base.horizon if base else (family.default_horizon if family else "CURRENT"),
             polarity="risk" if signal_type.endswith("risk") else "support",
-            # This is exact contract satisfaction, not a return probability.
-            score=1.0,
-            confidence=min(1.0, coverage * (base.confidence if base else 1.0)),
+            # Contract satisfaction and empirical signal strength are separate
+            # dimensions. TypeDB receives both and may promote only a strong,
+            # eligible match instead of treating every exact match as 1.0.
+            score=signal_score,
+            confidence=signal_confidence,
             observed_at=base.observed_at if base else feature_snapshot.as_of,
             source_feature_snapshot_id=feature_snapshot.snapshot_id,
             feature_set_version=feature_snapshot.feature_set_version,
@@ -465,12 +473,18 @@ def score_graph_hypothesis_contracts(
             coverage_ratio=min(coverage, base.coverage_ratio) if base else coverage,
             eligibility=eligibility,
             input_features=contract_features,
-            probability=None,
+            contract_matched=True,
+            market_session=base.market_session if base else "",
+            source_age_seconds=base.source_age_seconds if base else None,
+            freshness_compatible=base.freshness_compatible if base else True,
+            probability=base.probability if base else None,
+            probability_lower=base.probability_lower if base else None,
+            probability_upper=base.probability_upper if base else None,
             hypothesis_family_id=family_id,
             hypothesis_contract_ids=contract_ids,
             outcome_metric=family.outcome_metric if family else "",
             knowledge_cutoff_at=feature_snapshot.as_of,
-            uncertainty_status="score-only",
+            uncertainty_status=base.uncertainty_status if base else "score-only",
         ))
 
     # Preserve price/flow diagnostics even when no exact hypothesis contract

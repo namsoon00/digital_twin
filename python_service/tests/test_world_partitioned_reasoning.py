@@ -594,6 +594,75 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         self.assertEqual("ok", result["acct"]["status"])
         self.assertTrue(recorder.context["sharedPremiseProof"]["ready"])
 
+    def test_v2_executor_retries_one_transient_shared_premise_writer_handoff(self):
+        class Recorder:
+            def __init__(self):
+                self.calls = 0
+                self.context = {}
+
+            @staticmethod
+            def world_partitioned_reasoning_enabled():
+                return True
+
+            def prepare_shared_premises(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "status": "shared-premise-projection-failed",
+                        "ready": False,
+                        "retryable": True,
+                        "reasonCode": "deferred-projection-coordinator",
+                        "failureStage": "shared-premise-projection",
+                        "recommendedRetryAfterSeconds": 10,
+                    }
+                return {
+                    "status": "ready",
+                    "ready": True,
+                    "inferenceGenerationId": "market-generation:2",
+                    "sourceAboxSnapshotId": "market-abox:2",
+                    "symbols": {"NVDA": {"relations": [], "traces": []}},
+                }
+
+            def record_snapshot(self, _snapshot, **kwargs):
+                self.context = dict(kwargs.get("reasoning_context") or {})
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "nativeTypeDbReasoningCompleted": True,
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "account-abox:1",
+                        "inferenceGenerationId": "account-generation:1",
+                    },
+                }
+
+        recorder = Recorder()
+        sleeps = []
+        executor = ScopedTypeDBInferenceExecutor(
+            recorder,
+            settings={
+                "reasoningEngineSharedPremiseInlineRetryCount": "1",
+                "reasoningEngineSharedPremiseInlineRetryMaxSeconds": "2",
+            },
+            sleep=sleeps.append,
+        )
+        request = independent_reasoning_request(
+            "ontology-v2-production",
+            [source_event("NVDA", ["acct"])],
+        )
+
+        result = executor.execute(
+            request,
+            [SimpleNamespace(account_id="acct", metadata={})],
+        )
+
+        self.assertEqual("ok", result["acct"]["status"])
+        self.assertEqual(2, recorder.calls)
+        self.assertEqual([2], sleeps)
+        self.assertEqual(
+            2,
+            len(recorder.context["sharedPremiseProof"]["preparationAttempts"]),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

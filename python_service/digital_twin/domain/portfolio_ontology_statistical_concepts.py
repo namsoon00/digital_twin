@@ -161,6 +161,7 @@ def add_position_statistical_signal_concepts(
                 "polarity": str(signal.get("polarity") or "context"),
                 "score": round(_number(signal.get("score")), 8),
                 "strengthBand": str(signal.get("strengthBand") or "weak"),
+                "contractMatched": bool(signal.get("contractMatched")),
                 "confidence": round(_number(signal.get("confidence")), 8),
                 "probability": signal.get("probability"),
                 "probabilityLower": signal.get("probabilityLower"),
@@ -169,6 +170,9 @@ def add_position_statistical_signal_concepts(
                 "hypothesisContractCount": len(signal.get("hypothesisContractIds") or []),
                 "outcomeMetric": str(signal.get("outcomeMetric") or ""),
                 "knowledgeCutoffAt": str(signal.get("knowledgeCutoffAt") or signal.get("observedAt") or ""),
+                "marketSession": str(signal.get("marketSession") or ""),
+                "sourceAgeSeconds": signal.get("sourceAgeSeconds"),
+                "freshnessCompatible": bool(signal.get("freshnessCompatible", True)),
                 "uncertaintyStatus": str(signal.get("uncertaintyStatus") or "uncalibrated"),
                 "sampleCount": int(_number(signal.get("sampleCount"))),
                 "coverageRatio": round(_number(signal.get("coverageRatio")), 8),
@@ -231,6 +235,7 @@ def add_position_statistical_signal_concepts(
                 "hypothesisFamilyId": str(signal.get("hypothesisFamilyId") or ""),
                 "score": round(_number(signal.get("score")), 8),
                 "strengthBand": str(signal.get("strengthBand") or "weak"),
+                "contractMatched": bool(signal.get("contractMatched")),
                 "confidence": round(_number(signal.get("confidence")), 8),
                 "releaseId": str(signal.get("modelReleaseId") or release_id),
                 "eligibilityStatus": str(eligibility.get("status") or "ineligible"),
@@ -238,6 +243,9 @@ def add_position_statistical_signal_concepts(
                 "knowledgeCutoffAt": str(
                     signal.get("knowledgeCutoffAt") or signal.get("observedAt") or ""
                 ),
+                "marketSession": str(signal.get("marketSession") or ""),
+                "sourceAgeSeconds": signal.get("sourceAgeSeconds"),
+                "freshnessCompatible": bool(signal.get("freshnessCompatible", True)),
                 "materialHash": str(signal.get("materialHash") or ""),
                 "modelEvidenceIds": list(
                     (_mapping(signal.get("inputFeatures"))).get("evidenceIds") or []

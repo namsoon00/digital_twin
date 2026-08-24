@@ -1277,6 +1277,20 @@ class OntologyRuleboxPrewarmScheduler:
                 "recommendedRetryAfterSeconds": self.interval_seconds,
                 "durationMs": 0,
             }
+        bootstrap_reader = getattr(self.runner, "cold_bootstrap_state", None)
+        if callable(bootstrap_reader):
+            try:
+                candidate = bootstrap_reader(queue)
+                bootstrap = dict(candidate or {}) if isinstance(candidate, dict) else {}
+            except Exception:
+                bootstrap = {}
+            if bool(bootstrap.get("canBootstrap")):
+                # A recurring collector can prevent a five-minute empty
+                # window forever. After the bounded starvation threshold,
+                # allow exactly one staged rule batch while no inference
+                # lease is active; the shared writer coordinator remains the
+                # final mutual-exclusion guard.
+                return {}
         remaining = self.idle_quiet_seconds() - (now - self.last_reasoning_activity_at)
         if remaining > 0:
             return {

@@ -19,6 +19,7 @@ WINDOW_MINIMUM_SAMPLES = {
     "5D": 4,
     "20D": 5,
 }
+PRICE_SIGNAL_MAX_SOURCE_AGE_SECONDS = 4 * 24 * 60 * 60
 
 
 def _number(value: object) -> float:
@@ -130,6 +131,9 @@ def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int) 
         "ma20Distance": _number(_first(latest, "ma20Distance", "ma20_distance")) / 100.0,
         "ma60Distance": _number(_first(latest, "ma60Distance", "ma60_distance")) / 100.0,
         "latestObservedAt": str(_first(latest, "bucketAt", "bucket_at", "generatedAt", "observed_at") or ""),
+        "marketSession": str(
+            _first(latest, "marketSession", "market_session", "session") or ""
+        ).lower(),
         "stale": stale,
     }
 
@@ -144,6 +148,8 @@ def _signal_eligibility(metrics: Mapping[str, object], release) -> SignalEligibi
         reasons.append("minimum-coverage-not-met")
     if bool(metrics.get("stale")):
         reasons.append("latest-observation-stale")
+    if metrics.get("freshnessCompatible") is False:
+        reasons.append("source-age-exceeds-horizon-policy")
     if release.validation_status not in {"calibrated", "validated-deterministic"}:
         reasons.append("historical-replay-and-calibration-required")
     quality = "stale" if metrics.get("stale") else "sufficient" if not reasons[:2] else "insufficient"
@@ -230,6 +236,30 @@ def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "") -> 
         int(short.get("sampleCount") or 0),
     )
     combined["stale"] = bool(primary.get("stale") or short.get("stale"))
+    scored_observations = [
+        str(item.get("latestObservedAt") or "")
+        for item in (primary, short)
+        if str(item.get("latestObservedAt") or "")
+    ]
+    if scored_observations:
+        combined["latestObservedAt"] = max(scored_observations)
+    combined["marketSession"] = str(
+        short.get("marketSession") or primary.get("marketSession") or ""
+    )
+    cutoff = parse_timestamp(cutoff_at)
+    observed = parse_timestamp(combined.get("latestObservedAt"))
+    source_age_seconds = None
+    if cutoff and observed:
+        source_age_seconds = max(0, int((cutoff - observed).total_seconds()))
+    combined["sourceAgeSeconds"] = source_age_seconds
+    combined["maximumSourceAgeSeconds"] = PRICE_SIGNAL_MAX_SOURCE_AGE_SECONDS
+    combined["freshnessCompatible"] = bool(
+        not combined.get("stale")
+        and (
+            source_age_seconds is None
+            or source_age_seconds <= PRICE_SIGNAL_MAX_SOURCE_AGE_SECONDS
+        )
+    )
     combined["windowMetrics"] = metrics
     return combined
 
@@ -289,6 +319,9 @@ def score_temporal_feature_snapshot(
                 coverage_ratio=metrics.get("coverageRatio") or 0,
                 eligibility=eligibility,
                 input_features=compact_features,
+                market_session=str(metrics.get("marketSession") or ""),
+                source_age_seconds=metrics.get("sourceAgeSeconds"),
+                freshness_compatible=bool(metrics.get("freshnessCompatible", True)),
                 probability=None,
                 hypothesis_family_id=hypothesis_family_id,
                 outcome_metric=hypothesis_family.outcome_metric if hypothesis_family else "",

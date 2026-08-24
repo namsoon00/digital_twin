@@ -690,7 +690,8 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
         prompt = build_notification_ai_decision_prompt(decision_context(), {})
 
         self.assertIn('"investmentViewAction"', prompt)
-        self.assertIn("정책·실행·품질 규칙은 종목 의견을 바꾸지 않으며", prompt)
+        self.assertIn("action만 사용자가 읽을 유일한 최종 행동", prompt)
+        self.assertIn("정책·실행·품질 규칙은 검토 가설을 삭제하지 않고", prompt)
 
     def test_ordinary_symbol_decision_excludes_rebalance_policy_but_scheduled_review_keeps_it(self):
         context = decision_context()

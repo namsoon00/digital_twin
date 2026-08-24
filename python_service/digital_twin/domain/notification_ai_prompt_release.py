@@ -8,16 +8,16 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v9"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v8"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v10"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v9"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
 AI_DECISION_RESPONSE_SCHEMA = {
     "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
-    "investmentViewAction": "선택한 예측 가설이 지지하는 BUY|ADD|HOLD|TRIM|SELL|AVOID",
-    "investmentView": "현재 투자 매력과 위험을 비교한 한 문단",
-    "executionDecision": "현재 계정에서 지금 할 행동과 실행 제약",
+    "investmentViewAction": "선택한 예측 가설이 지지하는 검토 후보 BUY|ADD|HOLD|TRIM|SELL|AVOID; 사용자 최종 행동이 아님",
+    "investmentView": "선택한 검토 가설의 투자 매력과 위험을 비교한 한 문단; 별도 행동 명령을 쓰지 않음",
+    "executionDecision": "action을 현재 계정의 유일한 최종 행동으로 설명하고 검토 가설과 다르면 검증 가능한 이유를 명시",
     "changeAnalysis": "이전 판단에서 실제로 달라진 점",
     "evidence": ["핵심 근거 최대 3개"],
     "counterEvidence": ["반대 근거 최대 2개"],
@@ -68,7 +68,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는 최종 투자 판단 AI다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
     "notificationIntent가 context-observation이면 TypeDB의 NO_ACTION을 바꾸지 말고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
-    "investmentViewAction은 선택 예측 가설의 종목 의견이고 action은 actionEnvelope 안에서 제약을 반영한 현재 행동이다. 정책·실행·품질 규칙은 종목 의견을 바꾸지 않으며, 두 값이 다르면 executionDecision에 이유를 쓴다.",
+    "investmentViewAction은 선택 예측 가설의 검토 후보일 뿐 사용자 행동이 아니다. action만 사용자가 읽을 유일한 최종 행동이다. 정책·실행·품질 규칙은 검토 가설을 삭제하지 않고 실행을 제약하며, 두 값이 다르면 executionDecision과 disagreementReason에 검증 가능한 이유를 쓴다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. investmentViewAction은 선택 가설의 candidateAction과 같아야 한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId와 investmentViewAction은 빈 문자열로 둔다.",
     "근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며 검증되지 않은 외부 사실을 만들지 않는다.",
     "사용자에게 보여줄 투자 관점, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",

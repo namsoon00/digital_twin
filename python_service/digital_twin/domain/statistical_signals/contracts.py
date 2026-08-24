@@ -8,8 +8,8 @@ import json
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 
-MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v2"
-MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v2"
+MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v3"
+MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v3"
 SIGNAL_ELIGIBILITY_CONTRACT_VERSION = "statistical-signal-eligibility-v1"
 
 
@@ -138,6 +138,10 @@ class ModelSignal:
     coverage_ratio: float
     eligibility: SignalEligibility
     input_features: Dict[str, object] = field(default_factory=dict)
+    contract_matched: bool = False
+    market_session: str = ""
+    source_age_seconds: Optional[int] = None
+    freshness_compatible: bool = True
     probability: Optional[float] = None
     probability_lower: Optional[float] = None
     probability_upper: Optional[float] = None
@@ -167,6 +171,10 @@ class ModelSignal:
         coverage_ratio: object,
         eligibility: SignalEligibility,
         input_features: Mapping[str, object] = None,
+        contract_matched: object = False,
+        market_session: object = "",
+        source_age_seconds: object = None,
+        freshness_compatible: object = True,
         probability: object = None,
         probability_lower: object = None,
         probability_upper: object = None,
@@ -188,6 +196,12 @@ class ModelSignal:
             for value in hypothesis_contract_ids or []
             if _text(value)
         }))
+        normalized_source_age = None
+        if source_age_seconds not in (None, ""):
+            try:
+                normalized_source_age = max(0, int(float(source_age_seconds)))
+            except (TypeError, ValueError):
+                normalized_source_age = None
         material = {
             "contractVersion": MODEL_SIGNAL_CONTRACT_VERSION,
             "signalType": _text(signal_type).lower(),
@@ -204,6 +218,10 @@ class ModelSignal:
             "coverageRatio": round(_bounded(coverage_ratio), 8),
             "eligibility": eligibility.to_dict(),
             "inputFeatures": _canonical(dict(input_features or {})),
+            "contractMatched": bool(contract_matched),
+            "marketSession": _text(market_session).lower(),
+            "sourceAgeSeconds": normalized_source_age,
+            "freshnessCompatible": bool(freshness_compatible),
             "probability": normalized_probability,
             "probabilityLower": normalized_lower,
             "probabilityUpper": normalized_upper,
@@ -237,6 +255,10 @@ class ModelSignal:
             coverage_ratio=float(material["coverageRatio"]),
             eligibility=eligibility,
             input_features=dict(material["inputFeatures"]),
+            contract_matched=bool(material["contractMatched"]),
+            market_session=str(material["marketSession"]),
+            source_age_seconds=normalized_source_age,
+            freshness_compatible=bool(material["freshnessCompatible"]),
             probability=normalized_probability,
             probability_lower=normalized_lower,
             probability_upper=normalized_upper,
@@ -276,6 +298,10 @@ class ModelSignal:
             "coverageRatio": self.coverage_ratio,
             "eligibility": self.eligibility.to_dict(),
             "inputFeatures": dict(self.input_features),
+            "contractMatched": self.contract_matched,
+            "marketSession": self.market_session,
+            "sourceAgeSeconds": self.source_age_seconds,
+            "freshnessCompatible": self.freshness_compatible,
             "materialHash": self.material_hash,
         }
 

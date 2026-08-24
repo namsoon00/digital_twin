@@ -190,6 +190,9 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertLessEqual(support.observed_at, support.knowledge_cutoff_at)
         self.assertEqual(snapshot.as_of, support.knowledge_cutoff_at)
         self.assertEqual("score-only", support.uncertainty_status)
+        self.assertFalse(support.contract_matched)
+        self.assertTrue(support.freshness_compatible)
+        self.assertIsNotNone(support.source_age_seconds)
         self.assertIsNone(support.probability_lower)
         self.assertIsNone(support.probability_upper)
 
@@ -707,6 +710,17 @@ class StatisticalSignalTests(unittest.TestCase):
             "graph.earnings.surprise.risk.v1",
             "graph.valuation.negative_margin.risk.v1",
         }.issubset(exact_contract_ids))
+        matched_signals = [
+            signal
+            for signal in result["signalBundle"].signals
+            if signal.hypothesis_contract_ids
+        ]
+        self.assertTrue(all(signal.contract_matched for signal in matched_signals))
+        self.assertTrue(any(signal.score < 1.0 for signal in matched_signals))
+        for signal in matched_signals:
+            family_score = signal.input_features.get("familyScore")
+            if family_score is not None:
+                self.assertEqual(float(family_score), signal.score)
 
     def test_price_contract_is_ineligible_without_family_feature_snapshot(self):
         graph = PortfolioOntology(

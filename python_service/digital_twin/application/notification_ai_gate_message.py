@@ -3049,11 +3049,9 @@ def _investment_view_row(
         detail = detail or "이 알림 자체는 매수·매도 판단이 아닙니다."
     elif compact_reason_is_internal(detail):
         detail = ""
-    label = (
-        action_label_for_action(response.investment_view_action, context)
-        if response.investment_view_action else ""
-    )
-    return (("종목 의견: " + label + ". ") if label else "") + detail
+    # investmentView explains the selected TypeDB hypothesis.  It must not
+    # present a second action beside the validated final action shown below.
+    return detail
 
 
 def _notification_selected_inference_rows(
@@ -3075,7 +3073,15 @@ def _notification_selected_inference_rows(
         return []
     rows = full_typedb_competing_inference_rows(context, response)
     selected = [row for row in rows if row.startswith("선택 경로:")]
-    candidate = [row for row in rows if row.startswith("TypeDB 행동 후보") or row.startswith("TypeDB 후보 상태")]
+    candidate = [
+        row for row in rows
+        if row.startswith("TypeDB 검토 가설")
+        or row.startswith("TypeDB 행동 후보")
+        or row.startswith("TypeDB 후보 상태")
+    ]
+    difference = [row for row in rows if row.startswith("최종 행동을 다르게 정한 이유:")]
+    if candidate and difference:
+        candidate[0] += " · 차이 이유: " + difference[0].split(":", 1)[-1].strip()
     result = candidate[:1] + selected[:1]
     if result:
         return result
@@ -3116,7 +3122,7 @@ def execution_telegram_message_progressive(
     ]
     investment_view = _investment_view_row(context, response)
     if investment_view:
-        parts.extend(["", "<b>투자 관점</b>", _html_bullet(investment_view, level)])
+        parts.extend(["", "<b>AI 해석</b>", _html_bullet(investment_view, level)])
     parts.extend([
         "",
         "<b>지금 행동</b>",
@@ -3134,7 +3140,7 @@ def execution_telegram_message_progressive(
     if packet.counter_evidence:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
     if packet.inference:
-        parts.extend(["", "<b>TypeDB 핵심 추론</b>", *[_html_bullet(row, level) for row in packet.inference]])
+        parts.extend(["", "<b>TypeDB 검토 가설</b>", *[_html_bullet(row, level) for row in packet.inference]])
     if packet.company_value:
         parts.extend(["", "<b>회사 가치</b>", *[_html_bullet(row, level) for row in packet.company_value]])
     if packet.next_checks:
@@ -3174,7 +3180,7 @@ def execution_telegram_message_compact_beginner(
     ]
     investment_view = _investment_view_row(context, response)
     if investment_view:
-        parts.extend(["", "<b>투자 관점</b>", _html_bullet(investment_view, level)])
+        parts.extend(["", "<b>AI 해석</b>", _html_bullet(investment_view, level)])
     parts.extend([
         "",
         "<b>지금 행동</b>",
@@ -3332,7 +3338,9 @@ def compact_decision_section_labels(
 def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     ai_transition = ai_decision_transition_from_context(context)
     if ai_transition.get("historyAvailable"):
-        analysis = compact_sentence_count(customer_visible_ai_text(response.change_analysis or ""), 2)
+        analysis = _dedupe_compact_sentences(
+            compact_sentence_count(customer_visible_ai_text(response.change_analysis or ""), 2)
+        )
         label = "판단 변경" if str(ai_transition.get("kind") or "").strip().lower() == "action-changed" else "판단 유지"
         if analysis and not compact_reason_is_internal(analysis):
             return "[" + label + "] " + analysis
@@ -3692,6 +3700,22 @@ def _same_compact_message_text(left: object, right: object) -> bool:
     left_key = re.sub(r"[^0-9a-z가-힣]+", "", str(left or "").casefold())
     right_key = re.sub(r"[^0-9a-z가-힣]+", "", str(right or "").casefold())
     return bool(left_key and right_key and (left_key in right_key or right_key in left_key))
+
+
+def _dedupe_compact_sentences(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    rows: List[str] = []
+    keys = set()
+    for sentence in re.findall(r"[^.!?]+[.!?]?", text):
+        sentence = sentence.strip()
+        key = re.sub(r"[^0-9a-z가-힣]+", "", sentence.casefold())
+        if not key or key in keys:
+            continue
+        keys.add(key)
+        rows.append(sentence)
+    return " ".join(rows)
 
 
 def compact_action_reason_rows(
@@ -4071,15 +4095,24 @@ def full_typedb_competing_inference_rows(
         final = action_label_for_action(response.action, context) or response.action_label
         ai_authored = bool(response_writer_provenance(response, context).get("aiAuthored"))
         final_action_label = "AI 최종 행동 " if ai_authored else "최종 행동 "
-        final_opinion_label = "AI 최종 의견 " if ai_authored else "최종 의견 "
         if envelope_status == "JUDGEMENT_BLOCKED" or bool(envelope.get("judgementBlocked")):
-            append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · 최종 판단 보류", 220)
+            append_unique_text(rows, "TypeDB 검토 가설 " + candidate + " · 최종 판단 보류", 220)
         elif envelope_status == "ENTRY_DEFERRED":
-            append_unique_text(rows, "TypeDB 후보 상태 진입 후보·추가 확인 · " + final_action_label + final, 220)
+            append_unique_text(rows, "TypeDB 검토 가설 진입 후보·추가 확인 · " + final_action_label + final, 220)
         elif envelope_status == "ENTRY_ELIGIBLE":
-            append_unique_text(rows, "TypeDB 후보 상태 소액 진입 조건 성립 · " + final_action_label + final, 220)
+            append_unique_text(rows, "TypeDB 검토 가설 소액 진입 조건 성립 · " + final_action_label + final, 220)
         else:
-            append_unique_text(rows, "TypeDB 행동 후보 " + candidate + " · " + final_opinion_label + final, 220)
+            append_unique_text(rows, "TypeDB 검토 가설 " + candidate + " · " + final_action_label + final, 220)
+        if str(response.precomputed_action or "").strip().upper() != str(response.action or "").strip().upper():
+            alternative = response.alternative_action if isinstance(response.alternative_action, dict) else {}
+            reason = compact_sentence_count(customer_visible_ai_text(
+                alternative.get("whyNotSelected")
+                or response.disagreement_reason
+                or response.execution_decision
+                or ""
+            ), 1)
+            if reason:
+                append_unique_text(rows, "최종 행동을 다르게 정한 이유: " + reason, 360)
     ordered = sorted(
         [item for item in response.hypotheses or [] if isinstance(item, dict)],
         key=lambda item: str(item.get("hypothesisId") or "") != response.selected_hypothesis_id,
@@ -4159,10 +4192,10 @@ def typedb_decision_assessment_rows(context: Dict[str, object]) -> List[str]:
     }
     plan_labels = {
         "judgement-blocked": "근거가 보완될 때까지 종목 판단 보류",
-        "execution-blocked": "종목 의견은 유지하고 실행만 보류",
-        "constrained": "종목 의견은 유지하고 계좌·주문 제약 안에서 실행",
-        "observe": "종목 의견은 유지하고 확인 조건을 관찰",
-        "ready": "종목 의견과 실행 조건이 함께 성립",
+        "execution-blocked": "검토 가설은 유지하고 실행만 보류",
+        "constrained": "검토 가설은 유지하고 계좌·주문 제약 안에서 실행",
+        "observe": "검토 가설은 유지하고 확인 조건을 관찰",
+        "ready": "검토 가설과 실행 조건이 함께 성립",
     }
 
     opinion_action = str(opinion.get("candidateAction") or plan.get("investmentAction") or "").strip().upper()
@@ -4173,14 +4206,14 @@ def typedb_decision_assessment_rows(context: Dict[str, object]) -> List[str]:
     if opinion_label:
         opinion_text = opinion_label + (" · 추가 확인 필요" if opinion_status == "deferred" else "")
     else:
-        opinion_text = "성립한 종목 의견 없음"
+        opinion_text = "성립한 검토 가설 없음"
 
     portfolio_status = str(portfolio.get("status") or "not-evaluated").strip().lower()
     if not includes_portfolio_rebalance_policy(context):
         portfolio_status = "not-evaluated"
     return [
         "근거 품질: " + quality_labels.get(str(quality.get("status") or "not-evaluated").strip().lower(), "상태 확인 필요"),
-        "종목 의견: " + opinion_text,
+        "TypeDB 검토 가설: " + opinion_text,
         "계좌 적합성: " + portfolio_labels.get(portfolio_status, "상태 확인 필요"),
         "실행 가능성: " + execution_labels.get(str(execution.get("status") or "not-evaluated").strip().lower(), "상태 확인 필요"),
         "최종 조합: " + plan_labels.get(str(plan.get("status") or "").strip().lower(), "영역별 결과 조합 전"),

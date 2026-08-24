@@ -2145,11 +2145,16 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "deploymentId": str(deployment_id or ""),
             "releaseFingerprint": str(release_fingerprint or ""),
             "validationCohortId": str(validation_cohort_id or ""),
+            # One coalesced execution can own several durable source-event
+            # rows. Keep those row counts for queue auditing, but never expose
+            # them as the number of reasoning runs.
             "counts": count_map,
+            "jobRowCounts": count_map,
             "cohortCounts": cohort_count_map,
             "oldest": oldest,
             "latest": latest,
             "sampleCount": len(results),
+            "uniqueCompletedRunCount": len(results),
             "successfulRunCount": len(successful),
             "traceCompleteRunCount": len(trace_complete),
             "candidateEventRunCount": len(candidate_runs),

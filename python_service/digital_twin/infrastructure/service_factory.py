@@ -2200,6 +2200,7 @@ def build_v2_reasoning_engine(settings=None) -> V2ReasoningEngine:
         inference_executor=ScopedTypeDBInferenceExecutor(
             projection_recorder,
             shared_inference_service=shared_inference_service,
+            settings=candidate_settings,
         ),
         candidate_builder=V2GraphDecisionCandidateBuilder(
             candidate_settings,

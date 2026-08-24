@@ -97,8 +97,9 @@ class OntologyRuleboxPrewarmRunner:
 
         Availability is the production default: bounded direct TypeQL keeps
         live reasoning moving while the background compiler waits for an idle
-        queue. Operators can opt into a strict receipt gate for controlled
-        migrations after every active function has been prepared.
+        queue. The fallback is not a reason to suppress compilation; once the
+        queue has stayed quiet, the isolated worker must converge on a ready
+        receipt so normal operation can leave compatibility mode.
         """
         value = str(
             self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference") or "0"
@@ -333,6 +334,34 @@ class OntologyRuleboxPrewarmRunner:
             activity_status == "bootstrap-required"
             or not last_functions_ready
         )
+        last_status = str(last_result.get("status") or "").strip().lower()
+        raw_updated_at = str(activity.get("updatedAt") or "").strip()
+        cold_age_seconds = 0
+        if raw_updated_at:
+            try:
+                updated_at = datetime.fromisoformat(raw_updated_at.replace("Z", "+00:00"))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                cold_age_seconds = max(0, int(
+                    (self.activity_now() - updated_at.astimezone(timezone.utc)).total_seconds()
+                ))
+            except ValueError:
+                cold_age_seconds = 0
+        maximum_deferral_seconds = self.maximum_deferral_seconds()
+        starvation_recovery = bool(
+            bootstrap_required
+            and cold_age_seconds >= maximum_deferral_seconds
+        )
+        staged_recovery = bool(
+            bootstrap_required
+            and last_status in {"provisioning", "deferred-projection-coordinator"}
+        )
+        strict_recovery = bool(strict_readiness and waiting > 0 and bootstrap_required)
+        can_bootstrap = bool(
+            active == 0
+            and queue_status != "error"
+            and (strict_recovery or starvation_recovery or staged_recovery)
+        )
         return {
             "strictReadinessGateEnabled": strict_readiness,
             "waitingEntryCount": waiting,
@@ -341,20 +370,13 @@ class OntologyRuleboxPrewarmRunner:
             "prewarmActivityStatus": activity_status or "unknown",
             "lastFunctionsReady": last_functions_ready,
             "bootstrapRequired": bootstrap_required,
-            "eligible": bool(
-                strict_readiness
-                and waiting > 0
-                and active == 0
-                and queue_status != "error"
-                and bootstrap_required
-            ),
-            "canBootstrap": bool(
-                strict_readiness
-                and waiting > 0
-                and active == 0
-                and queue_status != "error"
-                and bootstrap_required
-            ),
+            "coldAgeSeconds": cold_age_seconds,
+            "maximumDeferralSeconds": maximum_deferral_seconds,
+            "starvationRecovery": starvation_recovery,
+            "stagedRecovery": staged_recovery,
+            "strictRecovery": strict_recovery,
+            "eligible": can_bootstrap,
+            "canBootstrap": can_bootstrap,
         }
 
     def interval_seconds(self) -> int:
@@ -380,6 +402,16 @@ class OntologyRuleboxPrewarmRunner:
             "ontologyRuleboxPrewarmIdleQuietSeconds",
             300,
             30,
+            24 * 60 * 60,
+        )
+
+    def maximum_deferral_seconds(self) -> int:
+        """Bound how long recurring market events may starve one compiler batch."""
+        return _integer_setting(
+            self.settings,
+            "ontologyRuleboxPrewarmMaximumDeferralSeconds",
+            900,
+            60,
             24 * 60 * 60,
         )
 
@@ -571,6 +603,7 @@ class OntologyRuleboxPrewarmRunner:
             "enabled": self.enabled(),
             "intervalSeconds": self.interval_seconds(),
             "idleQuietSeconds": self.idle_quiet_seconds(),
+            "maximumDeferralSeconds": self.maximum_deferral_seconds(),
             "executionTimeoutSeconds": self.execution_timeout_seconds(),
             "executionTimeoutGraceSeconds": self.execution_timeout_grace_seconds(),
             "processIsolationEnabled": self.process_isolation_enabled(),
@@ -735,32 +768,6 @@ class OntologyRuleboxPrewarmRunner:
                 "reason": (
                     "Live reasoning queue state could not be confirmed; RuleBox schema compilation is deferred "
                     "to avoid competing with an alert."
-                ),
-                "recommendedRetryAfterSeconds": self.interval_seconds(),
-                "durationMs": 0,
-            }
-        if (
-            not force
-            and not compiler_turn_granted
-            and not self.require_ready_for_inference()
-            and self.direct_typeql_fallback_enabled()
-        ):
-            # Compatibility mode is an operational circuit breaker. Starting
-            # another automatic schema commit after the live queue drains can
-            # make the whole TypeDB server unresponsive again, which is worse
-            # than the slower serial direct-TypeQL evaluator. An operator can
-            # still run one traced diagnostic pass explicitly with ``--force``.
-            return {
-                "status": "deferred-direct-typeql-fallback",
-                "configured": True,
-                "functionsReady": None,
-                "pendingRuleCount": None,
-                "reasoningPendingCount": pending,
-                "reasoningQueue": queue,
-                "automaticSchemaCompilationSuppressed": True,
-                "reason": (
-                    "Direct TypeQL compatibility mode is active; automatic RuleBox schema compilation "
-                    "remains quarantined so live investment inference keeps TypeDB available."
                 ),
                 "recommendedRetryAfterSeconds": self.interval_seconds(),
                 "durationMs": 0,

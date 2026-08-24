@@ -534,6 +534,41 @@ def _normalized_abstention(
     }
 
 
+def _ai_execution_status(
+    episode: Mapping[str, object],
+    facts_at_decision: Mapping[str, object],
+    selected_id: str,
+) -> Dict[str, object]:
+    explicit = item_dict(episode.get("aiExecution") or episode.get("ai_execution"))
+    final_decision = item_dict(facts_at_decision.get("finalDecision"))
+    source = text(explicit.get("source") or final_decision.get("source"))
+    reason = text(explicit.get("reason") or final_decision.get("reason"))
+    state = text(explicit.get("state")).lower()
+    if not state:
+        if selected_id:
+            state = "completed"
+        elif source == "typedb-context-observation":
+            state = "not-required"
+        elif source in {
+            "typedb-delivery-suppressed",
+            "typedb-no-material-change",
+            "typedb-shadow",
+        }:
+            state = "not-run"
+        elif item_dict(episode.get("decisionAbstention") or episode.get("decision_abstention")):
+            state = "abstained"
+        else:
+            state = "unknown"
+    return {
+        **explicit,
+        "version": text(explicit.get("version")) or "ai-judgment-execution-v1",
+        "state": state,
+        "source": source,
+        "reason": reason,
+        "attempted": bool(explicit.get("attempted")) if "attempted" in explicit else state in {"completed", "abstained", "failed"},
+    }
+
+
 def _status_dimensions(
     *,
     action: str,
@@ -546,8 +581,12 @@ def _status_dimensions(
     abstention: Mapping[str, object],
     outcome_count: int,
     decision_source: str = "",
+    ai_execution: Mapping[str, object] = None,
 ) -> List[Dict[str, object]]:
     abstained = bool(abstention)
+    ai_execution = dict(ai_execution or {})
+    ai_execution_state = text(ai_execution.get("state")).lower()
+    ai_execution_reason = text(ai_execution.get("reason"))
     typedb_only = "typedb" in decision_source.lower() and "fallback" in decision_source.lower()
     if typedb_only:
         decision = _dimension(
@@ -558,6 +597,16 @@ def _status_dimensions(
             "TYPE_DB_ONLY_DECISION",
             "AI를 사용할 수 없어 TypeDB가 확인한 행동 범위와 관계만 저장했습니다.",
             "자동 주문이나 AI 최종 의견으로 사용하지 않습니다.",
+        )
+    elif ai_execution_state in {"not-run", "not-required"}:
+        decision = _dimension(
+            "decision",
+            "판단 상태",
+            "warning",
+            "AI 판단 미실행" if ai_execution_state == "not-run" else "AI 판단 불필요",
+            "AI_JUDGMENT_NOT_RUN" if ai_execution_state == "not-run" else "AI_JUDGMENT_NOT_REQUIRED",
+            ai_execution_reason or "AI 최종 판단 단계가 실행되지 않았습니다.",
+            "TypeDB 추론 결과와 AI 최종 판단 상태를 구분해 확인합니다.",
         )
     elif abstained:
         decision = _dimension(
@@ -629,6 +678,16 @@ def _status_dimensions(
             "AI 판단이 완료되지 않아 TypeDB 추론 결과만 기록했습니다.",
             "확인된 관계는 볼 수 있지만 AI 최종 의견으로 표시하지 않습니다.",
         )
+    elif ai_execution_state in {"not-run", "not-required"}:
+        ai = _dimension(
+            "ai",
+            "AI 상태",
+            "warning" if ai_execution_state == "not-run" else "pending",
+            "AI 미실행" if ai_execution_state == "not-run" else "AI 판단 불필요",
+            "AI_NOT_RUN" if ai_execution_state == "not-run" else "AI_NOT_REQUIRED",
+            ai_execution_reason or "AI 가설 비교를 실행하지 않았습니다.",
+            "AI가 실제로 비교 후 유보한 상태와 구분합니다.",
+        )
     elif abstained:
         ai = _dimension(
             "ai", "AI 상태", "blocked", "비교 미완료", "AI_COMPARISON_INCOMPLETE",
@@ -672,7 +731,11 @@ def _case_explanation(
     inference_generation_id: str,
     reasoning_detail: Mapping[str, object],
     episode: Mapping[str, object],
+    ai_execution: Mapping[str, object] = None,
 ) -> Dict[str, object]:
+    ai_execution = dict(ai_execution or {})
+    ai_execution_state = text(ai_execution.get("state")).lower()
+    ai_not_run = ai_execution_state in {"not-run", "not-required"}
     selected = next((item for item in scenarios if item.get("selected")), {})
     candidate_scope = scenarios
     detail_facts = [item_dict(item) for item in reasoning_detail.get("facts") or [] if item_dict(item)]
@@ -680,19 +743,35 @@ def _case_explanation(
     detail_rules = [item_dict(item) for item in reasoning_detail.get("rules") or [] if item_dict(item)]
     detail_traces = [item_dict(item) for item in reasoning_detail.get("traces") or [] if item_dict(item)]
     detail_hypotheses = [item_dict(item) for item in reasoning_detail.get("hypotheses") or [] if item_dict(item)]
+    if ai_execution_state == "not-run":
+        primary_title = "AI 판단 미실행"
+    elif ai_execution_state == "not-required":
+        primary_title = "AI 판단 불필요"
+    elif abstention:
+        primary_title = text(abstention.get("title")) or "AI 가설 비교 미완료"
+    else:
+        primary_title = text(selected.get("title")) or "현재 판단"
     primary = {
         "id": "decision-primary",
-        "layer": "ai" if abstention else "hypothesis" if selected else "decision",
-        "role": "constraint" if abstention else "support",
-        "status": "confirmed" if not abstention else "incomplete",
-        "title": (
-            text(abstention.get("title")) or "AI 가설 비교 미완료"
-            if abstention else
-            text(selected.get("title")) or "현재 판단"
+        "layer": "ai" if abstention or ai_not_run else "hypothesis" if selected else "decision",
+        "role": "constraint" if abstention or ai_not_run else "support",
+        "status": "not-run" if ai_not_run else "confirmed" if not abstention else "incomplete",
+        "title": primary_title,
+        "summary": (
+            text(ai_execution.get("reason")) or headline
+            if ai_not_run else
+            text(abstention.get("reason")) if abstention else text(selected.get("claim")) or headline
         ),
-        "summary": text(abstention.get("reason")) if abstention else text(selected.get("claim")) or headline,
-        "effect": "행동 판단을 유보합니다." if abstention else f"{action or '현재'} 의견의 핵심 설명입니다.",
-        "reasonCode": "AI_HYPOTHESIS_COMPARISON_INCOMPLETE" if abstention else "SELECTED_HYPOTHESIS",
+        "effect": (
+            "TypeDB 후보는 보존하지만 AI 최종 투자 의견으로 확정하지 않습니다."
+            if ai_not_run else
+            "행동 판단을 유보합니다." if abstention else f"{action or '현재'} 의견의 핵심 설명입니다."
+        ),
+        "reasonCode": (
+            "AI_JUDGMENT_NOT_RUN" if ai_not_run
+            else "AI_HYPOTHESIS_COMPARISON_INCOMPLETE" if abstention
+            else "SELECTED_HYPOTHESIS"
+        ),
     }
     supporting = []
     counter = []
@@ -1002,8 +1081,16 @@ def investment_case_snapshot(
     ])
     local_decision_state = text(flow_stages.get("decision", {}).get("state")) or "warning"
     outcome_state = "pass" if outcomes else "pending"
+    ai_execution = _ai_execution_status(episode, facts_at_decision, selected_id)
+    if text(ai_execution.get("state")) in {"not-run", "not-required"} and local_decision_state == "blocked":
+        local_decision_state = "warning"
+    raw_abstention = item_dict(
+        episode.get("decisionAbstention") or episode.get("decision_abstention")
+    )
+    if text(ai_execution.get("state")) in {"not-run", "not-required"}:
+        raw_abstention = {}
     abstention = _normalized_abstention(
-        item_dict(episode.get("decisionAbstention") or episode.get("decision_abstention")),
+        raw_abstention,
         relation_count=relation_count,
         scenario_count=len(scenarios),
     )
@@ -1025,7 +1112,8 @@ def investment_case_snapshot(
         selected_id=selected_id,
         abstention=abstention,
         outcome_count=len(outcomes),
-        decision_source=text(episode.get("source")),
+        decision_source=text(ai_execution.get("source") or episode.get("source")),
+        ai_execution=ai_execution,
     )
     dimension_by_id = {item["id"]: item for item in dimensions}
     decision_dimension = dimension_by_id["decision"]
@@ -1054,6 +1142,8 @@ def investment_case_snapshot(
     headline = text(abstention.get("reason")) if abstention else text(
         episode.get("decisionSummary") or episode.get("decision_summary")
     )
+    if text(ai_execution.get("state")) in {"not-run", "not-required"}:
+        headline = text(ai_execution.get("reason")) or headline
     if not headline:
         headline = text(decision_dimension.get("reason")) or "판단 근거를 계속 관찰하고 있습니다."
 
@@ -1158,6 +1248,7 @@ def investment_case_snapshot(
         inference_generation_id=inference_generation_id,
         reasoning_detail=reasoning_detail,
         episode=episode,
+        ai_execution=ai_execution,
     )
     attention = _attention_summary(action, dimensions, integrity)
     change_conditions = list(explanation.get("changeConditions") or [])
@@ -1217,6 +1308,7 @@ def investment_case_snapshot(
             "executionDecision": text(episode.get("executionDecision") or episode.get("execution_decision")),
             "abstained": bool(abstention),
             "abstention": abstention,
+            "aiExecution": ai_execution,
             "requiredChecks": required_checks,
             "guardrails": guardrails,
         },

@@ -6,6 +6,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .notification_ai_context import is_graph_backed_relation_context
 
 
+OFF_HOURS_IMPORTANT_ONLY = "important_only"
+OFF_HOURS_SEND_ALL = "send_all"
+OFF_HOURS_DEFER_UNTIL_OPEN = "defer_until_open"
+OFF_HOURS_DELIVERY_MODES = {
+    OFF_HOURS_IMPORTANT_ONLY,
+    OFF_HOURS_SEND_ALL,
+    OFF_HOURS_DEFER_UNTIL_OPEN,
+}
+
+
 DEFAULT_MARKET_HOUR_SESSIONS: Dict[str, Dict[str, object]] = {
     "KR": {
         "market": "KR",
@@ -48,6 +58,7 @@ class MarketHoursDecision:
     open_time: str = ""
     close_time: str = ""
     timezone: str = ""
+    off_hours_mode: str = OFF_HOURS_IMPORTANT_ONLY
 
     def to_context(self) -> Dict[str, object]:
         return {
@@ -61,6 +72,7 @@ class MarketHoursDecision:
             "marketHoursOpenTime": self.open_time,
             "marketHoursCloseTime": self.close_time,
             "marketHoursTimezone": self.timezone,
+            "offHoursDeliveryMode": self.off_hours_mode,
         }
 
 
@@ -101,6 +113,31 @@ def default_market_hours_markets(message_type: str) -> List[str]:
     if default_market_hours_enabled(key):
         return ["KR", "US"]
     return []
+
+
+def default_off_hours_delivery_mode(message_type: str) -> str:
+    key = str(message_type or "").strip()
+    if key in {"investmentInsight", "externalDartDisclosure"}:
+        return OFF_HOURS_IMPORTANT_ONLY
+    return OFF_HOURS_DEFER_UNTIL_OPEN
+
+
+def normalize_off_hours_delivery_mode(value: object, message_type: str = "") -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "important": OFF_HOURS_IMPORTANT_ONLY,
+        "importantonly": OFF_HOURS_IMPORTANT_ONLY,
+        "all": OFF_HOURS_SEND_ALL,
+        "always": OFF_HOURS_SEND_ALL,
+        "sendall": OFF_HOURS_SEND_ALL,
+        "defer": OFF_HOURS_DEFER_UNTIL_OPEN,
+        "closed": OFF_HOURS_DEFER_UNTIL_OPEN,
+        "market_only": OFF_HOURS_DEFER_UNTIL_OPEN,
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in OFF_HOURS_DELIVERY_MODES:
+        return normalized
+    return default_off_hours_delivery_mode(message_type)
 
 
 def infer_market_from_context(message_type: str, context: Dict[str, object]) -> str:
@@ -208,6 +245,36 @@ def _structured_urgent_investment_transition(context: Dict[str, object]) -> bool
     )
 
 
+def _structured_material_external_event_reason(context: Dict[str, object]) -> str:
+    relation_diff = _mapping(context.get("ontologyRelationDiff"))
+    relation = _mapping(context.get("ontologyRelationContext"))
+    if not relation_diff.get("material") or not is_graph_backed_relation_context(relation):
+        return ""
+    source_types = {
+        str(item or "").strip()
+        for item in context.get("sourceSignalTypes") or []
+        if str(item or "").strip()
+    }
+    insight = _mapping(context.get("ontologyInsight"))
+    semantic = _mapping(insight.get("semanticComponents"))
+    event_keys = [
+        str(item or "").strip().lower()
+        for item in semantic.get("materialSourceEventKeys") or insight.get("materialSourceEventKeys") or []
+        if str(item or "").strip()
+    ]
+    if "externalCryptoMove" in source_types:
+        return "크립토 급변이 TypeDB 투자 판단을 바꾼 중요 사건이라 장 시간 외에도 발송"
+    if "externalMacroShift" in source_types:
+        return "금리·환율 등 거시 변화가 TypeDB 투자 판단을 바꾼 중요 사건이라 장 시간 외에도 발송"
+    if "newsDigest" in source_types or any(
+        marker in key
+        for key in event_keys
+        for marker in (":news:", ":article:", ":rss:", ":filing:", ":sec:")
+    ):
+        return "새 뉴스·공시가 TypeDB 투자 판단을 바꾼 중요 사건이라 장 시간 외에도 발송"
+    return ""
+
+
 def market_hours_important_exception_reason(message_type: str, context: Dict[str, object]) -> str:
     key = str(message_type or (context or {}).get("messageType") or "").strip()
     context = context or {}
@@ -219,6 +286,9 @@ def market_hours_important_exception_reason(message_type: str, context: Dict[str
         return "새 공시가 TypeDB 판단을 실제로 바꾼 중요 이벤트라 장 시간 외에도 발송"
     if _structured_urgent_investment_transition(context):
         return "TypeDB 관계가 즉시 손실·위험 대응 단계로 바뀌어 장 시간 외에도 발송"
+    material_event_reason = _structured_material_external_event_reason(context)
+    if material_event_reason:
+        return material_event_reason
     return ""
 
 
@@ -274,19 +344,43 @@ def evaluate_market_hours(
     enabled: bool,
     markets: List[str],
     now: datetime = None,
+    off_hours_mode: str = "",
 ) -> MarketHoursDecision:
+    normalized_off_hours_mode = normalize_off_hours_delivery_mode(off_hours_mode, message_type)
     selected_markets = [normalize_market_key(item) for item in markets or []]
     selected_markets = [item for item in selected_markets if item]
     if not enabled:
-        return MarketHoursDecision(False, status="bypass", reason="장 시간 필터 꺼짐")
+        return MarketHoursDecision(
+            False,
+            status="bypass",
+            reason="장 시간 필터 꺼짐",
+            off_hours_mode=normalized_off_hours_mode,
+        )
     market = infer_market_from_context(message_type, context)
     if not market:
-        return MarketHoursDecision(True, status="unknown", reason="시장 식별 불가로 통과")
+        return MarketHoursDecision(
+            True,
+            status="unknown",
+            reason="시장 식별 불가로 통과",
+            off_hours_mode=normalized_off_hours_mode,
+        )
     if selected_markets and market not in selected_markets:
-        return MarketHoursDecision(True, market=market, status="bypass", reason="선택한 장 시간 대상이 아니라 통과")
+        return MarketHoursDecision(
+            True,
+            market=market,
+            status="bypass",
+            reason="선택한 장 시간 대상이 아니라 통과",
+            off_hours_mode=normalized_off_hours_mode,
+        )
     session = DEFAULT_MARKET_HOUR_SESSIONS.get(market)
     if not session:
-        return MarketHoursDecision(True, market=market, status="unknown", reason="장 시간 세션 없음")
+        return MarketHoursDecision(
+            True,
+            market=market,
+            status="unknown",
+            reason="장 시간 세션 없음",
+            off_hours_mode=normalized_off_hours_mode,
+        )
 
     sessions = session_items(session)
     current = market_time(now or datetime.now(timezone.utc), str(session.get("timezone") or "UTC"))
@@ -313,7 +407,12 @@ def evaluate_market_hours(
     else:
         reason = market_label + " 닫힘 (" + session_summary(sessions) + ")"
         status = "closed"
-        exception_reason = market_hours_important_exception_reason(message_type, context)
+        if normalized_off_hours_mode == OFF_HOURS_SEND_ALL:
+            exception_reason = "모든 장외 투자 알림을 받도록 설정되어 발송"
+        elif normalized_off_hours_mode == OFF_HOURS_IMPORTANT_ONLY:
+            exception_reason = market_hours_important_exception_reason(message_type, context)
+        else:
+            exception_reason = ""
         if exception_reason:
             reason = reason + " · " + exception_reason
             status = "closed_exception"
@@ -328,4 +427,5 @@ def evaluate_market_hours(
         open_time=open_time,
         close_time=close_time,
         timezone=str(session.get("timezone") or ""),
+        off_hours_mode=normalized_off_hours_mode,
     )

@@ -34,7 +34,9 @@ The domain package imports neither MySQL nor Telegram.
 
 - `intake.py`: converts alerts or text into the stable request and durable job.
 - `admission.py`: evaluates cooldown, similarity, market-hours, and initial
-  freshness policy from repository-supplied history facts.
+  freshness policy from repository-supplied history facts. For graph-backed
+  investment insights, delivery-only failures are retained as deferred policy
+  facts so they cannot prevent the AI decision from being completed.
 - `eligibility.py`: rechecks live operational state and freshness at dispatch.
 - `rendering.py`: creates the exact send-time artifact and content hash.
 - `dispatch.py`: selects the account or operations audience and records the
@@ -65,9 +67,14 @@ The old `application/notification_service.py` and
    the source event and reasoning identities into `NotificationSourceTrace`.
 3. The MySQL adapter evaluates admission policy and atomically stores the job
    plus `received` and `eligibility_checked` events.
-4. The worker claims the job. AI-gated jobs may enter `awaiting_decision`; this
-   uses the existing AI queue and does not change the decision policy.
-5. Dispatch eligibility is checked, then the final text is rendered once and
+4. The worker claims the job. A closed market, cooldown, or similar-message
+   result does not block an otherwise material investment insight before AI.
+   AI-gated jobs enter `awaiting_decision`, persist the final DecisionEpisode,
+   and keep the earlier delivery assessment for the post-decision gate.
+5. Dispatch eligibility is checked after the decision is stored. Market-hours
+   policy may send all off-hours decisions, send only TypeDB-backed material
+   events and urgent transitions, or defer delivery until a later observation.
+   The final text is then rendered once and
    hashed.
 6. A delivery attempt is stored before calling Telegram or another channel.
 7. The attempt and terminal lifecycle state are updated after the channel

@@ -1051,6 +1051,7 @@ MYSQL_SCHEMA = [
         state_cooldown_minutes INT NOT NULL DEFAULT 0,
         market_hours_enabled TINYINT NOT NULL DEFAULT 0,
         market_hours_markets_json LONGTEXT NOT NULL,
+        off_hours_delivery_mode VARCHAR(32) NOT NULL DEFAULT 'important_only',
         updated_at VARCHAR(40) NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,

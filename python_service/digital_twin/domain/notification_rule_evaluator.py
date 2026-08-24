@@ -988,6 +988,8 @@ def apply_similarity_rule(
                 decision.reasons.append("반복 보류 해제: " + reason)
                 return decision
     reason = "같은 내용이 " + str(config.similarity_window_minutes) + "분 안에 이미 발송되어 다시 보내지 않습니다."
+    decision.similarity_suppressed = True
+    decision.similarity_reason = reason
     decision.mark_suppressed("similar_repeat", reason)
     decision.reasons.append("반복 정책: " + reason)
     return decision
@@ -1126,6 +1128,7 @@ def apply_market_hours_rule(
         bool(config.enabled and config.market_hours_enabled),
         list(config.market_hours_markets or []),
         now=now,
+        off_hours_mode=config.off_hours_delivery_mode,
     )
     decision.market_hours_enabled = bool(config.market_hours_enabled)
     decision.market_hours_market = market_decision.market
@@ -1137,6 +1140,7 @@ def apply_market_hours_rule(
     decision.market_hours_close_time = market_decision.close_time
     decision.market_hours_timezone = market_decision.timezone
     decision.market_hours_markets = list(config.market_hours_markets or [])
+    decision.off_hours_delivery_mode = market_decision.off_hours_mode
     if config.enabled and config.market_hours_enabled and market_decision.status in {"open", "closed", "closed_exception"}:
         decision.reasons.append("장 시간 " + market_decision.reason)
     if config.enabled and config.market_hours_enabled and not market_decision.should_send:

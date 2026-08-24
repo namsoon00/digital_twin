@@ -2889,6 +2889,27 @@ def notification_detail_level_from_context(context: Dict[str, object]) -> str:
     return normalize_notification_detail_level(raw) if raw not in (None, "") else "full"
 
 
+def market_hours_message_rows(context: Dict[str, object]) -> List[str]:
+    status = str(context.get("marketHoursStatus") or "").strip().lower()
+    if status not in {"closed", "closed_exception"}:
+        return []
+    market_label = str(context.get("marketHoursLabel") or context.get("marketHoursMarket") or "거래소").strip()
+    reason = customer_visible_ai_text(context.get("marketHoursReason") or "")
+    mode = str(context.get("offHoursDeliveryMode") or "important_only").strip().lower()
+    mode_label = {
+        "send_all": "모든 장외 판단 발송 설정",
+        "important_only": "중요 장외 판단 발송 설정",
+        "defer_until_open": "장 시작 후 확인 설정",
+    }.get(mode, "장외 발송 설정")
+    rows = [
+        "장 상태: " + market_label + " 닫힘 · " + mode_label,
+        "가격 확인: 장 마감 상태의 표시 가격은 실시간 체결가격이 아닐 수 있어 주문 전에 다시 확인해야 합니다.",
+    ]
+    if reason:
+        rows.append("장외 발송 이유: " + reason)
+    return rows
+
+
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     detail_level = notification_detail_level_from_context(context)
     if detail_level in {"concise", "standard"}:
@@ -2936,6 +2957,9 @@ def execution_telegram_message_full(context: Dict[str, object], response: Notifi
         "<b>" + ai_judgment_section_title(level) + "</b>",
         *ai_judgment_rows(response, level, context),
     ]
+    market_rows = market_hours_message_rows(context)
+    if market_rows:
+        parts.extend(["", "<b>장외 판단 안내</b>", *[_html_bullet(row, level) for row in market_rows]])
     hypothesis_rows = full_typedb_competing_inference_rows(context, response)
     parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in hypothesis_rows]])
     assessment_rows = typedb_decision_assessment_rows(context)
@@ -3128,6 +3152,9 @@ def execution_telegram_message_progressive(
         "<b>지금 행동</b>",
         _html_bullet(packet.action, level),
     ])
+    market_rows = market_hours_message_rows(context)
+    if market_rows:
+        parts.extend(["", "<b>장외 판단 안내</b>", *[_html_bullet(row, level) for row in market_rows]])
     if packet.change:
         parts.extend(["", "<b>이번 변화</b>", _html_bullet(packet.change, level)])
     continuity_rows = decision_continuity_rows(context, 2)
@@ -3189,6 +3216,9 @@ def execution_telegram_message_compact_beginner(
             level,
         ),
     ])
+    market_rows = market_hours_message_rows(context)
+    if market_rows:
+        parts.extend(["", "<b>장외 판단 안내</b>", *[_html_bullet(row, level) for row in market_rows]])
     transition = compact_decision_transition(context, response)
     if transition:
         parts.extend(["", "<b>이번 변화</b>", _html_bullet(transition, level)])

@@ -227,6 +227,9 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
         self.assertEqual("abox:1", episode.source_abox_snapshot_id)
         self.assertEqual("COMPLETED", episode.facts_at_decision["reasoningCaseStage"])
         self.assertFalse(episode.facts_at_decision["calibrationPolicy"]["eligible"])
+        self.assertEqual({}, episode.decision_abstention)
+        self.assertEqual("not-run", episode.ai_execution["state"])
+        self.assertFalse(episode.ai_execution["attempted"])
 
 
 def reasoning_request(fact_types=None):

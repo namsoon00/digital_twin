@@ -282,6 +282,33 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             result.explanation["primaryCause"]["reasonCode"],
         )
 
+    def test_delivery_suppressed_episode_is_not_presented_as_ai_abstention(self):
+        row = episode(action="NO_ACTION")
+        row["selectedHypothesisId"] = ""
+        row["decisionAbstention"] = {
+            "abstained": True,
+            "reason": "No validated final hypothesis selection.",
+        }
+        row["factsAtDecision"] = {
+            "finalDecision": {
+                "action": "NO_ACTION",
+                "source": "typedb-delivery-suppressed",
+                "reason": "장 시간 외라 알림과 AI 요청을 생성하지 않았습니다.",
+            },
+        }
+
+        result = investment_case_snapshot(row)
+        dimensions = {item["id"]: item for item in result.status_dimensions}
+
+        self.assertFalse(result.decision["abstained"])
+        self.assertEqual("not-run", result.decision["aiExecution"]["state"])
+        self.assertEqual("warning", dimensions["ai"]["state"])
+        self.assertEqual("AI_NOT_RUN", dimensions["ai"]["reasonCode"])
+        self.assertEqual("AI_JUDGMENT_NOT_RUN", result.explanation["primaryCause"]["reasonCode"])
+        self.assertEqual("not-run", result.explanation["comparison"]["state"])
+        self.assertEqual("AI 비교 미실행", result.explanation["comparison"]["label"])
+        self.assertNotIn("가설", result.headline)
+
     def test_generic_abstention_explains_the_missing_relation_and_hypothesis(self):
         row = episode()
         row["dataState"] = "unavailable"

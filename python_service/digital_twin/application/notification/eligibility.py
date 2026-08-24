@@ -12,6 +12,7 @@ from ...domain.message_types import INVESTMENT_INSIGHT, ONTOLOGY_REASONING_QUEUE
 from ...domain.market_hours import (
     default_market_hours_markets,
     evaluate_market_hours,
+    normalize_off_hours_delivery_mode,
 )
 from ...domain.notification_ai_context import is_graph_backed_relation_context
 from ...domain.notifications import NotificationJob
@@ -146,12 +147,17 @@ class NotificationDispatchEligibilityService:
         enabled = str(enabled_value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
         markets = context.get("marketHoursMarkets")
         markets = markets if isinstance(markets, list) else default_market_hours_markets(message_type)
+        off_hours_mode = normalize_off_hours_delivery_mode(
+            context.get("offHoursDeliveryMode"),
+            message_type,
+        )
         decision = evaluate_market_hours(
             message_type,
             context,
             enabled,
             markets,
             now=self.now_provider(),
+            off_hours_mode=off_hours_mode,
         )
         context.update(decision.to_context())
         context["dispatchMarketHoursGate"] = {
@@ -161,8 +167,26 @@ class NotificationDispatchEligibilityService:
             "decision": "send" if decision.should_send else "defer",
             "reason": decision.reason,
             "checkedAt": decision.local_time,
+            "offHoursDeliveryMode": decision.off_hours_mode,
         }
+        if decision.status in {"closed", "closed_exception"}:
+            context["marketHoursPriceBasis"] = {
+                "version": "market-hours-price-basis-v1",
+                "status": "closed-market-reference",
+                "reason": "장 마감 상태의 표시 가격은 실시간 체결가격이 아닐 수 있어 주문 전에 다시 확인해야 합니다.",
+            }
         job.context = context
+        if str(job.message_type or "") == INVESTMENT_INSIGHT and stage == "AI 판단 전":
+            context["preAiMarketHoursAssessment"] = {
+                "version": "pre-ai-market-hours-assessment-v1",
+                "status": decision.status,
+                "wouldSend": bool(decision.should_send),
+                "reason": decision.reason,
+                "offHoursDeliveryMode": decision.off_hours_mode,
+                "blocking": False,
+            }
+            job.context = context
+            return True
         if decision.should_send:
             return True
         reason = stage + " 장 운영 상태 재검증: " + str(decision.reason or "장 운영 시간 외")

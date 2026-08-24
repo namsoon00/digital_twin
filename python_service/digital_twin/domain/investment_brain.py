@@ -158,7 +158,7 @@ HYPOTHESIS_EVIDENCE_STATE_LABELS = {
     "blocked": "자료 문제로 판단 보류",
 }
 HYPOTHESIS_REVIEW_VERDICTS = ("supported", "weakened", "rejected", "unresolved", "unreviewed")
-HYPOTHESIS_COMPARISON_STATES = ("completed", "partial", "fallback", "invalid-selection", "unavailable")
+HYPOTHESIS_COMPARISON_STATES = ("completed", "partial", "incomplete", "fallback", "invalid-selection", "unavailable")
 
 
 def known_state(value: object, allowed: Iterable[str], fallback: str) -> str:
@@ -541,6 +541,7 @@ class DecisionEpisode:
     hypothesis_reviews: List[HypothesisReview] = field(default_factory=list)
     hypothesis_comparison_state: str = "unavailable"
     hypothesis_selection_source: str = "not-selected"
+    ai_execution: Dict[str, object] = field(default_factory=dict)
     decision_guardrails: List[Dict[str, object]] = field(default_factory=list)
     decision_abstention: Dict[str, object] = field(default_factory=dict)
     inference_generation_id: str = ""
@@ -573,6 +574,7 @@ class DecisionEpisode:
         payload["question"] = self.question.to_dict()
         payload["hypothesisSet"] = self.hypothesis_set.to_dict()
         payload["hypothesisReviews"] = [item.to_dict() for item in self.hypothesis_reviews]
+        payload["aiExecution"] = dict(self.ai_execution or {})
         payload["decisionGuardrails"] = [dict(item) for item in self.decision_guardrails]
         payload["decisionAbstention"] = dict(self.decision_abstention or {})
         payload["researchPlan"] = dict(self.research_plan or {})
@@ -881,6 +883,11 @@ class DecisionEpisode:
                 payload.get("hypothesisSelectionSource")
                 or payload.get("hypothesis_selection_source")
                 or "not-selected"
+            ),
+            ai_execution=dict(
+                payload.get("aiExecution")
+                or payload.get("ai_execution")
+                or {}
             ),
             decision_guardrails=[
                 dict(item)

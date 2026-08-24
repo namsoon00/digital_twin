@@ -78,6 +78,7 @@ def rule_from_row(row) -> NotificationRuleConfig:
         "stateCooldownMinutes": row["state_cooldown_minutes"] if "state_cooldown_minutes" in row_keys else None,
         "marketHoursEnabled": bool(row["market_hours_enabled"]) if "market_hours_enabled" in row_keys else None,
         "marketHoursMarkets": market_hours_markets if isinstance(market_hours_markets, list) else [],
+        "offHoursDeliveryMode": row["off_hours_delivery_mode"] if "off_hours_delivery_mode" in row_keys else None,
         "updatedAt": row["updated_at"],
     })
 

@@ -2,7 +2,12 @@ import re
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List
 
-from .market_hours import default_market_hours_enabled, default_market_hours_markets
+from .market_hours import (
+    default_market_hours_enabled,
+    default_market_hours_markets,
+    default_off_hours_delivery_mode,
+    normalize_off_hours_delivery_mode,
+)
 from .message_types import (
     INVESTMENT_CALENDAR_REMINDER,
     INVESTMENT_INSIGHT,
@@ -283,6 +288,7 @@ class NotificationRuleConfig:
     state_cooldown_minutes: int = 0
     market_hours_enabled: bool = False
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
+    off_hours_delivery_mode: str = "important_only"
     updated_at: str = ""
 
     @classmethod
@@ -357,6 +363,10 @@ class NotificationRuleConfig:
                 default_market_hours_enabled(message_type),
             ),
             market_hours_markets=markets,
+            off_hours_delivery_mode=normalize_off_hours_delivery_mode(
+                payload.get("offHoursDeliveryMode", payload.get("off_hours_delivery_mode")),
+                message_type,
+            ),
             updated_at=str(payload.get("updatedAt") or payload.get("updated_at") or ""),
         )
 
@@ -373,6 +383,10 @@ class NotificationRuleConfig:
             "stateCooldownMinutes": int(self.state_cooldown_minutes or 0),
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarkets": list(self.market_hours_markets or []),
+            "offHoursDeliveryMode": normalize_off_hours_delivery_mode(
+                self.off_hours_delivery_mode,
+                self.message_type,
+            ),
             "updatedAt": self.updated_at,
         }
 
@@ -398,6 +412,8 @@ class NotificationRuleDecision:
     similarity_recent_count: int = 0
     similarity_bypassed: bool = False
     similarity_bypass_reason: str = ""
+    similarity_suppressed: bool = False
+    similarity_reason: str = ""
     suppression_reason: str = ""
     state_cooldown_enabled: bool = False
     state_cooldown_minutes: int = 0
@@ -417,6 +433,7 @@ class NotificationRuleDecision:
     market_hours_close_time: str = ""
     market_hours_timezone: str = ""
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
+    off_hours_delivery_mode: str = "important_only"
     previous_profit_loss_rate: object = None
     profit_loss_rate_delta_pct: object = None
 
@@ -452,6 +469,8 @@ class NotificationRuleDecision:
             "repeatRecentCount": self.similarity_recent_count,
             "repeatBypassed": bool(self.similarity_bypassed),
             "repeatBypassReason": self.similarity_bypass_reason,
+            "repeatSuppressed": bool(self.similarity_suppressed),
+            "repeatReason": self.similarity_reason,
             "deliverySuppressionReason": self.suppression_reason,
             "cooldownEnabled": bool(self.state_cooldown_enabled),
             "cooldownMinutes": self.state_cooldown_minutes,
@@ -472,6 +491,7 @@ class NotificationRuleDecision:
             "marketHoursCloseTime": self.market_hours_close_time,
             "marketHoursTimezone": self.market_hours_timezone,
             "marketHoursMarkets": list(self.market_hours_markets or []),
+            "offHoursDeliveryMode": self.off_hours_delivery_mode,
         }
         if self.previous_profit_loss_rate is not None:
             payload["previousProfitLossRate"] = self.previous_profit_loss_rate
@@ -528,6 +548,7 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         state_cooldown_minutes=default_state_cooldown_minutes(key),
         market_hours_enabled=default_market_hours_enabled(key),
         market_hours_markets=default_market_hours_markets(key),
+        off_hours_delivery_mode=default_off_hours_delivery_mode(key),
     )
 
 

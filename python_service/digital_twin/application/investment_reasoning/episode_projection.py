@@ -33,6 +33,13 @@ PROJECTABLE_STAGES = {
     CASE_EXPIRED,
 }
 
+NO_AI_FINAL_SOURCES = {
+    "typedb-delivery-suppressed",
+    "typedb-no-material-change",
+    "typedb-shadow",
+    "typedb-context-observation",
+}
+
 
 def _text(value: object) -> str:
     return str(value or "").strip()
@@ -132,6 +139,17 @@ def decision_episode_from_reasoning_case(
     )
     failed = reasoning_case.stage in {CASE_BLOCKED, CASE_FAILED}
     action = _text(final.action if final else "NO_ACTION").upper() or "NO_ACTION"
+    final_source = _text(final.source if final else "")
+    if judgment and selected_id:
+        ai_execution_state = "completed"
+    elif judgment:
+        ai_execution_state = "abstained"
+    elif final_source == "typedb-context-observation":
+        ai_execution_state = "not-required"
+    elif final_source in NO_AI_FINAL_SOURCES:
+        ai_execution_state = "not-run"
+    else:
+        ai_execution_state = "failed" if failed else "not-run"
     validation_state = _text(final.validation_state if final else "").lower()
     if validation_state not in {"ready", "conditional", "blocked"}:
         validation_state = "blocked" if failed else "conditional"
@@ -207,14 +225,25 @@ def decision_episode_from_reasoning_case(
         "decisionReadiness": decision_ready,
         "selectedHypothesisId": selected_id,
         "hypothesisReviews": reviews,
-        "hypothesisComparisonState": "partial" if reviews else "unavailable",
+        "hypothesisComparisonState": (
+            "completed" if ai_execution_state == "completed"
+            else "incomplete" if ai_execution_state == "abstained"
+            else "unavailable"
+        ),
         "hypothesisSelectionSource": "ai-v2" if judgment and selected_id else "not-selected",
+        "aiExecution": {
+            "version": "ai-judgment-execution-v1",
+            "state": ai_execution_state,
+            "source": final_source,
+            "reason": _text(final.reason if final else ""),
+            "attempted": bool(judgment),
+        },
         "decisionGuardrails": [],
         "decisionAbstention": ({
             "abstained": True,
             "reason": _text((reasoning_case.errors or ({},))[-1].get("reason"))
             if reasoning_case.errors else "No validated final hypothesis selection.",
-        } if not selected_id else {}),
+        } if ai_execution_state == "abstained" else {}),
         "inferenceGenerationId": inference_generation_id,
         "portfolioId": "portfolio:" + (account_id or "default"),
         "sourceAboxSnapshotId": source_abox_id,

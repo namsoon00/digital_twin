@@ -517,6 +517,13 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition("notification_jobs", "data_quality", "VARCHAR(32) NOT NULL DEFAULT 'actual'"),
         MySQLColumnDefinition("notification_jobs", "is_mock", "TINYINT NOT NULL DEFAULT 0"),
     ),
+    "notification_rules": (
+        MySQLColumnDefinition(
+            "notification_rules",
+            "off_hours_delivery_mode",
+            "VARCHAR(32) NOT NULL DEFAULT 'important_only'",
+        ),
+    ),
     "monitor_snapshot_history": (
         MySQLColumnDefinition(
             "monitor_snapshot_history",

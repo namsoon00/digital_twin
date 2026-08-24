@@ -533,14 +533,8 @@ class NotificationQueueRunner:
             if not self.apply_final_ai_delivery_gate(job):
                 processed += 1
                 continue
-            self.record_lifecycle(job, "ready_to_render", "ready")
-            self.active_job_stage = "rendering"
-            message = self.render(job)
-            if not message:
-                reason = "empty rendered notification text"
-                self.queue.mark_failed(job, reason)
-                self.record_operational_delivery(job, "failed", reason)
-                self.last_run_details.append(self.job_detail(job, "failed", "empty rendered text"))
+            if not self.apply_deferred_admission_delivery_gate(job):
+                processed += 1
                 continue
             if not self.apply_operational_state_gate(job, "발송 직전"):
                 processed += 1
@@ -550,6 +544,15 @@ class NotificationQueueRunner:
                 continue
             if not self.apply_market_hours_gate(job, "발송 직전"):
                 processed += 1
+                continue
+            self.record_lifecycle(job, "ready_to_render", "ready")
+            self.active_job_stage = "rendering"
+            message = self.render(job)
+            if not message:
+                reason = "empty rendered notification text"
+                self.queue.mark_failed(job, reason)
+                self.record_operational_delivery(job, "failed", reason)
+                self.last_run_details.append(self.job_detail(job, "failed", "empty rendered text"))
                 continue
             if self.dry_run:
                 print(message)
@@ -662,6 +665,61 @@ class NotificationQueueRunner:
         self.mark_reasoning_case_suppressed(job, reason)
         self.last_run_details.append(self.job_detail(job, "suppressed", "final AI action unchanged"))
         return False
+
+    def apply_deferred_admission_delivery_gate(self, job: NotificationJob) -> bool:
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return True
+        context = dict(job.context or {})
+        deferred = context.get("preDecisionDeliveryGate")
+        deferred = deferred if isinstance(deferred, dict) else {}
+        if str(deferred.get("status") or "") != "deferred":
+            return True
+        reason_code = str(deferred.get("reasonCode") or "")
+        reason_codes = {
+            str(item or "")
+            for item in deferred.get("reasonCodes") or [reason_code]
+            if str(item or "")
+        }
+        repeat_reason_code = next(
+            (item for item in ("state_cooldown", "similar_repeat") if item in reason_codes),
+            "",
+        )
+        if repeat_reason_code:
+            reason_details = deferred.get("reasonDetails")
+            reason_details = reason_details if isinstance(reason_details, dict) else {}
+            reason = str(
+                reason_details.get(repeat_reason_code)
+                or deferred.get("reason")
+                or "반복·쿨다운 발송 정책에 따라 이번 메시지를 보내지 않습니다."
+            )
+            context["postDecisionDeliveryGate"] = {
+                "version": "post-decision-delivery-gate-v1",
+                "status": "suppressed-after-decision",
+                "reasonCode": repeat_reason_code,
+                "reasonCodes": sorted(reason_codes),
+                "reason": reason,
+            }
+            context["deliverySuppressionReason"] = repeat_reason_code
+            context["deliverySuppressionDetail"] = reason
+            job.context = context
+            if hasattr(self.queue, "mark_suppressed"):
+                self.queue.mark_suppressed(job, reason)
+            else:
+                self.queue.mark_failed(job, reason)
+            self.record_operational_delivery(job, "suppressed", reason)
+            self.mark_reasoning_case_suppressed(job, reason)
+            self.last_run_details.append(self.job_detail(job, "suppressed", repeat_reason_code))
+            return False
+        if reason_codes.intersection({"market_closed", "market_hours"}):
+            context["postDecisionDeliveryGate"] = {
+                "version": "post-decision-delivery-gate-v1",
+                "status": "market-hours-recheck",
+                "reasonCode": reason_code,
+                "reason": "AI 판단 저장 후 최신 장 상태와 장외 발송 설정을 다시 확인합니다.",
+            }
+            job.context = context
+            return True
+        return True
 
     def message_type_allowed(self, message_type: object) -> bool:
         value = str(message_type or "").strip()

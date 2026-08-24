@@ -24,13 +24,26 @@ def decision_comparison_state(
     """Describe TypeDB/AI participation without inventing an agreement."""
 
     facts = _mapping(episode.get("factsAtDecision") or episode.get("facts_at_decision"))
+    ai_execution = _mapping(episode.get("aiExecution") or episode.get("ai_execution"))
+    final_decision = _mapping(facts.get("finalDecision"))
+    ai_execution_state = _text(ai_execution.get("state")).lower()
+    final_source = _text(ai_execution.get("source") or final_decision.get("source"))
+    if not ai_execution_state and final_source in {
+        "typedb-delivery-suppressed",
+        "typedb-no-material-change",
+        "typedb-shadow",
+        "typedb-context-observation",
+    }:
+        ai_execution_state = "not-run"
     explicit = _text(facts.get("decisionComparisonState"))
     source = _text(episode.get("source")).lower()
     actions = list(dict.fromkeys(
         _text(value).upper() for value in type_db_actions or [] if _text(value)
     ))
     action = _text(final_action).upper()
-    if explicit:
+    if ai_execution_state in {"not-run", "not-required"}:
+        state = "not-run"
+    elif explicit:
         state = explicit
     elif "typedb" in source and "fallback" in source:
         state = "typedb-only"
@@ -47,6 +60,7 @@ def decision_comparison_state(
         "adjusted": "AI가 TypeDB 후보를 조정",
         "typedb-only": "TypeDB 추론만 사용",
         "ai-only": "AI 의견만 기록",
+        "not-run": "AI 비교 미실행",
         "unavailable": "비교할 판단 없음",
     }
     comparable = state in {"agreed", "adjusted"}
@@ -56,8 +70,8 @@ def decision_comparison_state(
         "comparable": comparable,
         "different": state == "adjusted" if comparable else None,
         "typeDbCandidateActions": actions,
-        "aiFinalAction": action,
-        "decisionSource": _text(facts.get("decisionWriter")) or _text(episode.get("source")),
+        "aiFinalAction": "" if state == "not-run" else action,
+        "decisionSource": final_source or _text(facts.get("decisionWriter")) or _text(episode.get("source")),
     }
 
 

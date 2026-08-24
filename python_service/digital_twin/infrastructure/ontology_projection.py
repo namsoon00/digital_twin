@@ -1822,6 +1822,17 @@ class PortfolioOntologyProjectionRecorder:
             matchedPremiseCount=sum(len(values) for values in premises.values()),
             totalMs=runtime_stages["totalMs"],
         )
+        model_signal_bridge_execution = (
+            dict(execution.get("modelSignalBridgeExecution") or {})
+            if isinstance(execution.get("modelSignalBridgeExecution"), dict)
+            else dict(
+                (execution.get("nativeMatchResult") or {}).get(
+                    "modelSignalBridgeExecution"
+                ) or {}
+            )
+            if isinstance(execution.get("nativeMatchResult"), dict)
+            else {}
+        )
         return {
             "contractVersion": WORLD_PARTITIONED_REASONING_VERSION,
             "status": "ready",
@@ -1885,6 +1896,7 @@ class PortfolioOntologyProjectionRecorder:
                 ),
             },
             "runtimeStages": runtime_stages,
+            "modelSignalBridgeExecution": model_signal_bridge_execution,
             "activationLifecycle": compact_staged_abox_activation_lifecycle(
                 execution
             ),

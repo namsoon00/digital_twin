@@ -306,6 +306,30 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(["035420", "MSTR"], failure["targetSymbols"])
         self.assertEqual(30, failure["recommendedRetryAfterSeconds"])
 
+    def test_projection_result_summary_keeps_bounded_model_signal_bridge_execution(self):
+        summary = projection_result_summary({
+            "ruleboxExecution": {
+                "status": "ok",
+                "modelSignalBridgeExecution": {
+                    "status": "ok",
+                    "logicalModelSignalPolicyCount": 74,
+                    "batchedSimplePolicyCount": 59,
+                    "constrainedPolicyCount": 15,
+                    "modelSignalBridgeReadCount": 3,
+                    "eliminatedModelSignalPolicyQueryCount": 56,
+                    "ignoredContractIds": ["unknown-contract"],
+                    "subjectCount": 1,
+                    "rawRows": [{"large": "payload"}],
+                },
+            },
+        })
+
+        execution = summary["ruleboxExecution"]["modelSignalBridgeExecution"]
+        self.assertEqual(74, execution["logicalModelSignalPolicyCount"])
+        self.assertEqual(3, execution["modelSignalBridgeReadCount"])
+        self.assertEqual(56, execution["eliminatedModelSignalPolicyQueryCount"])
+        self.assertNotIn("rawRows", execution)
+
     def test_projection_result_summary_keeps_relation_write_breakdown(self):
         summary = projection_result_summary({
             "relationPersistence": {

@@ -603,6 +603,9 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     prior_inference_reuse = dict(values.get("priorInferenceReuse") or {})
     inference_detail_outbox = dict(values.get("inferenceDetailOutbox") or {})
     native_stage_timings = dict(execution.get("typedbNativeStageTimings") or {})
+    model_signal_bridge_execution = dict(
+        execution.get("modelSignalBridgeExecution") or {}
+    )
     replay_validation = dict(values.get("nativeReplayValidation") or {})
     equivalence_audit = dict(values.get("incrementalEquivalenceAudit") or {})
     native_rule_failure = dict(values.get("nativeRuleFailure") or {})
@@ -822,6 +825,20 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "matchedRuleCount": int(execution.get("matchedRuleCount") or 0),
             "typedbNativeRuleExecutedCount": int(execution.get("typedbNativeRuleExecutedCount") or 0),
             "typedbNativeRuleMatchedCount": int(execution.get("typedbNativeRuleMatchedCount") or 0),
+            "modelSignalBridgeExecution": {
+                key: model_signal_bridge_execution.get(key)
+                for key in [
+                    "status",
+                    "logicalModelSignalPolicyCount",
+                    "batchedSimplePolicyCount",
+                    "constrainedPolicyCount",
+                    "modelSignalBridgeReadCount",
+                    "eliminatedModelSignalPolicyQueryCount",
+                    "ignoredContractIds",
+                    "subjectCount",
+                ]
+                if key in model_signal_bridge_execution
+            },
             "typedbNativeRuleMatchedRuleIds": sorted({
                 str(value or "").strip()
                 for value in execution.get("typedbNativeRuleMatchedRuleIds") or []

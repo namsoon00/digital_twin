@@ -565,6 +565,11 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
                     "inferenceGenerationId": "market-generation:1",
                     "sourceAboxSnapshotId": "market-abox:1",
                     "symbols": {"NVDA": {"snapshotId": "market-generation:1", "relations": [], "traces": []}},
+                    "modelSignalBridgeExecution": {
+                        "status": "ok",
+                        "modelSignalBridgeReadCount": 3,
+                        "eliminatedModelSignalPolicyQueryCount": 56,
+                    },
                 }
 
             def record_snapshot(self, snapshot, **kwargs):
@@ -593,6 +598,9 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
 
         self.assertEqual("ok", result["acct"]["status"])
         self.assertTrue(recorder.context["sharedPremiseProof"]["ready"])
+        bridge = result["acct"]["sharedInferenceExecution"]["modelSignalBridgeExecution"]
+        self.assertEqual(3, bridge["modelSignalBridgeReadCount"])
+        self.assertEqual(56, bridge["eliminatedModelSignalPolicyQueryCount"])
 
     def test_v2_executor_retries_one_transient_shared_premise_writer_handoff(self):
         class Recorder:

@@ -1024,6 +1024,19 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 "ignoredContractIds": ["unknown-contract"],
                 "rawRows": [{"large": "payload"}],
             },
+            "sharedInferenceExecution": {
+                "status": "direct-shared-premise-world",
+                "modelSignalBridgeExecution": {
+                    "status": "ok",
+                    "logicalModelSignalPolicyCount": 74,
+                    "batchedSimplePolicyCount": 59,
+                    "constrainedPolicyCount": 15,
+                    "modelSignalBridgeReadCount": 3,
+                    "eliminatedModelSignalPolicyQueryCount": 56,
+                    "subjectCount": 1,
+                    "rawRows": [{"large": "payload"}],
+                },
+            },
         })
 
         self.assertEqual(
@@ -1038,6 +1051,10 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             compact["modelSignalBridgeExecution"],
         )
         self.assertNotIn("rawRows", compact["modelSignalBridgeExecution"])
+        shared = compact["sharedInferenceExecution"]["modelSignalBridgeExecution"]
+        self.assertEqual(3, shared["modelSignalBridgeReadCount"])
+        self.assertEqual(56, shared["eliminatedModelSignalPolicyQueryCount"])
+        self.assertNotIn("rawRows", shared)
 
     def test_runner_batches_compatible_source_events_into_one_engine_turn(self):
         events = [source_event("NVDA", []), source_event("TSLA", [])]

@@ -209,6 +209,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("modelSignalBridgeExecution"), Mapping)
         else {}
     )
+    shared_model_signal_bridge_execution = (
+        shared_execution.get("modelSignalBridgeExecution")
+        if isinstance(shared_execution.get("modelSignalBridgeExecution"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -271,17 +276,33 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
             },
         },
         "sharedInferenceExecution": {
-            key: shared_execution.get(key)
-            for key in [
-                "status", "reuseProofStatus", "reuseEligible",
-                "decisionPathAffected", "worldId", "sourceAboxSnapshotId",
-                "inferenceGenerationId", "generationVector",
-                "ruleSelection", "resultSlotWrite", "runtimeStages",
-                "activationLifecycle", "requestedSymbols",
-                "evaluatedSymbols", "notEvaluatedSymbols",
-                "targetCoverageComplete", "existingInferenceReuseMode",
-            ]
-            if key in shared_execution
+            **{
+                key: shared_execution.get(key)
+                for key in [
+                    "status", "reuseProofStatus", "reuseEligible",
+                    "decisionPathAffected", "worldId", "sourceAboxSnapshotId",
+                    "inferenceGenerationId", "generationVector",
+                    "ruleSelection", "resultSlotWrite", "runtimeStages",
+                    "activationLifecycle", "requestedSymbols",
+                    "evaluatedSymbols", "notEvaluatedSymbols",
+                    "targetCoverageComplete", "existingInferenceReuseMode",
+                ]
+                if key in shared_execution
+            },
+            "modelSignalBridgeExecution": {
+                key: shared_model_signal_bridge_execution.get(key)
+                for key in [
+                    "status",
+                    "logicalModelSignalPolicyCount",
+                    "batchedSimplePolicyCount",
+                    "constrainedPolicyCount",
+                    "modelSignalBridgeReadCount",
+                    "eliminatedModelSignalPolicyQueryCount",
+                    "ignoredContractIds",
+                    "subjectCount",
+                ]
+                if key in shared_model_signal_bridge_execution
+            },
         },
         "modelSignalBridgeExecution": {
             key: model_signal_bridge_execution.get(key)
@@ -855,6 +876,9 @@ class ScopedTypeDBInferenceExecutor:
                         ).items()
                         if isinstance(value, (int, float))
                     },
+                    "modelSignalBridgeExecution": dict(
+                        premise_proof.get("modelSignalBridgeExecution") or {}
+                    ),
                     "activationLifecycle": dict(
                         premise_proof.get("activationLifecycle") or {}
                     ),

@@ -22679,6 +22679,9 @@ relation ontology-assertion,
             native_rule_timing["wallClockMs"] = native_stage_timings["nativeRuleQueriesMs"]
             evidence_field_index = dict(native_match_result.get("evidenceFieldIndex") or {})
             native_execution_plan = dict(native_match_result.get("executionPlan") or {})
+            model_signal_bridge_execution = dict(
+                native_match_result.get("modelSignalBridgeExecution") or {}
+            )
             runtime_rulebox_metadata.update({
                 "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
@@ -22699,6 +22702,26 @@ relation ontology-assertion,
                 "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
                 "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
                 "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+                "typedbModelSignalLogicalPolicyCount": int(
+                    number_or_none(model_signal_bridge_execution.get("logicalModelSignalPolicyCount")) or 0
+                ),
+                "typedbModelSignalBatchedSimplePolicyCount": int(
+                    number_or_none(model_signal_bridge_execution.get("batchedSimplePolicyCount")) or 0
+                ),
+                "typedbModelSignalConstrainedPolicyCount": int(
+                    number_or_none(model_signal_bridge_execution.get("constrainedPolicyCount")) or 0
+                ),
+                "typedbModelSignalBridgeReadCount": int(
+                    number_or_none(model_signal_bridge_execution.get("modelSignalBridgeReadCount")) or 0
+                ),
+                "typedbModelSignalEliminatedPolicyQueryCount": int(
+                    number_or_none(
+                        model_signal_bridge_execution.get("eliminatedModelSignalPolicyQueryCount")
+                    ) or 0
+                ),
+                "typedbModelSignalIgnoredContractIds": list(
+                    model_signal_bridge_execution.get("ignoredContractIds") or []
+                )[:20],
                 "typedbNativeManifestEvidencePreflightEnabled": bool(
                     native_execution_plan.get("manifestEvidencePreflightEnabled")
                 ),
@@ -23078,6 +23101,7 @@ relation ontology-assertion,
                             "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                             "skippedRules", "nativeExecutionMode", "readTransactionCount",
                             "readQueryCount", "executionPlan", "blockingRule", "typedbQueryMetrics",
+                            "modelSignalBridgeExecution",
                         ]
                         if key in native_match_result
                     },
@@ -23232,6 +23256,9 @@ relation ontology-assertion,
             "typedbNativeRuleExecutedCount": int(number_or_none(native_match_result.get("executedRuleCount")) or 0),
             "typedbNativeRuleExecutedWorkCount": int(number_or_none(native_match_result.get("executedRuleWorkCount")) or 0),
             "typedbNativeRuleSkippedCount": int(number_or_none(native_match_result.get("skippedRuleCount")) or 0),
+            "modelSignalBridgeExecution": dict(
+                native_match_result.get("modelSignalBridgeExecution") or {}
+            ),
             "typedbNativeManifestEvidencePreflightEnabled": bool(
                 dict(native_match_result.get("executionPlan") or {}).get(
                     "manifestEvidencePreflightEnabled"
@@ -23345,6 +23372,7 @@ relation ontology-assertion,
                     "subjectFanoutUsed", "subjectFanoutParallelism", "subjectFanoutDurationMs",
                     "subjectFanoutFailureCount", "subjectFanoutSubjects", "subjectRuleParallelism",
                     "totalReadParallelismCap", "effectiveTotalReadParallelism",
+                    "modelSignalBridgeExecution",
                 ]
                 if key in native_match_result
             },

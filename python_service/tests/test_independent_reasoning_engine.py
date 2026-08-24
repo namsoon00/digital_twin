@@ -1192,6 +1192,97 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(2, len(queue.completed))
         self.assertNotIn("lastError", registry.health)
 
+    def test_worker_heartbeat_retries_immediately_after_registry_write_failure(self):
+        class Registry:
+            def __init__(self):
+                self.fail = True
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                if self.fail:
+                    self.fail = False
+                    raise RuntimeError("temporary registry write failure")
+                self.health = dict(health)
+
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            object(),
+            object(),
+            registry,
+            worker_id="delivery-worker",
+            deployment_role="delivery",
+        )
+
+        self.assertFalse(runner.publish_worker_heartbeat("ontology-v2-production"))
+        self.assertEqual(0, runner._last_worker_heartbeat_at)
+        self.assertTrue(runner.publish_worker_heartbeat("ontology-v2-production"))
+        self.assertEqual(
+            "delivery-worker",
+            registry.health["workerHeartbeats"]["delivery"]["workerId"],
+        )
+
+    def test_job_lease_heartbeat_also_refreshes_worker_liveness(self):
+        class Queue:
+            def __init__(self):
+                self.calls = []
+
+            def heartbeat(self, job_ids, worker_id, lease_seconds, **_kwargs):
+                self.calls.append((list(job_ids), worker_id, lease_seconds))
+                return True
+
+        class Registry:
+            def __init__(self):
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        class StopAfterOneInterval:
+            def __init__(self):
+                self.calls = 0
+
+            def wait(self, _seconds):
+                self.calls += 1
+                return self.calls > 1
+
+        class LeaseLost:
+            def __init__(self):
+                self.value = False
+
+            def set(self):
+                self.value = True
+
+        queue = Queue()
+        registry = Registry()
+        lease_lost = LeaseLost()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            object(),
+            registry,
+            worker_id="delivery-worker",
+            deployment_role="delivery",
+        )
+
+        runner.heartbeat_loop(
+            ["job:1"],
+            StopAfterOneInterval(),
+            lease_lost,
+            "ontology-v2-production",
+        )
+
+        self.assertEqual(1, len(queue.calls))
+        self.assertFalse(lease_lost.value)
+        self.assertEqual(
+            "delivery-worker",
+            registry.health["workerHeartbeats"]["delivery"]["workerId"],
+        )
+
     def test_runner_does_not_claim_jobs_when_typedb_execution_guard_is_blocked(self):
         class Queue:
             def claim(self, *_args, **_kwargs):

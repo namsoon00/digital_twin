@@ -1537,7 +1537,12 @@ class IndependentReasoningJobRunner:
             lease_lost = threading.Event()
             heartbeat = threading.Thread(
                 target=self.heartbeat_loop,
-                args=(job_ids, stop_heartbeat, lease_lost),
+                args=(
+                    job_ids,
+                    stop_heartbeat,
+                    lease_lost,
+                    descriptor.deployment_id,
+                ),
                 name="v2-reasoning-heartbeat-" + self.worker_id[-12:],
                 daemon=True,
             )
@@ -2023,10 +2028,8 @@ class IndependentReasoningJobRunner:
         with self._progress_lock:
             return dict(self._current_progress)
 
-    def heartbeat_loop(self, job_ids, stop_event, lease_lost) -> None:
+    def heartbeat_loop(self, job_ids, stop_event, lease_lost, deployment_id="") -> None:
         callback = getattr(self.queue, "heartbeat", None)
-        if not callable(callback):
-            return
         lease_seconds = _int_setting(
             self.settings,
             "reasoningEngineV2LeaseSeconds",
@@ -2034,8 +2037,11 @@ class IndependentReasoningJobRunner:
             60,
             3600,
         )
-        parameters = inspect.signature(callback).parameters
+        parameters = inspect.signature(callback).parameters if callable(callback) else {}
         while not stop_event.wait(self.heartbeat_seconds()):
+            self.publish_worker_heartbeat(deployment_id)
+            if not callable(callback):
+                continue
             try:
                 kwargs = {}
                 if "progress" in parameters:
@@ -2166,13 +2172,12 @@ class IndependentReasoningJobRunner:
             "deploymentId": str(deployment_id or ""),
         }
 
-    def publish_worker_heartbeat(self, deployment_id: str) -> None:
+    def publish_worker_heartbeat(self, deployment_id: str) -> bool:
         """Persist bounded consumer liveness without writing on every poll."""
 
         now = time.monotonic()
         if self._last_worker_heartbeat_at and now - self._last_worker_heartbeat_at < 30:
-            return
-        self._last_worker_heartbeat_at = now
+            return True
         role = self.deployment_role if self.deployment_role not in {"", "configured"} else "configured"
         try:
             health = dict((self.registry.get(deployment_id) or {}).get("health") or {})
@@ -2186,7 +2191,9 @@ class IndependentReasoningJobRunner:
             health["workerHeartbeats"] = heartbeats
             self.registry.update_health(deployment_id, health)
         except Exception:  # noqa: BLE001 - queue leases remain the execution authority.
-            return
+            return False
+        self._last_worker_heartbeat_at = now
+        return True
 
     def repair_ingress(self, deployment_id: str) -> int:
         reader = getattr(self.event_reader, "unmaterialized_reasoning_engine_events", None)

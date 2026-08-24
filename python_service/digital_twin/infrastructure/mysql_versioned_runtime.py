@@ -740,6 +740,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         ).strip()
         occurred_at = str(getattr(event, "occurred_at", "") or "").strip()
         work_class = str(payload.get("workClass") or "").strip().upper()
+        if not work_class:
+            work_class = work_class_for_fact_types(
+                payload.get("factTypes") or [],
+                trigger=payload.get("trigger"),
+                full_reconciliation=bool(payload.get("fullReconciliation")),
+            )
         # Monitor-owned market/portfolio events are emitted immediately after
         # their verified snapshot. Other facts need the first monitor packet
         # created after collection so the new fact cannot be paired with an

@@ -626,22 +626,48 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         restore.assert_called_once_with()
         direct_start.assert_not_called()
 
-    def test_cli_restart_restores_configured_supervisor_after_worker_restart(self):
+    def test_cli_restart_reloads_configured_supervisor_after_worker_restart(self):
         with patch.object(service_manager, "restart", return_value=0) as restart, \
-                patch.object(service_manager, "restore_configured_supervisor", return_value=0) as restore:
+                patch.object(service_manager, "reload_configured_supervisor", return_value=0) as reload_supervisor:
             status = service_manager.main(["restart"])
 
         self.assertEqual(0, status)
         restart.assert_called_once_with(restart_typedb=False, restart_mysql=False, restart_share=False)
-        restore.assert_called_once_with()
+        reload_supervisor.assert_called_once_with()
 
     def test_cli_can_explicitly_restart_share_tunnel(self):
         with patch.object(service_manager, "restart", return_value=0) as restart, \
-                patch.object(service_manager, "restore_configured_supervisor", return_value=0):
+                patch.object(service_manager, "reload_configured_supervisor", return_value=0):
             status = service_manager.main(["restart", "--restart-share"])
 
         self.assertEqual(0, status)
         restart.assert_called_once_with(restart_typedb=False, restart_mysql=False, restart_share=True)
+
+    def test_reload_configured_supervisor_replaces_running_process(self):
+        with patch.object(service_manager, "configured_supervisor_available", return_value=True), \
+                patch.object(service_manager, "supervisor_running", return_value=True), \
+                patch.object(service_manager, "read_pid", return_value=123), \
+                patch.object(service_manager.os, "kill") as kill, \
+                patch.object(service_manager, "wait_for_supervisor_replacement", return_value=True) as wait, \
+                patch.object(service_manager, "install_supervisor", return_value=0) as install:
+            status = service_manager.reload_configured_supervisor()
+
+        self.assertEqual(0, status)
+        kill.assert_called_once_with(123, service_manager.signal.SIGHUP)
+        wait.assert_called_once_with(123)
+        install.assert_not_called()
+
+    def test_reload_configured_supervisor_reinstalls_when_handoff_times_out(self):
+        with patch.object(service_manager, "configured_supervisor_available", return_value=True), \
+                patch.object(service_manager, "supervisor_running", return_value=True), \
+                patch.object(service_manager, "read_pid", return_value=123), \
+                patch.object(service_manager.os, "kill"), \
+                patch.object(service_manager, "wait_for_supervisor_replacement", return_value=False), \
+                patch.object(service_manager, "install_supervisor", return_value=0) as install:
+            status = service_manager.reload_configured_supervisor()
+
+        self.assertEqual(0, status)
+        install.assert_called_once_with()
 
     def test_shared_world_rebuild_runs_once_for_a_fresh_typedb_marker(self):
         with tempfile.TemporaryDirectory() as temp:

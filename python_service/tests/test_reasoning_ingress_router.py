@@ -137,6 +137,23 @@ class ReasoningIngressRouterTests(unittest.TestCase):
             MySQLReasoningEngineJobStore.required_source_boundary_at(market_event),
         )
 
+    def test_market_facts_infer_work_class_for_verified_snapshot_boundary(self):
+        market_event = event()
+        market_event.payload.update({
+            "factTypes": ["ExecutionFlow", "MarketQuote", "TechnicalIndicator"],
+            "trigger": "verified-monitor-snapshot",
+            "sourceObservedAt": "2026-08-18T00:59:30Z",
+            "verifiedSourceSnapshot": {
+                "snapshotId": "reasoning-source:market",
+                "generatedAt": "2026-08-18T00:59:30Z",
+            },
+        })
+
+        self.assertEqual(
+            "2026-08-18T00:59:30Z",
+            MySQLReasoningEngineJobStore.required_source_boundary_at(market_event),
+        )
+
     @patch(
         "digital_twin.infrastructure.mysql_reasoning_ingress."
         "MySQLOntologyReasoningMailboxStore._refresh_queue_state_with_connection"

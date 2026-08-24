@@ -2812,6 +2812,45 @@ def restore_configured_supervisor() -> int:
     return result
 
 
+def reload_configured_supervisor() -> int:
+    """Reload only the launchd supervisor without stopping managed workers."""
+
+    if not configured_supervisor_available():
+        return 0
+    if supervisor_running():
+        previous_pid = read_pid(supervisor_pid_path())
+        try:
+            # SIGHUP is intentionally not handled by ``supervise``. launchd
+            # replaces only the supervisor process, so its worker-shutdown
+            # ``finally`` block does not run during a code handoff.
+            os.kill(previous_pid, signal.SIGHUP)
+        except OSError:
+            remove_pid(supervisor_pid_path())
+        else:
+            if wait_for_supervisor_replacement(previous_pid):
+                print("Orbit Alpha runtime supervisor reloaded after service restart.")
+                return 0
+    result = install_supervisor()
+    if result == 0:
+        print("Orbit Alpha runtime supervisor reloaded after service restart.")
+    return result
+
+
+def wait_for_supervisor_replacement(previous_pid: int, timeout_seconds: float = 15.0) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds or 15.0))
+    while time.monotonic() <= deadline:
+        current_pid = read_pid(supervisor_pid_path())
+        if (
+            current_pid
+            and current_pid != int(previous_pid or 0)
+            and pid_exists(current_pid)
+            and "monitor_service.py supervise" in command_for_pid(current_pid)
+        ):
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def bootout_supervisor_launch_agent() -> None:
     path = launch_agent_path()
     launchctl = shutil.which("launchctl")
@@ -3495,7 +3534,10 @@ def main(argv: List[str] = None) -> int:
             restart_mysql="--restart-mysql" in args[1:],
             restart_share="--restart-share" in args[1:],
         )
-        supervisor_result = restore_configured_supervisor()
+        # A long-lived supervisor imports worker definitions only once. Reload
+        # it after a code deployment so it cannot recreate workers using an
+        # older routing policy after the managed workers have restarted.
+        supervisor_result = reload_configured_supervisor()
         return result if result != 0 else supervisor_result
     if command == "status":
         return status()

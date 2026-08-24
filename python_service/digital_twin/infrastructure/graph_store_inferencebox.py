@@ -15,6 +15,11 @@ def knowledge_basis_payload(properties: Dict[str, object], row: Dict[str, object
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def claim_contract_payload(properties: Dict[str, object], row: Dict[str, object]) -> Dict[str, object]:
+    raw = properties.get("claimContract") or properties.get("claim_contract") or row.get("claimContract") or {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 def inferencebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], source: str, symbols: List[str] = None) -> Dict[str, object]:
     entity_count_row = first_row(rowsets.get("entityCounts"))
     relation_count_row = first_row(rowsets.get("relationCounts"))
@@ -50,6 +55,7 @@ def first_row(rows: List[Dict[str, object]]) -> Dict[str, object]:
 def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
     properties = row_properties(row)
     knowledge_basis = knowledge_basis_payload(properties, row)
+    claim_contract = claim_contract_payload(properties, row)
     return {
         "id": str(row.get("id") or ""),
         "label": str(row.get("label") or ""),
@@ -62,6 +68,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
         "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
         "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "knowledgeBasis": knowledge_basis,
+        "claimContract": claim_contract,
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),
@@ -101,6 +108,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
 def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
     properties = row_properties(row)
     knowledge_basis = knowledge_basis_payload(properties, row)
+    claim_contract = claim_contract_payload(properties, row)
     return {
         "type": str(row.get("type") or ""),
         "source": str(row.get("source") or ""),
@@ -114,6 +122,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
         "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "knowledgeBasis": knowledge_basis,
+        "claimContract": claim_contract,
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),
@@ -188,6 +197,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
 def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
     properties = row_properties(row)
     knowledge_basis = knowledge_basis_payload(properties, row)
+    claim_contract = claim_contract_payload(properties, row)
     matched_conditions = [
         dict(item)
         for item in properties.get("matchedConditions") or row.get("matchedConditions") or []
@@ -210,6 +220,7 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "hypothesisFamilyKey": str(row.get("hypothesisFamilyKey") or properties.get("hypothesisFamilyKey") or ""),
         "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "knowledgeBasis": knowledge_basis,
+        "claimContract": claim_contract,
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),

@@ -24,6 +24,17 @@ def candidate_brain():
                     "templateLabel": "Risk rule",
                     "claim": "Risk evidence remains active.",
                     "stance": "risk",
+                    "supportingRuleIds": ["risk-rule"],
+                    "claimContract": {
+                        "claimContractId": "rule-claim:risk-rule",
+                        "ruleId": "risk-rule",
+                        "claimType": "market-hypothesis",
+                        "statement": "Risk evidence remains active.",
+                        "theoryFamily": "trend",
+                        "thesisFamily": "trend-break",
+                        "validationMode": "forward-outcome-observation",
+                        "decisionAuthority": "conditional-investment-evidence",
+                    },
                 },
                 {
                     "hypothesisId": "hypothesis-support",
@@ -60,6 +71,10 @@ def calibration_row(
         "corroboratedCount": 1,
         "contradictedCount": 3,
         "inconclusiveCount": 0,
+        "directionalHitRate": 0.25,
+        "directionalHitRateConfidence95": {"lower": 0.05, "upper": 0.45},
+        "averageActionAdjustedReturnPct": -1.2,
+        "actionReturnState": "negative",
         "latestObservedAt": latest_observed_at,
         "outcomeHorizonMinutes": [60, 1440],
         "horizonSlices": [
@@ -134,6 +149,7 @@ class HypothesisCalibrationContextTests(unittest.TestCase):
         support = next(item for item in hypotheses if item["hypothesisId"] == "hypothesis-support")
         self.assertEqual("applied", attached["hypothesisCalibration"]["status"])
         self.assertEqual("more-contradicted", risk["historicalCalibration"]["outcomeState"])
+        self.assertEqual("observed", risk["qualification"]["status"])
         self.assertNotIn("historicalCalibration", support)
 
         episode = DecisionEpisode.from_dict({
@@ -147,6 +163,35 @@ class HypothesisCalibrationContextTests(unittest.TestCase):
         })
         stored_risk = next(item for item in episode.hypothesis_set.hypotheses if item.hypothesis_id == "hypothesis-risk")
         self.assertEqual("more-contradicted", stored_risk.historical_calibration["outcomeState"])
+
+    def test_current_abox_outcomes_automatically_quarantine_repeatedly_failed_claim(self):
+        row = calibration_row()
+        row.update({
+            "independentEpisodeCount": 12,
+            "decisiveOutcomeCount": 12,
+            "corroboratedCount": 1,
+            "contradictedCount": 11,
+            "directionalHitRate": 1 / 12,
+            "directionalHitRateConfidence95": {"lower": 0.01, "upper": 0.32},
+            "averageActionAdjustedReturnPct": -1.4,
+            "actionReturnState": "negative",
+        })
+        attached = attach_abox_hypothesis_calibrations(
+            candidate_brain(),
+            self.snapshot([row]),
+            subject_symbol="005930",
+            inference_generation_id="generation-1",
+            inference_generation_at="2026-07-20T02:00:00Z",
+            source_abox_snapshot_id="abox-1",
+            generation_aligned=True,
+        )
+
+        hypothesis = attached["hypothesisSet"]["hypotheses"][0]
+        self.assertEqual("quarantined", hypothesis["qualification"]["status"])
+        self.assertEqual(
+            0,
+            attached["hypothesisSet"]["decisionEvidenceSummary"]["eligibleHypothesisCount"],
+        )
 
     def test_excludes_future_outcome_from_current_generation(self):
         snapshot = self.snapshot([

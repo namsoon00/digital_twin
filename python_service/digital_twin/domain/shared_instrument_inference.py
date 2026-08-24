@@ -292,6 +292,7 @@ def _safe_trace(trace: Mapping[str, object], scope: Mapping[str, object]) -> Dic
         "semanticRuleId": _text(source.get("semanticRuleId") or source.get("ruleId")),
         "hypothesisFamilyKey": _text(source.get("hypothesisFamilyKey")),
         "knowledgeBasis": dict(source.get("knowledgeBasis") or {}) if isinstance(source.get("knowledgeBasis"), Mapping) else {},
+        "claimContract": dict(source.get("claimContract") or {}) if isinstance(source.get("claimContract"), Mapping) else {},
         "ruleKind": _text(source.get("ruleKind")),
         "theoryFamily": _text(source.get("theoryFamily")),
         "thesisFamily": _text(source.get("thesisFamily")),
@@ -319,7 +320,7 @@ def _safe_relation(relation: Mapping[str, object]) -> Dict[str, object]:
     allowed = [
         "type", "sourceLabel", "targetLabel", "ruleId",
         "semanticRuleId", "hypothesisFamilyKey", "polarity", "evidenceRole",
-        "knowledgeBasis", "ruleKind", "theoryFamily", "thesisFamily",
+        "knowledgeBasis", "claimContract", "ruleKind", "theoryFamily", "thesisFamily",
         "actionGroup", "actionLevel", "decisionStage", "decisionEffect",
         "reviewLevel", "dataState", "changeState", "validationState",
         "freshnessStatus", "evidenceUsableForJudgement",

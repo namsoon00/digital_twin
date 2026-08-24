@@ -141,6 +141,25 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
                 "reviewLevel", "ruleRequiredFacts",
             ),
         )
+        claim_contract = _mapping(row.get("claimContract"))
+        if claim_contract:
+            row["claimContract"] = _selected(
+                claim_contract,
+                (
+                    "claimContractId", "claimType", "statement", "predictionTarget",
+                    "expectedDirection", "expectedOutcome", "defaultHorizon",
+                    "outcomeMetric", "falsificationContract", "decisionAuthority",
+                ),
+            )
+        qualification = _mapping(row.get("qualification"))
+        if qualification:
+            row["qualification"] = _selected(
+                qualification,
+                (
+                    "status", "decisionAuthority", "reason", "decisiveOutcomeCount",
+                    "directionalHitRate", "averageActionAdjustedReturnPct",
+                ),
+            )
         applied = _unique(evidence_state.get("appliedFactFields") or [], 12)
         if applied:
             row["appliedFactFields"] = applied
@@ -177,7 +196,7 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
                 "marketHypothesisId", "accountHypothesisOverlayId",
                 "candidateAction", "predictionTarget", "expectedDirection",
                 "expectedOutcome", "outcomeMetric", "falsificationContract",
-                "inferenceGenerationId",
+                "inferenceGenerationId", "claimContract", "qualification",
             ),
         )
         row["claim"] = _sentence_text(item.get("claim"), 320)
@@ -739,6 +758,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
                 "predictionTarget", "expectedDirection", "expectedOutcome", "outcomeMetric",
                 "evidenceState", "verificationStatus", "approvalStatus", "scopeState", "horizon",
                 "inferenceGenerationId",
+                "claimContract", "qualification",
             )),
             "claim": _sentence_text(item.get("claim"), 140),
             "supportingRuleIds": _unique(item.get("supportingRuleIds") or [], 3),
@@ -749,6 +769,15 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         for item in fitted.get("hypothesisSet", {}).get("hypotheses") or []
         if isinstance(item, dict)
     ]
+    for item in fitted["hypothesisSet"]["hypotheses"]:
+        item["claimContract"] = _selected(
+            _mapping(item.get("claimContract")),
+            ("claimContractId", "claimType", "statement", "expectedDirection", "decisionAuthority"),
+        )
+        item["qualification"] = _selected(
+            _mapping(item.get("qualification")),
+            ("status", "decisionAuthority", "reason"),
+        )
     fitted["evidenceLedger"] = list(fitted.get("evidenceLedger") or [])[:4]
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
         fitted["evidenceLedger"]

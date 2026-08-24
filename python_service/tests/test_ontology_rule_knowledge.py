@@ -177,6 +177,27 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
             for rule in migration["rules"]
         ))
 
+    def test_missing_claim_contract_and_outcome_criteria_are_repaired(self):
+        bootstrap = rulebox_rules_payload(default_graph_inference_rules())
+        stored = deepcopy(bootstrap)
+        predictive = next(
+            item for item in stored
+            if (item.get("claim_contract") or {}).get("claimType") == "market-hypothesis"
+        )
+        rule_id = predictive["rule_id"]
+        predictive.pop("claim_contract", None)
+        predictive["hypothesis_lifecycle"]["outcomeContract"]["criteria"] = []
+
+        self.assertTrue(rulebox_catalog_requires_bootstrap_repair(stored))
+        migration = migrate_typedb_rule_catalog(stored, bootstrap)
+        repaired = next(item for item in migration["rules"] if item["rule_id"] == rule_id)
+
+        self.assertIn(rule_id, migration["claimContractUpdatedRuleIds"])
+        self.assertIn(rule_id, migration["outcomeContractUpdatedRuleIds"])
+        self.assertEqual("market-hypothesis", repaired["claim_contract"]["claimType"])
+        self.assertEqual(2, len(repaired["hypothesis_lifecycle"]["outcomeContract"]["criteria"]))
+        self.assertFalse(rulebox_catalog_requires_bootstrap_repair(migration["rules"]))
+
     def test_stale_ownership_contract_is_repaired_without_replacing_rule_logic(self):
         bootstrap = rulebox_rules_payload(default_graph_inference_rules())
         stored = deepcopy(bootstrap)

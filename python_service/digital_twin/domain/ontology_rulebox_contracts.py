@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Mapping, Optional
 
 from .hypothesis_outcome_contract import HypothesisOutcomeContract
 from .ontology_rule_knowledge import RuleKnowledgeBasis, resolved_rule_knowledge_basis
+from .rule_claim_contract import RuleClaimContract, resolved_rule_claim_contract
 
 
 GRAPH_REASONER_VERSION = "typedb-rulebox-graph-reasoner-v1"
@@ -329,6 +330,10 @@ class GraphInferenceRule:
     # resolved value is metadata for governance and AI evidence boundaries;
     # TypeDB remains the only evaluator of the market conditions above.
     knowledge_basis: RuleKnowledgeBasis = dataclass_field(default_factory=RuleKnowledgeBasis)
+    # Every executable rule owns exactly one typed claim. Predictive rules own
+    # a falsifiable market hypothesis; guardrails own a policy, execution,
+    # reliability or context claim and cannot masquerade as price forecasts.
+    claim_contract: RuleClaimContract = dataclass_field(default_factory=RuleClaimContract)
     # Lifecycle configuration is part of the editable RuleBox contract. The
     # TypeDB native rule still decides whether a condition is active; this
     # policy only records how a materialized path changes over generations.
@@ -383,6 +388,10 @@ class GraphInferenceRule:
         return resolved_rule_knowledge_basis(self)
 
     @cached_property
+    def resolved_claim_contract(self) -> RuleClaimContract:
+        return resolved_rule_claim_contract(self, self.resolved_knowledge_basis)
+
+    @cached_property
     def resolved_execution_profile(self) -> Dict[str, object]:
         from .ontology_rule_execution_policy import rule_execution_profile
 
@@ -397,6 +406,7 @@ class GraphInferenceRule:
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["knowledge_basis"] = self.resolved_knowledge_basis.to_dict()
+        payload["claim_contract"] = self.resolved_claim_contract.to_dict()
         payload["hypothesis_lifecycle"] = self.resolved_hypothesis_lifecycle().to_dict()
         payload["execution_profile"] = dict(self.resolved_execution_profile)
         payload["domain_manifest"] = dict(self.resolved_domain_manifest)
@@ -461,6 +471,11 @@ class GraphInferenceRule:
             knowledge_basis=RuleKnowledgeBasis.from_dict(
                 payload.get("knowledge_basis")
                 or payload.get("knowledgeBasis")
+                or {}
+            ),
+            claim_contract=RuleClaimContract.from_dict(
+                payload.get("claim_contract")
+                or payload.get("claimContract")
                 or {}
             ),
             hypothesis_lifecycle=HypothesisLifecyclePolicy.from_dict(

@@ -21,6 +21,10 @@ from ..domain.ontology_rulebox_governance import (
     rulebox_rules_hash as compute_rulebox_rules_hash,
 )
 from ..domain.ontology_rule_ownership import RULE_OWNERSHIP_CONTRACT_VERSION
+from ..domain.rule_claim_contract import (
+    RULE_CLAIM_CONTRACT_VERSION,
+    resolved_rule_claim_contract,
+)
 from ..domain.ontology_change_impact import (
     build_inference_impact_plan,
     compact_inference_impact_plan,
@@ -368,6 +372,35 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
             (item.get("knowledge_basis") or item.get("knowledgeBasis") or {}).get("ruleKind")
             or ""
         ).strip()
+        for item in rules
+        if item.get("enabled") is not False
+    ):
+        return True
+    if any(
+        not isinstance(item.get("claim_contract") or item.get("claimContract"), dict)
+        or str(
+            (item.get("claim_contract") or item.get("claimContract") or {}).get("version")
+            or ""
+        ).strip()
+        != RULE_CLAIM_CONTRACT_VERSION
+        for item in rules
+        if item.get("enabled") is not False
+    ):
+        return True
+    if any(
+        str(
+            (item.get("claim_contract") or item.get("claimContract") or {}).get("claimType")
+            or ""
+        ).strip()
+        == "market-hypothesis"
+        and not list(
+            (
+                (item.get("hypothesis_lifecycle") or item.get("hypothesisLifecycle") or {}).get("outcomeContract")
+                or (item.get("hypothesis_lifecycle") or item.get("hypothesisLifecycle") or {}).get("outcome_contract")
+                or {}
+            ).get("criteria")
+            or []
+        )
         for item in rules
         if item.get("enabled") is not False
     ):
@@ -898,6 +931,8 @@ def migrate_typedb_rule_catalog(
     removed = []
     updated = []
     knowledge_basis_updated = []
+    claim_contract_updated = []
+    outcome_contract_updated = []
     ownership_contract_updated = []
     added = []
     runtime_shape_updated = []
@@ -1047,6 +1082,63 @@ def migrate_typedb_rule_catalog(
             knowledge_basis_updated.append(rule_id)
             ownership_contract_updated.append(rule_id)
         effective_basis = rule.get("knowledge_basis") or rule.get("knowledgeBasis") or {}
+        stored_claim_contract = rule.get("claim_contract") or rule.get("claimContract")
+        default_claim_contract = default_rule.get("claim_contract") or default_rule.get("claimContract")
+        if not isinstance(default_claim_contract, dict) or not default_claim_contract:
+            default_claim_contract = resolved_rule_claim_contract(rule).to_dict()
+        if isinstance(default_claim_contract, dict) and (
+            not isinstance(stored_claim_contract, dict)
+            or str(stored_claim_contract.get("version") or "").strip()
+            != str(default_claim_contract.get("version") or "").strip()
+            or str(stored_claim_contract.get("ruleId") or stored_claim_contract.get("rule_id") or "").strip()
+            != rule_id
+        ):
+            rule["claim_contract"] = deepcopy(default_claim_contract)
+            rule.pop("claimContract", None)
+            changed = True
+            claim_contract_updated.append(rule_id)
+            default_lifecycle = default_rule.get("hypothesis_lifecycle") or default_rule.get("hypothesisLifecycle") or {}
+            default_outcome = (
+                default_lifecycle.get("outcomeContract")
+                or default_lifecycle.get("outcome_contract")
+                or {}
+            ) if isinstance(default_lifecycle, dict) else {}
+            if not default_outcome and str(default_claim_contract.get("claimType") or "") == "market-hypothesis":
+                default_outcome = default_claim_contract.get("outcomeContract") or {}
+            if default_outcome.get("criteria"):
+                lifecycle = rule.get("hypothesis_lifecycle") or rule.get("hypothesisLifecycle") or {}
+                lifecycle = deepcopy(lifecycle) if isinstance(lifecycle, dict) else {}
+                lifecycle["outcomeContract"] = deepcopy(default_outcome)
+                rule["hypothesis_lifecycle"] = lifecycle
+                rule.pop("hypothesisLifecycle", None)
+                outcome_contract_updated.append(rule_id)
+        effective_claim_contract = rule.get("claim_contract") or rule.get("claimContract") or {}
+        default_lifecycle = default_rule.get("hypothesis_lifecycle") or default_rule.get("hypothesisLifecycle") or {}
+        default_outcome = (
+            default_lifecycle.get("outcomeContract")
+            or default_lifecycle.get("outcome_contract")
+            or {}
+        ) if isinstance(default_lifecycle, dict) else {}
+        if not default_outcome and str((default_claim_contract or {}).get("claimType") or "") == "market-hypothesis":
+            default_outcome = default_claim_contract.get("outcomeContract") or {}
+        stored_lifecycle = rule.get("hypothesis_lifecycle") or rule.get("hypothesisLifecycle") or {}
+        stored_outcome = (
+            stored_lifecycle.get("outcomeContract")
+            or stored_lifecycle.get("outcome_contract")
+            or {}
+        ) if isinstance(stored_lifecycle, dict) else {}
+        if (
+            str((effective_claim_contract or {}).get("claimType") or "") == "market-hypothesis"
+            and isinstance(default_outcome, dict)
+            and default_outcome.get("criteria")
+            and not (isinstance(stored_outcome, dict) and stored_outcome.get("criteria"))
+        ):
+            lifecycle = deepcopy(stored_lifecycle) if isinstance(stored_lifecycle, dict) else {}
+            lifecycle["outcomeContract"] = deepcopy(default_outcome)
+            rule["hypothesis_lifecycle"] = lifecycle
+            rule.pop("hypothesisLifecycle", None)
+            changed = True
+            outcome_contract_updated.append(rule_id)
         if str((effective_basis or {}).get("ruleKind") or "") != "predictive-hypothesis":
             for index, derivation in enumerate(rule.get("derivations") or []):
                 if not isinstance(derivation, dict):
@@ -1108,6 +1200,8 @@ def migrate_typedb_rule_catalog(
         "addedRuleIds": sorted(set(added)),
         "decisionPolicyUpdatedRuleIds": sorted(set(updated)),
         "knowledgeBasisUpdatedRuleIds": sorted(set(knowledge_basis_updated)),
+        "claimContractUpdatedRuleIds": sorted(set(claim_contract_updated)),
+        "outcomeContractUpdatedRuleIds": sorted(set(outcome_contract_updated)),
         "ownershipContractUpdatedRuleIds": sorted(set(ownership_contract_updated)),
         "rawAboxRuntimeUpdatedRuleIds": sorted(set(runtime_shape_updated)),
         "decisionEffectContractUpdatedRuleIds": sorted(

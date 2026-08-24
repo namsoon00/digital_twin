@@ -16,6 +16,7 @@ from .ontology_rulebox_contracts import (
     HypothesisLifecyclePolicy,
 )
 from .ontology_rule_knowledge import resolved_rule_knowledge_basis
+from .rule_claim_contract import resolved_rule_claim_contract
 from .ontology_rulebox_release_manifest import (
     RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS,
 )
@@ -736,11 +737,17 @@ def with_rulebox_v3_governance(rules: List[GraphInferenceRule]) -> List[GraphInf
             conditions=conditions,
             derivations=derivations,
             hypothesis_family_key=_rulebox_v3_family_key(rule),
-            hypothesis_lifecycle=_rulebox_v3_lifecycle(rule, conditions),
         )
+        basis = resolved_rule_knowledge_basis(candidate)
+        candidate = replace(candidate, knowledge_basis=basis)
+        claim = resolved_rule_claim_contract(candidate, basis)
+        lifecycle = _rulebox_v3_lifecycle(candidate, conditions)
+        if claim.is_predictive:
+            lifecycle = replace(lifecycle, outcome_contract=claim.outcome_contract)
         normalized.append(replace(
             candidate,
-            knowledge_basis=resolved_rule_knowledge_basis(candidate),
+            claim_contract=claim,
+            hypothesis_lifecycle=lifecycle,
         ))
     return normalized
 

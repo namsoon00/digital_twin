@@ -9,6 +9,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List
 
+from .decision_evidence_contract import hypothesis_set_evidence_summary
+from .decision_performance import binomial_confidence_interval, number
+from .rule_claim_contract import RuleClaimContract, hypothesis_qualification
+
 
 HYPOTHESIS_CALIBRATION_CONTEXT_VERSION = "hypothesis-calibration-context-v1"
 HYPOTHESIS_CALIBRATION_SOURCE = "typedb-abox-hypothesis-calibration"
@@ -162,11 +166,17 @@ def attach_abox_hypothesis_calibrations(
 
     updated_hypotheses = []
     matched_template_ids: List[str] = []
+    qualification_by_template: Dict[str, Dict[str, object]] = {}
     for hypothesis in hypotheses:
         template_id = str(hypothesis.get("templateId") or "").strip()
         calibration = by_template.get(template_id)
         if calibration:
             hypothesis["historicalCalibration"] = calibration
+            claim_contract = RuleClaimContract.from_dict(hypothesis.get("claimContract"))
+            if claim_contract.is_predictive and claim_contract.claim_contract_id:
+                qualification = hypothesis_qualification(claim_contract, calibration)
+                hypothesis["qualification"] = qualification
+                qualification_by_template[template_id] = qualification
             matched_template_ids.append(template_id)
         updated_hypotheses.append(hypothesis)
     context.update({
@@ -176,10 +186,27 @@ def attach_abox_hypothesis_calibrations(
         "candidateTemplateIds": matched_template_ids,
         "calibrations": [by_template[key] for key in matched_template_ids],
     })
-    enriched["hypothesisSet"] = {
+    updated_hypothesis_set = {
         **hypothesis_set,
         "hypotheses": updated_hypotheses,
     }
+    updated_hypothesis_set["decisionEvidenceSummary"] = hypothesis_set_evidence_summary(
+        updated_hypothesis_set
+    )
+    enriched["hypothesisSet"] = updated_hypothesis_set
+    templates = [
+        dict(item) for item in enriched.get("hypothesisTemplates") or []
+        if isinstance(item, dict)
+    ]
+    if templates and qualification_by_template:
+        enriched["hypothesisTemplates"] = [
+            {
+                **item,
+                **({"qualification": qualification_by_template[str(item.get("templateId") or "")]}
+                   if str(item.get("templateId") or "") in qualification_by_template else {}),
+            }
+            for item in templates
+        ]
     enriched["hypothesisCalibration"] = context
     return enriched
 
@@ -199,6 +226,11 @@ def normalized_hypothesis_calibration_row(
     snapshot_matches = row_snapshot_id == source_abox_snapshot_id
     if not symbol or not template_id or (not snapshot_matches and not active_membership_verified):
         return {}
+    decisive_count = positive_int(payload.get("decisiveOutcomeCount"))
+    corroborated_count = positive_int(payload.get("corroboratedCount"))
+    confidence = payload.get("directionalHitRateConfidence95")
+    if not isinstance(confidence, dict):
+        confidence = binomial_confidence_interval(corroborated_count, decisive_count)
     return {
         "calibrationId": str(payload.get("id") or ""),
         "symbol": symbol,
@@ -209,10 +241,21 @@ def normalized_hypothesis_calibration_row(
         "reviewRecommendation": str(payload.get("reviewRecommendation") or "continue-observation"),
         "minimumDecisiveOutcomes": positive_int(payload.get("minimumDecisiveOutcomes"), 3),
         "independentEpisodeCount": positive_int(payload.get("independentEpisodeCount")),
-        "decisiveOutcomeCount": positive_int(payload.get("decisiveOutcomeCount")),
-        "corroboratedCount": positive_int(payload.get("corroboratedCount")),
+        "decisiveOutcomeCount": decisive_count,
+        "corroboratedCount": corroborated_count,
         "contradictedCount": positive_int(payload.get("contradictedCount")),
         "inconclusiveCount": positive_int(payload.get("inconclusiveCount")),
+        "directionalHitRate": number(
+            payload.get("directionalHitRate")
+            if payload.get("directionalHitRate") not in (None, "")
+            else confidence.get("rate") or 0
+        ),
+        "directionalHitRateConfidence95": {
+            "lower": number(confidence.get("lower")),
+            "upper": number(confidence.get("upper")),
+        },
+        "averageActionAdjustedReturnPct": number(payload.get("averageActionAdjustedReturnPct")),
+        "actionReturnState": str(payload.get("actionReturnState") or "unavailable"),
         "latestObservedAt": str(payload.get("latestObservedAt") or ""),
         "outcomeHorizonMinutes": positive_int_list(payload.get("outcomeHorizonMinutes")),
         "horizonSlices": normalized_horizon_slices(payload.get("horizonSlices") or payload.get("byHorizon") or []),

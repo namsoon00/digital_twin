@@ -7,6 +7,7 @@ from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_rule_manifest import rule_domain_manifest
 from .ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_knowledge_basis
+from .rule_claim_contract import resolved_rule_claim_contract, rule_claim_coverage
 
 
 RULE_AUDIT_VERSION = "ontology-rule-audit-v3"
@@ -111,6 +112,7 @@ def rule_audit_payload(
             "executionProfile": profile,
             "domainManifest": manifest,
             "knowledgeBasis": knowledge_basis.to_dict(),
+            "claimContract": resolved_rule_claim_contract(rule, knowledge_basis).to_dict(),
             "ruleKind": knowledge_basis.rule_kind,
             "theoryFamily": knowledge_basis.theory_family,
             "thesisFamily": knowledge_basis.thesis_family,
@@ -190,6 +192,7 @@ def rule_audit_payload(
         "assessmentScopeCounts": dict(sorted(scope_counts.items())),
         "lifecycleClassCounts": dict(sorted(lifecycle_counts.items())),
         "knowledgeBasisSummary": knowledge_summary,
+        "ruleClaimCoverage": rule_claim_coverage(authored_rules),
         "duplicateCandidateGroups": duplicate_groups,
         "retirementCandidateCount": len([item for item in rows if item.get("retirementCandidate")]),
         "rules": rows,

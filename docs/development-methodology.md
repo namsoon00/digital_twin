@@ -8,6 +8,17 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Keep use-case orchestration in `application/`.
 - Keep database, files, HTTP APIs, external vendors, process management, and runtime composition in `infrastructure/`.
 - Use domain events as contracts between feature slices.
+- Give every executable RuleBox rule exactly one persisted `RuleClaimContract`.
+  Predictive rules own a falsifiable `MarketHypothesisClaim` with an authored
+  outcome contract. Policy, execution, data-quality and context rules own
+  typed non-predictive claims and must never be promoted into competing market
+  hypotheses. A RuleBox release with an orphan, duplicate or incomplete claim
+  contract must fail semantic validation before TypeDB persistence.
+- Keep catalog admission separate from empirical qualification. Durable
+  `DecisionEpisode` and `ObservedOutcome` records deterministically derive
+  shadow, observed, limited-active, active or quarantined qualification using
+  the versioned policy stored with the claim. Never infer qualification from
+  lifecycle persistence, notification counts or a Python-only score.
 - Keep time-series database products behind `domain/time_series_storage.py`.
   Reasoning code consumes immutable `TemporalFeatureSnapshot` packets and must
   not import MySQL, QuestDB, or a future vendor driver. New backends are first

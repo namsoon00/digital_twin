@@ -28,6 +28,12 @@ from .hypothesis_outcome_contract import (
 )
 from .ontology_decision_state import DATA_STATES, REVIEW_LEVELS, VALIDATION_STATES
 from .ontology_rule_knowledge import rule_knowledge_basis_from_rows
+from .rule_claim_contract import (
+    RuleClaimContract,
+    hypothesis_qualification,
+    resolved_rule_claim_contract,
+    rule_claim_coverage,
+)
 from .ontology_schema import tbox_fingerprint
 from .ontology_worlds import market_world
 from .investment_reasoning_detail import reasoning_detail_snapshot
@@ -263,6 +269,8 @@ class HypothesisTemplate:
     competing_family_ids: List[str] = field(default_factory=list)
     outcome_metric: str = ""
     falsification_contract: str = ""
+    claim_contract: Dict[str, object] = field(default_factory=dict)
+    qualification: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return camelize(asdict(self))
@@ -412,6 +420,8 @@ class InvestmentHypothesis:
     falsification_contract: str = ""
     inference_generation_id: str = ""
     candidate_action: str = ""
+    claim_contract: Dict[str, object] = field(default_factory=dict)
+    qualification: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = camelize(asdict(self))
@@ -682,6 +692,8 @@ class DecisionEpisode:
                 falsification_contract=str(item.get("falsificationContract") or item.get("falsification_contract") or ""),
                 inference_generation_id=str(item.get("inferenceGenerationId") or item.get("inference_generation_id") or ""),
                 candidate_action=str(item.get("candidateAction") or item.get("candidate_action") or "").strip().upper(),
+                claim_contract=dict(item.get("claimContract") or item.get("claim_contract") or {}),
+                qualification=dict(item.get("qualification") or {}),
             ))
         families = []
         for item in hypothesis_payload.get("families") or []:
@@ -1740,6 +1752,17 @@ def hypothesis_from_inference_rule(
     template_id = "hypothesis-template:" + rule_id
     evidence_state = hypothesis_evidence_state(rows, traces, matches)
     family_definition = hypothesis_family_definition(knowledge_basis.thesis_family)
+    raw_claim = next((
+        item.get("claimContract") or item.get("claim_contract")
+        for item in [*rows, *traces, *matches]
+        if isinstance(item.get("claimContract") or item.get("claim_contract"), dict)
+    ), {})
+    claim_contract = resolved_rule_claim_contract({
+        "ruleId": rule_id,
+        "label": label,
+        "knowledgeBasis": knowledge_basis.to_dict(),
+        "claimContract": raw_claim,
+    }, knowledge_basis)
     causal_signature, family_source = causal_signature_for_rule(
         rule_id,
         stance,
@@ -1839,6 +1862,8 @@ def hypothesis_from_inference_rule(
         falsification_contract=family_definition.falsification_contract if family_definition else "",
         inference_generation_id=str(inference_generation_id or ""),
         candidate_action=candidate_action,
+        claim_contract=claim_contract.to_dict(),
+        qualification=hypothesis_qualification(claim_contract),
     )
 
 
@@ -2168,6 +2193,8 @@ def compact_hypotheses_by_causal_family(
             falsification_contract=primary.falsification_contract,
             inference_generation_id=common_hypothesis_value(ordered, "inference_generation_id"),
             candidate_action=common_hypothesis_value(ordered, "candidate_action"),
+            claim_contract=dict(primary.claim_contract or {}),
+            qualification=dict(primary.qualification or {}),
         ))
     return compacted
 
@@ -2623,12 +2650,22 @@ def hypothesis_templates_from_hypotheses(hypotheses: Iterable[InvestmentHypothes
             competing_family_ids=list(item.competing_family_ids),
             outcome_metric=item.outcome_metric,
             falsification_contract=item.falsification_contract,
+            claim_contract=dict(item.claim_contract or {}),
+            qualification=dict(item.qualification or {}),
         ).to_dict())
     return rows
 
 
-def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> List[Dict[str, object]]:
+def hypothesis_templates_from_rulebox_snapshot(
+    snapshot: Dict[str, object],
+    performance: Dict[str, object] = None,
+) -> List[Dict[str, object]]:
     rows = []
+    performance_by_rule = {
+        str(item.get("key") or ""): item
+        for item in (performance or {}).get("byRule") or []
+        if isinstance(item, dict) and str(item.get("key") or "")
+    }
     for rule in (snapshot or {}).get("rules") or []:
         if not isinstance(rule, dict) or rule.get("enabled") is False:
             continue
@@ -2660,6 +2697,11 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
             for derivation in derivations
         ], 12)
         family_definition = hypothesis_family_definition(knowledge_basis.thesis_family)
+        claim_contract = resolved_rule_claim_contract(rule, knowledge_basis)
+        qualification = hypothesis_qualification(
+            claim_contract,
+            performance_by_rule.get(rule_id),
+        )
         rows.append(HypothesisTemplate(
             template_id="hypothesis-template:" + rule_id,
             label=str(rule.get("label") or rule_id),
@@ -2680,8 +2722,17 @@ def hypothesis_templates_from_rulebox_snapshot(snapshot: Dict[str, object]) -> L
             competing_family_ids=list(family_definition.competing_family_ids) if family_definition else [],
             outcome_metric=family_definition.outcome_metric if family_definition else "",
             falsification_contract=family_definition.falsification_contract if family_definition else "",
+            claim_contract=claim_contract.to_dict(),
+            qualification=qualification,
         ).to_dict())
     return rows
+
+
+def rule_claim_coverage_from_rulebox_snapshot(snapshot: Dict[str, object]) -> Dict[str, object]:
+    return rule_claim_coverage([
+        item for item in (snapshot or {}).get("rules") or []
+        if isinstance(item, dict) and item.get("enabled") is not False
+    ])
 
 
 def relation_polarity(item: Dict[str, object]) -> str:

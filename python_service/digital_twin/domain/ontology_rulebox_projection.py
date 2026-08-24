@@ -39,6 +39,8 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
         execution_profile = rule_execution_profile(rule)
         domain_manifest = rule_domain_manifest(rule, execution=execution_profile)
         knowledge_basis = rule.resolved_knowledge_basis.to_dict()
+        claim_contract = rule.resolved_claim_contract
+        claim_payload = claim_contract.to_dict()
         interpretation_policy = (
             model_signal_interpretation_policy(rule)
             if is_model_signal_interpretation_rule(rule)
@@ -73,6 +75,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "executionProfile": execution_profile,
             "domainManifest": domain_manifest,
             "knowledgeBasis": knowledge_basis,
+            "claimContract": claim_payload,
             "ruleKind": knowledge_basis["ruleKind"],
             "theoryFamily": knowledge_basis["theoryFamily"],
             "thesisFamily": knowledge_basis["thesisFamily"],
@@ -95,6 +98,89 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             weight=1.0,
             properties=rulebox_relation_properties("DEFINES_RULE", {"ruleId": rule.rule_id}),
         ))
+        claim_class = {
+            "market-hypothesis": "MarketHypothesisClaim",
+            "risk-invariant": "RiskInvariantClaim",
+            "execution-feasibility": "ExecutionFeasibilityClaim",
+            "data-reliability": "DataReliabilityClaim",
+            "causal-context": "CausalContextClaim",
+        }.get(claim_contract.claim_type, "RuleClaimContract")
+        claim_id = entity_id("rule-claim", claim_contract.claim_contract_id)
+        graph.entities.append(OntologyEntity(
+            claim_id,
+            claim_contract.statement,
+            "rule-claim",
+            rulebox_properties({
+                "tboxClass": claim_class,
+                "tboxClasses": ["RuleClaimContract", claim_class],
+                **claim_payload,
+            }),
+        ))
+        graph.relations.append(OntologyRelation(
+            rule_id,
+            claim_id,
+            "GOVERNED_BY_CLAIM",
+            weight=1.0,
+            properties=rulebox_relation_properties("GOVERNED_BY_CLAIM", {
+                "ruleId": rule.rule_id,
+                "claimContractId": claim_contract.claim_contract_id,
+                "claimType": claim_contract.claim_type,
+            }),
+        ))
+        if claim_contract.is_predictive:
+            outcome_payload = claim_contract.outcome_contract.to_dict()
+            outcome_id = entity_id("hypothesis-outcome-contract", claim_contract.claim_contract_id)
+            graph.entities.append(OntologyEntity(
+                outcome_id,
+                rule.label + " 사후 검증 계약",
+                "hypothesis-outcome-contract",
+                rulebox_properties({
+                    "tboxClass": "HypothesisOutcomeContract",
+                    "tboxClasses": ["RuleBoxGovernance", "HypothesisOutcomeContract"],
+                    "ruleId": rule.rule_id,
+                    "claimContractId": claim_contract.claim_contract_id,
+                    **outcome_payload,
+                }),
+            ))
+            graph.relations.append(OntologyRelation(
+                claim_id,
+                outcome_id,
+                "USES_HYPOTHESIS_OUTCOME_CONTRACT",
+                weight=1.0,
+                properties=rulebox_relation_properties("USES_HYPOTHESIS_OUTCOME_CONTRACT", {
+                    "ruleId": rule.rule_id,
+                    "claimContractId": claim_contract.claim_contract_id,
+                }),
+            ))
+            for criterion_index, criterion in enumerate(claim_contract.outcome_contract.criteria or []):
+                criterion_payload = criterion.to_dict()
+                criterion_id = entity_id(
+                    "hypothesis-outcome-criterion",
+                    claim_contract.claim_contract_id + ":" + criterion.criterion_id,
+                )
+                graph.entities.append(OntologyEntity(
+                    criterion_id,
+                    criterion.label,
+                    "hypothesis-outcome-criterion",
+                    rulebox_properties({
+                        "tboxClass": "HypothesisOutcomeCriterion",
+                        "tboxClasses": ["RuleBoxGovernance", "HypothesisOutcomeCriterion"],
+                        "ruleId": rule.rule_id,
+                        "claimContractId": claim_contract.claim_contract_id,
+                        "criterionIndex": criterion_index,
+                        **criterion_payload,
+                    }),
+                ))
+                graph.relations.append(OntologyRelation(
+                    outcome_id,
+                    criterion_id,
+                    "HAS_OUTCOME_CRITERION",
+                    weight=1.0,
+                    properties=rulebox_relation_properties("HAS_OUTCOME_CRITERION", {
+                        "ruleId": rule.rule_id,
+                        "criterionId": criterion.criterion_id,
+                    }),
+                ))
         if interpretation_policy:
             graph.relations.append(OntologyRelation(
                 registry_id,

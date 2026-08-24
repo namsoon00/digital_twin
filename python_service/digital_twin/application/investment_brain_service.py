@@ -6,6 +6,7 @@ from ..domain.investment_brain import (
     decision_episode_from_context,
     hypothesis_set_from_relation_context,
     hypothesis_templates_from_rulebox_snapshot,
+    rule_claim_coverage_from_rulebox_snapshot,
 )
 from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_evidence_governance import (
@@ -668,11 +669,30 @@ class InvestmentBrainService:
 
     def hypothesis_templates(self) -> Dict[str, object]:
         snapshot = self.ontology_repository.rulebox_snapshot() if self.ontology_repository and hasattr(self.ontology_repository, "rulebox_snapshot") else {}
-        rows = hypothesis_templates_from_rulebox_snapshot(snapshot)
+        performance = (
+            self.decision_episode_store.performance(limit=500)
+            if self.decision_episode_store and hasattr(self.decision_episode_store, "performance")
+            else {}
+        )
+        rows = hypothesis_templates_from_rulebox_snapshot(snapshot, performance)
+        coverage = rule_claim_coverage_from_rulebox_snapshot(snapshot)
         return {
             "engine": "ontology-investment-brain",
             "source": "typedb-active-rulebox",
             "count": len(rows),
+            "ruleClaimCoverage": coverage,
+            "automaticQualification": {
+                "enabled": True,
+                "source": "DecisionEpisode+ObservedOutcome",
+                "performanceStatus": str((performance or {}).get("status") or "unavailable"),
+                "stateCounts": {
+                    state: sum(1 for item in rows if str((item.get("qualification") or {}).get("status") or "") == state)
+                    for state in sorted({
+                        str((item.get("qualification") or {}).get("status") or "unknown")
+                        for item in rows
+                    })
+                },
+            },
             "templates": rows,
         }
 

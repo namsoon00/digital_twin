@@ -318,6 +318,11 @@ def build_rulebox_rules_from_rows(
                 or props.get("knowledge_basis")
                 or {}
             ),
+            "claim_contract": (
+                props.get("claimContract")
+                or props.get("claim_contract")
+                or {}
+            ),
             "any_condition_min_count": int(row.get("anyConditionMinCount") or props.get("anyConditionMinCount") or 1),
             "execution_stage": str(
                 row.get("executionStageOverride")

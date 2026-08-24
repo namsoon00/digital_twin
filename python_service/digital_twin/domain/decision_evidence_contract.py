@@ -92,6 +92,15 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         or knowledge_basis.get("migration_disposition")
     ).lower()
     qualification_warnings: List[str] = []
+    claim_contract = _mapping(item.get("claimContract") or item.get("claim_contract"))
+    qualification = _mapping(item.get("qualification"))
+    qualification_status = _text(qualification.get("status")).lower()
+    if claim_contract and _text(claim_contract.get("claimType")) != "market-hypothesis":
+        reasons.append("claim-boundary:not-a-market-hypothesis")
+    if qualification_status == "quarantined":
+        reasons.append("hypothesis-qualification:quarantined")
+    elif qualification_status in {"shadow", "observed", "limited-active"}:
+        qualification_warnings.append("hypothesis-qualification:" + qualification_status)
     if knowledge_validation in {
         "replay-required", "candidate-replay-required", "authored-review-required",
     }:
@@ -130,6 +139,7 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         "reasons": reasons,
         "qualificationState": "conditional" if qualification_warnings else "qualified",
         "qualificationWarnings": qualification_warnings,
+        "outcomeQualificationStatus": qualification_status or "not-recorded",
     }
 
 

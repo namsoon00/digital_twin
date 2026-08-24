@@ -525,6 +525,7 @@ HYPOTHESIS_DECISION_FIELDS = (
     "theoryFamily", "thesisFamily", "evidenceIndependenceKey", "knowledgeBasis",
     "predictionTarget", "expectedDirection", "expectedOutcome", "outcomeMetric",
     "falsificationContract", "competingFamilyIds", "inferenceGenerationId", "candidateAction",
+    "claimContract", "qualification",
 )
 
 DECISION_FIELDS = (
@@ -1160,6 +1161,7 @@ def _minimum_hypotheses(value: object, *, emergency: bool = False) -> List[Dict[
                 "hypothesisId", "templateId", "familyId", "claim", "stance",
                 "evidenceState", "verificationStatus", "approvalStatus", "scopeState",
                 "theoryFamily", "thesisFamily", "evidenceIndependenceKey",
+                "qualification",
             ),
         )
         compact["claim"] = _clean(compact.get("claim"), 48 if emergency else 120)
@@ -1183,6 +1185,16 @@ def _minimum_hypotheses(value: object, *, emergency: bool = False) -> List[Dict[
                 for key in ("theoryFamily", "thesisFamily", "evidenceIndependenceKey"):
                     if not compact.get(key) and compact["knowledgeBasis"].get(key):
                         compact[key] = compact["knowledgeBasis"][key]
+            claim_contract = _mapping(row.get("claimContract"))
+            if claim_contract:
+                compact["claimContract"] = _selected_fields(
+                    claim_contract,
+                    (
+                        "claimContractId", "claimType", "statement", "predictionTarget",
+                        "expectedDirection", "expectedOutcome", "defaultHorizon",
+                        "outcomeMetric", "falsificationContract", "decisionAuthority",
+                    ),
+                )
         id_limit = 1 if emergency else 3
         id_fields = (
             ("supportingEvidenceIds", "counterEvidenceIds")

@@ -3,6 +3,12 @@ from typing import Dict, Iterable, List
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .hypothesis_review import outcome_assessments_from_episodes
+from .decision_performance import (
+    action_adjusted_return,
+    action_return_state,
+    binomial_confidence_interval,
+    number,
+)
 
 
 def add_investment_brain_concepts(
@@ -914,6 +920,10 @@ def add_hypothesis_calibration_concepts(
         template_id = str(selected.get("templateId") or "").strip()
         episode_id = str(episode.get("episodeId") or "").strip()
         latest_payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
+        latest_adjusted_return = action_adjusted_return(
+            str(episode.get("action") or ""),
+            number(latest.get("priceChangeFromDecisionPct")),
+        )
         independence_key = str(latest_payload.get("accountIndependenceKey") or episode_id).strip()
         if not episode_id or not template_id or status not in {"directionally-corroborated", "directionally-contradicted", "inconclusive"}:
             continue
@@ -934,6 +944,7 @@ def add_hypothesis_calibration_concepts(
                 "horizonMinutes": positive_int(latest_payload.get("horizonMinutes")),
                 "sourceEpisodeId": episode_id,
                 "independenceKey": independence_key,
+                "actionAdjustedReturnPct": latest_adjusted_return,
             }
         # Overall calibration uses one latest result per independent event. For
         # each horizon, however, retain that horizon's latest result so a
@@ -971,6 +982,16 @@ def add_hypothesis_calibration_concepts(
         inconclusive_count = statuses.count("inconclusive")
         decisive_count = corroborated_count + contradicted_count
         independent_count = len(row["episodeOutcomes"])
+        adjusted_returns = [
+            number(item.get("actionAdjustedReturnPct"))
+            for item in row["episodeOutcomes"].values()
+            if item.get("actionAdjustedReturnPct") is not None
+        ]
+        average_adjusted_return = (
+            sum(adjusted_returns) / len(adjusted_returns)
+            if adjusted_returns else 0.0
+        )
+        confidence = binomial_confidence_interval(corroborated_count, decisive_count)
         outcome_state, review_recommendation = hypothesis_calibration_state(
             corroborated_count,
             contradicted_count,
@@ -994,6 +1015,13 @@ def add_hypothesis_calibration_concepts(
             "corroboratedCount": corroborated_count,
             "contradictedCount": contradicted_count,
             "inconclusiveCount": inconclusive_count,
+            "directionalHitRate": confidence["rate"],
+            "directionalHitRateConfidence95": {
+                "lower": confidence["lower"],
+                "upper": confidence["upper"],
+            },
+            "averageActionAdjustedReturnPct": round(average_adjusted_return, 4),
+            "actionReturnState": action_return_state(adjusted_returns),
             "latestObservedAt": max((str(item.get("observedAt") or "") for item in outcome_rows), default=""),
             "outcomeHorizonMinutes": sorted({positive_int(item.get("horizonMinutes")) for item in horizon_outcome_rows if positive_int(item.get("horizonMinutes"))}),
             "horizonSlices": hypothesis_calibration_horizon_slices(horizon_outcome_rows),
@@ -1001,6 +1029,7 @@ def add_hypothesis_calibration_concepts(
             "reviewRecommendation": review_recommendation,
             "calibrationStatus": "usable" if decisive_count >= 3 else "insufficient-history",
             "minimumDecisiveOutcomes": 3,
+            "automaticQualification": True,
             "automaticDeployment": False,
             "source": "investment-brain-feedback",
         })

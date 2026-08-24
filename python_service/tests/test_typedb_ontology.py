@@ -8347,6 +8347,50 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(7, len(persisted.relations))
 
+    def test_typedb_projection_expands_structural_relations_without_dataclass_list_scans(self):
+        graph = PortfolioOntology("structural-expansion")
+        graph.entities.append(OntologyEntity(
+            "stock:000660",
+            "SK hynix",
+            "stock",
+            {"ontologyBox": "ABox"},
+        ))
+        for index in range(300):
+            graph.entities.append(OntologyEntity(
+                f"observation:000660:{index}",
+                f"Observation {index}",
+                "temporal-observation",
+                {"ontologyBox": "ABox"},
+            ))
+        graph.relations.append(OntologyRelation(
+            "stock:000660",
+            "observation:000660:0",
+            "HAS_TEMPORAL_WINDOW",
+            properties={"ontologyBox": "ABox"},
+        ))
+        graph.relations.extend(
+            OntologyRelation(
+                f"observation:000660:{index}",
+                f"observation:000660:{index + 1}",
+                "PRECEDES",
+                properties={"ontologyBox": "ABox"},
+            )
+            for index in range(299)
+        )
+
+        with patch.object(
+            OntologyRelation,
+            "__eq__",
+            side_effect=AssertionError("structural expansion must use hash keys"),
+        ):
+            persisted = PortfolioOntologyProjectionRecorder(None).graph_for_graph_store_persistence(
+                graph,
+                {"inputRelationTypes": ["HAS_TEMPORAL_WINDOW"]},
+            )
+
+        self.assertEqual(300, len(persisted.relations))
+        self.assertEqual(301, len(persisted.entities))
+
     def test_typedb_rule_catalog_migration_removes_shadow_and_fills_known_policy(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
         stored = [dict(item) for item in bootstrap[:2]]

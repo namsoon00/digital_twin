@@ -4047,16 +4047,58 @@ class PortfolioOntologyProjectionRecorder:
             for item in abox_relations
             if str(item.relation_type or "").upper().strip() in ABOX_STRUCTURAL_RELATION_TYPES
         ]
+        def equality_key(value):
+            if isinstance(value, dict):
+                return (
+                    "dict",
+                    tuple(sorted(
+                        ((key, equality_key(item)) for key, item in value.items()),
+                        key=lambda row: repr(row[0]),
+                    )),
+                )
+            if isinstance(value, list):
+                return ("list", tuple(equality_key(item) for item in value))
+            if isinstance(value, tuple):
+                return ("tuple", tuple(equality_key(item) for item in value))
+            if isinstance(value, set):
+                return ("set", frozenset(equality_key(item) for item in value))
+            try:
+                hash(value)
+            except TypeError:
+                return ("object", type(value).__qualname__, repr(value))
+            return ("value", value)
+
+        def relation_equality_key(relation):
+            # OntologyRelation is a dataclass. Preserve its equality contract
+            # while avoiding an O(structural-relations * retained-relations)
+            # list scan during full-world recovery and contract migrations.
+            return (
+                relation.source,
+                relation.target,
+                relation.relation_type,
+                relation.weight,
+                equality_key(relation.evidence_ids),
+                equality_key(relation.properties),
+            )
+
+        retained_relation_keys = {
+            relation_equality_key(item)
+            for item in relations
+        }
         while True:
             additions = [
                 item
                 for item in structural_relations
-                if item not in relations
+                if relation_equality_key(item) not in retained_relation_keys
                 and (item.source in persisted_endpoint_ids or item.target in persisted_endpoint_ids)
             ]
             if not additions:
                 break
             relations.extend(additions)
+            retained_relation_keys.update(
+                relation_equality_key(item)
+                for item in additions
+            )
             persisted_endpoint_ids.update(
                 endpoint
                 for relation in additions

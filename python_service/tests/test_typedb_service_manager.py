@@ -337,6 +337,81 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("release-fingerprint-mismatch", result["status"])
         self.assertEqual("new-rulebox", result["candidateRuleboxFingerprint"])
 
+    def test_blue_green_candidate_allows_explicit_registered_release_change(self):
+        from digital_twin.application.reasoning_engine_platform import (
+            ReasoningEnginePlatformService,
+        )
+
+        settings = {
+            "reasoningEngineV2DeploymentId": "v2-r50",
+            "reasoningEngineCandidateReleaseId": "release-r50",
+            "reasoningEngineV2TypeDbDatabase": "ontology_v2",
+            "_runtimeIdentity": {"revision": "runtime-r50"},
+        }
+
+        class FakeRegistry:
+            def __init__(self):
+                self.rows = {}
+
+            def control(self):
+                return SimpleNamespace(
+                    delivery_deployment_id="v2-r49",
+                    active_deployment_id="v2-r49",
+                    candidate_deployment_id="v2-r50",
+                )
+
+            def get(self, deployment_id):
+                return dict(self.rows.get(deployment_id) or {})
+
+        registry = FakeRegistry()
+        candidate_descriptor = next(
+            descriptor
+            for descriptor in ReasoningEnginePlatformService(registry, settings).descriptors()
+            if descriptor.deployment_id == "v2-r50"
+        )
+        registry.rows = {
+            "v2-r49": {
+                "deploymentId": "v2-r49",
+                "status": "active",
+                "graphStoreBinding": "ontology_v2",
+                "health": {
+                    "candidateReleaseId": "release-r49@frozen",
+                    "ruleboxFingerprint": "old-rulebox",
+                },
+            },
+            "v2-r50": {
+                "deploymentId": "v2-r50",
+                "status": "provisioning",
+                "graphStoreBinding": "ontology_v2",
+                "releaseBundle": candidate_descriptor.release_bundle.to_dict(),
+                "health": {},
+            },
+        }
+
+        class FakeRepository:
+            def rulebox_snapshot(self):
+                return {
+                    "status": "ok",
+                    "rules": [{"id": "rule:new"}],
+                    "sourceRulesHash": "new-rulebox",
+                }
+
+        result = service_manager.validate_typedb_candidate_release_contract(
+            {
+                "typedbDatabase": "ontology_v2",
+                "healthAddress": "127.0.0.1:1730",
+                "httpAddress": "127.0.0.1:8001",
+            },
+            settings_provider=lambda **kwargs: settings,
+            repository_factory=lambda configured: FakeRepository(),
+            registry_factory=lambda configured: registry,
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual("registered-candidate-ready", result["status"])
+        self.assertEqual("v2-r50", result["candidateDeploymentId"])
+        self.assertEqual("new-rulebox", result["candidateRuleboxFingerprint"])
+
     def test_blue_green_candidate_stops_before_world_rebuild_on_release_mismatch(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

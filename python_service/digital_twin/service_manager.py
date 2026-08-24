@@ -2370,6 +2370,25 @@ def validate_typedb_candidate_release_contract(
             clean = str(value or "").strip()
             if clean and clean not in deployment_ids:
                 deployment_ids.append(clean)
+        candidate_deployment_id = str(
+            (
+                control.get("candidate_deployment_id")
+                if isinstance(control, dict)
+                else getattr(control, "candidate_deployment_id", "")
+            )
+            or ""
+        ).strip()
+        registered_candidate = (
+            dict(registry.get(candidate_deployment_id) or {})
+            if candidate_deployment_id and candidate_deployment_id not in deployment_ids
+            else {}
+        )
+        candidate_governs_database = bool(
+            registered_candidate
+            and str(registered_candidate.get("graphStoreBinding") or "").strip() == database_name
+            and str(registered_candidate.get("status") or "").strip().lower()
+            in {"provisioning", "replaying", "shadow", "candidate"}
+        )
         governed = []
         for deployment_id in deployment_ids:
             deployment = dict(registry.get(deployment_id) or {})
@@ -2418,6 +2437,78 @@ def validate_typedb_candidate_release_contract(
             or snapshot.get("ruleboxRulesHash")
             or payload_hash(snapshot.get("rules") or [])
         ).strip()
+
+        # A registered release change intentionally replaces the RuleBox in a
+        # fresh blue-green store.  It must match the complete source release
+        # bundle frozen at registration; otherwise storage maintenance keeps
+        # enforcing the active/delivery fingerprint below.  The candidate
+        # worker freezes the concrete RuleBox fingerprint after cutover, so
+        # this branch breaks the startup cycle without weakening unregistered
+        # mutation protection.
+        if candidate_governs_database:
+            from .application.reasoning_engine_platform import ReasoningEnginePlatformService
+
+            expected_descriptor = next(
+                (
+                    descriptor
+                    for descriptor in ReasoningEnginePlatformService(
+                        registry,
+                        configured,
+                    ).descriptors()
+                    if descriptor.deployment_id == candidate_deployment_id
+                ),
+                None,
+            )
+            registered_bundle = dict(registered_candidate.get("releaseBundle") or {})
+            expected_bundle = (
+                expected_descriptor.release_bundle.to_dict()
+                if expected_descriptor is not None
+                else {}
+            )
+            if not expected_bundle or registered_bundle != expected_bundle:
+                return {
+                    "status": "registered-candidate-source-contract-mismatch",
+                    "ready": False,
+                    "database": database_name,
+                    "candidateDeploymentId": candidate_deployment_id,
+                    "candidateRuleboxFingerprint": candidate_fingerprint,
+                    "reason": (
+                        "The registered candidate release bundle no longer matches "
+                        "the current source release contract."
+                    ),
+                }
+            candidate_health = dict(registered_candidate.get("health") or {})
+            frozen_candidate_fingerprint = str(
+                candidate_health.get("ruleboxFingerprint") or ""
+            ).strip()
+            if (
+                frozen_candidate_fingerprint
+                and frozen_candidate_fingerprint != candidate_fingerprint
+            ):
+                return {
+                    "status": "registered-candidate-fingerprint-mismatch",
+                    "ready": False,
+                    "database": database_name,
+                    "candidateDeploymentId": candidate_deployment_id,
+                    "candidateRuleboxFingerprint": candidate_fingerprint,
+                    "frozenRuleboxFingerprint": frozen_candidate_fingerprint,
+                    "reason": (
+                        "The seeded RuleBox differs from the fingerprint already "
+                        "frozen for the registered candidate release."
+                    ),
+                }
+            return {
+                "status": "registered-candidate-ready",
+                "ready": True,
+                "database": database_name,
+                "candidateDeploymentId": candidate_deployment_id,
+                "candidateRuleboxFingerprint": candidate_fingerprint,
+                "governedDeployments": [{
+                    "deploymentId": candidate_deployment_id,
+                    "status": str(registered_candidate.get("status") or ""),
+                    "frozenRuleboxFingerprint": frozen_candidate_fingerprint,
+                }],
+            }
         mismatches = [
             item for item in governed
             if item["frozenRuleboxFingerprint"] != candidate_fingerprint

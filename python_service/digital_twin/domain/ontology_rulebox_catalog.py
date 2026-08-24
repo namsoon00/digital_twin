@@ -407,7 +407,11 @@ RULEBOX_DECISION_EFFECT_BY_STAGE: Dict[str, str] = {
     "TEMPORAL_DEFENSE": "support",
     "VALUATION_OPPORTUNITY": "support",
     "NEWS_CONFIRMATION": "support",
-    "DATA_CONFLICT": "block",
+    # A partial evidence gap limits confidence and the actions that may use
+    # that evidence; it does not invalidate an otherwise usable investment
+    # view. Rules for a genuinely unavailable primary quote opt into
+    # ``block`` explicitly below.
+    "DATA_CONFLICT": "constrain",
     "ENTRY_WATCH": "defer",
     "ENTRY_WAIT": "defer",
     "ENTRY_REVIEW": "defer",
@@ -2976,6 +2980,7 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     action_group="dataQuality",
                     action_level="review",
                     decision_stage="DATA_CONFLICT",
+                    decision_effect="block",
                 ),
                 GraphRuleDerivation(
                     relation_type="REQUIRES_NEXT_CHECK",

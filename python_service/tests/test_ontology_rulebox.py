@@ -1910,6 +1910,30 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertEqual([], missing)
 
+    def test_partial_data_gaps_constrain_but_primary_quote_failure_blocks_judgement(self):
+        rules = {rule.rule_id: rule for rule in default_graph_inference_rules()}
+        partial_gap_rules = {
+            "graph.security_line.coverage_gap.v1",
+            "graph.data_quality.microstructure_gap.v1",
+            "graph.data_quality.market_snapshot_degraded.v1",
+            "graph.data_quality.news_analysis_conflict.v1",
+            "graph.news.ai_body_missing_review.v1",
+            "graph.temporal.stale_observation.block.v1",
+            "graph.temporal.coverage_gap.v1",
+            "graph.coverage.gap.validation_state.v1",
+            "graph.news.quality.validation_state.v1",
+        }
+
+        self.assertTrue(all(
+            derivation.decision_effect != "block"
+            for rule_id in partial_gap_rules
+            for derivation in rules[rule_id].derivations
+        ))
+        self.assertTrue(any(
+            derivation.decision_effect == "block"
+            for derivation in rules["graph.data_quality.market_snapshot_failure_block.v1"].derivations
+        ))
+
     def test_rulebox_payload_rejects_derivation_without_decision_stage(self):
         payload = rulebox_rules_to_payload(default_graph_inference_rules()[:1])
         payload[0]["derivations"][0]["decision_stage"] = ""

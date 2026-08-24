@@ -2,6 +2,13 @@ from typing import Dict, Iterable
 
 from .ontology_change_impact import rule_condition_dependency_profile
 from .ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from .model_signal_interpretation import (
+    MODEL_SIGNAL_BRIDGE_VERSION,
+    MODEL_SIGNAL_INTERPRETATION_POLICY_VERSION,
+    is_model_signal_interpretation_rule,
+    model_signal_bridge_groups,
+    model_signal_interpretation_policy,
+)
 from .ontology_rulebox_contracts import GRAPH_REASONER_VERSION, GraphInferenceRule
 from .ontology_rule_execution_policy import rule_execution_profile
 from .ontology_rule_manifest import rule_domain_manifest
@@ -11,6 +18,7 @@ from .ontology_threshold_policy import rulebox_threshold_policy_payloads
 
 
 def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenceRule]) -> None:
+    rules = list(rules or [])
     registry_id = entity_id("rule-registry", GRAPH_REASONER_VERSION)
     graph.entities.append(OntologyEntity(registry_id, "Graph Reasoner RuleBox", "rule-registry", rulebox_properties({
         "tboxClass": "RuleRegistry",
@@ -26,14 +34,28 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
         properties=rulebox_relation_properties("DEFINES_RULE", {"source": GRAPH_REASONER_VERSION}),
     ))
     add_threshold_policy_concepts(graph, registry_id)
+    add_model_signal_interpretation_concepts(graph, registry_id, rules)
     for rule in rules:
         execution_profile = rule_execution_profile(rule)
         domain_manifest = rule_domain_manifest(rule, execution=execution_profile)
         knowledge_basis = rule.resolved_knowledge_basis.to_dict()
+        interpretation_policy = (
+            model_signal_interpretation_policy(rule)
+            if is_model_signal_interpretation_rule(rule)
+            else None
+        )
         rule_id = entity_id("rule", rule.rule_id)
         graph.entities.append(OntologyEntity(rule_id, rule.label, "rule", rulebox_properties({
-            "tboxClass": "GraphInferenceRule",
-            "tboxClasses": ["ReasoningRule", "GraphInferenceRule"],
+            "tboxClass": (
+                "ModelSignalInterpretationPolicy"
+                if interpretation_policy
+                else "GraphInferenceRule"
+            ),
+            "tboxClasses": (
+                ["ReasoningRule", "ModelSignalInterpretationPolicy"]
+                if interpretation_policy
+                else ["ReasoningRule", "GraphInferenceRule"]
+            ),
             "ruleId": rule.rule_id,
             "version": rule.version,
             "enabled": rule.enabled,
@@ -64,6 +86,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             "costHintOverride": rule.cost_hint,
             "conditionCount": len(rule.conditions),
             "derivationCount": len(rule.derivations),
+            **(interpretation_policy.to_dict() if interpretation_policy else {}),
         })))
         graph.relations.append(OntologyRelation(
             registry_id,
@@ -72,6 +95,19 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
             weight=1.0,
             properties=rulebox_relation_properties("DEFINES_RULE", {"ruleId": rule.rule_id}),
         ))
+        if interpretation_policy:
+            graph.relations.append(OntologyRelation(
+                registry_id,
+                rule_id,
+                "DEFINES_SIGNAL_INTERPRETATION",
+                weight=1.0,
+                properties=rulebox_relation_properties("DEFINES_SIGNAL_INTERPRETATION", {
+                    "ruleId": rule.rule_id,
+                    "policyId": interpretation_policy.policy_id,
+                    "bridgeContextKey": interpretation_policy.bridge_context_key,
+                    "executionMode": "typedb-shared-model-signal-bridge",
+                }),
+            ))
         for condition_index, condition in enumerate(rule.conditions):
             condition_id = entity_id("rule-condition", rule.rule_id + ":" + condition.condition_id)
             graph.entities.append(OntologyEntity(condition_id, condition.description, "rule-condition", rulebox_properties({
@@ -277,6 +313,72 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                     "relationType": derivation.relation_type,
                     "targetKind": derivation.target_kind,
                     "evaluationAuthority": "typedb",
+                }),
+            ))
+            if interpretation_policy:
+                graph.relations.append(OntologyRelation(
+                    rule_id,
+                    template_id,
+                    "PRESERVES_RULE_LINEAGE",
+                    weight=1.0,
+                    properties=rulebox_relation_properties("PRESERVES_RULE_LINEAGE", {
+                        "ruleId": rule.rule_id,
+                        "policyId": interpretation_policy.policy_id,
+                        "relationType": derivation.relation_type,
+                        "lineageStable": True,
+                    }),
+                ))
+
+
+def add_model_signal_interpretation_concepts(
+    graph: PortfolioOntology,
+    registry_id: str,
+    rules: Iterable[GraphInferenceRule],
+) -> None:
+    """Project shared execution bridges without duplicating policy meaning."""
+
+    for group in model_signal_bridge_groups(rules, enabled_only=False):
+        bridge_id = entity_id("model-signal-bridge", group.source_scope)
+        graph.entities.append(OntologyEntity(
+            bridge_id,
+            "모델 신호 범용 브리지 · " + group.source_scope,
+            "model-signal-bridge",
+            rulebox_properties({
+                "tboxClass": "ModelSignalBridge",
+                "tboxClasses": ["ReasoningRule", "ModelSignalBridge"],
+                "bridgeId": "model-signal-bridge:" + group.source_scope,
+                "bridgeContextKey": group.bridge_context_key,
+                "sourceScope": group.source_scope,
+                "version": MODEL_SIGNAL_BRIDGE_VERSION,
+                "interpretationPolicyVersion": MODEL_SIGNAL_INTERPRETATION_POLICY_VERSION,
+                "executionMode": "typedb-shared-model-signal-bridge",
+                "policyCount": len(group.policy_ids),
+                "policyIds": list(group.policy_ids),
+                "lineageRuleIds": list(group.legacy_rule_ids),
+            }),
+        ))
+        graph.relations.append(OntologyRelation(
+            registry_id,
+            bridge_id,
+            "DEFINES_MODEL_SIGNAL_BRIDGE",
+            weight=1.0,
+            properties=rulebox_relation_properties("DEFINES_MODEL_SIGNAL_BRIDGE", {
+                "bridgeContextKey": group.bridge_context_key,
+                "sourceScope": group.source_scope,
+                "version": MODEL_SIGNAL_BRIDGE_VERSION,
+            }),
+        ))
+        for rule_id_value in group.legacy_rule_ids:
+            graph.relations.append(OntologyRelation(
+                bridge_id,
+                entity_id("rule", rule_id_value),
+                "APPLIES_SIGNAL_INTERPRETATION",
+                weight=1.0,
+                properties=rulebox_relation_properties("APPLIES_SIGNAL_INTERPRETATION", {
+                    "ruleId": rule_id_value,
+                    "policyId": "model-signal-interpretation:" + rule_id_value,
+                    "bridgeContextKey": group.bridge_context_key,
+                    "sourceScope": group.source_scope,
                 }),
             ))
 

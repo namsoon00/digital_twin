@@ -571,6 +571,14 @@ class OntologyDiagnosticsService:
         if isinstance(profile, dict):
             summary["nativeReasoningProfile"] = self.pick(profile, [
                 "status",
+                "ruleCount",
+                "readyRuleCount",
+                "partialRuleCount",
+                "blockedRuleCount",
+                "schemaFunctionCount",
+                "deduplicatedSchemaFunctionCount",
+                "sharedModelSignalPolicyCount",
+                "sharedModelSignalBridgeFunctionCount",
                 "supportedRuleCount",
                 "unsupportedRuleCount",
                 "functionCount",

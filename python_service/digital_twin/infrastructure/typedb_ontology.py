@@ -18,6 +18,15 @@ from functools import wraps
 from typing import Dict, Iterable, List, Set, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
+from ..domain.model_signal_interpretation import (
+    MODEL_SIGNAL_BRIDGE_VERSION,
+    is_model_signal_interpretation_rule,
+    model_signal_bridge_conditions,
+    model_signal_bridge_definition_key,
+    model_signal_bridge_rule_payload,
+    model_signal_bridge_source_scope,
+    model_signal_residual_conditions,
+)
 from ..domain.ontology_semantics import (
     SEMANTIC_STORAGE_CONTRACT_VERSION,
     entity_semantic_type,
@@ -1683,7 +1692,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v15"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v16"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -1692,14 +1701,15 @@ TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 # Active ABox generations are selected through a control pointer. A dedicated
 # function namespace makes deployed schema functions refresh when that query
 # contract changes instead of silently reusing an older unscoped definition.
-# Version 9 passes the active Manifest pointer and world as typed function
+# Version 10 passes the active Manifest pointer and world as typed function
 # arguments. The call site already proves that the candidate belongs to that
 # Manifest, so the function only scopes its evidence relations. This removes
 # the duplicate active-pointer/source-scope join from every rule invocation
 # while keeping all target and relation facts isolated to the exact Manifest
-# generation.
-TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v9_"
-TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v6_"
+# generation. Exact statistical-model contracts share three source-context
+# functions; their signal and account predicates stay in the TypeDB call query.
+TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v10_"
+TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v7_"
 # Scoped ABox writes span many short TypeDB transactions. Keep their lease in
 # a separate control box so pointer replacement cannot delete it mid-write.
 SCOPED_ABOX_WRITE_LEASE_ID = "scoped-abox-write-lease"
@@ -16973,7 +16983,7 @@ relation ontology-assertion,
                 planned.get("targetWorkAdaptiveShardingUsed")
             ),
         }
-        function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
+        function_name = typedb_native_rule_function_name(rule_payload, world_id)
         has_any_conditions = any(
             normalized_condition_role(
                 condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
@@ -17135,6 +17145,14 @@ relation ontology-assertion,
                         )),
                         "schemaFunctionQueryUsed": uses_schema_function,
                         "indexedEvidenceQueryUsed": uses_indexed_evidence_query,
+                        "modelSignalInterpretationPolicy": is_model_signal_interpretation_rule(rule_payload),
+                        "modelSignalInterpretationPolicyId": (
+                            "model-signal-interpretation:" + str(rule.rule_id or "")
+                            if is_model_signal_interpretation_rule(rule_payload)
+                            else ""
+                        ),
+                        "sharedModelSignalBridge": bool(query_plan.get("sharedModelSignalBridge")),
+                        "bridgeSourceScope": str(query_plan.get("bridgeSourceScope") or ""),
                         "dedicatedReadDriverReused": not owns_driver,
                         "resultRowsCompacted": bool(query_plan.get("resultRowsCompacted")),
                         "rowCount": len(rows),
@@ -18172,7 +18190,7 @@ relation ontology-assertion,
                                 continue
                             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
                             rule_schema_function_query = schema_function_query_for(planned)
-                            function_name = typedb_native_rule_function_name(rule.rule_id, world_id)
+                            function_name = typedb_native_rule_function_name(rule_payload, world_id)
                             has_any_conditions = any(
                                 normalized_condition_role(
                                     condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
@@ -18322,6 +18340,14 @@ relation ontology-assertion,
                                 )),
                                 "schemaFunctionQueryUsed": uses_schema_function,
                                 "indexedEvidenceQueryUsed": uses_indexed_evidence_query,
+                                "modelSignalInterpretationPolicy": is_model_signal_interpretation_rule(rule_payload),
+                                "modelSignalInterpretationPolicyId": (
+                                    "model-signal-interpretation:" + str(rule.rule_id or "")
+                                    if is_model_signal_interpretation_rule(rule_payload)
+                                    else ""
+                                ),
+                                "sharedModelSignalBridge": bool(query_plan.get("sharedModelSignalBridge")),
+                                "bridgeSourceScope": str(query_plan.get("bridgeSourceScope") or ""),
                                 "rowCount": len(rows),
                                 "candidateSymbols": candidate_symbols,
                                 "queryComplexity": int(planned.get("queryComplexity") or 0),
@@ -18765,6 +18791,10 @@ relation ontology-assertion,
                 "ruleId": rule_id,
                 "status": str(item.get("status") or "executed"),
                 "queryMode": str(item.get("queryMode") or ""),
+                "modelSignalInterpretationPolicy": bool(item.get("modelSignalInterpretationPolicy")),
+                "modelSignalInterpretationPolicyId": str(item.get("modelSignalInterpretationPolicyId") or ""),
+                "sharedModelSignalBridge": bool(item.get("sharedModelSignalBridge")),
+                "bridgeSourceScope": str(item.get("bridgeSourceScope") or ""),
                 "elapsedMs": 0,
                 "queryDurationMs": 0,
                 "queryCount": 0,
@@ -18777,6 +18807,14 @@ relation ontology-assertion,
             target["queryCount"] += int(number_or_none(item.get("queryCount")) or 0)
             target["rowCount"] += int(number_or_none(item.get("rowCount")) or 0)
             target["workItemCount"] += 1
+            target["modelSignalInterpretationPolicy"] = bool(
+                target.get("modelSignalInterpretationPolicy")
+                or item.get("modelSignalInterpretationPolicy")
+            )
+            target["sharedModelSignalBridge"] = bool(
+                target.get("sharedModelSignalBridge")
+                or item.get("sharedModelSignalBridge")
+            )
             target["candidateSymbols"] = clean_symbols_from_payload([
                 *target["candidateSymbols"],
                 *(item.get("candidateSymbols") or []),
@@ -19281,7 +19319,7 @@ relation ontology-assertion,
                 "ruleId": rule.rule_id,
                 "nativeRuleId": typedb_native_rule_id(rule.rule_id),
                 "schemaFunctionName": (
-                    typedb_native_rule_function_name(rule.rule_id, world_id)
+                    typedb_native_rule_function_name(rule, world_id)
                     if query_plan.get("schemaFunctionQuery")
                     else ""
                 ),
@@ -19292,6 +19330,15 @@ relation ontology-assertion,
                 "matchedConditions": list(condition_context.get("matchedConditions") or []),
                 "evidenceRelationIds": sorted(set(evidence_relation_ids)),
                 "conditionDetailSource": str(condition_context.get("conditionDetailSource") or "schema-function-match"),
+                "modelSignalInterpretationPolicy": is_model_signal_interpretation_rule(rule),
+                "modelSignalInterpretationPolicyId": (
+                    "model-signal-interpretation:" + str(rule.rule_id or "")
+                    if is_model_signal_interpretation_rule(rule)
+                    else ""
+                ),
+                "sharedModelSignalBridge": bool(query_plan.get("sharedModelSignalBridge")),
+                "modelSignalBridgeVersion": str(query_plan.get("modelSignalBridgeVersion") or ""),
+                "bridgeSourceScope": str(query_plan.get("bridgeSourceScope") or ""),
             }
             match_index[match_key] = match
             matches.append(match)
@@ -19306,16 +19353,29 @@ relation ontology-assertion,
     ) -> Dict[str, object]:
         if not self.condition_detail_queries_enabled():
             return typedb_static_schema_function_condition_context(rule, query_plan or {}, row or {})
+        source_query_plan = dict(query_plan or {})
+        interpretation_policy = bool(source_query_plan.get("modelSignalInterpretationPolicy"))
+        shared_bridge = bool(source_query_plan.get("sharedModelSignalBridge"))
+        bridge_condition_ids = set(source_query_plan.get("bridgeConditionIds") or [])
+        residual_condition_ids = set(source_query_plan.get("residualConditionIds") or [])
         matched_conditions: List[Dict[str, object]] = []
         evidence_relation_ids: List[str] = []
         for index, condition in enumerate(getattr(rule, "conditions", []) or []):
             condition_payload = condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
             condition_id = str(condition_payload.get("condition_id") or condition_payload.get("conditionId") or "condition-" + str(index))
             role = normalized_condition_role(condition_payload)
-            query_plan = typedb_native_condition_check_query(condition_payload, source_id, index, world_id=world_id)
+            condition_query_plan = typedb_native_condition_check_query(
+                condition_payload,
+                source_id,
+                index,
+                world_id=world_id,
+            )
             rows: List[Dict[str, object]] = []
-            if query_plan.get("query"):
-                rows = self.read_rows(str(query_plan.get("query")), query_plan.get("columns") or [])
+            if condition_query_plan.get("query"):
+                rows = self.read_rows(
+                    str(condition_query_plan.get("query")),
+                    condition_query_plan.get("columns") or [],
+                )
             condition_matched = bool(rows)
             if role == "not":
                 if not condition_matched:
@@ -19340,7 +19400,14 @@ relation ontology-assertion,
                 "conditionId": condition_id,
                 "kind": condition_payload.get("kind"),
                 "role": role,
+                "matchedByTypeDB": True,
             }
+            if interpretation_policy:
+                payload["matchedByModelSignalInterpretationPolicy"] = True
+            if shared_bridge and condition_id in bridge_condition_ids:
+                payload["matchedBySharedModelSignalBridge"] = True
+            if shared_bridge and condition_id in residual_condition_ids:
+                payload["matchedByInterpretationPolicyQuery"] = True
             if condition_payload.get("kind") == "subject_property":
                 payload.update({
                     "field": condition_payload.get("field"),
@@ -19348,7 +19415,7 @@ relation ontology-assertion,
                     "value": condition_payload.get("value"),
                 })
             elif condition_payload.get("kind") == "relation":
-                relation_id_column = str(query_plan.get("relationIdColumn") or "")
+                relation_id_column = str(condition_query_plan.get("relationIdColumn") or "")
                 relation_id = str((rows[0] if rows else {}).get(relation_id_column) or "")
                 if relation_id:
                     payload["relationId"] = relation_id
@@ -19360,7 +19427,11 @@ relation ontology-assertion,
         return {
             "matchedConditions": matched_conditions,
             "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-            "conditionDetailSource": "schema-function-detail-query",
+            "conditionDetailSource": (
+                "typedb-model-signal-interpretation-policy-detail"
+                if interpretation_policy
+                else "schema-function-detail-query"
+            ),
         }
 
     @staticmethod
@@ -19737,10 +19808,10 @@ relation ontology-assertion,
                 "recoveredRuleIds": [],
             }
         pending_rule_ids = {
-            str(item.get("ruleId") or "")
+            rule_id
             for item in definitions
             if str(item.get("functionName") or "") in pending_names
-            and str(item.get("ruleId") or "")
+            for rule_id in typedb_schema_function_covered_rule_ids(item)
         }
         rules_by_id = {
             str(getattr(rule, "rule_id", "") or ""): rule
@@ -19760,7 +19831,7 @@ relation ontology-assertion,
         recovered_rule_ids = set(call_probe.get("verifiedRuleIds") or [])
         recovered_definitions = [
             item for item in definitions
-            if str(item.get("ruleId") or "") in recovered_rule_ids
+            if set(typedb_schema_function_covered_rule_ids(item)) <= recovered_rule_ids
         ]
         deployment_receipt = {
             "status": "empty",
@@ -19819,6 +19890,7 @@ relation ontology-assertion,
             if function_name:
                 definitions_by_rule_id[str(rule.rule_id or "")] = definition
         probed_count = 0
+        verified_function_names: Set[str] = set()
         verified_rule_ids: List[str] = []
         missing_rule_ids: List[str] = []
         missing_function_names: List[str] = []
@@ -19836,6 +19908,7 @@ relation ontology-assertion,
                     unresolved_function_names.append(function_name)
                     continue
                 probed_count += 1
+                verified_function_names.add(function_name)
                 verified_rule_ids.append(rule_id)
             if missing_rule_ids:
                 return {
@@ -19843,6 +19916,7 @@ relation ontology-assertion,
                     "available": False,
                     "probedCount": probed_count,
                     "verifiedRuleCount": len(ready_rules),
+                    "verifiedFunctionCount": len(verified_function_names),
                     "verifiedRuleIds": verified_rule_ids,
                     "missingRuleIds": sorted(set(missing_rule_ids)),
                     "missingFunctionNames": sorted(set(missing_function_names)),
@@ -19856,6 +19930,7 @@ relation ontology-assertion,
                 "available": probed_count == len(ready_rules),
                 "probedCount": probed_count,
                 "verifiedRuleCount": len(ready_rules),
+                "verifiedFunctionCount": len(verified_function_names),
                 "probeMode": "deployment-receipt-index",
                 "verifiedRuleIds": verified_rule_ids,
             }
@@ -19865,6 +19940,7 @@ relation ontology-assertion,
                 "available": False,
                 "probedCount": probed_count,
                 "verifiedRuleCount": len(ready_rules),
+                "verifiedFunctionCount": len(verified_function_names),
                 "verifiedRuleIds": verified_rule_ids,
                 "missingRuleIds": sorted(set(missing_rule_ids)),
                 "missingFunctionNames": sorted(set(missing_function_names)),
@@ -19958,6 +20034,19 @@ relation ontology-assertion,
                     "nativeRuleId": definition.get("nativeRuleId") or item.get("nativeRuleId"),
                     "rootFunctionName": definition.get("functionName"),
                 })
+        generated_definition_count = len(definitions)
+        definitions = deduplicate_typedb_schema_function_definitions(definitions)
+        covered_rule_ids = typedb_schema_function_rule_ids(definitions)
+        shared_bridge_function_count = sum(
+            1 for item in definitions if item.get("sharedModelSignalBridge")
+        )
+        function_inventory = {
+            "logicalRuleCount": len(covered_rule_ids),
+            "generatedDefinitionCount": generated_definition_count,
+            "physicalFunctionCount": len(definitions),
+            "deduplicatedFunctionCount": max(0, generated_definition_count - len(definitions)),
+            "sharedModelSignalBridgeFunctionCount": shared_bridge_function_count,
+        }
         sync_fingerprint_payload = {
             "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
             "database": self.database,
@@ -19981,6 +20070,9 @@ relation ontology-assertion,
         self.update_schema_function_sync_trace(
             syncFingerprint=sync_fingerprint,
             generatedFunctionCount=len(definitions),
+            generatedDefinitionCount=generated_definition_count,
+            deduplicatedFunctionCount=max(0, generated_definition_count - len(definitions)),
+            sharedModelSignalBridgeFunctionCount=shared_bridge_function_count,
             skippedRuleCount=len(skipped),
         )
         if force:
@@ -20014,11 +20106,7 @@ relation ontology-assertion,
             self.cache_schema_function_sync_result(sync_fingerprint, cached_result)
             return cached_result
         if probe_result.get("available"):
-            synced_rule_ids = sorted(set(
-                str(item.get("ruleId") or "")
-                for item in definitions
-                if str(item.get("ruleId") or "")
-            ))
+            synced_rule_ids = list(covered_rule_ids)
             result = {
                 "configured": True,
                 "status": "ok",
@@ -20030,6 +20118,10 @@ relation ontology-assertion,
                 "syncFingerprint": sync_fingerprint,
                 "syncedCount": len(synced_rule_ids),
                 "syncedFunctionCount": len(definitions),
+                "generatedDefinitionCount": generated_definition_count,
+                "deduplicatedFunctionCount": max(0, generated_definition_count - len(definitions)),
+                "sharedModelSignalBridgeFunctionCount": shared_bridge_function_count,
+                "functionInventory": function_inventory,
                 "skippedCount": len(skipped),
                 "failedCount": 0,
                 "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
@@ -20039,6 +20131,7 @@ relation ontology-assertion,
                         "nativeRuleId": item.get("nativeRuleId"),
                         "schemaFunctionName": item.get("functionName"),
                         "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
+                        "coveredRuleIds": typedb_schema_function_covered_rule_ids(item),
                         "schemaFunctionSyncStatus": "verified-existing",
                     }
                     for item in definitions[:60]
@@ -20075,7 +20168,7 @@ relation ontology-assertion,
             }
         definitions_to_sync = [
             item for item in definitions
-            if str(item.get("ruleId") or "") in missing_rule_ids
+            if set(typedb_schema_function_covered_rule_ids(item)) & missing_rule_ids
         ]
         if not definitions_to_sync:
             return {
@@ -20184,7 +20277,7 @@ relation ontology-assertion,
         if recovered_rule_ids:
             definitions_to_sync = [
                 item for item in definitions_to_sync
-                if str(item.get("ruleId") or "") not in recovered_rule_ids
+                if not set(typedb_schema_function_covered_rule_ids(item)) <= recovered_rule_ids
             ]
         if not definitions_to_sync:
             verification_result = self.run_schema_function_sync_stage(
@@ -20192,11 +20285,7 @@ relation ontology-assertion,
                 lambda: self.probe_typedb_native_rule_functions(rules, world_id),
             )
             if verification_result.get("available"):
-                synced_rule_ids = sorted({
-                    str(item.get("ruleId") or "")
-                    for item in definitions
-                    if str(item.get("ruleId") or "")
-                })
+                synced_rule_ids = typedb_schema_function_rule_ids(definitions)
                 result = {
                     "configured": True,
                     "status": "ok",
@@ -20208,6 +20297,10 @@ relation ontology-assertion,
                     "syncFingerprint": sync_fingerprint,
                     "syncedCount": len(synced_rule_ids),
                     "syncedFunctionCount": len(definitions),
+                    "generatedDefinitionCount": generated_definition_count,
+                    "deduplicatedFunctionCount": max(0, generated_definition_count - len(definitions)),
+                    "sharedModelSignalBridgeFunctionCount": shared_bridge_function_count,
+                    "functionInventory": function_inventory,
                     "skippedCount": len(skipped),
                     "failedCount": 0,
                     "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
@@ -20217,6 +20310,7 @@ relation ontology-assertion,
                             "nativeRuleId": item.get("nativeRuleId"),
                             "schemaFunctionName": item.get("functionName"),
                             "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
+                            "coveredRuleIds": typedb_schema_function_covered_rule_ids(item),
                             "schemaFunctionSyncStatus": "recovered-deployment-receipt",
                         }
                         for item in definitions[:60]
@@ -20249,29 +20343,22 @@ relation ontology-assertion,
                 "reasonCode": "typedbSchemaFunctionVerificationMismatch",
                 "reason": "TypeDB root function is unavailable although its generated definitions are present.",
             }
-        # Keep all definitions for one rule together, then bound a deployment
-        # attempt by rule count. A function compiler restart used to receive
+        # Keep each physical function definition together, then bound a
+        # deployment attempt by definition count. A function compiler restart used to receive
         # the whole RuleBox here (80 functions / roughly 150KB TypeQL), which
         # can monopolise the local TypeDB planner even after the caller times
         # out. The remaining missing functions stay explicitly pending and a
         # later native-rule retry continues from the TypeDB schema catalogue.
         provision_batch_size = self.schema_function_provision_batch_size()
-        deployment_rule_ids: List[str] = []
         deployment_definitions: List[Dict[str, object]] = []
         pending_definitions: List[Dict[str, object]] = []
         for definition in definitions_to_sync:
-            rule_id = str(definition.get("ruleId") or "").strip()
-            if rule_id not in deployment_rule_ids and len(deployment_rule_ids) >= provision_batch_size:
+            if len(deployment_definitions) >= provision_batch_size:
                 pending_definitions.append(definition)
                 continue
-            if rule_id and rule_id not in deployment_rule_ids:
-                deployment_rule_ids.append(rule_id)
             deployment_definitions.append(definition)
-        pending_rule_ids = sorted({
-            str(item.get("ruleId") or "").strip()
-            for item in pending_definitions
-            if str(item.get("ruleId") or "").strip()
-        })
+        deployment_rule_ids = typedb_schema_function_rule_ids(deployment_definitions)
+        pending_rule_ids = typedb_schema_function_rule_ids(pending_definitions)
         imported = self.driver_imports()
         self.update_schema_function_sync_trace(
             deploymentRuleIds=list(deployment_rule_ids),
@@ -20404,6 +20491,7 @@ relation ontology-assertion,
                                 "nativeRuleId": definition.get("nativeRuleId"),
                                 "schemaFunctionName": definition.get("functionName"),
                                 "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
+                                "coveredRuleIds": typedb_schema_function_covered_rule_ids(definition),
                                 "schemaFunctionSyncStatus": "defined-batch",
                             }
                             for definition in definitions_batch
@@ -20471,6 +20559,7 @@ relation ontology-assertion,
                     "nativeRuleId": definition.get("nativeRuleId"),
                     "schemaFunctionName": definition.get("functionName"),
                     "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
+                    "coveredRuleIds": typedb_schema_function_covered_rule_ids(definition),
                     # Do not retry a costly schema definition in the same
                     # request. A later staged cycle observes its durable
                     # result or safely attempts it again.
@@ -20504,7 +20593,7 @@ relation ontology-assertion,
                 "reasonCode": typedb_error_code(error),
                 "reason": str(error)[:220],
             })
-            synced_rule_ids = sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))
+            synced_rule_ids = typedb_schema_function_rule_ids(synced)
             return {
                 "configured": True,
                 "status": "provisioning" if provisioning_receipt.get("saved") else "error",
@@ -20546,8 +20635,9 @@ relation ontology-assertion,
                 "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "schemaFunctionSyncUsed": True,
                 "schemaFunctionProbeUsed": True,
-                "syncedCount": len(sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))),
+                "syncedCount": len(typedb_schema_function_rule_ids(synced)),
                 "syncedFunctionCount": len(synced),
+                "functionInventory": function_inventory,
                 "skippedCount": len(skipped),
                 "failedCount": 1,
                 "syncedFunctions": synced[:60],
@@ -20559,9 +20649,10 @@ relation ontology-assertion,
                 "reasonCode": str(deployment_receipt.get("reasonCode") or "typedbSchemaFunctionReceiptWriteError"),
                 "reason": str(deployment_receipt.get("reason") or "TypeDB function deployment receipt was not persisted.")[:220],
             }
+        deployed_rule_id_set = set(deployment_rule_ids)
         deployed_rules = [
             rule for rule in rules
-            if str(getattr(rule, "rule_id", "") or "").strip() in set(deployment_rule_ids)
+            if str(getattr(rule, "rule_id", "") or "").strip() in deployed_rule_id_set
         ]
         verification_result = self.run_schema_function_sync_stage(
             "deployed-function-verification",
@@ -20578,12 +20669,13 @@ relation ontology-assertion,
                 "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "schemaFunctionSyncUsed": True,
                 "schemaFunctionProbeUsed": True,
-                "syncedCount": len(sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))),
+                "syncedCount": len(typedb_schema_function_rule_ids(synced)),
                 "syncedFunctionCount": len(synced),
                 "skippedCount": len(skipped),
                 "failedCount": 1,
-                "syncedRules": [{"ruleId": item} for item in sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))[:40]],
+                "syncedRules": [{"ruleId": item} for item in typedb_schema_function_rule_ids(synced)[:40]],
                 "syncedFunctions": synced[:60],
+                "functionInventory": function_inventory,
                 "skippedRules": skipped[:40],
                 "functionProbe": probe_result,
                 "functionDefinitionProbe": definition_probe,
@@ -20593,7 +20685,7 @@ relation ontology-assertion,
                 "reasonCode": str(verification_result.get("reasonCode") or "typedbSchemaFunctionVerificationError"),
                 "reason": "TypeDB schema function sync did not verify every executable rule.",
             }
-        synced_rule_ids = sorted(set(str(item.get("ruleId") or "") for item in synced if str(item.get("ruleId") or "")))
+        synced_rule_ids = typedb_schema_function_rule_ids(synced)
         if pending_definitions:
             return {
                 "configured": True,
@@ -20607,6 +20699,7 @@ relation ontology-assertion,
                 "syncFingerprint": sync_fingerprint,
                 "syncedCount": len(synced_rule_ids),
                 "syncedFunctionCount": len(synced),
+                "functionInventory": function_inventory,
                 "skippedCount": len(skipped),
                 "failedCount": 0,
                 "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
@@ -20648,6 +20741,7 @@ relation ontology-assertion,
                     "schemaFunctionProbeUsed": True,
                     "syncedCount": len(synced_rule_ids),
                     "syncedFunctionCount": len(synced),
+                    "functionInventory": function_inventory,
                     "skippedCount": len(skipped),
                     "failedCount": 1,
                     "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
@@ -20671,6 +20765,7 @@ relation ontology-assertion,
             "syncFingerprint": sync_fingerprint,
             "syncedCount": len(synced_rule_ids),
             "syncedFunctionCount": len(synced),
+            "functionInventory": function_inventory,
             "skippedCount": len(skipped),
             "failedCount": 0,
             "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
@@ -20728,6 +20823,7 @@ relation ontology-assertion,
             "probeMode": str(probe.get("probeMode") or ""),
             "probedCount": int(number_or_none(probe.get("probedCount")) or 0),
             "verifiedRuleCount": int(number_or_none(probe.get("verifiedRuleCount")) or len(verified_rule_ids)),
+            "verifiedFunctionCount": int(number_or_none(probe.get("verifiedFunctionCount")) or 0),
             "missingRuleCount": len(missing_rule_ids),
             "verifiedRuleIds": verified_rule_ids[:20],
             "missingRuleIds": missing_rule_ids[:20],
@@ -20807,7 +20903,7 @@ relation ontology-assertion,
                 "schemaFunctionSyncUsed": False,
                 "schemaFunctionProbeUsed": True,
                 "syncedCount": len(verified_rule_ids),
-                "syncedFunctionCount": int(number_or_none(probe_result.get("probedCount")) or len(verified_rule_ids)),
+                "syncedFunctionCount": int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
                 "skippedCount": max(0, len(rule_list) - len(ready_rules)),
                 "failedCount": 0,
                 "pendingRuleCount": 0,
@@ -20835,7 +20931,7 @@ relation ontology-assertion,
                 "schemaFunctionSyncUsed": False,
                 "schemaFunctionProbeUsed": True,
                 "syncedCount": int(number_or_none(probe_result.get("probedCount")) or 0),
-                "syncedFunctionCount": int(number_or_none(probe_result.get("probedCount")) or 0),
+                "syncedFunctionCount": int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
                 "skippedCount": max(0, len(rule_list) - len(ready_rules)),
                 "failedCount": 0,
                 "pendingRuleCount": len(pending_rule_ids),
@@ -20859,7 +20955,7 @@ relation ontology-assertion,
             "schemaFunctionSyncUsed": False,
             "schemaFunctionProbeUsed": True,
             "syncedCount": int(number_or_none(probe_result.get("probedCount")) or 0),
-            "syncedFunctionCount": int(number_or_none(probe_result.get("probedCount")) or 0),
+            "syncedFunctionCount": int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
             "skippedCount": max(0, len(rule_list) - len(ready_rules)),
             "failedCount": 1,
             "pendingRuleCount": len(pending_rule_ids),
@@ -24683,6 +24779,12 @@ def materialize_typedb_native_matches(
             "matchedConditions": list(match.get("matchedConditions") or []),
             "evidenceRelationIds": list(match.get("evidenceRelationIds") or []),
             "conditionDetailSource": str(match.get("conditionDetailSource") or "schema-function-match"),
+            "modelSignalInterpretationPolicy": bool(match.get("modelSignalInterpretationPolicy")),
+            "modelSignalInterpretationPolicyId": str(match.get("modelSignalInterpretationPolicyId") or ""),
+            "sharedModelSignalBridge": bool(match.get("sharedModelSignalBridge")),
+            "modelSignalBridgeVersion": str(match.get("modelSignalBridgeVersion") or ""),
+            "bridgeSourceScope": str(match.get("bridgeSourceScope") or ""),
+            "schemaFunctionName": str(match.get("schemaFunctionName") or ""),
         }, evidence_index=evidence_index)
 
 
@@ -24700,6 +24802,18 @@ def typedb_native_matched_conditions(
     }
     any_group_verified = bool((row or {}).get("_anyConditionsVerified"))
     any_group_added = False
+    interpretation_policy = bool(query_plan.get("modelSignalInterpretationPolicy"))
+    shared_bridge = bool(query_plan.get("sharedModelSignalBridge"))
+    bridge_condition_ids = {
+        str(item or "")
+        for item in query_plan.get("bridgeConditionIds") or []
+        if str(item or "")
+    }
+    residual_condition_ids = {
+        str(item or "")
+        for item in query_plan.get("residualConditionIds") or []
+        if str(item or "")
+    }
     for condition in getattr(rule, "conditions", []) or []:
         condition_role = condition.role or "required"
         if (
@@ -24728,7 +24842,14 @@ def typedb_native_matched_conditions(
             "conditionId": condition.condition_id,
             "kind": condition.kind,
             "role": condition_role,
+            "matchedByTypeDB": True,
         }
+        if interpretation_policy:
+            payload["matchedByModelSignalInterpretationPolicy"] = True
+        if shared_bridge and condition.condition_id in bridge_condition_ids:
+            payload["matchedBySharedModelSignalBridge"] = True
+        if shared_bridge and condition.condition_id in residual_condition_ids:
+            payload["matchedByInterpretationPolicyQuery"] = True
         evidence_column = evidence_by_condition.get(condition.condition_id)
         if evidence_column:
             payload["relationId"] = str(row.get(evidence_column) or "")
@@ -24780,7 +24901,11 @@ def typedb_static_schema_function_condition_context(
     return {
         "matchedConditions": matched_conditions,
         "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-        "conditionDetailSource": "schema-function-match",
+        "conditionDetailSource": (
+            "typedb-model-signal-interpretation-policy"
+            if query_plan.get("modelSignalInterpretationPolicy")
+            else "schema-function-match"
+        ),
     }
 
 
@@ -26927,8 +27052,24 @@ def typedb_native_any_group_check_query(
     }
 
 
-def typedb_native_rule_function_name(rule_id: object, world_id: str = "") -> str:
-    raw = str(rule_id or "rule").strip().lower()
+def typedb_native_rule_function_name(rule_or_id: object, world_id: str = "") -> str:
+    """Return a deployment key for a rule or its shared model-signal bridge."""
+
+    if isinstance(rule_or_id, dict):
+        rule_payload = dict(rule_or_id)
+    elif hasattr(rule_or_id, "to_dict"):
+        rule_payload = dict(rule_or_id.to_dict())
+    else:
+        rule_payload = {}
+    if rule_payload and is_model_signal_interpretation_rule(rule_payload):
+        raw = "bridge_model_signal_" + model_signal_bridge_definition_key(rule_payload)
+    else:
+        raw = str(
+            rule_payload.get("rule_id")
+            or rule_payload.get("ruleId")
+            or rule_or_id
+            or "rule"
+        ).strip().lower()
     normalized = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
     if not normalized:
         normalized = "rule"
@@ -26936,12 +27077,12 @@ def typedb_native_rule_function_name(rule_id: object, world_id: str = "") -> str
         # Explicit worlds all share this parameterized function. The caller
         # passes the concrete world id as a TypeQL string argument, so the
         # function body cannot match another account's active manifest.
-        digest = hashlib.sha256((raw + "|world-parameter-v9").encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.sha256((raw + "|world-parameter-v10").encode("utf-8")).hexdigest()[:10]
         return (TYPEDB_SCHEMA_FUNCTION_PREFIX + normalized + "_" + digest)[:120]
     # Existing no-world ABox rows remain readable during the rolling migration.
     # The compiler contract changed with normalized execution metrics, so use a
     # new content namespace instead of silently reusing a stale v5 body.
-    digest = hashlib.sha256((raw + "|legacy-v6").encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256((raw + "|legacy-v7").encode("utf-8")).hexdigest()[:10]
     return (TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX + normalized + "_" + digest)[:120]
 
 
@@ -26959,12 +27100,18 @@ def typedb_native_any_helper_definitions(rule: Dict[str, object]) -> List[Dict[s
 
 def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "") -> Dict[str, object]:
     rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
-    function_name = typedb_native_rule_function_name(rule_id, world_id)
-    helper_definitions = typedb_native_any_helper_definitions(rule)
+    shared_model_signal_bridge = is_model_signal_interpretation_rule(rule)
+    executable_rule = (
+        model_signal_bridge_rule_payload(rule)
+        if shared_model_signal_bridge
+        else rule
+    )
+    function_name = typedb_native_rule_function_name(rule, world_id)
+    helper_definitions = typedb_native_any_helper_definitions(executable_rule)
     parameterized_world = bool(str(world_id or "").strip())
     world_id_variable = "$ruleWorldId" if parameterized_world else ""
     plan = typedb_native_match_query(
-        rule,
+        executable_rule,
         [],
         scoped_manifest_only=True,
         manifest_id_variable="$ruleManifestId" if parameterized_world else "",
@@ -27017,6 +27164,17 @@ def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "
         "define": "define\n" + body,
         "redefine": "redefine\n" + body,
         "body": body,
+        "coveredRuleIds": [rule_id],
+        "sharedModelSignalBridge": shared_model_signal_bridge,
+        "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION if shared_model_signal_bridge else "",
+        "bridgeSourceScope": model_signal_bridge_source_scope(rule) if shared_model_signal_bridge else "",
+        "bridgeConditionIds": [
+            str(item.get("condition_id") or item.get("conditionId") or "")
+            for item in [
+                condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
+                for condition in model_signal_bridge_conditions(rule)
+            ]
+        ] if shared_model_signal_bridge else [],
         "helperFunctions": helper_definitions,
         "functionDefinitions": helper_definitions + [{
             "ruleId": rule_id,
@@ -27025,9 +27183,63 @@ def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "
             "define": "define\n" + body,
             "redefine": "redefine\n" + body,
             "body": body,
+            "coveredRuleIds": [rule_id],
+            "sharedModelSignalBridge": shared_model_signal_bridge,
+            "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION if shared_model_signal_bridge else "",
+            "bridgeSourceScope": model_signal_bridge_source_scope(rule) if shared_model_signal_bridge else "",
         }],
         "matchQuery": match_query,
     }
+
+
+def typedb_schema_function_covered_rule_ids(definition: Dict[str, object]) -> List[str]:
+    values = list((definition or {}).get("coveredRuleIds") or [])
+    values.append(str((definition or {}).get("ruleId") or ""))
+    return sorted({str(item or "").strip() for item in values if str(item or "").strip()})
+
+
+def deduplicate_typedb_schema_function_definitions(
+    definitions: Iterable[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    """Collapse identical shared bridges while retaining every rule lineage."""
+
+    by_name: Dict[str, Dict[str, object]] = {}
+    order: List[str] = []
+    for raw_definition in definitions or []:
+        definition = dict(raw_definition or {})
+        function_name = str(definition.get("functionName") or "").strip()
+        if not function_name:
+            continue
+        existing = by_name.get(function_name)
+        if existing is None:
+            definition["coveredRuleIds"] = typedb_schema_function_covered_rule_ids(definition)
+            by_name[function_name] = definition
+            order.append(function_name)
+            continue
+        if str(existing.get("body") or "").strip() != str(definition.get("body") or "").strip():
+            raise ValueError(
+                "TypeDB schema function name collision has different bodies: "
+                + function_name
+            )
+        existing["coveredRuleIds"] = sorted(set(
+            typedb_schema_function_covered_rule_ids(existing)
+            + typedb_schema_function_covered_rule_ids(definition)
+        ))
+        existing["sharedModelSignalBridge"] = bool(
+            existing.get("sharedModelSignalBridge")
+            or definition.get("sharedModelSignalBridge")
+        )
+    return [by_name[name] for name in order]
+
+
+def typedb_schema_function_rule_ids(
+    definitions: Iterable[Dict[str, object]],
+) -> List[str]:
+    return sorted({
+        rule_id
+        for definition in definitions or []
+        for rule_id in typedb_schema_function_covered_rule_ids(definition)
+    })
 
 
 def typedb_native_indexed_evidence_match_query(
@@ -27247,6 +27459,19 @@ def typedb_native_rule_runtime_query_plan(
     compact_result_rows: bool = False,
 ) -> Dict[str, object]:
     """Choose a TypeDB-owned predicate surface without Python evaluation."""
+    model_signal_policy = is_model_signal_interpretation_rule(rule)
+    interpretation_metadata = {
+        "modelSignalInterpretationPolicy": model_signal_policy,
+        "modelSignalInterpretationPolicyId": (
+            "model-signal-interpretation:"
+            + str(rule.get("rule_id") or rule.get("ruleId") or "")
+            if model_signal_policy
+            else ""
+        ),
+        "bridgeSourceScope": (
+            model_signal_bridge_source_scope(rule) if model_signal_policy else ""
+        ),
+    }
     indexed_plan = typedb_native_indexed_evidence_match_query(
         rule,
         target_symbols,
@@ -27255,10 +27480,11 @@ def typedb_native_rule_runtime_query_plan(
         compact_result_rows,
     )
     if str(indexed_plan.get("status") or "") == "ok":
-        return indexed_plan
+        return {**indexed_plan, **interpretation_metadata}
     if schema_function_query:
         return {
             **typedb_native_function_call_query(rule, target_symbols, world_id),
+            **interpretation_metadata,
             "schemaFunctionQuery": True,
             "indexedEvidenceQuery": False,
             "queryMode": "typedb-schema-function",
@@ -27277,6 +27503,7 @@ def typedb_native_rule_runtime_query_plan(
         "indexedEvidenceQuery": False,
         "queryMode": "typedb-scoped-typeql",
         "indexedEvidenceFallbackReason": str(indexed_plan.get("reason") or ""),
+        **interpretation_metadata,
     }
 
 
@@ -27350,6 +27577,23 @@ def typedb_native_rule_function_sync_plan(
         "indexedEvidenceRuleCount": len(indexed_rules),
         "indexedEvidenceRuleIds": indexed_rule_ids,
         "schemaFunctionRuleCount": len(schema_function_rules),
+        "schemaFunctionCount": len({
+            typedb_native_rule_function_name(
+                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
+                world_id,
+            )
+            for rule in schema_function_rules
+        }),
+        "sharedModelSignalBridgeFunctionCount": len({
+            typedb_native_rule_function_name(
+                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
+                world_id,
+            )
+            for rule in schema_function_rules
+            if is_model_signal_interpretation_rule(
+                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+            )
+        }),
         "schemaFunctionRuleIds": schema_function_rule_ids,
         "schemaFunctionFallbackReasons": fallback_reasons,
         "indexedEvidenceRules": indexed_rules,
@@ -27365,7 +27609,8 @@ def typedb_native_function_call_query(
     world_id: str = "",
 ) -> Dict[str, object]:
     rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
-    function_name = typedb_native_rule_function_name(rule_id, world_id)
+    shared_model_signal_bridge = is_model_signal_interpretation_rule(rule)
+    function_name = typedb_native_rule_function_name(rule, world_id)
     source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
     symbols = clean_symbols_from_payload(list(target_symbols or []))
     parameterized_world = bool(str(world_id or "").strip())
@@ -27382,6 +27627,62 @@ def typedb_native_function_call_query(
         "let $source in " + function_name + "($candidate"
         + (", $activeManifestPointer, $ruleWorldId" if parameterized_world else "")
         + ");",
+    ])
+    residual_condition_ids: List[str] = []
+    if shared_model_signal_bridge:
+        for index, condition in enumerate(model_signal_residual_conditions(rule)):
+            condition_payload = (
+                condition.to_dict()
+                if hasattr(condition, "to_dict")
+                else dict(condition or {})
+            )
+            condition_id = str(
+                condition_payload.get("condition_id")
+                or condition_payload.get("conditionId")
+                or "condition-" + str(index)
+            )
+            residual_condition_ids.append(condition_id)
+            role = normalized_condition_role(condition_payload)
+            if role in {"any", "optional"}:
+                return {
+                    "ruleId": rule_id,
+                    "nativeRuleId": typedb_native_rule_id(rule_id),
+                    "functionName": function_name,
+                    "query": "",
+                    "columns": [],
+                    "reason": "Model-signal interpretation bridge requires deterministic residual conditions.",
+                    "sharedModelSignalBridge": True,
+                }
+            pattern = typedb_condition_pattern(
+                condition_payload,
+                index,
+                source_var="$source",
+                relation_prefix="interpretationRel",
+                target_prefix="interpretationTarget",
+                variable_scope="interpretation" + str(index) + "_",
+                manifest_id_variable="$activeManifestId",
+                world_id=world_id,
+            )
+            if pattern.get("reason"):
+                return {
+                    "ruleId": rule_id,
+                    "nativeRuleId": typedb_native_rule_id(rule_id),
+                    "functionName": function_name,
+                    "query": "",
+                    "columns": [],
+                    "reason": str(pattern.get("reason") or "Unsupported interpretation condition."),
+                    "sharedModelSignalBridge": True,
+                }
+            condition_clauses = [
+                str(item)
+                for item in pattern.get("clauses") or []
+                if str(item or "").strip()
+            ]
+            if role == "not":
+                clauses.append("not { " + " ".join(condition_clauses) + " };")
+            else:
+                clauses.extend(condition_clauses)
+    clauses.extend([
         "$source has ontology-id $sourceId;",
         "$source has ontology-label $sourceLabel;",
     ])
@@ -27393,6 +27694,24 @@ def typedb_native_function_call_query(
         "columns": ["sourceId", "sourceLabel"],
         "evidenceColumns": [],
         "conditionEvidenceColumns": {},
+        "modelSignalInterpretationPolicy": shared_model_signal_bridge,
+        "modelSignalInterpretationPolicyId": (
+            "model-signal-interpretation:" + rule_id
+            if shared_model_signal_bridge
+            else ""
+        ),
+        "sharedModelSignalBridge": shared_model_signal_bridge,
+        "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION if shared_model_signal_bridge else "",
+        "bridgeSourceScope": model_signal_bridge_source_scope(rule) if shared_model_signal_bridge else "",
+        "bridgeConditionIds": [
+            str(
+                (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("condition_id")
+                or (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("conditionId")
+                or ""
+            )
+            for condition in model_signal_bridge_conditions(rule)
+        ] if shared_model_signal_bridge else [],
+        "residualConditionIds": residual_condition_ids,
     }
 
 
@@ -28208,6 +28527,20 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
     blocked = [item for item in rule_profiles if item.get("status") == "blocked"]
     unsupported = sum(int(item.get("unsupportedConditionCount") or 0) for item in rule_profiles)
     supported = sum(int(item.get("supportedConditionCount") or 0) for item in rule_profiles)
+    schema_function_names = {
+        str(item.get("schemaFunctionName") or "").strip()
+        for item in ready
+        if str(item.get("schemaFunctionName") or "").strip()
+    }
+    shared_model_signal_policy_count = sum(
+        bool(item.get("sharedModelSignalBridge")) for item in ready
+    )
+    shared_model_signal_function_names = {
+        str(item.get("schemaFunctionName") or "").strip()
+        for item in ready
+        if item.get("sharedModelSignalBridge")
+        and str(item.get("schemaFunctionName") or "").strip()
+    }
     status = "ready" if rule_profiles and len(ready) == len(rule_profiles) else ("partial" if ready or partial else "blocked")
     blockers = [
         blocker
@@ -28224,6 +28557,10 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
         "ruleCount": len(rule_profiles),
         "nativeRuleCount": len(rule_profiles),
         "readyRuleCount": len(ready),
+        "schemaFunctionCount": len(schema_function_names),
+        "deduplicatedSchemaFunctionCount": max(0, len(ready) - len(schema_function_names)),
+        "sharedModelSignalPolicyCount": shared_model_signal_policy_count,
+        "sharedModelSignalBridgeFunctionCount": len(shared_model_signal_function_names),
         "partialRuleCount": len(partial),
         "blockedRuleCount": len(blocked),
         "supportedConditionCount": supported,
@@ -28268,7 +28605,13 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         "ruleId": source_rule_id,
         "sourceRuleId": source_rule_id,
         "nativeRuleId": native_rule_id,
-        "schemaFunctionName": typedb_native_rule_function_name(source_rule_id),
+        "schemaFunctionName": typedb_native_rule_function_name(rule),
+        "sharedModelSignalBridge": is_model_signal_interpretation_rule(rule),
+        "bridgeSourceScope": (
+            model_signal_bridge_source_scope(rule)
+            if is_model_signal_interpretation_rule(rule)
+            else ""
+        ),
         "label": str(rule.get("label") or ""),
         "status": status,
         "conditionCount": len(conditions),

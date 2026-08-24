@@ -77,6 +77,16 @@ def materialize_rule_inference(
         if lifecycle_policy and hasattr(lifecycle_policy, "to_dict")
         else {}
     }
+    interpretation_properties = {}
+    if context.get("modelSignalInterpretationPolicy"):
+        interpretation_properties = {
+            "modelSignalInterpretationPolicy": True,
+            "modelSignalInterpretationPolicyId": str(context.get("modelSignalInterpretationPolicyId") or ""),
+            "sharedModelSignalBridge": bool(context.get("sharedModelSignalBridge")),
+            "modelSignalBridgeVersion": str(context.get("modelSignalBridgeVersion") or ""),
+            "bridgeSourceScope": str(context.get("bridgeSourceScope") or ""),
+            "schemaFunctionName": str(context.get("schemaFunctionName") or ""),
+        }
     rule_condition_shapes = [
         rule_condition_shape(condition)
         for condition in getattr(rule, "conditions", []) or []
@@ -112,6 +122,7 @@ def materialize_rule_inference(
         **rule_contract_properties,
         **family_properties,
         **lifecycle_properties,
+        **interpretation_properties,
     })))
     explanation_entities = materialize_inference_explanation_entities(
         graph,
@@ -138,6 +149,7 @@ def materialize_rule_inference(
             **rule_contract_properties,
             **family_properties,
             **lifecycle_properties,
+            **interpretation_properties,
         }),
     ))
     graph.relations.append(OntologyRelation(
@@ -154,6 +166,7 @@ def materialize_rule_inference(
             **rule_contract_properties,
             **family_properties,
             **lifecycle_properties,
+            **interpretation_properties,
         }),
     ))
     evidence_id_value = "evidence:inference:" + symbol + ":" + rule.rule_id
@@ -181,6 +194,7 @@ def materialize_rule_inference(
             "promptHint": rule.prompt_hint,
             **family_properties,
             **lifecycle_properties,
+            **interpretation_properties,
         },
         "context",
         data_state,

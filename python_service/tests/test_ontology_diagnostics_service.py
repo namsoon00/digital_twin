@@ -67,6 +67,12 @@ class FakeOntologyRepository:
             "ruleboxDerivationCount": 2,
             "nativeReasoningProfile": {
                 "status": "partial",
+                "ruleCount": 116,
+                "readyRuleCount": 115,
+                "schemaFunctionCount": 45,
+                "deduplicatedSchemaFunctionCount": 71,
+                "sharedModelSignalPolicyCount": 74,
+                "sharedModelSignalBridgeFunctionCount": 3,
                 "supportedRuleCount": 1,
                 "unsupportedRuleCount": 1,
                 "functionCount": 1,
@@ -370,6 +376,9 @@ class OntologyDiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual("ok", payload["reasoningBoundary"]["ruleboxHashStatus"])
         self.assertEqual("typedb-semantic-storage-v2", payload["tbox"]["semanticStorage"]["contractVersion"])
         self.assertEqual("current", payload["tbox"]["semanticStorage"]["schemaContractStatus"])
+        self.assertEqual(45, payload["rulebox"]["nativeReasoningProfile"]["schemaFunctionCount"])
+        self.assertEqual(71, payload["rulebox"]["nativeReasoningProfile"]["deduplicatedSchemaFunctionCount"])
+        self.assertEqual(3, payload["rulebox"]["nativeReasoningProfile"]["sharedModelSignalBridgeFunctionCount"])
         self.assertEqual("warning", payload["aboxCoverage"]["status"])
         self.assertEqual("TSLA", payload["aboxCoverage"]["symbols"][0]["symbol"])
         self.assertIn("price", payload["aboxCoverage"]["symbols"][0]["present"])

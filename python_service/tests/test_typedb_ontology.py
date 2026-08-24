@@ -10663,7 +10663,18 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 return None
 
         repository = FakeRepository()
-        rules = [rule for rule in default_graph_inference_rules() if rule.enabled][:4]
+        rules = []
+        function_names = set()
+        for rule in default_graph_inference_rules():
+            if not rule.enabled:
+                continue
+            function_name = typedb_native_function_definition(rule.to_dict()).get("functionName")
+            if function_name in function_names:
+                continue
+            function_names.add(function_name)
+            rules.append(rule)
+            if len(rules) == 4:
+                break
         rule_ids = [rule.rule_id for rule in rules]
 
         with patch.object(repository, "probe_typedb_native_rule_functions", side_effect=[
@@ -10994,7 +11005,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 SimpleNamespace(returncode=0, stdout='{"status":"ok","ruleBoxReplaced":true}', stderr=""),
             ]
 
-            with patch.object(service_manager, "source_revision", return_value="test-revision"), \
+            with patch.object(service_manager, "typedb_rotation_lock_path", return_value=Path(temp) / "typedb-rotation.lock"), \
+                    patch.object(service_manager, "source_revision", return_value="test-revision"), \
                     patch.object(service_manager.subprocess, "run", side_effect=results) as run, \
                     patch.object(service_manager.time, "sleep", return_value=None):
                 self.assertTrue(service_manager.ensure_typedb_seeded(spec))
@@ -11027,11 +11039,12 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "seedRetryCount": "0",
             }
 
-            with patch.object(service_manager.subprocess, "run", return_value=SimpleNamespace(
-                returncode=1,
-                stdout='{"status":"rulebox-replace-failed"}',
-                stderr="",
-            )):
+            with patch.object(service_manager, "typedb_rotation_lock_path", return_value=Path(temp) / "typedb-rotation.lock"), \
+                    patch.object(service_manager.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=1,
+                        stdout='{"status":"rulebox-replace-failed"}',
+                        stderr="",
+                    )):
                 self.assertFalse(service_manager.ensure_typedb_seeded(spec))
 
             self.assertIn("seed failed attempt=1 exit=1", spec["log"].read_text(encoding="utf-8"))
@@ -11053,7 +11066,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 SimpleNamespace(returncode=0, stdout='{"status":"ok"}', stderr=""),
             ]
 
-            with patch.object(service_manager, "source_revision", return_value="test-revision"), \
+            with patch.object(service_manager, "typedb_rotation_lock_path", return_value=Path(temp) / "typedb-rotation.lock"), \
+                    patch.object(service_manager, "source_revision", return_value="test-revision"), \
                     patch.object(service_manager.subprocess, "run", side_effect=results) as run, \
                     patch.object(
                         service_manager,
@@ -13612,7 +13626,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("$ruleManifestPointerWorldId == $ruleWorldId", definition["body"])
         self.assertNotIn('has ontology-kind "worldview-manifest-active-pointer"', definition["body"])
         self.assertNotIn('$source has ontology-box "ABox", has ontology-scope-id $sourceScopeId', definition["body"])
-        self.assertIn('has ontology-kind "abox-scope-active-pointer"', definition["body"])
+        self.assertNotIn('has ontology-kind "abox-scope-active-pointer"', definition["body"])
         self.assertIn('has ontology-kind "worldview-manifest-active-pointer"', query)
         self.assertIn('has ontology-kind "abox-scope-active-pointer"', query)
         self.assertIn('($candidate, $activeManifestPointer, $ruleWorldId)', query)
@@ -13625,15 +13639,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         definition = typedb_native_function_definition(rule.to_dict())
         body = definition["body"]
+        query = typedb_native_function_call_query(rule.to_dict())["query"]
 
-        self.assertIn("ontology-investment-strategy-profile", body)
-        self.assertIn("ontology-profit-loss-rate", body)
-        self.assertIn("ontology-model-signal-type", body)
-        self.assertIn('"price-recovery-support"', body)
-        self.assertIn("ontology-model-release-id", body)
-        self.assertIn('"price-path-statistics-production-v2"', body)
-        self.assertIn("ontology-model-decision-eligibility", body)
-        self.assertNotIn("ontology-position-account-weight-pct", body)
+        self.assertTrue(definition["sharedModelSignalBridge"])
+        self.assertEqual("holding", definition["bridgeSourceScope"])
+        self.assertIn("ontology-source-value", body)
+        self.assertNotIn("ontology-model-signal-type", body)
+        self.assertIn("ontology-investment-strategy-profile", query)
+        self.assertIn("ontology-profit-loss-rate", query)
+        self.assertIn("ontology-model-signal-type", query)
+        self.assertIn('"price-recovery-support"', query)
+        self.assertIn("ontology-model-release-id", query)
+        self.assertIn('"price-path-statistics-production-v2"', query)
+        self.assertIn("ontology-model-decision-eligibility", query)
+        self.assertNotIn("ontology-position-account-weight-pct", query)
 
     def test_typedb_temporal_rules_consume_promoted_model_signals(self):
         persistent_rule = next(
@@ -13646,16 +13665,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             for item in default_graph_inference_rules()
             if item.rule_id == "graph.watchlist.temporal.recovery_entry.v1"
         )
-        persistent_body = typedb_native_function_definition(persistent_rule.to_dict())["body"]
-        event_body = typedb_native_function_definition(event_rule.to_dict())["body"]
+        persistent_definition = typedb_native_function_definition(persistent_rule.to_dict())
+        event_definition = typedb_native_function_definition(event_rule.to_dict())
+        persistent_query = typedb_native_function_call_query(persistent_rule.to_dict())["query"]
+        event_query = typedb_native_function_call_query(event_rule.to_dict())["query"]
 
-        self.assertIn("ontology-model-signal-type", persistent_body)
-        self.assertIn('"price-downside-acceleration-risk"', persistent_body)
-        self.assertIn("ontology-model-release-id", persistent_body)
-        self.assertIn("ontology-model-validation-status", persistent_body)
-        self.assertNotIn("ontology-price-change-pct", persistent_body)
-        self.assertIn("ontology-model-signal-type", event_body)
-        self.assertIn('"price-recovery-support"', event_body)
+        self.assertEqual("holding", persistent_definition["bridgeSourceScope"])
+        self.assertEqual("watchlist", event_definition["bridgeSourceScope"])
+        self.assertIn("ontology-model-signal-type", persistent_query)
+        self.assertIn('"price-downside-acceleration-risk"', persistent_query)
+        self.assertIn("ontology-model-release-id", persistent_query)
+        self.assertIn("ontology-model-validation-status", persistent_query)
+        self.assertNotIn("ontology-price-change-pct", persistent_query)
+        self.assertIn("ontology-model-signal-type", event_query)
+        self.assertIn('"price-recovery-support"', event_query)
 
     def test_typedb_function_definitions_use_promoted_portfolio_activity_attributes(self):
         rules = {

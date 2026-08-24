@@ -180,7 +180,21 @@
 
   function operationsHealth(payload) {
     var items = Array.isArray(payload.components) ? payload.components : [];
-    return '<section class="cws-section cws-section-table"><header><div><span>실행 상태</span><h2>핵심 구성요소</h2></div><strong>' + items.length + '개</strong></header><div class="cws-health-list">' + items.map(function (item) {
+    var storage = payload.storage || {};
+    var retention = storage.retentionPolicy || {};
+    var storageSummary = '<div class="cws-metrics">' +
+      metric("공용 디스크", number(storage.freeMb).toFixed(0) + "MB", "여유 공간") +
+      metric("MySQL 파일", number(storage.mysqlSizeMb).toFixed(1) + "MB", "한도 " + number(storage.mysqlLimitMb).toFixed(0) + "MB", storage.mysqlCapacityStage === "normal" ? "positive" : "danger") +
+      metric("MySQL 실데이터", number(storage.mysqlLiveDataMb).toFixed(1) + "MB", "회수 가능 " + number(storage.mysqlReclaimableMb).toFixed(1) + "MB") +
+      metric("TypeDB", number(storage.typedbSizeMb).toFixed(1) + "MB", "WAL " + number(storage.typedbWalMb).toFixed(1) + "MB") +
+      '</div>';
+    var retentionSummary = '<section class="cws-section"><header><div><span>보관 정책</span><h2>검증 이력·시계열</h2></div></header><dl class="cws-queue-facts">' +
+      '<div><dt>TypeDB</dt><dd>' + escapeHtml(retention.typedbActiveHours || 72) + '시간 · WAL ' + escapeHtml(retention.typedbWalTriggerMb || 4096) + 'MB</dd></div>' +
+      '<div><dt>알림 원문</dt><dd>' + escapeHtml(retention.notificationPayloadDays || 30) + '일</dd></div>' +
+      '<div><dt>추론 사례</dt><dd>' + escapeHtml(retention.reasoningCaseDays || 90) + '일</dd></div>' +
+      '<div><dt>시계열</dt><dd>3분 ' + escapeHtml((retention.timeSeriesDays || {})["3m"] || 7) + '일 · 일봉 ' + escapeHtml((retention.timeSeriesDays || {})["1d"] || 1825) + '일</dd></div>' +
+      '</dl></section>';
+    return storageSummary + retentionSummary + '<section class="cws-section cws-section-table"><header><div><span>실행 상태</span><h2>핵심 구성요소</h2></div><strong>' + items.length + '개</strong></header><div class="cws-health-list">' + items.map(function (item) {
       return '<article class="' + escapeHtml(item.state || "unknown") + '"><span class="cws-health-dot" aria-hidden="true"></span><div><strong>' + escapeHtml(item.label) + '</strong><em>' + escapeHtml(item.detail) + '</em></div><span><b>' + escapeHtml(healthLabel(item.state)) + '</b><time>' + escapeHtml(item.updatedAt ? clock(item.updatedAt) : "") + '</time></span></article>';
     }).join("") + '</div></section>';
   }

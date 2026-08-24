@@ -715,6 +715,93 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("stale", decision.status)
         self.assertEqual(["KIS price"], decision.stale_sources)
 
+    def test_recently_fetched_closed_market_quote_is_a_valid_last_close_reference(self):
+        now = datetime(2026, 8, 24, 11, 24, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "000660",
+                "quoteSource": "Toss /api/v1/prices + KIS Open API",
+                "sourceAsOf": "2026-08-24T19:59:59+09:00",
+                "sourceFetchedAt": "2026-08-24T11:22:10Z",
+                "freshnessStatus": "last-close",
+                "freshnessReason": "국장 닫힘",
+                "latencyStatus": "last-close",
+                "marketSession": "closed",
+                "marketSessionLabel": "국장",
+                "dataQuality": "reference",
+            },
+            INVESTMENT_INSIGHT,
+            settings={"dataFreshnessQuoteMaxAgeMinutes": "10"},
+            now=now,
+        )
+        decision = evaluate_notification_data_freshness(
+            {
+                "messageType": INVESTMENT_INSIGHT,
+                "dataFreshness": freshness,
+            },
+            settings={"dataFreshnessEnabled": "1", "dataFreshnessQuoteMaxAgeMinutes": "10"},
+            now=now,
+        )
+
+        quote = freshness["sources"][0]
+        self.assertEqual("last-close", quote["freshnessStatus"])
+        self.assertEqual("sourceFetchedAt", quote["dispatchFreshnessBasis"])
+        self.assertEqual(1, quote["ageMinutes"])
+        self.assertTrue(decision.should_send)
+        self.assertEqual("fresh", decision.status)
+
+    def test_closed_market_quote_still_fails_when_provider_check_is_old(self):
+        now = datetime(2026, 8, 24, 11, 24, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "035720",
+                "quoteSource": "Toss /api/v1/prices + KIS Open API",
+                "sourceAsOf": "2026-08-24T18:00:17+09:00",
+                "sourceFetchedAt": "2026-08-24T11:00:00Z",
+                "freshnessStatus": "last-close",
+                "latencyStatus": "last-close",
+                "marketSession": "closed",
+                "dataQuality": "reference",
+            },
+            INVESTMENT_INSIGHT,
+            settings={"dataFreshnessQuoteMaxAgeMinutes": "10"},
+            now=now,
+        )
+        decision = evaluate_notification_data_freshness(
+            {"messageType": INVESTMENT_INSIGHT, "dataFreshness": freshness},
+            settings={"dataFreshnessEnabled": "1", "dataFreshnessQuoteMaxAgeMinutes": "10"},
+            now=now,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("stale", decision.status)
+
+    def test_fresh_fetch_does_not_rescue_an_old_open_market_quote(self):
+        now = datetime(2026, 8, 24, 6, 24, tzinfo=timezone.utc)
+        freshness = freshness_from_position(
+            {
+                "symbol": "035720",
+                "quoteSource": "Toss /api/v1/prices + KIS WebSocket",
+                "sourceAsOf": "2026-08-24T06:00:00Z",
+                "sourceFetchedAt": "2026-08-24T06:23:30Z",
+                "freshnessStatus": "realtime",
+                "latencyStatus": "provider-observation",
+                "marketSession": "open",
+                "dataQuality": "actual",
+            },
+            INVESTMENT_INSIGHT,
+            settings={"dataFreshnessQuoteMaxAgeMinutes": "10"},
+            now=now,
+        )
+        decision = evaluate_notification_data_freshness(
+            {"messageType": INVESTMENT_INSIGHT, "dataFreshness": freshness},
+            settings={"dataFreshnessEnabled": "1", "dataFreshnessQuoteMaxAgeMinutes": "10"},
+            now=now,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("stale", decision.status)
+
     def test_notification_runner_suppresses_stale_investment_insight_and_requests_refresh(self):
         job = NotificationJob.create(
             "오래된 투자 알림",

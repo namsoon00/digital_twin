@@ -382,6 +382,31 @@ def freshness_from_position(position: Dict[str, object], message_type: str, sett
         now=now,
         require_source_as_of=True,
     )
+    for target, camel, snake in [
+        ("freshnessStatus", "freshnessStatus", "freshness_status"),
+        ("freshnessReason", "freshnessReason", "freshness_reason"),
+        ("latencyStatus", "latencyStatus", "latency_status"),
+        ("latencyReason", "latencyReason", "latency_reason"),
+        ("marketSession", "marketSession", "market_session"),
+        ("marketSessionLabel", "marketSessionLabel", "market_session_label"),
+        ("sourceTimestampState", "sourceTimestampState", "source_timestamp_state"),
+        ("transport", "transport", "transport"),
+        ("realTime", "realTime", "real_time"),
+    ]:
+        value = item.get(camel)
+        if value in (None, ""):
+            value = item.get(snake)
+        if value not in (None, ""):
+            base[target] = value
+    if is_closed_market_reference(base):
+        fetched_age = age_minutes(base.get("sourceFetchedAt"), now=now)
+        max_age = int(base.get("maxAgeMinutes") or max_age_minutes_for_message_type(message_type, settings))
+        base["referenceAgeMinutes"] = age_minutes(base.get("sourceAsOf"), now=now)
+        base["dispatchFreshnessBasis"] = "sourceFetchedAt"
+        if fetched_age is not None and fetched_age <= max_age:
+            base["status"] = "fresh"
+            base["reason"] = "최근 조회한 장 마감 기준값"
+            base["ageMinutes"] = fetched_age
     records = [base]
     records.extend(kis_stage_freshness_records(item, message_type, settings=settings, now=now))
     return aggregate_freshness(records, message_type, settings=settings, now=now)
@@ -540,7 +565,12 @@ def refreshed_freshness_record(record: Dict[str, object], now=None) -> Dict[str,
     source_as_of = item.get("sourceAsOf")
     source_fetched_at = item.get("sourceFetchedAt")
     require_source_as_of = bool(item.get("sourceAsOfRequired"))
-    timestamp = item.get("freshnessTimestamp") or source_as_of or ("" if require_source_as_of else source_fetched_at)
+    closed_market_reference = is_closed_market_reference(item)
+    timestamp = (
+        source_fetched_at
+        if closed_market_reference
+        else item.get("freshnessTimestamp") or source_as_of or ("" if require_source_as_of else source_fetched_at)
+    )
     age = age_minutes(timestamp, now=now)
     try:
         max_age = max(1, int(float(item.get("maxAgeMinutes") or 0)))
@@ -550,6 +580,9 @@ def refreshed_freshness_record(record: Dict[str, object], now=None) -> Dict[str,
     if evidence_disabled:
         item["status"] = "stale"
         item["reason"] = str(item.get("staleReason") or item.get("latencyReason") or "판단 근거 사용 불가")
+    elif closed_market_reference and age is not None and age <= max_age:
+        item["status"] = "fresh"
+        item["reason"] = "발송 직전 최근 조회한 장 마감 기준값 확인"
     elif original_status == "stale" and age is None:
         item["status"] = "stale"
     elif age is None:
@@ -564,7 +597,22 @@ def refreshed_freshness_record(record: Dict[str, object], now=None) -> Dict[str,
     item["ageMinutes"] = age
     item["maxAgeMinutes"] = max_age
     item["checkedAt"] = utc_iso(now)
+    if closed_market_reference:
+        item["referenceAgeMinutes"] = age_minutes(source_as_of, now=now)
+        item["dispatchFreshnessBasis"] = "sourceFetchedAt"
     return item
+
+
+def is_closed_market_reference(record: Dict[str, object]) -> bool:
+    item = record or {}
+    freshness_status = str(item.get("freshnessStatus") or "").strip().lower()
+    latency_status = str(item.get("latencyStatus") or "").strip().lower()
+    market_session = str(item.get("marketSession") or "").strip().lower()
+    reference_state = freshness_status == "last-close" or latency_status in {
+        "last-close",
+        "market-closed-reference",
+    }
+    return reference_state and market_session in {"closed", "closed_exception"}
 
 
 def ignored_kis_stages(decision: DataFreshnessDecision) -> Set[str]:

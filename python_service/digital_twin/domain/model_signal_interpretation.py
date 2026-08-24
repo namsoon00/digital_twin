@@ -148,6 +148,103 @@ def model_signal_residual_conditions(rule: object) -> Tuple[object, ...]:
     )
 
 
+def is_batchable_model_signal_interpretation_rule(rule: object) -> bool:
+    """Return whether one exact signal policy can use a shared bridge read.
+
+    A batchable policy has no account-specific predicate outside the shared
+    source scope. TypeDB therefore needs to prove only that the active source
+    is linked to one immutable ``HAS_MODEL_SIGNAL`` evidence entity. Runtime
+    dispatch maps the evidence's exact hypothesis contract back to the
+    governed RuleBox lineage; it does not evaluate a threshold in Python.
+    """
+
+    if not is_model_signal_interpretation_rule(rule):
+        return False
+    residual = model_signal_residual_conditions(rule)
+    if len(residual) != 1:
+        return False
+    payload = _condition_payload(residual[0])
+    target_filters = dict(
+        payload.get("target_property_filters")
+        or payload.get("targetPropertyFilters")
+        or {}
+    )
+    relation_filters = dict(
+        payload.get("relation_property_filters")
+        or payload.get("relationPropertyFilters")
+        or {}
+    )
+    deterministic_filters = all(
+        not isinstance(expected, Mapping)
+        or str(expected.get("operator") or "==").strip().lower() in {"==", "eq", "in"}
+        for expected in target_filters.values()
+    )
+    return bool(
+        str(payload.get("kind") or "") == "relation"
+        and str(
+            payload.get("relation_type")
+            or payload.get("relationType")
+            or ""
+        ).upper().strip()
+        == MODEL_SIGNAL_RELATION_TYPE
+        and str(payload.get("role") or "required").strip().lower() == "required"
+        and str(target_filters.get("hypothesisContractId") or "").strip()
+        and deterministic_filters
+        and not relation_filters
+    )
+
+
+def model_signal_interpretation_contract_id(rule: object) -> str:
+    """Return the stable hypothesis contract used to dispatch a bridge row."""
+
+    if not is_model_signal_interpretation_rule(rule):
+        return ""
+    signal = _condition_payload(model_signal_conditions(rule)[0])
+    filters = dict(
+        signal.get("target_property_filters")
+        or signal.get("targetPropertyFilters")
+        or {}
+    )
+    return str(filters.get("hypothesisContractId") or "").strip()
+
+
+def model_signal_interpretation_execution_partition(
+    rules: Iterable[GraphInferenceRule],
+    *,
+    enabled_only: bool = True,
+) -> Dict[str, object]:
+    """Describe the shared-read and constrained policy execution surfaces."""
+
+    model_rules = [
+        rule
+        for rule in rules or []
+        if is_model_signal_interpretation_rule(rule)
+        and (not enabled_only or bool(getattr(rule, "enabled", True)))
+    ]
+    batchable = [
+        rule for rule in model_rules
+        if is_batchable_model_signal_interpretation_rule(rule)
+    ]
+    constrained = [
+        rule for rule in model_rules
+        if not is_batchable_model_signal_interpretation_rule(rule)
+    ]
+    scopes = tuple(sorted({
+        model_signal_bridge_source_scope(rule)
+        for rule in batchable
+    }))
+    return {
+        "logicalModelSignalPolicyCount": len(model_rules),
+        "batchedSimplePolicyCount": len(batchable),
+        "constrainedPolicyCount": len(constrained),
+        "modelSignalBridgeReadCount": len(scopes),
+        "eliminatedModelSignalPolicyQueryCount": max(0, len(batchable) - len(scopes)),
+        "bridgeSourceScopes": list(scopes),
+        "batchableRuleIds": sorted(_rule_id(rule) for rule in batchable),
+        "constrainedRuleIds": sorted(_rule_id(rule) for rule in constrained),
+    }
+
+
 def _semantic_family(rule: GraphInferenceRule) -> str:
     derivations = list(rule.derivations or [])
     relation_types = {str(item.relation_type or "").upper() for item in derivations}
@@ -379,6 +476,10 @@ def model_signal_bridge_manifest(rules: Iterable[GraphInferenceRule]) -> Dict[st
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
+    execution_partition = model_signal_interpretation_execution_partition(
+        rules,
+        enabled_only=True,
+    )
     return {
         **material,
         "status": "ok" if not violations else "invalid",
@@ -390,6 +491,7 @@ def model_signal_bridge_manifest(rules: Iterable[GraphInferenceRule]) -> Dict[st
         "legacyExecutableFunctionCount": len(active),
         "sharedExecutableFunctionCount": len(groups),
         "eliminatedPerRuleFunctionCount": max(0, len(active) - len(groups)),
+        **execution_partition,
         "violations": violations,
     }
 

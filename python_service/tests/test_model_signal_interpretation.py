@@ -1,10 +1,13 @@
 import unittest
 
 from digital_twin.domain.model_signal_interpretation import (
+    is_batchable_model_signal_interpretation_rule,
     is_model_signal_interpretation_rule,
     model_signal_bridge_conditions,
     model_signal_bridge_groups,
     model_signal_bridge_manifest,
+    model_signal_interpretation_execution_partition,
+    model_signal_interpretation_contract_id,
     model_signal_interpretation_policies,
     model_signal_residual_conditions,
 )
@@ -19,6 +22,9 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_native_matched_conditions,
     typedb_schema_function_rule_ids,
     materialize_typedb_native_matches,
+    typedb_dispatch_model_signal_bridge_rows,
+    typedb_model_signal_bridge_batch_plan,
+    typedb_model_signal_bridge_batch_query,
 )
 
 
@@ -68,6 +74,130 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             if bridge:
                 self.assertEqual("source", bridge[0].field, rule.rule_id)
                 self.assertIn(bridge[0].value, {"holding", "watchlist"}, rule.rule_id)
+
+    def test_runtime_partition_batches_simple_policies_and_keeps_constraints(self):
+        partition = model_signal_interpretation_execution_partition(
+            self.rules,
+            enabled_only=True,
+        )
+
+        self.assertEqual(74, partition["logicalModelSignalPolicyCount"])
+        self.assertEqual(59, partition["batchedSimplePolicyCount"])
+        self.assertEqual(15, partition["constrainedPolicyCount"])
+        self.assertEqual(3, partition["modelSignalBridgeReadCount"])
+        self.assertEqual(56, partition["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual({"stock", "holding", "watchlist"}, set(
+            partition["bridgeSourceScopes"]
+        ))
+        self.assertTrue(all(
+            is_batchable_model_signal_interpretation_rule(rule)
+            for rule in self.model_rules
+            if rule.enabled and rule.rule_id in partition["batchableRuleIds"]
+        ))
+
+    def test_runtime_batch_plan_replaces_59_reads_with_three_bridge_reads(self):
+        entries = [{
+            "rule": rule,
+            "candidateSymbols": ["005930"],
+            "executionStage": "core",
+        } for rule in self.active_rules]
+        plan = typedb_model_signal_bridge_batch_plan(
+            entries,
+            ["005930"],
+            use_schema_functions=False,
+        )
+
+        self.assertEqual(59, plan["batchedSimplePolicyCount"])
+        self.assertEqual(15, plan["constrainedPolicyCount"])
+        self.assertEqual(3, plan["modelSignalBridgeReadCount"])
+        self.assertEqual(56, plan["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual(18, plan["plannedModelSignalQueryCount"])
+        self.assertEqual(
+            len(self.active_rules) - 59,
+            len(plan["regularEntries"]),
+        )
+        self.assertTrue(all(
+            not batch["schemaFunctionQuery"] for batch in plan["batches"]
+        ))
+        for batch in plan["batches"]:
+            query = typedb_model_signal_bridge_batch_query(
+                batch,
+                world_id="portfolio:local:default",
+            )
+            self.assertEqual("ok", query["status"])
+            self.assertIn("HAS_MODEL_SIGNAL", query["query"])
+            self.assertIn("$hypothesisContractId", query["query"])
+            self.assertIn("$signalEvidenceId", query["query"])
+
+        function_plan = typedb_model_signal_bridge_batch_plan(
+            entries,
+            ["005930"],
+            use_schema_functions=True,
+        )
+        self.assertEqual(3, function_plan["modelSignalBridgeReadCount"])
+        self.assertTrue(all(
+            batch["schemaFunctionQuery"] for batch in function_plan["batches"]
+        ))
+        function_query = typedb_model_signal_bridge_batch_query(
+            function_plan["batches"][0],
+            world_id="portfolio:local:default",
+        )
+        self.assertIn("let $source in orbit_rule_", function_query["query"])
+        self.assertEqual(
+            "typedb-shared-model-signal-bridge-function-batch",
+            function_query["queryMode"],
+        )
+
+    def test_bridge_dispatch_is_exact_fail_closed_and_excludes_disabled_policy(self):
+        batchable = next(
+            rule for rule in self.model_rules
+            if rule.enabled and is_batchable_model_signal_interpretation_rule(rule)
+        )
+        disabled = next(rule for rule in self.model_rules if not rule.enabled)
+        plan = typedb_model_signal_bridge_batch_plan([{
+            "rule": batchable,
+            "candidateSymbols": ["005930"],
+        }, {
+            "rule": disabled,
+            "candidateSymbols": ["005930"],
+        }], ["005930"], use_schema_functions=False)
+        batch = next(
+            item for item in plan["batches"]
+            if batchable.rule_id in item["ruleIds"]
+        )
+        signal = next(
+            condition for condition in batchable.conditions
+            if condition.relation_type == "HAS_MODEL_SIGNAL"
+        )
+        filters = dict(signal.target_property_filters or {})
+        valid_row = {
+            "sourceId": "stock:005930",
+            "sourceLabel": "삼성전자",
+            "sourceSymbol": "005930",
+            "signalEvidenceId": "model-signal:test",
+            **filters,
+        }
+
+        dispatched = typedb_dispatch_model_signal_bridge_rows(batch, [
+            valid_row,
+            {**valid_row, "hypothesisContractId": "unknown.contract.v1"},
+        ])
+        self.assertEqual("ok", dispatched["status"])
+        self.assertEqual(1, len(dispatched["matches"]))
+        self.assertEqual(
+            batchable.rule_id,
+            dispatched["matches"][0]["entry"]["rule"].rule_id,
+        )
+        self.assertEqual(["unknown.contract.v1"], dispatched["ignoredContractIds"])
+        self.assertNotIn(disabled.rule_id, plan["batchableRuleIds"])
+
+        invalid = typedb_dispatch_model_signal_bridge_rows(batch, [{
+            **valid_row,
+            "releaseId": "unexpected-release",
+        }])
+        self.assertEqual("invalid", invalid["status"])
+        self.assertEqual([], invalid["matches"])
+        self.assertIn("releaseId", invalid["failures"][0])
 
     def test_active_catalog_compiles_to_45_physical_functions(self):
         generated = []

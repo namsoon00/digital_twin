@@ -20,11 +20,14 @@ from typing import Dict, Iterable, List, Set, Tuple
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.model_signal_interpretation import (
     MODEL_SIGNAL_BRIDGE_VERSION,
+    is_batchable_model_signal_interpretation_rule,
     is_model_signal_interpretation_rule,
     model_signal_bridge_conditions,
     model_signal_bridge_definition_key,
     model_signal_bridge_rule_payload,
     model_signal_bridge_source_scope,
+    model_signal_conditions,
+    model_signal_interpretation_contract_id,
     model_signal_residual_conditions,
 )
 from ..domain.ontology_semantics import (
@@ -1692,7 +1695,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v16"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v17"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
@@ -17188,6 +17191,230 @@ relation ontology-assertion,
             }
         return with_elapsed(result)
 
+    def execute_typedb_model_signal_bridge_batches(
+        self,
+        batches: Iterable[Dict[str, object]],
+        *,
+        world_id: str,
+        imported,
+        transaction_type,
+        deadline: float,
+    ) -> Dict[str, object]:
+        """Execute one read per simple model-signal source-scope batch."""
+
+        batch_rows = [dict(item or {}) for item in batches or []]
+        if not batch_rows:
+            return {
+                "status": "ok",
+                "readTransactionCount": 0,
+                "readQueryCount": 0,
+                "executedRules": [],
+                "failures": [],
+                "dispatchedMatches": [],
+                "ignoredContractIds": [],
+            }
+        driver = self.open_native_rule_read_driver(
+            imported,
+            request_timeout_seconds=max(
+                self.native_rule_query_timeout_seconds(),
+                min(120.0, max(1.0, deadline - time.monotonic())),
+            ),
+        )
+        read_transaction_count = 0
+        read_query_count = 0
+        executed_rules: List[Dict[str, object]] = []
+        failures: List[Dict[str, object]] = []
+        dispatched_matches: List[Dict[str, object]] = []
+        ignored_contract_ids: Set[str] = set()
+        try:
+            self.ensure_database(driver)
+            for batch_index, batch in enumerate(batch_rows):
+                entries = [dict(item or {}) for item in batch.get("entries") or []]
+                batch_started = time.perf_counter()
+                remaining_seconds = deadline - time.monotonic()
+                query_plan = typedb_model_signal_bridge_batch_query(
+                    batch,
+                    world_id=world_id,
+                    # Shared bridges are a v2 scoped-world feature. Their
+                    # source, signal entity, and assertion must all resolve
+                    # through the active scope pointers even when the source
+                    # predicate itself came from a schema function.
+                    scoped_manifest_only=True,
+                )
+                if remaining_seconds <= 0.5 or not query_plan.get("query"):
+                    status = (
+                        "deferred-by-runtime-budget"
+                        if remaining_seconds <= 0.5
+                        else "blocked"
+                    )
+                    reason = (
+                        "TypeDB native-rule realtime execution budget is exhausted."
+                        if remaining_seconds <= 0.5
+                        else str(query_plan.get("reason") or "Shared model-signal bridge query could not be built.")
+                    )
+                    for entry in entries:
+                        rule = entry.get("rule")
+                        failures.append({
+                            "ruleId": str(getattr(rule, "rule_id", "") or ""),
+                            "status": status,
+                            "reason": reason[:220],
+                            "candidateSymbols": list(entry.get("candidateSymbols") or []),
+                            "sharedModelSignalBridgeBatch": True,
+                            "bridgeSourceScope": str(batch.get("sourceScope") or ""),
+                            **typedb_rule_execution_profile_fields(entry),
+                        })
+                    continue
+                query_timeout = min(
+                    self.native_rule_query_timeout_seconds(),
+                    remaining_seconds,
+                )
+                query_duration_ms = 0
+                try:
+                    with driver.transaction(
+                        self.database,
+                        transaction_type.READ,
+                        self.read_transaction_options(query_timeout),
+                    ) as tx:
+                        query_started = time.perf_counter()
+                        try:
+                            rows = self.read_rows_in_transaction(
+                                tx,
+                                str(query_plan.get("query")),
+                                query_plan.get("columns") or [],
+                                label=(
+                                    "modelSignalBridgeBatch:"
+                                    + str(batch.get("sourceScope") or "")
+                                ),
+                                timeout_seconds=query_timeout,
+                            )
+                        finally:
+                            query_duration_ms = int(
+                                (time.perf_counter() - query_started) * 1000
+                            )
+                    read_transaction_count += 1
+                    read_query_count += 1
+                except Exception as error:  # noqa: BLE001 - one bridge gap blocks complete coverage.
+                    status = (
+                        "query-timeout"
+                        if typedb_error_code(error) == "typedbTimeout"
+                        else "query-error"
+                    )
+                    for entry in entries:
+                        rule = entry.get("rule")
+                        failures.append({
+                            "ruleId": str(getattr(rule, "rule_id", "") or ""),
+                            "status": status,
+                            "reason": str(error)[:220],
+                            "candidateSymbols": list(entry.get("candidateSymbols") or []),
+                            "queryDurationMs": query_duration_ms,
+                            "sharedModelSignalBridgeBatch": True,
+                            "bridgeSourceScope": str(batch.get("sourceScope") or ""),
+                            **typedb_rule_execution_profile_fields(entry),
+                        })
+                    continue
+                dispatch = typedb_dispatch_model_signal_bridge_rows(batch, rows)
+                ignored_contract_ids.update(dispatch.get("ignoredContractIds") or [])
+                if str(dispatch.get("status") or "") != "ok":
+                    reason = "; ".join(str(item) for item in dispatch.get("failures") or [])
+                    for entry in entries:
+                        rule = entry.get("rule")
+                        failures.append({
+                            "ruleId": str(getattr(rule, "rule_id", "") or ""),
+                            "status": "contract-integrity-error",
+                            "reason": reason[:220],
+                            "candidateSymbols": list(entry.get("candidateSymbols") or []),
+                            "queryDurationMs": query_duration_ms,
+                            "sharedModelSignalBridgeBatch": True,
+                            "bridgeSourceScope": str(batch.get("sourceScope") or ""),
+                            **typedb_rule_execution_profile_fields(entry),
+                        })
+                    continue
+                dispatched = [dict(item or {}) for item in dispatch.get("matches") or []]
+                matched_count_by_rule_id: Dict[str, int] = {}
+                for item in dispatched:
+                    entry = dict(item.get("entry") or {})
+                    rule = entry.get("rule")
+                    rule_id = str(getattr(rule, "rule_id", "") or "")
+                    signal_condition = model_signal_conditions(rule)[0]
+                    signal_condition_payload = (
+                        signal_condition.to_dict()
+                        if hasattr(signal_condition, "to_dict")
+                        else dict(signal_condition or {})
+                    )
+                    signal_condition_id = str(
+                        signal_condition_payload.get("condition_id")
+                        or signal_condition_payload.get("conditionId")
+                        or ""
+                    )
+                    per_rule_query_plan = {
+                        **query_plan,
+                        "ruleId": rule_id,
+                        "nativeRuleId": typedb_native_rule_id(rule_id),
+                        "conditionEvidenceColumns": {
+                            signal_condition_id: str(query_plan.get("relationIdColumn") or "")
+                        } if signal_condition_id and query_plan.get("relationIdColumn") else {},
+                        "modelSignalInterpretationPolicy": True,
+                        "modelSignalInterpretationPolicyId": "model-signal-interpretation:" + rule_id,
+                        "bridgeConditionIds": [
+                            str(
+                                (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("condition_id")
+                                or (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("conditionId")
+                                or ""
+                            )
+                            for condition in model_signal_bridge_conditions(rule)
+                        ],
+                        "residualConditionIds": [signal_condition_id] if signal_condition_id else [],
+                    }
+                    dispatched_matches.append({
+                        "rule": rule,
+                        "queryPlan": per_rule_query_plan,
+                        "row": dict(item.get("row") or {}),
+                    })
+                    matched_count_by_rule_id[rule_id] = matched_count_by_rule_id.get(rule_id, 0) + 1
+                batch_elapsed_ms = int((time.perf_counter() - batch_started) * 1000)
+                for entry_index, entry in enumerate(entries):
+                    rule = entry.get("rule")
+                    rule_id = str(getattr(rule, "rule_id", "") or "")
+                    executed_rules.append({
+                        "ruleId": rule_id,
+                        "nativeRuleId": typedb_native_rule_id(rule_id),
+                        "schemaFunctionName": str(query_plan.get("schemaFunctionName") or ""),
+                        "queryMode": str(query_plan.get("queryMode") or ""),
+                        "schemaFunctionQueryUsed": bool(query_plan.get("schemaFunctionQuery")),
+                        "indexedEvidenceQueryUsed": False,
+                        "modelSignalInterpretationPolicy": True,
+                        "modelSignalInterpretationPolicyId": "model-signal-interpretation:" + rule_id,
+                        "sharedModelSignalBridge": True,
+                        "sharedModelSignalBridgeBatch": True,
+                        "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION,
+                        "bridgeSourceScope": str(batch.get("sourceScope") or ""),
+                        "bridgeBatchIndex": batch_index,
+                        "bridgeBatchPolicyCount": len(entries),
+                        "rowCount": int(matched_count_by_rule_id.get(rule_id) or 0),
+                        "candidateSymbols": list(entry.get("candidateSymbols") or []),
+                        "queryComplexity": int(entry.get("queryComplexity") or 0),
+                        # The physical read belongs to the batch leader. Every
+                        # logical policy remains visible without inflating the
+                        # actual query count in per-rule telemetry.
+                        "queryCount": 1 if entry_index == 0 else 0,
+                        "sharedBridgeReadCount": 1 if entry_index == 0 else 0,
+                        "anyConditionQueryCount": 0,
+                        "elapsedMs": batch_elapsed_ms,
+                        "queryDurationMs": query_duration_ms,
+                        **typedb_rule_execution_profile_fields(entry),
+                    })
+        finally:
+            self.close_native_rule_read_driver(driver)
+        return {
+            "status": "ok" if not failures else "partial",
+            "readTransactionCount": read_transaction_count,
+            "readQueryCount": read_query_count,
+            "executedRules": executed_rules,
+            "failures": failures,
+            "dispatchedMatches": dispatched_matches,
+            "ignoredContractIds": sorted(ignored_contract_ids),
+        }
+
     @staticmethod
     def native_rule_entry_has_timeout_failure(result: Dict[str, object]) -> bool:
         """Return whether a failed native-rule entry is safe to retry smaller.
@@ -17588,6 +17815,48 @@ relation ontology-assertion,
         } for row in subject_rows]
         failures = [item for item in subject_summary if not item["coreEvaluationComplete"] or item["status"] != "ok"]
         first_result = results[0] if results else {}
+        model_signal_subjects = [
+            dict(item.get("modelSignalBridgeExecution") or {})
+            for item in results
+            if isinstance(item.get("modelSignalBridgeExecution"), dict)
+        ]
+        model_signal_execution = {
+            "status": (
+                "ok"
+                if model_signal_subjects
+                and all(str(item.get("status") or "") == "ok" for item in model_signal_subjects)
+                else "partial"
+                if model_signal_subjects
+                else "not-planned"
+            ),
+            "logicalModelSignalPolicyCount": max(
+                [int(item.get("logicalModelSignalPolicyCount") or 0) for item in model_signal_subjects]
+                or [0]
+            ),
+            "batchedSimplePolicyCount": max(
+                [int(item.get("batchedSimplePolicyCount") or 0) for item in model_signal_subjects]
+                or [0]
+            ),
+            "constrainedPolicyCount": max(
+                [int(item.get("constrainedPolicyCount") or 0) for item in model_signal_subjects]
+                or [0]
+            ),
+            "modelSignalBridgeReadCount": sum(
+                int(item.get("modelSignalBridgeReadCount") or 0)
+                for item in model_signal_subjects
+            ),
+            "eliminatedModelSignalPolicyQueryCount": sum(
+                int(item.get("eliminatedModelSignalPolicyQueryCount") or 0)
+                for item in model_signal_subjects
+            ),
+            "ignoredContractIds": sorted({
+                str(contract_id or "")
+                for item in model_signal_subjects
+                for contract_id in item.get("ignoredContractIds") or []
+                if str(contract_id or "")
+            }),
+            "subjectCount": len(model_signal_subjects),
+        }
         return {
             "status": "ok" if complete else "partial",
             "graphStore": "typedb",
@@ -17633,6 +17902,7 @@ relation ontology-assertion,
             "executedRules": executed_rules,
             "skippedRules": skipped_rules,
             "executionPlan": dict(first_result.get("executionPlan") or {}),
+            "modelSignalBridgeExecution": model_signal_execution,
             "ruleContext": {
                 "status": "ok" if complete else "partial",
                 "symbols": clean_symbols,
@@ -17743,6 +18013,18 @@ relation ontology-assertion,
             else {}
         )
         adaptive_target_parallelism_by_rule_id: Dict[str, int] = {}
+        model_signal_batch_plan: Dict[str, object] = {
+            "status": "not-planned",
+            "logicalModelSignalPolicyCount": 0,
+            "batchedSimplePolicyCount": 0,
+            "constrainedPolicyCount": 0,
+            "modelSignalBridgeReadCount": 0,
+            "eliminatedModelSignalPolicyQueryCount": 0,
+            "plannedModelSignalQueryCount": 0,
+            "batches": [],
+            "regularEntries": [],
+        }
+        model_signal_ignored_contract_ids: List[str] = []
         adaptive_target_sharding_profile_status = str(
             adaptive_target_sharding_profile.get("status") or "not-requested"
         )
@@ -17979,6 +18261,13 @@ relation ontology-assertion,
                 and len(clean_symbols) > 1
             )
             selected_entries = list(target_work_plan.get("workItems") or [])
+            model_signal_batch_plan = typedb_model_signal_bridge_batch_plan(
+                selected_entries,
+                clean_symbols,
+                use_schema_functions=use_schema_functions,
+                schema_function_ready_rule_ids=ready_schema_rule_ids,
+            )
+            selected_entries = list(model_signal_batch_plan.get("regularEntries") or [])
             imported = self.driver_imports()
             if imported[0] is None:
                 raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
@@ -17999,8 +18288,16 @@ relation ontology-assertion,
                 for item in selected_entries
                 if item.get("rule")
             )
+            requires_direct_model_signal_bridge = any(
+                not bool(batch.get("schemaFunctionQuery"))
+                for batch in model_signal_batch_plan.get("batches") or []
+            )
             scoped_manifest_only = False
-            if requires_direct_any_probe or not schema_function_query:
+            if (
+                requires_direct_any_probe
+                or requires_direct_model_signal_bridge
+                or not schema_function_query
+            ):
                 try:
                     scoped_manifest_only = self.active_abox_uses_scoped_manifest(world_id)
                 except Exception:
@@ -18110,7 +18407,10 @@ relation ontology-assertion,
             }
             isolated_entry_execution = bool(
                 stable_abox_write_lease_held
-                and execution_batches
+                and (
+                    execution_batches
+                    or model_signal_batch_plan.get("batches")
+                )
             )
             parallel_rule_execution = bool(
                 isolated_entry_execution
@@ -18118,7 +18418,7 @@ relation ontology-assertion,
             )
             effective_parallelism = (
                 max(int(batch.get("parallelism") or 1) for batch in execution_batches)
-                if isolated_entry_execution
+                if isolated_entry_execution and execution_batches
                 else 1
             )
             if isolated_entry_execution:
@@ -18134,6 +18434,63 @@ relation ontology-assertion,
                     )
                 elif adaptive_target_entries:
                     execution_mode += "-adaptive-target-shards"
+
+            native_execution_deadline = (
+                time.monotonic() + self.native_rule_execution_budget_seconds()
+            )
+            bridge_batch_result = self.execute_typedb_model_signal_bridge_batches(
+                model_signal_batch_plan.get("batches") or [],
+                world_id=world_id,
+                imported=imported,
+                transaction_type=TransactionType,
+                deadline=native_execution_deadline,
+            )
+            read_transaction_count += int(
+                bridge_batch_result.get("readTransactionCount") or 0
+            )
+            read_call_count += int(bridge_batch_result.get("readQueryCount") or 0)
+            bridge_executed_rules = [
+                dict(item)
+                for item in bridge_batch_result.get("executedRules") or []
+                if isinstance(item, dict)
+            ]
+            executed_rules.extend(bridge_executed_rules)
+            bridge_failures = [
+                dict(item)
+                for item in bridge_batch_result.get("failures") or []
+                if isinstance(item, dict)
+            ]
+            if bridge_failures:
+                skipped_rules.extend(bridge_failures)
+                query_failures.extend(bridge_failures)
+                execution_incomplete = True
+                execution_budget_exhausted = execution_budget_exhausted or any(
+                    str(item.get("status") or "") == "deferred-by-runtime-budget"
+                    for item in bridge_failures
+                )
+            for dispatched in bridge_batch_result.get("dispatchedMatches") or []:
+                if not isinstance(dispatched, dict):
+                    continue
+                rule = dispatched.get("rule")
+                if not rule:
+                    continue
+                self.merge_native_match_rows(
+                    rule,
+                    dict(dispatched.get("queryPlan") or {}),
+                    [dict(dispatched.get("row") or {})],
+                    match_index,
+                    matches,
+                    world_id,
+                )
+            model_signal_ignored_contract_ids = list(
+                bridge_batch_result.get("ignoredContractIds") or []
+            )
+            if bridge_executed_rules:
+                schema_function_match_used = schema_function_match_used or any(
+                    bool(item.get("schemaFunctionQueryUsed"))
+                    for item in bridge_executed_rules
+                )
+                execution_mode = "typedb-shared-model-signal-bridge-batch"
 
             def operation():
                 nonlocal read_call_count, read_transaction_count, execution_budget_exhausted, execution_incomplete, execution_mode
@@ -18155,7 +18512,7 @@ relation ontology-assertion,
                 )
                 try:
                     self.ensure_database(driver)
-                    deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
+                    deadline = native_execution_deadline
                     # All applicable rules observe one stable ABox read view.
                     # Previously every rule, and then every N-of-M check, opened
                     # an independent transaction. That multiplied driver setup
@@ -18362,7 +18719,7 @@ relation ontology-assertion,
                     self.close_driver(driver)
 
             if isolated_entry_execution:
-                deadline = time.monotonic() + self.native_rule_execution_budget_seconds()
+                deadline = native_execution_deadline
                 completed_entries: Dict[int, Dict[str, object]] = {}
                 read_driver_pool = []
 
@@ -18639,6 +18996,10 @@ relation ontology-assertion,
                     "readQueryCount": read_call_count,
                     "executedRules": list(executed_rules),
                     "skippedRules": list(skipped_rules),
+                    "modelSignalBridgeExecution": typedb_model_signal_bridge_batch_plan_summary(
+                        model_signal_batch_plan,
+                        ignored_contract_ids=model_signal_ignored_contract_ids,
+                    ),
                     "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                     "ruleContext": rule_context,
                     "evidenceFieldIndex": evidence_index_hydration,
@@ -18703,6 +19064,10 @@ relation ontology-assertion,
                 "matches": matches,
                 "executedRules": list(executed_rules),
                 "skippedRules": list(skipped_rules),
+                "modelSignalBridgeExecution": typedb_model_signal_bridge_batch_plan_summary(
+                    model_signal_batch_plan,
+                    ignored_contract_ids=model_signal_ignored_contract_ids,
+                ),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                 "ruleContext": rule_context,
                 "evidenceFieldIndex": evidence_index_hydration,
@@ -18743,6 +19108,10 @@ relation ontology-assertion,
                 "executedRules": list(executed_rules),
                 "skippedRules": list(skipped_rules),
                 "readQueryCount": read_call_count,
+                "modelSignalBridgeExecution": typedb_model_signal_bridge_batch_plan_summary(
+                    model_signal_batch_plan,
+                    ignored_contract_ids=model_signal_ignored_contract_ids,
+                ),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
             }
@@ -27712,6 +28081,403 @@ def typedb_native_function_call_query(
             for condition in model_signal_bridge_conditions(rule)
         ] if shared_model_signal_bridge else [],
         "residualConditionIds": residual_condition_ids,
+    }
+
+
+def typedb_model_signal_bridge_batch_plan(
+    planned_entries: Iterable[Dict[str, object]],
+    target_symbols: Iterable[str] = None,
+    *,
+    use_schema_functions: bool = True,
+    schema_function_ready_rule_ids: Iterable[str] = None,
+) -> Dict[str, object]:
+    """Collapse simple model-signal policies into source-scope bridge reads.
+
+    The returned batches are an execution-routing plan only. TypeDB still
+    proves the active ``HAS_MODEL_SIGNAL`` assertion. Python maps its immutable
+    hypothesis contract to the existing governed rule lineage.
+    """
+
+    clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
+    ready_rule_ids = (
+        None
+        if schema_function_ready_rule_ids is None
+        else {
+            str(rule_id or "").strip()
+            for rule_id in schema_function_ready_rule_ids
+            if str(rule_id or "").strip()
+        }
+    )
+    regular_entries: List[Dict[str, object]] = []
+    batchable_by_rule_id: Dict[str, Dict[str, object]] = {}
+    constrained_rule_ids: Set[str] = set()
+    logical_model_signal_rule_ids: Set[str] = set()
+    for raw_entry in planned_entries or []:
+        entry = dict(raw_entry or {})
+        rule = entry.get("rule")
+        if not rule:
+            regular_entries.append(entry)
+            continue
+        rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+        rule_id = str(rule_payload.get("rule_id") or rule_payload.get("ruleId") or "").strip()
+        if not is_model_signal_interpretation_rule(rule_payload):
+            regular_entries.append(entry)
+            continue
+        if not bool(rule_payload.get("enabled", True)):
+            # The caller normally filters disabled rules before planning. Keep
+            # the shared dispatcher independently fail-safe for diagnostics
+            # and unit use so a disabled contract can never be routed.
+            continue
+        logical_model_signal_rule_ids.add(rule_id)
+        if not is_batchable_model_signal_interpretation_rule(rule_payload):
+            constrained_rule_ids.add(rule_id)
+            regular_entries.append(entry)
+            continue
+        candidate_symbols = typedb_planned_candidate_symbols(entry, clean_symbols)
+        existing = batchable_by_rule_id.get(rule_id)
+        if existing is None:
+            entry["candidateSymbols"] = list(candidate_symbols)
+            batchable_by_rule_id[rule_id] = entry
+            continue
+        existing["candidateSymbols"] = clean_symbols_from_payload(
+            list(existing.get("candidateSymbols") or []) + list(candidate_symbols)
+        )
+
+    grouped: Dict[Tuple[str, bool], List[Dict[str, object]]] = {}
+    for rule_id in sorted(batchable_by_rule_id):
+        entry = batchable_by_rule_id[rule_id]
+        rule = entry.get("rule")
+        scope = model_signal_bridge_source_scope(rule)
+        schema_ready = bool(
+            use_schema_functions
+            and (ready_rule_ids is None or rule_id in ready_rule_ids)
+        )
+        grouped.setdefault((scope, schema_ready), []).append(entry)
+    batches = [
+        {
+            "sourceScope": scope,
+            "schemaFunctionQuery": schema_ready,
+            "entries": entries,
+            "ruleIds": [
+                str(getattr(entry.get("rule"), "rule_id", "") or "")
+                for entry in entries
+            ],
+            "candidateSymbols": clean_symbols_from_payload([
+                symbol
+                for entry in entries
+                for symbol in entry.get("candidateSymbols") or []
+            ]),
+        }
+        for (scope, schema_ready), entries in sorted(
+            grouped.items(),
+            key=lambda item: (item[0][0], 0 if item[0][1] else 1),
+        )
+    ]
+    batchable_count = len(batchable_by_rule_id)
+    return {
+        "status": "ok",
+        "logicalModelSignalPolicyCount": len(logical_model_signal_rule_ids),
+        "batchedSimplePolicyCount": batchable_count,
+        "constrainedPolicyCount": len(constrained_rule_ids),
+        "modelSignalBridgeReadCount": len(batches),
+        "eliminatedModelSignalPolicyQueryCount": max(0, batchable_count - len(batches)),
+        "legacyModelSignalPolicyQueryCount": len(logical_model_signal_rule_ids),
+        "plannedModelSignalQueryCount": len(constrained_rule_ids) + len(batches),
+        "bridgeSourceScopes": sorted({str(item.get("sourceScope") or "") for item in batches}),
+        "batchableRuleIds": sorted(batchable_by_rule_id),
+        "constrainedRuleIds": sorted(constrained_rule_ids),
+        "batches": batches,
+        "regularEntries": regular_entries,
+    }
+
+
+def typedb_model_signal_bridge_batch_plan_summary(
+    plan: Dict[str, object],
+    *,
+    ignored_contract_ids: Iterable[str] = None,
+) -> Dict[str, object]:
+    payload = dict(plan or {})
+    return {
+        "status": str(payload.get("status") or "not-planned"),
+        "logicalModelSignalPolicyCount": int(payload.get("logicalModelSignalPolicyCount") or 0),
+        "batchedSimplePolicyCount": int(payload.get("batchedSimplePolicyCount") or 0),
+        "constrainedPolicyCount": int(payload.get("constrainedPolicyCount") or 0),
+        "modelSignalBridgeReadCount": int(payload.get("modelSignalBridgeReadCount") or 0),
+        "eliminatedModelSignalPolicyQueryCount": int(
+            payload.get("eliminatedModelSignalPolicyQueryCount") or 0
+        ),
+        "legacyModelSignalPolicyQueryCount": int(
+            payload.get("legacyModelSignalPolicyQueryCount") or 0
+        ),
+        "plannedModelSignalQueryCount": int(payload.get("plannedModelSignalQueryCount") or 0),
+        "bridgeSourceScopes": list(payload.get("bridgeSourceScopes") or []),
+        "batchableRuleIds": list(payload.get("batchableRuleIds") or []),
+        "constrainedRuleIds": list(payload.get("constrainedRuleIds") or []),
+        "ignoredContractIds": sorted({
+            str(item or "").strip()
+            for item in ignored_contract_ids or []
+            if str(item or "").strip()
+        }),
+    }
+
+
+def typedb_model_signal_bridge_batch_query(
+    batch: Dict[str, object],
+    *,
+    world_id: str = "",
+    scoped_manifest_only: bool = True,
+) -> Dict[str, object]:
+    """Build one TypeDB read for all simple policies in one source scope."""
+
+    entries = [dict(item or {}) for item in batch.get("entries") or []]
+    rules = [item.get("rule") for item in entries if item.get("rule")]
+    scope = str(batch.get("sourceScope") or "").strip().lower()
+    schema_function_query = bool(batch.get("schemaFunctionQuery"))
+    if not rules:
+        return {
+            "status": "invalid",
+            "query": "",
+            "reason": "Model-signal bridge batch has no policies.",
+        }
+    if any(
+        not is_batchable_model_signal_interpretation_rule(rule)
+        or model_signal_bridge_source_scope(rule) != scope
+        for rule in rules
+    ):
+        return {
+            "status": "invalid",
+            "query": "",
+            "reason": "Model-signal bridge batch mixes incompatible policy shapes.",
+        }
+    first_rule = rules[0]
+    first_payload = first_rule.to_dict() if hasattr(first_rule, "to_dict") else dict(first_rule or {})
+    source_kind = str(first_payload.get("source_kind") or first_payload.get("sourceKind") or "stock")
+    candidate_symbols = clean_symbols_from_payload(list(batch.get("candidateSymbols") or []))
+    parameterized_world = bool(str(world_id or "").strip())
+    clauses = [
+        typedb_active_worldview_manifest_clause(
+            "$activeManifestPointer",
+            "$activeManifestId",
+            world_id,
+        ),
+    ]
+    function_name = ""
+    if schema_function_query:
+        function_name = typedb_native_rule_function_name(first_payload, world_id)
+        clauses.extend([
+            typedb_scoped_manifest_member_clause(
+                "$candidate",
+                "modelSignalCandidate",
+                "$activeManifestId",
+                world_id,
+            ),
+            "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";",
+        ])
+        if candidate_symbols and typedb_source_kind_uses_symbol_scope(source_kind):
+            clauses.append(typedb_value_match(
+                "$candidate",
+                "ontology-symbol",
+                candidate_symbols,
+                "==",
+                "modelSignalCandidateSymbol",
+            ))
+        if parameterized_world:
+            clauses.append("let $ruleWorldId = " + typedb_string(str(world_id).strip()) + ";")
+        clauses.append(
+            "let $source in " + function_name + "($candidate"
+            + (", $activeManifestPointer, $ruleWorldId" if parameterized_world else "")
+            + ");"
+        )
+    else:
+        clauses.extend([
+            typedb_scoped_manifest_member_clause(
+                "$source",
+                "modelSignalSource",
+                "$activeManifestId",
+                world_id,
+            ) if scoped_manifest_only else typedb_active_abox_member_clause(
+                "$source",
+                "modelSignalSource",
+                world_id,
+            ),
+            "$source isa " + typedb_entity_match_type(source_kind)
+            + ", has ontology-kind " + typedb_string(source_kind) + ";",
+        ])
+        if candidate_symbols and typedb_source_kind_uses_symbol_scope(source_kind):
+            clauses.append(typedb_value_match(
+                "$source",
+                "ontology-symbol",
+                candidate_symbols,
+                "==",
+                "modelSignalSourceSymbol",
+            ))
+        for index, condition in enumerate(model_signal_bridge_conditions(first_rule)):
+            condition_payload = (
+                condition.to_dict()
+                if hasattr(condition, "to_dict")
+                else dict(condition or {})
+            )
+            pattern = typedb_condition_pattern(
+                condition_payload,
+                index,
+                source_var="$source",
+                variable_scope="modelSignalBridge" + str(index) + "_",
+            )
+            if pattern.get("reason"):
+                return {
+                    "status": "invalid",
+                    "query": "",
+                    "reason": str(pattern.get("reason") or "Unsupported bridge condition."),
+                }
+            clauses.extend(str(item) for item in pattern.get("clauses") or [] if str(item or "").strip())
+
+    signal_condition = model_signal_residual_conditions(first_rule)[0]
+    signal_payload = (
+        signal_condition.to_dict()
+        if hasattr(signal_condition, "to_dict")
+        else dict(signal_condition or {})
+    )
+    signal_payload.pop("target_property_filters", None)
+    signal_payload.pop("targetPropertyFilters", None)
+    signal_payload.pop("relation_property_filters", None)
+    signal_payload.pop("relationPropertyFilters", None)
+    signal_pattern = typedb_condition_pattern(
+        signal_payload,
+        0,
+        source_var="$source",
+        relation_prefix="modelSignalRelation",
+        target_prefix="modelSignalEvidence",
+        variable_scope="modelSignalBatch_",
+        manifest_id_variable="$activeManifestId" if scoped_manifest_only else "",
+        world_id=world_id,
+    )
+    if signal_pattern.get("reason"):
+        return {
+            "status": "invalid",
+            "query": "",
+            "reason": str(signal_pattern.get("reason") or "Unsupported model-signal relation."),
+        }
+    clauses.extend(str(item) for item in signal_pattern.get("clauses") or [] if str(item or "").strip())
+    signal_target = "$modelSignalEvidence0"
+    clauses.extend([
+        "$source has ontology-id $sourceId, has ontology-label $sourceLabel, has ontology-symbol $sourceSymbol;",
+        signal_target + " has ontology-id $signalEvidenceId;",
+    ])
+    filter_keys = sorted({
+        str(filter_key)
+        for rule in rules
+        for condition in model_signal_conditions(rule)
+        for filter_key in dict(
+            (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("target_property_filters")
+            or (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("targetPropertyFilters")
+            or {}
+        )
+    })
+    columns = ["sourceId", "sourceLabel", "sourceSymbol", "signalEvidenceId"]
+    for filter_key in filter_keys:
+        attribute = typedb_target_attribute(filter_key)
+        if not attribute:
+            return {
+                "status": "invalid",
+                "query": "",
+                "reason": "Unsupported model-signal contract field: " + filter_key,
+            }
+        variable = re.sub(r"[^A-Za-z0-9_]", "", filter_key)
+        clauses.append(signal_target + " has " + attribute + " $" + variable + ";")
+        columns.append(variable)
+    relation_id_column = str(signal_pattern.get("relationIdColumn") or "")
+    if relation_id_column:
+        columns.append(relation_id_column)
+    return {
+        "status": "ok",
+        "query": "match " + " ".join(item for item in clauses if item),
+        "columns": list(dict.fromkeys(columns)),
+        "evidenceColumns": [relation_id_column] if relation_id_column else [],
+        "relationIdColumn": relation_id_column,
+        "schemaFunctionName": function_name,
+        "schemaFunctionQuery": schema_function_query,
+        "queryMode": (
+            "typedb-shared-model-signal-bridge-function-batch"
+            if schema_function_query
+            else "typedb-shared-model-signal-bridge-direct-batch"
+        ),
+        "sharedModelSignalBridge": True,
+        "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION,
+        "bridgeSourceScope": scope,
+        "contractFields": filter_keys,
+        "ruleIds": list(batch.get("ruleIds") or []),
+    }
+
+
+def typedb_dispatch_model_signal_bridge_rows(
+    batch: Dict[str, object],
+    rows: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    """Route TypeDB evidence rows to exact governed policy contracts."""
+
+    by_contract: Dict[str, Dict[str, object]] = {}
+    for raw_entry in batch.get("entries") or []:
+        entry = dict(raw_entry or {})
+        rule = entry.get("rule")
+        contract_id = model_signal_interpretation_contract_id(rule)
+        if not contract_id:
+            continue
+        if contract_id in by_contract:
+            return {
+                "status": "invalid",
+                "matches": [],
+                "failures": ["Duplicate model-signal hypothesis contract: " + contract_id],
+            }
+        by_contract[contract_id] = entry
+    matches = []
+    failures = []
+    ignored_contracts: Set[str] = set()
+    for raw_row in rows or []:
+        row = dict(raw_row or {})
+        contract_id = str(row.get("hypothesisContractId") or "").strip()
+        entry = by_contract.get(contract_id)
+        if entry is None:
+            if contract_id:
+                ignored_contracts.add(contract_id)
+            continue
+        rule = entry.get("rule")
+        source_symbol = str(row.get("sourceSymbol") or symbol_from_subject(row.get("sourceId")) or "").upper().strip()
+        candidate_symbols = set(clean_symbols_from_payload(entry.get("candidateSymbols") or []))
+        if candidate_symbols and source_symbol not in candidate_symbols:
+            continue
+        signal_condition = model_signal_conditions(rule)[0]
+        signal_payload = (
+            signal_condition.to_dict()
+            if hasattr(signal_condition, "to_dict")
+            else dict(signal_condition or {})
+        )
+        expected_filters = dict(
+            signal_payload.get("target_property_filters")
+            or signal_payload.get("targetPropertyFilters")
+            or {}
+        )
+        mismatches = []
+        for key, expected in expected_filters.items():
+            expected_value = typedb_expected_value(expected)
+            actual_value = row.get(str(key))
+            if isinstance(expected_value, list):
+                valid = str(actual_value) in {str(item) for item in expected_value}
+            else:
+                valid = str(actual_value) == str(expected_value)
+            if not valid:
+                mismatches.append(str(key))
+        if mismatches:
+            failures.append(
+                contract_id + " contract fields do not match: " + ", ".join(sorted(mismatches))
+            )
+            continue
+        matches.append({"entry": entry, "row": row})
+    return {
+        "status": "ok" if not failures else "invalid",
+        "matches": matches,
+        "failures": failures,
+        "ignoredContractIds": sorted(ignored_contracts),
+        "ignoredContractRowCount": len(ignored_contracts),
     }
 
 

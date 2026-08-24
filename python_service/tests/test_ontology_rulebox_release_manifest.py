@@ -10,6 +10,8 @@ from digital_twin.domain.ontology_rulebox_catalog import (
 )
 from digital_twin.domain.ontology_rulebox_release_manifest import (
     DEPRECATED_TYPEDB_RULE_IDS,
+    RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS,
+    RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS,
     RULEBOX_DECISION_SCOPE_RULE_IDS,
     RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS,
     RULEBOX_PLATFORM_RELEASE_ADDITION_IDS,
@@ -33,7 +35,8 @@ class RuleBoxReleaseManifestTests(unittest.TestCase):
         self.assertEqual(
             RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
             | RULEBOX_DECISION_SCOPE_RULE_IDS
-            | RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS,
+            | RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS
+            | RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS,
             RULEBOX_RUNTIME_CONTRACT_RULE_IDS,
         )
         self.assertFalse(DEPRECATED_TYPEDB_RULE_IDS.intersection(rules))
@@ -55,6 +58,20 @@ class RuleBoxReleaseManifestTests(unittest.TestCase):
         self.assertEqual(
             sorted(RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS),
             payload["marketEvidenceGuardRuleIds"],
+        )
+        self.assertEqual(
+            sorted(RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS),
+            payload["decisionEffectContractRuleIds"],
+        )
+        self.assertEqual(
+            RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS,
+            {
+                rule_id: rule.version
+                for rule_id, rule in {
+                    rule.rule_id: rule for rule in default_graph_inference_rules()
+                }.items()
+                if rule_id in RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS
+            },
         )
 
 

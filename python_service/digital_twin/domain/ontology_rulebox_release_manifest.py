@@ -9,7 +9,7 @@ boundary prevents infrastructure code from becoming a second RuleBox.
 from typing import Dict, FrozenSet
 
 
-RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v2"
+RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v3"
 
 DEPRECATED_TYPEDB_RULE_IDS: FrozenSet[str] = frozenset({
     "shadow.market_psychology.state.v1",
@@ -112,10 +112,32 @@ RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS: FrozenSet[str] = frozenset(
     RULEBOX_MARKET_EVIDENCE_GUARD_RULE_VERSIONS
 )
 
+# Partial evidence gaps used to inherit the historical DATA_CONFLICT=block
+# policy in persisted RuleBox rows. They now constrain only the evidence they
+# describe. The primary quote-failure derivation remains an explicit block.
+# Versioning these rows makes the persisted TypeDB catalog receive the change
+# once without treating presentation metadata as runtime policy.
+RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS: Dict[str, str] = {
+    "graph.temporal.stale_observation.block.v1": "v2",
+    "graph.temporal.coverage_gap.v1": "v2",
+    "graph.security_line.coverage_gap.v1": "v2",
+    "graph.news.quality.validation_state.v1": "v2",
+    "graph.news.ai_body_missing_review.v1": "v2",
+    "graph.data_quality.news_analysis_conflict.v1": "v2",
+    "graph.data_quality.microstructure_gap.v1": "v2",
+    "graph.data_quality.market_snapshot_failure_block.v1": "v2",
+    "graph.data_quality.market_snapshot_degraded.v1": "v2",
+    "graph.coverage.gap.validation_state.v1": "v2",
+}
+RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS: FrozenSet[str] = frozenset(
+    RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS
+)
+
 RULEBOX_RUNTIME_CONTRACT_RULE_IDS: FrozenSet[str] = frozenset(
     RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS
     | RULEBOX_DECISION_SCOPE_RULE_IDS
     | RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS
+    | RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS
 )
 
 RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS: Dict[str, str] = {
@@ -134,6 +156,7 @@ RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS: Dict[str, str] = {
     **RULEBOX_RAW_ABOX_RUNTIME_RULE_VERSIONS,
     **{rule_id: "v2" for rule_id in RULEBOX_DECISION_SCOPE_RULE_IDS},
     **RULEBOX_MARKET_EVIDENCE_GUARD_RULE_VERSIONS,
+    **RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS,
 }
 
 # Rules introduced after TypeDB became the persisted source of truth. Missing
@@ -164,6 +187,7 @@ def rulebox_release_manifest() -> Dict[str, object]:
         "rawAboxContractRuleIds": sorted(RULEBOX_RAW_ABOX_RUNTIME_RULE_IDS),
         "decisionScopeContractRuleIds": sorted(RULEBOX_DECISION_SCOPE_RULE_IDS),
         "marketEvidenceGuardRuleIds": sorted(RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS),
+        "decisionEffectContractRuleIds": sorted(RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS),
         "platformAdditionRuleIds": sorted(RULEBOX_PLATFORM_RELEASE_ADDITION_IDS),
         "runtimeDecisionUse": False,
     }

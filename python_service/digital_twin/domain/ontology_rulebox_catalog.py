@@ -16,6 +16,9 @@ from .ontology_rulebox_contracts import (
     HypothesisLifecyclePolicy,
 )
 from .ontology_rule_knowledge import resolved_rule_knowledge_basis
+from .ontology_rulebox_release_manifest import (
+    RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS,
+)
 
 
 WATCHLIST_ENTRY_POLICY = {
@@ -740,6 +743,23 @@ def with_rulebox_v3_governance(rules: List[GraphInferenceRule]) -> List[GraphInf
             knowledge_basis=resolved_rule_knowledge_basis(candidate),
         ))
     return normalized
+
+
+def with_rulebox_decision_effect_contract(
+    rules: List[GraphInferenceRule],
+) -> List[GraphInferenceRule]:
+    """Version rules whose persisted decision effects changed semantics."""
+
+    return [
+        replace(
+            rule,
+            version=RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS.get(
+                rule.rule_id,
+                rule.version,
+            ),
+        )
+        for rule in rules or []
+    ]
 
 
 def crypto_market_inference_rules() -> List[GraphInferenceRule]:
@@ -7551,8 +7571,10 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
     ]
-    governed = with_rulebox_v3_governance(
-        with_rulebox_execution_guidance(with_market_evidence_guards(rules))
+    governed = with_rulebox_decision_effect_contract(
+        with_rulebox_v3_governance(
+            with_rulebox_execution_guidance(with_market_evidence_guards(rules))
+        )
     )
     return governed
 

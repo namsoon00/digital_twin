@@ -108,6 +108,7 @@ from ..domain.ontology_native_rule_planning import (
 from ..domain.ontology_fact_slots import build_fact_slot_projection_plan
 from ..domain.ontology_rulebox_release_manifest import (
     DEPRECATED_TYPEDB_RULE_IDS,
+    RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS,
     RULEBOX_PLATFORM_RELEASE_ADDITION_IDS,
     RULEBOX_RUNTIME_CONTRACT_RULE_IDS,
     RULEBOX_RUNTIME_CONTRACT_RULE_VERSIONS,
@@ -900,6 +901,7 @@ def migrate_typedb_rule_catalog(
     ownership_contract_updated = []
     added = []
     runtime_shape_updated = []
+    decision_effect_contract_updated = []
     model_signal_updated = []
     stored_rule_ids = set()
     for raw_rule in stored_rules or []:
@@ -962,6 +964,37 @@ def migrate_typedb_rule_catalog(
             if not isinstance(stored_basis, dict) or not str(stored_basis.get("ruleKind") or "").strip():
                 knowledge_basis_updated.append(rule_id)
                 ownership_contract_updated.append(rule_id)
+            continue
+        if (
+            rule_id in RULEBOX_DECISION_EFFECT_CONTRACT_RULE_IDS
+            and bool(default_version)
+            and stored_version != default_version
+        ):
+            # Decision effects are platform-owned execution semantics. Keep
+            # operator-authored labels, conditions and enable state, but move
+            # every derivation to the versioned default effect contract.
+            rule["version"] = default_version
+            default_derivations = default_rule.get("derivations") or []
+            for index, derivation in enumerate(rule.get("derivations") or []):
+                if not isinstance(derivation, dict):
+                    continue
+                default_derivation = (
+                    default_derivations[index]
+                    if index < len(default_derivations)
+                    else {}
+                )
+                expected_effect = str(
+                    (default_derivation or {}).get("decision_effect")
+                    or (default_derivation or {}).get("decisionEffect")
+                    or ""
+                ).strip()
+                if expected_effect:
+                    derivation["decision_effect"] = expected_effect
+                    derivation.pop("decisionEffect", None)
+            migrated.append(rule)
+            updated.append(rule_id)
+            runtime_shape_updated.append(rule_id)
+            decision_effect_contract_updated.append(rule_id)
             continue
         if (
             rule_id in RULEBOX_RUNTIME_CONTRACT_RULE_IDS
@@ -1077,6 +1110,9 @@ def migrate_typedb_rule_catalog(
         "knowledgeBasisUpdatedRuleIds": sorted(set(knowledge_basis_updated)),
         "ownershipContractUpdatedRuleIds": sorted(set(ownership_contract_updated)),
         "rawAboxRuntimeUpdatedRuleIds": sorted(set(runtime_shape_updated)),
+        "decisionEffectContractUpdatedRuleIds": sorted(
+            set(decision_effect_contract_updated)
+        ),
         "modelSignalUpdatedRuleIds": sorted(set(model_signal_updated)),
     }
 

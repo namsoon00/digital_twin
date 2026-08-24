@@ -51,6 +51,7 @@ from digital_twin.infrastructure.ontology_projection import (
     SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE,
     SharedMarketWorldProjectionCoordinator,
     migrate_typedb_rule_catalog,
+    rulebox_catalog_requires_bootstrap_repair,
 )
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules, rulebox_rules_to_payload
 from digital_twin.infrastructure.graph_store_lifecycle import ontology_seed_graph
@@ -8480,6 +8481,51 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 and condition.get("target_kind") == "execution-metric"
                 for condition in relation_conditions
             ))
+
+    def test_decision_effect_contract_migration_preserves_operator_rule_edits(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        stored = next(
+            deepcopy(item) for item in bootstrap
+            if item["rule_id"] == "graph.temporal.stale_observation.block.v1"
+        )
+        stored["version"] = "v1"
+        stored["label"] = "운영자가 수정한 기간 품질 규칙"
+        stored["enabled"] = False
+        stored["conditions"][0]["description"] = "운영자 설명"
+        stored["derivations"][0]["decision_effect"] = "block"
+
+        self.assertTrue(rulebox_catalog_requires_bootstrap_repair([stored]))
+        migration = migrate_typedb_rule_catalog([stored], bootstrap)
+        migrated = migration["rules"][0]
+
+        self.assertEqual("v2", migrated["version"])
+        self.assertEqual("constrain", migrated["derivations"][0]["decision_effect"])
+        self.assertEqual("운영자가 수정한 기간 품질 규칙", migrated["label"])
+        self.assertEqual("운영자 설명", migrated["conditions"][0]["description"])
+        self.assertFalse(migrated["enabled"])
+        self.assertEqual(
+            ["graph.temporal.stale_observation.block.v1"],
+            migration["decisionEffectContractUpdatedRuleIds"],
+        )
+
+    def test_primary_quote_failure_remains_block_while_recovery_check_constrains(self):
+        bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        stored = next(
+            deepcopy(item) for item in bootstrap
+            if item["rule_id"] == "graph.data_quality.market_snapshot_failure_block.v1"
+        )
+        stored["version"] = "v1"
+        for derivation in stored["derivations"]:
+            derivation["decision_effect"] = "block"
+
+        migration = migrate_typedb_rule_catalog([stored], bootstrap)
+        migrated = migration["rules"][0]
+
+        self.assertEqual("v2", migrated["version"])
+        self.assertEqual(
+            ["block", "constrain"],
+            [item["decision_effect"] for item in migrated["derivations"]],
+        )
 
     def test_typedb_insert_queries_project_same_ontology_graph_shape(self):
         graph = PortfolioOntology("portfolio:test")

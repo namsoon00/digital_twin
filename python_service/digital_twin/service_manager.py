@@ -2447,13 +2447,18 @@ def validate_typedb_candidate_release_contract(
         # mutation protection.
         if candidate_governs_database:
             from .application.reasoning_engine_platform import ReasoningEnginePlatformService
+            from .infrastructure.runtime_identity import runtime_identity
+
+            release_settings = dict(configured)
+            if not isinstance(release_settings.get("_runtimeIdentity"), dict):
+                release_settings["_runtimeIdentity"] = runtime_identity()
 
             expected_descriptor = next(
                 (
                     descriptor
                     for descriptor in ReasoningEnginePlatformService(
                         registry,
-                        configured,
+                        release_settings,
                     ).descriptors()
                     if descriptor.deployment_id == candidate_deployment_id
                 ),

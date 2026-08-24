@@ -341,12 +341,12 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         from digital_twin.application.reasoning_engine_platform import (
             ReasoningEnginePlatformService,
         )
+        from digital_twin.infrastructure.runtime_identity import runtime_identity
 
         settings = {
             "reasoningEngineV2DeploymentId": "v2-r50",
             "reasoningEngineCandidateReleaseId": "release-r50",
             "reasoningEngineV2TypeDbDatabase": "ontology_v2",
-            "_runtimeIdentity": {"revision": "runtime-r50"},
         }
 
         class FakeRegistry:
@@ -366,7 +366,10 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         registry = FakeRegistry()
         candidate_descriptor = next(
             descriptor
-            for descriptor in ReasoningEnginePlatformService(registry, settings).descriptors()
+            for descriptor in ReasoningEnginePlatformService(
+                registry,
+                {**settings, "_runtimeIdentity": runtime_identity()},
+            ).descriptors()
             if descriptor.deployment_id == "v2-r50"
         )
         registry.rows = {

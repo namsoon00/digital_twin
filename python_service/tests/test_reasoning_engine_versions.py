@@ -614,6 +614,51 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("v2-r15", state["independentQueue"]["deploymentId"])
         self.assertEqual("active-v2", state["promotionReadiness"]["mode"])
 
+    def test_current_status_reloads_active_queue_while_new_candidate_is_configured(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "engineVersion": "v2",
+                    "status": "active" if deployment_id == "v2-r24" else "provisioning",
+                    "releaseBundle": {"release_id": "release-" + deployment_id},
+                }
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200, **kwargs):
+                del lookback, kwargs
+                return {
+                    "deploymentId": deployment_id,
+                    "pendingCount": 7,
+                    "oldestPendingAgeSeconds": 42,
+                }
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            independent_job_store=Jobs(),
+        )
+        state = {
+            "control": {
+                "active_deployment_id": "v2-r24",
+                "delivery_deployment_id": "v2-r24",
+                "candidate_deployment_id": "v2-r25",
+            },
+            "deployments": [
+                Registry().get("v2-r24"),
+                Registry().get("v2-r25"),
+            ],
+            "independentQueue": {
+                "deploymentId": "v2-r25",
+                "pendingCount": 0,
+            },
+        }
+
+        current = platform.current_status(state)
+
+        self.assertEqual("v2-r24", current["queue"]["deploymentId"])
+        self.assertEqual(7, current["queue"]["pendingCount"])
+        self.assertEqual(42, current["queue"]["oldestPendingAgeSeconds"])
+
     def test_cli_promotion_switches_control_and_active_graph_database_together(self):
         from digital_twin.infrastructure.cli import reasoning_engine_platform_command
 

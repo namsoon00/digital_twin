@@ -565,7 +565,23 @@ class ReasoningEnginePlatformService:
         candidate = self._compact_deployment(by_id.get(candidate_id) or {}) if candidate_id else {}
         queue = dict(platform_state.get("independentQueue") or {})
         if str(queue.get("deploymentId") or "") != active_id:
+            # During an immutable release registration the configured V2
+            # worker points at the candidate while delivery remains on the
+            # active release. Never turn that mismatch into a false empty
+            # queue on the operational status surface.
             queue = {}
+            if self.independent_job_store is not None and active_id:
+                try:
+                    queue = dict(self.independent_queue_summary(
+                        active_id,
+                        self.release_identity(active_id),
+                    ) or {})
+                except Exception as error:  # noqa: BLE001 - status remains explicit when storage is unavailable.
+                    queue = {
+                        "deploymentId": active_id,
+                        "status": "unavailable",
+                        "reason": str(error)[:180],
+                    }
         schema = dict(active.get("schemaFunctionReadiness") or {})
         pending_count = int(queue.get("pendingCount") or 0)
         failure_count = int(queue.get("failureCount") or 0)
@@ -605,6 +621,7 @@ class ReasoningEnginePlatformService:
             "candidateDeployment": candidate,
             "queue": {
                 "deploymentId": str(queue.get("deploymentId") or active_id),
+                "status": str(queue.get("status") or "available"),
                 "pendingCount": pending_count,
                 "awaitingSourceCount": int(queue.get("awaitingSourceCount") or 0),
                 "awaitingWorldProjectionCount": int(

@@ -24314,6 +24314,25 @@
     ].join("");
   }
 
+  function renderNotificationTriggerLedger(job) {
+    var rows = Array.isArray(job && job.deliveryTriggerLedger) ? job.deliveryTriggerLedger : [];
+    if (!rows.length) return "";
+    return [
+      '<section class="notification-detail-section"><strong>실제 발송 계기</strong><div class="notification-detail-reasons">',
+      rows.map(function (item) {
+        var label = String(item.label || item.kind || "발송 조건");
+        var reason = String(item.reason || "기록된 설명 없음");
+        var values = [
+          item.previousValue !== undefined && item.previousValue !== "" ? "이전 " + String(item.previousValue) : "",
+          item.currentValue !== undefined && item.currentValue !== "" ? "현재 " + (Array.isArray(item.currentValue) ? item.currentValue.join(", ") : String(item.currentValue)) : "",
+          item.threshold !== undefined && item.threshold !== "" ? "기준 " + String(item.threshold) : ""
+        ].filter(Boolean).join(" · ");
+        return '<p><b>' + escapeHtml(label) + '</b> ' + escapeHtml(reason) + (values ? '<br><span>' + escapeHtml(values) + '</span>' : '') + '</p>';
+      }).join(""),
+      '</div></section>'
+    ].join("");
+  }
+
   function notificationJobSimilarityText(job) {
     var count = Number(job.repeatRecentCount || 0);
     var windowMinutes = Number(job.repeatWindowMinutes || 0);
@@ -25708,6 +25727,7 @@
       renderNotificationDetailMetric("발송 가능", job.nextEligibleAt ? formatClock(job.nextEligibleAt) : "조건 충족 시", "muted"),
       '</div>',
       renderNotificationInferenceStateTransition(job),
+      renderNotificationTriggerLedger(job),
       visibleGateRows.length ? '<section class="notification-detail-section"><strong>게이트와 보류 조건</strong><div class="notification-detail-tags">' + visibleGateRows.map(function (row) {
         return '<span>' + escapeHtml(textWithKnownDisplaySymbols(row, payload.resolvedSymbol, job)) + '</span>';
       }).join("") + '</div></section>' : '',

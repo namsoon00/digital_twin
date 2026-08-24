@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from .market_hours import evaluate_market_hours
 from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, ONTOLOGY_OBSERVATION_FOLLOWUP, SYSTEM_MESSAGE_TYPES
+from .context_observation_notifications import typedb_context_observation_contract
 from .notification_ai_context import is_graph_backed_relation_context
 from .ontology_relation_delivery import (
     relation_delivery_diff,
@@ -914,6 +915,19 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
     if message_type in INVESTMENT_STATE_GATED_MESSAGE_TYPES:
         if not graph_backed_notification(job.context or {}):
             decision.mark_suppressed("missing_graph_inference", "TypeDB 추론 근거가 없어 투자 판단 알림을 보내지 않습니다.")
+            return decision
+        context_observation = typedb_context_observation_contract(job.context or {})
+        if context_observation:
+            # Reference-only TypeDB observations deliberately carry a blocked
+            # action review level: they prove a market-context change while
+            # explicitly refusing to infer BUY/SELL/HOLD. Treating that state
+            # as a failed investment judgement prevents the requested AI
+            # narrative from ever reaching the notification queue.
+            decision.gate_state = "conditional"
+            decision.gate_reason = (
+                "TypeDB가 행동 판단과 분리된 참고용 관계 변화를 검증했습니다. "
+                "매수·매도 결론 없이 확인된 변화와 자료 한계만 전달합니다."
+            )
             return decision
         if state["dataState"] in {"insufficient", "unavailable"}:
             decision.mark_suppressed("insufficient_data", "핵심 자료가 부족하거나 사용할 수 없어 투자 판단 알림을 보내지 않습니다.")

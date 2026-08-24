@@ -287,6 +287,119 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertIn("관계 분석이 완료", decision.gate_reason)
 
+    def test_reference_only_typedb_observation_is_not_blocked_as_an_action_judgement(self):
+        rule_id = "graph.news.direct_material_context.v1"
+        context = self._typedb_relation_context({
+            "messageType": INVESTMENT_INSIGHT,
+            "ontologyInsight": {
+                "subject": "035720",
+                "reviewLevel": "blocked",
+                "dataState": "sufficient",
+                "changeState": "new-condition",
+                "conflictState": "mixed",
+                "validationState": "blocked",
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "sourceAboxSnapshotId": "abox:kakao:1",
+                "inferenceGenerationId": "generation:kakao:1",
+                "subject": {"symbol": "035720", "market": "KR"},
+                "facts": {"symbol": "035720", "market": "KR"},
+                "decisionState": {
+                    "reviewLevel": "blocked",
+                    "dataState": "sufficient",
+                    "changeState": "new-condition",
+                    "conflictState": "mixed",
+                    "validationState": "blocked",
+                },
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "selectedRuleId": rule_id,
+                },
+                "activeRules": [{
+                    "ruleId": rule_id,
+                    "label": "직접 중요 맥락 뉴스 확인",
+                    "knowledgeBasis": {
+                        "ruleKind": "context-observation",
+                        "decisionEligibility": "reference-only",
+                        "requiresHypothesis": False,
+                    },
+                }],
+                "graphStoreInference": {
+                    "graphStore": "typedb",
+                    "sourceAboxSnapshotId": "abox:kakao:1",
+                    "inferenceGenerationId": "generation:kakao:1",
+                    "relations": [{"ruleId": rule_id}],
+                    "traces": [{"id": "trace:kakao:1", "ruleId": rule_id}],
+                },
+            },
+        })
+        job = NotificationJob.create(
+            "카카오 참고용 관계 변화",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(job, default_notification_rule(INVESTMENT_INSIGHT))
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("conditional", decision.gate_state)
+        self.assertEqual("", decision.suppression_reason)
+        self.assertIn("참고용 관계 변화", decision.gate_reason)
+
+    def test_blocked_action_judgement_remains_suppressed(self):
+        context = self._typedb_relation_context({
+            "messageType": INVESTMENT_INSIGHT,
+            "ontologyInsight": {
+                "subject": "035720",
+                "reviewLevel": "blocked",
+                "dataState": "sufficient",
+                "changeState": "new-condition",
+                "conflictState": "mixed",
+                "validationState": "blocked",
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "decisionState": {
+                    "reviewLevel": "blocked",
+                    "dataState": "sufficient",
+                    "changeState": "new-condition",
+                    "conflictState": "mixed",
+                    "validationState": "blocked",
+                },
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "selectedRuleId": "graph.watchlist.entry.confirmed.v1",
+                },
+                "activeRules": [{
+                    "ruleId": "graph.watchlist.entry.confirmed.v1",
+                    "knowledgeBasis": {
+                        "ruleKind": "decision",
+                        "decisionEligibility": "action-candidate",
+                        "requiresHypothesis": True,
+                    },
+                }],
+            },
+        })
+        job = NotificationJob.create(
+            "카카오 행동 판단 보류",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(job, default_notification_rule(INVESTMENT_INSIGHT))
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("validation_blocked", decision.suppression_reason)
+
     @staticmethod
     def _typedb_relation_context(context):
         """Give cooldown tests the same TypeDB-backed contract as production."""

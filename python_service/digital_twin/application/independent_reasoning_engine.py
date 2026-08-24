@@ -1224,7 +1224,12 @@ class V2ReasoningEngine:
                 source_snapshot_replay=True,
             )
             delivery_events = list(getattr(cycle, "delivered_events", None) or ready_events)
-            ai_handoff_status = "notification-queue-enqueued" if int(getattr(cycle, "queued", 0) or 0) else "no-delivery-candidate"
+            if int(getattr(cycle, "queued", 0) or 0):
+                ai_handoff_status = "notification-queue-enqueued"
+            elif ready_events:
+                ai_handoff_status = "notification-admission-suppressed"
+            else:
+                ai_handoff_status = "no-delivery-candidate"
             stages["deliveryHandoffMs"] = int((time.perf_counter() - delivery_started) * 1000)
         elif delivery_authorized:
             ai_handoff_status = "delivery-recorder-unavailable"
@@ -1277,13 +1282,20 @@ class V2ReasoningEngine:
                     reason,
                     retryable=retryable,
                 )
-            elif not delivery_authorized or not ready_events or ai_handoff_status == "no-delivery-candidate":
+            elif (
+                not delivery_authorized
+                or not ready_events
+                or ai_handoff_status != "notification-queue-enqueued"
+            ):
                 if not delivery_authorized:
                     completion_reason = "현재 v2 배포는 알림 발송 권한이 없어 TypeDB 판단까지만 완료했습니다."
                     completion_source = "typedb-shadow"
                 elif not ready_events:
                     completion_reason = "새롭거나 중요한 판단 변화가 없어 AI 판단 요청과 알림을 생성하지 않았습니다."
                     completion_source = "typedb-no-material-change"
+                elif ai_handoff_status == "notification-admission-suppressed":
+                    completion_reason = "알림 입구의 검증·중복·쿨다운 정책에서 후보가 억제되어 AI 판단 요청을 생성하지 않았습니다."
+                    completion_source = "typedb-notification-admission-suppressed"
                 else:
                     completion_reason = "반복·쿨다운·발송 정책을 통과한 새 알림이 없어 AI 판단 요청을 생성하지 않았습니다."
                     completion_source = "typedb-delivery-suppressed"

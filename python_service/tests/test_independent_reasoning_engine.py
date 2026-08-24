@@ -1053,6 +1053,36 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("notification-queue-enqueued", result["ai_handoff_status"])
         self.assertEqual(1, recorder.calls)
 
+    def test_active_delivery_reports_notification_admission_suppression(self):
+        class SuppressingCycleRecorder(FakeCycleRecorder):
+            def record_cycle(self, account_ids, snapshots, events, **kwargs):
+                del account_ids, snapshots, kwargs
+                self.calls += 1
+                return MonitoringCycleRecordResult(
+                    delivered=False,
+                    queued=0,
+                    reason="validation blocked",
+                    delivered_events=list(events),
+                )
+
+        recorder = SuppressingCycleRecorder()
+        engine = V2ReasoningEngine(
+            descriptor(),
+            FakeAssembler(),
+            FakeExecutor(),
+            FakeCandidateBuilder(),
+            cycle_recorder=recorder,
+            delivery_authorized_provider=lambda: True,
+        )
+
+        result = engine.consume([source_event()])
+
+        self.assertEqual(
+            "notification-admission-suppressed",
+            result["ai_handoff_status"],
+        )
+        self.assertEqual(1, recorder.calls)
+
     def test_persisted_projection_result_excludes_the_full_scope_plan(self):
         compact = compact_projection_result({
             "configured": True,

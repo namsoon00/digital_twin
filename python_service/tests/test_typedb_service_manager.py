@@ -82,6 +82,33 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             run.assert_not_called()
             self.assertIn("candidate seed rejected", spec["log"].read_text(encoding="utf-8"))
 
+    def test_candidate_seed_captures_readback_attestation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "1",
+                "seedRetryCount": "0",
+                "_typedbMaintenanceLock": {"token": "rotation-token"},
+            }
+            attestation = {
+                "status": "ok",
+                "saved": True,
+                "activeRuleBoxHash": "persisted-rulebox",
+            }
+            command_result = SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(attestation) + "\n",
+                stderr="",
+            )
+            with patch.object(service_manager, "typedb_maintenance_lock_owned", return_value=True), \
+                    patch.object(service_manager, "typedb_seed_command", return_value=["seed"]), \
+                    patch.object(service_manager.subprocess, "run", return_value=command_result):
+                self.assertTrue(service_manager.ensure_typedb_seeded(spec))
+
+            self.assertEqual(attestation, spec["_typedbSeedAttestation"])
+
     def test_mysql_schema_bootstrap_uses_recovery_timeout_floor(self):
         spec = {
             "label": "MySQL operational store",
@@ -410,6 +437,18 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 "typedbDatabase": "ontology_v2",
                 "healthAddress": "127.0.0.1:1730",
                 "httpAddress": "127.0.0.1:8001",
+                "_typedbSeedAttestation": {
+                    "status": "ok",
+                    "saved": True,
+                    "ruleBoxReplaceRequested": True,
+                    "ruleBoxReplaced": True,
+                    "activeRuleBoxHash": source_rulebox_fingerprint,
+                    "activeRuleBoxRuleCount": 118,
+                    "postSeedPreflight": {
+                        "ready": True,
+                        "schemaContractMatches": True,
+                    },
+                },
             },
             settings_provider=lambda **kwargs: settings,
             repository_factory=lambda configured: FakeRepository(),

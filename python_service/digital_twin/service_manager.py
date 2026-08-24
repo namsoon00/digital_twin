@@ -2234,6 +2234,18 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             else:
                 output = (result.stdout or "") + ("\n" if result.stdout and result.stderr else "") + (result.stderr or "")
                 if result.returncode == 0:
+                    try:
+                        seed_attestation = json.loads(
+                            next(
+                                line
+                                for line in reversed(str(result.stdout or "").splitlines())
+                                if str(line or "").strip().startswith("{")
+                            )
+                        )
+                    except (StopIteration, TypeError, ValueError, json.JSONDecodeError):
+                        seed_attestation = {}
+                    if isinstance(seed_attestation, dict):
+                        spec["_typedbSeedAttestation"] = seed_attestation
                     append_log_text(spec["log"], "seed ok attempt=" + str(attempt), output)
                     print(str(spec["label"]) + " RuleBox seed ok.")
                     return True
@@ -2493,8 +2505,41 @@ def validate_typedb_candidate_release_contract(
                 rule.to_dict()
                 for rule in default_graph_inference_rules()
             ])
+            seed_attestation = dict(spec.get("_typedbSeedAttestation") or {})
+            post_seed_preflight = dict(seed_attestation.get("postSeedPreflight") or {})
+            attested_rulebox_fingerprint = str(
+                seed_attestation.get("activeRuleBoxHash")
+                or (seed_attestation.get("ruleBoxReplaceResult") or {}).get("ruleboxRulesHash")
+                or ""
+            ).strip()
+            attested_rule_count = int_value(
+                seed_attestation.get("activeRuleBoxRuleCount"),
+                0,
+                0,
+            )
+            if not frozen_candidate_fingerprint and not (
+                str(seed_attestation.get("status") or "") in {"ok", "unchanged"}
+                and bool(seed_attestation.get("saved"))
+                and bool(seed_attestation.get("ruleBoxReplaceRequested"))
+                and bool(seed_attestation.get("ruleBoxReplaced"))
+                and bool(post_seed_preflight.get("ready"))
+                and bool(post_seed_preflight.get("schemaContractMatches"))
+                and attested_rulebox_fingerprint
+                and attested_rule_count > 0
+            ):
+                return {
+                    "status": "registered-candidate-seed-attestation-missing",
+                    "ready": False,
+                    "database": database_name,
+                    "candidateDeploymentId": candidate_deployment_id,
+                    "candidateRuleboxFingerprint": candidate_fingerprint,
+                    "reason": (
+                        "The registered candidate has no complete, read-back-verified "
+                        "TypeDB seed attestation."
+                    ),
+                }
             expected_rulebox_fingerprint = (
-                frozen_candidate_fingerprint or source_rulebox_fingerprint
+                frozen_candidate_fingerprint or attested_rulebox_fingerprint
             )
             if (
                 expected_rulebox_fingerprint
@@ -2508,6 +2553,7 @@ def validate_typedb_candidate_release_contract(
                     "candidateRuleboxFingerprint": candidate_fingerprint,
                     "frozenRuleboxFingerprint": frozen_candidate_fingerprint,
                     "sourceRuleboxFingerprint": source_rulebox_fingerprint,
+                    "attestedRuleboxFingerprint": attested_rulebox_fingerprint,
                     "reason": (
                         "The seeded RuleBox differs from the registered candidate's "
                         "frozen or source-authored RuleBox fingerprint."
@@ -2520,6 +2566,8 @@ def validate_typedb_candidate_release_contract(
                 "candidateDeploymentId": candidate_deployment_id,
                 "candidateRuleboxFingerprint": candidate_fingerprint,
                 "sourceRuleboxFingerprint": source_rulebox_fingerprint,
+                "attestedRuleboxFingerprint": attested_rulebox_fingerprint,
+                "attestedRuleCount": attested_rule_count,
                 "governedDeployments": [{
                     "deploymentId": candidate_deployment_id,
                     "status": str(registered_candidate.get("status") or ""),

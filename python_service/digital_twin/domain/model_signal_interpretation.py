@@ -28,6 +28,7 @@ MODEL_SIGNAL_RELATION_TYPE = "HAS_MODEL_SIGNAL"
 MODEL_SIGNAL_EVIDENCE_KIND = "statistical-model-hypothesis-evidence"
 
 MODEL_SIGNAL_BRIDGE_SOURCE_SCOPES = ("stock", "holding", "watchlist")
+SHARED_PREMISE_RULE_PREFIXES = ("shared.premise.any.", "shared.premise.")
 
 
 def _condition_payload(condition: object) -> Dict[str, object]:
@@ -48,6 +49,16 @@ def _rule_id(rule: object) -> str:
     if isinstance(rule, Mapping):
         return str(rule.get("rule_id") or rule.get("ruleId") or "").strip()
     return str(getattr(rule, "rule_id", "") or "").strip()
+
+
+def _semantic_rule_id(rule: object) -> str:
+    """Return the governed RuleBox ID behind a physical world-phase rule."""
+
+    rule_id = _rule_id(rule)
+    for prefix in SHARED_PREMISE_RULE_PREFIXES:
+        if rule_id.startswith(prefix):
+            return rule_id[len(prefix):]
+    return rule_id
 
 
 def _migration_disposition(rule: object) -> str:
@@ -90,7 +101,8 @@ def is_model_signal_interpretation_rule(rule: object) -> bool:
         or {}
     )
     return bool(
-        str(filters.get("hypothesisContractId") or "").strip() == _rule_id(rule)
+        str(filters.get("hypothesisContractId") or "").strip()
+        == _semantic_rule_id(rule)
         and str(payload.get("target_kind") or payload.get("targetKind") or "").strip()
         == MODEL_SIGNAL_EVIDENCE_KIND
     )

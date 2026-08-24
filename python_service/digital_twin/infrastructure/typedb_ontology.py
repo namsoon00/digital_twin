@@ -1695,7 +1695,7 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v17"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v18"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"

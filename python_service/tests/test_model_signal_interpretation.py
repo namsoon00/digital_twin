@@ -14,6 +14,7 @@ from digital_twin.domain.model_signal_interpretation import (
 from digital_twin.domain.ontology_contracts import entity_id
 from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.world_partitioned_reasoning import compile_world_partitioned_rules
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.typedb_ontology import (
     deduplicate_typedb_schema_function_definitions,
@@ -94,6 +95,35 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             for rule in self.model_rules
             if rule.enabled and rule.rule_id in partition["batchableRuleIds"]
         ))
+
+    def test_shared_premise_compilation_preserves_model_signal_bridge_routing(self):
+        compiled = compile_world_partitioned_rules(self.rules)
+        shared_rules = list(compiled["sharedRules"])
+        partition = model_signal_interpretation_execution_partition(
+            shared_rules,
+            enabled_only=True,
+        )
+
+        self.assertEqual("ready", compiled["status"])
+        self.assertEqual(74, partition["logicalModelSignalPolicyCount"])
+        self.assertEqual(74, partition["batchedSimplePolicyCount"])
+        self.assertEqual(0, partition["constrainedPolicyCount"])
+        self.assertEqual(1, partition["modelSignalBridgeReadCount"])
+        self.assertEqual(73, partition["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual(["stock"], partition["bridgeSourceScopes"])
+
+        plan = typedb_model_signal_bridge_batch_plan(
+            [{
+                "rule": rule,
+                "candidateSymbols": ["005930"],
+                "executionStage": "shared-premise",
+            } for rule in shared_rules],
+            ["005930"],
+            use_schema_functions=False,
+        )
+        self.assertEqual(74, plan["logicalModelSignalPolicyCount"])
+        self.assertEqual(1, plan["modelSignalBridgeReadCount"])
+        self.assertEqual(73, plan["eliminatedModelSignalPolicyQueryCount"])
 
     def test_runtime_batch_plan_replaces_59_reads_with_three_bridge_reads(self):
         entries = [{

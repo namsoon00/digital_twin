@@ -204,6 +204,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("worldPartitionedReasoning"), Mapping)
         else {}
     )
+    model_signal_bridge_execution = (
+        values.get("modelSignalBridgeExecution")
+        if isinstance(values.get("modelSignalBridgeExecution"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -277,6 +282,18 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                 "targetCoverageComplete", "existingInferenceReuseMode",
             ]
             if key in shared_execution
+        },
+        "modelSignalBridgeExecution": {
+            key: model_signal_bridge_execution.get(key)
+            for key in [
+                "logicalModelSignalPolicyCount",
+                "batchedSimplePolicyCount",
+                "constrainedPolicyCount",
+                "modelSignalBridgeReadCount",
+                "eliminatedModelSignalPolicyQueryCount",
+                "ignoredContractIds",
+            ]
+            if key in model_signal_bridge_execution
         },
         "worldPartitionedReasoning": {
             key: partitioned_reasoning.get(key)

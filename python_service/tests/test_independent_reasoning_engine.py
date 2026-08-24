@@ -1010,6 +1010,35 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("abox:1", compact["sourceAboxSnapshotId"])
         self.assertEqual(1, compact["inferenceTraceCount"])
 
+    def test_persisted_projection_result_keeps_model_signal_bridge_execution_summary(self):
+        compact = compact_projection_result({
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "modelSignalBridgeExecution": {
+                "logicalModelSignalPolicyCount": 74,
+                "batchedSimplePolicyCount": 59,
+                "constrainedPolicyCount": 15,
+                "modelSignalBridgeReadCount": 3,
+                "eliminatedModelSignalPolicyQueryCount": 56,
+                "ignoredContractIds": ["unknown-contract"],
+                "rawRows": [{"large": "payload"}],
+            },
+        })
+
+        self.assertEqual(
+            {
+                "logicalModelSignalPolicyCount": 74,
+                "batchedSimplePolicyCount": 59,
+                "constrainedPolicyCount": 15,
+                "modelSignalBridgeReadCount": 3,
+                "eliminatedModelSignalPolicyQueryCount": 56,
+                "ignoredContractIds": ["unknown-contract"],
+            },
+            compact["modelSignalBridgeExecution"],
+        )
+        self.assertNotIn("rawRows", compact["modelSignalBridgeExecution"])
+
     def test_runner_batches_compatible_source_events_into_one_engine_turn(self):
         events = [source_event("NVDA", []), source_event("TSLA", [])]
 

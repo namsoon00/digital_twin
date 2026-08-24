@@ -5167,12 +5167,34 @@ def console_decisions_api_payload(query: Dict[str, List[str]]) -> Dict[str, obje
 
 
 def console_operations_health_api_payload() -> Dict[str, object]:
+    settings = operational_read_settings()
+
+    def storage_payload():
+        from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
+        from .operational_storage_guard import operational_storage_inventory
+
+        inventory = operational_storage_inventory(settings)
+        policy = mysql_minimal_retention_policy(settings)
+        inventory["retentionPolicy"] = {
+            "typedbActiveHours": int(settings.get("typedbDataRetentionHours") or 72),
+            "typedbWalTriggerMb": int(settings.get("typedbCapacityAutoRotateWalMb") or 4096),
+            "typedbRollbackMinutes": int(settings.get("typedbBlueGreenRetiredRetentionMinutes") or 120),
+            "notificationPayloadDays": round(policy.terminal_notification_retention_hours / 24),
+            "completedWorldProjectionHours": policy.completed_world_projection_retention_hours,
+            "completedInferenceDetailDays": round(policy.completed_inference_detail_retention_hours / 24),
+            "reasoningCaseDays": round(policy.investment_reasoning_case_retention_hours / 24),
+            "statisticalSignalDays": round(policy.statistical_model_signal_snapshot_retention_hours / 24),
+            "timeSeriesDays": dict(policy.market_time_series_retention_days),
+        }
+        return inventory
+
     readers = {
         "realtime": realtime_status_payload,
         "external": external_data_status_payload,
         "reasoning": ontology_reasoning_status_payload,
         "engine": reasoning_engine_platform_status_payload,
         "timeSeries": time_series_platform_status_payload,
+        "storage": storage_payload,
     }
     payloads = {}
     executor = ThreadPoolExecutor(max_workers=len(readers), thread_name_prefix="console-health")

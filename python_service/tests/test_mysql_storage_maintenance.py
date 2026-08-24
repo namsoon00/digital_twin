@@ -160,15 +160,15 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
         self.assertEqual(500, operational_projection_run_keep_count({"operationalProjectionRunKeepCount": "9999"}))
 
     def test_article_delivery_ledger_retention_is_compact_and_bounded(self):
-        self.assertEqual(30, sent_article_delivery_ledger_retention_days({}))
+        self.assertEqual(365, sent_article_delivery_ledger_retention_days({}))
         self.assertEqual(1, sent_article_delivery_ledger_retention_days({"sentArticleDeliveryLedgerRetentionDays": "0"}))
         self.assertEqual(365, sent_article_delivery_ledger_retention_days({"sentArticleDeliveryLedgerRetentionDays": "9999"}))
 
     def test_history_retention_limits_legacy_batches_and_large_outbox_audit_window(self):
         self.assertEqual(50, operational_history_retention_batch_size({"operationalHistoryRetentionBatchSize": "1000"}))
-        self.assertEqual(1, operational_world_projection_outbox_retention_hours({}))
+        self.assertEqual(6, operational_world_projection_outbox_retention_hours({}))
         self.assertEqual(
-            1,
+            6,
             operational_world_projection_outbox_retention_hours(
                 {"ontologyWorldProjectionCompletedRetentionHours": "168"}
             ),
@@ -474,7 +474,7 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
 
     def test_duplicated_event_and_delivery_history_defaults_are_compact(self):
         self.assertEqual(20, operational_large_domain_event_keep_count({}))
-        self.assertEqual(5, operational_delivered_notification_keep_count({}))
+        self.assertEqual(30, operational_delivered_notification_keep_count({}))
         self.assertEqual(5, operational_delivered_notification_keep_count({"operationalDeliveredNotificationKeepCount": "1"}))
         self.assertEqual(500, operational_delivered_notification_keep_count({"operationalDeliveredNotificationKeepCount": "9999"}))
 
@@ -496,8 +496,10 @@ class MySQLStorageMaintenanceTests(unittest.TestCase):
 
         self.assertEqual(["domain_events"], result["optimizedTables"])
         self.assertEqual(["unknown_table; DROP DATABASE orbit_alpha"], result["rejectedTables"])
-        self.assertEqual(1, len(connection.calls))
+        self.assertEqual(2, len(connection.calls))
         self.assertEqual("OPTIMIZE TABLE `domain_events`", connection.calls[0][0])
+        self.assertEqual("ANALYZE TABLE `domain_events`", connection.calls[1][0])
+        self.assertEqual(["domain_events"], result["analyzedTables"])
 
     def test_compaction_plan_uses_metadata_and_preserves_disk_reserve(self):
         candidates = mysql_operational_space_reclaim_candidates(TableSpaceConnection())

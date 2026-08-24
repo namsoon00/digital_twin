@@ -14,12 +14,14 @@ TypeDB materialized ontology. It is a storage policy, not an investment rule.
 
 ## Retention Defaults
 
-- Detailed reasoning stage and rule traces: 1 day.
-- Completed shared-world projection jobs: 1 hour.
-- Failed shared-world payloads: compact after 24 hours; delete the failed row
-  after 7 days.
-- Intraday market observations: 3-minute data for 2 days, 15-minute data for
-  10 days, hourly data for 90 days, and daily data for 180 days.
+- Terminal notification payloads: 30 days; compact delivery identities: 365 days.
+- Completed shared-world projection jobs: 6 hours; completed inference detail: 7 days.
+- Failed shared-world payloads: compact after 2 days; delete the failed row
+  after 30 days.
+- Temporal feature snapshots: 3 days; statistical signal snapshots: 365 days.
+- Investment reasoning cases and engine comparisons: 90 days.
+- Intraday market observations: 3-minute data for 7 days, 15-minute data for
+  30 days, hourly data for 365 days, and daily data for 1,825 days.
 - Inactive TypeDB ABox manifests: keep one rollback generation per world.
 
 Retention never removes active snapshots, pending or processing jobs, current
@@ -51,9 +53,15 @@ python3 python_service/service.py ontology-maintenance status
 
 `TYPEDB_DATA_MAX_SIZE_MB=16384` is a safety ceiling, not a target. Normal
 operation should stay well below the 70% write-throttle threshold. Automatic
-rotation starts at 80%, and 90% is critical. Shared disk reserve checks remain
-independent, so increasing the TypeDB ceiling cannot consume the host's final
-free space.
+rotation starts at 80%, WAL rotation starts at 4,096 MB, and 90% is critical.
+The active graph's age observation window is 72 hours, but age-only deletion
+remains disabled. Shared disk reserve checks remain independent, so increasing
+the TypeDB ceiling cannot consume the host's final free space.
+
+The MySQL operational ceiling is 16,384 MB. Capacity reports separate physical
+files, live data and indexes, and allocator pages reclaimable by explicit
+compaction. Increasing retention does not treat deleted but unreclaimed pages
+as live investment history.
 
 MySQL physical compaction is explicit because `OPTIMIZE TABLE` can briefly
 rebuild a table. The command selects only allow-listed tables, requires at
@@ -72,17 +80,19 @@ and data directory while the active server continues to serve inference:
 
 1. Start the candidate with configured credentials.
 2. Seed TBox, language data, and TypeDB schema functions.
-3. Read the latest completed shared-world packets from MySQL and project them
+3. Compare the seeded RuleBox fingerprint with the frozen delivery deployment.
+   A mismatch fails the rotation while the active store keeps serving.
+4. Read the latest completed shared-world packets from MySQL and project them
    into the candidate without requeueing or changing live outbox rows.
-4. Read each latest verified live account snapshot from MySQL and rebuild its
+5. Read each latest verified live account snapshot from MySQL and rebuild its
    current PortfolioWorld ABox plus the aligned native InferenceBox. This does
    not call providers, consume the reasoning mailbox, or enqueue alerts.
-5. Validate authenticated TypeDB access and fail the candidate when any live
+6. Validate authenticated TypeDB access and fail the candidate when any live
    PortfolioWorld cannot be rebuilt.
-6. Stop managed dependents, swap the candidate directory into the active path,
+7. Stop managed dependents, swap the candidate directory into the active path,
    and restart them.
-7. If startup fails, restore the retained previous directory and restart.
-8. Remove the retired directory after the rollback retention window.
+8. If startup fails, restore the retained previous directory and restart.
+9. Remove the retired directory after the rollback retention window.
 
 Scoped ABox retention first deduplicates generation IDs across removable
 Manifests, deletes each retired physical generation once, and removes a
@@ -90,8 +100,11 @@ Manifest marker only after all of its unprotected generations are gone. The
 maintenance status records planned and removed generation counts, duplicate
 references avoided, and the remaining generation drain backlog per world.
 
-Candidate preparation failure never stops the active TypeDB. The previous
-store is retained for 30 minutes after a successful cutover by default.
+Candidate preparation failure never stops the active TypeDB. A fresh candidate
+cannot inherit an active instance's seed skip flag: TBox and RuleBox seeding is
+mandatory before any world replay. Consecutive failures retry after 5, 15, 30,
+and then 60 minutes. The previous store is retained for 120 minutes after a
+successful cutover by default.
 
 ## Test Isolation
 

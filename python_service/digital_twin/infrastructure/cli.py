@@ -1484,6 +1484,9 @@ def run_mysql_operational_cleanup(
                         connection,
                         compaction_plan["selectedTables"],
                     )
+                    from .operational_storage_guard import clear_mysql_storage_metadata_cache
+
+                    clear_mysql_storage_metadata_cache()
                 if drop_ephemeral_databases:
                     result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
                         connection,

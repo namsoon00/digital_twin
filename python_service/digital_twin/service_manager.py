@@ -310,7 +310,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "needle": "typedb_server_bin",
         "role": "typedb",
         "dataPath": data_path,
-        "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "24"),
+        "retentionHours": str((settings or {}).get("typedbDataRetentionHours") or "72"),
         "maxSizeMb": str((settings or {}).get("typedbDataMaxSizeMb") or "16384"),
         "minimumFreeSpaceMb": str(max(
             int_value((settings or {}).get("typedbMinimumFreeSpaceMb"), 4096, 1),
@@ -322,7 +322,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
         "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "80"),
-        "autoRotationWalMb": str((settings or {}).get("typedbCapacityAutoRotateWalMb") or "2048"),
+        "autoRotationWalMb": str((settings or {}).get("typedbCapacityAutoRotateWalMb") or "4096"),
         "autoRotationFreeSpaceMb": str(
             (settings or {}).get("typedbCapacityAutoRotateFreeSpaceMb") or "24576"
         ),
@@ -330,7 +330,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             (settings or {}).get("typedbCapacityAutoRotateCooldownMinutes") or "60"
         ),
         "autoRotationFailureRetrySeconds": str(
-            (settings or {}).get("typedbCapacityAutoRotateFailureRetrySeconds") or "120"
+            (settings or {}).get("typedbCapacityAutoRotateFailureRetrySeconds") or "300"
         ),
         "blueGreenRotationEnabled": str(
             (settings or {}).get("typedbBlueGreenRotationEnabled") or "1"
@@ -339,7 +339,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             (settings or {}).get("typedbBlueGreenStagePortOffset") or "1"
         ),
         "blueGreenRetiredRetentionMinutes": str(
-            (settings or {}).get("typedbBlueGreenRetiredRetentionMinutes") or "30"
+            (settings or {}).get("typedbBlueGreenRetiredRetentionMinutes") or "120"
         ),
         "blueGreenMinimumHeadroomMb": str(
             (settings or {}).get("typedbBlueGreenMinimumHeadroomMb") or "12288"
@@ -1244,7 +1244,7 @@ def typedb_auto_rotation_needed(
     maximum_mb = int_value(configured.get("maxSizeMb"), 8192, 1)
     threshold_percent = int_value(configured.get("autoRotationPercent"), 80, 50)
     threshold_percent = min(100, threshold_percent)
-    wal_trigger_mb = int_value(configured.get("autoRotationWalMb"), 2048, 0)
+    wal_trigger_mb = int_value(configured.get("autoRotationWalMb"), 4096, 0)
     free_space_trigger_mb = int_value(
         configured.get("autoRotationFreeSpaceMb"),
         0,
@@ -1263,7 +1263,7 @@ def typedb_auto_rotation_needed(
     cooldown_minutes = min(24 * 60, int_value(configured.get("autoRotationCooldownMinutes"), 60, 1))
     failure_retry_seconds = min(
         3600,
-        int_value(configured.get("autoRotationFailureRetrySeconds"), 120, 30),
+        int_value(configured.get("autoRotationFailureRetrySeconds"), 300, 30),
     )
     size_bytes = int((size_provider or directory_size_bytes)(data_path))
     size_mb = round(size_bytes / 1024 / 1024, 1)
@@ -1311,9 +1311,27 @@ def typedb_auto_rotation_needed(
     except (TypeError, ValueError):
         last_attempt_epoch = 0.0
     last_attempt_status = str(marker.get("lastAutoRotationStatus") or "").strip().lower()
-    failure_statuses = {"failed", "reset-failed", "restart-failed", "exception"}
+    failure_statuses = {
+        "failed",
+        "reset-failed",
+        "restart-failed",
+        "exception",
+        "candidate-failed-active-preserved",
+        "cutover-fenced-active-preserved",
+    }
+    try:
+        consecutive_failures = max(
+            1 if last_attempt_status in failure_statuses else 0,
+            int(marker.get("autoRotationConsecutiveFailureCount") or 0),
+        )
+    except (TypeError, ValueError):
+        consecutive_failures = 1 if last_attempt_status in failure_statuses else 0
+    failure_backoff_multiplier = (1, 3, 6, 12)[
+        min(max(0, consecutive_failures - 1), 3)
+    ]
+    failure_backoff_seconds = min(3600, failure_retry_seconds * failure_backoff_multiplier)
     retry_window_seconds = (
-        failure_retry_seconds
+        failure_backoff_seconds
         if last_attempt_status in failure_statuses
         else cooldown_minutes * 60
     )
@@ -1368,6 +1386,7 @@ def typedb_auto_rotation_needed(
             "maxSizeMb": maximum_mb,
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
             "lastAttemptStatus": last_attempt_status,
+            "consecutiveFailureCount": consecutive_failures,
             "retryWindowSeconds": retry_window_seconds,
             "freeSpaceMb": free_space_mb,
             "typedbWalMb": round(wal_mb, 1),
@@ -1389,6 +1408,7 @@ def typedb_auto_rotation_needed(
             "maxSizeMb": maximum_mb,
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
             "lastAttemptStatus": last_attempt_status,
+            "consecutiveFailureCount": consecutive_failures,
             "retryWindowSeconds": retry_window_seconds,
             "freeSpaceMb": free_space_mb,
             "typedbWalMb": round(wal_mb, 1),
@@ -1421,6 +1441,7 @@ def typedb_auto_rotation_needed(
         "maxSizeMb": maximum_mb,
         "cooldownRemainingSeconds": cooldown_remaining_seconds,
         "lastAttemptStatus": last_attempt_status,
+        "consecutiveFailureCount": consecutive_failures,
         "retryWindowSeconds": retry_window_seconds,
         "hardLimitReached": hard_limit_reached,
         "trigger": (
@@ -1505,6 +1526,23 @@ def record_typedb_auto_rotation_incident(
 
 def record_typedb_auto_rotation_state(**updates: object) -> Dict[str, object]:
     marker = read_typedb_retention_marker()
+    status = str(updates.get("lastAutoRotationStatus") or "").strip().lower()
+    failure_statuses = {
+        "failed",
+        "reset-failed",
+        "restart-failed",
+        "exception",
+        "candidate-failed-active-preserved",
+        "cutover-fenced-active-preserved",
+    }
+    if status in failure_statuses:
+        try:
+            previous_failures = int(marker.get("autoRotationConsecutiveFailureCount") or 0)
+        except (TypeError, ValueError):
+            previous_failures = 0
+        marker["autoRotationConsecutiveFailureCount"] = previous_failures + 1
+    elif status == "ok":
+        marker["autoRotationConsecutiveFailureCount"] = 0
     marker.update({key: value for key, value in updates.items() if value is not None})
     write_typedb_retention_marker(marker)
     return marker
@@ -2133,6 +2171,10 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
     if str(spec.get("role") or "") not in {"typedb", "typedb-stage"}:
         return True
     if not truthy(spec.get("seedOnStart")):
+        if str(spec.get("role") or "") == "typedb-stage":
+            append_log(spec["log"], "candidate seed rejected; fresh candidate requires schema seed")
+            print(str(spec["label"]) + " fresh candidate seed is required.")
+            return False
         append_log(spec["log"], "seed skipped")
         print(str(spec["label"]) + " RuleBox seed skipped.")
         return True
@@ -2275,6 +2317,137 @@ def validate_typedb_candidate_inference_runtime(spec: Dict[str, object]) -> Dict
             else "TypeDB schema functions are incomplete and direct TypeQL fallback is disabled."
         ),
     }
+
+
+def validate_typedb_candidate_release_contract(
+    spec: Dict[str, object],
+    settings_provider=None,
+    repository_factory=None,
+    registry_factory=None,
+) -> Dict[str, object]:
+    """Fence blue-green cutover against the frozen delivery RuleBox.
+
+    A storage rotation must preserve the executable reasoning release. The
+    normal seed command reflects the current source catalog, which may be
+    newer than the release serving production. Reading the candidate before
+    cutover prevents a storage maintenance operation from silently changing
+    investment behavior or stopping the versioned reasoning worker.
+    """
+    if settings_provider is None:
+        settings_provider = runtime_settings
+    if repository_factory is None:
+        from .infrastructure.ontology_graph_store import ontology_repository_from_settings
+        repository_factory = ontology_repository_from_settings
+    if registry_factory is None:
+        from .infrastructure.operational_store import reasoning_engine_registry_store
+        registry_factory = reasoning_engine_registry_store
+
+    try:
+        configured = dict(settings_provider(fast_operational_read=True) or {})
+    except TypeError:
+        configured = dict(settings_provider() or {})
+    database_name = str(spec.get("typedbDatabase") or "").strip()
+    candidate_settings = {
+        **configured,
+        "ontologyTypeDbEnabled": "1",
+        "typedbAddress": str(spec.get("healthAddress") or ""),
+        "typedbHttpAddress": str(spec.get("httpAddress") or ""),
+        "typedbDatabase": database_name,
+        "typedbUser": str(spec.get("typedbUser") or configured.get("typedbUser") or "admin"),
+        "typedbPassword": str(spec.get("typedbPassword") or configured.get("typedbPassword") or "password"),
+        "typedbTlsEnabled": str(spec.get("typedbTlsEnabled") or configured.get("typedbTlsEnabled") or "0"),
+    }
+    try:
+        registry = registry_factory(configured)
+        control = registry.control()
+        deployment_ids = []
+        for field in ("delivery_deployment_id", "active_deployment_id"):
+            value = (
+                control.get(field)
+                if isinstance(control, dict)
+                else getattr(control, field, "")
+            )
+            clean = str(value or "").strip()
+            if clean and clean not in deployment_ids:
+                deployment_ids.append(clean)
+        governed = []
+        for deployment_id in deployment_ids:
+            deployment = dict(registry.get(deployment_id) or {})
+            if str(deployment.get("graphStoreBinding") or "").strip() != database_name:
+                continue
+            health = dict(deployment.get("health") or {})
+            frozen_fingerprint = str(health.get("ruleboxFingerprint") or "").strip()
+            if not frozen_fingerprint and not str(health.get("candidateReleaseId") or "").strip():
+                # Compatibility with the pre-v2 health contract.
+                frozen_fingerprint = str(health.get("releaseFingerprint") or "").strip()
+            governed.append({
+                "deploymentId": deployment_id,
+                "status": str(deployment.get("status") or ""),
+                "frozenRuleboxFingerprint": frozen_fingerprint,
+            })
+        if not governed:
+            return {
+                "status": "not-governed",
+                "ready": True,
+                "database": database_name,
+                "governedDeployments": [],
+            }
+        missing = [item for item in governed if not item["frozenRuleboxFingerprint"]]
+        if missing:
+            return {
+                "status": "release-fingerprint-missing",
+                "ready": False,
+                "database": database_name,
+                "governedDeployments": governed,
+                "reason": "The active reasoning release has no frozen RuleBox fingerprint.",
+            }
+
+        snapshot = dict(repository_factory(candidate_settings).rulebox_snapshot() or {})
+        if str(snapshot.get("status") or "") != "ok" or not snapshot.get("rules"):
+            return {
+                "status": "candidate-rulebox-unavailable",
+                "ready": False,
+                "database": database_name,
+                "governedDeployments": governed,
+                "reason": "The seeded candidate RuleBox could not be read before cutover.",
+            }
+        from .domain.reasoning_shadow import payload_hash
+        candidate_fingerprint = str(
+            snapshot.get("sourceRulesHash")
+            or snapshot.get("rulesHash")
+            or snapshot.get("ruleboxRulesHash")
+            or payload_hash(snapshot.get("rules") or [])
+        ).strip()
+        mismatches = [
+            item for item in governed
+            if item["frozenRuleboxFingerprint"] != candidate_fingerprint
+        ]
+        if mismatches:
+            return {
+                "status": "release-fingerprint-mismatch",
+                "ready": False,
+                "database": database_name,
+                "candidateRuleboxFingerprint": candidate_fingerprint,
+                "governedDeployments": governed,
+                "reason": (
+                    "The candidate RuleBox differs from the frozen delivery release; "
+                    "register and validate a new reasoning deployment before rotating storage."
+                ),
+            }
+        return {
+            "status": "ready",
+            "ready": True,
+            "database": database_name,
+            "candidateRuleboxFingerprint": candidate_fingerprint,
+            "governedDeployments": governed,
+        }
+    except Exception as error:  # noqa: BLE001 - maintenance must fail closed.
+        return {
+            "status": "release-contract-error",
+            "ready": False,
+            "database": database_name,
+            "reason": str(error)[:300],
+        }
 
 
 def ensure_typedb_shared_world_projection_rebuilt(
@@ -3095,6 +3268,12 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
         "log": candidate_log,
         "needle": "typedb_server_bin",
         "dataPath": candidate_path,
+        # A blue-green candidate starts from an empty data directory. Active
+        # instances may deliberately skip startup seeding, but inheriting that
+        # switch here produces a database without the TBox and makes the world
+        # replay fail on its first ontology-node write.
+        "seedOnStart": "1",
+        "seedReplaceRuleBox": "1",
         # TypeDB 3.12 can spend more than 15 minutes compiling the first cold
         # schema commit. Interrupting it during checkpoint replacement may
         # leave a transient checkpoint directory that crashes the next server.
@@ -3173,6 +3352,7 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             return {"status": "candidate-start-failed", "candidate": candidate}
         validated_databases = []
         validated_inference_modes = {}
+        validated_release_contracts = {}
         for database_spec in typedb_blue_green_database_specs(candidate):
             database_name = str(database_spec.get("typedbDatabase") or "")
             if not ensure_typedb_seeded(database_spec):
@@ -3187,6 +3367,14 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                     "status": "candidate-inference-readiness-failed",
                     "database": database_name,
                     "inferenceReadiness": inference_readiness,
+                    "candidate": candidate,
+                }
+            release_contract = validate_typedb_candidate_release_contract(database_spec)
+            if not bool(release_contract.get("ready")):
+                return {
+                    "status": "candidate-release-contract-failed",
+                    "database": database_name,
+                    "releaseContract": release_contract,
                     "candidate": candidate,
                 }
             if not ensure_typedb_shared_world_projection_rebuilt(database_spec, force=True):
@@ -3211,12 +3399,16 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             validated_inference_modes[database_name] = str(
                 inference_readiness.get("mode") or "unknown"
             )
+            validated_release_contracts[database_name] = str(
+                release_contract.get("status") or "unknown"
+            )
         return {
             "status": "prepared",
             "candidate": candidate,
             "candidateSizeBytes": directory_size_bytes(candidate_path),
             "validatedDatabases": validated_databases,
             "validatedInferenceModes": validated_inference_modes,
+            "validatedReleaseContracts": validated_release_contracts,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {

@@ -178,6 +178,24 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertEqual(failed["checkedAt"], failed["lastCapacityRotationFailureAlertAt"])
         self.assertIsNotNone(failed_event)
 
+    def test_failed_rotation_separates_maintenance_from_healthy_capacity(self):
+        service = OperationalStorageCapacityService(
+            store=StateStore(),
+            now_provider=lambda: datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc),
+        )
+
+        failed, event = service.record(
+            self.healthy_snapshot(),
+            force_alert=True,
+            force_alert_kind="typedb-auto-rotation-failed",
+        )
+
+        self.assertEqual("healthy", failed["capacityState"])
+        self.assertEqual("warning", failed["state"])
+        self.assertEqual("failed", failed["maintenanceState"])
+        self.assertTrue(failed["activeStorePreserved"])
+        self.assertIsNotNone(event)
+
     def test_internal_cleanup_warning_does_not_page_until_the_human_threshold(self):
         current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
         service = OperationalStorageCapacityService(
@@ -385,13 +403,13 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertGreater(inventory["typedbWalMb"], 0)
         self.assertGreater(inventory["typedbCheckpointMb"], 0)
 
-    def test_mysql_uses_an_eight_gigabyte_default_and_starts_cleanup_at_seventy_percent(self):
+    def test_mysql_uses_a_sixteen_gigabyte_default_and_starts_cleanup_at_seventy_percent(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "mysql-runtime").mkdir()
 
             def size(path):
-                return int(5.75 * 1024 * 1024 * 1024) if Path(path).name == "mysql-runtime" else 0
+                return int(11.5 * 1024 * 1024 * 1024) if Path(path).name == "mysql-runtime" else 0
 
             inventory = operational_storage_inventory(
                 {},
@@ -401,12 +419,19 @@ class OperationalStorageCapacityTests(unittest.TestCase):
                     total=100 * 1024 * 1024 * 1024,
                 ),
                 size_provider=size,
+                mysql_metadata_provider=lambda _settings: {
+                    "mysqlMetadataStatus": "available",
+                    "mysqlLiveDataMb": 1200.0,
+                    "mysqlReclaimableMb": 800.0,
+                },
             )
 
-        self.assertEqual(8192, inventory["mysqlLimitMb"])
+        self.assertEqual(16384, inventory["mysqlLimitMb"])
         self.assertEqual(71.9, inventory["mysqlUsagePercent"])
         self.assertEqual("maintenance", inventory["mysqlCapacityStage"])
         self.assertEqual("accelerated", inventory["cleanupMode"])
+        self.assertEqual(1200.0, inventory["mysqlLiveDataMb"])
+        self.assertEqual(800.0, inventory["mysqlReclaimableMb"])
         effective = accelerated_mysql_cleanup_settings({}, inventory)
         self.assertEqual("500", effective["_effectiveMysqlMinimalRetentionBatchSize"])
 
@@ -437,7 +462,7 @@ class OperationalStorageCapacityTests(unittest.TestCase):
             (root / "mysql-runtime").mkdir()
 
             def size(path):
-                return 8 * 1024 * 1024 * 1024 if Path(path).name == "mysql-runtime" else 0
+                return 16 * 1024 * 1024 * 1024 if Path(path).name == "mysql-runtime" else 0
 
             inventory = operational_storage_inventory(
                 {},

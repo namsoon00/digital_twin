@@ -263,10 +263,10 @@ class QuestDBTimeSeriesAdapter:
 
     def expected_ttl_days(self) -> Dict[str, int]:
         retention_days = {
-            "3m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 2))),
-            "15m": max(1, int(float(self.settings.get("marketTimeSeries15mRetentionDays") or 10))),
-            "1h": max(1, int(float(self.settings.get("marketTimeSeries1hRetentionDays") or 90))),
-            "1d": max(1, int(float(self.settings.get("marketTimeSeriesDailyRetentionDays") or 180))),
+            "3m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 7))),
+            "15m": max(1, int(float(self.settings.get("marketTimeSeries15mRetentionDays") or 30))),
+            "1h": max(1, int(float(self.settings.get("marketTimeSeries1hRetentionDays") or 365))),
+            "1d": max(1, int(float(self.settings.get("marketTimeSeriesDailyRetentionDays") or 1825))),
         }
         return {
             **{

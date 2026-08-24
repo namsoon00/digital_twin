@@ -182,8 +182,11 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual(256 * 1024, policy.max_delete_bytes)
         self.assertEqual(30, policy.max_run_seconds)
         self.assertEqual(10, policy.audit_keep_count)
-        self.assertEqual(24, policy.failed_world_projection_payload_retention_hours)
-        self.assertEqual(24 * 7, policy.failed_world_projection_retention_hours)
+        self.assertEqual(24 * 2, policy.failed_world_projection_payload_retention_hours)
+        self.assertEqual(24 * 30, policy.failed_world_projection_retention_hours)
+        self.assertEqual(24 * 30, policy.terminal_notification_retention_hours)
+        self.assertEqual(24 * 90, policy.investment_reasoning_case_retention_hours)
+        self.assertEqual({"3m": 7, "15m": 30, "1h": 365, "1d": 1825}, policy.market_time_series_retention_days)
 
         accelerated = mysql_minimal_retention_policy({
             "mysqlMinimalRetentionEnabled": "1",

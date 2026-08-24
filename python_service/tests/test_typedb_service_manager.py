@@ -68,6 +68,20 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
             run.assert_not_called()
 
+    def test_candidate_seed_cannot_be_disabled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "0",
+            }
+            with patch.object(service_manager.subprocess, "run") as run:
+                self.assertFalse(service_manager.ensure_typedb_seeded(spec))
+
+            run.assert_not_called()
+            self.assertIn("candidate seed rejected", spec["log"].read_text(encoding="utf-8"))
+
     def test_mysql_schema_bootstrap_uses_recovery_timeout_floor(self):
         spec = {
             "label": "MySQL operational store",
@@ -260,6 +274,10 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                         "ready": True,
                         "mode": "direct-typeql-fallback",
                     }), \
+                    patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
+                        "ready": True,
+                        "status": "ready",
+                    }), \
                     patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt", return_value=True), \
                     patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
                     patch.object(service_manager, "typedb_driver_ready", return_value=True):
@@ -272,6 +290,81 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             "ontology_primary": "direct-typeql-fallback",
             "ontology_v2": "direct-typeql-fallback",
         }, prepared["validatedInferenceModes"])
+        self.assertEqual({
+            "ontology_primary": "ready",
+            "ontology_v2": "ready",
+        }, prepared["validatedReleaseContracts"])
+
+    def test_blue_green_candidate_rejects_rulebox_that_differs_from_delivery_release(self):
+        class FakeRegistry:
+            def control(self):
+                return SimpleNamespace(
+                    delivery_deployment_id="v2-r49",
+                    active_deployment_id="v2-r49",
+                )
+
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "active",
+                    "graphStoreBinding": "ontology_v2",
+                    "health": {
+                        "candidateReleaseId": "release-r49@frozen",
+                        "ruleboxFingerprint": "frozen-rulebox",
+                    },
+                }
+
+        class FakeRepository:
+            def rulebox_snapshot(self):
+                return {
+                    "status": "ok",
+                    "rules": [{"id": "rule:new"}],
+                    "sourceRulesHash": "new-rulebox",
+                }
+
+        result = service_manager.validate_typedb_candidate_release_contract(
+            {
+                "typedbDatabase": "ontology_v2",
+                "healthAddress": "127.0.0.1:1730",
+                "httpAddress": "127.0.0.1:8001",
+            },
+            settings_provider=lambda **kwargs: {},
+            repository_factory=lambda settings: FakeRepository(),
+            registry_factory=lambda settings: FakeRegistry(),
+        )
+
+        self.assertFalse(result["ready"])
+        self.assertEqual("release-fingerprint-mismatch", result["status"])
+        self.assertEqual("new-rulebox", result["candidateRuleboxFingerprint"])
+
+    def test_blue_green_candidate_stops_before_world_rebuild_on_release_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "pid": Path(temp) / "typedb.pid",
+                "log": Path(temp) / "typedb.log",
+                "dataPath": Path(temp) / "typedb-data",
+                "healthAddress": "127.0.0.1:1729",
+                "httpAddress": "127.0.0.1:8000",
+                "typedbDatabase": "ontology_v2",
+            }
+            with patch.object(service_manager, "stop_worker", return_value=0), \
+                    patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_seeded", return_value=True), \
+                    patch.object(service_manager, "validate_typedb_candidate_inference_runtime", return_value={
+                        "ready": True,
+                        "mode": "direct-typeql-fallback",
+                    }), \
+                    patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
+                        "ready": False,
+                        "status": "release-fingerprint-mismatch",
+                    }), \
+                    patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt") as rebuild:
+                result = service_manager.prepare_typedb_blue_green_candidate(spec)
+
+        self.assertEqual("candidate-release-contract-failed", result["status"])
+        rebuild.assert_not_called()
 
     def test_blue_green_candidate_requires_functions_or_direct_typeql_fallback(self):
         command_result = SimpleNamespace(
@@ -552,6 +645,56 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual(20, cooling["cooldownRemainingSeconds"])
         self.assertEqual(120, cooling["retryWindowSeconds"])
         self.assertTrue(due["needed"])
+
+    def test_failed_candidate_rotation_uses_bounded_exponential_backoff(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (9 * 1024 * 1024))
+            spec = {
+                "dataPath": data_path,
+                "maxSizeMb": "10",
+                "autoRotationEnabled": "1",
+                "autoRotationPercent": "80",
+                "autoRotationFailureRetrySeconds": "300",
+            }
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                service_manager.write_typedb_retention_marker({
+                    "lastAutoRotationAttemptEpoch": 1000,
+                    "lastAutoRotationStatus": "candidate-failed-active-preserved",
+                    "autoRotationConsecutiveFailureCount": 2,
+                })
+                cooling = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1800)
+                due = service_manager.typedb_auto_rotation_needed(spec, now_epoch=1901)
+
+        self.assertFalse(cooling["needed"])
+        self.assertEqual(100, cooling["cooldownRemainingSeconds"])
+        self.assertEqual(900, cooling["retryWindowSeconds"])
+        self.assertEqual(2, cooling["consecutiveFailureCount"])
+        self.assertTrue(due["needed"])
+
+    def test_rotation_failure_counter_resets_only_after_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "marker.json"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                first = service_manager.record_typedb_auto_rotation_state(
+                    lastAutoRotationStatus="candidate-failed-active-preserved",
+                )
+                running = service_manager.record_typedb_auto_rotation_state(
+                    lastAutoRotationStatus="running",
+                )
+                second = service_manager.record_typedb_auto_rotation_state(
+                    lastAutoRotationStatus="reset-failed",
+                )
+                successful = service_manager.record_typedb_auto_rotation_state(
+                    lastAutoRotationStatus="ok",
+                )
+
+        self.assertEqual(1, first["autoRotationConsecutiveFailureCount"])
+        self.assertEqual(1, running["autoRotationConsecutiveFailureCount"])
+        self.assertEqual(2, second["autoRotationConsecutiveFailureCount"])
+        self.assertEqual(0, successful["autoRotationConsecutiveFailureCount"])
 
     def test_automatic_rotation_requires_a_healthy_managed_mysql_source(self):
         mysql_spec = {"pid": Path("/tmp/mysql.pid"), "healthAddress": "127.0.0.1:3306"}
@@ -856,6 +999,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("127.0.0.1:1732", candidate["healthAddress"])
         self.assertEqual("127.0.0.1:8003", candidate["httpAddress"])
         self.assertTrue(str(candidate["dataPath"]).endswith("typedb-data-candidate"))
+        self.assertEqual("1", candidate["seedOnStart"])
+        self.assertEqual("1", candidate["seedReplaceRuleBox"])
         self.assertIn("--storage.data-directory", candidate["command"])
 
         self.assertNotIn("--recover-scoped-write-lease", service_manager.typedb_seed_command(candidate))

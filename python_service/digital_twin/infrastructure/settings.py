@@ -44,6 +44,7 @@ TEXT_SETTING_KEYS = [
     "operationalLargeDomainEventNames",
     "operationalProjectionRunKeepCount",
     "ontologyExecutionTraceRetentionDays",
+    "hypothesisLifecycleEventRetentionDays",
     "ontologyMacroSystemicRateDeltaBp",
     "ontologyMacroSystemicFxChangePct",
     "operationalMinimumFreeSpaceMb",
@@ -197,6 +198,7 @@ TEXT_SETTING_KEYS = [
     "ontologyDecisionEpisodeContextOutcomeLimit",
     "ontologyAsyncQualityRecordEnabled",
     "ontologyWorldProjectionDeferWhenReasoningPending",
+    "ontologyWorldProjectionCompletedRetentionHours",
     "ontologyBackgroundWorkFairnessEnabled",
     "ontologyBackgroundWorkFairnessCooldownSeconds",
     "ontologyWorldProjectionMaxReasoningDeferralSeconds",
@@ -1197,12 +1199,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalDeliveredNotificationKeepCount": value(
             "operationalDeliveredNotificationKeepCount",
             "OPERATIONAL_DELIVERED_NOTIFICATION_KEEP_COUNT",
-            "5",
+            "30",
         ),
         "sentArticleDeliveryLedgerRetentionDays": value(
             "sentArticleDeliveryLedgerRetentionDays",
             "SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS",
-            "30",
+            "365",
         ),
         "operationalLargeDomainEventKeepCount": value(
             "operationalLargeDomainEventKeepCount",
@@ -1222,7 +1224,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyExecutionTraceRetentionDays": value(
             "ontologyExecutionTraceRetentionDays",
             "ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS",
-            "1",
+            "90",
+        ),
+        "hypothesisLifecycleEventRetentionDays": value(
+            "hypothesisLifecycleEventRetentionDays",
+            "HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS",
+            "90",
         ),
         "ontologyMacroSystemicRateDeltaBp": value(
             "ontologyMacroSystemicRateDeltaBp",
@@ -1342,7 +1349,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "operationalMySqlDataMaxSizeMb": value(
             "operationalMySqlDataMaxSizeMb",
             "OPERATIONAL_MYSQL_DATA_MAX_SIZE_MB",
-            "8192",
+            "16384",
         ),
         "operationalLogMaxSizeMb": value(
             "operationalLogMaxSizeMb",
@@ -1387,107 +1394,107 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlMinimalDeliveredNotificationKeepCount": value(
             "mysqlMinimalDeliveredNotificationKeepCount",
             "MYSQL_MINIMAL_DELIVERED_NOTIFICATION_KEEP_COUNT",
-            "5",
+            "30",
         ),
         "mysqlMinimalTerminalNotificationRetentionHours": value(
             "mysqlMinimalTerminalNotificationRetentionHours",
             "MYSQL_MINIMAL_TERMINAL_NOTIFICATION_RETENTION_HOURS",
-            "6",
+            "720",
         ),
         "mysqlMinimalCompletedWorldProjectionRetentionHours": value(
             "mysqlMinimalCompletedWorldProjectionRetentionHours",
             "MYSQL_MINIMAL_COMPLETED_WORLD_PROJECTION_RETENTION_HOURS",
-            "1",
+            "6",
         ),
         "mysqlMinimalCompletedInferenceDetailRetentionHours": value(
             "mysqlMinimalCompletedInferenceDetailRetentionHours",
             "MYSQL_MINIMAL_COMPLETED_INFERENCE_DETAIL_RETENTION_HOURS",
-            "24",
+            "168",
         ),
         "mysqlMinimalFailedWorldProjectionPayloadRetentionHours": value(
             "mysqlMinimalFailedWorldProjectionPayloadRetentionHours",
             "MYSQL_MINIMAL_FAILED_WORLD_PROJECTION_PAYLOAD_RETENTION_HOURS",
-            "24",
+            "48",
         ),
         "mysqlMinimalFailedWorldProjectionRetentionHours": value(
             "mysqlMinimalFailedWorldProjectionRetentionHours",
             "MYSQL_MINIMAL_FAILED_WORLD_PROJECTION_RETENTION_HOURS",
-            "168",
+            "720",
         ),
         "mysqlMinimalProjectionPayloadRetentionHours": value(
             "mysqlMinimalProjectionPayloadRetentionHours",
             "MYSQL_MINIMAL_PROJECTION_PAYLOAD_RETENTION_HOURS",
-            "6",
+            "24",
         ),
         "mysqlMinimalLifecycleEventRetentionHours": value(
             "mysqlMinimalLifecycleEventRetentionHours",
             "MYSQL_MINIMAL_LIFECYCLE_EVENT_RETENTION_HOURS",
-            "6",
+            "8760",
         ),
         "mysqlMinimalResearchTerminalRetentionHours": value(
             "mysqlMinimalResearchTerminalRetentionHours",
             "MYSQL_MINIMAL_RESEARCH_TERMINAL_RETENTION_HOURS",
-            "24",
+            "168",
         ),
         "mysqlMinimalInactiveEvidenceRetentionHours": value(
             "mysqlMinimalInactiveEvidenceRetentionHours",
             "MYSQL_MINIMAL_INACTIVE_EVIDENCE_RETENTION_HOURS",
-            "24",
+            "720",
         ),
         "mysqlMinimalCompletedTimeSeriesProjectionRetentionHours": value(
             "mysqlMinimalCompletedTimeSeriesProjectionRetentionHours",
             "MYSQL_MINIMAL_COMPLETED_TIME_SERIES_PROJECTION_RETENTION_HOURS",
-            "6",
+            "24",
         ),
         "mysqlMinimalTemporalFeatureSnapshotRetentionHours": value(
             "mysqlMinimalTemporalFeatureSnapshotRetentionHours",
             "MYSQL_MINIMAL_TEMPORAL_FEATURE_SNAPSHOT_RETENTION_HOURS",
-            "24",
+            "72",
         ),
         "mysqlMinimalStatisticalModelSignalSnapshotRetentionHours": value(
             "mysqlMinimalStatisticalModelSignalSnapshotRetentionHours",
             "MYSQL_MINIMAL_STATISTICAL_MODEL_SIGNAL_SNAPSHOT_RETENTION_HOURS",
-            str(24 * 90),
+            str(24 * 365),
         ),
         "mysqlMinimalReasoningShadowJobRetentionHours": value(
             "mysqlMinimalReasoningShadowJobRetentionHours",
             "MYSQL_MINIMAL_REASONING_SHADOW_JOB_RETENTION_HOURS",
-            "24",
+            "72",
         ),
         "mysqlMinimalInvestmentReasoningCaseRetentionHours": value(
             "mysqlMinimalInvestmentReasoningCaseRetentionHours",
             "MYSQL_MINIMAL_INVESTMENT_REASONING_CASE_RETENTION_HOURS",
-            "168",
+            "2160",
         ),
         "mysqlMinimalReasoningComparisonRetentionHours": value(
             "mysqlMinimalReasoningComparisonRetentionHours",
             "MYSQL_MINIMAL_REASONING_COMPARISON_RETENTION_HOURS",
-            "168",
+            "2160",
         ),
         "mysqlMinimalRetentionAuditKeepCount": value(
             "mysqlMinimalRetentionAuditKeepCount",
             "MYSQL_MINIMAL_RETENTION_AUDIT_KEEP_COUNT",
-            "100",
+            "365",
         ),
         "mysqlMinimalTimeSeries3mRetentionDays": value(
             "mysqlMinimalTimeSeries3mRetentionDays",
             "MYSQL_MINIMAL_TIME_SERIES_3M_RETENTION_DAYS",
-            "2",
+            "7",
         ),
         "mysqlMinimalTimeSeries15mRetentionDays": value(
             "mysqlMinimalTimeSeries15mRetentionDays",
             "MYSQL_MINIMAL_TIME_SERIES_15M_RETENTION_DAYS",
-            "10",
+            "30",
         ),
         "mysqlMinimalTimeSeries1hRetentionDays": value(
             "mysqlMinimalTimeSeries1hRetentionDays",
             "MYSQL_MINIMAL_TIME_SERIES_1H_RETENTION_DAYS",
-            "90",
+            "365",
         ),
         "mysqlMinimalTimeSeries1dRetentionDays": value(
             "mysqlMinimalTimeSeries1dRetentionDays",
             "MYSQL_MINIMAL_TIME_SERIES_1D_RETENTION_DAYS",
-            "180",
+            "1825",
         ),
         "tossApiBaseUrl": value("tossApiBaseUrl", "TOSS_API_BASE_URL", "https://openapi.tossinvest.com"),
         "tossClientId": value("tossClientId", "TOSS_CLIENT_ID"),
@@ -2012,7 +2019,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyWorldProjectionCompletedRetentionHours": value(
             "ontologyWorldProjectionCompletedRetentionHours",
             "ONTOLOGY_WORLD_PROJECTION_COMPLETED_RETENTION_HOURS",
-            "1",
+            "6",
         ),
         "ontologyWorldProjectionMaxPayloadBytes": value(
             "ontologyWorldProjectionMaxPayloadBytes",
@@ -2072,7 +2079,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyInferenceDetailCompletedRetentionHours": value(
             "ontologyInferenceDetailCompletedRetentionHours",
             "ONTOLOGY_INFERENCE_DETAIL_COMPLETED_RETENTION_HOURS",
-            "24",
+            "168",
         ),
         "ontologyInferenceDetailMaxResultBytes": value(
             "ontologyInferenceDetailMaxResultBytes",
@@ -2248,7 +2255,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         ),
         "typedbAutoResetEnabled": value("typedbAutoResetEnabled", "TYPEDB_AUTO_RESET_ENABLED", "0"),
         "typedbAgeResetEnabled": value("typedbAgeResetEnabled", "TYPEDB_AGE_RESET_ENABLED", "0"),
-        "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "24"),
+        "typedbDataRetentionHours": value("typedbDataRetentionHours", "TYPEDB_DATA_RETENTION_HOURS", "72"),
         "typedbDataMaxSizeMb": value("typedbDataMaxSizeMb", "TYPEDB_DATA_MAX_SIZE_MB", "16384"),
         "typedbMinimumFreeSpaceMb": value("typedbMinimumFreeSpaceMb", "TYPEDB_MINIMUM_FREE_SPACE_MB", "4096"),
         "typedbCapacityGuardCheckIntervalSeconds": value(
@@ -2284,7 +2291,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbCapacityAutoRotateWalMb": value(
             "typedbCapacityAutoRotateWalMb",
             "TYPEDB_CAPACITY_AUTO_ROTATE_WAL_MB",
-            "2048",
+            "4096",
         ),
         "typedbCapacityAutoRotateFreeSpaceMb": value(
             "typedbCapacityAutoRotateFreeSpaceMb",
@@ -2304,7 +2311,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbCapacityAutoRotateFailureRetrySeconds": value(
             "typedbCapacityAutoRotateFailureRetrySeconds",
             "TYPEDB_CAPACITY_AUTO_ROTATE_FAILURE_RETRY_SECONDS",
-            "120",
+            "300",
         ),
         "typedbBlueGreenRotationEnabled": value(
             "typedbBlueGreenRotationEnabled",
@@ -2319,7 +2326,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbBlueGreenRetiredRetentionMinutes": value(
             "typedbBlueGreenRetiredRetentionMinutes",
             "TYPEDB_BLUE_GREEN_RETIRED_RETENTION_MINUTES",
-            "30",
+            "120",
         ),
         "typedbBlueGreenMinimumHeadroomMb": value(
             "typedbBlueGreenMinimumHeadroomMb",
@@ -2418,10 +2425,10 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "marketDataCandleBatchSize": value("marketDataCandleBatchSize", "MARKET_DATA_CANDLE_BATCH_SIZE", "25"),
         "marketDataRefreshUniverse": value("marketDataRefreshUniverse", "MARKET_DATA_REFRESH_UNIVERSE", "1"),
         "marketTimeSeriesEnabled": value("marketTimeSeriesEnabled", "MARKET_TIME_SERIES_ENABLED", "1"),
-        "marketTimeSeriesRawRetentionDays": value("marketTimeSeriesRawRetentionDays", "MARKET_TIME_SERIES_RAW_RETENTION_DAYS", "2"),
-        "marketTimeSeries15mRetentionDays": value("marketTimeSeries15mRetentionDays", "MARKET_TIME_SERIES_15M_RETENTION_DAYS", "10"),
-        "marketTimeSeries1hRetentionDays": value("marketTimeSeries1hRetentionDays", "MARKET_TIME_SERIES_1H_RETENTION_DAYS", "90"),
-        "marketTimeSeriesDailyRetentionDays": value("marketTimeSeriesDailyRetentionDays", "MARKET_TIME_SERIES_DAILY_RETENTION_DAYS", "180"),
+        "marketTimeSeriesRawRetentionDays": value("marketTimeSeriesRawRetentionDays", "MARKET_TIME_SERIES_RAW_RETENTION_DAYS", "7"),
+        "marketTimeSeries15mRetentionDays": value("marketTimeSeries15mRetentionDays", "MARKET_TIME_SERIES_15M_RETENTION_DAYS", "30"),
+        "marketTimeSeries1hRetentionDays": value("marketTimeSeries1hRetentionDays", "MARKET_TIME_SERIES_1H_RETENTION_DAYS", "365"),
+        "marketTimeSeriesDailyRetentionDays": value("marketTimeSeriesDailyRetentionDays", "MARKET_TIME_SERIES_DAILY_RETENTION_DAYS", "1825"),
         "marketTimeSeriesMaxPointsPerWindow": value("marketTimeSeriesMaxPointsPerWindow", "MARKET_TIME_SERIES_MAX_POINTS_PER_WINDOW", "500"),
         "timeSeriesActiveBackendId": value("timeSeriesActiveBackendId", "TIME_SERIES_ACTIVE_BACKEND_ID", "mysql-primary"),
         "timeSeriesShadowBackendId": value("timeSeriesShadowBackendId", "TIME_SERIES_SHADOW_BACKEND_ID", "questdb-shadow"),

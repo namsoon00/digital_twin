@@ -16,8 +16,8 @@ DEFAULT_CHECK_INTERVAL_SECONDS = 120
 DEFAULT_SNAPSHOT_HISTORY_KEEP_COUNT = 2
 DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
 DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 20
-DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 5
-DEFAULT_SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS = 30
+DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 30
+DEFAULT_SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS = 365
 # The event log is a transport/audit trail, not the canonical store for the
 # same snapshot, evidence claim, or delivered notification. These payloads
 # can be large, so retain a bounded operator window per high-volume event.
@@ -29,15 +29,15 @@ DEFAULT_LARGE_DOMAIN_EVENT_NAMES = (
     "ontology.reasoning_requested",
 )
 DEFAULT_PROJECTION_RUN_KEEP_COUNT = 2
-DEFAULT_ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS = 30
-DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 1
-DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 24
-DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 1
+DEFAULT_ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS = 90
+DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 6
+DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 24 * 7
+DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 90
 DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
-    "3m": 2,
-    "15m": 10,
-    "1h": 90,
-    "1d": 180,
+    "3m": 7,
+    "15m": 30,
+    "1h": 365,
+    "1d": 1825,
 }
 RETENTION_LOCK_NAME = "orbit_alpha_operational_history_retention"
 EPHEMERAL_MYSQL_DATABASE_PATTERN = re.compile(
@@ -292,10 +292,10 @@ def operational_large_domain_event_names(settings: Mapping[str, object] = None) 
 def market_time_series_retention_days(settings: Mapping[str, object] = None) -> Dict[str, int]:
     configured = settings or {}
     return {
-        "3m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 2, 1, 3650),
-        "15m": _int_setting(configured, "marketTimeSeries15mRetentionDays", 10, 1, 36500),
-        "1h": _int_setting(configured, "marketTimeSeries1hRetentionDays", 90, 1, 36500),
-        "1d": _int_setting(configured, "marketTimeSeriesDailyRetentionDays", 180, 1, 36500),
+        "3m": _int_setting(configured, "marketTimeSeriesRawRetentionDays", 7, 1, 3650),
+        "15m": _int_setting(configured, "marketTimeSeries15mRetentionDays", 30, 1, 36500),
+        "1h": _int_setting(configured, "marketTimeSeries1hRetentionDays", 365, 1, 36500),
+        "1d": _int_setting(configured, "marketTimeSeriesDailyRetentionDays", 1825, 1, 36500),
     }
 
 
@@ -880,19 +880,32 @@ def optimize_mysql_operational_tables(connection, tables: Sequence[str]) -> Dict
     allowed = [table for table in requested if table in MYSQL_OPERATIONAL_COMPACTION_TABLES]
     rejected = [table for table in requested if table not in MYSQL_OPERATIONAL_COMPACTION_TABLES]
     optimized = []
+    analyzed = []
     failures = []
+    metadata_failures = []
     for table in allowed:
         try:
             _execute(connection, "OPTIMIZE TABLE " + quote_identifier(table))
             optimized.append(table)
         except Exception as error:  # noqa: BLE001 - retain the rest of the maintenance result.
             failures.append({"table": table, "reason": str(error)[:220]})
+            continue
+        try:
+            # MySQL can keep pre-rebuild allocator statistics until an explicit
+            # analyze. Refresh them so the capacity dashboard does not report
+            # already reclaimed pages as another compaction candidate.
+            _execute(connection, "ANALYZE TABLE " + quote_identifier(table))
+            analyzed.append(table)
+        except Exception as error:  # noqa: BLE001 - physical compaction still succeeded.
+            metadata_failures.append({"table": table, "reason": str(error)[:220]})
     return {
-        "status": "ok" if not failures else "partial",
+        "status": "ok" if not failures and not metadata_failures else "partial",
         "requestedTables": requested,
         "optimizedTables": optimized,
+        "analyzedTables": analyzed,
         "rejectedTables": rejected,
         "failures": failures,
+        "metadataFailures": metadata_failures,
     }
 
 

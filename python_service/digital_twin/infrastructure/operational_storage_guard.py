@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Dict, Mapping
 
 from .settings import data_dir
+
+
+_MYSQL_STORAGE_METADATA_CACHE: Dict[str, object] = {}
+
+
+def clear_mysql_storage_metadata_cache() -> None:
+    _MYSQL_STORAGE_METADATA_CACHE.clear()
 
 
 def _integer(value: object, fallback: int, minimum: int = 0, maximum: int = 1024 * 1024) -> int:
@@ -168,11 +176,86 @@ def storage_directory_physical_size_bytes(path: Path) -> int:
     return total
 
 
+def mysql_storage_metadata(
+    settings: Mapping[str, object],
+    now_provider: Callable[[], float] = None,
+) -> Dict[str, object]:
+    """Return cheap logical allocation metadata without joining application tables."""
+
+    configured = dict(settings or {})
+    enabled = str(configured.get("mysqlStorageMetadataEnabled") or "1").strip().lower() \
+        not in {"", "0", "false", "no", "off", "disabled"}
+    configured_runtime = bool(
+        str(configured.get("mysqlHost") or configured.get("mysqlUrl") or "").strip()
+        or str(configured.get("mysqlRuntimeManaged") or "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    if not enabled or not configured_runtime:
+        return {"mysqlMetadataStatus": "disabled"}
+    now = float((now_provider or time.monotonic)())
+    database = str(configured.get("mysqlDatabase") or "orbit_alpha")
+    cache_seconds = _integer(configured.get("mysqlStorageMetadataCacheSeconds"), 300, 30, 3600)
+    cached_at = float(_MYSQL_STORAGE_METADATA_CACHE.get("cachedAt") or 0.0)
+    if (
+        _MYSQL_STORAGE_METADATA_CACHE.get("database") == database
+        and now - cached_at < cache_seconds
+    ):
+        return dict(_MYSQL_STORAGE_METADATA_CACHE.get("payload") or {})
+    try:
+        from .mysql_operational_connection import MySQLOperationalConnection
+
+        probe_settings = {
+            **configured,
+            "_skipOperationalSchemaBootstrap": "1",
+            "_skipOperationalHistoryRetention": "1",
+            "mysqlOperationTimeoutSeconds": str(min(
+                10,
+                _integer(configured.get("mysqlOperationTimeoutSeconds"), 10, 1, 60),
+            )),
+        }
+        store = MySQLOperationalConnection(probe_settings)
+        with store.connect() as connection:
+            cursor = connection.execute(
+                """
+                SELECT COALESCE(SUM(data_length), 0) AS dataBytes,
+                       COALESCE(SUM(index_length), 0) AS indexBytes,
+                       COALESCE(SUM(data_free), 0) AS reclaimableBytes
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE()
+                """
+            )
+            row = cursor.fetchone() or {}
+        data_bytes = int(row.get("dataBytes") or 0)
+        index_bytes = int(row.get("indexBytes") or 0)
+        reclaimable_bytes = int(row.get("reclaimableBytes") or 0)
+        payload = {
+            "mysqlMetadataStatus": "available",
+            "mysqlLiveDataMb": round((data_bytes + index_bytes) / 1024 / 1024, 1),
+            "mysqlReclaimableMb": round(reclaimable_bytes / 1024 / 1024, 1),
+            "mysqlAllocatedTableMb": round(
+                (data_bytes + index_bytes + reclaimable_bytes) / 1024 / 1024,
+                1,
+            ),
+        }
+    except Exception as error:  # noqa: BLE001 - optional diagnostics must not gate writes.
+        payload = {
+            "mysqlMetadataStatus": "unavailable",
+            "mysqlMetadataReason": str(error)[:180],
+        }
+    _MYSQL_STORAGE_METADATA_CACHE.clear()
+    _MYSQL_STORAGE_METADATA_CACHE.update({
+        "database": database,
+        "cachedAt": now,
+        "payload": payload,
+    })
+    return dict(payload)
+
+
 def operational_storage_inventory(
     settings: Mapping[str, object] = None,
     data_path: Path = None,
     disk_usage_provider: Callable = None,
     size_provider: Callable[[Path], int] = None,
+    mysql_metadata_provider: Callable[[Mapping[str, object]], Mapping[str, object]] = None,
 ) -> Dict[str, object]:
     """Return bounded component sizes for capacity alerts and maintenance decisions."""
 
@@ -196,9 +279,12 @@ def operational_storage_inventory(
     root_logs = sum(apparent_size(path) for path in root.glob("*.log"))
     typedb_logs = apparent_size(root / "typedb-logs")
     mysql_size_mb = round(apparent_size(mysql_root) / 1024 / 1024, 1)
+    mysql_metadata = dict(
+        (mysql_metadata_provider or mysql_storage_metadata)(configured) or {}
+    )
     mysql_limit_mb = _integer(
         configured.get("operationalMySqlDataMaxSizeMb"),
-        8192,
+        16384,
         256,
     )
     mysql_usage_percent = round(mysql_size_mb / mysql_limit_mb * 100, 1) if mysql_limit_mb else 0.0
@@ -258,6 +344,7 @@ def operational_storage_inventory(
         "typedbCheckpointReferencedMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 8192, 256),
         "mysqlSizeMb": mysql_size_mb,
+        **mysql_metadata,
         "mysqlLimitMb": mysql_limit_mb,
         "mysqlUsagePercent": mysql_usage_percent,
         "mysqlCapacityStage": mysql_stage,

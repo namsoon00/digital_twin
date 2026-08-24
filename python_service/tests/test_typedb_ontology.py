@@ -11001,7 +11001,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertIn("--server.listen-address", command)
         self.assertIn("--storage.data-directory", command)
         self.assertEqual("typedb", workers["typedb"]["role"])
-        self.assertEqual("24", workers["typedb"]["retentionHours"])
+        self.assertEqual("72", workers["typedb"]["retentionHours"])
         self.assertEqual("16384", workers["typedb"]["maxSizeMb"])
         self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])

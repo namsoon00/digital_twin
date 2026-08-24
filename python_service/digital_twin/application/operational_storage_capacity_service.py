@@ -94,6 +94,7 @@ class OperationalStorageCapacityService:
             and force_due
             and operational_storage_capacity_enabled(self.settings)
         ):
+            health["capacityState"] = str(health.get("state") or "unknown")
             health.update({
                 "alertRequired": True,
                 "alertKind": forced_kind,
@@ -104,6 +105,18 @@ class OperationalStorageCapacityService:
                 health["runtimeCapacityFailure"] = True
             else:
                 health["forcedCapacityIncident"] = forced_kind
+            if forced_kind == "typedb-auto-rotation":
+                health["maintenanceState"] = "running"
+                health["maintenanceReason"] = "TypeDB 안전 재구축 후보를 준비하고 있습니다."
+            elif forced_kind == "typedb-auto-rotation-failed":
+                health["maintenanceState"] = "failed"
+                health["maintenanceReason"] = "후보 검증에 실패해 활성 TypeDB는 그대로 유지했습니다."
+                health["activeStorePreserved"] = True
+                if str(health.get("state") or "healthy") == "healthy":
+                    health["state"] = "warning"
+                health["suggestedAction"] = (
+                    "활성 TypeDB를 유지한 채 실패 원인을 확인하고 지수 백오프 후 다시 시도합니다."
+                )
         for key in (
             "lastRuntimeFailureAlertAt",
             "lastForcedCapacityAlertAt",
@@ -199,6 +212,9 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "• MySQL 실제 점유: " + str(values.get("mysqlSizeMb") or 0) + "MB / 운영 한도 "
             + str(values.get("mysqlLimitMb") or 0) + "MB ("
             + str(values.get("mysqlUsagePercent") or 0) + "%)",
+            "• MySQL 내부 사용: 데이터·인덱스 " + str(values.get("mysqlLiveDataMb") or 0)
+            + "MB · 회수 가능 " + str(values.get("mysqlReclaimableMb") or 0)
+            + "MB · 메타데이터 " + str(values.get("mysqlMetadataStatus") or "unavailable"),
             "• MySQL 단계: " + {
                 "normal": "정상",
                 "maintenance": "예방 정리",
@@ -230,7 +246,17 @@ class OperationalStorageCapacityNotificationEnqueuer:
         elif kind == "typedb-auto-rotation":
             lines.insert(3, "• 감지: TypeDB가 안전 재구축 기준에 도달해 MySQL 원천 데이터로 그래프를 다시 만드는 작업을 시작했습니다.")
         elif kind == "typedb-auto-rotation-failed":
-            lines.insert(3, "• 감지: TypeDB 안전 재구축이 완료되지 않았습니다. 짧은 실패 재시도 간격으로 다시 시도합니다.")
+            lines.insert(
+                3,
+                "• 감지: TypeDB 안전 재구축 후보 검증에 실패했습니다. 활성 저장소는 보존됐으며 5·15·30·60분 백오프로 재시도합니다.",
+            )
+        if values.get("maintenanceState"):
+            lines.insert(
+                3,
+                "• 유지보수: " + str(values.get("maintenanceState"))
+                + " · 용량 상태 " + str(values.get("capacityState") or state)
+                + " · " + str(values.get("maintenanceReason") or ""),
+            )
         try:
             shared_linked_mb = float(values.get("typedbSharedLinkedMb") or 0)
         except (TypeError, ValueError):

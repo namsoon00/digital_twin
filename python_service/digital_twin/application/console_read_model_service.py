@@ -543,6 +543,7 @@ class ConsoleReadModelService:
         reasoning = _mapping(payloads.get("reasoning"))
         engine = _mapping(payloads.get("engine"))
         time_series = _mapping(payloads.get("timeSeries"))
+        storage = _mapping(payloads.get("storage"))
         providers = _rows(external.get("providers"))
         failed_providers = [item for item in providers if _text(item.get("state")).lower() not in {"healthy", "ok", "ready"}]
         pending = int(reasoning.get("effectivePendingCount") or reasoning.get("pendingCount") or 0)
@@ -589,6 +590,14 @@ class ConsoleReadModelService:
             engine_state = "critical"
         elif guard_state and guard_state not in {"ready", "healthy", "ok"}:
             engine_state = "warning"
+        storage_stage = _text(storage.get("mysqlCapacityStage")).lower()
+        storage_state = (
+            "critical" if storage_stage in {"critical", "core-only"}
+            or _text(storage.get("status")).lower() == "critical-low-disk"
+            else "warning" if storage_stage in {"maintenance", "warning", "restricted"}
+            or _text(storage.get("status")).lower() in {"guarded-low-disk", "pressure", "unavailable"}
+            else "healthy"
+        )
         rows = [
             {
                 "id": "monitoring",
@@ -645,6 +654,17 @@ class ConsoleReadModelService:
                 "detail": f"활성 배포 {active_deployment_id or '미선택'}" + (f" · {guard_state}" if guard_state else ""),
                 "updatedAt": _text(active_engine.get("updatedAt") or active_engine.get("updated_at")),
             },
+            {
+                "id": "storage",
+                "label": "운영 저장공간",
+                "state": storage_state,
+                "detail": (
+                    f"MySQL {storage.get('mysqlSizeMb') or 0}MB / {storage.get('mysqlLimitMb') or 0}MB"
+                    f" · 회수 가능 {storage.get('mysqlReclaimableMb') or 0}MB"
+                    f" · TypeDB {storage.get('typedbSizeMb') or 0}MB"
+                ),
+                "updatedAt": "",
+            },
         ]
         counts = Counter(item["state"] for item in rows)
         return {
@@ -674,6 +694,7 @@ class ConsoleReadModelService:
                 },
             },
             "providers": providers,
+            "storage": storage,
         }
 
     @staticmethod

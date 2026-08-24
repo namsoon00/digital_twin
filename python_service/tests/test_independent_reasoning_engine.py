@@ -346,6 +346,49 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertIn("stage_details_json", connection.sql)
         self.assertIn("shared_premise.inference.start", connection.params)
 
+    def test_mysql_queue_claim_retries_deadlock_without_repeating_inference(self):
+        class Connection:
+            def execute(self, sql, _params=()):
+                if sql.lstrip().startswith("SELECT *"):
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "job_id": "job:retry-once",
+                        "deployment_id": "ontology-v2-production",
+                        "request_json": "{}",
+                        "source_boundary_json": "[]",
+                    }])
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            def __init__(self):
+                self.runtime_settings = {
+                    "mysqlDeadlockRetryCount": "2",
+                    "mysqlDeadlockRetryBaseMilliseconds": "1",
+                    "mysqlDeadlockRetryMaxMilliseconds": "1",
+                    "reasoningEngineV2RequireSourceBoundary": "0",
+                }
+                self.last_transaction_retry = {}
+                self.attempts = 0
+
+            @contextmanager
+            def transaction(self):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise RuntimeError(1213, "Deadlock found when trying to get lock")
+                yield connection
+
+        store = Store()
+        jobs = store.claim(
+            "ontology-v2-production",
+            "worker-host:111:v2-current",
+        )
+
+        self.assertEqual(["job:retry-once"], [job["jobId"] for job in jobs])
+        self.assertEqual(2, store.attempts)
+        self.assertTrue(store.last_transaction_retry["recovered"])
+        self.assertEqual(1, store.last_transaction_retry["retryCount"])
+
     def test_mysql_queue_releases_exact_worker_claims_during_managed_shutdown(self):
         class Connection:
             def __init__(self):

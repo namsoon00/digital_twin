@@ -5,6 +5,7 @@ import os
 import socket
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import Dict, Iterable, List, Mapping, Optional
 
 from ..domain.reasoning_engine_versions import (
@@ -33,7 +34,34 @@ from ..domain.time_series_storage import (
     clean_status,
     payload_fingerprint,
 )
-from .mysql_operational_connection import MySQLOperationalConnection
+from .mysql_operational_connection import (
+    MySQLOperationalConnection,
+    run_mysql_deadlock_retry,
+)
+
+
+def reasoning_queue_deadlock_retry(operation: str):
+    """Retry only one short, idempotent queue-store operation.
+
+    The inference itself is deliberately outside this boundary. InnoDB rolls
+    back a deadlocked transaction, so rerunning the store method opens a fresh
+    transaction without repeating TypeDB projection or AI work.
+    """
+
+    def decorate(callback):
+        @wraps(callback)
+        def wrapped(self, *args, **kwargs):
+            result, receipt = run_mysql_deadlock_retry(
+                getattr(self, "runtime_settings", {}) or {},
+                operation,
+                lambda: callback(self, *args, **kwargs),
+            )
+            self.last_transaction_retry = receipt.to_dict()
+            return result
+
+        return wrapped
+
+    return decorate
 
 
 def utc_now() -> datetime:
@@ -1097,12 +1125,14 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "nativeTargetSymbolLimit": symbol_limit,
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-ingress")
     def ingress_event(self, event) -> Dict[str, object]:
         """Idempotently materialize one durable source event for V2."""
 
         with self.transaction() as connection:
             return self.ingress_event_with_connection(connection, event)
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-reshard")
     def reshard_claimed_job(
         self,
         job_id: str,
@@ -1226,6 +1256,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "jobIds": inserted_job_ids,
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-backlog-compaction")
     def compact_supersedable_backlog(
         self,
         deployment_id: str,
@@ -1352,6 +1383,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "queueAgeResetCount": age_resets,
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-local-lease-recovery")
     def recover_dead_local_leases(
         self,
         deployment_id: str,
@@ -1450,6 +1482,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "recoveredOwnerCount": len(set(recovered_owners)),
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-worker-lease-release")
     def release_worker_leases(
         self,
         deployment_id: str,
@@ -1518,6 +1551,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             ).fetchone()
         return str((row or {}).get("reasoning_lane") or "")
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-claim")
     def claim(
         self,
         deployment_id: str,
@@ -1584,6 +1618,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             )
         return [self.row_payload(row) for row in rows or []]
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-release-bind")
     def bind_release(
         self,
         job_ids: Iterable[str],
@@ -1609,6 +1644,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-heartbeat")
     def heartbeat(
         self,
         job_ids: Iterable[str],
@@ -1639,6 +1675,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0) == len(selected)
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-complete")
     def complete(self, job_id: str, result: Mapping[str, object], worker_id: str = "") -> None:
         stamp = iso_utc()
         values = dict(result or {})
@@ -1668,6 +1705,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             if str(worker_id or "") and int(getattr(cursor, "rowcount", 0) or 0) != 1:
                 raise RuntimeError("The V2 reasoning job lease was lost before completion publication.")
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-defer")
     def defer(self, job_id: str, reason: str, retry_after_seconds: int = 15) -> None:
         with self.connect() as connection:
             connection.execute(
@@ -1687,6 +1725,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-world-projection-wait")
     def await_world_projection(
         self,
         job_id: str,
@@ -1755,6 +1794,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "retryAfterSeconds": 0 if terminal else delay,
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-exclude")
     def exclude(
         self,
         job_id: str,
@@ -1799,6 +1839,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-fail")
     def fail(
         self,
         job_id: str,
@@ -1844,6 +1885,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-supersede")
     def supersede(self, job_id: str, reason: str) -> None:
         stamp = iso_utc()
         with self.connect() as connection:
@@ -1860,6 +1902,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 (str(reason or "")[:500], stamp, stamp, str(job_id or "")),
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-deployment-supersede")
     def supersede_pending_deployment(
         self,
         deployment_id: str,
@@ -1893,6 +1936,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "supersededCount": int(getattr(cursor, "rowcount", 0) or 0),
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-job-retry")
     def retry(self, job_id: str, error: str, max_attempts: int = 3) -> Dict[str, object]:
         with self.transaction() as connection:
             row = connection.execute(

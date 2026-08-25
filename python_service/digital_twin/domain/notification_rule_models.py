@@ -465,6 +465,8 @@ class NotificationRuleDecision:
         row = {
             "triggerId": clean_id,
             "kind": str(kind or "delivery-policy").strip(),
+            "triggerCategory": str(values.pop("triggerCategory", "internal-gate") or "internal-gate").strip(),
+            "customerVisible": bool(values.pop("customerVisible", False)),
             "label": str(label or "발송 조건").strip(),
             "reason": str(reason or "").strip(),
             "source": str(values.pop("source", "notification-admission") or "notification-admission"),
@@ -486,6 +488,8 @@ class NotificationRuleDecision:
             trigger_ledger.append({
                 "triggerId": "state-policy:" + self.state_decision,
                 "kind": "state-cooldown",
+                "triggerCategory": "delivery-policy",
+                "customerVisible": False,
                 "label": "이전 알림과 비교",
                 "reason": self.state_reason,
                 "status": "released" if self.should_send else "suppressed",
@@ -498,6 +502,8 @@ class NotificationRuleDecision:
             trigger_ledger.append({
                 "triggerId": "repeat-policy:bypass",
                 "kind": "repeat-policy",
+                "triggerCategory": "delivery-policy",
+                "customerVisible": False,
                 "label": "반복 알림 보류 해제",
                 "reason": self.similarity_bypass_reason,
                 "status": "released",
@@ -506,6 +512,8 @@ class NotificationRuleDecision:
         trigger_ledger.append({
             "triggerId": "delivery-gate",
             "kind": "delivery-gate",
+            "triggerCategory": "internal-gate",
+            "customerVisible": False,
             "label": "최종 발송 판단",
             "reason": self.gate_reason,
             "status": "eligible" if self.should_send else "suppressed",
@@ -517,7 +525,7 @@ class NotificationRuleDecision:
             "deliveryGateReason": self.gate_reason,
             "deliveryReasons": list(self.reasons or []),
             "deliveryMatchedConditions": list(self.matched_conditions or []),
-            "deliveryTriggerLedgerVersion": "notification-delivery-trigger-ledger-v1",
+            "deliveryTriggerLedgerVersion": "notification-delivery-trigger-ledger-v2",
             "deliveryTriggerLedger": trigger_ledger,
             "deliveryRuleEnabled": bool(self.enabled),
             "deliveryFingerprint": self.fingerprint,

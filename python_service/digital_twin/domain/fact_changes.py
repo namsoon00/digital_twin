@@ -57,7 +57,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v3"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v4"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -124,6 +124,39 @@ FACT_TYPE_DEPENDENCY_KEYS = {
     "investmentcalendarevent": {"kind:earnings-calendar-event"},
     "verifiedclaim": {"kind:verified-claim"},
     "verificationrun": {"kind:verification-run"},
+}
+
+# These source facts are projected onto stock properties. Their exact RuleBox
+# dependency is determined by the changed-field vector carried by the same
+# durable event, instead of reopening every rule in the broad family.
+FIELD_ROUTED_FACT_TYPES = {
+    "marketquote",
+    "pricemetric",
+    "technicalindicator",
+    "tradeflow",
+    "executionflow",
+    "investorflow",
+    "orderbook",
+}
+
+FIELD_DEPENDENCY_ALIASES = {
+    "changerate": {"pricechangerate"},
+    "currentprice": {"currentprice", "ma5distance", "ma20distance", "ma60distance"},
+    "foreignbuyvolume": {"foreignbuyvolume", "foreignnetvolume", "smartmoneynetvolume"},
+    "foreignsellvolume": {"foreignsellvolume", "foreignnetvolume", "smartmoneynetvolume"},
+    "foreignnetvolume": {"foreignnetvolume", "smartmoneynetvolume"},
+    "institutionbuyvolume": {"institutionbuyvolume", "institutionnetvolume", "smartmoneynetvolume"},
+    "institutionsellvolume": {"institutionsellvolume", "institutionnetvolume", "smartmoneynetvolume"},
+    "institutionnetvolume": {"institutionnetvolume", "smartmoneynetvolume"},
+    "volume": {"volume", "volumeratio"},
+}
+
+QUALITY_STATE_FIELDS = {
+    "dataquality",
+    "freshnessstatus",
+    "latencystatus",
+    "quotestatus",
+    "sourcetimestampstate",
 }
 
 KNOWN_SCOPE_FAMILIES = {
@@ -203,9 +236,57 @@ def dependency_keys_complete_for_fact_types(fact_types: Iterable[object]) -> boo
     )
 
 
+def _field_token(value: object) -> str:
+    text = str(value or "").strip()
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return "".join(character for character in text.lower() if character.isalnum())
+
+
+def dependency_keys_for_changed_fields(fields: Iterable[object]) -> List[str]:
+    keys: Set[str] = set()
+    for field in fields or []:
+        token = _field_token(field)
+        if not token or token in {"marketobservationfollowup", "cryptomarkettransition"}:
+            continue
+        aliases = FIELD_DEPENDENCY_ALIASES.get(token, {token})
+        keys.update("kind:stock:field:" + alias for alias in aliases if alias)
+        if token in QUALITY_STATE_FIELDS:
+            keys.update({
+                "kind:data-availability-assessment",
+                "kind:data-availability-assessment:field:datastate",
+                "kind:data-availability-assessment:field:field",
+                "relation:has-data-quality",
+            })
+    return sorted(keys)
+
+
+def _symbol_dependency_contract(
+    fact_types: Iterable[object],
+    changed_fields: Iterable[object],
+) -> Dict[str, object]:
+    normalized_types = [
+        normalized_fact_type(value)
+        for value in fact_types or []
+        if str(value or "").strip()
+    ]
+    static_keys = set(dependency_keys_for_fact_types(fact_types))
+    field_routed = any(value in FIELD_ROUTED_FACT_TYPES for value in normalized_types)
+    field_keys = set(dependency_keys_for_changed_fields(changed_fields)) if field_routed else set()
+    complete = bool(normalized_types) and all(
+        value in FACT_TYPE_DEPENDENCY_KEYS or value in FIELD_ROUTED_FACT_TYPES
+        for value in normalized_types
+    ) and (not field_routed or bool(field_keys))
+    return {
+        "dependencyKeys": sorted(static_keys | field_keys),
+        "complete": complete,
+    }
+
+
 def fact_change_contract(
     fact_types: Iterable[object],
     fact_types_by_symbol: Mapping[str, Iterable[object]] = None,
+    changed_fields_by_symbol: Mapping[str, Iterable[object]] = None,
 ) -> Dict[str, object]:
     """Build the auditable routing contract carried by a reasoning event."""
     clean_types = sorted({str(value or "").strip() for value in fact_types or [] if str(value or "").strip()})
@@ -213,6 +294,11 @@ def fact_change_contract(
     dependency_keys_by_symbol = {}
     dependency_keys_complete_by_symbol = {}
     unclassified_by_symbol = {}
+    raw_changed_fields = {
+        str(symbol or "").upper().strip(): list(values or [])
+        for symbol, values in dict(changed_fields_by_symbol or {}).items()
+        if str(symbol or "").strip()
+    }
     for raw_symbol, values in dict(fact_types_by_symbol or {}).items():
         symbol = str(raw_symbol or "").upper().strip()
         if not symbol:
@@ -222,24 +308,33 @@ def fact_change_contract(
         unknown = unclassified_fact_types(symbol_types)
         if families:
             by_symbol[symbol] = families
-        symbol_dependency_keys = dependency_keys_for_fact_types(symbol_types)
+        symbol_contract = _symbol_dependency_contract(
+            symbol_types,
+            raw_changed_fields.get(symbol, []),
+        )
+        symbol_dependency_keys = symbol_contract["dependencyKeys"]
         if symbol_dependency_keys:
             dependency_keys_by_symbol[symbol] = symbol_dependency_keys
-        dependency_keys_complete_by_symbol[symbol] = (
-            dependency_keys_complete_for_fact_types(symbol_types)
-        )
+        dependency_keys_complete_by_symbol[symbol] = bool(symbol_contract["complete"])
         if unknown:
             unclassified_by_symbol[symbol] = unknown
     unknown = unclassified_fact_types(clean_types)
+    global_dependency_keys = set(dependency_keys_for_fact_types(clean_types))
+    for values in dependency_keys_by_symbol.values():
+        global_dependency_keys.update(values)
+    if dependency_keys_complete_by_symbol:
+        dependency_keys_complete = all(dependency_keys_complete_by_symbol.values())
+    else:
+        dependency_keys_complete = dependency_keys_complete_for_fact_types(clean_types)
     return {
         "version": FACT_CHANGE_CONTRACT_VERSION,
         "status": "blocked-unclassified" if unknown or unclassified_by_symbol else "ready",
         "factTypes": clean_types,
         "scopeFamilies": scope_families_for_fact_types(clean_types),
         "scopeFamiliesBySymbol": by_symbol,
-        "dependencyKeys": dependency_keys_for_fact_types(clean_types),
+        "dependencyKeys": sorted(global_dependency_keys),
         "dependencyKeysBySymbol": dependency_keys_by_symbol,
-        "dependencyKeysComplete": dependency_keys_complete_for_fact_types(clean_types),
+        "dependencyKeysComplete": dependency_keys_complete,
         "dependencyKeysCompleteBySymbol": dependency_keys_complete_by_symbol,
         "unclassifiedFactTypes": unknown,
         "unclassifiedFactTypesBySymbol": unclassified_by_symbol,

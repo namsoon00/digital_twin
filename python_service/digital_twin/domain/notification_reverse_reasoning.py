@@ -361,6 +361,16 @@ def _hypothesis_rows(relation: Dict[str, object], ai: Dict[str, object]) -> List
             "horizon": _text(candidate.get("horizon"), 80),
             "scopeState": _text(candidate.get("scopeState"), 80),
             "verificationStatus": _text(candidate.get("verificationStatus"), 120),
+            "evidenceIndependenceKey": _text(
+                _dict(candidate.get("knowledgeBasis")).get("evidenceIndependenceKey"),
+                160,
+            ),
+            "correlatedHypothesisCount": _dict(candidate.get("knowledgeBasis")).get(
+                "correlatedHypothesisCount", 1
+            ),
+            "independentVoteCount": _dict(candidate.get("knowledgeBasis")).get(
+                "independentVoteCount", 1
+            ),
         })
     return rows
 

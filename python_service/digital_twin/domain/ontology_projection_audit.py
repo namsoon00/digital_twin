@@ -232,7 +232,7 @@ def compact_reasoning_request_context(
                 "version": str(item.get("version") or "")[:64],
                 "status": str(item.get("status") or "")[:64],
                 "dependencyKeys": clean_list(
-                    item.get("dependencyKeys"), limit=40
+                    item.get("dependencyKeys"), limit=160
                 ),
                 "dependencyKeysBySymbol": symbol_family_map(
                     item.get("dependencyKeysBySymbol")

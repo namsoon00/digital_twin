@@ -211,7 +211,7 @@ def reasoning_request_provenance(
                 "requestEventId": event_id,
                 "version": str(fact_contract.get("version") or "")[:64],
                 "status": str(fact_contract.get("status") or "")[:64],
-                "dependencyKeys": list(fact_contract.get("dependencyKeys") or [])[:40],
+                "dependencyKeys": list(fact_contract.get("dependencyKeys") or [])[:160],
                 "dependencyKeysBySymbol": dict(fact_contract.get("dependencyKeysBySymbol") or {}),
                 "dependencyKeysComplete": bool(fact_contract.get("dependencyKeysComplete")),
                 "dependencyKeysCompleteBySymbol": dict(

@@ -921,7 +921,7 @@ def execution_headline(context: Dict[str, object], response: NotificationAIValid
         target = target_name_for_headline(
             context.get("displayTarget") or context.get("target") or context.get("title") or ""
         )
-        return " ".join(part for part in ["🔎", ((target + " · ") if target else "") + "관계 변화 관찰"] if part)
+        return " ".join(part for part in ["📌", ((target + " · ") if target else "") + "중요 자료 확인"] if part)
     presentation_context = dict(context or {})
     presentation_context["notificationAiValidatedResponse"] = response.to_dict()
     headline = investment_notification_title(
@@ -3294,7 +3294,7 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
         and str(response.hypothesis_comparison_state or "").strip().lower() != "completed"
     )
     if is_typedb_context_observation_notification(context or {}):
-        marker = "[TypeDB 관찰]"
+        marker = "[TypeDB 참고]"
     elif writer_kind == "typedb":
         marker = "[TypeDB 추론]"
     elif writer_kind == "ai" and comparison_incomplete:
@@ -3304,7 +3304,7 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
     else:
         marker = "[시스템 요약]"
     if is_typedb_context_observation_notification(context or {}):
-        return marker + " 매수·매도 행동은 변경하지 않고 관계의 다음 변화를 관찰합니다."
+        return marker + " 매수·매도 판단이 아니라, 종목과 연결된 중요 자료를 확인하라는 알림입니다."
     relation = relation_context_value(context or {})
     envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
     if str(envelope.get("status") or "").strip().upper() == "JUDGEMENT_BLOCKED" or bool(envelope.get("judgementBlocked")):

@@ -3052,6 +3052,12 @@ def notification_suppression_summary(job: NotificationJob) -> str:
         return "장 시간 외 발송 보류"
     if reason == "state_cooldown":
         return "같은 상태 반복 발송 보류"
+    if reason == "initial_graph_baseline":
+        return "최초 참고 관계는 비교 기준으로만 저장"
+    if reason == "unchanged_graph_inference":
+        return "TypeDB 행동 범위가 이전과 같아 반복 발송 보류"
+    if reason == "unresolved_material_evidence":
+        return "관계를 만든 정확한 원문 근거를 연결하지 못해 발송 보류"
     return reason or "알림 정책으로 발송 보류"
 
 
@@ -3152,6 +3158,16 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "deliveryTriggerLedgerVersion": context.get("deliveryTriggerLedgerVersion") or "",
         "deliveryTriggerLedger": [
             dict(item) for item in trigger_ledger if isinstance(item, dict)
+        ] if detail else [],
+        "customerDeliveryTriggers": [
+            dict(item)
+            for item in trigger_ledger
+            if isinstance(item, dict) and item.get("customerVisible") is True
+        ] if detail else [],
+        "internalDeliveryChecks": [
+            dict(item)
+            for item in trigger_ledger
+            if isinstance(item, dict) and item.get("customerVisible") is not True
         ] if detail else [],
         "deliveryFingerprint": context.get("deliveryFingerprint") or "",
         "deliveryReviewLevel": context.get("deliveryReviewLevel") or "",

@@ -854,10 +854,10 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                 if _event_text(symbol, 64)
             },
             "dependencyKeys": _event_text_list(
-                contract.get("dependencyKeys"), limit=40, item_limit=128
+                contract.get("dependencyKeys"), limit=160, item_limit=128
             ),
             "dependencyKeysBySymbol": {
-                _event_text(symbol, 64).upper(): _event_text_list(values, limit=40, item_limit=128)
+                _event_text(symbol, 64).upper(): _event_text_list(values, limit=160, item_limit=128)
                 for symbol, values in dict(contract.get("dependencyKeysBySymbol") or {}).items()
                 if _event_text(symbol, 64)
             },
@@ -1479,7 +1479,11 @@ def ontology_reasoning_requested_event(
             })
             if clean_values:
                 symbol_fact_types[symbol] = clean_values[:20]
-    change_contract = fact_change_contract(clean_fact_types, symbol_fact_types)
+    change_contract = fact_change_contract(
+        clean_fact_types,
+        symbol_fact_types,
+        changed_fields,
+    )
     source_observed_at = next((
         str(source_payload.get(key) or "").strip()
         for key in ["sourceObservedAt", "sourceAsOf", "observedAt", "generatedAt", "collectedAt"]

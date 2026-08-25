@@ -436,6 +436,41 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, payload["fullText"])
 
+    def test_web_separates_customer_triggers_from_internal_delivery_checks(self):
+        context = notification_context()
+        context["deliveryTriggerLedgerVersion"] = "notification-delivery-trigger-ledger-v2"
+        context["deliveryTriggerLedger"] = [
+            {
+                "triggerId": "material-evidence:evidence:disclosure",
+                "kind": "material-evidence",
+                "customerVisible": True,
+                "triggerCategory": "evidence",
+                "label": "확인된 새 근거",
+                "reason": "새 공시가 확인됐습니다.",
+                "sourceTitle": "삼성전자 자금조달 공시",
+                "ruleIds": ["graph.disclosure.event_risk.v1"],
+                "evidenceIds": ["evidence:disclosure"],
+                "status": "matched",
+            },
+            {
+                "triggerId": "condition:body-present",
+                "kind": "configured-condition",
+                "customerVisible": False,
+                "triggerCategory": "internal-gate",
+                "label": "본문 있음",
+                "reason": "본문 있음",
+                "status": "matched",
+            },
+        ]
+        job = NotificationJob.create("알림 본문", message_type="investmentInsight", context=context)
+
+        payload = notification_job_public_payload(job, detail=True)
+
+        self.assertEqual(1, len(payload["customerDeliveryTriggers"]))
+        self.assertEqual("삼성전자 자금조달 공시", payload["customerDeliveryTriggers"][0]["sourceTitle"])
+        self.assertEqual(1, len(payload["internalDeliveryChecks"]))
+        self.assertEqual("condition:body-present", payload["internalDeliveryChecks"][0]["triggerId"])
+
 
 if __name__ == "__main__":
     unittest.main()

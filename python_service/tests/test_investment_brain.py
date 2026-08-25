@@ -823,6 +823,43 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual({"trend-risk", "flow-risk"}, {item["supportingRuleIds"][0] for item in risk})
         self.assertTrue(all(item["mergedRuleCount"] == 1 for item in risk))
 
+    def test_same_independence_key_is_one_comparison_input_not_two_votes(self):
+        context = relation_context()
+        context["facts"]["missingData"] = []
+        context["missingData"] = []
+        context["signalConflicts"] = {"hasConflict": False}
+        basis = {
+            "ruleKind": "predictive-hypothesis",
+            "decisionEligibility": "eligible",
+            "requiresHypothesis": True,
+            "theoryFamily": "trend-recovery",
+            "thesisFamily": "price-recovery",
+            "evidenceIndependenceKey": "price-recovery-support",
+        }
+        context["activeRules"] = [
+            {"ruleId": "trend-recovery-a", "evidenceRole": "support", "knowledgeBasis": basis},
+            {"ruleId": "flow-confirmed-recovery-b", "evidenceRole": "support", "knowledgeBasis": basis},
+        ]
+        context["graphStoreInference"]["relations"] = [
+            {"id": "recovery-a", "source": "stock:005930", "target": "support:trend", "type": "HAS_INFERRED_SUPPORT", "ruleId": "trend-recovery-a", "polarity": "support"},
+            {"id": "recovery-b", "source": "stock:005930", "target": "support:flow", "type": "HAS_INFERRED_SUPPORT", "ruleId": "flow-confirmed-recovery-b", "polarity": "support"},
+        ]
+        context["graphStoreInference"]["traces"] = [
+            {"id": "trace-recovery-a", "ruleId": "trend-recovery-a", "knowledgeBasis": basis, "matchedConditions": [{"conditionId": "trend", "kind": "relation", "relationType": "RECLAIMS_LEVEL", "targetKind": "key-level"}]},
+            {"id": "trace-recovery-b", "ruleId": "flow-confirmed-recovery-b", "knowledgeBasis": basis, "matchedConditions": [{"conditionId": "flow", "kind": "relation", "relationType": "HAS_TRADE_FLOW", "targetKind": "smart-money-flow"}]},
+        ]
+
+        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
+        support = [item for item in hypotheses if item["stance"] == "support"]
+
+        self.assertEqual(1, len(support))
+        self.assertEqual(
+            {"trend-recovery-a", "flow-confirmed-recovery-b"},
+            set(support[0]["supportingRuleIds"]),
+        )
+        self.assertEqual(1, support[0]["knowledgeBasis"]["independentVoteCount"])
+        self.assertEqual(2, support[0]["knowledgeBasis"]["correlatedHypothesisCount"])
+
     def test_legacy_traces_without_a_rule_structure_do_not_compact(self):
         context = relation_context()
         context["facts"]["missingData"] = []

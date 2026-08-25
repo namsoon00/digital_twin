@@ -1288,8 +1288,10 @@ def generated_inference_id(original_id: str, generation_id: str) -> str:
 
 def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str, object]:
     rules_payload = [item for item in (rules_payload or []) if isinstance(item, dict)]
+    active_rules_payload = [item for item in rules_payload if typedb_rule_is_enabled(item)]
     rules_hash = rulebox_rules_hash(rules_payload)
-    execution_profiles = [rule_execution_profile(item) for item in rules_payload]
+    execution_profiles = [rule_execution_profile(item) for item in active_rules_payload]
+    all_execution_profiles = [rule_execution_profile(item) for item in rules_payload]
     stage_counts = {
         stage: len([
             item
@@ -1303,11 +1305,21 @@ def rulebox_runtime_metadata(rules_payload: List[Dict[str, object]]) -> Dict[str
         "ruleboxRulesHash": rules_hash,
         "ruleboxShortHash": rules_hash[:12],
         "ruleboxRuleCount": len(rules_payload),
+        "ruleboxActiveRuleCount": len(active_rules_payload),
+        "ruleboxDisabledRuleCount": len(rules_payload) - len(active_rules_payload),
         "ruleboxConditionCount": sum(len(item.get("conditions") or []) for item in rules_payload),
         "ruleboxDerivationCount": sum(len(item.get("derivations") or []) for item in rules_payload),
         "ruleboxEngineVersion": GRAPH_REASONER_VERSION,
         "ruleExecutionPolicyVersion": RULE_EXECUTION_POLICY_VERSION,
         "ruleExecutionStageCounts": stage_counts,
+        "ruleExecutionStageCountsAll": {
+            stage: len([
+                item
+                for item in all_execution_profiles
+                if str(item.get("executionStage") or "") == stage
+            ])
+            for stage in ["critical", "core", "supporting"]
+        },
         "ruleDependencyIndexVersion": str(dependency_index.get("version") or ""),
         "ruleDependencyIndexFingerprint": str(dependency_index.get("fingerprint") or ""),
         "ruleDependencyIndexRuleCount": int(dependency_index.get("ruleCount") or 0),
@@ -21215,6 +21227,35 @@ relation ontology-assertion,
         the current native slice and hands any missing work to the dedicated
         RuleBox prewarm worker instead of opening a schema transaction.
         """
+        rule_list = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
+        ready_rules = []
+        for rule in rule_list:
+            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+            if typedb_native_rule_profile(rule_payload).get("status") == "ready":
+                ready_rules.append(rule)
+        expected_function_names = {
+            typedb_native_rule_function_name(
+                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
+                world_id,
+            )
+            for rule in ready_rules
+        }
+        expected_shared_bridge_names = {
+            typedb_native_rule_function_name(
+                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
+                world_id,
+            )
+            for rule in ready_rules
+            if is_model_signal_interpretation_rule(
+                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
+            )
+        }
+        physical_plan = {
+            "logicalRuleCount": len(rule_list),
+            "schemaFunctionRuleCount": len(ready_rules),
+            "expectedFunctionCount": len(expected_function_names),
+            "expectedSharedModelSignalBridgeFunctionCount": len(expected_shared_bridge_names),
+        }
         if not self.address:
             return {
                 "configured": False,
@@ -21230,13 +21271,8 @@ relation ontology-assertion,
                 "pendingRuleCount": 0,
                 "pendingRuleIds": [],
                 "reason": "TypeDB ontology storage is not configured.",
+                **physical_plan,
             }
-        rule_list = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
-        ready_rules = []
-        for rule in rule_list:
-            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            if typedb_native_rule_profile(rule_payload).get("status") == "ready":
-                ready_rules.append(rule)
         namespace = self.schema_function_prewarm_namespace(world_id)
         if not ready_rules:
             return {
@@ -21256,6 +21292,7 @@ relation ontology-assertion,
                 "pendingRuleCount": 0,
                 "pendingRuleIds": [],
                 "reason": "The current native execution slice has no generated TypeDB schema function.",
+                **physical_plan,
             }
         probe_result = self.probe_typedb_native_rule_functions(ready_rules, world_id)
         if probe_result.get("available"):
@@ -21286,6 +21323,8 @@ relation ontology-assertion,
                 "syncedRules": [{"ruleId": item} for item in verified_rule_ids],
                 "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
                 "reason": "TypeDB schema-function deployment receipts are ready; live inference will not compile functions.",
+                "missingFunctionCount": 0,
+                **physical_plan,
             }
         probe_status = str(probe_result.get("status") or "").strip()
         pending_rule_ids = [
@@ -21326,6 +21365,12 @@ relation ontology-assertion,
                     "TypeDB schema function. Live inference did not start a deployment."
                 ),
                 "retryable": True,
+                "missingFunctionCount": max(
+                    0,
+                    len(expected_function_names)
+                    - int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
+                ),
+                **physical_plan,
             }
         return {
             "configured": True,
@@ -21346,6 +21391,12 @@ relation ontology-assertion,
             "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
             "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionPrewarmReadinessError"),
             "reason": str(probe_result.get("reason") or "TypeDB schema-function prewarm readiness could not be checked.")[:220],
+            "missingFunctionCount": max(
+                0,
+                len(expected_function_names)
+                - int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
+            ),
+            **physical_plan,
         }
 
     def schema_function_prewarm_rulebox(self) -> Dict[str, object]:

@@ -2040,17 +2040,29 @@ def compact_hypotheses_by_causal_family(
     name: str,
     question: InvestmentQuestion,
 ) -> List[InvestmentHypothesis]:
-    """Merge only equivalent TypeDB paths before candidate capping.
+    """Merge equivalent paths and correlated evidence before candidate capping.
 
     The merge is a presentation and comparison optimization. It unions the
     graph-owned evidence and source rules, while keeping the original TypeDB
     action semantics untouched. Different causal signatures remain competing
-    hypotheses even when they imply the same user-facing action.
+    hypotheses unless their governed knowledge contracts explicitly share one
+    ``evidenceIndependenceKey``. Such rows are one comparison input rather
+    than independent votes, while their original graph lineage is retained.
     """
     groups: Dict[str, List[InvestmentHypothesis]] = {}
     for hypothesis in hypotheses or []:
         signature = str(hypothesis.causal_signature or "").strip()
         family_id = str(hypothesis.family_id or "").strip()
+        independence_key = str(
+            (hypothesis.knowledge_basis or {}).get("evidenceIndependenceKey")
+            or (hypothesis.knowledge_basis or {}).get("evidence_independence_key")
+            or ""
+        ).strip()
+        basis_origin = str(
+            (hypothesis.knowledge_basis or {}).get("basisOrigin")
+            or (hypothesis.knowledge_basis or {}).get("basis_origin")
+            or ""
+        ).strip()
         if not signature:
             signature = "legacy-template:" + str(hypothesis.template_id or "")
         if not family_id:
@@ -2060,10 +2072,15 @@ def compact_hypotheses_by_causal_family(
                 question.horizon,
                 signature,
             )
-        groups.setdefault(family_id, []).append(hypothesis)
+        comparison_group = (
+            "independent-evidence:" + independence_key + "|stance=" + str(hypothesis.stance or "")
+            if independence_key and basis_origin != "legacy-inference"
+            else family_id
+        )
+        groups.setdefault(comparison_group, []).append(hypothesis)
 
     compacted: List[InvestmentHypothesis] = []
-    for family_id, members in groups.items():
+    for comparison_group, members in groups.items():
         ordered = sorted(
             members,
             key=lambda item: (
@@ -2072,6 +2089,12 @@ def compact_hypotheses_by_causal_family(
             ),
         )
         primary = ordered[0]
+        family_id = primary.family_id or stable_id(
+            "hypothesis-family",
+            question.subject_symbol or name,
+            question.horizon,
+            comparison_group,
+        )
         source_rule_ids = sorted({
             rule_id
             for item in ordered
@@ -2082,7 +2105,16 @@ def compact_hypotheses_by_causal_family(
         evidence_state = merged_hypothesis_evidence_state(ordered)
         claim = primary.claim
         if count > 1:
-            claim += " 같은 인과 구조의 TypeDB 규칙 " + str(count) + "개가 이 설명을 함께 뒷받침합니다."
+            independence_key = str(
+                (primary.knowledge_basis or {}).get("evidenceIndependenceKey")
+                or (primary.knowledge_basis or {}).get("evidence_independence_key")
+                or ""
+            ).strip()
+            claim += (
+                " 같은 독립 근거 계열을 공유하는 TypeDB 규칙 "
+                if independence_key
+                else " 같은 인과 구조의 TypeDB 규칙 "
+            ) + str(count) + "개가 이 설명을 함께 뒷받침합니다. 독립된 " + str(count) + "표로 계산하지 않습니다."
         compacted.append(InvestmentHypothesis(
             hypothesis_id=stable_id("hypothesis-instance", hypothesis_seed, family_id),
             template_id=primary.template_id,
@@ -2181,7 +2213,17 @@ def compact_hypotheses_by_causal_family(
             ),
             theory_family=primary.theory_family,
             thesis_family=primary.thesis_family,
-            knowledge_basis=dict(primary.knowledge_basis or {}),
+            knowledge_basis={
+                **dict(primary.knowledge_basis or {}),
+                "correlatedHypothesisCount": len(ordered),
+                "correlatedFamilyIds": unique_texts([
+                    item.family_id for item in ordered if item.family_id
+                ], 24),
+                "correlatedCausalSignatures": unique_texts([
+                    item.causal_signature for item in ordered if item.causal_signature
+                ], 24),
+                "independentVoteCount": 1,
+            },
             prediction_target=primary.prediction_target,
             expected_direction=primary.expected_direction,
             expected_outcome=primary.expected_outcome,

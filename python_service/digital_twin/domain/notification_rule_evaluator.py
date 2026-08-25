@@ -199,6 +199,7 @@ def material_evidence_present(context: Dict[str, object]) -> bool:
         "ontologyInsight.sourceEventKeys",
         "researchEvidence",
         "newsItems",
+        "newsHeadlines",
         "disclosures",
     ):
         if is_present(field_value(context, field)):
@@ -883,6 +884,8 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
             trigger_ledger.append({
                 "triggerId": "condition:" + condition.condition_id,
                 "kind": "configured-condition",
+                "triggerCategory": "internal-gate",
+                "customerVisible": False,
                 "label": condition.label,
                 "reason": getattr(condition, "description", "") or condition.label,
                 "conditionType": condition.condition_type,

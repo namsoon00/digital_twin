@@ -190,8 +190,8 @@ class NotificationExplanationTests(unittest.TestCase):
 
         message = renderer.render(job)
 
-        self.assertIn("관계 변화 관찰", message)
-        self.assertIn("[TypeDB 관찰]", message)
+        self.assertIn("중요 자료 확인", message)
+        self.assertIn("[TypeDB 참고]", message)
         self.assertIn("매수·매도 판단이 아닙니다", message)
         self.assertIn("TypeDB 참고 규칙: 가격 관계 변화 관찰", message)
         self.assertNotIn("AI 안전 보류", message)

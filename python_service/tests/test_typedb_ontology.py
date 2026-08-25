@@ -10980,6 +10980,43 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
         self.assertEqual([pending_rule.rule_id], result["pendingRuleIds"])
 
+    def test_typedb_schema_function_readiness_reports_logical_and_physical_counts(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        rules = [rule for rule in default_graph_inference_rules() if rule.enabled]
+
+        with patch.object(repository, "probe_typedb_native_rule_functions", return_value={
+            "status": "missing",
+            "available": False,
+            "probedCount": 86,
+            "verifiedRuleCount": 86,
+            "verifiedFunctionCount": 15,
+            "verifiedRuleIds": [rule.rule_id for rule in rules[:86]],
+            "missingRuleIds": [rule.rule_id for rule in rules[86:]],
+            "reasonCode": "typedbSchemaFunctionMissing",
+        }):
+            result = repository.schema_function_prewarm_readiness(
+                rules,
+                TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
+            )
+
+        self.assertEqual(116, result["logicalRuleCount"])
+        self.assertEqual(116, result["schemaFunctionRuleCount"])
+        self.assertEqual(45, result["expectedFunctionCount"])
+        self.assertEqual(3, result["expectedSharedModelSignalBridgeFunctionCount"])
+        self.assertEqual(30, result["missingFunctionCount"])
+
+    def test_rulebox_runtime_metadata_separates_catalog_and_active_counts(self):
+        from digital_twin.infrastructure.typedb_ontology import rulebox_runtime_metadata
+
+        rules = [rule.to_dict() for rule in default_graph_inference_rules()]
+        metadata = rulebox_runtime_metadata(rules)
+
+        self.assertEqual(118, metadata["ruleboxRuleCount"])
+        self.assertEqual(116, metadata["ruleboxActiveRuleCount"])
+        self.assertEqual(2, metadata["ruleboxDisabledRuleCount"])
+        self.assertEqual(116, sum(metadata["ruleExecutionStageCounts"].values()))
+        self.assertEqual(118, sum(metadata["ruleExecutionStageCountsAll"].values()))
+
     def test_typedb_rulebox_prewarm_prepares_only_active_parameterized_namespace(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule = default_graph_inference_rules()[0]

@@ -479,6 +479,10 @@ def customer_alert_reason_lines(context: Dict[str, object]) -> List[str]:
     for item in trigger_ledger if isinstance(trigger_ledger, list) else []:
         if not isinstance(item, dict):
             continue
+        kind = str(item.get("kind") or "").strip().lower()
+        customer_visible = item.get("customerVisible")
+        if customer_visible is not True and kind not in {"typedb-relation-diff", "material-evidence"}:
+            continue
         status = str(item.get("status") or "").strip().lower()
         if status not in {"matched", "released", "eligible"}:
             continue
@@ -487,6 +491,9 @@ def customer_alert_reason_lines(context: Dict[str, object]) -> List[str]:
         if not reason or reason == "발송 가능한 이벤트입니다.":
             continue
         text = (label + ": " if label and label not in reason else "") + reason
+        source_title = _text(item.get("sourceTitle"), 180)
+        if source_title and source_title not in text:
+            text += " · 원문: " + source_title
         if text not in rows:
             rows.append(text)
     for item in _list(why_now.get("changeDrivers")):

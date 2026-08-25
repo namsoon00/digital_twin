@@ -150,7 +150,10 @@ def build_notification_explanation_packet(
         current_flow=_dedupe_rows(current_flow, current_limit, seen, 220) if current_limit else (),
         evidence=_dedupe_rows(evidence, int(profile["maxEvidence"]), seen, 190 if concise else 240),
         counter_evidence=_dedupe_rows(counter_evidence, int(profile["maxCounterEvidence"]), seen, 180 if concise else 220),
-        inference=_dedupe_rows(inference, inference_limit, seen, 260) if inference_limit else (),
+        # A rule proof may repeat one observed price or P/L value from the
+        # current-flow rows. It is still a distinct explanation and must not be
+        # removed merely because a short fact string overlaps.
+        inference=_dedupe_rows(inference, inference_limit, set(), 260) if inference_limit else (),
         company_value=_dedupe_rows(company_value, company_limit, seen, 240) if company_limit else (),
         next_checks=_dedupe_rows(next_checks, int(profile["maxNextChecks"]), seen, 220 if concise else 280),
         data_warnings=_dedupe_rows(data_warnings, warning_limit, seen, 200 if concise else 260),

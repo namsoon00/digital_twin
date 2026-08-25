@@ -1,7 +1,9 @@
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 from digital_twin.application.notification.rendering import NotificationRenderingService
+from digital_twin.application.notification.workflow import NotificationAIValidatedGateEnricher
 from digital_twin.application.ai_inference_queue_service import AIInferenceQueueRunner
 from digital_twin.application.notification_ai_gate_message import _notification_selected_inference_rows
 from digital_twin.domain.ai_inference_queue import AIInferenceRequest
@@ -360,6 +362,13 @@ class NotificationNarrativeTests(unittest.TestCase):
         self.assertEqual("ai", job.context["notificationWriterProvenance"]["writerKind"])
         self.assertEqual(1, job.context["notificationClaimValidation"]["verifiedClaimCount"])
         self.assertTrue(job.context["notificationPresentationAudit"]["narrativeFingerprint"])
+        publication = dict(job.context["notificationNarrativePublication"])
+        with mock.patch(
+            "digital_twin.application.notification.workflow.context_with_validated_ai_response",
+            side_effect=AssertionError("canonical publication must not be rebuilt"),
+        ):
+            NotificationAIValidatedGateEnricher(settings={})(job)
+        self.assertEqual(publication, job.context["notificationNarrativePublication"])
 
     def test_context_observation_ai_writes_narrative_without_reopening_action_decision(self):
         context = self.context_observation_context()

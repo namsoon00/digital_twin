@@ -48,6 +48,19 @@ class NotificationExplanationTests(unittest.TestCase):
         self.assertEqual(("조건 1", "조건 2"), packet.next_checks)
         self.assertEqual(("한계 1",), packet.data_warnings)
 
+    def test_rule_proof_is_not_removed_when_it_repeats_a_current_flow_value(self):
+        packet = build_notification_explanation_packet(
+            detail_level="concise",
+            action="보유",
+            current_flow=["수익률 -8.86%"],
+            inference=["물타기 정책 차단 성립값: 보유 수익률 -8.86% < 0%"],
+        )
+
+        self.assertEqual(
+            ("물타기 정책 차단 성립값: 보유 수익률 -8.86% < 0%",),
+            packet.inference,
+        )
+
     def test_new_account_defaults_to_concise_notifications(self):
         account = AccountConfig("main", "메인", "toss", "", "", "", "", [])
         context = account.message_delivery_context()

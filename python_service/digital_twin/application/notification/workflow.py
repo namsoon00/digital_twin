@@ -220,6 +220,23 @@ class NotificationAIValidatedGateEnricher:
         context.setdefault("accountId", job.account_id)
         context.setdefault("accountLabel", job.account_label)
         context.setdefault("jobId", job.job_id)
+        narrative = context.get("notificationNarrativeBrief")
+        publication = context.get("notificationNarrativePublication")
+        has_canonical_publication = bool(
+            isinstance(narrative, dict)
+            and narrative.get("version")
+            and isinstance(narrative.get("claims"), list)
+            and isinstance(publication, dict)
+            and publication.get("version") == "investment-narrative-publication-v1"
+        )
+        if has_canonical_publication and isinstance(
+            context.get("notificationAiValidatedResponse"), dict
+        ):
+            # AI completion is the publication boundary. Revalidating at send
+            # time changes the evidence ledger and can silently replace an
+            # accepted AI narrative with a deterministic fallback.
+            job.context = context
+            return
         if job.message_type == INVESTMENT_INSIGHT:
             context = context_with_previous_investment_decision(
                 context,
@@ -229,9 +246,7 @@ class NotificationAIValidatedGateEnricher:
         quality_gate = ontology_quality_gate_context(context, self.settings)
         context["ontologyQualityGate"] = quality_gate
         if context.get("notificationAiValidatedResponse"):
-            # A persisted telegramMessage is a presentation cache. Rebuild it
-            # from the validated decision so replayed or delayed jobs receive
-            # the current customer-facing format and sanitization rules.
+            # Legacy jobs predate the immutable narrative publication contract.
             response = NotificationAIValidatedResponse.from_dict(context.get("notificationAiValidatedResponse"))
             job.context = context_with_validated_ai_response(context, response, self.settings)
             return

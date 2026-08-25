@@ -3139,8 +3139,8 @@ def _notification_rule_proof_line(
         observed_text = _rule_condition_display_value(observed)
         expected_text = _rule_condition_display_value(expected)
         if field == "source" and observed_text == "holding":
-            observed_text = "보유 종목"
-            expected_text = ""
+            append_unique_text(values, "보유 종목", 90)
+            continue
         elif field == "investmentStrategyProfile":
             observed_text = {
                 "aggressive": "공격형",

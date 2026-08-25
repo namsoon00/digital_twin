@@ -6717,6 +6717,19 @@ class PythonServiceTests(unittest.TestCase):
         self.assertNotIn("summary", payload)
         self.assertNotIn("resultTotal", payload)
 
+    def test_symbol_universe_suggest_resolves_alias_from_first_character(self):
+        service = SymbolUniverseService(
+            TestSymbolUniverseStore(test_store_seed(self.temp.name)),
+            RemoteSymbolSourceGateway(),
+            runtime_settings(),
+        )
+
+        english_payload = service.suggest(query="a")
+        korean_payload = service.suggest(query="\uc0bc")
+
+        self.assertEqual("AAPL", english_payload["items"][0]["symbol"])
+        self.assertEqual("005930", korean_payload["items"][0]["symbol"])
+
     def test_symbol_universe_search_includes_collected_market_data(self):
         db_path = test_store_seed(self.temp.name)
         symbol_store = TestSymbolUniverseStore(db_path)

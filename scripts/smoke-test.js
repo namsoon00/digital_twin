@@ -2293,6 +2293,8 @@ function checkFrontendAdminRender() {
     assertOk(watchlistHtml.indexOf("data-watch-symbol-input") >= 0, "관심종목 검색 입력창이 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("data-watch-suggest-list") >= 0, "관심종목 서제스트 영역이 렌더링되지 않았습니다.");
     assertOk(code.indexOf("/api/symbol-universe/suggest?") >= 0 && code.indexOf("팔란티어") >= 0 && code.indexOf("PLTR") >= 0, "관심종목 자동완성이 경량 API와 팔란티어 별칭을 사용하지 않습니다.");
+    assertOk(watchlistHtml.indexOf('role="combobox"') >= 0 && watchlistHtml.indexOf('role="listbox"') >= 0, "관심종목 한 글자 자동완성이 접근 가능한 선택 목록으로 렌더링되지 않았습니다.");
+    assertOk(code.indexOf("state.watchSuggestItems = localItems;") >= 0 && code.indexOf("updateWatchSuggestBox(box, input);") >= 0, "관심종목 자동완성이 첫 글자 입력 즉시 로컬 후보를 표시하지 않습니다.");
     assertOk(watchlistHtml.indexOf("watch-row-meta") >= 0, "관심종목 알림/시세 상태가 렌더링되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("시세 알림") >= 0, "관심종목 시세 알림 상태가 표시되지 않았습니다.");
     assertOk(watchlistHtml.indexOf("symbol-result-list") < 0, "관심종목 탭에 전체 종목 결과 리스트가 남아 있습니다.");
@@ -2880,6 +2882,10 @@ async function checkNormalMode(port, context) {
   assertOk(Array.isArray(universeSuggestPayload.items), "종목 자동완성 API items가 배열이 아닙니다.");
   assertOk(universeSuggestPayload.items[0] && universeSuggestPayload.items[0].symbol === "PLTR", "팔란티어 자동완성이 PLTR을 첫 후보로 반환하지 않습니다.");
   assertOk(!Object.prototype.hasOwnProperty.call(universeSuggestPayload, "summary"), "종목 자동완성 API가 무거운 summary payload를 포함합니다.");
+  const oneCharacterUniverseSuggest = await request(port, "/api/symbol-universe/suggest?query=a");
+  assertOk(oneCharacterUniverseSuggest.statusCode === 200, "한 글자 종목 자동완성 API 응답 코드가 200이 아닙니다: " + oneCharacterUniverseSuggest.statusCode);
+  const oneCharacterUniverseSuggestPayload = JSON.parse(oneCharacterUniverseSuggest.body);
+  assertOk(oneCharacterUniverseSuggestPayload.items[0] && oneCharacterUniverseSuggestPayload.items[0].symbol === "AAPL", "영문 한 글자 a가 Apple을 첫 후보로 반환하지 않습니다.");
 
   const instrumentTimeline = await request(port, "/api/instruments/AAPL/timeline?range=1m");
   assertOk(instrumentTimeline.statusCode === 200, "종목 타임라인 API 응답 코드가 200이 아닙니다: " + instrumentTimeline.statusCode);

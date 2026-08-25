@@ -1987,7 +1987,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260824-console-ia-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260826-symbol-suggest-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -8489,8 +8489,6 @@
   function stockSearchAliasSymbols(query) {
     var token = compactStockSearchText(query);
     if (!token) return [];
-    var aliasReady = token.length >= 2 || /[가-힣]/.test(token);
-    if (!aliasReady) return [];
     var symbols = [];
     stockSearchAliasCatalog().forEach(function (entry) {
       var matched = entry.aliases.some(function (alias) {
@@ -9194,7 +9192,7 @@
     return items.map(function (item) {
       var symbol = suggestionKey(item);
       return [
-        '<button class="watch-suggest-option" type="button" data-watch-suggest-symbol="' + escapeHtml(symbol) + '">',
+        '<button class="watch-suggest-option" type="button" role="option" data-watch-suggest-symbol="' + escapeHtml(symbol) + '">',
         '<span>',
         '<strong>' + escapeHtml(stockDisplayName(symbol, item)) + '</strong>',
         '<em>' + escapeHtml(stockDisplayMeta(item, [marketLabel(item.market || item.exchange), item.currency || item.assetType || "-"])) + '</em>',
@@ -9205,27 +9203,31 @@
     }).join("") + (state.watchSuggestLoading ? '<p class="subtle watch-suggest-message">DB 후보를 확인하는 중입니다.</p>' : '');
   }
 
-  function updateWatchSuggestBox(box) {
+  function updateWatchSuggestBox(box, input) {
     if (box) box.innerHTML = renderWatchSuggestList();
+    if (input) {
+      input.setAttribute("aria-expanded", String(Boolean(state.watchSuggestQuery)));
+      input.setAttribute("aria-busy", String(Boolean(state.watchSuggestLoading)));
+    }
   }
 
   function loadWatchSuggestions(query, box, input) {
     var normalized = String(query || "").trim();
+    var requestId = ++watchSuggestRequestId;
     state.watchSuggestQuery = normalized;
     state.watchSuggestError = "";
+    if (watchSuggestTimer) clearTimeout(watchSuggestTimer);
     if (!normalized) {
       state.watchSuggestItems = [];
       state.watchSuggestLoading = false;
-      updateWatchSuggestBox(box);
+      updateWatchSuggestBox(box, input);
       return;
     }
-    if (watchSuggestTimer) clearTimeout(watchSuggestTimer);
+    var localItems = localWatchSuggestItems(normalized);
+    state.watchSuggestItems = localItems;
+    state.watchSuggestLoading = true;
+    updateWatchSuggestBox(box, input);
     watchSuggestTimer = setTimeout(function () {
-      var requestId = ++watchSuggestRequestId;
-      var localItems = localWatchSuggestItems(normalized);
-      state.watchSuggestItems = localItems;
-      state.watchSuggestLoading = true;
-      updateWatchSuggestBox(box);
       var request = isStaticPreviewHost()
         ? Promise.resolve({ items: localItems })
         : requestJson(watchSuggestPath(normalized));
@@ -9244,7 +9246,7 @@
         .finally(function () {
           if (requestId !== watchSuggestRequestId) return;
           state.watchSuggestLoading = false;
-          updateWatchSuggestBox(box);
+          updateWatchSuggestBox(box, input);
         });
     }, 180);
   }
@@ -14719,11 +14721,11 @@
       '<div class="market-watch-command-copy"><span>WATCHLIST</span><strong>' + escapeHtml(account ? watchlistAccountLabel(account) : "계정을 선택하세요") + '</strong><em>' + escapeHtml(symbols.length + "개 관심 종목") + '</em></div>',
       '<label class="market-watch-account"><span>저장 계정</span><select data-market-watch-account' + (state.serviceAccountsLoading ? " disabled" : "") + '>' + renderWatchAccountSelectOptions() + '</select></label>',
       '<form class="market-watch-add" data-watch-add-form data-watch-account-id="' + escapeHtml(accountId) + '">',
-      '<label><span class="sr-only">관심 종목 코드</span><input name="symbol" data-watch-symbol-input placeholder="종목 코드 입력" autocomplete="off"' + (locked ? " disabled" : "") + ' /></label>',
+      '<label><span class="sr-only">관심 종목 검색</span><input name="symbol" data-watch-symbol-input role="combobox" aria-autocomplete="list" aria-controls="market-watch-symbol-suggestions" aria-expanded="' + (state.watchSuggestQuery ? "true" : "false") + '" placeholder="회사명 또는 코드" autocomplete="off"' + (locked ? " disabled" : "") + ' /></label>',
       '<button class="text-button primary"' + (locked ? " disabled" : "") + '>추가</button>',
       '</form>',
       '<button class="text-button" type="button" data-market-workspace="universe">전체 종목에서 찾기</button>',
-      '<div class="watch-suggest-box market-watch-suggest" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
+      '<div class="watch-suggest-box market-watch-suggest" id="market-watch-symbol-suggestions" role="listbox" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
       '<p class="market-watch-api">저장 API /api/service-accounts/{accountId}/watchlist · 시세 Toss Open API · 종목 KRX KIND / Nasdaq Trader</p>',
       locked ? '<p class="market-watch-readonly">' + escapeHtml(isStaticPreviewHost() || state.serverSettingsLocked ? "GitHub Pages는 읽기 전용입니다. 로컬 앱에서 추가할 수 있습니다." : "설정에서 계정을 먼저 등록하세요.") + '</p>' : '',
       state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
@@ -22976,10 +22978,10 @@
       '</div>',
       '<div class="watch-editor account-watch-editor">',
       '<form class="watch-add-form" data-watch-add-form data-watch-account-id="' + escapeHtml(accountId) + '">',
-      '<input name="symbol" data-watch-symbol-input placeholder="회사명으로 검색" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off"' + (locked ? " disabled" : "") + ' />',
+      '<input name="symbol" data-watch-symbol-input role="combobox" aria-autocomplete="list" aria-controls="watch-symbol-suggestions" aria-expanded="' + (state.watchSuggestQuery ? "true" : "false") + '" placeholder="회사명으로 검색" value="' + escapeHtml(state.watchSuggestQuery || "") + '" autocomplete="off"' + (locked ? " disabled" : "") + ' />',
       '<button class="text-button primary"' + (locked ? " disabled" : "") + '>' + escapeHtml(state.watchlistSavingAccountId === accountId ? "저장 중" : "추가") + '</button>',
       '</form>',
-      '<div class="watch-suggest-box" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
+      '<div class="watch-suggest-box" id="watch-symbol-suggestions" role="listbox" data-watch-suggest-list data-watch-account-id="' + escapeHtml(accountId) + '">' + renderWatchSuggestList() + '</div>',
       '<p class="subtle">검색 후 저장하면 이 계정의 알림·모니터링 기준으로 쓰입니다. 시장 전체 목록은 종목 탐색 탭에서 따로 봅니다.</p>',
       state.watchlistError ? '<p class="form-error">' + escapeHtml(state.watchlistError) + '</p>' : '',
       '</div>',

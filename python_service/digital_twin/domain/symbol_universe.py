@@ -58,7 +58,6 @@ def compact_search_text(value: str) -> str:
 def symbol_search_terms(query: str) -> list:
     raw = str(query or "").strip()
     compact = compact_search_text(raw)
-    alias_ready = len(compact) >= 2 or any("\uac00" <= char <= "\ud7a3" for char in compact)
     terms = []
 
     def add(value: str) -> None:
@@ -66,7 +65,7 @@ def symbol_search_terms(query: str) -> list:
         if text and text not in terms:
             terms.append(text)
 
-    if compact and alias_ready:
+    if compact:
         for alias, values in SYMBOL_SEARCH_ALIASES.items():
             alias_compact = compact_search_text(alias)
             matched = alias_compact.startswith(compact)

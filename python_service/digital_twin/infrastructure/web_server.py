@@ -3160,7 +3160,9 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "deliveryGateReason": context.get("deliveryGateReason") or "",
         "deliveryReasons": [str(item) for item in reasons],
         "deliveryTriggerLedgerVersion": context.get("deliveryTriggerLedgerVersion") or "",
-        "customerDeliveryExplanation": delivery_explanation if detail else {},
+        # This bounded, customer-safe contract drives the summary screen too.
+        # Raw trigger provenance remains restricted to the detailed projection.
+        "customerDeliveryExplanation": delivery_explanation,
         "customerDeliveryExplanationVersion": delivery_explanation.get("version") or "",
         "customerDeliveryExplanationValidationState": str((
             (delivery_explanation.get("validation") or {}).get("state")

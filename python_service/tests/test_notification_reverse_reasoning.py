@@ -511,6 +511,12 @@ class NotificationReverseReasoningTests(unittest.TestCase):
             "material-evidence",
             payload["customerDeliveryExplanation"]["primaryCause"]["category"],
         )
+        summary_payload = notification_job_public_payload(job, detail=False)
+        self.assertEqual(
+            "material-evidence",
+            summary_payload["customerDeliveryExplanation"]["primaryCause"]["category"],
+        )
+        self.assertEqual([], summary_payload["deliveryTriggerLedger"])
 
 
 if __name__ == "__main__":

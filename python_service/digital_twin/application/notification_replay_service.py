@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import hashlib
 from typing import Callable, Dict, List, Optional
 
 from ..domain.notifications import NotificationJob, notification_debug_number
@@ -67,6 +68,23 @@ class NotificationReplayService:
             runner.apply_account_delivery_context(replay_job, account)
         message = self.replay_message(source, source.text)
         replay_job.text = message
+        replay_context = dict(replay_job.context or {})
+        source_audit = replay_context.get("notificationPresentationAudit")
+        if isinstance(source_audit, dict) and source_audit:
+            replay_context["replaySourcePresentationAudit"] = dict(source_audit)
+        source_hash = hashlib.sha256(str(source.text or "").encode("utf-8")).hexdigest()
+        replay_context["notificationPresentationAudit"] = {
+            "version": "notification-replay-preserved-v1",
+            "detailLevel": "archived-original",
+            "renderedBytes": len(message.encode("utf-8")),
+            "renderedSha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+            "sourceBodyBytes": len(str(source.text or "").encode("utf-8")),
+            "sourceBodySha256": source_hash,
+            "replayBodySha256": source_hash,
+            "replaySourceJobId": source.job_id,
+            "originalBodyPreserved": True,
+        }
+        replay_job.context = replay_context
 
         common = {
             "requested_identifier": requested,

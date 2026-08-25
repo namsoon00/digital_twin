@@ -122,6 +122,10 @@ class NotificationReplayServiceTests(unittest.TestCase):
         self.assertTrue(replay.context["notificationReplayPreserveOriginal"])
         self.assertEqual(0, runner.render_calls)
         self.assertTrue(runner.deliveries[0][1].endswith("원본 본문"))
+        audit = replay.context["notificationPresentationAudit"]
+        self.assertEqual("notification-replay-preserved-v1", audit["version"])
+        self.assertTrue(audit["originalBodyPreserved"])
+        self.assertEqual(audit["sourceBodySha256"], audit["replayBodySha256"])
 
     def test_replay_queue_uses_new_job_without_dedupe_key(self):
         source = NotificationJob.create(

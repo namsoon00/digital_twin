@@ -126,6 +126,7 @@ class NotificationNarrativeTests(unittest.TestCase):
 
         self.assertEqual("typedb", brief.writer_provenance["writerKind"])
         self.assertFalse(brief.writer_provenance["aiAuthored"])
+        self.assertEqual("typedb", brief.publication.action_authority)
         self.assertEqual("ai-narrative-claim-contract-missing", brief.writer_provenance["fallbackReason"])
         self.assertNotIn("추가매수 보류", [item["text"] for item in brief.claims])
         self.assertIn("종목 성격 물타기 차단", [item["text"] for item in brief.claims])

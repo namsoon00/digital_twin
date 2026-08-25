@@ -3098,12 +3098,14 @@ def _notification_rule_proof_line(
     graph = relation.get("graphStoreInference") if isinstance(relation.get("graphStoreInference"), dict) else {}
     traces = [item for item in graph.get("traces") or [] if isinstance(item, dict)]
     preferred = [str(item or "").strip() for item in preferred_rule_ids if str(item or "").strip()]
-    trace = next((
-        item for rule_id in preferred for item in traces
-        if str(item.get("ruleId") or item.get("sourceRuleId") or "").strip() == rule_id
-    ), None)
-    if trace is None:
-        trace = next((item for item in traces if item.get("matchedConditions")), None)
+    def proof_score(item: Dict[str, object]) -> tuple:
+        conditions = [row for row in item.get("matchedConditions") or [] if isinstance(row, dict)]
+        concrete = [row for row in conditions if row.get("field") and row.get("observedValue") not in (None, "")]
+        decision_values = [row for row in concrete if str(row.get("field") or "") != "source"]
+        rule_id = str(item.get("ruleId") or item.get("sourceRuleId") or "").strip()
+        return (len(decision_values), len(concrete), int(rule_id in preferred))
+
+    trace = max(traces, key=proof_score, default=None)
     if not isinstance(trace, dict):
         return ""
     field_labels = {
@@ -3136,6 +3138,15 @@ def _notification_rule_proof_line(
         operator = str(condition.get("operator") or shape.get("operator") or "=").strip()
         observed_text = _rule_condition_display_value(observed)
         expected_text = _rule_condition_display_value(expected)
+        if field == "source" and observed_text == "holding":
+            observed_text = "보유 종목"
+            expected_text = ""
+        elif field == "investmentStrategyProfile":
+            observed_text = {
+                "aggressive": "공격형",
+                "balanced": "균형형",
+                "conservative": "보수형",
+            }.get(observed_text, observed_text)
         if not observed_text:
             continue
         suffix = "%" if field.lower().endswith(("rate", "distance", "pct")) else ""
@@ -3147,7 +3158,17 @@ def _notification_rule_proof_line(
             break
     if premise_unlinked:
         values.append("공유 전제의 원천 연결은 상세에서 확인 필요")
-    return "성립값: " + " · ".join(values) if values else ""
+    if not values:
+        return ""
+    trace_rule_id = str(trace.get("ruleId") or trace.get("sourceRuleId") or "").strip()
+    prefix = "성립값"
+    if preferred and trace_rule_id not in preferred:
+        label = str(trace.get("label") or "").split(" · ")[-1].strip()
+        if "->" in label:
+            label = label.split("->", 1)[-1].strip()
+        if label:
+            prefix += "(" + label[:42] + ")"
+    return prefix + ": " + " · ".join(values)
 
 
 def _notification_selected_inference_rows(

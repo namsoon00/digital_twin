@@ -490,16 +490,22 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual(source_rulebox_fingerprint, result["candidateRuleboxFingerprint"])
 
     def test_candidate_seed_contract_accepts_fresh_and_unchanged_verified_paths(self):
+        from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+        from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
         from digital_twin.domain.ontology_schema import default_tbox_metadata
 
-        rulebox_fingerprint = "rulebox-fingerprint"
+        rulebox_fingerprint = rulebox_rules_hash([
+            rule.to_dict()
+            for rule in default_graph_inference_rules()
+        ])
+        static_rulebox_fingerprint = "static-rulebox-fingerprint"
         manifest = {
             "expectedFingerprint": "static-fingerprint",
             "activeFingerprint": "static-fingerprint",
             "expectedTboxFingerprint": default_tbox_metadata()["fingerprint"],
             "activeTboxFingerprint": default_tbox_metadata()["fingerprint"],
-            "expectedRuleboxFingerprint": rulebox_fingerprint,
-            "activeRuleboxFingerprint": rulebox_fingerprint,
+            "expectedRuleboxFingerprint": static_rulebox_fingerprint,
+            "activeRuleboxFingerprint": static_rulebox_fingerprint,
             "expectedSchemaContractFingerprint": "schema-fingerprint",
             "activeSchemaContractFingerprint": "schema-fingerprint",
         }

@@ -2795,6 +2795,7 @@ def validate_typedb_candidate_seed_contract(
             "typedbTlsEnabled": str(spec.get("typedbTlsEnabled") or configured.get("typedbTlsEnabled") or "0"),
         }
         snapshot = dict(repository_factory(candidate_settings).rulebox_snapshot() or {})
+        from .domain.ontology_rulebox_catalog import default_graph_inference_rules
         from .domain.ontology_rulebox_governance import rulebox_rules_hash
         from .domain.ontology_schema import default_tbox_metadata
 
@@ -2805,6 +2806,10 @@ def validate_typedb_candidate_seed_contract(
             or snapshot.get("ruleboxRulesHash")
             or (rulebox_rules_hash(snapshot_rules) if snapshot_rules else "")
         ).strip()
+        source_rulebox_fingerprint = rulebox_rules_hash([
+            rule.to_dict()
+            for rule in default_graph_inference_rules()
+        ])
         attestation = dict(spec.get("_typedbSeedAttestation") or {})
         preflight = dict(
             attestation.get("postSeedPreflight")
@@ -2818,14 +2823,14 @@ def validate_typedb_candidate_seed_contract(
             or ""
         ).strip()
         active_tbox_fingerprint = str(manifest.get("activeTboxFingerprint") or "").strip()
-        expected_rulebox_fingerprint = str(
-            manifest.get("expectedRuleboxFingerprint")
-            or attestation.get("expectedRuleBoxHash")
-            or ""
+        expected_static_rulebox_fingerprint = str(
+            manifest.get("expectedRuleboxFingerprint") or ""
         ).strip()
-        active_rulebox_fingerprint = str(
-            manifest.get("activeRuleboxFingerprint")
-            or attestation.get("activeRuleBoxHash")
+        active_static_rulebox_fingerprint = str(
+            manifest.get("activeRuleboxFingerprint") or ""
+        ).strip()
+        attested_runtime_rulebox_fingerprint = str(
+            attestation.get("activeRuleBoxHash")
             or (attestation.get("ruleBoxReplaceResult") or {}).get("ruleboxRulesHash")
             or ""
         ).strip()
@@ -2866,10 +2871,17 @@ def validate_typedb_candidate_seed_contract(
                 expected_tbox_fingerprint
                 and active_tbox_fingerprint == expected_tbox_fingerprint
             ),
-            "ruleboxFingerprintMatches": bool(
+            "staticRuleboxFingerprintMatches": bool(
+                expected_static_rulebox_fingerprint
+                and active_static_rulebox_fingerprint == expected_static_rulebox_fingerprint
+            ),
+            "runtimeRuleboxFingerprintMatches": bool(
                 candidate_rulebox_fingerprint
-                and expected_rulebox_fingerprint == candidate_rulebox_fingerprint
-                and active_rulebox_fingerprint == candidate_rulebox_fingerprint
+                and source_rulebox_fingerprint == candidate_rulebox_fingerprint
+                and (
+                    not attested_runtime_rulebox_fingerprint
+                    or attested_runtime_rulebox_fingerprint == candidate_rulebox_fingerprint
+                )
             ),
             "schemaContractFingerprintMatches": bool(
                 expected_schema_fingerprint
@@ -2890,8 +2902,11 @@ def validate_typedb_candidate_seed_contract(
             "database": database_name,
             "seedStatus": str(attestation.get("status") or "unknown"),
             "candidateRuleboxFingerprint": candidate_rulebox_fingerprint,
-            "expectedRuleboxFingerprint": expected_rulebox_fingerprint,
-            "activeRuleboxFingerprint": active_rulebox_fingerprint,
+            "expectedRuleboxFingerprint": source_rulebox_fingerprint,
+            "activeRuleboxFingerprint": candidate_rulebox_fingerprint,
+            "attestedRuntimeRuleboxFingerprint": attested_runtime_rulebox_fingerprint,
+            "expectedStaticRuleboxFingerprint": expected_static_rulebox_fingerprint,
+            "activeStaticRuleboxFingerprint": active_static_rulebox_fingerprint,
             "expectedTboxFingerprint": expected_tbox_fingerprint,
             "activeTboxFingerprint": active_tbox_fingerprint,
             "expectedSchemaContractFingerprint": expected_schema_fingerprint,

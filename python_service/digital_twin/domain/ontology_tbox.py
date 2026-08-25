@@ -216,7 +216,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("HedgeCandidate", "strategy-thesis", "헤지 후보"),
     TBoxClassDef("Strategy", "strategy-thesis", "투자전략"),
     TBoxClassDef("InvestmentStrategyProposal", "strategy-thesis", "투자 전략 제안", parent="Strategy", description="AI와 온톨로지 실험이 만든 전략 가설, 조건, 리스크 통제, 검증 상태를 추적합니다."),
-    TBoxClassDef("StrategyValidation", "strategy-thesis", "전략 검증", parent="Strategy", description="후보 전략이 ABox, TypeDB 직접 TypeQL preview, InferenceBox 검증을 통과했는지 기록합니다."),
+    TBoxClassDef("StrategyValidation", "strategy-thesis", "전략 검증", parent="Strategy", description="후보 전략이 ABox, TypeDB schema function preview, InferenceBox 검증을 통과했는지 기록합니다."),
     TBoxClassDef("StrategyDeployment", "strategy-thesis", "전략 배포", parent="Strategy", description="승인된 전략 제안이 운영 RuleBox/InferenceBox 경로에 반영된 이력을 기록합니다."),
     TBoxClassDef("InvestorProfile", "strategy-thesis", "투자자 성향", description="계정별 손실 허용도, 수익 보호 기준, 비중 한도, 행동 범위를 정의합니다."),
     TBoxClassDef("InvestmentStrategyProfile", "strategy-thesis", "투자 전략 성향", parent="InvestorProfile"),

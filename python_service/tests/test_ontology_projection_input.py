@@ -3,6 +3,10 @@ import unittest
 from copy import deepcopy
 
 from digital_twin.domain.investment_research import research_evidence_from_external_signals
+from digital_twin.domain.market_signal_transitions import (
+    MARKET_SIGNAL_TRANSITION_RESULTS_KEY,
+    MARKET_SIGNAL_TRANSITION_STATE_KEY,
+)
 from digital_twin.domain.ontology_projection_input import (
     compact_external_signals_for_ontology,
     compact_monitor_state_for_reasoning_base,
@@ -16,6 +20,26 @@ from digital_twin.infrastructure.ontology_projection import PortfolioOntologyPro
 
 
 class OntologyProjectionInputTests(unittest.TestCase):
+
+    def test_runtime_signal_transition_metadata_is_bounded_to_target_symbol(self):
+        metadata = {
+            MARKET_SIGNAL_TRANSITION_STATE_KEY: {
+                "AAPL": {"signals": {"price": {"confirmedState": "anchored"}}},
+                "NVDA": {"signals": {"price": {"confirmedState": "anchored"}}},
+            },
+            MARKET_SIGNAL_TRANSITION_RESULTS_KEY: {
+                "AAPL": {"confirmedTransitions": []},
+                "NVDA": {"confirmedTransitions": [{"signalId": "price"}]},
+            },
+        }
+
+        compact = PortfolioOntologyProjectionRecorder.factual_runtime_metadata(
+            metadata,
+            target_symbols=["AAPL"],
+        )
+
+        self.assertEqual({"AAPL"}, set(compact[MARKET_SIGNAL_TRANSITION_STATE_KEY]))
+        self.assertEqual({"AAPL"}, set(compact[MARKET_SIGNAL_TRANSITION_RESULTS_KEY]))
 
     def test_existing_company_knowledge_keeps_structured_periods(self):
         source = {

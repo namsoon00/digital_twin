@@ -191,6 +191,7 @@ def market_change_materiality(
     current: Dict[str, object],
     change: Dict[str, object],
     settings: Dict[str, object] = None,
+    signal_transition_result: Dict[str, object] = None,
 ) -> MaterialityAssessment:
     settings = settings or {}
     changed_fields = list((change or {}).get("fields") or [])
@@ -315,6 +316,30 @@ def market_change_materiality(
     if field_changed(changed_fields, "freshnessStatus", "sourceTimestampState", "latencyStatus", "realTime"):
         matched.append("source-validity-state-change")
 
+    stateful_transition_policy = bool(
+        isinstance(signal_transition_result, dict)
+        and str(signal_transition_result.get("version") or "").strip()
+        and signal_transition_result.get("enabled") is not False
+    )
+    confirmed_transitions = (
+        list(signal_transition_result.get("confirmedTransitions") or [])
+        if stateful_transition_policy
+        else []
+    )
+    pending_transitions = (
+        list(signal_transition_result.get("pendingTransitions") or [])
+        if stateful_transition_policy
+        else []
+    )
+    if stateful_transition_policy:
+        # Raw observations remain in the time-series store. Only a persisted
+        # state transition can promote them into a new TypeDB reasoning turn.
+        matched = list(dict.fromkeys(
+            str(condition or "").strip()
+            for condition in signal_transition_result.get("confirmedConditions") or []
+            if str(condition or "").strip()
+        ))
+
     # Moving from an intraday observation to a known last-close reference is
     # expected when the exchange closes. The runtime MarketSession fact already
     # blocks action evidence then, so one TypeDB cycle per holding would only
@@ -351,6 +376,7 @@ def market_change_materiality(
 
     directional = {
         "price-move",
+        "price-move-immediate",
         "ma20-cross",
         "ma60-cross",
         "ma20-distance",
@@ -374,7 +400,9 @@ def market_change_materiality(
         "institution-flow-pressure",
         "institution-flow-pressure-cleared",
     } & set(matched)
-    if "ma60-cross" in matched or (directional and confirmation):
+    if stateful_transition_policy and bool(signal_transition_result.get("immediate")):
+        review_level = "immediate"
+    elif "ma60-cross" in matched or (directional and confirmation):
         review_level = "act"
     elif directional or confirmation or "data-state-change" in matched or "source-validity-state-change" in matched:
         review_level = "check"
@@ -396,9 +424,13 @@ def market_change_materiality(
         or source_state in {"stale", "last-close", "reference-only", "unavailable", "no-tick"}
     ) else "sufficient"
     reason = (
-        "가격·추세 또는 수급 상태가 새 기준을 넘거나 해제되어 다시 확인합니다."
+        "가격·추세 또는 수급 상태 전이가 지속성 기준을 통과해 다시 확인합니다."
         if passed
-        else "값은 갱신됐지만 기존 상태가 유지되어 TypeDB 재추론 요청은 만들지 않습니다."
+        else (
+            "새 상태 후보를 관찰 중이며 지속성 기준을 아직 충족하지 않아 TypeDB 재추론 요청은 만들지 않습니다."
+            if pending_transitions
+            else "값은 갱신됐지만 기존 상태가 유지되고 확정 전이가 없어 TypeDB 재추론 요청은 만들지 않습니다."
+        )
     )
     return MaterialityAssessment(
         symbol,
@@ -415,6 +447,13 @@ def market_change_materiality(
             "ma60Distance": round(current_ma60, 3),
             "ma20DistanceChange": round(current_ma20 - previous_ma20, 3),
             "ma60DistanceChange": round(current_ma60 - previous_ma60, 3),
+            "signalTransitionPolicy": (
+                str(signal_transition_result.get("version") or "")
+                if stateful_transition_policy
+                else "legacy-stateless"
+            ),
+            "confirmedSignalTransitions": confirmed_transitions[:20],
+            "pendingSignalTransitionCount": len(pending_transitions),
             **flow_pressure_facts,
         },
         data_state=data_state,

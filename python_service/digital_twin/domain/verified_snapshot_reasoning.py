@@ -26,6 +26,7 @@ from .crypto_market_signals import (
 )
 from .investment_research import research_evidence_from_payload
 from .materiality import market_change_materiality
+from .market_signal_transitions import MARKET_SIGNAL_TRANSITION_RESULTS_KEY
 from .ontology_projection_input import compact_external_signals_for_ontology
 from .portfolio import AccountSnapshot, Position
 from .reasoning_source_snapshot import reasoning_source_snapshot_id
@@ -601,6 +602,12 @@ def verified_monitor_snapshot_reasoning_event(
     deferred_market_symbols: List[str] = []
     deferred_supplemental_external_symbols: List[str] = []
     position_changed_count = 0
+    snapshot_metadata = snapshot.metadata if isinstance(snapshot.metadata, Mapping) else {}
+    signal_transition_results = (
+        snapshot_metadata.get(MARKET_SIGNAL_TRANSITION_RESULTS_KEY)
+        if isinstance(snapshot_metadata.get(MARKET_SIGNAL_TRANSITION_RESULTS_KEY), Mapping)
+        else {}
+    )
 
     for symbol in subjects:
         before_position = previous_positions.get(symbol, {})
@@ -626,6 +633,11 @@ def verified_monitor_snapshot_reasoning_event(
                 after_position,
                 {"fields": position_fields},
                 dict(settings or {}),
+                signal_transition_result=(
+                    dict(signal_transition_results.get(symbol) or {})
+                    if isinstance(signal_transition_results.get(symbol), Mapping)
+                    else None
+                ),
             )
         bootstrap_or_position_context = bool(
             not before_position

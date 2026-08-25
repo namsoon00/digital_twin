@@ -219,6 +219,23 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             default_notification_rule(MARKET_OBSERVATION),
         ))
 
+    def test_investment_insight_uses_semantic_state_cooldown_without_text_similarity(self):
+        default_rule = default_notification_rule("investmentInsight")
+        self.assertFalse(default_rule.similarity_enabled)
+        self.assertTrue(default_rule.state_cooldown_enabled)
+
+        legacy = default_notification_rule("investmentInsight")
+        legacy.similarity_enabled = True
+        legacy.similarity_window_minutes = 360
+        changed = MySQLNotificationRuleStore._migrate_legacy_investment_insight_similarity(
+            legacy,
+            default_rule,
+        )
+
+        self.assertTrue(changed)
+        self.assertFalse(legacy.similarity_enabled)
+        self.assertTrue(legacy.state_cooldown_enabled)
+
     def test_current_notification_rule_defaults_marker_skips_startup_writes(self):
         fingerprint = notification_rule_defaults_fingerprint()
         transaction_calls = []

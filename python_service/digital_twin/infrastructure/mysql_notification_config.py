@@ -63,6 +63,7 @@ from .mysql_operational_helpers import (
 
 
 MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY = "notification-rule-migration:market-observation-no-similarity-v1"
+INVESTMENT_INSIGHT_SIMILARITY_MIGRATION_KEY = "notification-rule-migration:investment-insight-state-cooldown-only-v1"
 NOTIFICATION_RULE_DEFAULTS_STATE_KEY = "notification-rule-defaults:active"
 NOTIFICATION_RULE_DEFAULTS_LOCK_NAME = "orbit-alpha-notification-rule-defaults"
 
@@ -231,6 +232,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             (MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,),
         ).fetchone()
         migrate_market_observation_similarity = not bool(migration_row)
+        investment_migration_row = connection.execute(
+            "SELECT store_id FROM app_store WHERE store_id = %s",
+            (INVESTMENT_INSIGHT_SIMILARITY_MIGRATION_KEY,),
+        ).fetchone()
+        migrate_investment_insight_similarity = not bool(investment_migration_row)
         for message_type, rule in DEFAULT_NOTIFICATION_RULES.items():
             connection.execute(
                 """
@@ -269,6 +275,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     if migrate_market_observation_similarity
                     else False
                 )
+                migrated_investment_insight_similarity = (
+                    self._migrate_legacy_investment_insight_similarity(current, rule)
+                    if migrate_investment_insight_similarity
+                    else False
+                )
                 set_clauses = []
                 params = []
                 if migrated_conditions:
@@ -279,7 +290,7 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     params.append(json_dumps(current.similarity_fields))
                     set_clauses.append("similarity_bypass_conditions_json = %s")
                     params.append(json_dumps([condition.to_dict() for condition in current.similarity_bypass_conditions]))
-                if migrated_market_observation_similarity:
+                if migrated_market_observation_similarity or migrated_investment_insight_similarity:
                     set_clauses.append("similarity_enabled = %s")
                     params.append(1 if current.similarity_enabled else 0)
                     set_clauses.append("similarity_window_minutes = %s")
@@ -305,6 +316,19 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                 (
                     MARKET_OBSERVATION_SIMILARITY_MIGRATION_KEY,
                     json_dumps({"policy": "marketObservation uses monitor cadence instead of text similarity"}),
+                    stamp,
+                ),
+            )
+        if migrate_investment_insight_similarity:
+            connection.execute(
+                """
+                INSERT INTO app_store (store_id, payload_json, updated_at)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                """,
+                (
+                    INVESTMENT_INSIGHT_SIMILARITY_MIGRATION_KEY,
+                    json_dumps({"policy": "investmentInsight uses semantic state cooldown instead of duplicate text similarity"}),
                     stamp,
                 ),
             )
@@ -426,6 +450,36 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
             return False
         current.similarity_enabled = False
         current.similarity_window_minutes = 0
+        return True
+
+    @staticmethod
+    def _migrate_legacy_investment_insight_similarity(
+        current: NotificationRuleConfig,
+        default_rule: NotificationRuleConfig,
+    ) -> bool:
+        """Remove only the untouched generic similarity layer.
+
+        Semantic state cooldown remains enabled and keeps its material-change
+        bypass conditions, so changed actions or relations can still publish.
+        """
+
+        if str(current.message_type or "") != "investmentInsight":
+            return False
+        if not current.similarity_enabled or int(current.similarity_window_minutes or 0) != 360:
+            return False
+        if list(current.similarity_fields or []) != list(default_rule.similarity_fields or []):
+            return False
+        default_ids = {
+            condition.condition_id
+            for condition in default_rule.similarity_bypass_conditions
+        }
+        current_ids = {
+            condition.condition_id
+            for condition in current.similarity_bypass_conditions
+        }
+        if current_ids != default_ids:
+            return False
+        current.similarity_enabled = False
         return True
 
     def list(self) -> List[NotificationRuleConfig]:

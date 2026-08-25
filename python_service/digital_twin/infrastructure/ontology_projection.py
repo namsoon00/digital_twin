@@ -13,6 +13,10 @@ from ..application.investment_outcome_observation_service import InvestmentOutco
 from ..domain.ontology_contracts import PortfolioOntology
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.crypto_market_signals import crypto_markets_by_symbol
+from ..domain.market_signal_transitions import (
+    MARKET_SIGNAL_TRANSITION_RESULTS_KEY,
+    MARKET_SIGNAL_TRANSITION_STATE_KEY,
+)
 from ..domain.ontology_rulebox_catalog import (
     default_graph_inference_rules,
     governed_graph_inference_rules,
@@ -8049,11 +8053,28 @@ class PortfolioOntologyProjectionRecorder:
         ABox would create a self-triggering inference loop.
         """
         source = dict(metadata or {})
+        selected_symbols = {
+            str(symbol or "").upper().strip()
+            for symbol in target_symbols or []
+            if str(symbol or "").strip()
+        }
+
+        def bounded_transition_rows(key: str, value: object) -> object:
+            if key not in {MARKET_SIGNAL_TRANSITION_STATE_KEY, MARKET_SIGNAL_TRANSITION_RESULTS_KEY}:
+                return deepcopy(value)
+            if not isinstance(value, dict) or not selected_symbols:
+                return deepcopy(value)
+            return {
+                str(symbol): deepcopy(payload)
+                for symbol, payload in value.items()
+                if str(symbol or "").upper().strip() in selected_symbols
+            }
+
         values = {}
         for key, value in source.items():
             if key in {"ontology", "hypothesisLifecycle", "reasoningSnapshotReplay", "previousMonitorState", "previousState", "monitorStateHistory"}:
                 continue
-            values[key] = deepcopy(value)
+            values[key] = bounded_transition_rows(str(key), value)
         # This marker describes how the worker acquired the snapshot. It is
         # operational replay provenance, not a market fact for the ABox.
         def factual_state(state: object) -> object:
@@ -8073,7 +8094,10 @@ class PortfolioOntologyProjectionRecorder:
                 )
             nested = result.get("metadata")
             if isinstance(nested, dict):
-                nested = dict(nested)
+                nested = {
+                    key: bounded_transition_rows(str(key), value)
+                    for key, value in nested.items()
+                }
                 nested.pop("ontology", None)
                 nested.pop("hypothesisLifecycle", None)
                 nested.pop("reasoningSnapshotReplay", None)

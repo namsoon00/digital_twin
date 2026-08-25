@@ -1846,7 +1846,7 @@ class OntologyReasoningRunner:
         return int_setting(self.settings, "ontologyReasoningCriticalMinIntervalSeconds", 30, 0, 3600)
 
     def market_min_interval_seconds(self) -> int:
-        return int_setting(self.settings, "ontologyReasoningMarketMinIntervalSeconds", 120, 0, 3600)
+        return int_setting(self.settings, "ontologyReasoningMarketMinIntervalSeconds", 180, 0, 3600)
 
     def research_min_interval_seconds(self) -> int:
         return int_setting(self.settings, "ontologyReasoningResearchMinIntervalSeconds", 300, 0, 86400)

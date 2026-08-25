@@ -106,7 +106,7 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
         )
 
         self.assertFalse(runner.fairness_drain_state(["MSFT"], cursor.load())["active"])
-        self.assertEqual(120, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
+        self.assertEqual(180, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
         self.assertFalse(runner.projection_due([event], cursor.load(), ["MSFT"]))
 
     def test_overdue_event_reserves_one_target_despite_recent_symbol_projection(self):
@@ -205,7 +205,7 @@ class OntologyProjectionStabilityTests(unittest.TestCase):
             payload={"changedCount": 1, "trigger": "market-data-update", "symbols": ["MSFT"]},
         )
 
-        self.assertEqual(120, runner.event_min_interval_seconds(event))
+        self.assertEqual(180, runner.event_min_interval_seconds(event))
         self.assertTrue(runner.event_symbol_due(event, "MSFT", cursor.load()))
         self.assertEqual(0, runner.effective_projection_min_interval_seconds([event], cursor.load(), ["MSFT"]))
         self.assertTrue(runner.projection_due([event], cursor.load(), ["MSFT"]))

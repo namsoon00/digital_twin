@@ -3,6 +3,11 @@ from typing import Dict, List
 from .accounts import investment_strategy_profile, message_delivery_profile
 from .investment_mandate import InvestmentMandate
 from .market_data import number
+from .market_signal_transitions import (
+    MARKET_SIGNAL_TRANSITION_RESULTS_KEY,
+    MARKET_SIGNAL_TRANSITION_STATE_KEY,
+    market_signal_transition_policy_snapshot,
+)
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .portfolio import Position
@@ -141,7 +146,11 @@ def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: s
     metadata = runtime_context.get("metadata") if isinstance(runtime_context, dict) else {}
     if not isinstance(metadata, dict):
         return
+    transition_states = metadata.get(MARKET_SIGNAL_TRANSITION_STATE_KEY)
+    transition_results = metadata.get(MARKET_SIGNAL_TRANSITION_RESULTS_KEY)
     for key, value in sorted(metadata.items()):
+        if key in {MARKET_SIGNAL_TRANSITION_STATE_KEY, MARKET_SIGNAL_TRANSITION_RESULTS_KEY}:
+            continue
         if value in (None, "", False):
             continue
         metadata_id = add_entity(graph, "runtime-metadata", key, "metadata:" + str(key), {
@@ -150,6 +159,56 @@ def add_runtime_metadata_concepts(graph: PortfolioOntology, portfolio_node_id: s
             "value": safe_setting_value(str(key), value),
         })
         add_relation(graph, portfolio_node_id, metadata_id, "HAS_RUNTIME_SETTING", weight=1.0, properties={"source": "runtime-metadata", "aiInfluenceLabel": "metadata:" + str(key)})
+    state_rows = transition_states if isinstance(transition_states, dict) else {}
+    result_rows = transition_results if isinstance(transition_results, dict) else {}
+    for symbol, state_payload in sorted(state_rows.items()):
+        if not isinstance(state_payload, dict):
+            continue
+        stock_id = entity_id("stock", str(symbol or "").upper())
+        signals = state_payload.get("signals") if isinstance(state_payload.get("signals"), dict) else {}
+        state_ids = {}
+        for signal_id, signal_state in sorted(signals.items()):
+            if not isinstance(signal_state, dict):
+                continue
+            confirmed_state = str(signal_state.get("confirmedState") or "").strip()
+            if not confirmed_state:
+                continue
+            state_id = add_entity(graph, "signal-state", str(symbol) + ":" + str(signal_id), str(symbol) + " " + str(signal_id) + " " + confirmed_state, {
+                "tboxClass": "SignalState",
+                "symbol": str(symbol),
+                "signalId": str(signal_id),
+                "state": confirmed_state,
+                "lastConfirmedAt": signal_state.get("lastConfirmedAt"),
+                "policyVersion": signal_state.get("policyVersion"),
+            })
+            state_ids[str(signal_id)] = state_id
+            add_relation(graph, stock_id, state_id, "HAS_SIGNAL_STATE", properties={"source": "market-signal-transition"})
+        result_payload = result_rows.get(symbol) if isinstance(result_rows.get(symbol), dict) else {}
+        for index, transition in enumerate(result_payload.get("confirmedTransitions") or []):
+            if not isinstance(transition, dict):
+                continue
+            signal_id = str(transition.get("signalId") or "signal")
+            transition_key = ":".join([
+                str(symbol), signal_id, str(transition.get("fromState") or "unknown"),
+                str(transition.get("toState") or "unknown"), str(index),
+            ])
+            transition_class = "ImmediateSignalTransition" if transition.get("immediate") else "ConfirmedSignalTransition"
+            transition_id = add_entity(graph, "signal-transition", transition_key, str(symbol) + " " + signal_id + " 상태 전이", {
+                "tboxClass": transition_class,
+                "symbol": str(symbol),
+                **dict(transition),
+            })
+            add_relation(graph, stock_id, transition_id, "HAS_SIGNAL_TRANSITION", properties={"source": "market-signal-transition"})
+            if signal_id.endswith("-cross"):
+                policy_key = "trend-cross"
+            elif signal_id.endswith("-distance"):
+                policy_key = "trend-distance"
+            else:
+                policy_key = signal_id
+            policy_id = entity_id("signal-transition-policy", policy_key)
+            add_relation(graph, transition_id, policy_id, "GOVERNED_BY_SIGNAL_POLICY", properties={"source": "market-signal-transition"})
+            if signal_id != "price" and state_ids.get(signal_id):
+                add_relation(graph, transition_id, state_ids[signal_id], "CONFIRMS_SIGNAL_STATE", properties={"source": "market-signal-transition"})
 
 def add_account_delivery_profile_concepts(
     graph: PortfolioOntology,
@@ -431,6 +490,15 @@ def add_operational_world_concepts(
         "investorFlowRatioPct": number(settings.get("marketMaterialityInvestorFlowRatioPct")) or 15.0,
         "description": "데이터 변경이 투자 판단에 충분히 중요한 경우에만 추론과 알림 의도로 승격합니다.",
     })
+    transition_policy_snapshot = market_signal_transition_policy_snapshot(settings)
+    for policy in transition_policy_snapshot.get("policies") or []:
+        signal_id = str(policy.get("signalId") or "signal")
+        policy_id = add_entity(graph, "signal-transition-policy", signal_id, str(policy.get("label") or signal_id) + " 전이 정책", {
+            "tboxClass": "SignalTransitionPolicy",
+            "enabled": bool(transition_policy_snapshot.get("enabled")),
+            **dict(policy),
+        })
+        add_relation(graph, importance_gate_id, policy_id, "GOVERNS_SIGNAL_TRANSITION", properties={"source": "operational-ontology"})
     novelty_policy_id = add_entity(graph, "novelty-policy", "relation-novelty", "관계 신규성 정책", {
         "tboxClass": "NoveltyPolicy",
         "meaningfulChangeStates": ["new-condition", "improving", "worsening", "direction-changed", "new-evidence"],

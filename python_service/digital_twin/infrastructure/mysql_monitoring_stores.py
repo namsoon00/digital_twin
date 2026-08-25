@@ -30,6 +30,7 @@ from ..domain.market_observations import (
     market_observation_reasoning_candidates,
     market_observation_reasoning_symbols,
 )
+from ..domain.market_signal_transitions import prepare_market_signal_transition_metadata
 from ..domain.model_review import ModelReviewJob
 from ..domain.notification_rules import (
     DEFAULT_NOTIFICATION_RULES,
@@ -953,6 +954,13 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         live_snapshots = []
         observation_candidates_by_account: Dict[str, List[Dict[str, object]]] = {}
         if not source_snapshot_replay:
+            live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
+            for snapshot in live_snapshots:
+                prepare_market_signal_transition_metadata(
+                    snapshot,
+                    previous_states.get(snapshot.account_id) or {},
+                    self.runtime_settings,
+                )
             snapshot_states = {
                 snapshot.account_id: snapshot_state_for_persistence(
                     snapshot,
@@ -960,7 +968,6 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 )
                 for snapshot in snapshots
             }
-            live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
             observation_candidates_by_account = {
                 snapshot.account_id: market_observation_reasoning_candidates(
                     snapshot.metadata if isinstance(snapshot.metadata, dict) else {}

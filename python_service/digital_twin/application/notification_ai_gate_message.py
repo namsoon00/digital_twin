@@ -3078,6 +3078,78 @@ def _investment_view_row(
     return detail
 
 
+def _rule_condition_display_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "예" if value else "아니오"
+    if isinstance(value, float):
+        return ("%.2f" % value).rstrip("0").rstrip(".")
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value[:4])
+    if isinstance(value, dict):
+        return ""
+    return str(value if value is not None else "").strip()
+
+
+def _notification_rule_proof_line(
+    context: Dict[str, object],
+    preferred_rule_ids: List[str],
+) -> str:
+    relation = relation_context_value(context or {})
+    graph = relation.get("graphStoreInference") if isinstance(relation.get("graphStoreInference"), dict) else {}
+    traces = [item for item in graph.get("traces") or [] if isinstance(item, dict)]
+    preferred = [str(item or "").strip() for item in preferred_rule_ids if str(item or "").strip()]
+    trace = next((
+        item for rule_id in preferred for item in traces
+        if str(item.get("ruleId") or item.get("sourceRuleId") or "").strip() == rule_id
+    ), None)
+    if trace is None:
+        trace = next((item for item in traces if item.get("matchedConditions")), None)
+    if not isinstance(trace, dict):
+        return ""
+    field_labels = {
+        "source": "보유 상태",
+        "profitLossRate": "보유 수익률",
+        "investmentStrategyProfile": "투자 성향",
+        "currentPrice": "현재가",
+        "ma5Distance": "5일선 괴리",
+        "ma20Distance": "20일선 괴리",
+        "ma60Distance": "60일선 괴리",
+        "foreignNetVolume": "외국인 순매수",
+        "institutionNetVolume": "기관 순매수",
+        "tradeStrength": "체결강도",
+        "timeAdjustedVolumeRatio": "시간 보정 거래량",
+    }
+    values: List[str] = []
+    premise_unlinked = False
+    for condition in trace.get("matchedConditions") or []:
+        if not isinstance(condition, dict):
+            continue
+        lineage = condition.get("premiseLineage") if isinstance(condition.get("premiseLineage"), dict) else {}
+        if str(lineage.get("status") or "").strip().lower() in {"legacy-unavailable", "unavailable", "missing"}:
+            premise_unlinked = True
+        field = str(condition.get("field") or "").strip()
+        observed = condition.get("observedValue")
+        if not field or observed in (None, ""):
+            continue
+        shape = condition.get("ruleConditionShape") if isinstance(condition.get("ruleConditionShape"), dict) else {}
+        expected = shape.get("value")
+        operator = str(condition.get("operator") or shape.get("operator") or "=").strip()
+        observed_text = _rule_condition_display_value(observed)
+        expected_text = _rule_condition_display_value(expected)
+        if not observed_text:
+            continue
+        suffix = "%" if field.lower().endswith(("rate", "distance", "pct")) else ""
+        item = field_labels.get(field, field) + " " + observed_text + suffix
+        if expected_text and expected_text != observed_text:
+            item += " " + operator + " " + expected_text + suffix
+        append_unique_text(values, item, 90)
+        if len(values) >= 3:
+            break
+    if premise_unlinked:
+        values.append("공유 전제의 원천 연결은 상세에서 확인 필요")
+    return "성립값: " + " · ".join(values) if values else ""
+
+
 def _notification_selected_inference_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
@@ -3088,6 +3160,9 @@ def _notification_selected_inference_rows(
     envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
     readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
     selected_rule_id = str(envelope.get("selectedRuleId") or "").strip()
+    if not selected_rule_id:
+        decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
+        selected_rule_id = str(decision.get("selectedRuleId") or "").strip()
     eligible_rule_ids = {
         str(item or "").strip()
         for item in readiness.get("eligibleRuleIds") or []
@@ -3108,8 +3183,15 @@ def _notification_selected_inference_rows(
         candidate[0] += " · 차이 이유: " + difference[0].split(":", 1)[-1].strip()
     result = candidate[:1] + selected[:1]
     if result:
+        proof = _notification_rule_proof_line(context, [selected_rule_id])
+        if proof:
+            result[0] += " · " + proof
         return result
     matched = [row for row in rows if row.startswith("성립 규칙:")]
+    if matched:
+        proof = _notification_rule_proof_line(context, [selected_rule_id])
+        if proof:
+            matched[0] += " · " + proof
     return matched[:1]
 
 

@@ -137,6 +137,13 @@ def notification_context():
                     "matchedConditions": [
                         {"conditionId": "holding", "summary": "삼성전자 보유 수량 10주"},
                         {"conditionId": "disclosure", "summary": "신규 자금조달 공시 확인"},
+                        {
+                            "conditionId": "holding-loss",
+                            "field": "profitLossRate",
+                            "operator": "<",
+                            "observedValue": -10.2,
+                            "ruleConditionShape": {"value": 0},
+                        },
                     ],
                 }],
             },
@@ -204,6 +211,10 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("hypothesis:risk", trace["selectedHypothesis"]["hypothesisId"])
         self.assertTrue(trace["matchedRules"][0]["selected"])
         self.assertEqual("holding", trace["inferenceTraces"][0]["conditions"][0]["label"])
+        proof = trace["ruleEvaluations"][0]["proof"]
+        self.assertEqual(3, len(proof["conditions"]))
+        self.assertEqual(-10.2, proof["conditions"][2]["observed_value"])
+        self.assertEqual(0, proof["conditions"][2]["expected_value"])
         self.assertEqual(2, len(trace["alternativeHypotheses"]))
         self.assertEqual("https://example.test/samsung-disclosure", trace["sources"][0]["url"])
         self.assertIn("공시 본문: 발행 조건 확인 전 위험 강도를 제한합니다.", trace["missingData"])

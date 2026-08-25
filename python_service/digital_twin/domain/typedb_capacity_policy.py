@@ -95,8 +95,6 @@ def evaluate_typedb_capacity_policy(
     background_role = operation_role in {
         "projection",
         "world-projection",
-        "prewarm",
-        "rulebox-prewarm",
         "inference-detail",
         "detail",
     }
@@ -136,7 +134,7 @@ def evaluate_typedb_capacity_policy(
         capacity_priority = True
         bypass_reasoning_deferral = maintenance_role
         # A live reasoning turn may be needed to preserve the account-level
-        # decision boundary. Background materialization and compiler work can
+        # decision boundary. Background materialization and maintenance work can
         # always catch up from their durable outboxes after capacity recovers.
         ready = not background_role
         if maintenance_role:

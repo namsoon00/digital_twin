@@ -301,19 +301,9 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                         "ready": True,
                         "status": "ready",
                     }), \
-                    patch.object(service_manager, "prewarm_typedb_candidate_rulebox_functions", return_value={
-                        "ready": True,
-                        "status": "ready",
-                    }), \
                     patch.object(service_manager, "validate_typedb_candidate_inference_runtime", return_value={
                         "ready": True,
-                        "mode": "schema-functions",
-                        "readiness": {
-                            "logicalRuleCount": 116,
-                            "expectedFunctionCount": 45,
-                            "verifiedFunctionCount": 45,
-                            "missingFunctionCount": 0,
-                        },
+                        "mode": "typedb-direct-typeql",
                     }), \
                     patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
                         "ready": True,
@@ -328,14 +318,13 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual(["ontology_primary", "ontology_v2"], seen)
         self.assertEqual(["ontology_primary", "ontology_v2"], prepared["validatedDatabases"])
         self.assertEqual({
-            "ontology_primary": "schema-functions",
-            "ontology_v2": "schema-functions",
+            "ontology_primary": "typedb-direct-typeql",
+            "ontology_v2": "typedb-direct-typeql",
         }, prepared["validatedInferenceModes"])
         self.assertEqual({
             "ontology_primary": "ready",
             "ontology_v2": "ready",
         }, prepared["validatedReleaseContracts"])
-        self.assertEqual(45, prepared["validatedFunctionReadiness"]["ontology_v2"]["verifiedFunctionCount"])
 
     def test_blue_green_candidate_rejects_rulebox_that_differs_from_delivery_release(self):
         class FakeRegistry:
@@ -593,161 +582,25 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                         "ready": False,
                         "status": "release-fingerprint-mismatch",
                     }) as release_check, \
-                    patch.object(service_manager, "prewarm_typedb_candidate_rulebox_functions") as prewarm, \
                     patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt") as rebuild:
                 result = service_manager.prepare_typedb_blue_green_candidate(spec)
 
         self.assertEqual("candidate-release-contract-failed", result["status"])
         release_check.assert_called_once()
-        prewarm.assert_not_called()
         rebuild.assert_not_called()
 
-    def test_blue_green_candidate_requires_functions_or_direct_typeql_fallback(self):
-        command_result = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({
-                "prewarm": {
-                    "functionsReady": False,
-                    "ruleCount": 118,
-                },
-            }),
-            stderr="",
-        )
-        spec = {
-            "schemaFunctionDirectQueryFallbackEnabled": "1",
-            "typedbDatabase": "ontology_v2",
-        }
+    def test_blue_green_candidate_requires_direct_typeql_driver_readiness(self):
+        spec = {"typedbDatabase": "ontology_v2"}
 
-        with patch.object(service_manager.subprocess, "run", return_value=command_result):
+        with patch.object(service_manager, "typedb_driver_ready", return_value=True):
             ready = service_manager.validate_typedb_candidate_inference_runtime(spec)
-
-        self.assertTrue(ready["ready"])
-        self.assertEqual("direct-typeql-fallback", ready["mode"])
-        self.assertEqual(118, ready["ruleCount"])
-
-        spec["schemaFunctionDirectQueryFallbackEnabled"] = "0"
-        with patch.object(service_manager.subprocess, "run", return_value=command_result):
+        with patch.object(service_manager, "typedb_driver_ready", return_value=False):
             blocked = service_manager.validate_typedb_candidate_inference_runtime(spec)
 
+        self.assertTrue(ready["ready"])
+        self.assertEqual("typedb-direct-typeql", ready["mode"])
         self.assertFalse(blocked["ready"])
         self.assertEqual("blocked", blocked["status"])
-
-    def test_blue_green_candidate_strict_gate_requires_complete_function_receipts(self):
-        payload = {
-            "prewarm": {
-                "status": "provisioning",
-                "functionsReady": False,
-                "ruleCount": 116,
-                "namespaceResults": [{
-                    "namespace": "world-parameterized",
-                    "result": {
-                        "logicalRuleCount": 116,
-                        "expectedFunctionCount": 45,
-                        "expectedSharedModelSignalBridgeFunctionCount": 3,
-                        "syncedFunctionCount": 44,
-                        "missingFunctionCount": 1,
-                        "functionProbe": {"verifiedFunctionCount": 44},
-                    },
-                }],
-            },
-        }
-        command_result = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
-        spec = {
-            "schemaFunctionDirectQueryFallbackEnabled": "1",
-            "candidateRequireSchemaFunctions": "1",
-        }
-
-        with patch.object(service_manager.subprocess, "run", return_value=command_result):
-            result = service_manager.validate_typedb_candidate_inference_runtime(spec)
-
-        self.assertFalse(result["ready"])
-        self.assertTrue(result["strictSchemaFunctionsRequired"])
-        self.assertEqual(44, result["readiness"]["verifiedFunctionCount"])
-        self.assertEqual(1, result["readiness"]["missingFunctionCount"])
-
-    def test_candidate_prewarm_repeats_bounded_batches_until_receipts_are_complete(self):
-        not_ready = {
-            "ready": False,
-            "readiness": {
-                "logicalRuleCount": 116,
-                "expectedFunctionCount": 45,
-                "verifiedFunctionCount": 44,
-                "missingFunctionCount": 1,
-            },
-        }
-        ready = {
-            "ready": True,
-            "readiness": {
-                "logicalRuleCount": 116,
-                "expectedFunctionCount": 45,
-                "verifiedFunctionCount": 45,
-                "missingFunctionCount": 0,
-                "expectedSharedModelSignalBridgeFunctionCount": 3,
-                "verifiedSharedModelSignalBridgeFunctionCount": 3,
-            },
-        }
-        command_result = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({"status": "provisioning"}),
-            stderr="",
-        )
-        with tempfile.TemporaryDirectory() as temp, \
-                patch.object(
-                    service_manager,
-                    "validate_typedb_candidate_inference_runtime",
-                    side_effect=[not_ready, ready],
-                ) as validate, \
-                patch.object(service_manager.subprocess, "run", return_value=command_result) as run, \
-                patch.object(service_manager.time, "sleep", return_value=None):
-            result = service_manager.prewarm_typedb_candidate_rulebox_functions({
-                "role": "typedb-stage",
-                "log": Path(temp) / "candidate.log",
-                "schemaFunctionPrewarmMaxAttempts": "3",
-            })
-
-        self.assertTrue(result["ready"])
-        self.assertEqual(1, result["attemptCount"])
-        self.assertEqual(45, result["readiness"]["verifiedFunctionCount"])
-        self.assertEqual(2, validate.call_count)
-        prewarm_calls = [
-            call
-            for call in run.call_args_list
-            if "ontology-rulebox-prewarm" in list(call.args[0])
-        ]
-        self.assertEqual(1, len(prewarm_calls))
-
-    def test_blue_green_candidate_stops_before_world_rebuild_when_functions_are_incomplete(self):
-        with tempfile.TemporaryDirectory() as temp:
-            spec = {
-                "label": "TypeDB ontology graph store",
-                "role": "typedb",
-                "pid": Path(temp) / "typedb.pid",
-                "log": Path(temp) / "typedb.log",
-                "dataPath": Path(temp) / "typedb-data",
-                "healthAddress": "127.0.0.1:1729",
-                "httpAddress": "127.0.0.1:8000",
-                "typedbDatabase": "ontology_v2",
-            }
-            with patch.object(service_manager, "stop_worker", return_value=0), \
-                    patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
-                    patch.object(service_manager, "ensure_typedb_seeded", return_value=True), \
-                    patch.object(service_manager, "validate_typedb_candidate_seed_contract", return_value={
-                        "ready": True,
-                        "status": "ready",
-                    }), \
-                    patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
-                        "ready": True,
-                        "status": "ready",
-                    }), \
-                    patch.object(service_manager, "prewarm_typedb_candidate_rulebox_functions", return_value={
-                        "ready": False,
-                        "status": "candidate-prewarm-incomplete",
-                    }), \
-                    patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt") as rebuild:
-                result = service_manager.prepare_typedb_blue_green_candidate(spec)
-
-        self.assertEqual("candidate-function-prewarm-failed", result["status"])
-        rebuild.assert_not_called()
 
     def test_wait_for_typedb_ready_bootstraps_only_pending_fresh_store(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1286,32 +1139,6 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         })
 
         self.assertEqual(2640, window)
-
-    def test_typedb_restart_marks_the_durable_rulebox_compiler_handoff_cold(self):
-        with patch.object(service_manager, "runtime_settings", return_value={
-            "mysqlHost": "127.0.0.1",
-            "mysqlDatabase": "orbit_alpha",
-        }), patch.object(service_manager, "MySQLOntologyRuleboxPrewarmStateStore") as state_store:
-            self.assertTrue(service_manager.clear_typedb_rulebox_prewarm_activity())
-
-        settings = state_store.call_args.args[0]
-        self.assertEqual("1", settings["_skipOperationalHistoryRetention"])
-        self.assertEqual("1", settings["_skipOperationalSchemaBootstrap"])
-        self.assertEqual({
-            "status": "bootstrap-required",
-            "active": False,
-            "expiresAtEpoch": 0,
-            "reason": "typedb-server-restarted-require-rulebox-receipt",
-            "lastResult": {
-                "status": "bootstrap-required",
-                "functionsReady": False,
-                "reason": "TypeDB server restarted; RuleBox receipts must be verified before native investment inference.",
-            },
-        }, {
-            key: value
-            for key, value in state_store.return_value.replace.call_args.args[0].items()
-            if key != "updatedAt"
-        })
 
     def test_supervisor_honors_explicit_maintenance_deadline_while_owner_runs(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -175,20 +175,20 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             "typedbDatabase": "orbit_alpha_ontology_shadow_v2",
             "_reasoningEngineReleaseFingerprint": "release:a",
             "_reasoningEngineValidationCohortId": "cohort:a",
-            "typedbNativeRuleEngineVersion": "typedb-schema-function-rule-engine-v9",
+            "typedbNativeRuleEngineVersion": "typedb-direct-typeql-rule-engine-v1",
         }).execution_namespace()
         second = PortfolioOntologyProjectionRecorder(repository, settings={
             "_reasoningEngineDeploymentId": "ontology-v2-shadow",
             "typedbDatabase": "orbit_alpha_ontology_shadow_v2",
             "_reasoningEngineReleaseFingerprint": "release:b",
             "_reasoningEngineValidationCohortId": "cohort:b",
-            "typedbNativeRuleEngineVersion": "typedb-schema-function-rule-engine-v9",
+            "typedbNativeRuleEngineVersion": "typedb-direct-typeql-rule-engine-v1",
         }).execution_namespace()
         changed_engine = PortfolioOntologyProjectionRecorder(repository, settings={
             "_reasoningEngineDeploymentId": "ontology-v2-shadow",
             "typedbDatabase": "orbit_alpha_ontology_shadow_v2",
             "_reasoningEngineReleaseFingerprint": "release:b",
-            "typedbNativeRuleEngineVersion": "typedb-schema-function-rule-engine-v10",
+            "typedbNativeRuleEngineVersion": "typedb-direct-typeql-rule-engine-v2",
         }).execution_namespace()
 
         self.assertEqual(first["executionNamespaceId"], second["executionNamespaceId"])

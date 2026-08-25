@@ -16,7 +16,7 @@ from .ontology_contracts import PortfolioOntology
 NATIVE_RULE_PLANNER_TOPOLOGY_VERSION = "native-rule-planner-topology-v2-model-contracts"
 
 # These are the raw source attributes referenced by the current TypeDB
-# schema-function RuleBox.  Persisting this bounded negative-planning index
+# direct-TypeQL RuleBox. Persisting this bounded negative-planning index
 # avoids opening an expensive function when the exact ABox source plainly
 # contradicts a required condition.  It never contains derived judgements and
 # never proves a rule match; TypeDB remains the sole rule evaluator.
@@ -310,7 +310,7 @@ def native_rule_planner_topology(graph: PortfolioOntology) -> Dict[str, object]:
     """Return the relation-type index for native RuleBox subjects in one ABox graph.
 
     This is deliberately a structural index. The complete rule payload and
-    every numeric/text/negative condition remain TypeDB schema-function work.
+    every numeric/text/negative condition remains direct TypeQL work.
     """
     source_ids_by_symbol: Dict[str, Set[str]] = {}
     subject_entities_by_symbol: Dict[str, List[object]] = {}

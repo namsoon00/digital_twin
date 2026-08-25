@@ -32,7 +32,7 @@ class TypeDBCapacityPolicyTests(unittest.TestCase):
         self.assertTrue(maintenance["bypassReasoningDeferral"])
 
     def test_rotation_threshold_blocks_all_graph_writers(self):
-        for role in ["reasoning", "world-projection", "maintenance", "rulebox-prewarm"]:
+        for role in ["reasoning", "world-projection", "maintenance"]:
             policy = evaluate_typedb_capacity_policy(self.snapshot(800), role=role)
             self.assertFalse(policy["ready"])
             self.assertEqual("rotation-required", policy["mode"])

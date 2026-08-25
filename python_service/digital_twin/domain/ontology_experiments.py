@@ -347,13 +347,13 @@ def run_experiment_on_graph(
     return {
         "portfolioId": facts_graph.portfolio_id,
         "status": "requires-typedb-materialization",
-        "reason": "Local Python graph inference was removed. Candidate rules must be saved to TypeDB schema functions and materialized before inference deltas are available.",
+        "reason": "Local Python graph inference was removed. Candidate rules must be saved to RuleBox and evaluated by direct TypeQL before inference deltas are available.",
         "baseline": baseline_metrics,
         "candidate": candidate_metrics,
         "delta": inference_metric_delta(baseline_metrics, candidate_metrics),
         "materialization": {
             "required": True,
-            "engine": "typedb-native-schema-functions",
+            "engine": "typedb-native-direct-typeql",
             "candidateRuleCount": int(candidate_rule_metrics.get("ruleCount") or 0),
             "candidateRuleIds": list(candidate_rule_metrics.get("ruleIds") or []),
         },
@@ -517,7 +517,7 @@ def experiment_recommendations(
                 "run-typedb-materialization",
                 "high",
                 "TypeDB materialization으로 후보 규칙 검증",
-                "Python 로컬 추론이 제거되어 후보 규칙의 실제 파생 관계 수는 TypeDB schema function 실행 후에만 확인할 수 있습니다.",
+                "Python 로컬 추론이 제거되어 후보 규칙의 실제 파생 관계 수는 TypeDB 직접 TypeQL 실행 후에만 확인할 수 있습니다.",
                 "후보 규칙을 검토 승인한 뒤 TypeDB RuleBox에 저장하고 run_rulebox로 실제 InferenceBox 결과를 확인합니다.",
                 proposed_changes,
                 {

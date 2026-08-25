@@ -149,7 +149,7 @@ def trend_observation_facts(position: Position) -> Dict[str, object]:
     ABox projection is allowed to derive arithmetic values from the quote, such
     as the slope spread.  It must not label the observation as a breakdown,
     recovery, support, or risk.  Those labels are RuleBox derivations evaluated
-    by the TypeDB schema functions.
+    by direct TypeQL rules in TypeDB.
     """
     ma20_distance = number(position.ma20_distance)
     ma60_distance = number(position.ma60_distance)

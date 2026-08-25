@@ -868,11 +868,8 @@ class OntologyReasoningRunner:
         projection_coordinator_probe: Callable = None,
         projection_lease_recovery: Callable = None,
         projection_coordinator_lease_recovery: Callable = None,
-        rulebox_prewarm_probe: Callable = None,
         snapshot_readiness_probe: Callable = None,
         operational_settings_refresher: Callable = None,
-        rulebox_prewarm_activity_probe: Callable = None,
-        rulebox_prewarm_state_writer: Callable = None,
         maintenance_yield_state_probe: Callable = None,
         market_observation_completion_recorder: Callable = None,
         reasoning_shadow_scheduler=None,
@@ -896,11 +893,8 @@ class OntologyReasoningRunner:
         self.projection_coordinator_probe = projection_coordinator_probe
         self.projection_lease_recovery = projection_lease_recovery
         self.projection_coordinator_lease_recovery = projection_coordinator_lease_recovery
-        self.rulebox_prewarm_probe = rulebox_prewarm_probe
         self.snapshot_readiness_probe = snapshot_readiness_probe
         self.operational_settings_refresher = operational_settings_refresher
-        self.rulebox_prewarm_activity_probe = rulebox_prewarm_activity_probe
-        self.rulebox_prewarm_state_writer = rulebox_prewarm_state_writer
         self.maintenance_yield_state_probe = maintenance_yield_state_probe
         self.market_observation_completion_recorder = market_observation_completion_recorder
         self.reasoning_shadow_scheduler = reasoning_shadow_scheduler
@@ -962,256 +956,6 @@ class OntologyReasoningRunner:
         if configured is None:
             configured = self.settings.get("typedbNativeRuleExecutionEnabled")
         return truthy(configured, False)
-
-    def rulebox_prewarm_required(self) -> bool:
-        """Whether a live native run must wait for compiled RuleBox receipts.
-
-        Production keeps the bounded direct-TypeQL compatibility path
-        available during cold starts. A strict deployment can opt into this
-        gate after all generated functions have verified receipts.
-        """
-        return (
-            self.native_typedb_rule_execution_enabled()
-            and truthy(
-                self.settings.get("ontologyRuleboxPrewarmEnabled"),
-                True,
-            )
-            and truthy(
-                self.settings.get("ontologyRuleboxPrewarmRequireReadyForInference"),
-                False,
-            )
-        )
-
-    def rulebox_prewarm_direct_fallback_enabled(self) -> bool:
-        """Whether RuleBox candidates may use bounded direct TypeQL evaluation.
-
-        This is the production path until generated-function compilation has
-        been profiled and explicitly enabled. ``rulebox_prewarm_required``
-        still enforces a strict compiled-only deployment when requested.
-        """
-        return self.native_typedb_rule_execution_enabled() and truthy(
-            self.settings.get("typedbNativeRuleDirectQueryFallbackEnabled"),
-            True,
-        )
-
-    def rulebox_prewarm_retry_seconds(self) -> int:
-        return int_setting(
-            self.settings,
-            "ontologyRuleboxPrewarmIntervalSeconds",
-            15,
-            5,
-            300,
-        )
-
-    def rulebox_prewarm_backlog_recovery_enabled(self) -> bool:
-        return truthy(
-            self.settings.get("ontologyRuleboxPrewarmBacklogRecoveryEnabled"),
-            True,
-        )
-
-    def rulebox_prewarm_backlog_recovery_age_seconds(self) -> int:
-        return int_setting(
-            self.settings,
-            "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds",
-            90,
-            15,
-            24 * 60 * 60,
-        )
-
-    def rulebox_prewarm_backlog_recovery_min_pending_entries(self) -> int:
-        return int_setting(
-            self.settings,
-            "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries",
-            2,
-            1,
-            100000,
-        )
-
-    def rulebox_prewarm_backlog_recovery_retry_seconds(self) -> int:
-        return int_setting(
-            self.settings,
-            "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds",
-            5,
-            3,
-            60,
-        )
-
-    def rulebox_prewarm_backlog_recovery_state(
-        self,
-        requests: Iterable[object],
-    ) -> Dict[str, object]:
-        """Tell a cold compiler apart from ordinary one-shot live work.
-
-        Direct TypeQL fallback protects a fresh alert from a schema compiler,
-        but it is intentionally serial.  Once it demonstrably cannot drain a
-        durable latest-state queue, yielding one short period to the prewarm
-        worker is faster than repeatedly starting another serial fallback.
-        """
-        pending_requests = list(requests or [])
-        pending = len(pending_requests)
-        age_seconds = self.oldest_request_wait_seconds(pending_requests)
-        threshold = self.rulebox_prewarm_backlog_recovery_age_seconds()
-        minimum = self.rulebox_prewarm_backlog_recovery_min_pending_entries()
-        enabled = self.rulebox_prewarm_backlog_recovery_enabled()
-        return {
-            "enabled": enabled,
-            "pendingEntryCount": pending,
-            "oldestPendingAgeSeconds": age_seconds,
-            "minimumPendingEntries": minimum,
-            "ageThresholdSeconds": threshold,
-            "eligible": bool(
-                enabled
-                and pending >= minimum
-                and age_seconds >= threshold
-            ),
-        }
-
-    def rulebox_prewarm_readiness(
-        self,
-        probe_when_fallback: bool = False,
-    ) -> Dict[str, object]:
-        if not self.rulebox_prewarm_required() and not probe_when_fallback:
-            return {
-                "ready": True,
-                "status": "direct-typeql-fallback" if self.rulebox_prewarm_direct_fallback_enabled() else "disabled",
-                "directTypeqlFallbackEnabled": self.rulebox_prewarm_direct_fallback_enabled(),
-                "reason": (
-                    "RuleBox prewarm readiness gate is explicitly disabled; a cold receipt uses bounded direct TypeQL evaluation."
-                    if self.rulebox_prewarm_direct_fallback_enabled()
-                    else "RuleBox prewarm gate is disabled for this runtime."
-                ),
-            }
-        probe = getattr(self, "rulebox_prewarm_probe", None)
-        if not callable(probe):
-            # Compatibility repositories do not expose generated functions.
-            # Do not turn that absence into a permanent scheduler outage.
-            return {
-                "ready": True,
-                "status": "unsupported",
-                "reason": "Ontology repository has no RuleBox prewarm readiness probe.",
-            }
-        try:
-            payload = probe()
-        except Exception as error:  # noqa: BLE001 - fail closed before a live schema fallback.
-            return {
-                "ready": False,
-                "status": "error",
-                "functionsReady": False,
-                "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
-                "reason": "TypeDB RuleBox prewarm readiness lookup failed: " + str(error)[:180],
-            }
-        result = dict(payload or {}) if isinstance(payload, dict) else {
-            "status": "error",
-            "functionsReady": False,
-            "reason": "TypeDB RuleBox prewarm readiness returned an invalid payload.",
-        }
-        ready = bool(result.get("functionsReady")) or str(result.get("status") or "") == "ok"
-        return {
-            **result,
-            "ready": ready,
-            "retryAfterSeconds": self.rulebox_prewarm_retry_seconds(),
-            "recoveryProbe": bool(probe_when_fallback),
-        }
-
-    def rulebox_prewarm_activity_state(self) -> Dict[str, object]:
-        """Read the low-cost compiler hand-off state without opening TypeDB.
-
-        A schema commit rebuilds TypeDB's type cache and may still be running
-        after its Python child has lost the driver connection. During that
-        window a readiness check is counterproductive: it creates another
-        native-driver handshake exactly while the compiler owns the server.
-        """
-        probe = self.rulebox_prewarm_activity_probe
-        if not callable(probe):
-            return {"active": False, "status": "not-configured"}
-        try:
-            payload = probe()
-        except Exception as error:  # noqa: BLE001 - a missing hint must not block a normal receipt check.
-            return {
-                "active": False,
-                "status": "error",
-                "reason": str(error)[:180],
-            }
-        result = dict(payload or {}) if isinstance(payload, Mapping) else {}
-        status = str(result.get("status") or "").strip().lower()
-        try:
-            expires_at_epoch = float(result.get("expiresAtEpoch") or 0)
-        except (TypeError, ValueError):
-            expires_at_epoch = 0.0
-        if not expires_at_epoch:
-            raw_expiry = str(result.get("expiresAt") or "").strip()
-            if raw_expiry:
-                try:
-                    expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
-                    if expiry.tzinfo is None:
-                        expiry = expiry.replace(tzinfo=timezone.utc)
-                    expires_at_epoch = expiry.astimezone(timezone.utc).timestamp()
-                except ValueError:
-                    expires_at_epoch = 0.0
-        now = self.now_provider()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        remaining = max(0.0, expires_at_epoch - now.astimezone(timezone.utc).timestamp())
-        active = bool(
-            result.get("active")
-            and status in {"running", "cooldown", "provisioning", "handoff"}
-            and remaining > 0
-        )
-        return {
-            **result,
-            "status": status or "unknown",
-            "active": active,
-            "remainingSeconds": int(remaining + 0.999) if active else 0,
-            # Poll MySQL again soon. This intentionally avoids a long stale
-            # wait if an isolated compiler process is killed unexpectedly.
-            "retryAfterSeconds": min(
-                max(1, int(remaining + 0.999)) if active else 0,
-                self.rulebox_prewarm_retry_seconds(),
-            ) if active else 0,
-        }
-
-    def request_rulebox_prewarm(self, readiness: Dict[str, object]) -> Dict[str, object]:
-        """Persist a cold-receipt hand-off for the dedicated compiler worker.
-
-        The reasoning worker only observes missing receipts; it must never
-        compile schema functions itself. Publishing this small MySQL marker
-        invalidates a previously-ready hand-off after a RuleBox change and
-        lets the prewarm scheduler make progress even while latest-state
-        mailbox work is waiting.
-        """
-        writer = self.rulebox_prewarm_state_writer
-        if not callable(writer):
-            return {"published": False, "reason": "not-configured"}
-        now = self.now_provider()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        summary = {
-            key: dict(readiness or {}).get(key)
-            for key in [
-                "status",
-                "functionsReady",
-                "pendingRuleCount",
-                "reasonCode",
-                "reason",
-            ]
-            if key in dict(readiness or {})
-        }
-        payload = {
-            "status": "bootstrap-required",
-            "active": False,
-            "updatedAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "expiresAtEpoch": 0,
-            "reason": "live-readiness-probe-reported-cold-rulebox",
-            "lastResult": {
-                **summary,
-                "functionsReady": False,
-            },
-        }
-        try:
-            writer(payload)
-        except Exception as error:  # noqa: BLE001 - live safety must not depend on telemetry writes.
-            return {"published": False, "reason": str(error)[:180]}
-        return {"published": True, "state": payload}
 
     def source_snapshot_preflight(self, reasoning_context: Dict[str, object]) -> Dict[str, object]:
         """Check a persisted snapshot boundary before creating a TypeDB child.
@@ -1345,7 +1089,7 @@ class OntologyReasoningRunner:
         return status
 
     def native_typedb_target_symbol_limit(self) -> int:
-        """Bound schema-function work without reducing the complete ABox."""
+        """Bound direct TypeQL work without reducing the complete ABox."""
         return int_setting(self.settings, "typedbNativeRuleTargetSymbolLimit", 1, 1, 200)
 
     def effective_max_symbols_per_run(self) -> int:
@@ -1445,7 +1189,7 @@ class OntologyReasoningRunner:
         revision. This guard is for the remaining case: the same latest
         revision repeatedly reaches TypeDB but cannot produce an aligned
         InferenceBox. Giving that revision a bounded backoff lets other
-        symbols progress and gives the RuleBox prewarm worker a quiet handoff.
+        symbols progress without repeatedly retrying the same failed input.
         """
         requested = max(1, int(requested_retry_seconds or self.projection_retry_seconds()))
         results = list((projection_gate or {}).get("results") or [])
@@ -1458,7 +1202,6 @@ class OntologyReasoningRunner:
             "inference-failed-rolled-back",
             "inference-finalization-pending",
             "incomplete-native-coverage",
-            "deferred-schema-function-provisioning",
         }
         attempts = self.mailbox_attempt_count(entries)
         threshold = self.projection_failure_yield_after_attempts()
@@ -4207,7 +3950,7 @@ class OntologyReasoningRunner:
         max_symbols_override: int = None,
     ) -> Tuple[Dict[str, List[str]], List[str], int]:
         # Snapshot construction still preserves all portfolio and market
-        # entities. Native schema-function subjects remain bounded by the
+        # entities. Native TypeQL subjects remain bounded by the
         # configured realtime cap; one coherent ABox/InferenceBox generation
         # can safely include the highest-priority subjects from more than one
         # source event.
@@ -4341,7 +4084,7 @@ class OntologyReasoningRunner:
                 ]
                 snapshot_limit = self.coherent_snapshot_max_symbols()
                 # Coherence refers to the full ABox retained for context, not
-                # an unbounded schema-function request. Native TypeDB rules
+                # an unbounded TypeQL request. Native TypeDB rules
                 # still run only for the configured incremental subjects so a
                 # broad market event cannot monopolize the realtime worker.
                 if max_symbols > 0:
@@ -4572,11 +4315,6 @@ class OntologyReasoningRunner:
             "deferred-source-snapshot",
             "blocked-pending-abox-activation",
             "pending-abox-activation",
-            # The dedicated RuleBox prewarm worker compiles a cold TypeDB
-            # catalogue outside live inference. Keep source events pending
-            # while the prior aligned generation remains active; this is
-            # controlled back-pressure, not an investment inference failure.
-            "deferred-schema-function-provisioning",
             # The candidate was safely rolled back to its predecessor because
             # durable InferenceBox readback did not prove the same generation.
             # Keep events pending and retry with back-pressure instead of
@@ -5658,14 +5396,6 @@ class OntologyReasoningRunner:
                 "failureStatuses": sorted(failure_statuses),
                 "failureYield": dict(yield_state or {}) if isinstance(yield_state, dict) else {},
             }
-        if status == "deferred-rulebox-prewarm-recovery":
-            return {
-                "status": "recovering",
-                "scope": "typedb-inference-execution",
-                "reason": str(last.get("deferredReason") or "RuleBox 컴파일 복구를 기다리는 중입니다."),
-                "lastExecutionStatus": status,
-                "ruleboxPrewarm": dict(last.get("ruleboxPrewarm") or {}),
-            }
         if status in {"ok", "idle", "cooldown", "partial"}:
             return {
                 "status": "healthy",
@@ -5809,13 +5539,6 @@ class OntologyReasoningRunner:
                     "retryAfterSeconds", "failureStatuses",
                 ]
                 if key in failure_yield
-            }
-        rulebox_prewarm = result.get("ruleboxPrewarm")
-        if isinstance(rulebox_prewarm, dict):
-            summary["ruleboxPrewarm"] = {
-                key: rulebox_prewarm.get(key)
-                for key in ["status", "functionsReady", "pendingRuleCount", "reason"]
-                if key in rulebox_prewarm
             }
         payload = self.cursor_payload()
         history = [dict(item) for item in payload.get("reasoningExecutionHistory") or [] if isinstance(item, dict)]
@@ -6006,151 +5729,6 @@ class OntologyReasoningRunner:
                 "retryAfterSeconds": 60,
                 "deferredReason": str(storage_guard.get("reason") or "TypeDB 저장소 여유 공간이 부족해 추론을 보류합니다."),
                 "storageGuard": storage_guard,
-                "coalescedEventCount": len(durable_superseded_ids),
-                **queue_metadata,
-            }
-        prewarm_recovery = self.rulebox_prewarm_backlog_recovery_state(requests)
-        queue_metadata["ruleboxPrewarmRecovery"] = dict(prewarm_recovery)
-        prewarm_required = self.rulebox_prewarm_required()
-        direct_fallback_enabled = self.rulebox_prewarm_direct_fallback_enabled()
-        # A receipt check is not free: it reads the complete RuleBox and both
-        # deployment namespaces. It is nevertheless required before a normal
-        # investment judgement so a TypeDB restart cannot change the rule
-        # execution shape beneath an alert. Compatibility deployments that
-        # explicitly disable the gate retain the bounded direct-TypeQL path.
-        # Compatibility deployments normally keep direct TypeQL available
-        # while functions are cold. Once that path has left an aged backlog,
-        # it must yield to the dedicated compiler just like a strict receipt
-        # gate; otherwise the compiler can never acquire an idle turn.
-        prewarm_recovery_probe = bool(prewarm_recovery.get("eligible"))
-        prewarm_activity = (
-            self.rulebox_prewarm_activity_state()
-            if (
-                prewarm_required
-                or direct_fallback_enabled
-                or prewarm_recovery_probe
-            )
-            else {}
-        )
-        prewarm_activity_status = str(prewarm_activity.get("status") or "").strip().lower()
-        recovery_cooldown_fallback = bool(
-            prewarm_recovery_probe
-            and direct_fallback_enabled
-            and bool(prewarm_activity.get("active"))
-            and prewarm_activity_status == "cooldown"
-        )
-        if bool(prewarm_activity.get("active")) and prewarm_required:
-            retry_after = int(
-                prewarm_activity.get("retryAfterSeconds")
-                or self.rulebox_prewarm_retry_seconds()
-            )
-            activity_status = str(prewarm_activity.get("status") or "running")
-            activity_reason = (
-                "TypeDB RuleBox 컴파일러가 " + activity_status
-                + " 상태로 실행 중입니다. 완료 확인을 위해 TypeDB에 새 연결을 열지 않고 대기합니다."
-            )
-            if prewarm_recovery_probe:
-                return {
-                    "status": "deferred-rulebox-prewarm-recovery",
-                    "processedCount": 0,
-                    "alertCount": 0,
-                    "retryAfterSeconds": max(1, retry_after),
-                    "deferredReason": (
-                        "오래된 추론 대기열의 직접 TypeQL 재시도를 멈추고 " + activity_reason
-                    ),
-                    "ruleboxPrewarm": {
-                        "status": "compiler-" + activity_status,
-                        "functionsReady": False,
-                        "reason": activity_reason,
-                    },
-                    "ruleboxPrewarmActivity": prewarm_activity,
-                    "ruleboxPrewarmRecovery": prewarm_recovery,
-                    "coalescedEventCount": len(durable_superseded_ids),
-                    **queue_metadata,
-                }
-            return {
-                "status": "deferred-rulebox-prewarm",
-                "processedCount": 0,
-                "alertCount": 0,
-                "retryAfterSeconds": max(1, retry_after),
-                "deferredReason": activity_reason,
-                "ruleboxPrewarm": {
-                    "status": "compiler-" + activity_status,
-                    "functionsReady": False,
-                    "reason": activity_reason,
-                },
-                "ruleboxPrewarmActivity": prewarm_activity,
-                "ruleboxPrewarmRecovery": prewarm_recovery,
-                "coalescedEventCount": len(durable_superseded_ids),
-                **queue_metadata,
-            }
-        if bool(prewarm_activity.get("active")) and direct_fallback_enabled:
-            # Read transactions remain available while TypeDB owns the schema
-            # writer.  A compatibility deployment that explicitly disables
-            # the strict readiness gate therefore keeps investment inference
-            # on the serial, bounded direct-TypeQL path instead of turning a
-            # background compiler cooldown into a full notification outage.
-            queue_metadata["ruleboxPrewarmActivity"] = dict(prewarm_activity)
-            queue_metadata["ruleboxPrewarmFallbackDuringCompilerActivity"] = True
-            if recovery_cooldown_fallback:
-                # A failed compiler records a bounded cooldown so another
-                # schema writer does not immediately contend with TypeDB.
-                # The read-only fallback remains available during that window;
-                # otherwise an already-aged mailbox would be blocked twice.
-                queue_metadata["ruleboxPrewarmRecoveryCooldownFallback"] = True
-        if direct_fallback_enabled:
-            # A schema compilation is a background optimisation. When the
-            # compatibility path is explicitly enabled, live TypeQL inference
-            # must keep draining the mailbox even while a compiler attempt is
-            # active or its receipt is unavailable. The compiler scheduler
-            # waits for a true idle window before trying again.
-            prewarm_recovery_probe = False
-        elif recovery_cooldown_fallback:
-            prewarm_recovery_probe = False
-        rulebox_prewarm = self.rulebox_prewarm_readiness(
-            probe_when_fallback=prewarm_recovery_probe,
-        )
-        if not rulebox_prewarm.get("ready") and prewarm_required:
-            retry_after = int(
-                rulebox_prewarm.get("retryAfterSeconds")
-                or self.rulebox_prewarm_retry_seconds()
-            )
-            prewarm_request = self.request_rulebox_prewarm(rulebox_prewarm)
-            return {
-                "status": "deferred-rulebox-prewarm",
-                "processedCount": 0,
-                "alertCount": 0,
-                "retryAfterSeconds": max(1, retry_after),
-                "deferredReason": (
-                    "TypeDB RuleBox 함수 사전 준비가 완료될 때까지 투자 판단 추론을 안전하게 보류합니다. "
-                    + str(rulebox_prewarm.get("reason") or "")[:180]
-                ).strip(),
-                "ruleboxPrewarm": rulebox_prewarm,
-                "ruleboxPrewarmRequest": prewarm_request,
-                "ruleboxPrewarmRecovery": prewarm_recovery,
-                "coalescedEventCount": len(durable_superseded_ids),
-                **queue_metadata,
-            }
-        if prewarm_recovery_probe and not rulebox_prewarm.get("ready"):
-            probe_retry_after = int(
-                rulebox_prewarm.get("retryAfterSeconds")
-                or self.rulebox_prewarm_backlog_recovery_retry_seconds()
-            )
-            retry_after = min(
-                probe_retry_after,
-                self.rulebox_prewarm_backlog_recovery_retry_seconds(),
-            )
-            return {
-                "status": "deferred-rulebox-prewarm-recovery",
-                "processedCount": 0,
-                "alertCount": 0,
-                "retryAfterSeconds": max(1, retry_after),
-                "deferredReason": (
-                    "오래된 추론 대기열의 직접 TypeQL 재시도를 멈추고 TypeDB RuleBox 컴파일 복구를 기다립니다. "
-                    + str(rulebox_prewarm.get("reason") or "")[:180]
-                ).strip(),
-                "ruleboxPrewarm": rulebox_prewarm,
-                "ruleboxPrewarmRecovery": prewarm_recovery,
                 "coalescedEventCount": len(durable_superseded_ids),
                 **queue_metadata,
             }

@@ -234,7 +234,7 @@ def inference_eligible(evidence, lifecycle_state: object = "active", settings: D
     """Whether an evidence item belongs to the active investment fact set.
 
     Materiality only decides admission to the inference fact set.  It does not
-    determine the final investment action; TypeDB schema functions remain the
+    determine the final investment action; direct TypeQL rules remain the
     only judgement path.
     """
     if evidence is None or not evidence_is_active(lifecycle_state):

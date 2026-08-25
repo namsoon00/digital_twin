@@ -1565,7 +1565,7 @@ def decision_from_inference(
                 if missing_effect_rule_ids
                 else "blocked-no-predictive-hypothesis"
             ),
-            "finalDecisionOwner": "typedb-schema-function-rules",
+            "finalDecisionOwner": "typedb-direct-typeql-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
             "eligibleRuleIds": [],
             "excludedRuleIds": list((action_envelope.get("dataReadiness") or {}).get("excludedRuleIds") or []),
@@ -1622,7 +1622,7 @@ def decision_from_inference(
             "basis": source_name,
             "selectedRuleId": selected.rule_id,
             "selectionRole": "blocked-missing-typedb-decision-policy",
-            "finalDecisionOwner": "typedb-schema-function-rules",
+            "finalDecisionOwner": "typedb-direct-typeql-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
             "candidateDecisionStages": [],
             "selectedInferenceTraceId": "",

@@ -1038,7 +1038,11 @@ def build_investment_narrative_brief(
         status="published" if accepted_claim_ids else "blocked",
         writer_kind=publication_writer,
         review_mode=review_mode,
-        action_authority="typedb" if review_mode == "context-narrative" else "ai-judgement",
+        action_authority=(
+            "typedb"
+            if review_mode == "context-narrative" or not ai_claim_count
+            else "ai-judgement"
+        ),
         accepted_claim_ids=tuple(accepted_claim_ids),
         rejected_claim_ids=tuple(rejected_claim_ids),
         ai_claim_count=ai_claim_count,

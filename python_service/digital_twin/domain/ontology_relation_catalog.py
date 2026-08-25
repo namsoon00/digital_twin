@@ -1,6 +1,6 @@
 """Bootstrap ontology relation catalog.
 
-Use active TypeDB schema-function RuleBox/InferenceBox output for runtime reasoning behavior.
+Use active TypeDB direct-TypeQL RuleBox/InferenceBox output for runtime reasoning behavior.
 The defaults here seed ontology/native-rule management views and prompt read models when no
 graph-store rules have been saved yet; they are not a Python fallback reasoner.
 """

@@ -247,21 +247,7 @@ class OntologyReasoningProofService:
             and int(item.get("queryCount") or 0) > 0
             and str(item.get("queryMode") or "").strip()
         })
-        direct_query_used = any(
-            "scoped-typeql" in mode or "manifest-evidence-index" in mode
-            for mode in production_query_modes
-        )
-        schema_function_used = any(
-            "schema-function" in mode
-            for mode in production_query_modes
-        )
-        replay_query_mode = (
-            "direct-typeql"
-            if direct_query_used
-            else "schema-function"
-            if schema_function_used
-            else "auto"
-        )
+        replay_query_mode = "direct-typeql"
         production_rule_ids = []
         for item in rule_trace.get("rules") or []:
             rule_id = str(item.get("ruleId") or "")
@@ -304,8 +290,8 @@ class OntologyReasoningProofService:
                 "symbols": requested_symbols,
                 "repeats": max(1, min(3, int(repeats or 2))),
                 # Compare the exact production read set by default. Replaying
-                # every active rule both distorts the evidence and can touch a
-                # schema function that the production generation never used.
+                # every active rule both distorts the evidence and spends time
+                # on predicates that the production generation never used.
                 "ruleIds": requested_rule_ids,
                 "nativeQueryMode": replay_query_mode,
                 "compareSubjectFanout": bool(compare_subject_fanout),

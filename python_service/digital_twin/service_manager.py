@@ -14,7 +14,6 @@ from typing import Dict, List
 
 from .infrastructure.mysql_monitoring import mysql_settings
 from .infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore
-from .infrastructure.mysql_operational import MySQLOntologyRuleboxPrewarmStateStore
 from .infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.share_runtime import fixed_entry_url, share_credentials_environment
@@ -131,13 +130,6 @@ BASE_WORKERS = {
         "log": data_dir() / "python-ontology-inference-detail.log",
         "command": [sys.executable, "-u", "python_service/service.py", "ontology-inference-detail", "watch"],
         "needle": "python_service/service.py ontology-inference-detail watch",
-    },
-    "ontology-rulebox-prewarm": {
-        "label": "Python TypeDB RuleBox schema-function prewarm worker",
-        "pid": data_dir() / "python-ontology-rulebox-prewarm.pid",
-        "log": data_dir() / "python-ontology-rulebox-prewarm.log",
-        "command": [sys.executable, "-u", "python_service/service.py", "ontology-rulebox-prewarm", "watch"],
-        "needle": "python_service/service.py ontology-rulebox-prewarm watch",
     },
     "ontology-maintenance": {
         "label": "Python ontology ABox maintenance worker",
@@ -379,24 +371,6 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
-        "schemaFunctionDirectQueryFallbackEnabled": str(
-            (settings or {}).get("typedbNativeRuleDirectQueryFallbackEnabled")
-            or os.environ.get("TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED")
-            or "0"
-        ),
-        "schemaFunctionProvisionBatchSize": str(
-            (settings or {}).get("typedbSchemaFunctionProvisionBatchSize") or "1"
-        ),
-        "schemaFunctionProvisionTimeoutSeconds": str(
-            (settings or {}).get("typedbSchemaFunctionProvisionTimeoutSeconds") or "900"
-        ),
-        "schemaFunctionPrewarmMaxAttempts": str(
-            (settings or {}).get("typedbBlueGreenFunctionPrewarmMaxAttempts") or "60"
-        ),
-        "schemaFunctionPrewarmAttemptTimeoutSeconds": str(
-            (settings or {}).get("typedbBlueGreenFunctionPrewarmAttemptTimeoutSeconds")
-            or "1200"
-        ),
         # A fresh TypeDB needs to persist the complete static TBox, RuleBox,
         # and language contract before any ABox worker is allowed to run.
         # The safe one-query static writes intentionally trade bootstrap speed
@@ -737,12 +711,6 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         workers["typedb"] = typedb_worker_spec(settings)
     if truthy((settings or {}).get("timeSeriesQuestDbEnabled")):
         workers["questdb"] = questdb_worker_spec(settings)
-    # Schema-function readiness is a prerequisite for investment inference.
-    # Start its dedicated worker before collectors can create fresh reasoning
-    # pressure; the reasoning worker itself still fails closed until the
-    # verified receipt for the active RuleBox/TBox is ready.
-    if "ontology-rulebox-prewarm" in BASE_WORKERS:
-        workers["ontology-rulebox-prewarm"] = BASE_WORKERS["ontology-rulebox-prewarm"]
     active_engine_version = active_reasoning_engine_version(settings)
     independent_v2_enabled = truthy(
         (settings or {}).get("reasoningEngineV2IndependentEnabled", "1")
@@ -761,8 +729,7 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     workers.update({
         name: spec
         for name, spec in BASE_WORKERS.items()
-        if name != "ontology-rulebox-prewarm"
-        and not (name == "ontology-reasoning" and active_engine_version != "v1")
+        if not (name == "ontology-reasoning" and active_engine_version != "v1")
         and not (
             name in {"reasoning-engine-delivery", "reasoning-engine-shadow"}
             and not independent_v2_enabled
@@ -804,7 +771,6 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
 
 
 GRAPH_DEPENDENT_WORKERS = {
-    "ontology-rulebox-prewarm",
     "ontology-reasoning",
     "reasoning-engine-delivery",
     "reasoning-engine-shadow",
@@ -1577,17 +1543,6 @@ def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str,
             "schemaContractFingerprint": str(values.get("activeSchemaContractFingerprint") or ""),
             "failedChecks": list(values.get("failedChecks") or []),
         }
-    function_readiness = {}
-    for database, readiness in dict(source.get("validatedFunctionReadiness") or {}).items():
-        values = dict(readiness or {})
-        function_readiness[str(database)] = {
-            "status": str(values.get("status") or "unknown"),
-            "complete": bool(values.get("complete")),
-            "logicalRuleCount": int_value(values.get("logicalRuleCount"), 0, 0),
-            "expectedFunctionCount": int_value(values.get("expectedFunctionCount"), 0, 0),
-            "verifiedFunctionCount": int_value(values.get("verifiedFunctionCount"), 0, 0),
-            "missingFunctionCount": int_value(values.get("missingFunctionCount"), 0, 0),
-        }
     summary = {
         "status": str(source.get("status") or "unknown"),
         "database": str(source.get("database") or ""),
@@ -1595,22 +1550,10 @@ def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str,
         "validatedInferenceModes": dict(source.get("validatedInferenceModes") or {}),
         "validatedReleaseContracts": dict(source.get("validatedReleaseContracts") or {}),
         "validatedSeedContracts": seed_contracts,
-        "validatedFunctionReadiness": function_readiness,
     }
     for key in ("seedContract", "releaseContract", "inferenceReadiness"):
         if isinstance(source.get(key), dict):
             summary[key] = dict(source.get(key) or {})
-    if isinstance(source.get("functionPrewarm"), dict):
-        prewarm = dict(source.get("functionPrewarm") or {})
-        attempts = list(prewarm.get("attempts") or [])
-        summary["functionPrewarm"] = {
-            "status": str(prewarm.get("status") or "unknown"),
-            "ready": bool(prewarm.get("ready")),
-            "attemptCount": int_value(prewarm.get("attemptCount"), len(attempts), 0),
-            "lastAttempt": dict(attempts[-1] or {}) if attempts else {},
-            "readiness": dict(prewarm.get("readiness") or {}),
-            "reason": str(prewarm.get("reason") or "")[:300],
-        }
     return summary
 
 
@@ -1639,42 +1582,6 @@ def record_typedb_rulebox_deployment_event(
         return {"recorded": True, "eventId": event.event_id}
     except Exception as error:  # noqa: BLE001 - active TypeDB safety takes precedence.
         return {"recorded": False, "reason": str(error)[:180]}
-
-
-def enable_rulebox_prewarm_after_verified_cutover(operation_id: str) -> Dict[str, object]:
-    """Enable future delta compilation only after a verified candidate serves."""
-
-    try:
-        from .domain.events import DomainEvent, SETTINGS_UPDATED
-        from .infrastructure.operational_store import event_log
-        from .infrastructure.settings import save_runtime_settings
-
-        saved = save_runtime_settings({"ontologyRuleboxPrewarmEnabled": "1"})
-        enabled = truthy(saved.get("ontologyRuleboxPrewarmEnabled"))
-        audit = {"recorded": False}
-        try:
-            configured = runtime_settings(fast_operational_read=True)
-            event = DomainEvent(
-                name=SETTINGS_UPDATED,
-                aggregate_id="runtime",
-                payload={
-                    "keys": ["ontologyRuleboxPrewarmEnabled"],
-                    "reason": "verified-blue-green-rulebox-cutover",
-                    "operationId": str(operation_id or "")[:191],
-                },
-                correlation_id=("rulebox-deployment:" + str(operation_id or ""))[:191],
-            )
-            event_log(configured).handle(event)
-            audit = {"recorded": True, "eventId": event.event_id}
-        except Exception as error:  # noqa: BLE001 - setting persistence already succeeded.
-            audit = {"recorded": False, "reason": str(error)[:180]}
-        return {
-            "enabled": enabled,
-            "setting": "ontologyRuleboxPrewarmEnabled",
-            "audit": audit,
-        }
-    except Exception as error:  # noqa: BLE001 - serving candidate remains valid without the worker.
-        return {"enabled": False, "reason": str(error)[:180]}
 
 
 def typedb_storage_preflight(spec: Dict[str, object]) -> Dict[str, object]:
@@ -2136,28 +2043,6 @@ def typedb_portfolio_world_projection_rebuild_command(spec: Dict[str, object]) -
     ]
 
 
-def typedb_rulebox_prewarm_status_command(_spec: Dict[str, object]) -> List[str]:
-    return [
-        sys.executable,
-        "-u",
-        "python_service/service.py",
-        "ontology-rulebox-prewarm",
-        "status",
-    ]
-
-
-def typedb_rulebox_candidate_prewarm_command(_spec: Dict[str, object]) -> List[str]:
-    return [
-        sys.executable,
-        "-u",
-        "python_service/service.py",
-        "ontology-rulebox-prewarm",
-        "once",
-        "--force",
-        "--candidate",
-    ]
-
-
 def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
     """Pin maintenance commands to the exact TypeDB instance being managed."""
     environment = managed_process_environment(spec)
@@ -2184,18 +2069,7 @@ def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
                 int_value(spec.get("freshSchemaBootstrapTimeoutSeconds"), 900, 1),
                 int_value(spec.get("schemaOperationTimeoutSeconds"), 120, 1),
             )),
-            # Candidate compilation is isolated from the active TypeDB and
-            # must converge on a complete function catalogue before cutover.
-            "ONTOLOGY_RULEBOX_PREWARM_ENABLED": "1",
-            "ONTOLOGY_RULEBOX_PREWARM_REQUIRE_READY_FOR_INFERENCE": "1",
-            "TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED": "0",
-            "TYPEDB_SCHEMA_FUNCTION_PROBE_INTERVAL_SECONDS": "0",
-            "TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE": str(
-                spec.get("schemaFunctionProvisionBatchSize") or "1"
-            ),
-            "TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS": str(
-                spec.get("schemaFunctionProvisionTimeoutSeconds") or "900"
-            ),
+            "TYPEDB_NATIVE_RULE_EXECUTION_ENABLED": "1",
         })
     return environment
 
@@ -2449,323 +2323,17 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             release_typedb_rotation_lock(maintenance_lock)
 
 
-def typedb_rulebox_readiness_summary(payload: Dict[str, object]) -> Dict[str, object]:
-    """Flatten receipt-backed RuleBox readiness for promotion decisions."""
-
-    values = dict(payload or {})
-    prewarm = dict(values.get("prewarm") or values)
-    namespace_rows = [
-        dict(item or {})
-        for item in prewarm.get("namespaceResults") or []
-        if isinstance(item, dict)
-    ]
-    results = [
-        dict(item.get("result") or {})
-        for item in namespace_rows
-    ]
-    expected_function_count = sum(
-        int_value(item.get("expectedFunctionCount"), 0, 0)
-        for item in results
-    )
-    verified_function_count = sum(
-        int_value(
-            dict(item.get("functionProbe") or {}).get("verifiedFunctionCount")
-            or item.get("syncedFunctionCount"),
-            0,
-            0,
-        )
-        for item in results
-    )
-    missing_function_count = sum(
-        int_value(
-            item.get("missingFunctionCount"),
-            max(0, int_value(item.get("expectedFunctionCount"), 0, 0)),
-            0,
-        )
-        for item in results
-    )
-    logical_rule_count = max([
-        int_value(item.get("logicalRuleCount"), 0, 0)
-        for item in results
-    ] or [int_value(prewarm.get("ruleCount"), 0, 0)])
-    expected_bridge_count = sum(
-        int_value(item.get("expectedSharedModelSignalBridgeFunctionCount"), 0, 0)
-        for item in results
-    )
-    functions_ready = bool(prewarm.get("functionsReady"))
-    if functions_ready and expected_function_count:
-        verified_function_count = expected_function_count
-        missing_function_count = 0
-    complete = bool(
-        functions_ready
-        and logical_rule_count > 0
-        and expected_function_count > 0
-        and verified_function_count == expected_function_count
-        and missing_function_count == 0
-    )
-    return {
-        "status": str(prewarm.get("status") or "unknown"),
-        "functionsReady": functions_ready,
-        "complete": complete,
-        "logicalRuleCount": logical_rule_count,
-        "expectedFunctionCount": expected_function_count,
-        "verifiedFunctionCount": verified_function_count,
-        "missingFunctionCount": missing_function_count,
-        "expectedSharedModelSignalBridgeFunctionCount": expected_bridge_count,
-        "verifiedSharedModelSignalBridgeFunctionCount": (
-            expected_bridge_count if complete else 0
-        ),
-        "ruleboxMetadata": dict(prewarm.get("ruleboxMetadata") or {}),
-    }
-
-
 def validate_typedb_candidate_inference_runtime(
     spec: Dict[str, object],
-    require_functions: bool = False,
 ) -> Dict[str, object]:
-    """Read native-rule readiness, optionally enforcing the promotion gate.
+    """Validate the sole native-rule runtime without compiler receipts."""
 
-    Active-store diagnostics may still report bounded direct TypeQL fallback.
-    Blue-green preparation always sets ``require_functions`` and therefore
-    cannot promote a candidate until every expected function is verified.
-    """
-    try:
-        result = subprocess.run(
-            low_priority_command(spec, typedb_rulebox_prewarm_status_command(spec)),
-            cwd=str(ROOT_DIR),
-            env=typedb_subprocess_environment(spec),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return {
-            "status": "error",
-            "ready": False,
-            "reason": str(error)[:220],
-        }
-    if result.returncode != 0:
-        return {
-            "status": "error",
-            "ready": False,
-            "reason": str(result.stderr or result.stdout or "RuleBox readiness command failed")[:220],
-        }
-    try:
-        payload = json.loads(str(result.stdout or "{}"))
-    except json.JSONDecodeError as error:
-        return {
-            "status": "error",
-            "ready": False,
-            "reason": "Invalid RuleBox readiness response: " + str(error)[:180],
-        }
-    readiness = typedb_rulebox_readiness_summary(payload)
-    functions_ready = bool(readiness.get("complete"))
-    direct_fallback_ready = truthy(spec.get("schemaFunctionDirectQueryFallbackEnabled"))
-    strict = bool(require_functions or truthy(spec.get("candidateRequireSchemaFunctions")))
-    ready = functions_ready if strict else bool(functions_ready or direct_fallback_ready)
+    ready = typedb_driver_ready(spec)
     return {
         "status": "ready" if ready else "blocked",
         "ready": ready,
-        "mode": "schema-functions" if functions_ready else "direct-typeql-fallback",
-        "functionsReady": functions_ready,
-        "directTypeqlFallbackReady": direct_fallback_ready,
-        "strictSchemaFunctionsRequired": strict,
-        "ruleCount": int_value(readiness.get("logicalRuleCount"), 0, 0),
-        "readiness": readiness,
-        "reason": (
-            ""
-            if ready
-            else "Candidate promotion requires every expected TypeDB schema function receipt."
-            if strict
-            else "TypeDB schema functions are incomplete and direct TypeQL fallback is disabled."
-        ),
-    }
-
-
-def command_json_payload(output: object) -> Dict[str, object]:
-    """Read the final JSON object emitted by a maintenance subprocess."""
-
-    for line in reversed(str(output or "").splitlines()):
-        candidate = str(line or "").strip()
-        if not candidate.startswith("{"):
-            continue
-        try:
-            payload = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    return {}
-
-
-def interrupted_typedb_schema_operation(payload: Dict[str, object]) -> bool:
-    text = " ".join(str(dict(payload or {}).get(key) or "") for key in [
-        "reason", "stderr", "stdout", "workerOutput",
-    ]).lower()
-    return any(token in text for token in [
-        "keep-alive timed out",
-        "operation timed out",
-        "deadline exceeded",
-        "transport error",
-        "connection reset",
-        "connection closed",
-        "unable to connect to typedb server",
-    ])
-
-
-def prewarm_typedb_candidate_rulebox_functions(spec: Dict[str, object]) -> Dict[str, object]:
-    """Converge an isolated candidate on a complete schema-function receipt.
-
-    Every pass deploys one bounded physical batch and then reads the durable
-    receipt. A timed-out client may leave the TypeDB compiler running, so the
-    candidate process is restarted before the next probe. The active TypeDB
-    and its live reasoning queue are never touched.
-    """
-
-    max_attempts = int_value(spec.get("schemaFunctionPrewarmMaxAttempts"), 60, 1)
-    attempt_timeout = int_value(
-        spec.get("schemaFunctionPrewarmAttemptTimeoutSeconds"),
-        1200,
-        30,
-    )
-    attempts = []
-    last_verified = -1
-    consecutive_no_progress = 0
-
-    initial = validate_typedb_candidate_inference_runtime(spec, require_functions=True)
-    if bool(initial.get("ready")):
-        return {
-            "status": "ready",
-            "ready": True,
-            "attemptCount": 0,
-            "attempts": [],
-            "readiness": dict(initial.get("readiness") or {}),
-        }
-
-    for attempt in range(1, max_attempts + 1):
-        timed_out = False
-        try:
-            completed = subprocess.run(
-                low_priority_command(spec, typedb_rulebox_candidate_prewarm_command(spec)),
-                cwd=str(ROOT_DIR),
-                env=typedb_subprocess_environment(spec),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=attempt_timeout,
-            )
-            payload = command_json_payload(completed.stdout)
-            process_result = {
-                "returnCode": completed.returncode,
-                "status": str(payload.get("status") or "invalid-output"),
-                "reason": str(
-                    payload.get("reason")
-                    or completed.stderr
-                    or ("candidate prewarm emitted no JSON" if not payload else "")
-                )[:220],
-                "payload": payload,
-            }
-        except subprocess.TimeoutExpired as error:
-            timed_out = True
-            process_result = {
-                "returnCode": None,
-                "status": "timeout",
-                "reason": "Candidate RuleBox prewarm exceeded " + str(attempt_timeout) + " seconds.",
-                "stdout": str(error.stdout or "")[-500:],
-                "stderr": str(error.stderr or "")[-500:],
-            }
-        except OSError as error:
-            process_result = {
-                "returnCode": None,
-                "status": "error",
-                "reason": str(error)[:220],
-            }
-
-        restart_required = timed_out or interrupted_typedb_schema_operation(process_result)
-        if restart_required:
-            if not restart_typedb_stage_for_schema_retry(spec, "function prewarm retry"):
-                return {
-                    "status": "candidate-restart-failed",
-                    "ready": False,
-                    "attemptCount": attempt,
-                    "attempts": attempts + [{
-                        "attempt": attempt,
-                        "status": str(process_result.get("status") or "error"),
-                        "restarted": False,
-                    }],
-                    "reason": "Candidate TypeDB could not restart after an interrupted schema compile.",
-                }
-
-        readiness = validate_typedb_candidate_inference_runtime(spec, require_functions=True)
-        summary = dict(readiness.get("readiness") or {})
-        verified = int_value(summary.get("verifiedFunctionCount"), 0, 0)
-        attempts.append({
-            "attempt": attempt,
-            "status": str(process_result.get("status") or "unknown"),
-            "restarted": restart_required,
-            "verifiedFunctionCount": verified,
-            "expectedFunctionCount": int_value(summary.get("expectedFunctionCount"), 0, 0),
-            "missingFunctionCount": int_value(summary.get("missingFunctionCount"), 0, 0),
-        })
-        append_log(
-            spec["log"],
-            "candidate function prewarm attempt=" + str(attempt)
-            + " status=" + str(process_result.get("status") or "unknown")
-            + " verified=" + str(verified)
-            + "/" + str(summary.get("expectedFunctionCount") or 0),
-        )
-        if bool(readiness.get("ready")):
-            return {
-                "status": "ready",
-                "ready": True,
-                "attemptCount": attempt,
-                "attempts": attempts,
-                "readiness": summary,
-            }
-
-        if verified > last_verified:
-            last_verified = verified
-            consecutive_no_progress = 0
-        else:
-            consecutive_no_progress += 1
-
-        process_status = str(process_result.get("status") or "").strip().lower()
-        return_code = process_result.get("returnCode")
-        if (
-            return_code not in {0, None}
-            or process_status not in {"provisioning", "timeout", "error"}
-            or (process_status == "error" and not restart_required)
-        ):
-            return {
-                "status": "candidate-prewarm-failed",
-                "ready": False,
-                "attemptCount": attempt,
-                "attempts": attempts,
-                "readiness": summary,
-                "reason": str(process_result.get("reason") or "Candidate function prewarm failed."),
-            }
-        if consecutive_no_progress >= 3:
-            if not restart_typedb_stage_for_schema_retry(spec, "function prewarm no-progress"):
-                return {
-                    "status": "candidate-no-progress",
-                    "ready": False,
-                    "attemptCount": attempt,
-                    "attempts": attempts,
-                    "readiness": summary,
-                    "reason": "Candidate function receipts made no progress and the recovery restart failed.",
-                }
-            consecutive_no_progress = 0
-        time.sleep(1.0)
-
-    final = validate_typedb_candidate_inference_runtime(spec, require_functions=True)
-    return {
-        "status": "candidate-prewarm-incomplete",
-        "ready": False,
-        "attemptCount": max_attempts,
-        "attempts": attempts,
-        "readiness": dict(final.get("readiness") or {}),
-        "reason": "Candidate did not reach complete schema-function readiness within the bounded attempts.",
+        "mode": "typedb-direct-typeql",
+        "reason": "" if ready else "Candidate TypeDB direct-query driver probe failed.",
     }
 
 
@@ -3301,38 +2869,6 @@ def recover_typedb_scoped_write_lease_after_worker_restart(spec: Dict[str, objec
     return True
 
 
-def clear_typedb_rulebox_prewarm_activity() -> bool:
-    """Mark RuleBox compilation as required after a new TypeDB server is ready.
-
-    A bounded cooldown protects a server-side schema commit after its client
-    disconnects.  A managed TypeDB restart terminates that commit, so carrying
-    the old hand-off into the new server lifetime would delay prewarm for no
-    safety benefit. Do not mark the RuleBox as idle, however: the next native
-    inference must wait for receipts from this TypeDB server lifetime. The
-    prewarm scheduler uses this durable marker to break the otherwise circular
-    wait between a cold receipt and a non-empty mailbox.
-    """
-    settings = dict(runtime_settings())
-    settings["_skipOperationalHistoryRetention"] = "1"
-    settings["_skipOperationalSchemaBootstrap"] = "1"
-    try:
-        MySQLOntologyRuleboxPrewarmStateStore(settings).replace({
-            "status": "bootstrap-required",
-            "active": False,
-            "updatedAt": iso_now(),
-            "expiresAtEpoch": 0,
-            "reason": "typedb-server-restarted-require-rulebox-receipt",
-            "lastResult": {
-                "status": "bootstrap-required",
-                "functionsReady": False,
-                "reason": "TypeDB server restarted; RuleBox receipts must be verified before native investment inference.",
-            },
-        })
-    except Exception:  # noqa: BLE001 - a stale hint must never fail a healthy graph start.
-        return False
-    return True
-
-
 def start_worker(spec: Dict[str, object]) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
@@ -3427,8 +2963,6 @@ def start_worker(spec: Dict[str, object]) -> int:
             return 1
         if not ensure_typedb_shared_world_projection_rebuilt(spec):
             return 1
-        if not clear_typedb_rulebox_prewarm_activity():
-            append_log(log_path, "RuleBox compiler activity marker could not be cleared after TypeDB restart")
     elif role in {"mysql", "questdb", "web"}:
         if not wait_for_tcp_service(spec):
             print(str(spec["label"]) + " did not become ready at " + str(spec.get("healthAddress") or ""))
@@ -4031,11 +3565,6 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
         # replay fail on its first ontology-node write.
         "seedOnStart": "1",
         "seedReplaceRuleBox": "1",
-        # A candidate is promotable only after every generated function has a
-        # durable deployment receipt. The active store may keep its bounded
-        # fallback while this isolated process compiles.
-        "schemaFunctionDirectQueryFallbackEnabled": "0",
-        "candidateRequireSchemaFunctions": "1",
         # TypeDB 3.12 can spend more than 15 minutes compiling the first cold
         # schema commit. Interrupting it during checkpoint replacement may
         # leave a transient checkpoint directory that crashes the next server.
@@ -4116,7 +3645,6 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
         validated_inference_modes = {}
         validated_seed_contracts = {}
         validated_release_contracts = {}
-        validated_function_readiness = {}
         for database_spec in typedb_blue_green_database_specs(candidate):
             database_name = str(database_spec.get("typedbDatabase") or "")
             if not ensure_typedb_seeded(database_spec):
@@ -4142,17 +3670,8 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                     "releaseContract": release_contract,
                     "candidate": candidate,
                 }
-            function_prewarm = prewarm_typedb_candidate_rulebox_functions(database_spec)
-            if not bool(function_prewarm.get("ready")):
-                return {
-                    "status": "candidate-function-prewarm-failed",
-                    "database": database_name,
-                    "functionPrewarm": function_prewarm,
-                    "candidate": candidate,
-                }
             inference_readiness = validate_typedb_candidate_inference_runtime(
                 database_spec,
-                require_functions=True,
             )
             if not bool(inference_readiness.get("ready")):
                 return {
@@ -4187,9 +3706,6 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             validated_release_contracts[database_name] = str(
                 release_contract.get("status") or "unknown"
             )
-            validated_function_readiness[database_name] = dict(
-                inference_readiness.get("readiness") or {}
-            )
         return {
             "status": "prepared",
             "candidate": candidate,
@@ -4198,7 +3714,6 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             "validatedInferenceModes": validated_inference_modes,
             "validatedSeedContracts": validated_seed_contracts,
             "validatedReleaseContracts": validated_release_contracts,
-            "validatedFunctionReadiness": validated_function_readiness,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {
@@ -4516,9 +4031,6 @@ def typedb_rotate(
             start_status = 1
         if start_status == 0 and result.get("status") == "swapped":
             result["retiredPathsRemoved"] = prune_retired_typedb_data_paths(spec)
-            result["ruleboxPrewarmActivation"] = enable_rulebox_prewarm_after_verified_cutover(
-                operation_id
-            )
             result["audit"] = record_typedb_rulebox_deployment_event(
                 operation_id,
                 "cutover",
@@ -4526,7 +4038,6 @@ def typedb_rotate(
                 database=str(spec.get("typedbDatabase") or ""),
                 details={
                     "candidateValidation": candidate_validation,
-                    "ruleboxPrewarmActivation": result["ruleboxPrewarmActivation"],
                 },
             )
         record_typedb_auto_rotation_state(

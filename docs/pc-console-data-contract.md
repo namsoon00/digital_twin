@@ -14,7 +14,7 @@ The PC console presents one operational question per workspace without copying f
 | Research article and stock impact | `ResearchEvidence` | Market | Korean article summary, impact analysis and source |
 | Delivery state and dispatch reason | `NotificationJob` | Alerts | gates, full message and linked article detail |
 | Per-user notification state | `NotificationInboxReceipt` keyed by browser recipient and job | Alerts | read, acknowledged and important state |
-| Ontology graph and inference | TypeDB TBox, ABox, schema functions and InferenceBox | Validation | graph, rule and trace detail |
+| Ontology graph and inference | TypeDB TBox, ABox, RuleBox and InferenceBox | Validation | graph, rule and trace detail |
 | Experiment lifecycle | `OntologyExperiment` | Validation | replay, comparison and promotion detail |
 | Calendar event | investment calendar event repository | Calendar | month board, event rationale and reminder detail |
 | Runtime settings | MySQL operational settings | Settings or Operations governance | full-screen category editor |

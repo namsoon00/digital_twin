@@ -80,7 +80,7 @@ class OntologySubjectFanoutTests(unittest.TestCase):
 
     def test_signatures_ignore_query_transport_but_keep_evidence(self):
         first = match("graph.test.v1", "instrument:AAA", "evidence:1")
-        second = dict(first, queryMode="schema-function", schemaFunctionName="fn_test")
+        second = dict(first, queryMode="typedb-manifest-evidence-index")
         changed = match("graph.test.v1", "instrument:AAA", "evidence:2")
 
         self.assertEqual(native_match_signatures([first]), native_match_signatures([second]))
@@ -117,7 +117,6 @@ class OntologySubjectFanoutTests(unittest.TestCase):
             repository,
             [],
             ["AAA", "BBB"],
-            use_schema_functions=True,
             world_id="portfolio:local:main",
         )
 
@@ -153,7 +152,6 @@ class OntologySubjectFanoutTests(unittest.TestCase):
             repository,
             [],
             ["AAA", "BBB"],
-            use_schema_functions=True,
             world_id="portfolio:local:main",
         )
 
@@ -192,7 +190,6 @@ class OntologySubjectFanoutTests(unittest.TestCase):
             repository,
             [],
             ["AAA", "BBB"],
-            use_schema_functions=True,
             world_id="portfolio:local:main",
         )
 

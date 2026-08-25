@@ -262,15 +262,15 @@ def _condition_rows(trace: Dict[str, object]) -> List[Dict[str, str]]:
                     or item.get("id"),
                     180,
                 )
-                value_text = _text(
-                    item.get("observedValue")
-                    or item.get("summary")
-                    or item.get("matchedValue")
-                    or item.get("value")
-                    or item.get("description")
-                    or item.get("expectedValue"),
-                    220,
-                )
+                observed = next((
+                    item.get(candidate)
+                    for candidate in (
+                        "observedValue", "summary", "matchedValue", "value",
+                        "description", "expectedValue",
+                    )
+                    if candidate in item and item.get(candidate) not in (None, "")
+                ), "")
+                value_text = _text(observed, 220)
             else:
                 label, value_text = _text(item, 220), ""
             if not label:
@@ -306,24 +306,40 @@ def _trace_rows(relation: Dict[str, object], rules: List[Dict[str, object]]) -> 
         trace_id = _text(trace.get("id") or trace.get("inferenceTraceId") or rule.get("inferenceTraceId"), 220)
         if trace_id:
             consumed_trace_ids.add(trace_id)
+        matched_conditions = [
+            dict(item)
+            for item in trace.get("matchedConditions") or []
+            if isinstance(item, dict)
+        ]
         rows.append({
             "ruleId": str(rule.get("ruleId") or ""),
             "label": str(rule.get("label") or ""),
             "traceId": trace_id,
             "selected": bool(rule.get("selected")),
             "conditions": _condition_rows(trace),
+            "matchedConditions": matched_conditions,
+            "evidenceRelationIds": list(trace.get("evidenceRelationIds") or []),
+            "evidenceUsableForJudgement": bool(trace.get("evidenceUsableForJudgement")),
         })
     for trace in raw:
         trace = _dict(trace)
         trace_id = _text(trace.get("id") or trace.get("inferenceTraceId") or trace.get("traceId"), 220)
         if trace_id and trace_id in consumed_trace_ids:
             continue
+        matched_conditions = [
+            dict(item)
+            for item in trace.get("matchedConditions") or []
+            if isinstance(item, dict)
+        ]
         rows.append({
             "ruleId": _text(trace.get("ruleId") or trace.get("sourceRuleId"), 180),
             "label": _text(trace.get("label") or trace.get("name") or trace.get("ruleId") or "추론 경로"),
             "traceId": trace_id,
             "selected": False,
             "conditions": _condition_rows(trace),
+            "matchedConditions": matched_conditions,
+            "evidenceRelationIds": list(trace.get("evidenceRelationIds") or []),
+            "evidenceUsableForJudgement": bool(trace.get("evidenceUsableForJudgement")),
         })
     return rows
 
@@ -521,8 +537,15 @@ def build_notification_reverse_reasoning_trace(
             "legacyRejectedClaimCount": int(legacy_publication.get("rejectedClaimCount") or 0),
             "fallbackReason": _text(writer.get("fallbackReason"), 180),
         }
+    recorded_publication = _dict(ai_execution.get("claimPublication"))
+    publication_consistent = not recorded_publication or recorded_publication == publication
     adoption_state = _text(ai_execution.get("adoptionState"), 100)
-    if not adoption_state:
+    if publication and (
+        int(publication.get("aiClaimCount") or 0) <= 0
+        or bool(publication.get("fallbackUsed"))
+    ):
+        adoption_state = "executed-not-adopted" if ai_execution.get("aiAttempted") else "not-executed"
+    elif not adoption_state:
         if ai_execution.get("aiAttempted") and writer.get("aiAuthored"):
             adoption_state = "legacy-adopted"
         elif ai_execution.get("aiAttempted"):
@@ -530,8 +553,8 @@ def build_notification_reverse_reasoning_trace(
         else:
             adoption_state = "not-executed"
     action_authority = _text(
-        ai_execution.get("actionAuthority")
-        or publication.get("actionAuthority")
+        publication.get("actionAuthority")
+        or ai_execution.get("actionAuthority")
         or ("typedb" if review_mode == "context-narrative" else ""),
         80,
     )
@@ -574,11 +597,25 @@ def build_notification_reverse_reasoning_trace(
             for item in trace.get("matchedConditions") or []
             if isinstance(item, dict) and isinstance(item.get("premiseLineage"), dict)
         ), {})
+        condition_lineage_statuses = {
+            _text(item.get("premiseLineage", {}).get("status"), 80)
+            for item in trace.get("matchedConditions") or []
+            if isinstance(item, dict) and isinstance(item.get("premiseLineage"), dict)
+        }
+        proof_status = (
+            "partial-premise-lineage"
+            if condition_lineage_statuses.intersection({"legacy-unavailable", "unavailable", "missing"})
+            else "available"
+            if trace.get("matchedConditions") or trace.get("evidenceRelationIds")
+            else "legacy-unavailable"
+        )
         proof = RuleMatchProof.from_dict({
             **trace,
             "ruleId": rule_id,
             "traceId": trace_id,
             "conditions": trace.get("matchedConditions") or [],
+            "evidenceRelationIds": trace.get("evidenceRelationIds") or [],
+            "status": proof_status,
             "premiseLineage": {
                 **condition_lineage,
                 "sharedGenerationId": graph.get("sharedPremiseInferenceGenerationId") or relation.get("sharedPremiseInferenceGenerationId"),
@@ -744,7 +781,14 @@ def build_notification_reverse_reasoning_trace(
             "researchCycle": _dict(ai_execution.get("researchCycle")),
             "hypothesisComparisonRepair": _dict(ai_execution.get("hypothesisComparisonRepair")),
             "inferencePacket": _dict(ai_execution.get("inferencePacket")),
-            "claimPublication": _dict(ai_execution.get("claimPublication")),
+            "claimPublication": publication,
+            "recordedClaimPublication": recorded_publication if not publication_consistent else {},
+            "publicationConsistent": publication_consistent,
+            "publicationConsistencyReason": (
+                "저장된 실행 감사와 최종 발행 계약이 일치합니다."
+                if publication_consistent
+                else "과거 실행 감사와 최종 발행 계약이 달라 최종 발행 계약을 기준으로 표시합니다."
+            ),
             "responseSource": _text(
                 ai_execution.get("responseSource") or ai.get("source"),
                 180,

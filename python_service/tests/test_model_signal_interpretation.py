@@ -17,11 +17,7 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 from digital_twin.domain.world_partitioned_reasoning import compile_world_partitioned_rules
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.infrastructure.typedb_ontology import (
-    deduplicate_typedb_schema_function_definitions,
-    typedb_native_function_call_query,
-    typedb_native_function_definition,
     typedb_native_matched_conditions,
-    typedb_schema_function_rule_ids,
     materialize_typedb_native_matches,
     typedb_dispatch_model_signal_bridge_rows,
     typedb_model_signal_bridge_batch_plan,
@@ -119,7 +115,6 @@ class ModelSignalInterpretationTests(unittest.TestCase):
                 "executionStage": "shared-premise",
             } for rule in shared_rules],
             ["005930"],
-            use_schema_functions=False,
         )
         self.assertEqual(74, plan["logicalModelSignalPolicyCount"])
         self.assertEqual(1, plan["modelSignalBridgeReadCount"])
@@ -134,7 +129,6 @@ class ModelSignalInterpretationTests(unittest.TestCase):
         plan = typedb_model_signal_bridge_batch_plan(
             entries,
             ["005930"],
-            use_schema_functions=False,
         )
 
         self.assertEqual(59, plan["batchedSimplePolicyCount"])
@@ -147,7 +141,7 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             len(plan["regularEntries"]),
         )
         self.assertTrue(all(
-            not batch["schemaFunctionQuery"] for batch in plan["batches"]
+            "schemaFunctionQuery" not in batch for batch in plan["batches"]
         ))
         for batch in plan["batches"]:
             query = typedb_model_signal_bridge_batch_query(
@@ -158,25 +152,6 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             self.assertIn("HAS_MODEL_SIGNAL", query["query"])
             self.assertIn("$hypothesisContractId", query["query"])
             self.assertIn("$signalEvidenceId", query["query"])
-
-        function_plan = typedb_model_signal_bridge_batch_plan(
-            entries,
-            ["005930"],
-            use_schema_functions=True,
-        )
-        self.assertEqual(3, function_plan["modelSignalBridgeReadCount"])
-        self.assertTrue(all(
-            batch["schemaFunctionQuery"] for batch in function_plan["batches"]
-        ))
-        function_query = typedb_model_signal_bridge_batch_query(
-            function_plan["batches"][0],
-            world_id="portfolio:local:default",
-        )
-        self.assertIn("let $source in orbit_rule_", function_query["query"])
-        self.assertEqual(
-            "typedb-shared-model-signal-bridge-function-batch",
-            function_query["queryMode"],
-        )
 
     def test_bridge_dispatch_is_exact_fail_closed_and_excludes_disabled_policy(self):
         batchable = next(
@@ -190,7 +165,7 @@ class ModelSignalInterpretationTests(unittest.TestCase):
         }, {
             "rule": disabled,
             "candidateSymbols": ["005930"],
-        }], ["005930"], use_schema_functions=False)
+        }], ["005930"])
         batch = next(
             item for item in plan["batches"]
             if batchable.rule_id in item["ruleIds"]
@@ -228,62 +203,6 @@ class ModelSignalInterpretationTests(unittest.TestCase):
         self.assertEqual("invalid", invalid["status"])
         self.assertEqual([], invalid["matches"])
         self.assertIn("releaseId", invalid["failures"][0])
-
-    def test_active_catalog_compiles_to_45_physical_functions(self):
-        generated = []
-        for rule in self.active_rules:
-            definition = typedb_native_function_definition(
-                rule.to_dict(),
-                "portfolio:local:default",
-            )
-            generated.extend(definition.get("functionDefinitions") or [definition])
-        unique = deduplicate_typedb_schema_function_definitions(generated)
-
-        self.assertEqual(116, len(generated))
-        self.assertEqual(45, len(unique))
-        self.assertEqual(3, sum(
-            bool(item.get("sharedModelSignalBridge")) for item in unique
-        ))
-        self.assertEqual(
-            {rule.rule_id for rule in self.active_rules},
-            set(typedb_schema_function_rule_ids(unique)),
-        )
-
-    def test_shared_bridge_keeps_exact_signal_contract_in_typedb_call(self):
-        holding_rules = [
-            rule for rule in self.model_rules
-            if any(condition.field == "source" and condition.value == "holding" for condition in rule.conditions)
-        ]
-        first, second = holding_rules[:2]
-        first_definition = typedb_native_function_definition(
-            first.to_dict(), "portfolio:local:default"
-        )
-        second_definition = typedb_native_function_definition(
-            second.to_dict(), "portfolio:local:default"
-        )
-        call = typedb_native_function_call_query(
-            first.to_dict(), ["005930"], "portfolio:local:default"
-        )
-
-        self.assertEqual(first_definition["functionName"], second_definition["functionName"])
-        self.assertNotIn("ontology-model-signal-type", first_definition["body"])
-        self.assertIn("ontology-model-signal-type", call["query"])
-        self.assertIn("ontology-hypothesis-contract-id", call["query"])
-        self.assertIn(first.rule_id, call["query"])
-        self.assertEqual(first.rule_id, call["ruleId"])
-        self.assertTrue(call["sharedModelSignalBridge"])
-
-        matched_conditions = typedb_native_matched_conditions(first, {}, call)
-        self.assertEqual(len(first.conditions), len(matched_conditions))
-        self.assertEqual(1, sum(
-            bool(item.get("matchedBySharedModelSignalBridge"))
-            for item in matched_conditions
-        ))
-        self.assertEqual(len(first.conditions) - 1, sum(
-            bool(item.get("matchedByInterpretationPolicyQuery"))
-            for item in matched_conditions
-        ))
-        self.assertTrue(all(item.get("matchedByTypeDB") for item in matched_conditions))
 
     def test_rulebox_projection_exposes_policies_bridges_and_stable_lineage(self):
         graph = rulebox_graph_from_rules(self.rules, include_tbox=False)
@@ -338,7 +257,7 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             "sharedModelSignalBridge": True,
             "modelSignalBridgeVersion": "typedb-model-signal-bridge-v1",
             "bridgeSourceScope": "holding",
-            "schemaFunctionName": "orbit_rule_holding_model_signal_bridge",
+            "typeqlExecutionMode": "direct-typeql",
         }]})
 
         trace = next(item for item in graph.entities if item.kind == "inference-trace")

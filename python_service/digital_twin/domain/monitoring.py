@@ -775,7 +775,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         resetting the threshold every monitor cycle. It never names a
         buy/sell/hold action, never consumes an InferenceBox, and can therefore
         be durably queued before the asynchronous TypeDB worker has an
-        available schema-function generation.
+        available direct-TypeQL InferenceBox generation.
         """
 
         if not snapshot.has_live_account_data():

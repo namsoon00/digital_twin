@@ -28,9 +28,6 @@ from digital_twin.infrastructure.typedb_ontology import (
     inference_generation_delete_queries,
     ontology_storage_id,
     typedb_active_worldview_manifest_clause,
-    typedb_native_function_call_query,
-    typedb_native_function_definition,
-    typedb_native_rule_function_name,
 )
 from digital_twin.infrastructure.web_server import run_ontology_rulebox_payload
 
@@ -445,7 +442,7 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertEqual([scope_id], second["observationRefreshedScopeIds"])
         self.assertEqual("2026-07-01T00:10:00Z", second["marketScopeObservedAt"][scope_id])
 
-    def test_typedb_world_identity_isolates_storage_and_reuses_parameterized_rule_namespace(self):
+    def test_typedb_world_identity_isolates_storage_and_direct_query_scope(self):
         first_world = "portfolio:tenant-a:account-a"
         second_world = "portfolio:tenant-a:account-b"
         row = {"ontologyBox": "ABox", "snapshotId": "scope:test"}
@@ -453,10 +450,6 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertNotEqual(
             ontology_storage_id({**row, "worldId": first_world}, "stock:005930", "node"),
             ontology_storage_id({**row, "worldId": second_world}, "stock:005930", "node"),
-        )
-        self.assertEqual(
-            typedb_native_rule_function_name("graph.holding.loss_guard.v1", first_world),
-            typedb_native_rule_function_name("graph.holding.loss_guard.v1", second_world),
         )
         clause = typedb_active_worldview_manifest_clause(world_id=first_world)
         self.assertIn('has ontology-world-id "portfolio:tenant-a:account-a"', clause)
@@ -507,19 +500,6 @@ class OntologyWorldContractTests(unittest.TestCase):
             "data-availability-assessment:NVDA:judgementEvidence",
             {item.entity_id for item in knowledge.entities},
         )
-
-    def test_parameterized_native_rule_function_binds_the_requested_world_at_call_time(self):
-        rule = next(item for item in default_graph_inference_rules() if item.rule_id == "graph.loss_guard.breakdown.v1")
-        world = "portfolio:tenant-a:account-a"
-
-        definition = typedb_native_function_definition(rule.to_dict(), world)
-        call = typedb_native_function_call_query(rule.to_dict(), ["005930"], world)
-
-        self.assertIn("$ruleWorldId: string", definition["body"])
-        self.assertIn("== $ruleWorldId", definition["body"])
-        self.assertNotIn(world, definition["body"])
-        self.assertIn('let $ruleWorldId = "portfolio:tenant-a:account-a";', call["query"])
-        self.assertIn("($candidate, $activeManifestPointer, $ruleWorldId)", call["query"])
 
     def test_native_rulebox_api_requires_a_portfolio_world(self):
         missing = run_ontology_rulebox_payload({"clearInference": True})

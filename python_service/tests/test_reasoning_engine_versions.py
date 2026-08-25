@@ -1091,14 +1091,15 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         result = platform.current_status(state)
 
-        self.assertEqual("degraded", result["status"])
+        self.assertEqual("ready", result["status"])
         self.assertEqual("v2-r24", result["activeDeployment"]["deploymentId"])
         self.assertEqual(16, result["queue"]["uniqueCompletedRunCount"])
         self.assertEqual({"completed": 24}, result["queue"]["jobRowCounts"])
         self.assertNotIn("deployments", result)
-        self.assertIn(
-            "schema-functions-not-ready-direct-typeql-fallback",
-            result["reasons"],
+        self.assertEqual([], result["reasons"])
+        self.assertEqual(
+            "typedb-direct-typeql",
+            result["activeDeployment"]["ruleExecutionReadiness"]["mode"],
         )
 
 

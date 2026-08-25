@@ -988,7 +988,7 @@ def native_rule_timing_profile(
     payload: Mapping[str, object] = None,
     limit: int = 8,
 ) -> Dict[str, object]:
-    """Return bounded operational timing for TypeDB schema functions only."""
+    """Return bounded operational timing for direct TypeQL rule reads."""
 
     values = dict(payload or {}) if isinstance(payload, Mapping) else {}
     existing = values.get("typedbNativeRuleTimingProfile")
@@ -1044,7 +1044,7 @@ def native_rule_timing_profile(
         return {
             "ruleId": _text(item.get("ruleId")),
             "nativeRuleId": _text(item.get("nativeRuleId")),
-            "schemaFunctionName": _text(item.get("schemaFunctionName")),
+            "typeqlExecutionMode": _text(item.get("typeqlExecutionMode")) or "direct-typeql",
             "status": status,
             "rowCount": max(0, _integer(item.get("rowCount"))),
             "candidateSymbolCount": len([symbol for symbol in symbols if _text(symbol)]),

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from digital_twin.application.notification.rendering import NotificationRenderingService
 from digital_twin.application.ai_inference_queue_service import AIInferenceQueueRunner
+from digital_twin.application.notification_ai_gate_message import _notification_selected_inference_rows
 from digital_twin.domain.ai_inference_queue import AIInferenceRequest
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_narrative import (
@@ -440,6 +441,59 @@ class NotificationNarrativeTests(unittest.TestCase):
         self.assertEqual("context-narrative", publication["reviewMode"])
         self.assertEqual("typedb", publication["actionAuthority"])
         self.assertEqual(1, publication["aiClaimCount"])
+        execution = queue.enriched["notificationAiExecutionAudit"]
+        self.assertEqual(publication, execution["claimPublication"])
+        self.assertEqual("narrative-adopted-action-not-applicable", execution["adoptionState"])
+
+        persisted_publication = dict(publication)
+        render_job = NotificationJob.create(
+            "before-render",
+            account_id="main",
+            message_type="investmentInsight",
+            context=queue.enriched,
+        )
+        renderer = NotificationRenderingService(
+            template_renderer=lambda target: target.context["telegramMessage"],
+        )
+        renderer.render(render_job)
+        self.assertEqual(persisted_publication, render_job.context["notificationNarrativePublication"])
+        self.assertTrue(render_job.context["notificationWriterProvenance"]["aiAuthored"])
+
+    def test_selected_inference_row_includes_observed_rule_values(self):
+        context = {
+            "ontologyRelationContext": {
+                "decision": {"selectedRuleId": "graph.holding.loss.v1"},
+                "actionEnvelope": {
+                    "selectedRuleId": "graph.holding.loss.v1",
+                    "dataReadiness": {"eligibleRuleIds": ["graph.holding.loss.v1"]},
+                },
+                "matchedRules": [{
+                    "ruleId": "graph.holding.loss.v1",
+                    "label": "손실 보유 추가매수 차단",
+                }],
+                "graphStoreInference": {
+                    "traces": [{
+                        "ruleId": "graph.holding.loss.v1",
+                        "matchedConditions": [{
+                            "conditionId": "holding-loss",
+                            "field": "profitLossRate",
+                            "operator": "<",
+                            "observedValue": -8.86,
+                            "ruleConditionShape": {"value": 0},
+                        }],
+                    }],
+                },
+            },
+        }
+        response = NotificationAIValidatedResponse(
+            action="HOLD",
+            precomputed_action="HOLD",
+            source="TypeDB inference fallback",
+        )
+
+        rows = _notification_selected_inference_rows(context, response)
+
+        self.assertIn("성립값: 보유 수익률 -8.86% < 0%", rows[0])
 
 
 if __name__ == "__main__":

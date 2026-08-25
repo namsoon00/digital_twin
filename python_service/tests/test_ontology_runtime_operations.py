@@ -597,7 +597,7 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
                 {
                     "ruleId": "graph.fast",
                     "nativeRuleId": "typedb.native.graph.fast",
-                    "schemaFunctionName": "orbit_fast",
+                    "typeqlExecutionMode": "direct-typeql",
                     "rowCount": 1,
                     "candidateSymbols": ["005930"],
                     "queryComplexity": 2,
@@ -608,7 +608,7 @@ class OntologyRuntimeOperationsTests(unittest.TestCase):
                 {
                     "ruleId": "graph.slow",
                     "nativeRuleId": "typedb.native.graph.slow",
-                    "schemaFunctionName": "orbit_slow",
+                    "typeqlExecutionMode": "direct-typeql",
                     "rowCount": 0,
                     "candidateSymbols": ["005930"],
                     "queryComplexity": 6,

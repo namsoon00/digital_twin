@@ -65,8 +65,7 @@ class NotificationReplayService:
         account = self.account_map().get(replay_job.account_id)
         if hasattr(runner, "apply_account_delivery_context"):
             runner.apply_account_delivery_context(replay_job, account)
-        message = str(runner.render(replay_job) if hasattr(runner, "render") else replay_job.text).strip()
-        message = self.replay_message(source, message)
+        message = self.replay_message(source, source.text)
         replay_job.text = message
 
         common = {
@@ -121,6 +120,7 @@ class NotificationReplayService:
         context.update({
             "notificationReplay": True,
             "notificationReplayMode": "direct" if direct else "queue",
+            "notificationReplayPreserveOriginal": True,
             "notificationReplayRequestedAt": utc_now_iso(),
             "replaySourceJobId": source.job_id,
             "replaySourceNotificationNumber": notification_debug_number(source.job_id),
@@ -182,4 +182,3 @@ class NotificationReplayService:
             self.queue.upsert_job(job)
         elif hasattr(self.queue, "update"):
             self.queue.update(job)
-

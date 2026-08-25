@@ -485,7 +485,7 @@ class ReasoningEnginePlatformService:
         bundle = dict(values.get("releaseBundle") or {})
         health = dict(values.get("health") or {})
         last_result = dict(health.get("lastResult") or {})
-        schema_readiness = dict(health.get("schemaFunctionReadiness") or {})
+        rule_execution = dict(health.get("ruleExecutionReadiness") or {})
         return {
             "deploymentId": str(values.get("deploymentId") or ""),
             "engineVersion": str(values.get("engineVersion") or ""),
@@ -500,12 +500,9 @@ class ReasoningEnginePlatformService:
             ),
             "validationCohortId": str(health.get("validationCohortId") or ""),
             "capabilities": dict(values.get("capabilities") or {}),
-            "schemaFunctionReadiness": {
-                "status": str(schema_readiness.get("status") or "unknown"),
-                "functionsReady": bool(schema_readiness.get("functionsReady")),
-                "directTypeqlFallbackReady": bool(
-                    schema_readiness.get("directTypeqlFallbackReady")
-                ),
+            "ruleExecutionReadiness": {
+                "status": str(rule_execution.get("status") or "ready"),
+                "mode": str(rule_execution.get("mode") or "typedb-direct-typeql"),
             },
             "workerHeartbeats": dict(health.get("workerHeartbeats") or {}),
             "lastRun": {
@@ -604,12 +601,9 @@ class ReasoningEnginePlatformService:
                     "status": "unavailable",
                     "reason": str(error)[:180],
                 }
-        schema = dict(active.get("schemaFunctionReadiness") or {})
         pending_count = int(queue.get("pendingCount") or 0)
         failure_count = int(queue.get("failureCount") or 0)
         oldest_pending_age = int(queue.get("oldestPendingAgeSeconds") or 0)
-        functions_ready = bool(schema.get("functionsReady"))
-        fallback_ready = bool(schema.get("directTypeqlFallbackReady"))
         delivery_heartbeats = dict(delivery.get("workerHeartbeats") or {})
         delivery_heartbeat = dict(delivery_heartbeats.get("delivery") or {})
         delivery_heartbeat_at = self.timestamp(delivery_heartbeat.get("updatedAt"))
@@ -640,12 +634,6 @@ class ReasoningEnginePlatformService:
                 or delivery_heartbeat_age > heartbeat_critical_seconds
             ):
                 reasons.append("delivery-reasoning-worker-heartbeat-missing")
-            if not functions_ready:
-                reasons.append(
-                    "schema-functions-not-ready-direct-typeql-fallback"
-                    if fallback_ready
-                    else "schema-functions-not-ready"
-                )
             status = "ready" if not reasons else "degraded"
         result = {
             "status": status,

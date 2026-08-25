@@ -166,7 +166,7 @@ def ontology_rulebox_deployment_changed_event(
     database: str = "",
     details: Mapping[str, object] = None,
 ) -> DomainEvent:
-    """Record bounded schema-function deployment evidence for operations."""
+    """Record bounded governed RuleBox release evidence for operations."""
 
     clean_operation_id = str(operation_id or uuid.uuid4().hex).strip()[:191]
     return DomainEvent(

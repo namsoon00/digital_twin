@@ -7,7 +7,7 @@ TypeDB materialized ontology. It is a storage policy, not an investment rule.
 
 - MySQL is the durable source for market observations, account snapshots,
   projection outboxes, reasoning audit summaries, and delivery state.
-- TypeDB stores the active TBox, TypeDB schema functions, current ABox world
+- TypeDB stores the active TBox, governed RuleBox, current ABox world
   generations, and current InferenceBox results used by investment reasoning.
 - Old TypeDB generations are rebuildable read-model history. They are not the
   long-term source of record.
@@ -79,7 +79,7 @@ Automatic TypeDB rotation prepares an isolated candidate on a different port
 and data directory while the active server continues to serve inference:
 
 1. Start the candidate with configured credentials.
-2. Seed TBox, language data, and TypeDB schema functions.
+2. Seed TBox, language data, and governed RuleBox rows.
 3. Compare the seeded RuleBox fingerprint with the frozen delivery deployment.
    A mismatch fails the rotation while the active store keeps serving.
 4. Read the latest completed shared-world packets from MySQL and project them

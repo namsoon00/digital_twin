@@ -41,7 +41,6 @@ from .mysql_operational import (
     MySQLOntologyWorldProjectionStateStore,
     MySQLOntologyQualitySampleStore,
     MySQLOntologyMaintenanceStateStore,
-    MySQLOntologyRuleboxPrewarmStateStore,
     MySQLOntologyReasoningCursorStore,
     MySQLOntologyReasoningMailboxStore,
     MySQLResearchEvidenceStore,
@@ -141,11 +140,6 @@ def ontology_world_projection_state_store(settings: Dict[str, str] = None):
 def ontology_inference_detail_state_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLOntologyInferenceDetailStateStore(configured)
-
-
-def ontology_rulebox_prewarm_state_store(settings: Dict[str, str] = None):
-    configured = configured_settings(settings)
-    return MySQLOntologyRuleboxPrewarmStateStore(configured)
 
 
 def ontology_reasoning_mailbox_store(settings: Dict[str, str] = None):

@@ -425,7 +425,7 @@ def build_portfolio_ontology(
     graph.worldview = {
         "model": "ontology-abox-facts",
         "runtimeProjectionMode": "abox-facts-only-typedb-native-rules",
-        "description": "Runtime ABox facts are projected for TypeDB schema-function inference. Python graph reasoning is not available in this path.",
+        "description": "Runtime ABox facts are projected for direct TypeQL inference in TypeDB. Python graph reasoning is not available in this path.",
         "positionCount": len([item for item in reference_observed_positions if is_holding_position(item)]),
         "watchlistCount": len([item for item in reference_observed_positions if is_watchlist_position(item)]),
         "aboxLifecycle": dict(lifecycle_metadata),

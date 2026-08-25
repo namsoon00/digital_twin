@@ -371,10 +371,10 @@ def typedb_native_rule_planner_topology_for_execution(
     A caller-provided topology is accepted only when it has the exact same
     fingerprint as the topology persisted on the active ABox manifest. This
     preserves TypeDB as the rule evaluator while avoiding a costly TypeQL
-    topology scan before every schema-function call.
+    topology scan before every direct TypeQL rule query.
     """
     active = dict(active_abox_metadata or {})
-    # Keep the immutable, full topology payload intact for the schema-function
+    # Keep the immutable, full topology payload intact for the direct-query
     # matcher.  ``normalize_native_rule_planner_topology(..., target_symbols)``
     # returns a selected view whose fingerprint still refers to the full
     # payload; passing that selected view back into the matcher makes its
@@ -473,19 +473,9 @@ NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION = "native-rule-evidence-read-inde
 NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE = 48
 # This is a TypeDB query-shape guard, not an investment threshold. Field-index
 # hydration splits larger factual reads into this size; an individual native
-# predicate remains in the schema-function path when its own evidence set is
+# predicate remains in the direct TypeQL path when its own evidence set is
 # still wider than this bounded shape.
 NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS = NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE
-TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_BOX = "FunctionRegistry"
-TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_KIND = "typedb-schema-function-deployment"
-TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_VERSION = "typedb-schema-function-deployment-v1"
-# A generated schema function has two stable namespaces: legacy global ABox
-# functions and parameterized Worldview functions.  Any non-empty world id
-# compiles to the latter namespace, so this sentinel lets the background
-# prewarmer install that shared catalogue without depending on a live account.
-TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID = "__orbit_schema_function_prewarm__"
-
-
 def native_rule_evidence_read_index_from_rows(
     node_rows: Iterable[Dict[str, object]],
     relation_rows: Iterable[Dict[str, object]],
@@ -1707,24 +1697,15 @@ def merge_flat_properties(row: Dict[str, object], props: Dict[str, object]) -> D
 
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-schema-function-rule-engine-v18"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v1"
 TYPEDB_NATIVE_REASONING_MODE = "typedb-native-rule-materialized"
 TYPEDB_NATIVE_BLOCKED_MODE = "typedb-native-rule-materialization-blocked"
 TYPEDB_NATIVE_REQUIRED_MODE = "typedb-native-rule-materialization-required"
 TYPEDB_NATIVE_MATERIALIZATION_SOURCE = "typedb-abox-native-rule"
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
-# Active ABox generations are selected through a control pointer. A dedicated
-# function namespace makes deployed schema functions refresh when that query
-# contract changes instead of silently reusing an older unscoped definition.
-# Version 10 passes the active Manifest pointer and world as typed function
-# arguments. The call site already proves that the candidate belongs to that
-# Manifest, so the function only scopes its evidence relations. This removes
-# the duplicate active-pointer/source-scope join from every rule invocation
-# while keeping all target and relation facts isolated to the exact Manifest
-# generation. Exact statistical-model contracts share three source-context
-# functions; their signal and account predicates stay in the TypeDB call query.
-TYPEDB_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v10_"
-TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX = "orbit_rule_active_manifest_subject_v7_"
+# Active ABox generations are selected through a control pointer. Every direct
+# TypeQL query binds the exact Manifest and world, so inactive generations can
+# never satisfy a current rule evaluation.
 # Scoped ABox writes span many short TypeDB transactions. Keep their lease in
 # a separate control box so pointer replacement cannot delete it mid-write.
 SCOPED_ABOX_WRITE_LEASE_ID = "scoped-abox-write-lease"
@@ -1735,25 +1716,25 @@ SCOPED_ABOX_WRITE_LEASE_VERSION = "scoped-abox-write-lease-v1"
 # physical-write coordinator without becoming an ABox fact or a user world.
 TYPEDB_PROJECTION_COORDINATOR_WORLD_ID = "system:typedb-projection-coordinator"
 TYPEDB_PROJECTION_COORDINATOR_VERSION = "typedb-projection-coordinator-v1"
-# The production RuleBox currently plans up to 75 native functions for one
+# The production RuleBox can plan many direct TypeQL rules for one
 # material symbol. A verified live ABox replay prunes most of them, but an
-# applicable Manifest-scoped function can still take several seconds on the
+# applicable Manifest-scoped query can still take several seconds on the
 # local TypeDB planner. A one-symbol complete replay with exact preflight
 # takes about a minute for the current RuleBox, so keep bounded headroom for a
-# complete generation rather than turning a slow, otherwise valid function
+# complete generation rather than turning a slow, otherwise valid query
 # into a partial judgement.
 # The reasoning scheduler and circuit breaker continue to bound aggregate CPU.
 DEFAULT_TYPEDB_NATIVE_RULE_QUERY_TIMEOUT_SECONDS = 30.0
 # An indexed N-of-M group is bound to one verified active ABox source and its
 # exact relation rows. It is structurally bounded but TypeDB's aggregation
-# planner can take longer than an ordinary schema-function lookup on a cold
+# planner can take longer than an ordinary direct rule lookup on a cold
 # local server. Keep this allowance separate from the broad-query deadline.
 DEFAULT_TYPEDB_NATIVE_RULE_INDEXED_ANY_CONDITION_QUERY_TIMEOUT_SECONDS = 20.0
 # A complete one-symbol production replay needs roughly 84 seconds on the
 # local TypeDB dataset. Leave headroom for the final applicable rule instead
 # of failing a whole candidate when its last bounded read starts with <1s.
 DEFAULT_TYPEDB_NATIVE_RULE_EXECUTION_BUDGET_SECONDS = 105.0
-# Schema functions are independent read-only evaluations while the scoped ABox
+# Direct TypeQL rules are independent read-only evaluations while the scoped ABox
 # write lease is held. Four workers keep local TypeDB planner pressure bounded
 # while removing the serial wait across the small applicable-rule set.
 DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
@@ -1761,19 +1742,6 @@ DEFAULT_TYPEDB_NATIVE_RULE_PARALLELISM = 4
 # activation and one InferenceBox publication; this value only controls how a
 # verified target set is split into read-only TypeDB work items in between.
 DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
-# TypeDB recompiles the stored-function graph at each schema transaction.
-# A schema definition invalidates TypeDB's function planner cache.  On the
-# local single-node runtime, committing more than one complete RuleBox rule
-# can leave that compiler busy long enough for the client transport to expire.
-# One complete rule is slower only during idle maintenance, but it gives the
-# durable receipt recovery path an unambiguous commit boundary.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE = 1
-# A timed-out schema commit can continue server-side, so deployment receipts
-# make the next bounded pass verify it before defining anything again. Keep
-# every inference worker behind one long-lived request. Local TypeDB schema
-# cache construction can legitimately exceed a short transport keep-alive,
-# so the dedicated isolated worker gets a real maintenance window instead.
-DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS = 900.0
 # A fresh TypeDB database used to receive the complete 1,200+ statement base
 # schema in one transaction. TypeDB recompiles the growing type graph at that
 # boundary, so the cold blue-green candidate could exceed the driver deadline
@@ -7720,19 +7688,6 @@ class ScopedABoxManifestMixin:
             "reason": "TypeDB ontology storage is not configured.",
         }
 
-    def schema_function_prewarm_status(self) -> Dict[str, object]:
-        return {
-            "configured": False,
-            "status": "disabled",
-            "graphStore": "typedb",
-            "functionsReady": False,
-            "reason": "TypeDB ontology storage is not configured.",
-        }
-
-    def prewarm_typedb_native_rule_functions(self, force: bool = False) -> Dict[str, object]:
-        del force
-        return self.schema_function_prewarm_status()
-
     def validate_rulebox_materialization(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         return {
             "configured": False,
@@ -7816,15 +7771,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     _process_base_schema_ready: Dict[Tuple[str, str, bool, str], float] = {}
     _process_base_schema_ready_lock = threading.Lock()
     _process_base_schema_cache_seconds = 300.0
-    # The realtime reasoning service intentionally builds a fresh repository
-    # for each coalesced work item. Keep successful schema-function probes at
-    # process scope so that lifecycle choice does not turn into a full schema
-    # scan for every one-symbol inference. The actual function query remains
-    # authoritative; an execution failure invalidates this optimization and
-    # blocks the current judgement.
-    _process_schema_function_sync: Dict[Tuple[str, str, str, bool, str], Dict[str, object]] = {}
-    _process_schema_function_sync_lock = threading.Lock()
-
     def __init__(
         self,
         address: str,
@@ -7855,11 +7801,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         native_rule_any_condition_parallelism: int = 1,
         native_rule_durable_preflight_fallback_enabled: bool = False,
         inference_write_lease_enabled: bool = False,
-        process_schema_function_cache_enabled: bool = False,
-        schema_function_probe_interval_seconds: float = 300.0,
-        schema_function_provision_batch_size: int = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE,
-        schema_function_provision_timeout_seconds: float = DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
-        schema_function_direct_query_fallback_enabled: bool = True,
         projection_coordinator_write_enforced: bool = False,
         persistent_driver_enabled: bool = False,
         fresh_candidate_rebuild: bool = False,
@@ -7962,52 +7903,16 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # adapters retain the old unlocked behavior for isolated migrations
         # and deterministic unit tests that do not open a real TypeDB driver.
         self._inference_write_lease_enabled = bool(inference_write_lease_enabled)
-        self._process_schema_function_cache_enabled = bool(process_schema_function_cache_enabled)
-        self._schema_function_probe_interval_seconds = max(
-            0.0,
-            float(schema_function_probe_interval_seconds or 0.0),
-        )
-        self._schema_function_provision_batch_size = max(
-            1,
-            min(
-                12,
-                int(
-                    number_or_none(schema_function_provision_batch_size)
-                    or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE
-                ),
-            ),
-        )
-        self._schema_function_provision_timeout_seconds = max(
-            5.0,
-            min(
-                1800.0,
-                float(
-                    number_or_none(schema_function_provision_timeout_seconds)
-                    or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS
-                ),
-            ),
-        )
-        # Generated schema functions are the production execution contract.
-        # Direct TypeQL remains an explicit compatibility switch only; a cold
-        # compiler normally blocks investment inference while raw operational
-        # observations continue through their independent path.
-        self._schema_function_direct_query_fallback_enabled = bool(
-            schema_function_direct_query_fallback_enabled
-        )
         self._last_graph = None
         self._last_rules: List[GraphInferenceRule] = []
         self._base_schema_ready_fingerprint = ""
         self._base_schema_type_names: set = set()
         self._last_base_schema_sync: Dict[str, object] = {}
-        self._schema_function_sync_cache_key = ""
-        self._schema_function_sync_cache_result: Dict[str, object] = {}
         self._rulebox_snapshot_cache_at = 0.0
         self._rulebox_snapshot_cache_full_load_at = 0.0
         self._rulebox_snapshot_cache_result: Dict[str, object] = {}
         self._query_metrics: List[Dict[str, object]] = []
         self._query_metrics_lock = threading.Lock()
-        self._schema_function_sync_trace: Dict[str, object] = {}
-        self._schema_function_sync_trace_lock = threading.RLock()
         # Nested repository calls in one worker must share the coordinator
         # acquired by their outer projection. A thread-local stack keeps that
         # adoption local to the request and never bypasses the durable TypeDB
@@ -8133,88 +8038,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "slowQueries": slow,
         }
 
-    def begin_schema_function_sync_trace(self, world_id: str, rule_count: int) -> None:
-        namespace = self.schema_function_prewarm_namespace(world_id)
-        with self._schema_function_sync_trace_lock:
-            self._schema_function_sync_trace = {
-                "namespace": namespace,
-                "worldId": str(world_id or ""),
-                "ruleCount": max(0, int(rule_count or 0)),
-                "startedAt": utc_now(),
-                "currentStage": "initializing",
-                "lastStage": "",
-                "failedStage": "",
-                "stages": [],
-                "_startedMonotonic": time.perf_counter(),
-            }
-
-    def update_schema_function_sync_trace(self, **metadata) -> None:
-        with self._schema_function_sync_trace_lock:
-            if not self._schema_function_sync_trace:
-                return
-            for key, value in metadata.items():
-                self._schema_function_sync_trace[str(key)] = value
-
-    def run_schema_function_sync_stage(self, stage: str, operation):
-        stage_name = str(stage or "unknown")
-        started_at = time.perf_counter()
-        with self._schema_function_sync_trace_lock:
-            if self._schema_function_sync_trace:
-                self._schema_function_sync_trace["currentStage"] = stage_name
-        try:
-            result = operation()
-        except Exception as error:
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            with self._schema_function_sync_trace_lock:
-                if self._schema_function_sync_trace:
-                    self._schema_function_sync_trace["currentStage"] = ""
-                    self._schema_function_sync_trace["lastStage"] = stage_name
-                    self._schema_function_sync_trace["failedStage"] = stage_name
-                    self._schema_function_sync_trace["failureReasonCode"] = typedb_error_code(error)
-                    self._schema_function_sync_trace["failureReason"] = str(error)[:220]
-                    self._schema_function_sync_trace.setdefault("stages", []).append({
-                        "stage": stage_name,
-                        "status": "error",
-                        "durationMs": duration_ms,
-                        "reasonCode": typedb_error_code(error),
-                        "reason": str(error)[:180],
-                    })
-            raise
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        result_status = "ok"
-        if isinstance(result, dict) and str(result.get("status") or ""):
-            result_status = str(result.get("status") or "")
-        with self._schema_function_sync_trace_lock:
-            if self._schema_function_sync_trace:
-                self._schema_function_sync_trace["currentStage"] = ""
-                self._schema_function_sync_trace["lastStage"] = stage_name
-                if result_status in {"error", "timeout"}:
-                    self._schema_function_sync_trace["failedStage"] = stage_name
-                    self._schema_function_sync_trace["failureReasonCode"] = str(
-                        result.get("reasonCode") or ""
-                    )
-                    self._schema_function_sync_trace["failureReason"] = str(
-                        result.get("reason") or result_status
-                    )[:220]
-                self._schema_function_sync_trace.setdefault("stages", []).append({
-                    "stage": stage_name,
-                    "status": result_status,
-                    "durationMs": duration_ms,
-                    **({
-                        "reasonCode": str(result.get("reasonCode") or ""),
-                        "reason": str(result.get("reason") or result_status)[:180],
-                    } if result_status in {"error", "timeout"} else {}),
-                })
-        return result
-
-    def schema_function_sync_trace_snapshot(self) -> Dict[str, object]:
-        with self._schema_function_sync_trace_lock:
-            trace = copy.deepcopy(self._schema_function_sync_trace)
-        started_at = float(trace.pop("_startedMonotonic", 0.0) or 0.0)
-        if started_at:
-            trace["durationMs"] = int((time.perf_counter() - started_at) * 1000)
-        trace["stages"] = list(trace.get("stages") or [])[-24:]
-        return trace
 
     def rulebox_snapshot_cache_seconds(self) -> float:
         return self._rulebox_snapshot_cache_seconds
@@ -8270,90 +8093,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def native_rule_durable_preflight_fallback_enabled(self) -> bool:
         return self._native_rule_durable_preflight_fallback_enabled
 
-    def schema_function_provision_batch_size(self) -> int:
-        return self._schema_function_provision_batch_size
-
-    def schema_function_provision_timeout_seconds(self) -> float:
-        return self._schema_function_provision_timeout_seconds
-
-    def schema_function_direct_query_fallback_enabled(self) -> bool:
-        return self._schema_function_direct_query_fallback_enabled
-
     def clear_rulebox_snapshot_cache(self) -> None:
         self._rulebox_snapshot_cache_at = 0.0
         self._rulebox_snapshot_cache_full_load_at = 0.0
         self._rulebox_snapshot_cache_result = {}
-
-    def schema_function_process_cache_key(self, sync_fingerprint: str) -> Tuple[str, str, str, bool, str]:
-        return (
-            self.address,
-            self.user,
-            self.database,
-            bool(self.tls_enabled),
-            str(sync_fingerprint or ""),
-        )
-
-    def cached_schema_function_sync_result(self, sync_fingerprint: str) -> Dict[str, object]:
-        """Return a recent cross-instance function verification, if safe.
-
-        The current native query is still run against TypeDB after this lookup.
-        A cached verification only avoids a redundant schema catalog scan when
-        the short-lived monitor runner creates a new repository object.
-        """
-        if not self._process_schema_function_cache_enabled:
-            return {}
-        interval = self._schema_function_probe_interval_seconds
-        if interval <= 0:
-            return {}
-        key = self.schema_function_process_cache_key(sync_fingerprint)
-        with self._process_schema_function_sync_lock:
-            entry = dict(self._process_schema_function_sync.get(key) or {})
-        verified_at = float(entry.get("verifiedAtMonotonic") or 0.0)
-        result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
-        age_seconds = max(0.0, time.monotonic() - verified_at) if verified_at else interval
-        if not result or age_seconds >= interval:
-            return {}
-        cached = dict(result)
-        cached.update({
-            "cached": True,
-            "schemaFunctionSyncCached": True,
-            "schemaFunctionProbeUsed": False,
-            "schemaFunctionProcessCached": True,
-            "schemaFunctionProbeAgeSeconds": round(age_seconds, 3),
-            "syncFingerprint": sync_fingerprint,
-        })
-        return cached
-
-    def cache_schema_function_sync_result(self, sync_fingerprint: str, result: Dict[str, object]) -> None:
-        if (
-            not self._process_schema_function_cache_enabled
-            or str((result or {}).get("status") or "") != "ok"
-            or not sync_fingerprint
-        ):
-            return
-        key = self.schema_function_process_cache_key(sync_fingerprint)
-        with self._process_schema_function_sync_lock:
-            self._process_schema_function_sync[key] = {
-                "verifiedAtMonotonic": time.monotonic(),
-                "result": dict(result or {}),
-            }
-
-    def invalidate_schema_function_sync_cache(self, sync_fingerprint: str = "") -> None:
-        self._schema_function_sync_cache_key = ""
-        self._schema_function_sync_cache_result = {}
-        if not self._process_schema_function_cache_enabled:
-            return
-        with self._process_schema_function_sync_lock:
-            if sync_fingerprint:
-                self._process_schema_function_sync.pop(
-                    self.schema_function_process_cache_key(sync_fingerprint),
-                    None,
-                )
-                return
-            prefix = (self.address, self.user, self.database, bool(self.tls_enabled))
-            for key in list(self._process_schema_function_sync):
-                if key[:4] == prefix:
-                    self._process_schema_function_sync.pop(key, None)
 
     def active_tbox_metadata(self) -> Dict[str, object]:
         if not self.address:
@@ -8742,24 +8485,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             float(self._write_operation_timeout_seconds or 0),
         )
 
-    def open_schema_driver(self, imported, request_timeout_seconds: float = None):
-        """Open a dedicated channel for an expensive schema-function commit.
-
-        The persistent driver serves bounded read and ABox work. Reusing that
-        channel for a cold RuleBox compiler commit can retain a shorter
-        request deadline and a transport that was interrupted by the compiler.
-        A schema writer is already isolated by the prewarm worker, so it gets
-        a fresh channel with its own maintenance deadline instead.
-        """
-        timeout = (
-            self.schema_function_provision_timeout_seconds()
-            if request_timeout_seconds is None
-            else max(1.0, float(request_timeout_seconds))
-        )
-        if not self._persistent_driver_enabled:
-            return self.open_driver(imported, request_timeout_seconds=timeout)
-        return self.create_driver(imported, request_timeout_seconds=timeout)
-
     def open_native_rule_read_driver(self, imported, request_timeout_seconds: float = None):
         """Open a channel whose deadline matches one bounded native-rule read.
 
@@ -8796,10 +8521,8 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
     def read_transaction_options(self, timeout_seconds: float = None):
         """Bound a TypeDB read transaction, not only the individual query call.
 
-        A driver-side transaction deadline is required because a schema function
-        can spend time planning before ``query(...).resolve()`` becomes
-        interruptible in Python.  This keeps one slow rule from blocking the
-        realtime reasoning worker indefinitely.
+        A driver-side transaction deadline keeps one slow direct TypeQL rule
+        from blocking the realtime reasoning worker indefinitely.
         """
         try:
             from typedb.driver import TransactionOptions
@@ -8811,13 +8534,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         )
 
     def schema_transaction_options(self, timeout_seconds: float = None):
-        """Give TypeDB's schema lock and transaction the prewarm deadline."""
+        """Give TypeDB schema maintenance its configured operation deadline."""
         try:
             from typedb.driver import TransactionOptions
         except Exception:  # noqa: BLE001 - retain compatibility with older optional drivers.
             return None
         timeout = (
-            self.schema_function_provision_timeout_seconds()
+            self.schema_operation_timeout_seconds()
             if timeout_seconds is None
             else max(1.0, float(timeout_seconds))
         )
@@ -10537,9 +10260,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         }
 
     def active_abox_rule_context(self, symbols: Iterable[str], world_id: str = "") -> Dict[str, object]:
-        """Load only TypeDB facts needed to plan schema-function calls.
+        """Load only TypeDB facts needed to plan direct TypeQL calls.
 
-        This remains a topology-only execution planner. TypeDB schema functions
+        This remains a topology-only execution planner. Direct TypeQL rules
         still evaluate every rule condition and decide whether the rule matches.
         """
         clean_symbols = clean_symbols_from_payload(list(symbols or []))
@@ -12095,7 +11818,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         parsed = number_or_none(raw)
         if parsed is None:
             parsed = 8
-        # TBox and TypeDB schema-function rule seeding can also contain
+        # TBox and RuleBox seeding can also contain
         # thousands of queries. Seed in short commits so startup does not hold
         # the TypeDB writer for minutes before the live ABox worker can run.
         # A subsequent seed deletes and rebuilds those boxes, so retrying a
@@ -16187,7 +15910,7 @@ relation ontology-assertion,
             completed = dict(result or {})
             if scoped_write_lease_recovery:
                 completed["scopedABoxWriteLeaseRecovery"] = dict(scoped_write_lease_recovery)
-            return self.with_seed_schema_function_sync(completed, rules)
+            return completed
 
         seed_graph = ontology_seed_graph(
             rules,
@@ -16424,47 +16147,6 @@ relation ontology-assertion,
                     ).strip(),
                 })
         return complete_seed(result)
-
-    def with_seed_schema_function_sync(
-        self,
-        result: Dict[str, object],
-        rules: Iterable[GraphInferenceRule],
-    ) -> Dict[str, object]:
-        """Record native-function deployment as a dedicated background concern.
-
-        RuleBox rows are the durable investment-policy contract. Generated
-        TypeDB functions are a compiled view of that contract and can be much
-        more expensive to install than the static TBox/RuleBox seed itself.
-        Keeping a fresh server restart behind a whole-catalogue compilation
-        caused worker startup to time out and left TypeDB busy after the client
-        had already given up. A dedicated prewarm worker now compiles the full
-        catalogue in small, verified batches. Live native inference only reads
-        its deployment receipts; it never starts a schema definition.
-        """
-        completed = dict(result or {})
-        if not completed.get("saved"):
-            return completed
-        rule_ids = sorted({
-            str(getattr(rule, "rule_id", "") or "").strip()
-            for rule in rules or []
-            if typedb_rule_is_enabled(rule)
-            and str(getattr(rule, "rule_id", "") or "").strip()
-        })
-        completed["schemaFunctionSync"] = {
-            "status": "deferred",
-            "configured": True,
-            "graphStore": "typedb",
-            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "deploymentMode": "dedicated-rulebox-prewarm-worker",
-            "ruleCount": len(rule_ids),
-            "provisionBatchSize": self.schema_function_provision_batch_size(),
-            "reason": (
-                "TypeDB schema functions are provisioned by the dedicated "
-                "RuleBox prewarm worker in bounded batches; live native "
-                "execution only checks the prepared receipt."
-            ),
-        }
-        return completed
 
     def rulebox_snapshot(self) -> Dict[str, object]:
         if not self.address:
@@ -16952,7 +16634,6 @@ relation ontology-assertion,
         self,
         planned: Dict[str, object],
         clean_symbols: Iterable[str],
-        schema_function_query: bool,
         world_id: str,
         scoped_manifest_only: bool,
         imported,
@@ -16966,7 +16647,7 @@ relation ontology-assertion,
 
         Parallel execution deliberately opens a short-lived read transaction per
         rule. The enclosing scoped ABox write lease prevents an ABox pointer
-        transition while the functions run, while the per-rule transaction
+        transition while direct TypeQL reads run, while the per-rule transaction
         timeout remains effective in worker threads where SIGALRM is not.
         """
         entry_started = time.perf_counter()
@@ -17007,7 +16688,6 @@ relation ontology-assertion,
                 planned.get("targetWorkAdaptiveShardingUsed")
             ),
         }
-        function_name = typedb_native_rule_function_name(rule_payload, world_id)
         has_any_conditions = any(
             normalized_condition_role(
                 condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
@@ -17017,7 +16697,6 @@ relation ontology-assertion,
         query_plan = typedb_native_rule_runtime_query_plan(
             rule_payload,
             candidate_symbols,
-            schema_function_query=schema_function_query,
             scoped_manifest_only=scoped_manifest_only,
             world_id=world_id,
             evidence_read_index=evidence_read_index,
@@ -17029,7 +16708,6 @@ relation ontology-assertion,
             # returns one proven result row per source.
             compact_result_rows=not self.condition_detail_queries_enabled(),
         )
-        uses_schema_function = bool(query_plan.get("schemaFunctionQuery"))
         uses_indexed_evidence_query = bool(query_plan.get("indexedEvidenceQuery"))
         if not query_plan.get("query"):
             return with_elapsed({
@@ -17039,7 +16717,7 @@ relation ontology-assertion,
                 "failure": {
                     "ruleId": str(rule.rule_id or ""),
                     "status": "blocked",
-                    "reason": "TypeDB schema function call could not be built.",
+                    "reason": "Direct TypeQL rule query could not be built.",
                     "candidateSymbols": candidate_symbols,
                 },
             })
@@ -17163,11 +16841,11 @@ relation ontology-assertion,
                     "executed": {
                         "ruleId": rule.rule_id,
                         "nativeRuleId": typedb_native_rule_id(rule.rule_id),
-                        "schemaFunctionName": function_name if uses_schema_function else "",
-                        "queryMode": str(query_plan.get("queryMode") or (
-                            execution_mode if uses_schema_function else "typedb-scoped-typeql-any-verified-parallel"
-                        )),
-                        "schemaFunctionQueryUsed": uses_schema_function,
+                        "typeqlExecutionMode": "direct-typeql",
+                        "queryMode": str(
+                            query_plan.get("queryMode")
+                            or "typedb-scoped-typeql-any-verified-parallel"
+                        ),
                         "indexedEvidenceQueryUsed": uses_indexed_evidence_query,
                         "modelSignalInterpretationPolicy": is_model_signal_interpretation_rule(rule_payload),
                         "modelSignalInterpretationPolicyId": (
@@ -17259,7 +16937,7 @@ relation ontology-assertion,
                     # Shared bridges are a v2 scoped-world feature. Their
                     # source, signal entity, and assertion must all resolve
                     # through the active scope pointers even when the source
-                    # predicate itself came from a schema function.
+                    # predicate itself came from a direct TypeQL query.
                     scoped_manifest_only=True,
                 )
                 if remaining_seconds <= 0.5 or not query_plan.get("query"):
@@ -17399,9 +17077,8 @@ relation ontology-assertion,
                     executed_rules.append({
                         "ruleId": rule_id,
                         "nativeRuleId": typedb_native_rule_id(rule_id),
-                        "schemaFunctionName": str(query_plan.get("schemaFunctionName") or ""),
+                        "typeqlExecutionMode": "direct-typeql",
                         "queryMode": str(query_plan.get("queryMode") or ""),
-                        "schemaFunctionQueryUsed": bool(query_plan.get("schemaFunctionQuery")),
                         "indexedEvidenceQueryUsed": False,
                         "modelSignalInterpretationPolicy": True,
                         "modelSignalInterpretationPolicyId": "model-signal-interpretation:" + rule_id,
@@ -17441,7 +17118,7 @@ relation ontology-assertion,
         """Return whether a failed native-rule entry is safe to retry smaller.
 
         Only a bounded read timeout is eligible. A malformed query, missing
-        schema function, or incomplete any-condition proof must remain a hard
+        direct TypeQL query, or incomplete any-condition proof must remain a hard
         failure for the entire generation.
         """
         failure = dict((result or {}).get("failure") or {})
@@ -17472,7 +17149,6 @@ relation ontology-assertion,
         primary_result: Dict[str, object],
         planned: Dict[str, object],
         clean_symbols: Iterable[str],
-        schema_function_query: bool,
         world_id: str,
         scoped_manifest_only: bool,
         imported,
@@ -17512,7 +17188,6 @@ relation ontology-assertion,
             retried = self.execute_typedb_native_rule_entry(
                 dict(planned or {}),
                 clean_symbols,
-                schema_function_query,
                 world_id,
                 scoped_manifest_only,
                 imported,
@@ -17615,7 +17290,6 @@ relation ontology-assertion,
             shard_result = self.execute_typedb_native_rule_entry(
                 shard,
                 clean_symbols,
-                schema_function_query,
                 world_id,
                 scoped_manifest_only,
                 imported,
@@ -17714,8 +17388,6 @@ relation ontology-assertion,
         rules: Iterable[GraphInferenceRule],
         target_symbols: Iterable[str],
         *,
-        use_schema_functions: bool,
-        schema_function_ready_rule_ids: Iterable[str] = None,
         world_id: str,
         planner_topology: Dict[str, object] = None,
         preflight_graph: PortfolioOntology = None,
@@ -17745,8 +17417,6 @@ relation ontology-assertion,
             result = self.match_typedb_native_rules(
                 rules,
                 target_symbols=[symbol],
-                use_schema_functions=use_schema_functions,
-                schema_function_ready_rule_ids=schema_function_ready_rule_ids,
                 world_id=world_id,
                 planner_topology=planner_topology,
                 preflight_graph=preflight_graph,
@@ -17883,7 +17553,6 @@ relation ontology-assertion,
             "graphStore": "typedb",
             "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
             "nativeQueryUsed": complete,
-            "schemaFunctionUsed": any(bool(item.get("schemaFunctionUsed")) for item in results),
             "indexedEvidenceQueryUsed": any(bool(item.get("indexedEvidenceQueryUsed")) for item in results),
             "nativeExecutionMode": "subject-fanout",
             "nativeRuleParallelism": parallelism,
@@ -17943,8 +17612,6 @@ relation ontology-assertion,
         self,
         rules: Iterable[GraphInferenceRule],
         target_symbols: Iterable[str] = None,
-        use_schema_functions: bool = True,
-        schema_function_ready_rule_ids: Iterable[str] = None,
         world_id: str = "",
         planner_topology: Dict[str, object] = None,
         preflight_graph: PortfolioOntology = None,
@@ -17965,48 +17632,13 @@ relation ontology-assertion,
             return self.match_typedb_native_rules_by_subject(
                 rules,
                 clean_symbols,
-                use_schema_functions=use_schema_functions,
-                schema_function_ready_rule_ids=schema_function_ready_rule_ids,
                 world_id=world_id,
                 planner_topology=planner_topology,
                 preflight_graph=preflight_graph,
                 preflight_incoming_relations_complete=preflight_incoming_relations_complete,
                 evidence_read_index=evidence_read_index,
             )
-        # The original hot path rebuilt every rule as a raw TypeQL match when a
-        # changed symbol was supplied. `any` branches in those queries can grow
-        # combinatorially and have previously stalled the TypeDB server. Base
-        # clauses stay in persisted TypeDB schema functions; N-of-M clauses
-        # are verified as bounded, source-specific TypeQL reads only after a
-        # base match exists.
-        ready_schema_rule_ids = (
-            None
-            if schema_function_ready_rule_ids is None
-            else {
-                str(rule_id or "").strip()
-                for rule_id in schema_function_ready_rule_ids
-                if str(rule_id or "").strip()
-            }
-        )
-
-        def schema_function_query_for(planned: Dict[str, object]) -> bool:
-            if not use_schema_functions:
-                return False
-            if ready_schema_rule_ids is None:
-                return True
-            rule = planned.get("rule") if isinstance(planned, dict) else None
-            return str(getattr(rule, "rule_id", "") or "") in ready_schema_rule_ids
-
-        schema_function_query = bool(use_schema_functions and ready_schema_rule_ids is None)
-        execution_mode = (
-            "typedb-native-per-rule-function-readiness"
-            if use_schema_functions and ready_schema_rule_ids is not None
-            else "typedb-schema-function-filtered-planned"
-            if schema_function_query and clean_symbols
-            else "typedb-schema-function"
-            if schema_function_query
-            else "typedb-scoped-typeql"
-        )
+        execution_mode = "typedb-scoped-typeql"
         matches: List[Dict[str, object]] = []
         match_index: Dict[str, Dict[str, object]] = {}
         executed_rules = []
@@ -18023,7 +17655,6 @@ relation ontology-assertion,
         any_condition_parallelism_cap = 1
         any_condition_rule_count = 0
         native_rule_execution_phases: Dict[str, object] = {}
-        schema_function_match_used = False
         indexed_evidence_query_used = False
         evidence_index_hydration: Dict[str, object] = {}
         timeout_fallback_rule_count = 0
@@ -18239,7 +17870,7 @@ relation ontology-assertion,
                     skipped_rules.append({
                         "ruleId": str(rule.rule_id or ""),
                         "status": str(profile.get("status") or "partial"),
-                        "reason": "Rule has JSON-bound or unsupported conditions for TypeDB schema function execution.",
+                        "reason": "Rule has JSON-bound or unsupported conditions for direct TypeQL execution.",
                         **typedb_rule_execution_profile_fields(planned),
                     })
                     continue
@@ -18285,20 +17916,15 @@ relation ontology-assertion,
             model_signal_batch_plan = typedb_model_signal_bridge_batch_plan(
                 selected_entries,
                 clean_symbols,
-                use_schema_functions=use_schema_functions,
-                schema_function_ready_rule_ids=ready_schema_rule_ids,
             )
             selected_entries = list(model_signal_batch_plan.get("regularEntries") or [])
             imported = self.driver_imports()
             if imported[0] is None:
                 raise RuntimeError("typedb-driver Python package is not installed: " + str(imported[1])[:160])
             _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-            # Schema-function calls bind the scoped active Manifest in their
-            # definition. A direct TypeQL fallback has no such definition, so
-            # it must bind the active Manifest for *every* raw predicate, not
-            # just N-of-M follow-up checks. Otherwise a staged function
-            # deployment can turn a one-symbol recovery read into a scan of
-            # inactive ABox generations.
+            # Direct TypeQL binds the active Manifest for every raw predicate,
+            # including N-of-M follow-up checks, so inactive ABox generations
+            # cannot enter a scoped recovery read.
             requires_direct_any_probe = any(
                 any(
                     normalized_condition_role(
@@ -18309,20 +17935,11 @@ relation ontology-assertion,
                 for item in selected_entries
                 if item.get("rule")
             )
-            requires_direct_model_signal_bridge = any(
-                not bool(batch.get("schemaFunctionQuery"))
-                for batch in model_signal_batch_plan.get("batches") or []
-            )
             scoped_manifest_only = False
-            if (
-                requires_direct_any_probe
-                or requires_direct_model_signal_bridge
-                or not schema_function_query
-            ):
-                try:
-                    scoped_manifest_only = self.active_abox_uses_scoped_manifest(world_id)
-                except Exception:
-                    scoped_manifest_only = False
+            try:
+                scoped_manifest_only = self.active_abox_uses_scoped_manifest(world_id)
+            except Exception:
+                scoped_manifest_only = False
             requested_parallelism = max(
                 1,
                 min(8, int(number_or_none(native_rule_parallelism) or 1)),
@@ -18356,7 +17973,7 @@ relation ontology-assertion,
                 if bool(planned.get("targetWorkAdaptiveShardingUsed"))
             ]
             adaptive_target_indexes = {index for index, _planned in adaptive_target_entries}
-            function_only_entries = [
+            direct_entries = [
                 (index, planned)
                 for index, planned in enumerate(selected_entries)
                 if index not in adaptive_target_indexes and not entry_has_any_conditions.get(index)
@@ -18368,9 +17985,9 @@ relation ontology-assertion,
             ]
             execution_batches = []
             for execution_stage in ["critical", "core", "supporting"]:
-                stage_function_entries = [
+                stage_direct_entries = [
                     item
-                    for item in function_only_entries
+                    for item in direct_entries
                     if str(item[1].get("executionStage") or "core") == execution_stage
                 ]
                 stage_any_entries = [
@@ -18383,12 +18000,12 @@ relation ontology-assertion,
                     for item in adaptive_target_entries
                     if str(item[1].get("executionStage") or "core") == execution_stage
                 ]
-                if stage_function_entries:
+                if stage_direct_entries:
                     execution_batches.append({
-                        "name": execution_stage + ":function-only",
+                        "name": execution_stage + ":direct-typeql",
                         "executionStage": execution_stage,
-                        "entries": stage_function_entries,
-                        "parallelism": min(requested_parallelism, len(stage_function_entries)),
+                        "entries": stage_direct_entries,
+                        "parallelism": min(requested_parallelism, len(stage_direct_entries)),
                     })
                 if stage_any_entries:
                     # N-of-M verification is contention-sensitive, but a
@@ -18408,8 +18025,8 @@ relation ontology-assertion,
                         "parallelism": 1,
                     })
             native_rule_execution_phases = {
-                "functionOnlyRuleCount": len(function_only_entries),
-                "functionOnlyParallelism": min(requested_parallelism, len(function_only_entries)) if function_only_entries else 0,
+                "directTypeqlRuleCount": len(direct_entries),
+                "directTypeqlParallelism": min(requested_parallelism, len(direct_entries)) if direct_entries else 0,
                 "anyConditionRuleCount": len(any_condition_entries),
                 "anyConditionParallelism": min(any_condition_parallelism_cap, len(any_condition_entries)) if any_condition_entries else 0,
                 "adaptiveTargetShardWorkItemCount": len(adaptive_target_entries),
@@ -18444,15 +18061,11 @@ relation ontology-assertion,
             )
             if isolated_entry_execution:
                 # ABox writes are serialized by the durable lease passed by the
-                # projection recorder. Independent schema functions may now use
+                # projection recorder. Independent direct TypeQL rules may use
                 # separate bounded read transactions without observing a world
                 # pointer transition between rule evaluations.
                 if parallel_rule_execution:
-                    execution_mode = (
-                        "typedb-schema-function-hybrid-any-verified-phased"
-                        if schema_function_query and requires_direct_any_probe
-                        else execution_mode + "-parallel"
-                    )
+                    execution_mode += "-parallel"
                 elif adaptive_target_entries:
                     execution_mode += "-adaptive-target-shards"
 
@@ -18507,15 +18120,11 @@ relation ontology-assertion,
                 bridge_batch_result.get("ignoredContractIds") or []
             )
             if bridge_executed_rules:
-                schema_function_match_used = schema_function_match_used or any(
-                    bool(item.get("schemaFunctionQueryUsed"))
-                    for item in bridge_executed_rules
-                )
                 execution_mode = "typedb-shared-model-signal-bridge-batch"
 
             def operation():
                 nonlocal read_call_count, read_transaction_count, execution_budget_exhausted, execution_incomplete, execution_mode
-                nonlocal schema_function_match_used, indexed_evidence_query_used
+                nonlocal indexed_evidence_query_used
                 if not selected_entries:
                     return
                 # The durable projection may need a long write timeout, but a
@@ -18539,7 +18148,7 @@ relation ontology-assertion,
                     # an independent transaction. That multiplied driver setup
                     # and query planning work while allowing a live world switch
                     # between rules. Per-query alarm limits still bound an
-                    # expensive function; a failed query aborts this shared
+                    # expensive predicate; a failed query aborts this shared
                     # transaction and yields a fail-closed partial result.
                     read_transaction_count += 1
                     with driver.transaction(
@@ -18567,8 +18176,6 @@ relation ontology-assertion,
                                 })
                                 continue
                             rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-                            rule_schema_function_query = schema_function_query_for(planned)
-                            function_name = typedb_native_rule_function_name(rule_payload, world_id)
                             has_any_conditions = any(
                                 normalized_condition_role(
                                     condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
@@ -18582,26 +18189,21 @@ relation ontology-assertion,
                             query_plan = typedb_native_rule_runtime_query_plan(
                                 rule_payload,
                                 candidate_symbols,
-                                schema_function_query=rule_schema_function_query,
                                 scoped_manifest_only=scoped_manifest_only,
                                 world_id=world_id,
                                 evidence_read_index=evidence_read_index,
                                 compact_result_rows=not self.condition_detail_queries_enabled(),
                             )
-                            uses_schema_function = bool(query_plan.get("schemaFunctionQuery"))
                             uses_indexed_evidence_query = bool(query_plan.get("indexedEvidenceQuery"))
-                            schema_function_match_used = schema_function_match_used or uses_schema_function
                             indexed_evidence_query_used = indexed_evidence_query_used or uses_indexed_evidence_query
-                            if has_any_conditions and uses_schema_function:
-                                execution_mode = "typedb-schema-function-hybrid-any-verified"
-                            elif uses_indexed_evidence_query:
+                            if uses_indexed_evidence_query:
                                 execution_mode = "typedb-manifest-evidence-index"
                             if not query_plan.get("query"):
                                 execution_incomplete = True
                                 skipped_rules.append({
                                     "ruleId": str(rule.rule_id or ""),
                                     "status": "blocked",
-                                    "reason": "TypeDB schema function call could not be built.",
+                                    "reason": "Direct TypeQL rule query could not be built.",
                                     "elapsedMs": int((time.perf_counter() - rule_started) * 1000),
                                     **typedb_rule_execution_profile_fields(planned),
                                 })
@@ -18712,11 +18314,11 @@ relation ontology-assertion,
                             executed_rules.append({
                                 "ruleId": rule.rule_id,
                                 "nativeRuleId": typedb_native_rule_id(rule.rule_id),
-                                "schemaFunctionName": function_name if uses_schema_function else "",
-                                "queryMode": str(query_plan.get("queryMode") or (
-                                    execution_mode if uses_schema_function else "typedb-scoped-typeql-any-verified"
-                                )),
-                                "schemaFunctionQueryUsed": uses_schema_function,
+                                "typeqlExecutionMode": "direct-typeql",
+                                "queryMode": str(
+                                    query_plan.get("queryMode")
+                                    or "typedb-scoped-typeql-any-verified"
+                                ),
                                 "indexedEvidenceQueryUsed": uses_indexed_evidence_query,
                                 "modelSignalInterpretationPolicy": is_model_signal_interpretation_rule(rule_payload),
                                 "modelSignalInterpretationPolicyId": (
@@ -18775,7 +18377,6 @@ relation ontology-assertion,
                                 self.execute_typedb_native_rule_entry(
                                     planned,
                                     clean_symbols,
-                                    schema_function_query_for(planned),
                                     world_id,
                                     scoped_manifest_only,
                                     imported,
@@ -18876,7 +18477,6 @@ relation ontology-assertion,
                             completed,
                             planned,
                             clean_symbols,
-                            schema_function_query_for(planned),
                             world_id,
                             scoped_manifest_only,
                             imported,
@@ -18926,9 +18526,6 @@ relation ontology-assertion,
                         timeout_fallback_shard_count += int(
                             executed.get("timeoutFallbackShardCount") or 0
                         )
-                    schema_function_match_used = schema_function_match_used or bool(
-                        executed.get("schemaFunctionQueryUsed")
-                    )
                     indexed_evidence_query_used = indexed_evidence_query_used or bool(
                         executed.get("indexedEvidenceQueryUsed")
                     )
@@ -18967,7 +18564,6 @@ relation ontology-assertion,
                     "graphStore": "typedb",
                     "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                     "nativeQueryUsed": False,
-                    "schemaFunctionUsed": schema_function_match_used,
                     "indexedEvidenceQueryUsed": indexed_evidence_query_used,
                     "nativeExecutionMode": execution_mode,
                     "nativeRuleParallelism": effective_parallelism,
@@ -19031,7 +18627,6 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "nativeQueryUsed": True,
-                "schemaFunctionUsed": schema_function_match_used,
                 "indexedEvidenceQueryUsed": indexed_evidence_query_used,
                 "nativeExecutionMode": execution_mode,
                 "nativeRuleParallelism": effective_parallelism,
@@ -19099,7 +18694,6 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
                 "nativeQueryUsed": False,
-                "schemaFunctionUsed": False,
                 "nativeExecutionMode": execution_mode,
                 "nativeRuleParallelism": effective_parallelism,
                 "nativeRuleTargetParallelism": int(target_work_plan.get("effectiveTargetParallelism") or 1),
@@ -19218,10 +18812,10 @@ relation ontology-assertion,
     def profile_native_rule_reads(self, payload: Dict[str, object] = None) -> Dict[str, object]:
         """Replay the native read path without writing operational graph state.
 
-        The method reads the active RuleBox and ABox, evaluates schema
-        functions, loads the matched evidence graph, and builds an InferenceBox
-        graph in memory. It deliberately never syncs schema functions, acquires
-        a write lease, persists ABox/InferenceBox rows, or rotates generations.
+        The method reads the active RuleBox and ABox, evaluates direct TypeQL
+        predicates, loads the matched evidence graph, and builds an InferenceBox
+        graph in memory. It never acquires a write lease, persists graph rows,
+        or rotates generations.
         A sample is comparable only when the active ABox identity is unchanged
         before and after the complete read path.
         """
@@ -19235,13 +18829,7 @@ relation ontology-assertion,
             0.0,
             min(95.0, float(number_or_none(values.get("minimumFanoutReductionPct")) or 40.0)),
         )
-        requested_query_mode = str(values.get("nativeQueryMode") or "").strip().lower()
-        if requested_query_mode not in {"auto", "schema-function", "direct-typeql"}:
-            requested_query_mode = (
-                "schema-function"
-                if "useSchemaFunctions" not in values or typedb_bool(values.get("useSchemaFunctions"))
-                else "direct-typeql"
-            )
+        requested_query_mode = "direct-typeql"
         requested_rule_ids = {
             str(item or "").strip()
             for item in values.get("ruleIds") or []
@@ -19255,7 +18843,6 @@ relation ontology-assertion,
             "mutatedOperationalState": False,
             "writeMethodsInvoked": [],
             "excludedOperations": [
-                "schema-function-sync",
                 "abox-write",
                 "inferencebox-write",
                 "generation-activation",
@@ -19295,31 +18882,7 @@ relation ontology-assertion,
             report.update({"status": "no-rules", "reason": "No enabled RuleBox rule matched the requested IDs."})
             return report
 
-        schema_function_probe = {
-            "status": "not-requested",
-            "available": False,
-        }
-        if requested_query_mode in {"auto", "schema-function"}:
-            probe_started = time.perf_counter()
-            schema_function_probe = self.probe_typedb_native_rule_functions(rules, world_id)
-            schema_function_probe = {
-                key: schema_function_probe.get(key)
-                for key in [
-                    "status", "available", "probedCount", "verifiedRuleCount",
-                    "missingRuleIds", "missingFunctionNames", "reasonCode", "reason",
-                ]
-                if key in schema_function_probe
-            }
-            schema_function_probe["durationMs"] = int((time.perf_counter() - probe_started) * 1000)
-        use_schema_functions = (
-            requested_query_mode in {"auto", "schema-function"}
-            and bool(schema_function_probe.get("available"))
-        )
-        report["nativeQueryMode"] = "schema-function" if use_schema_functions else "direct-typeql"
-        report["schemaFunctionProbe"] = schema_function_probe
-        report["schemaFunctionFallback"] = bool(
-            requested_query_mode == "schema-function" and not use_schema_functions
-        )
+        report["nativeQueryMode"] = "direct-typeql"
 
         report["rulebox"] = {
             "ruleCount": len(rules),
@@ -19383,10 +18946,9 @@ relation ontology-assertion,
                 native_result = self.match_typedb_native_rules(
                     rules,
                     target_symbols=target_symbols,
-                    use_schema_functions=use_schema_functions,
                     world_id=world_id,
                     planner_topology=planner_topology,
-                    native_rule_parallelism=(self.native_rule_parallelism() if use_schema_functions else 1),
+                    native_rule_parallelism=1,
                     native_rule_target_parallelism=1,
                     stable_abox_write_lease_held=False,
                     evidence_read_index=evidence_read_index,
@@ -19447,7 +19009,6 @@ relation ontology-assertion,
                             result = self.match_typedb_native_rules(
                                 rules,
                                 target_symbols=[subject_symbol],
-                                use_schema_functions=use_schema_functions,
                                 world_id=world_id,
                                 planner_topology=subject_topology,
                                 native_rule_parallelism=1,
@@ -19701,25 +19262,21 @@ relation ontology-assertion,
                         existing_conditions.append(item)
                 existing["matchedConditions"] = existing_conditions
                 continue
-            condition_context = self.typedb_schema_function_condition_context(rule, source_id, query_plan, row, world_id)
+            condition_context = self.typedb_rule_condition_context(rule, source_id, query_plan, row, world_id)
             if query_plan.get("indexedEvidenceQuery"):
                 condition_context["conditionDetailSource"] = "typedb-manifest-evidence-index-match"
             evidence_relation_ids = sorted(set(evidence_relation_ids + list(condition_context.get("evidenceRelationIds") or [])))
             match = {
                 "ruleId": rule.rule_id,
                 "nativeRuleId": typedb_native_rule_id(rule.rule_id),
-                "schemaFunctionName": (
-                    typedb_native_rule_function_name(rule, world_id)
-                    if query_plan.get("schemaFunctionQuery")
-                    else ""
-                ),
-                "queryMode": str(query_plan.get("queryMode") or "typedb-schema-function"),
+                "typeqlExecutionMode": "direct-typeql",
+                "queryMode": str(query_plan.get("queryMode") or "direct-typeql"),
                 "worldId": str(world_id or ""),
                 "sourceId": source_id,
                 "sourceLabel": str(row.get("sourceLabel") or ""),
                 "matchedConditions": list(condition_context.get("matchedConditions") or []),
                 "evidenceRelationIds": sorted(set(evidence_relation_ids)),
-                "conditionDetailSource": str(condition_context.get("conditionDetailSource") or "schema-function-match"),
+                "conditionDetailSource": str(condition_context.get("conditionDetailSource") or "direct-typeql-match"),
                 "modelSignalInterpretationPolicy": is_model_signal_interpretation_rule(rule),
                 "modelSignalInterpretationPolicyId": (
                     "model-signal-interpretation:" + str(rule.rule_id or "")
@@ -19733,7 +19290,7 @@ relation ontology-assertion,
             match_index[match_key] = match
             matches.append(match)
 
-    def typedb_schema_function_condition_context(
+    def typedb_rule_condition_context(
         self,
         rule: GraphInferenceRule,
         source_id: str,
@@ -19742,7 +19299,7 @@ relation ontology-assertion,
         world_id: str = "",
     ) -> Dict[str, object]:
         if not self.condition_detail_queries_enabled():
-            return typedb_static_schema_function_condition_context(rule, query_plan or {}, row or {})
+            return typedb_static_rule_condition_context(rule, query_plan or {}, row or {})
         source_query_plan = dict(query_plan or {})
         interpretation_policy = bool(source_query_plan.get("modelSignalInterpretationPolicy"))
         shared_bridge = bool(source_query_plan.get("sharedModelSignalBridge"))
@@ -19820,1848 +19377,10 @@ relation ontology-assertion,
             "conditionDetailSource": (
                 "typedb-model-signal-interpretation-policy-detail"
                 if interpretation_policy
-                else "schema-function-detail-query"
+                else "direct-typeql-detail-query"
             ),
         }
 
-    @staticmethod
-    def schema_function_definition_hash(definition: Dict[str, object]) -> str:
-        """Fingerprint an immutable generated function definition.
-
-        Generated functions use a versioned namespace, but keeping the body
-        hash in the deployment receipt prevents a future compiler change from
-        treating an old implementation with the same name as verified.
-        """
-        payload = {
-            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "functionName": str((definition or {}).get("functionName") or "").strip(),
-            "body": str((definition or {}).get("body") or (definition or {}).get("define") or "").strip(),
-        }
-        canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        return "typedb-function:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
-
-    def schema_function_deployment_marker(
-        self,
-        definition: Dict[str, object],
-        deployment_state: str = "deployed",
-    ) -> Dict[str, object]:
-        function_name = str((definition or {}).get("functionName") or "").strip()
-        definition_hash = self.schema_function_definition_hash(definition)
-        clean_state = str(deployment_state or "deployed").strip().lower()
-        if clean_state not in {"deployed", "provisioning"}:
-            clean_state = "deployed"
-        # Keep the deployed receipt identity stable for existing v9 receipts.
-        # A provisioning receipt is a separate, non-authoritative fact so a
-        # connection loss cannot be confused with a committed function body.
-        marker_seed = function_name + "|" + definition_hash
-        if clean_state != "deployed":
-            marker_seed += "|" + clean_state
-        marker_id = "typedb-schema-function-deployment:" + hashlib.sha256(
-            marker_seed.encode("utf-8")
-        ).hexdigest()[:32]
-        properties = {
-            "ontologyBox": TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_BOX,
-            "tboxClass": "TypeDBSchemaFunctionDeployment",
-            "deploymentVersion": TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_VERSION,
-            "deploymentState": clean_state,
-            "functionName": function_name,
-            "definitionHash": definition_hash,
-            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "ruleId": str((definition or {}).get("ruleId") or ""),
-            "nativeRuleId": str((definition or {}).get("nativeRuleId") or ""),
-        }
-        return {
-            "id": marker_id,
-            "label": "TypeDB function " + function_name,
-            "kind": TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_KIND,
-            "properties": properties,
-            "storageId": ontology_storage_id(properties, marker_id, "node"),
-        }
-
-    def schema_function_deployment_markers(
-        self,
-        definitions: Iterable[Dict[str, object]],
-        deployment_state: str = "deployed",
-    ) -> List[Dict[str, object]]:
-        markers: List[Dict[str, object]] = []
-        seen = set()
-        for definition in definitions or []:
-            marker = self.schema_function_deployment_marker(
-                dict(definition or {}),
-                deployment_state=deployment_state,
-            )
-            function_name = str(marker["properties"].get("functionName") or "")
-            if not function_name or function_name in seen:
-                continue
-            seen.add(function_name)
-            markers.append(marker)
-        return markers
-
-    def read_schema_function_deployment_markers(
-        self,
-        definitions: Iterable[Dict[str, object]],
-        deployment_state: str = "deployed",
-    ) -> Dict[str, Dict[str, object]]:
-        """Read immutable deployment receipts through the unique storage key.
-
-        Calling ``database.schema()`` for every inference cycle makes TypeDB
-        serialise and parse the complete RuleBox function catalogue.  A
-        successful schema definition is instead recorded as a tiny, immutable
-        graph fact in the same database.  The receipt is naturally removed
-        with the database and is content-addressed by function body hash.
-        """
-        definitions = [dict(item or {}) for item in definitions or []]
-        markers = self.schema_function_deployment_markers(
-            definitions,
-            deployment_state=deployment_state,
-        )
-        if not markers:
-            return {}
-        expected_by_storage_id = {
-            str(marker.get("storageId") or ""): marker
-            for marker in markers
-            if str(marker.get("storageId") or "")
-        }
-        found: Dict[str, Dict[str, object]] = {}
-        storage_ids = sorted(expected_by_storage_id)
-        for offset in range(0, len(storage_ids), NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE):
-            batch = storage_ids[offset: offset + NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE]
-            query = (
-                "match $n isa ontology-node, has ontology-storage-id $storageId, "
-                "has ontology-json $json; "
-                + typedb_value_match(
-                    "$n",
-                    "ontology-storage-id",
-                    batch,
-                    "==",
-                    "functionDeploymentStorageId",
-                )
-            )
-            rows = self.read_rows(
-                query,
-                ["storageId", "json"],
-                label="typedb.schema-function-deployment-receipt",
-            )
-            for row in rows:
-                storage_id = str(row.get("storageId") or "")
-                marker = expected_by_storage_id.get(storage_id)
-                if not marker:
-                    continue
-                metadata = json_object(row.get("json"))
-                function_name = str(metadata.get("functionName") or "")
-                if function_name:
-                    found[function_name] = metadata
-        return found
-
-    def save_schema_function_deployment_markers(
-        self,
-        definitions: Iterable[Dict[str, object]],
-        deployment_state: str = "deployed",
-    ) -> Dict[str, object]:
-        """Persist receipts only after TypeDB committed the function bodies.
-
-        Receipts are append-only because TypeDB generated function names are
-        content-addressed.  This makes a retry after a process interruption
-        safe: a duplicate schema definition simply writes the missing receipt.
-        """
-        definitions = [dict(item or {}) for item in definitions or []]
-        markers = self.schema_function_deployment_markers(
-            definitions,
-            deployment_state=deployment_state,
-        )
-        if not markers:
-            return {
-                "status": "empty",
-                "saved": True,
-                "markerCount": 0,
-                "deploymentState": str(deployment_state or "deployed"),
-            }
-        graph = PortfolioOntology(
-            "typedb-schema-function-deployment-registry",
-            entities=[
-                OntologyEntity(
-                    str(marker["id"]),
-                    str(marker["label"]),
-                    str(marker["kind"]),
-                    dict(marker["properties"]),
-                )
-                for marker in markers
-            ],
-        )
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return {
-                "status": "driver-missing",
-                "saved": False,
-                "markerCount": 0,
-                "deploymentState": str(deployment_state or "deployed"),
-                "reason": str(imported[1])[:180],
-            }
-        try:
-            def operation():
-                driver = self.open_driver(imported)
-                try:
-                    self.ensure_database(driver)
-                    self.ensure_schema(driver, imported)
-                    self.write_graph(driver, imported, graph, delete_boxes=[])
-                finally:
-                    self.close_driver(driver)
-
-            self.with_typedb_retries(operation)
-            return {
-                "status": "ok",
-                "saved": True,
-                "markerCount": len(markers),
-                "deploymentState": str(deployment_state or "deployed"),
-                "functionNames": [
-                    str(marker["properties"].get("functionName") or "")
-                    for marker in markers
-                ],
-            }
-        except Exception as error:  # noqa: BLE001 - no receipt means the function cannot be trusted as deployed.
-            # A second worker can prove the same function and insert this
-            # immutable receipt between our initial probe and write. Treat an
-            # exact deployed receipt as an idempotent success rather than
-            # turning a completed schema deployment into an error.
-            if str(deployment_state or "deployed").strip().lower() == "deployed":
-                try:
-                    existing = self.read_schema_function_deployment_markers(definitions)
-                    if len(existing) == len(markers) and all(
-                        self.schema_function_deployment_receipt_matches(
-                            definition,
-                            existing.get(str((definition or {}).get("functionName") or "")) or {},
-                        )
-                        for definition in definitions or []
-                    ):
-                        return {
-                            "status": "ok",
-                            "saved": True,
-                            "existing": True,
-                            "markerCount": len(markers),
-                            "deploymentState": "deployed",
-                            "functionNames": [
-                                str(marker["properties"].get("functionName") or "")
-                                for marker in markers
-                            ],
-                        }
-                except Exception:
-                    pass
-            return {
-                "status": "error",
-                "saved": False,
-                "markerCount": 0,
-                "deploymentState": str(deployment_state or "deployed"),
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:180],
-            }
-
-    def schema_function_deployment_receipt_matches(
-        self,
-        definition: Dict[str, object],
-        receipt: Dict[str, object],
-    ) -> bool:
-        expected = self.schema_function_deployment_marker(definition)["properties"]
-        return (
-            str((receipt or {}).get("deploymentVersion") or "") == TYPEDB_SCHEMA_FUNCTION_DEPLOYMENT_VERSION
-            and str((receipt or {}).get("engineVersion") or "") == TYPEDB_NATIVE_RULE_ENGINE_VERSION
-            and str((receipt or {}).get("deploymentState") or "deployed") == "deployed"
-            and str((receipt or {}).get("functionName") or "") == str(expected.get("functionName") or "")
-            and str((receipt or {}).get("definitionHash") or "") == str(expected.get("definitionHash") or "")
-        )
-
-    @staticmethod
-    def schema_function_call_reports_missing(error: Exception) -> bool:
-        message = str(error or "").lower()
-        return any(token in message for token in [
-            "undefined function",
-            "unknown function",
-            "function not found",
-            "no function",
-            # TypeDB 3 reports an unresolved call as REP4/QEX7 rather than
-            # using one of the older "unknown function" phrases.  A pending
-            # deployment receipt with this response was never committed, so
-            # it must be retried by the background prewarmer instead of being
-            # treated as an indefinitely in-flight schema transaction.
-            "could not resolve function",
-        ])
-
-    @classmethod
-    def native_rule_result_reports_missing_schema_function(
-        cls,
-        result: Dict[str, object],
-    ) -> bool:
-        """Detect a stale deployment receipt in a completed native read.
-
-        Blue-green data replacement can preserve an ABox receipt while the
-        content-addressed schema function itself is absent from the new TypeDB
-        schema. The complete generation is retried with direct TypeQL rather
-        than leaving an otherwise valid investment request in the mailbox.
-        """
-        payload = dict(result or {})
-        messages = [payload.get("reason"), payload.get("reasonCode")]
-        for key in ["skippedRules", "supportingRuleFailures"]:
-            messages.extend(
-                value
-                for item in payload.get(key) or []
-                if isinstance(item, dict)
-                for value in [item.get("reason"), item.get("reasonCode")]
-            )
-        return any(
-            cls.schema_function_call_reports_missing(message)
-            for message in messages
-            if message
-        )
-
-    def probe_typedb_schema_function_calls(
-        self,
-        rules: Iterable[GraphInferenceRule],
-        world_id: str = "",
-    ) -> Dict[str, object]:
-        """Resolve a small set of root functions without scanning the schema.
-
-        This is deliberately *not* the normal runtime probe. It is used only
-        for a pending deployment receipt after a schema transaction lost its
-        client response. A no-match sentinel validates the function symbol
-        and its helper dependencies without evaluating a live investment
-        subject.
-        """
-        verified_rule_ids: List[str] = []
-        missing_rule_ids: List[str] = []
-        errored_rule_ids: List[str] = []
-        diagnostics: List[Dict[str, object]] = []
-        for rule in rules or []:
-            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            rule_id = str(getattr(rule, "rule_id", "") or rule_payload.get("rule_id") or rule_payload.get("ruleId") or "")
-            plan = typedb_native_function_call_query(
-                rule_payload,
-                ["__ORBIT_SCHEMA_FUNCTION_RECEIPT_PROBE__"],
-                world_id,
-            )
-            try:
-                self.read_rows(
-                    str(plan.get("query") or ""),
-                    list(plan.get("columns") or []),
-                    label="typedb.schema-function-deployment-call-probe",
-                    timeout_seconds=min(5.0, self.query_timeout_seconds()),
-                )
-                verified_rule_ids.append(rule_id)
-            except Exception as error:  # noqa: BLE001 - this determines whether a pending transaction can be retried safely.
-                if self.schema_function_call_reports_missing(error):
-                    missing_rule_ids.append(rule_id)
-                else:
-                    errored_rule_ids.append(rule_id)
-                diagnostics.append({
-                    "ruleId": rule_id,
-                    "functionName": str(plan.get("functionName") or ""),
-                    "reasonCode": typedb_error_code(error),
-                    "reason": str(error)[:180],
-                })
-        status = "ok"
-        if errored_rule_ids:
-            status = "error"
-        elif missing_rule_ids:
-            status = "missing"
-        return {
-            "status": status,
-            "available": not missing_rule_ids and not errored_rule_ids,
-            "probeMode": "bounded-function-call-recovery",
-            "verifiedRuleIds": verified_rule_ids,
-            "missingRuleIds": missing_rule_ids,
-            "erroredRuleIds": errored_rule_ids,
-            "diagnostics": diagnostics,
-        }
-
-    def recover_pending_schema_function_deployment_receipts(
-        self,
-        rules: Iterable[GraphInferenceRule],
-        definitions: Iterable[Dict[str, object]],
-        world_id: str = "",
-    ) -> Dict[str, object]:
-        """Promote only function deployments whose commit can be proven.
-
-        TypeDB can finish a schema transaction after its gRPC client has
-        disconnected. The durable provisioning receipt prevents a later
-        inference cycle from recompiling the same function blindly. A root
-        function call proves the completed transaction, after which the
-        normal immutable deployed receipt is written.
-        """
-        definitions = [dict(item or {}) for item in definitions or []]
-        pending_receipts = self.read_schema_function_deployment_markers(
-            definitions,
-            deployment_state="provisioning",
-        )
-        pending_names = set(pending_receipts)
-        if not pending_names:
-            return {
-                "status": "empty",
-                "pendingFunctionNames": [],
-                "recoveredRuleIds": [],
-            }
-        pending_rule_ids = {
-            rule_id
-            for item in definitions
-            if str(item.get("functionName") or "") in pending_names
-            for rule_id in typedb_schema_function_covered_rule_ids(item)
-        }
-        rules_by_id = {
-            str(getattr(rule, "rule_id", "") or ""): rule
-            for rule in rules or []
-            if str(getattr(rule, "rule_id", "") or "")
-        }
-        pending_rules = [rules_by_id[rule_id] for rule_id in sorted(pending_rule_ids) if rule_id in rules_by_id]
-        if not pending_rules:
-            return {
-                "status": "error",
-                "pendingFunctionNames": sorted(pending_names),
-                "recoveredRuleIds": [],
-                "reasonCode": "typedbSchemaFunctionPendingRuleMissing",
-                "reason": "Pending TypeDB schema function has no matching RuleBox rule.",
-            }
-        call_probe = self.probe_typedb_schema_function_calls(pending_rules, world_id)
-        recovered_rule_ids = set(call_probe.get("verifiedRuleIds") or [])
-        recovered_definitions = [
-            item for item in definitions
-            if set(typedb_schema_function_covered_rule_ids(item)) <= recovered_rule_ids
-        ]
-        deployment_receipt = {
-            "status": "empty",
-            "saved": True,
-            "markerCount": 0,
-        }
-        if recovered_definitions:
-            deployment_receipt = self.save_schema_function_deployment_markers(recovered_definitions)
-        receipt_saved = bool(deployment_receipt.get("saved"))
-        remaining_rule_ids = sorted(pending_rule_ids - recovered_rule_ids)
-        if recovered_rule_ids and receipt_saved and not remaining_rule_ids:
-            status = "recovered"
-        elif call_probe.get("status") == "error":
-            status = "pending"
-        elif call_probe.get("status") == "missing":
-            status = "not-deployed"
-        elif not receipt_saved:
-            status = "error"
-        else:
-            status = "partial"
-        return {
-            "status": status,
-            "pendingFunctionNames": sorted(pending_names),
-            "pendingRuleIds": sorted(pending_rule_ids),
-            "recoveredRuleIds": sorted(recovered_rule_ids),
-            "remainingRuleIds": remaining_rule_ids,
-            "callProbe": call_probe,
-            "deploymentReceipt": deployment_receipt,
-            "retryable": status in {"pending", "not-deployed", "partial"},
-            "reasonCode": str(deployment_receipt.get("reasonCode") or ""),
-            "reason": str(deployment_receipt.get("reason") or ""),
-        }
-
-    def probe_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule], world_id: str = "") -> Dict[str, object]:
-        ready_rules = []
-        for rule in rules or []:
-            if not typedb_rule_is_enabled(rule):
-                continue
-            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            if typedb_native_rule_profile(rule_payload).get("status") == "ready":
-                ready_rules.append((rule, rule_payload))
-        if not ready_rules:
-            return {"status": "empty", "available": False, "probedCount": 0}
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return {
-                "status": "driver-missing",
-                "available": False,
-                "probedCount": 0,
-                "reason": str(imported[1])[:180],
-            }
-        definitions_by_rule_id: Dict[str, Dict[str, object]] = {}
-        for rule, rule_payload in ready_rules:
-            definition = typedb_native_function_definition(rule_payload, world_id)
-            function_name = str(definition.get("functionName") or "")
-            if function_name:
-                definitions_by_rule_id[str(rule.rule_id or "")] = definition
-        probed_count = 0
-        verified_function_names: Set[str] = set()
-        verified_rule_ids: List[str] = []
-        missing_rule_ids: List[str] = []
-        missing_function_names: List[str] = []
-        unresolved_function_names: List[str] = []
-        try:
-            receipts = self.read_schema_function_deployment_markers(definitions_by_rule_id.values())
-            for rule, _rule_payload in ready_rules:
-                rule_id = str(rule.rule_id or "")
-                definition = definitions_by_rule_id.get(rule_id) or {}
-                function_name = str(definition.get("functionName") or "")
-                receipt = receipts.get(function_name) or {}
-                if not self.schema_function_deployment_receipt_matches(definition, receipt):
-                    missing_rule_ids.append(rule_id)
-                    missing_function_names.append(function_name)
-                    unresolved_function_names.append(function_name)
-                    continue
-                probed_count += 1
-                verified_function_names.add(function_name)
-                verified_rule_ids.append(rule_id)
-            if missing_rule_ids:
-                return {
-                    "status": "missing",
-                    "available": False,
-                    "probedCount": probed_count,
-                    "verifiedRuleCount": len(ready_rules),
-                    "verifiedFunctionCount": len(verified_function_names),
-                    "verifiedRuleIds": verified_rule_ids,
-                    "missingRuleIds": sorted(set(missing_rule_ids)),
-                    "missingFunctionNames": sorted(set(missing_function_names)),
-                    "unresolvedFunctionNames": sorted(set(unresolved_function_names)),
-                    "probeMode": "deployment-receipt-index",
-                    "reasonCode": "typedbSchemaFunctionMissing",
-                    "reason": "TypeDB schema function is missing.",
-                }
-            return {
-                "status": "ok",
-                "available": probed_count == len(ready_rules),
-                "probedCount": probed_count,
-                "verifiedRuleCount": len(ready_rules),
-                "verifiedFunctionCount": len(verified_function_names),
-                "probeMode": "deployment-receipt-index",
-                "verifiedRuleIds": verified_rule_ids,
-            }
-        except Exception as error:  # noqa: BLE001 - receipt reads must block inference rather than look like missing functions.
-            return {
-                "status": "error",
-                "available": False,
-                "probedCount": probed_count,
-                "verifiedRuleCount": len(ready_rules),
-                "verifiedFunctionCount": len(verified_function_names),
-                "verifiedRuleIds": verified_rule_ids,
-                "missingRuleIds": sorted(set(missing_rule_ids)),
-                "missingFunctionNames": sorted(set(missing_function_names)),
-                "unresolvedFunctionNames": sorted(set(unresolved_function_names)),
-                "probeMode": "deployment-receipt-index",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:180],
-            }
-
-    def probe_typedb_schema_function_definitions(self, definitions: Iterable[Dict[str, object]]) -> Dict[str, object]:
-        normalized_definitions = [
-            dict(item or {})
-            for item in definitions or []
-            if str((item or {}).get("functionName") or "").strip()
-        ]
-        function_names = sorted({str(item.get("functionName") or "").strip() for item in normalized_definitions})
-        if not normalized_definitions:
-            return {"status": "empty", "available": True, "probedCount": 0, "missingFunctionNames": []}
-        imported = self.driver_imports()
-        if imported[0] is None:
-            return {
-                "status": "driver-missing",
-                "available": False,
-                "probedCount": 0,
-                "missingFunctionNames": [],
-                "reason": str(imported[1])[:180],
-            }
-        probed_count = 0
-        missing_function_names: List[str] = []
-        try:
-            receipts = self.read_schema_function_deployment_markers(normalized_definitions)
-            for definition in normalized_definitions:
-                function_name = str(definition.get("functionName") or "")
-                if not self.schema_function_deployment_receipt_matches(
-                    definition,
-                    receipts.get(function_name) or {},
-                ):
-                    missing_function_names.append(function_name)
-                    continue
-                probed_count += 1
-            return {
-                "status": "ok" if not missing_function_names else "missing",
-                "available": not missing_function_names,
-                "probedCount": probed_count,
-                "verifiedFunctionCount": len(function_names),
-                "missingFunctionNames": sorted(set(missing_function_names)),
-                "probeMode": "deployment-receipt-index",
-            }
-        except Exception as error:  # noqa: BLE001 - do not mask read or connectivity failures as missing functions.
-            return {
-                "status": "error",
-                "available": False,
-                "probedCount": probed_count,
-                "verifiedFunctionCount": len(function_names),
-                "missingFunctionNames": sorted(set(missing_function_names)),
-                "probeMode": "deployment-receipt-index",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:180],
-            }
-
-    def sync_typedb_native_rule_functions(self, rules: Iterable[GraphInferenceRule], force: bool = False, world_id: str = "") -> Dict[str, object]:
-        if not self.address:
-            return {"status": "disabled", "configured": False, "graphStore": "typedb", "syncedCount": 0}
-        rules = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
-        self.begin_schema_function_sync_trace(world_id, len(rules))
-        definitions: List[Dict[str, object]] = []
-        skipped: List[Dict[str, object]] = []
-        for rule in rules or []:
-            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            profile = typedb_native_rule_profile(rule_payload)
-            if profile.get("status") != "ready":
-                skipped.append({
-                    "ruleId": str(rule.rule_id or ""),
-                    "status": profile.get("status") or "blocked",
-                    "reason": "Unsupported native-rule profile; schema function was not generated.",
-                })
-                continue
-            definition = typedb_native_function_definition(rule_payload, world_id)
-            if not definition.get("define"):
-                skipped.append({
-                    "ruleId": str(rule.rule_id or ""),
-                    "status": "blocked",
-                    "reason": str(definition.get("reason") or "Function definition was empty."),
-                })
-                continue
-            rule_definitions = list(definition.get("functionDefinitions") or []) or [definition]
-            for item in rule_definitions:
-                definitions.append({
-                    **item,
-                    "ruleId": definition.get("ruleId") or item.get("ruleId"),
-                    "nativeRuleId": definition.get("nativeRuleId") or item.get("nativeRuleId"),
-                    "rootFunctionName": definition.get("functionName"),
-                })
-        generated_definition_count = len(definitions)
-        definitions = deduplicate_typedb_schema_function_definitions(definitions)
-        covered_rule_ids = typedb_schema_function_rule_ids(definitions)
-        shared_bridge_function_count = sum(
-            1 for item in definitions if item.get("sharedModelSignalBridge")
-        )
-        function_inventory = {
-            "logicalRuleCount": len(covered_rule_ids),
-            "generatedDefinitionCount": generated_definition_count,
-            "physicalFunctionCount": len(definitions),
-            "deduplicatedFunctionCount": max(0, generated_definition_count - len(definitions)),
-            "sharedModelSignalBridgeFunctionCount": shared_bridge_function_count,
-        }
-        sync_fingerprint_payload = {
-            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "database": self.database,
-            "functions": [
-                {
-                    "functionName": item.get("functionName"),
-                    "define": item.get("define"),
-                    "redefine": item.get("redefine"),
-                }
-                for item in definitions
-            ],
-            "skipped": skipped,
-        }
-        if str(world_id or "").strip():
-            sync_fingerprint_payload["functionNamespace"] = "world-parameterized"
-        sync_fingerprint = hashlib.sha256(json.dumps(
-            sync_fingerprint_payload,
-            sort_keys=True,
-            ensure_ascii=False,
-        ).encode("utf-8")).hexdigest()
-        self.update_schema_function_sync_trace(
-            syncFingerprint=sync_fingerprint,
-            generatedFunctionCount=len(definitions),
-            generatedDefinitionCount=generated_definition_count,
-            deduplicatedFunctionCount=max(0, generated_definition_count - len(definitions)),
-            sharedModelSignalBridgeFunctionCount=shared_bridge_function_count,
-            skippedRuleCount=len(skipped),
-        )
-        if force:
-            self.invalidate_schema_function_sync_cache(sync_fingerprint)
-        else:
-            process_cached = self.cached_schema_function_sync_result(sync_fingerprint)
-            if process_cached:
-                self._schema_function_sync_cache_key = sync_fingerprint
-                self._schema_function_sync_cache_result = dict(process_cached)
-                return process_cached
-        probe_result = self.run_schema_function_sync_stage(
-            "deployment-receipt-probe",
-            lambda: self.probe_typedb_native_rule_functions(rules, world_id),
-        )
-        if (
-            not force
-            and self._schema_function_sync_cache_key == sync_fingerprint
-            and str(self._schema_function_sync_cache_result.get("status") or "") == "ok"
-            and probe_result.get("available")
-        ):
-            # A restart can retain this Python object while dropping TypeDB's
-            # schema functions. Confirm the deployed functions still exist
-            # before trusting the in-process sync cache.
-            cached_result = dict(self._schema_function_sync_cache_result)
-            cached_result.update({
-                "cached": True,
-                "schemaFunctionSyncCached": True,
-                "syncFingerprint": sync_fingerprint,
-                "functionProbe": probe_result,
-            })
-            self.cache_schema_function_sync_result(sync_fingerprint, cached_result)
-            return cached_result
-        if probe_result.get("available"):
-            synced_rule_ids = list(covered_rule_ids)
-            result = {
-                "configured": True,
-                "status": "ok",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionSyncCached": True,
-                "schemaFunctionProbeUsed": True,
-                "syncFingerprint": sync_fingerprint,
-                "syncedCount": len(synced_rule_ids),
-                "syncedFunctionCount": len(definitions),
-                "generatedDefinitionCount": generated_definition_count,
-                "deduplicatedFunctionCount": max(0, generated_definition_count - len(definitions)),
-                "sharedModelSignalBridgeFunctionCount": shared_bridge_function_count,
-                "functionInventory": function_inventory,
-                "skippedCount": len(skipped),
-                "failedCount": 0,
-                "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-                "syncedFunctions": [
-                    {
-                        "ruleId": item.get("ruleId"),
-                        "nativeRuleId": item.get("nativeRuleId"),
-                        "schemaFunctionName": item.get("functionName"),
-                        "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
-                        "coveredRuleIds": typedb_schema_function_covered_rule_ids(item),
-                        "schemaFunctionSyncStatus": "verified-existing",
-                    }
-                    for item in definitions[:60]
-                ],
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-            }
-            self._schema_function_sync_cache_key = sync_fingerprint
-            self._schema_function_sync_cache_result = dict(result)
-            self.cache_schema_function_sync_result(sync_fingerprint, result)
-            return result
-        self.invalidate_schema_function_sync_cache(sync_fingerprint)
-        missing_rule_ids = {
-            str(item or "").strip()
-            for item in (probe_result.get("missingRuleIds") or [])
-            if str(item or "").strip()
-        }
-        if not missing_rule_ids:
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionProbeError"),
-                "reason": str(probe_result.get("reason") or "TypeDB schema function probe failed.")[:220],
-            }
-        definitions_to_sync = [
-            item for item in definitions
-            if set(typedb_schema_function_covered_rule_ids(item)) & missing_rule_ids
-        ]
-        if not definitions_to_sync:
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "reasonCode": "typedbSchemaFunctionDefinitionMissing",
-                "reason": "Missing TypeDB schema function has no generated definition.",
-            }
-        definition_probe = self.run_schema_function_sync_stage(
-            "function-definition-receipt-probe",
-            lambda: self.probe_typedb_schema_function_definitions(definitions_to_sync),
-        )
-        if str(definition_probe.get("status") or "") == "error":
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "reasonCode": str(definition_probe.get("reasonCode") or "typedbSchemaFunctionProbeError"),
-                "reason": str(definition_probe.get("reason") or "TypeDB schema helper function probe failed.")[:220],
-            }
-        missing_function_names = {
-            str(item or "").strip()
-            for item in (definition_probe.get("missingFunctionNames") or [])
-            if str(item or "").strip()
-        }
-        definitions_to_sync = [
-            item for item in definitions_to_sync
-            if str(item.get("functionName") or "") in missing_function_names
-        ]
-        try:
-            pending_recovery = self.run_schema_function_sync_stage(
-                "pending-commit-recovery-probe",
-                lambda: self.recover_pending_schema_function_deployment_receipts(
-                    rules,
-                    definitions_to_sync,
-                    world_id,
-                ),
-            )
-        except Exception as error:  # noqa: BLE001 - receipt recovery must fail closed before another schema definition.
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "reasonCode": typedb_error_code(error),
-                "reason": "TypeDB pending schema function receipt recovery failed: " + str(error)[:180],
-            }
-        pending_recovery_status = str(pending_recovery.get("status") or "empty")
-        recovered_rule_ids = {
-            str(item or "").strip()
-            for item in (pending_recovery.get("recoveredRuleIds") or [])
-            if str(item or "").strip()
-        }
-        if pending_recovery_status == "pending":
-            return {
-                "configured": True,
-                "status": "provisioning",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProvisioning": True,
-                "schemaFunctionProvisioningRecovery": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(skipped),
-                "failedCount": 0,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "pendingDeploymentRecovery": pending_recovery,
-                "pendingRuleCount": len(pending_recovery.get("pendingRuleIds") or []),
-                "pendingRuleIds": list(pending_recovery.get("pendingRuleIds") or [])[:80],
-                "reasonCode": "typedbSchemaFunctionCommitPending",
-                "reason": "TypeDB schema function deployment is awaiting a bounded commit verification.",
-                "retryable": True,
-            }
-        if recovered_rule_ids:
-            definitions_to_sync = [
-                item for item in definitions_to_sync
-                if not set(typedb_schema_function_covered_rule_ids(item)) <= recovered_rule_ids
-            ]
-        if not definitions_to_sync:
-            verification_result = self.run_schema_function_sync_stage(
-                "recovered-deployment-verification",
-                lambda: self.probe_typedb_native_rule_functions(rules, world_id),
-            )
-            if verification_result.get("available"):
-                synced_rule_ids = typedb_schema_function_rule_ids(definitions)
-                result = {
-                    "configured": True,
-                    "status": "ok",
-                    "graphStore": "typedb",
-                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                    "schemaFunctionSyncUsed": True,
-                    "schemaFunctionSyncCached": False,
-                    "schemaFunctionProbeUsed": True,
-                    "syncFingerprint": sync_fingerprint,
-                    "syncedCount": len(synced_rule_ids),
-                    "syncedFunctionCount": len(definitions),
-                    "generatedDefinitionCount": generated_definition_count,
-                    "deduplicatedFunctionCount": max(0, generated_definition_count - len(definitions)),
-                    "sharedModelSignalBridgeFunctionCount": shared_bridge_function_count,
-                    "functionInventory": function_inventory,
-                    "skippedCount": len(skipped),
-                    "failedCount": 0,
-                    "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-                    "syncedFunctions": [
-                        {
-                            "ruleId": item.get("ruleId"),
-                            "nativeRuleId": item.get("nativeRuleId"),
-                            "schemaFunctionName": item.get("functionName"),
-                            "rootSchemaFunctionName": item.get("rootFunctionName") or item.get("functionName"),
-                            "coveredRuleIds": typedb_schema_function_covered_rule_ids(item),
-                            "schemaFunctionSyncStatus": "recovered-deployment-receipt",
-                        }
-                        for item in definitions[:60]
-                    ],
-                    "skippedRules": skipped[:40],
-                    "functionProbe": probe_result,
-                    "functionDefinitionProbe": definition_probe,
-                    "pendingDeploymentRecovery": pending_recovery,
-                    "verificationProbe": verification_result,
-                }
-                self._schema_function_sync_cache_key = sync_fingerprint
-                self._schema_function_sync_cache_result = dict(result)
-                self.cache_schema_function_sync_result(sync_fingerprint, result)
-                return result
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "pendingDeploymentRecovery": pending_recovery,
-                "reasonCode": "typedbSchemaFunctionVerificationMismatch",
-                "reason": "TypeDB root function is unavailable although its generated definitions are present.",
-            }
-        # Keep each physical function definition together, then bound a
-        # deployment attempt by definition count. A function compiler restart used to receive
-        # the whole RuleBox here (80 functions / roughly 150KB TypeQL), which
-        # can monopolise the local TypeDB planner even after the caller times
-        # out. The remaining missing functions stay explicitly pending and a
-        # later native-rule retry continues from the TypeDB schema catalogue.
-        provision_batch_size = self.schema_function_provision_batch_size()
-        deployment_definitions: List[Dict[str, object]] = []
-        pending_definitions: List[Dict[str, object]] = []
-        for definition in definitions_to_sync:
-            if len(deployment_definitions) >= provision_batch_size:
-                pending_definitions.append(definition)
-                continue
-            deployment_definitions.append(definition)
-        deployment_rule_ids = typedb_schema_function_rule_ids(deployment_definitions)
-        pending_rule_ids = typedb_schema_function_rule_ids(pending_definitions)
-        imported = self.driver_imports()
-        self.update_schema_function_sync_trace(
-            deploymentRuleIds=list(deployment_rule_ids),
-            deploymentFunctionNames=[
-                str(item.get("functionName") or "")
-                for item in deployment_definitions
-                if str(item.get("functionName") or "")
-            ],
-            remainingRuleCount=len(pending_rule_ids),
-        )
-        if imported[0] is None:
-            return {
-                "configured": True,
-                "status": "driver-missing",
-                "graphStore": "typedb",
-                "syncedCount": 0,
-                "reason": "typedb-driver Python package is not installed: " + str(imported[1])[:160],
-            }
-        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-
-        provisioning_receipt = {
-            "status": "existing-pending" if pending_recovery_status != "empty" else "not-written",
-            "saved": pending_recovery_status != "empty",
-            "markerCount": 0,
-        }
-        if pending_recovery_status == "empty":
-            provisioning_receipt = self.run_schema_function_sync_stage(
-                "provisioning-receipt-write",
-                lambda: self.save_schema_function_deployment_markers(
-                    deployment_definitions,
-                    deployment_state="provisioning",
-                ),
-            )
-            if not provisioning_receipt.get("saved"):
-                return {
-                    "configured": True,
-                    "status": "error",
-                    "graphStore": "typedb",
-                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                    "schemaFunctionSyncUsed": True,
-                    "schemaFunctionProvisioning": True,
-                    "syncedCount": 0,
-                    "syncedFunctionCount": 0,
-                    "skippedCount": len(skipped),
-                    "failedCount": 1,
-                    "skippedRules": skipped[:40],
-                    "functionProbe": probe_result,
-                    "functionDefinitionProbe": definition_probe,
-                    "pendingDeploymentRecovery": pending_recovery,
-                    "provisioningReceipt": provisioning_receipt,
-                    "reasonCode": str(provisioning_receipt.get("reasonCode") or "typedbSchemaFunctionProvisioningReceiptError"),
-                    "reason": str(provisioning_receipt.get("reason") or "TypeDB function provisioning receipt was not persisted.")[:220],
-                }
-
-        def is_already_existing_schema_function(error: Exception) -> bool:
-            error_text = str(error).lower()
-            return "already exists" in error_text or "with name" in error_text
-
-        def is_interrupted_schema_function_commit(error: Exception) -> bool:
-            """Do not compound a server-side compiler run after client loss."""
-            if isinstance(error, TimeoutError):
-                return True
-            error_text = str(error or "").lower()
-            return any(token in error_text for token in [
-                "keep-alive timed out",
-                "operation timed out",
-                "deadline exceeded",
-                "transport error",
-                "connection reset",
-                "connection closed",
-            ])
-
-        synced: List[Dict[str, object]] = []
-        failed: List[Dict[str, object]] = []
-        try:
-            def sync_definitions_batch(definitions_batch: List[Dict[str, object]]) -> List[Dict[str, object]]:
-                """Install one bounded, deterministic function group.
-
-                A schema transaction per function makes a cold deployment
-                unnecessarily slow, but a whole RuleBox definition can keep
-                TypeDB's compiler busy long after a service restart timed out.
-                The caller limits this batch to a small set of complete rules.
-                """
-                def operation():
-                    timeout = self.schema_function_provision_timeout_seconds()
-                    driver = self.run_schema_function_sync_stage(
-                        "schema-driver-open",
-                        lambda: self.open_schema_driver(imported, request_timeout_seconds=timeout),
-                    )
-                    try:
-                        self.run_schema_function_sync_stage(
-                            "schema-database-ensure",
-                            lambda: self.ensure_database(driver),
-                        )
-                        self.run_schema_function_sync_stage(
-                            "base-schema-ensure",
-                            lambda: self.ensure_schema(driver, imported),
-                        )
-                        with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
-                            transaction = self.run_schema_function_sync_stage(
-                                "schema-transaction-open",
-                                lambda: self.schema_transaction(driver, TransactionType.SCHEMA, timeout),
-                            )
-                            with transaction as tx:
-                                # A schema transaction alone is not enough to
-                                # avoid repeated TypeDB compilation: issuing
-                                # one ``define`` query per function still
-                                # rebuilds the growing function graph for
-                                # every item. These are content-addressed and
-                                # bounded, so compile this small group as one
-                                # TypeQL definition statement.
-                                bodies = [
-                                    str(definition.get("body") or "").strip()
-                                    for definition in definitions_batch
-                                    if str(definition.get("body") or "").strip()
-                                ]
-                                if len(bodies) != len(definitions_batch):
-                                    raise ValueError("TypeDB native-rule batch contains an empty schema function body.")
-                                self.run_schema_function_sync_stage(
-                                    "schema-function-define",
-                                    lambda: tx.query("define\n" + "\n".join(bodies)).resolve(),
-                                )
-                                self.run_schema_function_sync_stage(
-                                    "schema-function-commit",
-                                    tx.commit,
-                                )
-                        return [
-                            {
-                                "ruleId": definition.get("ruleId"),
-                                "nativeRuleId": definition.get("nativeRuleId"),
-                                "schemaFunctionName": definition.get("functionName"),
-                                "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
-                                "coveredRuleIds": typedb_schema_function_covered_rule_ids(definition),
-                                "schemaFunctionSyncStatus": "defined-batch",
-                            }
-                            for definition in definitions_batch
-                        ]
-                    finally:
-                        self.close_driver(driver)
-
-                # A schema compiler timeout can leave the server shedding the
-                # original request for a short period. Retrying the same
-                # expensive definition immediately compounds that pressure;
-                # the persisted RuleBox retry will resume this small batch on
-                # the next inference cycle instead.
-                return operation()
-
-            def sync_definition(definition: Dict[str, object]) -> Dict[str, object]:
-                """Define one content-addressed function in its own schema transaction.
-
-                TypeDB invalidates a schema transaction after a duplicate
-                definition error.  Retrying a large shared transaction then
-                makes every successfully committed function look like a
-                failure.  Per-definition transactions keep a restart or an
-                interrupted seed idempotent while preserving the generated
-                function name as the deployment key.
-                """
-                def operation():
-                    timeout = self.schema_function_provision_timeout_seconds()
-                    driver = self.run_schema_function_sync_stage(
-                        "schema-driver-open",
-                        lambda: self.open_schema_driver(imported, request_timeout_seconds=timeout),
-                    )
-                    try:
-                        self.run_schema_function_sync_stage(
-                            "schema-database-ensure",
-                            lambda: self.ensure_database(driver),
-                        )
-                        self.run_schema_function_sync_stage(
-                            "base-schema-ensure",
-                            lambda: self.ensure_schema(driver, imported),
-                        )
-                        try:
-                            with typedb_operation_timeout(timeout, "TypeDB schema function provisioning"):
-                                transaction = self.run_schema_function_sync_stage(
-                                    "schema-transaction-open",
-                                    lambda: self.schema_transaction(driver, TransactionType.SCHEMA, timeout),
-                                )
-                                with transaction as tx:
-                                    self.run_schema_function_sync_stage(
-                                        "schema-function-define",
-                                        lambda: tx.query(str(definition.get("define") or "")).resolve(),
-                                    )
-                                    self.run_schema_function_sync_stage(
-                                        "schema-function-commit",
-                                        tx.commit,
-                                    )
-                            return "defined"
-                        except Exception as error:  # noqa: BLE001 - duplicate content-addressed functions are already deployed.
-                            if is_already_existing_schema_function(error):
-                                return "already-exists"
-                            raise
-                    finally:
-                        self.close_driver(driver)
-
-                return {
-                    "ruleId": definition.get("ruleId"),
-                    "nativeRuleId": definition.get("nativeRuleId"),
-                    "schemaFunctionName": definition.get("functionName"),
-                    "rootSchemaFunctionName": definition.get("rootFunctionName") or definition.get("functionName"),
-                    "coveredRuleIds": typedb_schema_function_covered_rule_ids(definition),
-                    # Do not retry a costly schema definition in the same
-                    # request. A later staged cycle observes its durable
-                    # result or safely attempts it again.
-                    "schemaFunctionSyncStatus": operation(),
-                }
-
-            synced.clear()
-            if len(deployment_definitions) > 1:
-                try:
-                    synced.extend(sync_definitions_batch(deployment_definitions))
-                except Exception as error:
-                    if is_interrupted_schema_function_commit(error):
-                        # The provisioning receipt is already durable. The
-                        # next pass proves the server-side commit before it
-                        # may define anything again; retrying each function
-                        # immediately would add compiler pressure to a server
-                        # that may still be processing this same batch.
-                        raise
-                    # A batch can be invalidated by a concurrent schema writer
-                    # or one unexpected legacy definition. Re-open independent
-                    # transactions so already-installed functions are treated
-                    # as idempotent rather than failing the whole RuleBox.
-                    synced.clear()
-                    for definition in deployment_definitions:
-                        synced.append(sync_definition(definition))
-            else:
-                for definition in deployment_definitions:
-                    synced.append(sync_definition(definition))
-        except Exception as error:  # noqa: BLE001 - caller must block investment inference.
-            failed.append({
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:220],
-            })
-            synced_rule_ids = typedb_schema_function_rule_ids(synced)
-            return {
-                "configured": True,
-                "status": "provisioning" if provisioning_receipt.get("saved") else "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProvisioning": bool(provisioning_receipt.get("saved")),
-                "syncedCount": len(synced_rule_ids),
-                "syncedFunctionCount": len(synced),
-                "skippedCount": len(skipped),
-                "failedCount": 0 if provisioning_receipt.get("saved") else len(failed),
-                "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-                "syncedFunctions": synced[:60],
-                "skippedRules": skipped[:40],
-                "failedRules": failed[:10],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "pendingDeploymentRecovery": pending_recovery,
-                "provisioningReceipt": provisioning_receipt,
-                "pendingRuleCount": len(deployment_rule_ids),
-                "pendingRuleIds": deployment_rule_ids[:80],
-                "reasonCode": "typedbSchemaFunctionCommitPending" if provisioning_receipt.get("saved") else typedb_error_code(error),
-                "reason": (
-                    "TypeDB schema definition response was interrupted; deployment will be verified by a bounded function call before retry."
-                    if provisioning_receipt.get("saved")
-                    else str(error)[:220]
-                ),
-                "retryable": bool(provisioning_receipt.get("saved")),
-            }
-        deployment_receipt = self.run_schema_function_sync_stage(
-            "deployment-receipt-write",
-            lambda: self.save_schema_function_deployment_markers(deployment_definitions),
-        )
-        if not deployment_receipt.get("saved"):
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": len(typedb_schema_function_rule_ids(synced)),
-                "syncedFunctionCount": len(synced),
-                "functionInventory": function_inventory,
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "syncedFunctions": synced[:60],
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "provisioningReceipt": provisioning_receipt,
-                "deploymentReceipt": deployment_receipt,
-                "reasonCode": str(deployment_receipt.get("reasonCode") or "typedbSchemaFunctionReceiptWriteError"),
-                "reason": str(deployment_receipt.get("reason") or "TypeDB function deployment receipt was not persisted.")[:220],
-            }
-        deployed_rule_id_set = set(deployment_rule_ids)
-        deployed_rules = [
-            rule for rule in rules
-            if str(getattr(rule, "rule_id", "") or "").strip() in deployed_rule_id_set
-        ]
-        verification_result = self.run_schema_function_sync_stage(
-            "deployed-function-verification",
-            lambda: self.probe_typedb_native_rule_functions(
-                deployed_rules or rules,
-                world_id,
-            ),
-        )
-        if not verification_result.get("available"):
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": len(typedb_schema_function_rule_ids(synced)),
-                "syncedFunctionCount": len(synced),
-                "skippedCount": len(skipped),
-                "failedCount": 1,
-                "syncedRules": [{"ruleId": item} for item in typedb_schema_function_rule_ids(synced)[:40]],
-                "syncedFunctions": synced[:60],
-                "functionInventory": function_inventory,
-                "skippedRules": skipped[:40],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "provisioningReceipt": provisioning_receipt,
-                "deploymentReceipt": deployment_receipt,
-                "verificationProbe": verification_result,
-                "reasonCode": str(verification_result.get("reasonCode") or "typedbSchemaFunctionVerificationError"),
-                "reason": "TypeDB schema function sync did not verify every executable rule.",
-            }
-        synced_rule_ids = typedb_schema_function_rule_ids(synced)
-        if pending_definitions:
-            return {
-                "configured": True,
-                "status": "provisioning",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionSyncUsed": True,
-                "schemaFunctionSyncCached": False,
-                "schemaFunctionProvisioning": True,
-                "schemaFunctionProvisionBatchSize": provision_batch_size,
-                "syncFingerprint": sync_fingerprint,
-                "syncedCount": len(synced_rule_ids),
-                "syncedFunctionCount": len(synced),
-                "functionInventory": function_inventory,
-                "skippedCount": len(skipped),
-                "failedCount": 0,
-                "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-                "syncedFunctions": synced[:60],
-                "skippedRules": skipped[:40],
-                "pendingRuleCount": len(pending_rule_ids),
-                "pendingFunctionCount": len(pending_definitions),
-                "pendingRuleIds": pending_rule_ids[:20],
-                "functionProbe": probe_result,
-                "functionDefinitionProbe": definition_probe,
-                "provisioningReceipt": provisioning_receipt,
-                "deploymentReceipt": deployment_receipt,
-                "verificationProbe": verification_result,
-                "reasonCode": "typedbSchemaFunctionProvisioning",
-                "reason": (
-                    "TypeDB schema function deployment is staged: "
-                    + str(len(synced_rule_ids))
-                    + " rule(s) were verified and "
-                    + str(len(pending_rule_ids))
-                    + " remain."
-                ),
-                "retryable": True,
-            }
-        # The final batch must verify the complete selected RuleBox. Earlier
-        # batches only verified their own functions so a partial deployment can
-        # never be mistaken for a complete investment evaluation.
-        if deployed_rules and len(deployed_rules) != len(rules):
-            verification_result = self.run_schema_function_sync_stage(
-                "complete-rulebox-verification",
-                lambda: self.probe_typedb_native_rule_functions(rules, world_id),
-            )
-            if not verification_result.get("available"):
-                return {
-                    "configured": True,
-                    "status": "error",
-                    "graphStore": "typedb",
-                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                    "schemaFunctionSyncUsed": True,
-                    "schemaFunctionProbeUsed": True,
-                    "syncedCount": len(synced_rule_ids),
-                    "syncedFunctionCount": len(synced),
-                    "functionInventory": function_inventory,
-                    "skippedCount": len(skipped),
-                    "failedCount": 1,
-                    "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-                    "syncedFunctions": synced[:60],
-                    "skippedRules": skipped[:40],
-                    "functionProbe": probe_result,
-                    "functionDefinitionProbe": definition_probe,
-                    "provisioningReceipt": provisioning_receipt,
-                    "deploymentReceipt": deployment_receipt,
-                    "verificationProbe": verification_result,
-                    "reasonCode": str(verification_result.get("reasonCode") or "typedbSchemaFunctionVerificationError"),
-                    "reason": "TypeDB schema function sync did not verify every executable rule.",
-                }
-        result = {
-            "configured": True,
-            "status": "ok",
-            "graphStore": "typedb",
-            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "schemaFunctionSyncUsed": True,
-            "schemaFunctionSyncCached": False,
-            "syncFingerprint": sync_fingerprint,
-            "syncedCount": len(synced_rule_ids),
-            "syncedFunctionCount": len(synced),
-            "functionInventory": function_inventory,
-            "skippedCount": len(skipped),
-            "failedCount": 0,
-            "syncedRules": [{"ruleId": item} for item in synced_rule_ids[:40]],
-            "syncedFunctions": synced[:60],
-            "skippedRules": skipped[:40],
-            "functionProbe": probe_result,
-            "functionDefinitionProbe": definition_probe,
-            "provisioningReceipt": provisioning_receipt,
-            "deploymentReceipt": deployment_receipt,
-            "verificationProbe": verification_result,
-        }
-        self._schema_function_sync_cache_key = sync_fingerprint
-        self._schema_function_sync_cache_result = dict(result)
-        self.cache_schema_function_sync_result(sync_fingerprint, result)
-        return result
-
-    @staticmethod
-    def schema_function_prewarm_namespace(world_id: str = "") -> str:
-        return "world-parameterized" if str(world_id or "").strip() else "legacy"
-
-    @staticmethod
-    def schema_function_prewarm_namespaces() -> List[Dict[str, str]]:
-        """Return the single generated-function namespace used by active V2.
-
-        V2 inference always supplies an explicit world identifier. Compiling a
-        second legacy global-ABox copy doubled schema work and made readiness
-        depend on a path that no active or delivery deployment can execute.
-        Historical V1 data remains readable but is not an executable runtime
-        namespace.
-        """
-        return [
-            {
-                "namespace": "world-parameterized",
-                "worldId": TYPEDB_SCHEMA_FUNCTION_PREWARM_PARAMETERIZED_WORLD_ID,
-            },
-        ]
-
-    @staticmethod
-    def schema_function_prewarm_probe_summary(probe_result: Dict[str, object]) -> Dict[str, object]:
-        """Keep readiness diagnostics bounded on the live inference payload."""
-        probe = dict(probe_result or {})
-        missing_rule_ids = [
-            str(item or "").strip()
-            for item in probe.get("missingRuleIds") or []
-            if str(item or "").strip()
-        ]
-        verified_rule_ids = [
-            str(item or "").strip()
-            for item in probe.get("verifiedRuleIds") or []
-            if str(item or "").strip()
-        ]
-        return {
-            "status": str(probe.get("status") or ""),
-            "available": bool(probe.get("available")),
-            "probeMode": str(probe.get("probeMode") or ""),
-            "probedCount": int(number_or_none(probe.get("probedCount")) or 0),
-            "verifiedRuleCount": int(number_or_none(probe.get("verifiedRuleCount")) or len(verified_rule_ids)),
-            "verifiedFunctionCount": int(number_or_none(probe.get("verifiedFunctionCount")) or 0),
-            "missingRuleCount": len(missing_rule_ids),
-            "verifiedRuleIds": verified_rule_ids[:20],
-            "missingRuleIds": missing_rule_ids[:20],
-            "reasonCode": str(probe.get("reasonCode") or ""),
-            "reason": str(probe.get("reason") or "")[:180],
-        }
-
-    def schema_function_prewarm_readiness(
-        self,
-        rules: Iterable[GraphInferenceRule],
-        world_id: str = "",
-    ) -> Dict[str, object]:
-        """Check receipt-backed function readiness without mutating TypeDB.
-
-        This method is deliberately the only schema-function operation used by
-        live inference. It reads the small immutable deployment receipts for
-        the current native slice and hands any missing work to the dedicated
-        RuleBox prewarm worker instead of opening a schema transaction.
-        """
-        rule_list = [rule for rule in rules or [] if typedb_rule_is_enabled(rule)]
-        ready_rules = []
-        for rule in rule_list:
-            rule_payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            if typedb_native_rule_profile(rule_payload).get("status") == "ready":
-                ready_rules.append(rule)
-        expected_function_names = {
-            typedb_native_rule_function_name(
-                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
-                world_id,
-            )
-            for rule in ready_rules
-        }
-        expected_shared_bridge_names = {
-            typedb_native_rule_function_name(
-                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
-                world_id,
-            )
-            for rule in ready_rules
-            if is_model_signal_interpretation_rule(
-                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            )
-        }
-        physical_plan = {
-            "logicalRuleCount": len(rule_list),
-            "schemaFunctionRuleCount": len(ready_rules),
-            "expectedFunctionCount": len(expected_function_names),
-            "expectedSharedModelSignalBridgeFunctionCount": len(expected_shared_bridge_names),
-        }
-        if not self.address:
-            return {
-                "configured": False,
-                "status": "disabled",
-                "graphStore": "typedb",
-                "schemaFunctionPrewarmReadinessChecked": True,
-                "schemaFunctionPrewarmReady": False,
-                "schemaFunctionSyncUsed": False,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": 0,
-                "failedCount": 0,
-                "pendingRuleCount": 0,
-                "pendingRuleIds": [],
-                "reason": "TypeDB ontology storage is not configured.",
-                **physical_plan,
-            }
-        namespace = self.schema_function_prewarm_namespace(world_id)
-        if not ready_rules:
-            return {
-                "configured": True,
-                "status": "ok",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionPrewarmReadinessChecked": True,
-                "schemaFunctionPrewarmReady": True,
-                "schemaFunctionPrewarmNamespace": namespace,
-                "schemaFunctionSyncUsed": False,
-                "schemaFunctionSyncBypassed": True,
-                "syncedCount": 0,
-                "syncedFunctionCount": 0,
-                "skippedCount": len(rule_list),
-                "failedCount": 0,
-                "pendingRuleCount": 0,
-                "pendingRuleIds": [],
-                "reason": "The current native execution slice has no generated TypeDB schema function.",
-                **physical_plan,
-            }
-        probe_result = self.probe_typedb_native_rule_functions(ready_rules, world_id)
-        if probe_result.get("available"):
-            verified_rule_ids = [
-                str(item or "").strip()
-                for item in probe_result.get("verifiedRuleIds") or []
-                if str(item or "").strip()
-            ]
-            return {
-                "configured": True,
-                "status": "ok",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionPrewarmReadinessChecked": True,
-                "schemaFunctionPrewarmReady": True,
-                "schemaFunctionPrewarmNamespace": namespace,
-                "schemaFunctionSyncUsed": False,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": len(verified_rule_ids),
-                "syncedFunctionCount": int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
-                "skippedCount": max(0, len(rule_list) - len(ready_rules)),
-                "failedCount": 0,
-                "pendingRuleCount": 0,
-                "pendingRuleIds": [],
-                # Live inference needs the complete verified-rule set to mix
-                # deployed schema functions with bounded direct TypeQL reads.
-                # This list is an execution contract, not a display summary.
-                "syncedRules": [{"ruleId": item} for item in verified_rule_ids],
-                "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
-                "reason": "TypeDB schema-function deployment receipts are ready; live inference will not compile functions.",
-                "missingFunctionCount": 0,
-                **physical_plan,
-            }
-        probe_status = str(probe_result.get("status") or "").strip()
-        pending_rule_ids = [
-            str(item or "").strip()
-            for item in probe_result.get("missingRuleIds") or []
-            if str(item or "").strip()
-        ]
-        if probe_status == "missing":
-            verified_rule_ids = [
-                str(item or "").strip()
-                for item in probe_result.get("verifiedRuleIds") or []
-                if str(item or "").strip()
-            ]
-            return {
-                "configured": True,
-                "status": "provisioning",
-                "graphStore": "typedb",
-                "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                "schemaFunctionPrewarmReadinessChecked": True,
-                "schemaFunctionPrewarmReady": False,
-                "schemaFunctionPrewarmRequired": True,
-                "schemaFunctionPrewarmNamespace": namespace,
-                "schemaFunctionSyncUsed": False,
-                "schemaFunctionProbeUsed": True,
-                "syncedCount": int(number_or_none(probe_result.get("probedCount")) or 0),
-                "syncedFunctionCount": int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
-                "skippedCount": max(0, len(rule_list) - len(ready_rules)),
-                "failedCount": 0,
-                "pendingRuleCount": len(pending_rule_ids),
-                "pendingRuleIds": pending_rule_ids[:80],
-                # Keep already deployed functions usable while the dedicated
-                # prewarm worker finishes the remaining physical definitions.
-                "syncedRules": [{"ruleId": item} for item in verified_rule_ids],
-                "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
-                "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionPrewarmPending"),
-                "reason": (
-                    "The dedicated RuleBox prewarm worker has not yet verified every required "
-                    "TypeDB schema function. Live inference did not start a deployment."
-                ),
-                "retryable": True,
-                "missingFunctionCount": max(
-                    0,
-                    len(expected_function_names)
-                    - int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
-                ),
-                **physical_plan,
-            }
-        return {
-            "configured": True,
-            "status": "error",
-            "graphStore": "typedb",
-            "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-            "schemaFunctionPrewarmReadinessChecked": True,
-            "schemaFunctionPrewarmReady": False,
-            "schemaFunctionPrewarmNamespace": namespace,
-            "schemaFunctionSyncUsed": False,
-            "schemaFunctionProbeUsed": True,
-            "syncedCount": int(number_or_none(probe_result.get("probedCount")) or 0),
-            "syncedFunctionCount": int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
-            "skippedCount": max(0, len(rule_list) - len(ready_rules)),
-            "failedCount": 1,
-            "pendingRuleCount": len(pending_rule_ids),
-            "pendingRuleIds": pending_rule_ids[:20],
-            "functionProbe": self.schema_function_prewarm_probe_summary(probe_result),
-            "reasonCode": str(probe_result.get("reasonCode") or "typedbSchemaFunctionPrewarmReadinessError"),
-            "reason": str(probe_result.get("reason") or "TypeDB schema-function prewarm readiness could not be checked.")[:220],
-            "missingFunctionCount": max(
-                0,
-                len(expected_function_names)
-                - int(number_or_none(probe_result.get("verifiedFunctionCount")) or 0),
-            ),
-            **physical_plan,
-        }
-
-    def schema_function_prewarm_rulebox(self) -> Dict[str, object]:
-        """Read the active RuleBox once for a background prewarm pass."""
-        try:
-            snapshot = self.rulebox_snapshot()
-        except Exception as error:  # noqa: BLE001 - prewarm can retry on the next isolated cycle.
-            return {
-                "status": "error",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:220],
-                "rules": [],
-                "snapshot": {},
-            }
-        if str(snapshot.get("status") or "") != "ok":
-            return {
-                "status": "error",
-                "reasonCode": str(snapshot.get("reasonCode") or "typedbRuleBoxUnavailable"),
-                "reason": str(snapshot.get("reason") or "Active RuleBox is unavailable.")[:220],
-                "rules": [],
-                "snapshot": snapshot,
-            }
-        rows = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
-        try:
-            rules = [
-                rule
-                for rule in rulebox_rules_from_payload({"rules": rows})
-                if typedb_rule_is_enabled(rule)
-            ]
-        except ValueError as error:
-            return {
-                "status": "error",
-                "reasonCode": "typedbRuleBoxInvalid",
-                "reason": str(error)[:220],
-                "rules": [],
-                "snapshot": snapshot,
-            }
-        return {
-            "status": "ok",
-            "rules": list(rules),
-            "snapshot": snapshot,
-        }
-
-    def schema_function_prewarm_status(self) -> Dict[str, object]:
-        """Report both function namespaces without opening a schema write."""
-        if not self.address:
-            return NullTypeDBOntologyGraphRepository().schema_function_prewarm_status()
-        rulebox = self.schema_function_prewarm_rulebox()
-        if str(rulebox.get("status") or "") != "ok":
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "functionsReady": False,
-                "reasonCode": str(rulebox.get("reasonCode") or "typedbRuleBoxUnavailable"),
-                "reason": str(rulebox.get("reason") or "Active RuleBox is unavailable.")[:220],
-                "namespaceResults": [],
-            }
-        rules = list(rulebox.get("rules") or [])
-        namespace_results = []
-        for namespace in self.schema_function_prewarm_namespaces():
-            result = self.schema_function_prewarm_readiness(
-                rules,
-                world_id=str(namespace.get("worldId") or ""),
-            )
-            namespace_results.append({
-                "namespace": str(namespace.get("namespace") or ""),
-                "result": result,
-            })
-        statuses = {
-            str(item.get("result", {}).get("status") or "")
-            for item in namespace_results
-        }
-        if statuses == {"ok"}:
-            status = "ok"
-        elif "provisioning" in statuses:
-            status = "provisioning"
-        else:
-            status = "error"
-        snapshot = dict(rulebox.get("snapshot") or {})
-        return {
-            "configured": True,
-            "status": status,
-            "graphStore": "typedb",
-            "functionsReady": status == "ok",
-            "ruleCount": len(rules),
-            "ruleboxMetadata": rulebox_runtime_metadata(
-                snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
-            ),
-            "namespaceResults": namespace_results,
-            "retryable": status == "provisioning",
-        }
-
-    @coordinated_typedb_projection_write("schema-function-prewarm")
-    def prewarm_typedb_native_rule_functions(self, force: bool = False) -> Dict[str, object]:
-        """Compile the complete active RuleBox outside the live inference path."""
-        if not self.address:
-            return NullTypeDBOntologyGraphRepository().prewarm_typedb_native_rule_functions(force)
-        self.reset_query_metrics()
-        started_at = time.perf_counter()
-        prewarm_stage_timings: List[Dict[str, object]] = []
-        rulebox_started_at = time.perf_counter()
-        try:
-            rulebox = self.schema_function_prewarm_rulebox()
-        except Exception as error:  # noqa: BLE001 - expose the pre-compiler failure stage.
-            prewarm_stage_timings.append({
-                "stage": "active-rulebox-load",
-                "status": "error",
-                "durationMs": int((time.perf_counter() - rulebox_started_at) * 1000),
-                "reasonCode": typedb_error_code(error),
-            })
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "source": "typedbSchemaFunctionPrewarm",
-                "functionsReady": False,
-                "failedStage": "active-rulebox-load",
-                "reasonCode": typedb_error_code(error),
-                "reason": str(error)[:220],
-                "prewarmStageTimings": prewarm_stage_timings,
-                "durationMs": int((time.perf_counter() - started_at) * 1000),
-                "typedbQueryMetrics": self.query_metrics_snapshot(),
-            }
-        prewarm_stage_timings.append({
-            "stage": "active-rulebox-load",
-            "status": str(rulebox.get("status") or "ok"),
-            "durationMs": int((time.perf_counter() - rulebox_started_at) * 1000),
-        })
-        if str(rulebox.get("status") or "") != "ok":
-            return {
-                "configured": True,
-                "status": "error",
-                "graphStore": "typedb",
-                "source": "typedbSchemaFunctionPrewarm",
-                "functionsReady": False,
-                "failedStage": "active-rulebox-load",
-                "reasonCode": str(rulebox.get("reasonCode") or "typedbRuleBoxUnavailable"),
-                "reason": str(rulebox.get("reason") or "Active RuleBox is unavailable.")[:220],
-                "prewarmStageTimings": prewarm_stage_timings,
-                "durationMs": int((time.perf_counter() - started_at) * 1000),
-                "typedbQueryMetrics": self.query_metrics_snapshot(),
-            }
-        rules = list(rulebox.get("rules") or [])
-        namespace_results = []
-        namespaces = self.schema_function_prewarm_namespaces()
-        for index, namespace in enumerate(namespaces):
-            namespace_started_at = time.perf_counter()
-            namespace_name = str(namespace.get("namespace") or "")
-            try:
-                result = self.sync_typedb_native_rule_functions(
-                    rules,
-                    force=bool(force),
-                    world_id=str(namespace.get("worldId") or ""),
-                )
-            except Exception as error:  # noqa: BLE001 - retain the adapter's last completed stage.
-                trace = self.schema_function_sync_trace_snapshot()
-                result = {
-                    "status": "error",
-                    "failedStage": str(trace.get("failedStage") or "namespace-sync"),
-                    "reasonCode": typedb_error_code(error),
-                    "reason": str(error)[:220],
-                    "schemaFunctionSyncTrace": trace,
-                }
-            result = dict(result or {})
-            result.setdefault("schemaFunctionSyncTrace", self.schema_function_sync_trace_snapshot())
-            namespace_duration_ms = int((time.perf_counter() - namespace_started_at) * 1000)
-            prewarm_stage_timings.append({
-                "stage": "namespace-sync",
-                "namespace": namespace_name,
-                "status": str(result.get("status") or "unknown"),
-                "durationMs": namespace_duration_ms,
-                "failedStage": str(
-                    result.get("failedStage")
-                    or dict(result.get("schemaFunctionSyncTrace") or {}).get("failedStage")
-                    or ""
-                ),
-            })
-            namespace_results.append({
-                "namespace": namespace_name,
-                "result": result,
-                "durationMs": namespace_duration_ms,
-            })
-            # A cold schema definition can consume the TypeDB compiler for its
-            # bounded timeout. Prepare the normal Worldview namespace first,
-            # then yield after one unfinished batch so a live request observes
-            # a short coordinator deferral rather than two back-to-back schema
-            # compiles. The following namespace is resumed next cycle once the
-            # priority namespace is fully ready.
-            if str(result.get("status") or "") != "ok":
-                for queued_namespace in namespaces[index + 1:]:
-                    namespace_results.append({
-                        "namespace": str(queued_namespace.get("namespace") or ""),
-                        "result": {
-                            "status": "queued",
-                            "reason": "A higher-priority RuleBox function namespace is still being prewarmed.",
-                        },
-                        "durationMs": 0,
-                    })
-                break
-        statuses = {
-            str(item.get("result", {}).get("status") or "")
-            for item in namespace_results
-        }
-        if statuses == {"ok"}:
-            status = "ok"
-        elif statuses.issubset({"ok", "provisioning", "queued"}):
-            status = "provisioning"
-        else:
-            status = "error"
-        snapshot = dict(rulebox.get("snapshot") or {})
-        pending_rule_ids = sorted({
-            str(rule_id or "").strip()
-            for item in namespace_results
-            for rule_id in dict(item.get("result") or {}).get("pendingRuleIds") or []
-            if str(rule_id or "").strip()
-        })
-        failed_trace = next((
-            dict(item.get("result", {}).get("schemaFunctionSyncTrace") or {})
-            for item in namespace_results
-            if str(dict(item.get("result", {}).get("schemaFunctionSyncTrace") or {}).get("failedStage") or "")
-        ), {})
-        failed_stage = str(failed_trace.get("failedStage") or "")
-        return {
-            "configured": True,
-            "status": status,
-            "graphStore": "typedb",
-            "source": "typedbSchemaFunctionPrewarm",
-            "background": True,
-            "functionsReady": status == "ok",
-            "force": bool(force),
-            "ruleCount": len(rules),
-            "ruleboxMetadata": rulebox_runtime_metadata(
-                snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
-            ),
-            "namespaceResults": namespace_results,
-            "pendingRuleCount": len(pending_rule_ids),
-            "pendingRuleIds": pending_rule_ids[:80],
-            "failedStage": failed_stage,
-            "prewarmStageTimings": prewarm_stage_timings,
-            "retryable": status == "provisioning",
-            "reason": (
-                (
-                    "TypeDB RuleBox prewarm was interrupted at " + failed_stage
-                    + "; the durable provisioning receipt will verify the commit before retry."
-                )
-                if failed_stage
-                else "The complete active RuleBox is prewarmed in bounded TypeDB schema batches."
-                if status == "provisioning"
-                else ""
-            ),
-            "durationMs": int((time.perf_counter() - started_at) * 1000),
-            "typedbQueryMetrics": self.query_metrics_snapshot(),
-        }
-
-    @coordinated_typedb_projection_write(
-        "staged-abox-native-rule-run",
-        typedb_projection_world_from_payload,
-    )
     def run_rulebox_for_staged_abox(
         self,
         payload: Dict[str, object] = None,
@@ -22001,8 +19720,7 @@ relation ontology-assertion,
                 "statementCount": 0,
                 "relationTypes": [],
                 "nativeTypeDbReasoningUsed": False,
-                "typedbNativeFunctionReasoningUsed": False,
-                "typedbSchemaFunctionUsed": False,
+                "typedbDirectTypeqlUsed": False,
                 "typedbBootstrapReasoningUsed": False,
                 "pythonBootstrapDisabled": True,
                 "pythonCompatibilityReasonerUsed": False,
@@ -22037,10 +19755,6 @@ relation ontology-assertion,
         destructive_clear_allowed = typedb_bool(payload.get("allowDestructiveInferenceClear"))
         prune_requested = typedb_bool(payload.get("pruneOldGenerations")) if "pruneOldGenerations" in payload else True
         keep_generation_count = max(1, int(number_or_none(payload.get("keepGenerationCount")) or self.inference_generation_keep_count))
-        force_schema_function_sync = (
-            typedb_bool(payload.get("forceSchemaFunctionSync"))
-            or typedb_bool(payload.get("forceRuleFunctionSync"))
-        )
         requested_generation_id = str(payload.get("generationId") or "").strip()
         generation_id = requested_generation_id or inference_generation_id()
         fresh_inference_generation = not bool(requested_generation_id)
@@ -22469,214 +20183,23 @@ relation ontology-assertion,
                 "nativeRulePreflightRelationCount": int(number_or_none(native_preflight.get("relationCount")) or 0),
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })
-            # An absent or legacy topology is unknown, not evidence that a
-            # required relation is absent. Only the verified active Manifest
-            # topology may reduce the schema-function deployment slice.
-            preflight_execution_plan = (
-                typedb_native_rule_execution_plan(
-                    execution_rules,
-                    target_symbols,
-                    relation_types_by_symbol=dict(
-                        planner_topology.get("relationTypesBySymbol") or {}
-                    ),
-                    preflight_graph=preflight_graph,
-                    preflight_incoming_relations_complete=preflight_incoming_relations_complete,
-                    subject_properties_by_symbol=dict(
-                        planner_topology.get("subjectPropertiesBySymbol") or {}
-                    ),
-                    relation_evidence_by_symbol=dict(
-                        planner_topology.get("relationEvidenceBySymbol") or {}
-                    ),
-                    relation_evidence_complete_by_symbol=dict(
-                        planner_topology.get("relationEvidenceCompleteBySymbol") or {}
-                    ),
-                )
-                if str(planner_topology.get("status") or "") == "verified"
-                else {}
-            )
-            function_sync_plan = typedb_native_rule_function_sync_plan(
-                execution_rules,
-                target_symbols=target_symbols,
-                evidence_read_index=evidence_read_index,
-                world_id=world_id,
-                execution_plan=preflight_execution_plan,
-                force_schema_function_sync=force_schema_function_sync,
-            )
-            schema_function_rules = list(function_sync_plan.get("schemaFunctionRules") or [])
-            # Exact active-Manifest predicates are still evaluated by TypeDB,
-            # but they do not require a generated schema function. A dedicated
-            # worker may prewarm the complete RuleBox after policy changes.
-            # The live path only checks the small receipt slice it can invoke;
-            # when a receipt is still staging, it can use bounded direct
-            # TypeQL reads but must never open a schema transaction itself.
-            function_prewarm_check_started = time.perf_counter()
-            if schema_function_rules:
-                function_sync_result = typedb_call_for_world(
-                    self.schema_function_prewarm_readiness,
-                    schema_function_rules,
-                    world_id=world_id,
-                )
-                if force_schema_function_sync:
-                    function_sync_result = {
-                        **dict(function_sync_result or {}),
-                        "forceSchemaFunctionSyncRequested": True,
-                        "reason": (
-                            str(function_sync_result.get("reason") or "")
-                            + " A live force request is delegated to the RuleBox prewarm worker."
-                        ).strip(),
-                    }
-            else:
-                function_sync_result = {
-                    "configured": True,
-                    "status": "ok",
-                    "graphStore": "typedb",
-                    "engineVersion": TYPEDB_NATIVE_RULE_ENGINE_VERSION,
-                    "schemaFunctionSyncBypassed": True,
-                    "ruleCount": 0,
-                    "syncedCount": 0,
-                    "skippedCount": 0,
-                    "failedCount": 0,
-                    "pendingRuleCount": 0,
-                    "pendingRuleIds": [],
-                    "schemaFunctionPrewarmReadinessChecked": True,
-                    "schemaFunctionPrewarmReady": True,
-                    "reason": "Every current native RuleBox predicate is anchored by the verified active Manifest evidence index.",
-                }
-            native_stage_timings["schemaFunctionSyncMs"] = 0
-            native_stage_timings["schemaFunctionPrewarmCheckMs"] = int(
-                (time.perf_counter() - function_prewarm_check_started) * 1000
-            )
-            schema_function_direct_query_fallback = bool(
-                str(function_sync_result.get("status") or "") == "provisioning"
-                and self.schema_function_direct_query_fallback_enabled()
-                and not force_schema_function_sync
-            )
-            schema_function_sync_used = bool(schema_function_rules) and (
-                str(function_sync_result.get("status") or "") == "ok"
-            )
-            verified_schema_function_rule_ids = {
-                str((item or {}).get("ruleId") or "").strip()
-                for item in function_sync_result.get("syncedRules") or []
-                if isinstance(item, dict) and str(item.get("ruleId") or "").strip()
-            }
-            schema_function_hybrid_fallback = bool(
-                schema_function_direct_query_fallback
-                and verified_schema_function_rule_ids
-            )
-            indexed_rule_count = int(function_sync_plan.get("indexedEvidenceRuleCount") or 0)
-            if schema_function_direct_query_fallback:
-                execution_mode = "typedb-native-direct-typeql-fallback"
-            elif schema_function_rules and indexed_rule_count:
-                execution_mode = "typedb-native-hybrid"
-            elif indexed_rule_count:
-                execution_mode = "typedb-native-indexed-evidence"
-            else:
-                execution_mode = "typedb-schema-function"
+            # Direct TypeQL is the sole production execution strategy. Rule
+            # selection and bounded query execution happen in this lifecycle;
+            # there is no separate rule preparation or schema-write stage.
+            indexed_rule_count = 0
+            execution_mode = "typedb-native-direct-typeql"
             if bool(rule_selection.get("selectionApplied")):
                 execution_mode += "-dependency-selected"
             elif target_symbols:
                 execution_mode += "-filtered"
             runtime_rulebox_metadata.update({
-                "typedbSchemaFunctionSyncStatus": str(function_sync_result.get("status") or ""),
-                "typedbSchemaFunctionSyncCached": bool(function_sync_result.get("schemaFunctionSyncCached")),
-                "typedbSchemaFunctionSyncBypassed": bool(function_sync_result.get("schemaFunctionSyncBypassed")),
-                "typedbSchemaFunctionPrewarmReadinessChecked": bool(function_sync_result.get("schemaFunctionPrewarmReadinessChecked")),
-                "typedbSchemaFunctionPrewarmReady": bool(function_sync_result.get("schemaFunctionPrewarmReady")),
-                "typedbSchemaFunctionPrewarmRequired": bool(function_sync_result.get("schemaFunctionPrewarmRequired")),
-                "typedbSchemaFunctionPrewarmNamespace": str(function_sync_result.get("schemaFunctionPrewarmNamespace") or ""),
-                "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
-                "typedbSchemaFunctionSkippedCount": int(number_or_none(function_sync_result.get("skippedCount")) or 0),
-                "typedbSchemaFunctionFailedCount": int(number_or_none(function_sync_result.get("failedCount")) or 0),
-                "typedbSchemaFunctionPendingCount": int(number_or_none(function_sync_result.get("pendingRuleCount")) or 0),
-                "typedbSchemaFunctionPendingRuleIds": list(function_sync_result.get("pendingRuleIds") or [])[:80],
-                "typedbSchemaFunctionDirectQueryFallbackEnabled": self.schema_function_direct_query_fallback_enabled(),
-                "typedbSchemaFunctionDirectQueryFallbackUsed": schema_function_direct_query_fallback,
-                "typedbSchemaFunctionHybridFallbackUsed": schema_function_hybrid_fallback,
-                "typedbSchemaFunctionReadyRuleCount": len(verified_schema_function_rule_ids),
-                "typedbSchemaFunctionDirectQueryFallbackReason": (
-                    "Generated schema functions are still staging; TypeDB is evaluating the selected native rules with bounded direct TypeQL reads."
-                    if schema_function_direct_query_fallback
-                    else ""
-                ),
-                "typedbSchemaFunctionCandidateSource": str(function_sync_plan.get("candidateSource") or ""),
-                "typedbSchemaFunctionCandidateCount": int(function_sync_plan.get("candidateRuleCount") or 0),
-                "typedbSchemaFunctionRequiredRuleCount": len(schema_function_rules),
-                "typedbSchemaFunctionRequiredRuleIds": list(function_sync_plan.get("schemaFunctionRuleIds") or [])[:80],
                 "typedbNativeIndexedRuleCandidateCount": indexed_rule_count,
-                "typedbNativeIndexedRuleCandidateIds": list(function_sync_plan.get("indexedEvidenceRuleIds") or [])[:80],
-                "typedbSchemaFunctionUsed": schema_function_sync_used,
-                "typeDbFunctionReasoningUsed": schema_function_sync_used,
+                "typedbNativeIndexedRuleCandidateIds": [],
+                "typedbRuleExecutionStrategy": "direct-typeql",
                 "typedbNativeExecutionMode": execution_mode,
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })
-            if (
-                str(function_sync_result.get("status") or "") == "provisioning"
-                and not schema_function_direct_query_fallback
-            ):
-                return {
-                    "configured": True,
-                    "status": "deferred-schema-function-provisioning",
-                    "graphStore": "typedb",
-                    "source": "typedbNativeRule",
-                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
-                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionProvisioning"),
-                    "reason": (
-                        "TypeDB schema function prewarm is still being staged; "
-                        "the previous verified InferenceBox is retained. "
-                        + str(function_sync_result.get("reason") or "")[:180]
-                    ),
-                    "statementCount": 0,
-                    "relationTypes": [],
-                    "nativeTypeDbReasoningUsed": False,
-                    "typedbNativeFunctionReasoningUsed": False,
-                    "typedbSchemaFunctionUsed": False,
-                    "typedbBootstrapReasoningUsed": False,
-                    "pythonBootstrapDisabled": True,
-                    "pythonCompatibilityReasonerUsed": False,
-                    "preservedPreviousInference": True,
-                    "retryable": True,
-                    "recommendedRetryAfterSeconds": 10,
-                    "clearResult": clear_result,
-                    "nativeReasoningProfile": native_profile,
-                    "functionSyncResult": function_sync_result,
-                    "ruleboxMetadata": runtime_rulebox_metadata,
-                    "typedbQueryMetrics": self.query_metrics_snapshot(),
-                    **runtime_rulebox_metadata,
-                }
-            if (
-                str(function_sync_result.get("status") or "") != "ok"
-                and not schema_function_direct_query_fallback
-            ):
-                return {
-                    "configured": True,
-                    "status": "error",
-                    "graphStore": "typedb",
-                    "source": "typedbNativeRule",
-                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
-                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionSyncError"),
-                    "reason": "TypeDB schema function 동기화 실패: " + str(function_sync_result.get("reason") or function_sync_result.get("status") or "")[:180],
-                    "statementCount": 0,
-                    "relationTypes": [],
-                    "nativeTypeDbReasoningUsed": False,
-                    "typedbNativeFunctionReasoningUsed": False,
-                    "typedbSchemaFunctionUsed": False,
-                    "typedbBootstrapReasoningUsed": False,
-                    "pythonBootstrapDisabled": True,
-                    "pythonCompatibilityReasonerUsed": False,
-                    "clearResult": clear_result,
-                    "nativeReasoningProfile": native_profile,
-                    "functionSyncResult": function_sync_result,
-                    "ruleboxMetadata": runtime_rulebox_metadata,
-                    "typedbQueryMetrics": self.query_metrics_snapshot(),
-                    **runtime_rulebox_metadata,
-                }
             native_query_started = time.perf_counter()
-            # Generated functions can be evaluated concurrently after a
-            # stable ABox lease. During provisioning, however, direct TypeQL
-            # predicates still need their own query plans. Limit that
-            # recovery path to one reader so it restores an inference result
-            # without recreating the compiler contention that blocked the
-            # notification-producing worker in the first place.
             native_rule_parallelism = (
                 self.native_rule_parallelism() if stable_abox_write_lease_held else 1
             )
@@ -22685,34 +20208,10 @@ relation ontology-assertion,
                 if stable_abox_write_lease_held
                 else 1
             )
-            if schema_function_direct_query_fallback:
-                # The projection coordinator prevents schema maintenance from
-                # overlapping a stable ABox write lease. Use two bounded rule
-                # readers in that proven state so a cold function receipt does
-                # not turn the compatibility path into a multi-minute serial
-                # scan. Unleased callers retain the conservative one-reader
-                # contract.
-                native_rule_parallelism = (
-                    min(2, self.native_rule_parallelism())
-                    if stable_abox_write_lease_held
-                    else 1
-                )
-                native_rule_target_parallelism = 1
-                # Adaptive target shards remain serial. Parallelism is across
-                # independent rules for the same immutable ABox generation,
-                # never across target writes or schema transactions.
-                runtime_rulebox_metadata[
-                    "typedbSchemaFunctionDirectQueryFallbackParallelismCap"
-                ] = native_rule_parallelism
             native_match_result = typedb_call_for_world(
                 self.match_typedb_native_rules,
                 execution_rules,
                 target_symbols=target_symbols,
-                use_schema_functions=(
-                    not schema_function_direct_query_fallback
-                    or schema_function_hybrid_fallback
-                ),
-                schema_function_ready_rule_ids=verified_schema_function_rule_ids,
                 world_id=world_id,
                 planner_topology=(
                     dict(planner_topology.get("topology") or {})
@@ -22727,36 +20226,6 @@ relation ontology-assertion,
                 stable_abox_write_lease_held=stable_abox_write_lease_held,
                 evidence_read_index=evidence_read_index,
             )
-            schema_function_runtime_fallback = False
-            if (
-                self.schema_function_direct_query_fallback_enabled()
-                and self.native_rule_result_reports_missing_schema_function(native_match_result)
-            ):
-                # A deployment receipt is an index, not physical proof that a
-                # function survived a blue-green schema replacement. Retry the
-                # complete immutable ABox generation through TypeDB's direct
-                # TypeQL path so one stale receipt cannot stall the queue.
-                native_match_result = typedb_call_for_world(
-                    self.match_typedb_native_rules,
-                    execution_rules,
-                    target_symbols=target_symbols,
-                    use_schema_functions=False,
-                    schema_function_ready_rule_ids=[],
-                    world_id=world_id,
-                    planner_topology=(
-                        dict(planner_topology.get("topology") or {})
-                        if str(planner_topology.get("status") or "") == "verified"
-                        else None
-                    ),
-                    preflight_graph=preflight_graph,
-                    preflight_incoming_relations_complete=preflight_incoming_relations_complete,
-                    native_rule_parallelism=1,
-                    native_rule_target_parallelism=1,
-                    adaptive_target_sharding_profile=adaptive_target_sharding_profile,
-                    stable_abox_write_lease_held=stable_abox_write_lease_held,
-                    evidence_read_index=evidence_read_index,
-                )
-                schema_function_runtime_fallback = True
             native_stage_timings["nativeRuleQueriesMs"] = int(
                 (time.perf_counter() - native_query_started) * 1000
             )
@@ -22771,8 +20240,7 @@ relation ontology-assertion,
             runtime_rulebox_metadata.update({
                 "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
                 "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
-                "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
-                "typedbSchemaFunctionRuntimeFallbackUsed": schema_function_runtime_fallback,
+                "typedbDirectTypeqlQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
                 "typedbNativeIndexedRuleQueryUsed": bool(native_match_result.get("indexedEvidenceQueryUsed")),
                 "typedbNativeEvidenceFieldIndexStatus": str(evidence_field_index.get("status") or ""),
                 "typedbNativeEvidenceFieldIndexChunkCount": int(number_or_none(evidence_field_index.get("chunkCount")) or 0),
@@ -22881,12 +20349,6 @@ relation ontology-assertion,
                 "typedbNativeStageTimings": dict(native_stage_timings),
             })
             if not native_query_used:
-                # A process-scoped schema verification is only an optimization.
-                # Any native-function failure invalidates it so the next cycle
-                # performs a fresh TypeDB catalog probe before evaluating.
-                self.invalidate_schema_function_sync_cache(
-                    str(function_sync_result.get("syncFingerprint") or "")
-                )
                 runtime_rulebox_metadata["typedbNativeRuleQueryReason"] = str(native_match_result.get("reason") or "")
                 return {
                     "configured": True,
@@ -22894,23 +20356,17 @@ relation ontology-assertion,
                     "graphStore": "typedb",
                     "source": "typedbNativeRule",
                     "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
-                    "reasonCode": str(native_match_result.get("reasonCode") or "typedbSchemaFunctionQueryError"),
-                    "reason": (
-                        "TypeDB 직접 TypeQL 규칙 실행 실패: "
-                        if schema_function_direct_query_fallback
-                        else "TypeDB schema function 실행 실패: "
-                    ) + str(native_match_result.get("reason") or "")[:180],
+                    "reasonCode": str(native_match_result.get("reasonCode") or "typedbDirectTypeqlQueryError"),
+                    "reason": "TypeDB 직접 TypeQL 규칙 실행 실패: " + str(native_match_result.get("reason") or "")[:180],
                     "statementCount": 0,
                     "relationTypes": [],
                     "nativeTypeDbReasoningUsed": False,
-                    "typedbNativeFunctionReasoningUsed": False,
-                    "typedbSchemaFunctionUsed": False,
+                    "typedbDirectTypeqlUsed": False,
                     "typedbBootstrapReasoningUsed": False,
                     "pythonBootstrapDisabled": True,
                     "pythonCompatibilityReasonerUsed": False,
                     "clearResult": clear_result,
                     "nativeReasoningProfile": native_profile,
-                    "functionSyncResult": function_sync_result,
                     "nativeMatchResult": native_match_result,
                     "ruleboxMetadata": runtime_rulebox_metadata,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
@@ -22942,15 +20398,13 @@ relation ontology-assertion,
                     "statementCount": 0,
                     "relationTypes": [],
                     "nativeTypeDbReasoningUsed": False,
-                    "typedbNativeFunctionReasoningUsed": False,
-                    "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
+                    "typedbDirectTypeqlUsed": False,
                     "typedbBootstrapReasoningUsed": False,
                     "pythonBootstrapDisabled": True,
                     "preservedPreviousInference": True,
                     "requiresAboxReprojection": True,
                     "clearResult": clear_result,
                     "nativeReasoningProfile": native_profile,
-                    "functionSyncResult": function_sync_result,
                     "nativeMatchResult": native_match_result,
                     "ruleboxMetadata": runtime_rulebox_metadata,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
@@ -23021,14 +20475,12 @@ relation ontology-assertion,
                     "statementCount": 0,
                     "relationTypes": [],
                     "nativeTypeDbReasoningUsed": False,
-                    "typedbNativeFunctionReasoningUsed": False,
-                    "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
+                    "typedbDirectTypeqlUsed": False,
                     "typedbBootstrapReasoningUsed": False,
                     "pythonBootstrapDisabled": True,
                     "preservedPreviousInference": True,
                     "clearResult": clear_result,
                     "nativeReasoningProfile": native_profile,
-                    "functionSyncResult": function_sync_result,
                     "nativeMatchResult": native_match_result,
                     "ruleboxMetadata": runtime_rulebox_metadata,
                     "typedbQueryMetrics": self.query_metrics_snapshot(),
@@ -23183,7 +20635,7 @@ relation ontology-assertion,
                     "nativeMatchResult": {
                         key: native_match_result.get(key)
                         for key in [
-                            "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "indexedEvidenceQueryUsed",
+                            "status", "reason", "reasonCode", "nativeQueryUsed", "indexedEvidenceQueryUsed",
                             "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                             "skippedRules", "nativeExecutionMode", "readTransactionCount",
                             "readQueryCount", "executionPlan", "blockingRule", "typedbQueryMetrics",
@@ -23214,7 +20666,6 @@ relation ontology-assertion,
                         "pythonBootstrapDisabled": True,
                         "clearResult": clear_result,
                         "nativeReasoningProfile": native_profile,
-                        "functionSyncResult": function_sync_result,
                         "nativeMatchResult": native_match_result,
                         "ruleboxMetadata": runtime_rulebox_metadata,
                         **runtime_rulebox_metadata,
@@ -23335,7 +20786,7 @@ relation ontology-assertion,
             "nativeInferenceOutcome": native_inference_outcome if saved_ok else "failed",
             "nativeInferenceNoMatch": bool(saved_ok and not has_materialized_relations),
             "typedbNativeRuleQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
-            "typedbSchemaFunctionQueryUsed": bool(native_match_result.get("schemaFunctionUsed")),
+            "typedbDirectTypeqlQueryUsed": bool(native_match_result.get("nativeQueryUsed")),
             "typedbNativeIndexedRuleQueryUsed": bool(native_match_result.get("indexedEvidenceQueryUsed")),
             "typedbNativeRuleQueryStatus": str(native_match_result.get("status") or ""),
             "typedbNativeRuleMatchedCount": int(number_or_none(native_match_result.get("matchedCount")) or 0),
@@ -23413,11 +20864,9 @@ relation ontology-assertion,
                 number_or_none(native_match_result.get("timeoutFallbackShardCount")) or 0
             ),
             "typedbNativeRuleCommitMode": "single-inferencebox-generation",
-            "typedbSchemaFunctionUsed": schema_function_sync_used,
-            "typedbSchemaFunctionSyncedCount": int(number_or_none(function_sync_result.get("syncedCount")) or 0),
             "pythonCompatibilityReasonerUsed": False,
-            "typedbNativeFunctionReasoningUsed": saved_ok and has_materialized_relations and bool(native_match_result.get("schemaFunctionUsed")),
-            "typeDbFunctionReasoningUsed": saved_ok and has_materialized_relations and bool(native_match_result.get("schemaFunctionUsed")),
+            "typedbNativeFunctionReasoningUsed": False,
+            "typeDbFunctionReasoningUsed": False,
             "typedbNativeReasoningReady": native_profile.get("status") in {"ready", "partial"},
             "typedbBootstrapReasoningUsed": False,
             "pythonBootstrapDisabled": True,
@@ -23438,19 +20887,10 @@ relation ontology-assertion,
             "clearResult": clear_result,
             "pruneResult": prune_result,
             "saveResult": save_result,
-            "functionSyncResult": {
-                key: function_sync_result.get(key)
-                for key in [
-                    "status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount",
-                    "syncedRules", "skippedRules", "schemaFunctionSyncCached", "schemaFunctionSyncBypassed",
-                    "schemaFunctionProbeUsed", "functionProbe",
-                ]
-                if key in function_sync_result
-            },
             "nativeMatchResult": {
                 key: native_match_result.get(key)
                 for key in [
-                    "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "indexedEvidenceQueryUsed",
+                    "status", "reason", "reasonCode", "nativeQueryUsed", "indexedEvidenceQueryUsed",
                     "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                     "skippedRules", "nativeExecutionMode", "readTransactionCount", "readQueryCount",
                     "executionPlan", "blockingRule", "typedbQueryMetrics", "timeoutFallbackUsed",
@@ -23568,7 +21008,7 @@ relation ontology-assertion,
         if typedb_bool(payload.get("policyOnly")):
             # Hypothesis lifecycle and outcome contracts are read by the
             # lifecycle audit after native relation materialization.  Their
-            # preview must not replace a deployed schema function merely to
+            # preview must not replace the governed RuleBox merely to
             # validate a non-predicate policy edit.
             return {
                 "configured": True,
@@ -23596,53 +21036,6 @@ relation ontology-assertion,
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
             }
         try:
-            force_sync = typedb_bool(payload.get("forceSchemaFunctionSync")) or typedb_bool(payload.get("forceRuleFunctionSync"))
-            function_sync_result = self.sync_typedb_native_rule_functions(
-                enabled_rules,
-                force=force_sync,
-                world_id=world_id,
-            )
-            if str(function_sync_result.get("status") or "") == "provisioning":
-                return {
-                    "configured": True,
-                    "status": "provisioning",
-                    "graphStore": "typedb",
-                    "source": "typedbCandidateRulePreview",
-                    "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
-                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionProvisioning"),
-                    "reason": "TypeDB schema function deployment is staged before this RuleBox preview. "
-                    + str(function_sync_result.get("reason") or "")[:180],
-                    "validationOnly": True,
-                    "mutatedOperationalRuleBox": False,
-                    "wroteInferenceBox": False,
-                    "candidateRuleCount": len(enabled_rules),
-                    "targetSymbols": target_symbols,
-                    "worldId": world_id,
-                    "nativeTypeDbReasoningUsed": False,
-                    "typedbNativeFunctionReasoningUsed": False,
-                    "baselineInferenceBox": baseline_inferencebox,
-                    "diff": materialization_preview_diff_payload(baseline_inferencebox, 0, len(enabled_rules), False),
-                    "functionSyncResult": function_sync_result,
-                    "retryable": True,
-                    "typedbQueryMetrics": self.query_metrics_snapshot(),
-                }
-            if str(function_sync_result.get("status") or "") != "ok":
-                return {
-                    "configured": True,
-                    "status": "error",
-                    "graphStore": "typedb",
-                    "reasonCode": str(function_sync_result.get("reasonCode") or "typedbSchemaFunctionSyncError"),
-                    "reason": "TypeDB schema function 동기화 실패: " + str(function_sync_result.get("reason") or function_sync_result.get("status") or "")[:180],
-                    "validationOnly": True,
-                    "mutatedOperationalRuleBox": False,
-                    "wroteInferenceBox": False,
-                    "candidateRuleCount": len(enabled_rules),
-                    "nativeReasoningProfile": native_profile,
-                    "baselineInferenceBox": baseline_inferencebox,
-                    "diff": materialization_preview_diff_payload(baseline_inferencebox, 0, len(enabled_rules), False),
-                    "functionSyncResult": function_sync_result,
-                    "typedbQueryMetrics": self.query_metrics_snapshot(),
-                }
             native_match_result = self.match_typedb_native_rules(
                 enabled_rules,
                 target_symbols=target_symbols,
@@ -23656,7 +21049,7 @@ relation ontology-assertion,
                 "graphStore": "typedb",
                 "source": "typedbCandidateRulePreview",
                 "reasoningMode": TYPEDB_NATIVE_REASONING_MODE,
-                "reason": "" if native_query_used else "TypeDB schema function preview failed: " + str(native_match_result.get("reason") or "")[:180],
+                "reason": "" if native_query_used else "TypeDB direct TypeQL preview failed: " + str(native_match_result.get("reason") or "")[:180],
                 "validationOnly": True,
                 "mutatedOperationalRuleBox": False,
                 "wroteInferenceBox": False,
@@ -23673,21 +21066,11 @@ relation ontology-assertion,
                     native_query_used,
                 ),
                 "nativeTypeDbReasoningUsed": native_query_used,
-                "typedbNativeFunctionReasoningUsed": native_query_used and bool(native_match_result.get("schemaFunctionUsed")),
-                "typedbSchemaFunctionUsed": bool(function_sync_result.get("status") == "ok"),
-                "functionSyncResult": {
-                    key: function_sync_result.get(key)
-                    for key in [
-                        "status", "reason", "reasonCode", "syncedCount", "skippedCount", "failedCount",
-                        "syncedRules", "skippedRules", "schemaFunctionSyncCached",
-                        "schemaFunctionProbeUsed", "functionProbe",
-                    ]
-                    if key in function_sync_result
-                },
+                "typedbDirectTypeqlUsed": native_query_used,
                 "nativeMatchResult": {
                     key: native_match_result.get(key)
                     for key in [
-                        "status", "reason", "reasonCode", "nativeQueryUsed", "schemaFunctionUsed", "indexedEvidenceQueryUsed",
+                        "status", "reason", "reasonCode", "nativeQueryUsed", "indexedEvidenceQueryUsed",
                         "executedRuleCount", "skippedRuleCount", "matchedCount", "executedRules",
                         "skippedRules", "nativeExecutionMode", "readTransactionCount", "readQueryCount",
                         "executionPlan", "blockingRule", "typedbQueryMetrics",
@@ -25234,9 +22617,9 @@ def typedb_native_profile_metadata(native_profile: Dict[str, object]) -> Dict[st
         "typedbNativePartialRuleCount": int(number_or_none(profile.get("partialRuleCount")) or 0),
         "typedbNativeBlockedRuleCount": int(number_or_none(profile.get("blockedRuleCount")) or 0),
         "typedbNativeRuleMaterializationUsed": True,
-        "typedbSchemaFunctionMaterializationUsed": True,
+        "typedbDirectTypeqlMaterializationUsed": True,
         "typeDbNativeRulesPrimary": True,
-        "ruleStore": "TypeDB schema functions",
+        "ruleStore": "TypeDB direct TypeQL",
     }
 
 
@@ -25261,13 +22644,13 @@ def materialize_typedb_native_matches(
         materialize_rule_inference(graph, rule, subject, {
             "matchedConditions": list(match.get("matchedConditions") or []),
             "evidenceRelationIds": list(match.get("evidenceRelationIds") or []),
-            "conditionDetailSource": str(match.get("conditionDetailSource") or "schema-function-match"),
+            "conditionDetailSource": str(match.get("conditionDetailSource") or "direct-typeql-match"),
             "modelSignalInterpretationPolicy": bool(match.get("modelSignalInterpretationPolicy")),
             "modelSignalInterpretationPolicyId": str(match.get("modelSignalInterpretationPolicyId") or ""),
             "sharedModelSignalBridge": bool(match.get("sharedModelSignalBridge")),
             "modelSignalBridgeVersion": str(match.get("modelSignalBridgeVersion") or ""),
             "bridgeSourceScope": str(match.get("bridgeSourceScope") or ""),
-            "schemaFunctionName": str(match.get("schemaFunctionName") or ""),
+            "typeqlExecutionMode": "direct-typeql",
         }, evidence_index=evidence_index)
 
 
@@ -25344,7 +22727,7 @@ def typedb_native_matched_conditions(
     return result
 
 
-def typedb_static_schema_function_condition_context(
+def typedb_static_rule_condition_context(
     rule: GraphInferenceRule,
     query_plan: Dict[str, object] = None,
     row: Dict[str, object] = None,
@@ -25361,7 +22744,7 @@ def typedb_static_schema_function_condition_context(
                 "conditionId": getattr(condition, "condition_id", ""),
                 "kind": getattr(condition, "kind", ""),
                 "role": role,
-                "matchedBySchemaFunction": True,
+                "matchedByTypeDB": True,
             }
             if role == "not":
                 payload["absenceSatisfied"] = True
@@ -25387,7 +22770,7 @@ def typedb_static_schema_function_condition_context(
         "conditionDetailSource": (
             "typedb-model-signal-interpretation-policy"
             if query_plan.get("modelSignalInterpretationPolicy")
-            else "schema-function-match"
+            else "direct-typeql-match"
         ),
     }
 
@@ -25437,7 +22820,7 @@ def typedb_native_rule_any_relation_requirement(rule: object) -> tuple:
     """Return topology-only alternatives when every ``any`` branch is a relation.
 
     This is only a planner shortcut. Attribute filters and the actual minimum
-    match count are still evaluated by the TypeDB schema function.
+    match count are still evaluated by direct TypeQL.
     """
     any_conditions = [
         condition
@@ -25765,7 +23148,7 @@ def typedb_native_rule_subject_properties_preflight(
     The index is generated from the same immutable graph as the active ABox.
     Missing legacy/index values remain unknown, and a positive comparison
     never materializes an inference.  The surviving rule is still evaluated
-    in full by its TypeDB schema function.
+    in full by its direct TypeQL rule.
     """
     clean_symbol = str(symbol or "").upper().strip()
     property_index = dict(subject_properties_by_symbol or {})
@@ -26259,7 +23642,7 @@ def typedb_native_rule_execution_plan(
             normalized_condition_role(condition) in {"any", "optional"}
             for condition in conditions
         )
-        # A schema-function base match for an N-of-M rule is followed by a
+        # A direct base match for an N-of-M rule is followed by a
         # second TypeDB cardinality query. Run those bounded checks first so a
         # long series of ordinary matches cannot leave the only cardinality
         # proof until the shared read budget is nearly exhausted.
@@ -27010,7 +24393,7 @@ def typedb_native_any_group_check_query(
 ) -> Dict[str, object]:
     """Build a source-bounded TypeDB N-of-M condition check.
 
-    This is deliberately a direct TypeQL query rather than a schema function:
+    This is a direct TypeQL query:
     TypeDB evaluates the cardinality with `reduce count`, while schema compile
     remains small and predictable.  The caller invokes it only after the base
     rule query produced this exact source id.
@@ -27087,7 +24470,7 @@ def typedb_native_any_group_check_query(
 
     # For N-of-M groups, a source-bounded generic query still expands the
     # active scoped-Manifest membership graph. Use the verified source-local
-    # physical rows when available. The existing compiler retains the same
+    # physical rows when available. The direct query retains the same
     # TypeDB `reduce count` evaluation and RuleBox condition tokens; Python
     # supplies identities only and never decides the cardinality outcome.
     if clean_source_storage_id and any_min_count > 1:
@@ -27515,7 +24898,7 @@ def typedb_native_any_group_check_query(
         rule,
         [],
         scoped_manifest_only=scoped_manifest_only,
-        # The schema function already proved required and negative clauses for
+        # The base direct query already proved required and negative clauses for
         # this exact source in the same read transaction. Repeating its joins
         # here turns a bounded N-of-M check into a full second rule query.
         include_required_conditions=False,
@@ -27533,196 +24916,6 @@ def typedb_native_any_group_check_query(
         "columns": ["sourceId", "sourceLabel"],
         "anyConditionCheckMode": "distinct-condition-count",
     }
-
-
-def typedb_native_rule_function_name(rule_or_id: object, world_id: str = "") -> str:
-    """Return a deployment key for a rule or its shared model-signal bridge."""
-
-    if isinstance(rule_or_id, dict):
-        rule_payload = dict(rule_or_id)
-    elif hasattr(rule_or_id, "to_dict"):
-        rule_payload = dict(rule_or_id.to_dict())
-    else:
-        rule_payload = {}
-    if rule_payload and is_model_signal_interpretation_rule(rule_payload):
-        raw = "bridge_model_signal_" + model_signal_bridge_definition_key(rule_payload)
-    else:
-        raw = str(
-            rule_payload.get("rule_id")
-            or rule_payload.get("ruleId")
-            or rule_or_id
-            or "rule"
-        ).strip().lower()
-    normalized = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
-    if not normalized:
-        normalized = "rule"
-    if str(world_id or "").strip():
-        # Explicit worlds all share this parameterized function. The caller
-        # passes the concrete world id as a TypeQL string argument, so the
-        # function body cannot match another account's active manifest.
-        digest = hashlib.sha256((raw + "|world-parameter-v10").encode("utf-8")).hexdigest()[:10]
-        return (TYPEDB_SCHEMA_FUNCTION_PREFIX + normalized + "_" + digest)[:120]
-    # Existing no-world ABox rows remain readable during the rolling migration.
-    # The compiler contract changed with normalized execution metrics, so use a
-    # new content namespace instead of silently reusing a stale v5 body.
-    digest = hashlib.sha256((raw + "|legacy-v7").encode("utf-8")).hexdigest()[:10]
-    return (TYPEDB_LEGACY_SCHEMA_FUNCTION_PREFIX + normalized + "_" + digest)[:120]
-
-
-def typedb_native_any_helper_definitions(rule: Dict[str, object]) -> List[Dict[str, object]]:
-    """Compatibility hook retained for RuleBox management metadata.
-
-    The active v4 compiler emits no helper functions.  N-of-M `any` groups
-    are evaluated by a source-bounded TypeQL aggregation after the base
-    schema-function match, avoiding both combination explosion and a Python
-    fallback decision path.
-    """
-    del rule
-    return []
-
-
-def typedb_native_function_definition(rule: Dict[str, object], world_id: str = "") -> Dict[str, object]:
-    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
-    shared_model_signal_bridge = is_model_signal_interpretation_rule(rule)
-    executable_rule = (
-        model_signal_bridge_rule_payload(rule)
-        if shared_model_signal_bridge
-        else rule
-    )
-    function_name = typedb_native_rule_function_name(rule, world_id)
-    helper_definitions = typedb_native_any_helper_definitions(executable_rule)
-    parameterized_world = bool(str(world_id or "").strip())
-    world_id_variable = "$ruleWorldId" if parameterized_world else ""
-    plan = typedb_native_match_query(
-        executable_rule,
-        [],
-        scoped_manifest_only=True,
-        manifest_id_variable="$ruleManifestId" if parameterized_world else "",
-        bind_active_manifest=not parameterized_world,
-        # The function call receives a candidate whose active Manifest
-        # membership was checked by the outer query. Repeating that proof in
-        # every schema function expands the TypeDB search plan substantially.
-        include_source_manifest_membership=not parameterized_world,
-        # N-of-M `any` clauses are verified as bounded TypeDB reads only when
-        # this base function returns a source. Embedding their combinations or
-        # an aggregation pipeline in a schema function makes TypeDB compile
-        # the rule as one large search space.
-        include_any_conditions=False,
-        world_id=world_id,
-        world_id_variable=world_id_variable,
-    )
-    match_query = str(plan.get("query") or "").strip()
-    if parameterized_world and match_query.startswith("match "):
-        # A function argument has a TypeQL type, whereas ontology-manifest-id
-        # is an attribute concept. Bind the Manifest id from the already
-        # verified pointer instead of passing an untyped string value and
-        # accidentally declaring one variable as both concepts at compile
-        # time.
-        match_query = (
-            "match $ruleManifestPointer has ontology-manifest-id $ruleManifestId, "
-            "has ontology-world-id $ruleManifestPointerWorldId; "
-            "$ruleManifestPointerWorldId == $ruleWorldId; "
-            + match_query[len("match "):]
-        )
-    if not match_query:
-        return {
-            "ruleId": rule_id,
-            "nativeRuleId": typedb_native_rule_id(rule_id),
-            "functionName": function_name,
-            "define": "",
-            "redefine": "",
-            "reason": str(plan.get("reason") or "match query is empty"),
-        }
-    body = (
-        "fun " + function_name + "($source: ontology-node"
-        + (", $ruleManifestPointer: ontology-node, $ruleWorldId: string" if parameterized_world else "")
-        + ") -> { ontology-node }:\n"
-        + match_query + "\n"
-        + "return { $source };"
-    )
-    return {
-        "ruleId": rule_id,
-        "nativeRuleId": typedb_native_rule_id(rule_id),
-        "functionName": function_name,
-        "define": "define\n" + body,
-        "redefine": "redefine\n" + body,
-        "body": body,
-        "coveredRuleIds": [rule_id],
-        "sharedModelSignalBridge": shared_model_signal_bridge,
-        "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION if shared_model_signal_bridge else "",
-        "bridgeSourceScope": model_signal_bridge_source_scope(rule) if shared_model_signal_bridge else "",
-        "bridgeConditionIds": [
-            str(item.get("condition_id") or item.get("conditionId") or "")
-            for item in [
-                condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
-                for condition in model_signal_bridge_conditions(rule)
-            ]
-        ] if shared_model_signal_bridge else [],
-        "helperFunctions": helper_definitions,
-        "functionDefinitions": helper_definitions + [{
-            "ruleId": rule_id,
-            "nativeRuleId": typedb_native_rule_id(rule_id),
-            "functionName": function_name,
-            "define": "define\n" + body,
-            "redefine": "redefine\n" + body,
-            "body": body,
-            "coveredRuleIds": [rule_id],
-            "sharedModelSignalBridge": shared_model_signal_bridge,
-            "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION if shared_model_signal_bridge else "",
-            "bridgeSourceScope": model_signal_bridge_source_scope(rule) if shared_model_signal_bridge else "",
-        }],
-        "matchQuery": match_query,
-    }
-
-
-def typedb_schema_function_covered_rule_ids(definition: Dict[str, object]) -> List[str]:
-    values = list((definition or {}).get("coveredRuleIds") or [])
-    values.append(str((definition or {}).get("ruleId") or ""))
-    return sorted({str(item or "").strip() for item in values if str(item or "").strip()})
-
-
-def deduplicate_typedb_schema_function_definitions(
-    definitions: Iterable[Dict[str, object]],
-) -> List[Dict[str, object]]:
-    """Collapse identical shared bridges while retaining every rule lineage."""
-
-    by_name: Dict[str, Dict[str, object]] = {}
-    order: List[str] = []
-    for raw_definition in definitions or []:
-        definition = dict(raw_definition or {})
-        function_name = str(definition.get("functionName") or "").strip()
-        if not function_name:
-            continue
-        existing = by_name.get(function_name)
-        if existing is None:
-            definition["coveredRuleIds"] = typedb_schema_function_covered_rule_ids(definition)
-            by_name[function_name] = definition
-            order.append(function_name)
-            continue
-        if str(existing.get("body") or "").strip() != str(definition.get("body") or "").strip():
-            raise ValueError(
-                "TypeDB schema function name collision has different bodies: "
-                + function_name
-            )
-        existing["coveredRuleIds"] = sorted(set(
-            typedb_schema_function_covered_rule_ids(existing)
-            + typedb_schema_function_covered_rule_ids(definition)
-        ))
-        existing["sharedModelSignalBridge"] = bool(
-            existing.get("sharedModelSignalBridge")
-            or definition.get("sharedModelSignalBridge")
-        )
-    return [by_name[name] for name in order]
-
-
-def typedb_schema_function_rule_ids(
-    definitions: Iterable[Dict[str, object]],
-) -> List[str]:
-    return sorted({
-        rule_id
-        for definition in definitions or []
-        for rule_id in typedb_schema_function_covered_rule_ids(definition)
-    })
 
 
 def typedb_native_indexed_evidence_match_query(
@@ -27915,7 +25108,6 @@ def typedb_native_indexed_evidence_match_query(
         **plan,
         "status": "ok",
         "indexedEvidenceQuery": True,
-        "schemaFunctionQuery": False,
         "queryMode": (
             "typedb-manifest-evidence-index-any-combined"
             if has_any_conditions
@@ -27935,7 +25127,6 @@ def typedb_native_indexed_evidence_match_query(
 def typedb_native_rule_runtime_query_plan(
     rule: Dict[str, object],
     target_symbols: Iterable[str] = None,
-    schema_function_query: bool = True,
     scoped_manifest_only: bool = False,
     world_id: str = "",
     evidence_read_index: Dict[str, object] = None,
@@ -27964,15 +25155,6 @@ def typedb_native_rule_runtime_query_plan(
     )
     if str(indexed_plan.get("status") or "") == "ok":
         return {**indexed_plan, **interpretation_metadata}
-    if schema_function_query:
-        return {
-            **typedb_native_function_call_query(rule, target_symbols, world_id),
-            **interpretation_metadata,
-            "schemaFunctionQuery": True,
-            "indexedEvidenceQuery": False,
-            "queryMode": "typedb-schema-function",
-            "indexedEvidenceFallbackReason": str(indexed_plan.get("reason") or ""),
-        }
     return {
         **typedb_native_match_query(
             rule,
@@ -27982,7 +25164,6 @@ def typedb_native_rule_runtime_query_plan(
             world_id=world_id,
             compact_result_rows=compact_result_rows,
         ),
-        "schemaFunctionQuery": False,
         "indexedEvidenceQuery": False,
         "queryMode": "typedb-scoped-typeql",
         "indexedEvidenceFallbackReason": str(indexed_plan.get("reason") or ""),
@@ -27990,220 +25171,9 @@ def typedb_native_rule_runtime_query_plan(
     }
 
 
-def typedb_native_rule_function_sync_plan(
-    rules: Iterable[GraphInferenceRule],
-    target_symbols: Iterable[str] = None,
-    evidence_read_index: Dict[str, object] = None,
-    world_id: str = "",
-    execution_plan: Dict[str, object] = None,
-    force_schema_function_sync: bool = False,
-) -> Dict[str, object]:
-    """Plan only the schema functions a complete native run can invoke.
-
-    This is deployment planning, not investment reasoning. A verified active
-    Manifest can anchor some RuleBox predicates directly to exact physical
-    ABox assertions, so those predicates are still evaluated by TypeDB but do
-    not need a generated schema function. The optional execution plan may
-    exclude only facts that the existing native preflight has already proven
-    impossible; it never marks a rule as matched.
-    """
-    all_rules = [rule for rule in rules or [] if rule and typedb_rule_is_enabled(rule)]
-    plan = dict(execution_plan or {})
-    if force_schema_function_sync:
-        candidate_rules = list(all_rules)
-        candidate_source = "forced-complete-execution"
-    elif plan:
-        candidate_rules = [
-            item.get("rule")
-            for item in plan.get("selectedEntries") or []
-            if isinstance(item, dict)
-            and item.get("rule")
-            and typedb_rule_is_enabled(item.get("rule"))
-        ]
-        candidate_source = "native-preflight-selected"
-    else:
-        candidate_rules = list(all_rules)
-        candidate_source = "complete-execution"
-
-    indexed_rules: List[GraphInferenceRule] = []
-    schema_function_rules: List[GraphInferenceRule] = []
-    indexed_rule_ids: List[str] = []
-    schema_function_rule_ids: List[str] = []
-    fallback_reasons: Dict[str, str] = {}
-    for rule in candidate_rules:
-        payload = rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-        rule_id = str(payload.get("rule_id") or payload.get("ruleId") or "")
-        indexed_plan = typedb_native_indexed_evidence_match_query(
-            payload,
-            target_symbols,
-            evidence_read_index,
-            world_id,
-        )
-        if not force_schema_function_sync and str(indexed_plan.get("status") or "") == "ok":
-            indexed_rules.append(rule)
-            if rule_id:
-                indexed_rule_ids.append(rule_id)
-            continue
-        schema_function_rules.append(rule)
-        if rule_id:
-            schema_function_rule_ids.append(rule_id)
-            fallback_reasons[rule_id] = (
-                "forced schema function synchronization"
-                if force_schema_function_sync
-                else str(indexed_plan.get("reason") or "indexed evidence query is not eligible")
-            )
-    return {
-        "status": "ok",
-        "candidateSource": candidate_source,
-        "forceSchemaFunctionSync": bool(force_schema_function_sync),
-        "candidateRuleCount": len(candidate_rules),
-        "indexedEvidenceRuleCount": len(indexed_rules),
-        "indexedEvidenceRuleIds": indexed_rule_ids,
-        "schemaFunctionRuleCount": len(schema_function_rules),
-        "schemaFunctionCount": len({
-            typedb_native_rule_function_name(
-                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
-                world_id,
-            )
-            for rule in schema_function_rules
-        }),
-        "sharedModelSignalBridgeFunctionCount": len({
-            typedb_native_rule_function_name(
-                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {}),
-                world_id,
-            )
-            for rule in schema_function_rules
-            if is_model_signal_interpretation_rule(
-                rule.to_dict() if hasattr(rule, "to_dict") else dict(rule or {})
-            )
-        }),
-        "schemaFunctionRuleIds": schema_function_rule_ids,
-        "schemaFunctionFallbackReasons": fallback_reasons,
-        "indexedEvidenceRules": indexed_rules,
-        "schemaFunctionRules": schema_function_rules,
-        "preflightSelectedRuleCount": len(plan.get("selectedEntries") or []) if plan else 0,
-        "preflightSkippedRuleCount": len(plan.get("skippedEntries") or []) if plan else 0,
-    }
-
-
-def typedb_native_function_call_query(
-    rule: Dict[str, object],
-    target_symbols: Iterable[str] = None,
-    world_id: str = "",
-) -> Dict[str, object]:
-    rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
-    shared_model_signal_bridge = is_model_signal_interpretation_rule(rule)
-    function_name = typedb_native_rule_function_name(rule, world_id)
-    source_kind = str(rule.get("source_kind") or rule.get("sourceKind") or "stock")
-    symbols = clean_symbols_from_payload(list(target_symbols or []))
-    parameterized_world = bool(str(world_id or "").strip())
-    clauses = [
-        typedb_active_worldview_manifest_clause("$activeManifestPointer", "$activeManifestId", world_id),
-        typedb_scoped_manifest_member_clause("$candidate", "candidate", "$activeManifestId", world_id),
-        "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";",
-    ]
-    if symbols and typedb_source_kind_uses_symbol_scope(source_kind):
-        clauses.append(typedb_value_match("$candidate", "ontology-symbol", symbols, "==", "sourceSymbol"))
-    if parameterized_world:
-        clauses.append("let $ruleWorldId = " + typedb_string(str(world_id).strip()) + ";")
-    clauses.extend([
-        "let $source in " + function_name + "($candidate"
-        + (", $activeManifestPointer, $ruleWorldId" if parameterized_world else "")
-        + ");",
-    ])
-    residual_condition_ids: List[str] = []
-    if shared_model_signal_bridge:
-        for index, condition in enumerate(model_signal_residual_conditions(rule)):
-            condition_payload = (
-                condition.to_dict()
-                if hasattr(condition, "to_dict")
-                else dict(condition or {})
-            )
-            condition_id = str(
-                condition_payload.get("condition_id")
-                or condition_payload.get("conditionId")
-                or "condition-" + str(index)
-            )
-            residual_condition_ids.append(condition_id)
-            role = normalized_condition_role(condition_payload)
-            if role in {"any", "optional"}:
-                return {
-                    "ruleId": rule_id,
-                    "nativeRuleId": typedb_native_rule_id(rule_id),
-                    "functionName": function_name,
-                    "query": "",
-                    "columns": [],
-                    "reason": "Model-signal interpretation bridge requires deterministic residual conditions.",
-                    "sharedModelSignalBridge": True,
-                }
-            pattern = typedb_condition_pattern(
-                condition_payload,
-                index,
-                source_var="$source",
-                relation_prefix="interpretationRel",
-                target_prefix="interpretationTarget",
-                variable_scope="interpretation" + str(index) + "_",
-                manifest_id_variable="$activeManifestId",
-                world_id=world_id,
-            )
-            if pattern.get("reason"):
-                return {
-                    "ruleId": rule_id,
-                    "nativeRuleId": typedb_native_rule_id(rule_id),
-                    "functionName": function_name,
-                    "query": "",
-                    "columns": [],
-                    "reason": str(pattern.get("reason") or "Unsupported interpretation condition."),
-                    "sharedModelSignalBridge": True,
-                }
-            condition_clauses = [
-                str(item)
-                for item in pattern.get("clauses") or []
-                if str(item or "").strip()
-            ]
-            if role == "not":
-                clauses.append("not { " + " ".join(condition_clauses) + " };")
-            else:
-                clauses.extend(condition_clauses)
-    clauses.extend([
-        "$source has ontology-id $sourceId;",
-        "$source has ontology-label $sourceLabel;",
-    ])
-    return {
-        "ruleId": rule_id,
-        "nativeRuleId": typedb_native_rule_id(rule_id),
-        "functionName": function_name,
-        "query": "match " + " ".join(item for item in clauses if item),
-        "columns": ["sourceId", "sourceLabel"],
-        "evidenceColumns": [],
-        "conditionEvidenceColumns": {},
-        "modelSignalInterpretationPolicy": shared_model_signal_bridge,
-        "modelSignalInterpretationPolicyId": (
-            "model-signal-interpretation:" + rule_id
-            if shared_model_signal_bridge
-            else ""
-        ),
-        "sharedModelSignalBridge": shared_model_signal_bridge,
-        "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION if shared_model_signal_bridge else "",
-        "bridgeSourceScope": model_signal_bridge_source_scope(rule) if shared_model_signal_bridge else "",
-        "bridgeConditionIds": [
-            str(
-                (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("condition_id")
-                or (condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})).get("conditionId")
-                or ""
-            )
-            for condition in model_signal_bridge_conditions(rule)
-        ] if shared_model_signal_bridge else [],
-        "residualConditionIds": residual_condition_ids,
-    }
-
-
 def typedb_model_signal_bridge_batch_plan(
     planned_entries: Iterable[Dict[str, object]],
     target_symbols: Iterable[str] = None,
-    *,
-    use_schema_functions: bool = True,
-    schema_function_ready_rule_ids: Iterable[str] = None,
 ) -> Dict[str, object]:
     """Collapse simple model-signal policies into source-scope bridge reads.
 
@@ -28213,15 +25183,6 @@ def typedb_model_signal_bridge_batch_plan(
     """
 
     clean_symbols = clean_symbols_from_payload(list(target_symbols or []))
-    ready_rule_ids = (
-        None
-        if schema_function_ready_rule_ids is None
-        else {
-            str(rule_id or "").strip()
-            for rule_id in schema_function_ready_rule_ids
-            if str(rule_id or "").strip()
-        }
-    )
     regular_entries: List[Dict[str, object]] = []
     batchable_by_rule_id: Dict[str, Dict[str, object]] = {}
     constrained_rule_ids: Set[str] = set()
@@ -28257,20 +25218,15 @@ def typedb_model_signal_bridge_batch_plan(
             list(existing.get("candidateSymbols") or []) + list(candidate_symbols)
         )
 
-    grouped: Dict[Tuple[str, bool], List[Dict[str, object]]] = {}
+    grouped: Dict[str, List[Dict[str, object]]] = {}
     for rule_id in sorted(batchable_by_rule_id):
         entry = batchable_by_rule_id[rule_id]
         rule = entry.get("rule")
         scope = model_signal_bridge_source_scope(rule)
-        schema_ready = bool(
-            use_schema_functions
-            and (ready_rule_ids is None or rule_id in ready_rule_ids)
-        )
-        grouped.setdefault((scope, schema_ready), []).append(entry)
+        grouped.setdefault(scope, []).append(entry)
     batches = [
         {
             "sourceScope": scope,
-            "schemaFunctionQuery": schema_ready,
             "entries": entries,
             "ruleIds": [
                 str(getattr(entry.get("rule"), "rule_id", "") or "")
@@ -28282,9 +25238,9 @@ def typedb_model_signal_bridge_batch_plan(
                 for symbol in entry.get("candidateSymbols") or []
             ]),
         }
-        for (scope, schema_ready), entries in sorted(
+        for scope, entries in sorted(
             grouped.items(),
-            key=lambda item: (item[0][0], 0 if item[0][1] else 1),
+            key=lambda item: item[0],
         )
     ]
     batchable_count = len(batchable_by_rule_id)
@@ -28346,7 +25302,6 @@ def typedb_model_signal_bridge_batch_query(
     entries = [dict(item or {}) for item in batch.get("entries") or []]
     rules = [item.get("rule") for item in entries if item.get("rule")]
     scope = str(batch.get("sourceScope") or "").strip().lower()
-    schema_function_query = bool(batch.get("schemaFunctionQuery"))
     if not rules:
         return {
             "status": "invalid",
@@ -28367,7 +25322,6 @@ def typedb_model_signal_bridge_batch_query(
     first_payload = first_rule.to_dict() if hasattr(first_rule, "to_dict") else dict(first_rule or {})
     source_kind = str(first_payload.get("source_kind") or first_payload.get("sourceKind") or "stock")
     candidate_symbols = clean_symbols_from_payload(list(batch.get("candidateSymbols") or []))
-    parameterized_world = bool(str(world_id or "").strip())
     clauses = [
         typedb_active_worldview_manifest_clause(
             "$activeManifestPointer",
@@ -28375,75 +25329,47 @@ def typedb_model_signal_bridge_batch_query(
             world_id,
         ),
     ]
-    function_name = ""
-    if schema_function_query:
-        function_name = typedb_native_rule_function_name(first_payload, world_id)
-        clauses.extend([
-            typedb_scoped_manifest_member_clause(
-                "$candidate",
-                "modelSignalCandidate",
-                "$activeManifestId",
-                world_id,
-            ),
-            "$candidate isa ontology-node, has ontology-kind " + typedb_string(source_kind) + ";",
-        ])
-        if candidate_symbols and typedb_source_kind_uses_symbol_scope(source_kind):
-            clauses.append(typedb_value_match(
-                "$candidate",
-                "ontology-symbol",
-                candidate_symbols,
-                "==",
-                "modelSignalCandidateSymbol",
-            ))
-        if parameterized_world:
-            clauses.append("let $ruleWorldId = " + typedb_string(str(world_id).strip()) + ";")
-        clauses.append(
-            "let $source in " + function_name + "($candidate"
-            + (", $activeManifestPointer, $ruleWorldId" if parameterized_world else "")
-            + ");"
+    clauses.extend([
+        typedb_scoped_manifest_member_clause(
+            "$source",
+            "modelSignalSource",
+            "$activeManifestId",
+            world_id,
+        ) if scoped_manifest_only else typedb_active_abox_member_clause(
+            "$source",
+            "modelSignalSource",
+            world_id,
+        ),
+        "$source isa " + typedb_entity_match_type(source_kind)
+        + ", has ontology-kind " + typedb_string(source_kind) + ";",
+    ])
+    if candidate_symbols and typedb_source_kind_uses_symbol_scope(source_kind):
+        clauses.append(typedb_value_match(
+            "$source",
+            "ontology-symbol",
+            candidate_symbols,
+            "==",
+            "modelSignalSourceSymbol",
+        ))
+    for index, condition in enumerate(model_signal_bridge_conditions(first_rule)):
+        condition_payload = (
+            condition.to_dict()
+            if hasattr(condition, "to_dict")
+            else dict(condition or {})
         )
-    else:
-        clauses.extend([
-            typedb_scoped_manifest_member_clause(
-                "$source",
-                "modelSignalSource",
-                "$activeManifestId",
-                world_id,
-            ) if scoped_manifest_only else typedb_active_abox_member_clause(
-                "$source",
-                "modelSignalSource",
-                world_id,
-            ),
-            "$source isa " + typedb_entity_match_type(source_kind)
-            + ", has ontology-kind " + typedb_string(source_kind) + ";",
-        ])
-        if candidate_symbols and typedb_source_kind_uses_symbol_scope(source_kind):
-            clauses.append(typedb_value_match(
-                "$source",
-                "ontology-symbol",
-                candidate_symbols,
-                "==",
-                "modelSignalSourceSymbol",
-            ))
-        for index, condition in enumerate(model_signal_bridge_conditions(first_rule)):
-            condition_payload = (
-                condition.to_dict()
-                if hasattr(condition, "to_dict")
-                else dict(condition or {})
-            )
-            pattern = typedb_condition_pattern(
-                condition_payload,
-                index,
-                source_var="$source",
-                variable_scope="modelSignalBridge" + str(index) + "_",
-            )
-            if pattern.get("reason"):
-                return {
-                    "status": "invalid",
-                    "query": "",
-                    "reason": str(pattern.get("reason") or "Unsupported bridge condition."),
-                }
-            clauses.extend(str(item) for item in pattern.get("clauses") or [] if str(item or "").strip())
+        pattern = typedb_condition_pattern(
+            condition_payload,
+            index,
+            source_var="$source",
+            variable_scope="modelSignalBridge" + str(index) + "_",
+        )
+        if pattern.get("reason"):
+            return {
+                "status": "invalid",
+                "query": "",
+                "reason": str(pattern.get("reason") or "Unsupported bridge condition."),
+            }
+        clauses.extend(str(item) for item in pattern.get("clauses") or [] if str(item or "").strip())
 
     signal_condition = model_signal_residual_conditions(first_rule)[0]
     signal_payload = (
@@ -28508,13 +25434,7 @@ def typedb_model_signal_bridge_batch_query(
         "columns": list(dict.fromkeys(columns)),
         "evidenceColumns": [relation_id_column] if relation_id_column else [],
         "relationIdColumn": relation_id_column,
-        "schemaFunctionName": function_name,
-        "schemaFunctionQuery": schema_function_query,
-        "queryMode": (
-            "typedb-shared-model-signal-bridge-function-batch"
-            if schema_function_query
-            else "typedb-shared-model-signal-bridge-direct-batch"
-        ),
+        "queryMode": "typedb-shared-model-signal-bridge-direct-batch",
         "sharedModelSignalBridge": True,
         "modelSignalBridgeVersion": MODEL_SIGNAL_BRIDGE_VERSION,
         "bridgeSourceScope": scope,
@@ -28605,8 +25525,8 @@ def typedb_native_condition_check_query(
     """Build one bounded native condition probe for a resolved source.
 
     The active scoped Manifest is bound once for the probe. This is used only
-    after a base schema function has matched, so N-of-M `any` conditions do
-    not expand the function compiler or make unrelated sources part of the
+    after a base direct query has matched, so N-of-M `any` conditions do
+    not expand the query or make unrelated sources part of the
     TypeQL search space.
     """
     manifest_id_variable = "$activeManifestId" if scoped_manifest_only else ""
@@ -29023,8 +25943,8 @@ def typedb_reasoned_properties(
     payload["nativeTypeDbReasoned"] = True
     payload["typedbNativeRuleReasoned"] = True
     payload["typedbNativeRuleMaterializationUsed"] = True
-    payload["typedbSchemaFunctionReasoned"] = True
-    payload["typedbSchemaFunctionMaterializationUsed"] = True
+    payload["typedbDirectTypeqlReasoned"] = True
+    payload["typedbDirectTypeqlMaterializationUsed"] = True
     payload["typeDbMaterialized"] = True
     payload["graphInferenceUsed"] = True
     payload["typedbMaterialized"] = True
@@ -29067,28 +25987,14 @@ def inference_rulebox_metadata(
         "typedbNativeBlockedRuleCount",
         "typedbNativeRuleQueryStatus",
         "typedbNativeRuleQueryUsed",
-        "typedbSchemaFunctionQueryUsed",
+        "typedbDirectTypeqlQueryUsed",
         "typedbNativeIndexedRuleQueryUsed",
         "typedbNativeEvidenceFieldIndexStatus",
         "typedbNativeEvidenceFieldIndexChunkCount",
         "typedbNativeEvidenceFieldIndexStorageIdentityCount",
         "typedbNativeEvidenceFieldIndexFieldRowCount",
         "typedbNativeEvidenceFieldIndexRelationTypes",
-        "typedbSchemaFunctionUsed",
-        "typedbSchemaFunctionSyncStatus",
-        "typedbSchemaFunctionSyncCached",
-        "typedbSchemaFunctionSyncBypassed",
-        "typedbSchemaFunctionPrewarmReadinessChecked",
-        "typedbSchemaFunctionPrewarmReady",
-        "typedbSchemaFunctionPrewarmRequired",
-        "typedbSchemaFunctionPrewarmNamespace",
-        "typedbSchemaFunctionSyncedCount",
-        "typedbSchemaFunctionSkippedCount",
-        "typedbSchemaFunctionFailedCount",
-        "typedbSchemaFunctionCandidateSource",
-        "typedbSchemaFunctionCandidateCount",
-        "typedbSchemaFunctionRequiredRuleCount",
-        "typedbSchemaFunctionRequiredRuleIds",
+        "typedbDirectTypeqlUsed",
         "typedbNativeIndexedRuleCandidateCount",
         "typedbNativeIndexedRuleCandidateIds",
         "typedbNativeRuleMatchedCount",
@@ -29162,9 +26068,6 @@ def inference_rulebox_metadata(
         "typedbNativeRuleMatchedCount",
         "typedbNativeRuleExecutedCount",
         "typedbNativeRuleSkippedCount",
-        "typedbSchemaFunctionSyncedCount",
-        "typedbSchemaFunctionSkippedCount",
-        "typedbSchemaFunctionFailedCount",
         "sourceAboxSnapshotCount",
         "nativeRuleSelectionCandidateCount",
         "nativeRuleSelectionPriorMatchedCount",
@@ -29407,19 +26310,14 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
     blocked = [item for item in rule_profiles if item.get("status") == "blocked"]
     unsupported = sum(int(item.get("unsupportedConditionCount") or 0) for item in rule_profiles)
     supported = sum(int(item.get("supportedConditionCount") or 0) for item in rule_profiles)
-    schema_function_names = {
-        str(item.get("schemaFunctionName") or "").strip()
-        for item in ready
-        if str(item.get("schemaFunctionName") or "").strip()
-    }
     shared_model_signal_policy_count = sum(
         bool(item.get("sharedModelSignalBridge")) for item in ready
     )
-    shared_model_signal_function_names = {
-        str(item.get("schemaFunctionName") or "").strip()
+    shared_model_signal_scopes = {
+        str(item.get("bridgeSourceScope") or "").strip()
         for item in ready
         if item.get("sharedModelSignalBridge")
-        and str(item.get("schemaFunctionName") or "").strip()
+        and str(item.get("bridgeSourceScope") or "").strip()
     }
     status = "ready" if rule_profiles and len(ready) == len(rule_profiles) else ("partial" if ready or partial else "blocked")
     blockers = [
@@ -29437,10 +26335,9 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
         "ruleCount": len(rule_profiles),
         "nativeRuleCount": len(rule_profiles),
         "readyRuleCount": len(ready),
-        "schemaFunctionCount": len(schema_function_names),
-        "deduplicatedSchemaFunctionCount": max(0, len(ready) - len(schema_function_names)),
+        "directTypeqlRuleCount": len(ready),
         "sharedModelSignalPolicyCount": shared_model_signal_policy_count,
-        "sharedModelSignalBridgeFunctionCount": len(shared_model_signal_function_names),
+        "sharedModelSignalBridgeCount": len(shared_model_signal_scopes),
         "partialRuleCount": len(partial),
         "blockedRuleCount": len(blocked),
         "supportedConditionCount": supported,
@@ -29448,7 +26345,7 @@ def typedb_native_reasoning_profile(rules: Iterable[object]) -> Dict[str, object
         "materializationRequired": True,
         "materializationTarget": "InferenceBox",
         "materializationStrategy": "typedb-abox-native-rule-to-inferencebox",
-        "reason": "TypeDB ABox facts and stored semantic rules are materialized into TypeDB InferenceBox with native-rule metadata.",
+        "reason": "TypeDB ABox facts are evaluated by direct TypeQL rules and materialized into the TypeDB InferenceBox.",
         "readyRules": [item.get("ruleId") for item in ready][:24],
         "readyNativeRules": [item.get("nativeRuleId") for item in ready][:24],
         "partialRules": [item.get("ruleId") for item in partial][:24],
@@ -29480,12 +26377,22 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         status = "ready"
     source_rule_id = str(rule.get("rule_id") or rule.get("ruleId") or "")
     native_rule_id = typedb_native_rule_id(source_rule_id)
-    function_definition = typedb_native_function_definition(rule) if status in {"ready", "partial"} else {}
+    direct_query = (
+        typedb_native_match_query(
+            rule,
+            [],
+            scoped_manifest_only=True,
+            include_any_conditions=True,
+            compact_result_rows=True,
+        )
+        if status in {"ready", "partial"}
+        else {}
+    )
     return {
         "ruleId": source_rule_id,
         "sourceRuleId": source_rule_id,
         "nativeRuleId": native_rule_id,
-        "schemaFunctionName": typedb_native_rule_function_name(rule),
+        "executionStrategy": "direct-typeql",
         "sharedModelSignalBridge": is_model_signal_interpretation_rule(rule),
         "bridgeSourceScope": (
             model_signal_bridge_source_scope(rule)
@@ -29501,8 +26408,7 @@ def typedb_native_rule_profile(rule: Dict[str, object]) -> Dict[str, object]:
         "blockers": blockers,
         "reasoningLayer": TYPEDB_NATIVE_REASONING_LAYER,
         "conditions": condition_profiles,
-        "typeqlRuleBlueprint": str(function_definition.get("body") or typedb_function_blueprint(rule)) if status in {"ready", "partial"} else "",
-        "functionBlueprint": str(function_definition.get("body") or typedb_function_blueprint(rule)) if status in {"ready", "partial"} else "",
+        "typeqlRuleBlueprint": str(direct_query.get("query") or ""),
     }
 
 
@@ -29681,22 +26587,6 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
         inference_write_lease_enabled=True
         if settings.get("typedbInferenceWriteLeaseEnabled") in (None, "")
         else typedb_bool(settings.get("typedbInferenceWriteLeaseEnabled")),
-        process_schema_function_cache_enabled=True
-        if settings.get("typedbProcessSchemaFunctionCacheEnabled") in (None, "")
-        else typedb_bool(settings.get("typedbProcessSchemaFunctionCacheEnabled")),
-        schema_function_probe_interval_seconds=number_or_none(
-            settings.get("typedbSchemaFunctionProbeIntervalSeconds")
-        )
-        or 300.0,
-        schema_function_provision_batch_size=int(number_or_none(
-            settings.get("typedbSchemaFunctionProvisionBatchSize")
-        ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE),
-        schema_function_provision_timeout_seconds=number_or_none(
-            settings.get("typedbSchemaFunctionProvisionTimeoutSeconds")
-        ) or DEFAULT_TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS,
-        schema_function_direct_query_fallback_enabled=False
-        if settings.get("typedbNativeRuleDirectQueryFallbackEnabled") in (None, "")
-        else typedb_bool(settings.get("typedbNativeRuleDirectQueryFallbackEnabled")),
         projection_coordinator_write_enforced=typedb_bool(
             settings.get("typedbProjectionCoordinatorEnabled", "1")
         ),

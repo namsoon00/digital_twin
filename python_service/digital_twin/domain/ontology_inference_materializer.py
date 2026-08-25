@@ -95,7 +95,7 @@ def materialize_rule_inference(
             "sharedModelSignalBridge": bool(context.get("sharedModelSignalBridge")),
             "modelSignalBridgeVersion": str(context.get("modelSignalBridgeVersion") or ""),
             "bridgeSourceScope": str(context.get("bridgeSourceScope") or ""),
-            "schemaFunctionName": str(context.get("schemaFunctionName") or ""),
+            "typeqlExecutionMode": str(context.get("typeqlExecutionMode") or "direct-typeql"),
         }
     rule_condition_shapes = [
         rule_condition_shape(condition)

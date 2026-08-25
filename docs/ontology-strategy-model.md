@@ -51,8 +51,8 @@ TBox / RuleBox (shared definitions)
 - `PortfolioWorld`: 테넌트와 계정 하나에만 속한다. 보유·관심종목, 포지션, 계정 위험 예산, 전략, 가설, 의사결정, 알림 이력과 그 계정의 ABox/InferenceBox generation을 보관한다. 활성 ABox pointer와 InferenceBox pointer도 `worldId`로 조회하므로 다른 계정의 최신 generation을 선택할 수 없다.
 - `MarketHypothesis`는 `MarketWorld`에 쓰는 새로운 투자 판단이 아니다. TypeDB가 성립시킨 경로 중 시장 공통 입력만 가진 경우에만 `marketHypothesisId`를 만들고, 각 `PortfolioWorld`의 판단 에피소드가 그 공통 식별자를 참조한다. 따라서 같은 시장 인과 설명은 계정마다 같은 식별자를 쓰되, 공유 세계에는 계정 판단이나 행동이 저장되지 않는다.
 - `AccountHypothesisOverlay`는 보유 여부, 손익, 비중, 위험 한도, 투자 성향, 허용/차단 행동처럼 계정 전용 입력을 별도 ABox 개체로 남긴다. 조건 구조가 시장 입력과 계정 입력을 섞었거나 소유권을 판별할 수 없으면 공통 시장 가설을 만들지 않고 `mixed` 또는 `unverified`로 보수적으로 남긴다.
-- `RuleBox`: 규칙 정의는 전역으로 한 번만 배포하지만, TypeDB schema function 실행은 반드시 `PortfolioWorld.worldId`를 인자로 받는다. 계정이나 세계가 지정되지 않은 RuleBox 실행은 차단한다. 공유 `MarketWorld`는 직접 투자 판단을 수행하는 대상이 아니므로 그 세계에서 InferenceBox를 만들 수 없다.
-- 현재 native RuleBox 가운데 시장 조건과 계정 조건을 함께 쓰는 혼합 규칙은 두 사실을 한 ABox generation 안에서 결합한다. 따라서 혼합 규칙을 새로 계산할 때만 `PortfolioWorld`에 실행용 시장 사실 read mirror가 존재하고, `MarketWorld`는 공유·보존되는 기준 원본이다. 시장 전용 규칙은 정확한 shared head가 있으면 계정 세계에서 다시 실행하지 않는다. 동일한 전체 입력으로 이미 완료한 계정 추론은 이전 TypeDB InferenceBox를 재생하므로 ABox도 다시 쓰지 않는다. read mirror를 완전히 제거하려면 혼합 규칙을 `공유 시장 전제`와 `계정 오버레이 판정`의 두 schema function으로 분리해야 하며, 이 분리를 거치지 않고 사실을 삭제하는 것은 허용하지 않는다.
+- `RuleBox`: 규칙 정의는 전역으로 한 번만 배포하지만, TypeDB direct TypeQL rule 실행은 반드시 `PortfolioWorld.worldId`를 인자로 받는다. 계정이나 세계가 지정되지 않은 RuleBox 실행은 차단한다. 공유 `MarketWorld`는 직접 투자 판단을 수행하는 대상이 아니므로 그 세계에서 InferenceBox를 만들 수 없다.
+- 현재 native RuleBox 가운데 시장 조건과 계정 조건을 함께 쓰는 혼합 규칙은 두 사실을 한 ABox generation 안에서 결합한다. 따라서 혼합 규칙을 새로 계산할 때만 `PortfolioWorld`에 실행용 시장 사실 read mirror가 존재하고, `MarketWorld`는 공유·보존되는 기준 원본이다. 시장 전용 규칙은 정확한 shared head가 있으면 계정 세계에서 다시 실행하지 않는다. 동일한 전체 입력으로 이미 완료한 계정 추론은 이전 TypeDB InferenceBox를 재생하므로 ABox도 다시 쓰지 않는다. read mirror를 완전히 제거하려면 혼합 규칙을 `공유 시장 전제`와 `계정 오버레이 판정`의 두 direct TypeQL rule으로 분리해야 하며, 이 분리를 거치지 않고 사실을 삭제하는 것은 허용하지 않는다.
 
 ### Shared Instrument Inference fan-out
 
@@ -101,7 +101,7 @@ RuleBox 조건은 선택적으로 `hypothesisScope`를 `market`, `account`, `mix
 ## Runtime Flow
 
 1. Toss 계좌, 시장 데이터, 외부 API 데이터를 `Position`, `PortfolioSummary`, `externalSignals`로 정규화한다.
-2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, TypeDB schema function rule materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 read model formatting helper로만 사용하며 추론을 실행하지 않는다.
+2. `infrastructure/ontology_projection.py`가 종목별 ABox fact와 부족 데이터를 TypeDB에 저장하고, 직접 TypeQL 규칙의 materialization 결과를 InferenceBox로 읽어 운영 판단에 사용한다. `domain/ontology_relation_reasoning.py`는 프롬프트 조립과 read model formatting helper로만 사용하며 추론을 실행하지 않는다.
 3. `DecisionItem.decision`, `reviewLevel`, `dataState`, `changeState`, `conflictState`, `validationState`, `decisionBasis`는 관계 규칙 결과에서 나온다. `decisionBasis`는 `ontologyRelationRules`다.
 4. 과거 점수 기반 데이터가 남아 있으면 읽기 경계에서 범주형 상태로만 변환하며, 새 판단과 메시지에는 다시 저장하거나 사용하지 않는다.
 5. `domain/ontology.py`가 TBox/ABox 그래프와 `OntologyOpinion`을 만든다. 이때 `Strategy`, `InvestmentThesis`, `Observation`, `Risk`, `Insight`, `NotificationDispatch`까지 모두 ABox 노드로 만든다.
@@ -112,9 +112,9 @@ RuleBox 조건은 선택적으로 `hypothesisScope`를 `market`, `account`, `mix
 
 알림은 투자 이벤트 타입별 폴링으로 직접 발송하지 않는다. 기존 `modelBuy`, `holdingTiming`, `externalDartDisclosure` 같은 이벤트는 `investmentInsight.metadata.sourceAlertEvents`의 근거 신호로 남고, 최종 발송은 `Insight -> DISPATCHED_BY -> NotificationDispatch(investmentInsight)` 관계가 담당한다.
 
-## TypeDB Schema Function Rule And InferenceBox
+## TypeDB Direct TypeQL Rule And InferenceBox
 
-운영 판단의 기준은 TypeDB에 저장된 ABox와 TypeDB schema function materialization 결과다. TypeDB 3에서는 예전 TypeDB 2의 `define rule` 대신 schema `fun`이 rule-equivalent 추론 단위다. Python 공식, 템플릿 조건, 알림 임계값은 투자 의미를 직접 만들지 않는다.
+운영 판단의 기준은 TypeDB에 저장된 ABox와 직접 TypeQL 규칙 실행 결과다. RuleBox는 감사 가능한 의미·조건 계약이고, 런타임은 선택된 규칙을 활성 Manifest와 세계에 바인딩한 TypeQL 조회로 실행한 뒤 InferenceBox를 materialize한다. 생성 함수나 별도 컴파일 단계는 없다. Python 공식, 템플릿 조건, 알림 임계값은 투자 의미를 직접 만들지 않는다.
 
 운영 경로는 다음 경계를 강제한다. Python의 ABox projection은 TypeDB에 활성화된 규칙이 참조하는 관계 타입만 전달하며 조건값이나 임계값을 미리 판정하지 않는다. 모든 파생 관계는 TypeDB RuleBox 정의에 `decisionStage`를 명시해야 하고, 이 값이 없으면 해당 관계는 설명 자료로만 남아 투자 판단을 차단한다. Python action label fallback과 별도 Psychology Shadow 판단 경로는 사용하지 않는다.
 
@@ -122,7 +122,7 @@ RuleBox 조건은 선택적으로 `hypothesisScope`를 `market`, `account`, `mix
 
 1. `portfolio_ontology_builder.py`가 계좌, 보유/관심 종목, 가격, 이동평균, 수급, 투자자별 매수·매도, 뉴스, 공시, 거시, 투자 성향, 데이터 품질을 ABox fact로 만든다.
 2. `typedb_ontology.py`가 ABox를 TypeDB에 저장한다.
-3. RuleBox semantic profile은 TypeDB schema function으로 컴파일된다. 각 function은 TypeDB ABox를 직접 조회하며, 필수 조건, 후보 조건 중 N개 이상, 부정 조건을 TypeQL 안에서 처리한다.
+3. `typedb_ontology.py`는 선택된 RuleBox profile을 직접 TypeQL 조회로 만들고 TypeDB ABox에 실행한다. 필수 조건, 후보 조건 중 N개 이상, 부정 조건은 TypeQL 안에서 처리한다.
 4. 성립한 규칙은 InferenceBox 노드와 관계로 저장된다. 각 결과에는 `sourceRuleId`, `nativeRuleId`, `semanticRuleId`, `reasoningMode`, `materializationSource`, `matchedConditions`, `reviewLevel`, `dataState`, `evidenceRole`, `conflictState`, `validationState`, `sourceEvidenceIds`가 남는다.
 5. `ontology_inference_context.py`가 최신 generation의 InferenceBox만 읽어 투자 판단 후보, 근거, 반대 근거, 부족 데이터, AI 질문을 만든다.
 6. AI는 이 컨텍스트를 받아 최종 의견을 쓰고, 시스템은 없는 데이터 생성 여부와 규칙 충돌 여부를 검증한 뒤 알림 메시지에 넣는다.
@@ -135,7 +135,7 @@ ABox의 기간 경로에는 `HAS_TEMPORAL_WINDOW`, `WINDOW_CONTAINS_OBSERVATION`
 
 예측 모델 제어 영역은 원시 기간·가격·수급·회사·사건 속성을 한 번 색인해 각 예측 규칙의 시장 조건을 평가한다. 조건이 성립하면 모델 릴리스, 원본 특징 스냅샷, 표본 수, 커버리지, 신선도, 검증 상태, 정확한 `hypothesisContractId`를 가진 `ModelHypothesisEvidence`를 ABox에 넣는다. 오래되거나 표본이 부족한 관측은 해당 계약을 판단 적격으로 만들 수 없고, 수급 변화 계약은 서로 다른 실제 수급 관측이 필요한 원래 조건을 그대로 지킨다.
 
-TypeDB schema function은 이 정확한 모델 근거와 계정의 보유·손익·성향·한도·실행 가능성·자료 품질을 결합해 `DERIVES_TREND_EPISODE`, `HAS_TREND_TRANSITION`, `HAS_INFERRED_RISK`, `HAS_INFERRED_SUPPORT`, `BLOCKS_VALIDATION_OF` 같은 InferenceBox 관계를 만든다. 예측 임계값은 감사 가능한 원본 RuleBox 계약에 있고, 운영 TypeDB 규칙은 계정 조건과 정확한 모델 계약 참조만 가진다. 75개 예측 규칙은 6개 운영 모델군으로 전환됐으며, 정책·품질·실행·알림 규칙은 TypeDB에 남는다. 모델 근거만으로 매수·매도 행동을 만들 수는 없다.
+TypeDB direct TypeQL rule은 이 정확한 모델 근거와 계정의 보유·손익·성향·한도·실행 가능성·자료 품질을 결합해 `DERIVES_TREND_EPISODE`, `HAS_TREND_TRANSITION`, `HAS_INFERRED_RISK`, `HAS_INFERRED_SUPPORT`, `BLOCKS_VALIDATION_OF` 같은 InferenceBox 관계를 만든다. 예측 임계값은 감사 가능한 원본 RuleBox 계약에 있고, 운영 TypeDB 규칙은 계정 조건과 정확한 모델 계약 참조만 가진다. 75개 예측 규칙은 6개 운영 모델군으로 전환됐으며, 정책·품질·실행·알림 규칙은 TypeDB에 남는다. 모델 근거만으로 매수·매도 행동을 만들 수는 없다.
 
 우선적으로 강화한 추론 관계 축은 다음 5개다.
 
@@ -161,13 +161,13 @@ TypeDB는 먼저 규칙 성립 여부와 InferenceBox 관계를 만들고, `onto
 - `reasoningMode=typedb-native-rule-materialized`: 정상. TypeDB ABox에서 native rule match가 실행되고 InferenceBox가 저장됐다.
 - `materializationSource=typedb-abox-native-rule`: 정상. TypeDB ABox 기반 materialization 결과다.
 - `pythonCompatibilityReasonerUsed=false`: 정상 운영 경로다.
-- `typedbSchemaFunctionUsed=true`: 정상. RuleBox profile이 TypeDB schema function으로 동기화되고 해당 function query가 실행됐다.
-- `deferred-schema-function-provisioning`: 재시작 뒤 TypeDB schema function을 작은 후보 규칙 배치로 배포 중이다. 이전 정렬 세대를 유지하고 재시도하므로 부분 RuleBox 결과를 투자 판단이나 알림으로 사용하면 안 된다.
+- `typedbRuleExecutionStrategy=direct-typeql`: 정상. 선택된 RuleBox profile을 활성 ABox Manifest에 직접 조회했다.
+- `ruleExecutionReadiness.status=ready`: 정상. TypeDB 드라이버·RuleBox·ABox가 직접 조회 가능한 상태다. 별도 컴파일 준비 상태는 존재하지 않는다.
 - `typedbNativeRuleSkippedCount=0`: 정상. 지원되지 않아 건너뛴 active rule이 없다.
-- `pythonCompatibilityReasonerUsed=true`: 비정상. 운영 투자 판단 경로에서는 사용하면 안 된다. TypeDB schema function sync/query 실패는 투자 판단을 차단하고 진단 알림으로 다뤄야 한다.
+- `pythonCompatibilityReasonerUsed=true`: 비정상. 운영 투자 판단 경로에서는 사용하면 안 된다. 직접 TypeQL 조회 실패는 투자 판단을 차단하고 진단 알림으로 다뤄야 한다.
 - `relations=0`, `traces=0`: 보유/관심 데이터가 있는데도 이 값이면 TypeDB 저장, native rule profile, 조건 매칭, worker 실행 상태를 순서대로 확인한다.
 
-TypeDB schema function rule은 TypeDB schema의 class/relation 정의와 다르다. TBox는 개념과 가능한 관계를 정의하고, ABox는 현재 사실을 담는다. RuleBox profile에서 생성된 schema function은 이 ABox 사실이 어떤 조합일 때 `손실 방어`, `회복 확인`, `추가매수 보류`, `조건부 추가매수 검토`, `뉴스 리스크 대응` 같은 InferenceBox 관계로 이어지는지 정의한다.
+직접 TypeQL 규칙은 TypeDB schema의 class/relation 정의와 다르다. TBox는 개념과 가능한 관계를 정의하고, ABox는 현재 사실을 담는다. RuleBox profile은 이 ABox 사실이 어떤 조합일 때 `손실 방어`, `회복 확인`, `추가매수 보류`, `조건부 추가매수 검토`, `뉴스 리스크 대응` 같은 InferenceBox 관계로 이어지는지 정의한다.
 
 ## Projection Boundary
 
@@ -225,7 +225,7 @@ Projection은 다음 용도로만 사용한다.
 
 ## Ontology Lab
 
-실험 환경은 운영 TypeDB schema function rule과 TypeDB를 직접 바꾸지 않는 후보 검증 단계다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프와 규칙 구조를 검증한다. 파생 관계, 추론 trace, 자료·검증 상태 변화는 후보가 승인되어 TypeDB schema function으로 동기화되고 `run_rulebox` materialization을 실행한 뒤에만 확인한다. API/화면 이름에 남아 있는 `RuleBox`는 호환 이름이며, 운영 의미는 TypeDB schema function rule이다.
+실험 환경은 운영 RuleBox와 TypeDB를 직접 바꾸지 않는 후보 검증 단계다. 후보 규칙을 `candidateRules`로 저장하고, 최근 모니터 스냅샷에서 만든 ABox facts-only 그래프와 규칙 구조를 검증한다. 파생 관계, 추론 trace, 자료·검증 상태 변화는 후보가 승인되어 RuleBox에 반영되고 `run_rulebox` 직접 TypeQL materialization을 실행한 뒤에만 확인한다.
 
 CLI:
 
@@ -262,7 +262,7 @@ API:
 - `POST /api/ontology/experiments/{id}/activate`
 - `POST /api/ontology/experiments/{id}/pause`
 
-샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 관계 규칙을 RuleBox semantic profile에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 TypeDB schema function sync와 InferenceBox materialization을 다시 실행한다. 런타임 실험과 실행 이력은 MySQL의 `ontology_experiments`, `ontology_experiment_runs`에 저장한다. 기존 `data/ontology-lab.json`은 MySQL 테이블이 비어 있을 때 한 번만 이관하는 레거시 입력으로만 사용한다.
+샌드박스 실행 결과의 `sandbox.mutatedOperationalRuleBox`와 `sandbox.mutatedTypeDB`는 항상 `false`여야 한다. 운영 반영은 완료된 샌드박스 결과, 그래프 실행 이력, `proposedOntologyChanges`가 있는 실험에서만 `apply` 단계로 수행한다. `apply`는 후보 관계 규칙을 RuleBox semantic profile에 저장하고, 제안된 TBox class/relation/decision stage를 그래프 저장소에 반영한 뒤 직접 TypeQL 조회와 InferenceBox materialization을 다시 실행한다. 런타임 실험과 실행 이력은 MySQL의 `ontology_experiments`, `ontology_experiment_runs`에 저장한다. 기존 `data/ontology-lab.json`은 MySQL 테이블이 비어 있을 때 한 번만 이관하는 레거시 입력으로만 사용한다.
 
 AI가 만든 신규 가설은 `hypothesis_development_cases`에서 제안 계보를 유지한다. 인과 구조, 근거, 중복, TypeDB 현재 ABox 재생, 과거 자료 범위, 제안 이후 홀드아웃 관측, 반증 가능성, 정책 안전 게이트를 자동으로 통과해야 `approval-required`가 된다. 이 단계까지 후보 규칙은 `enabled=false`이고 투자 판단에 사용되지 않는다. 운영 RuleBox 배포는 검증 탭의 명시적 승인으로만 실행하며, 배포 직후 TypeDB 추론에 실패하면 기준선 RuleBox 버전을 자동 복원한다.
 
@@ -272,15 +272,15 @@ AI가 만든 신규 가설은 `hypothesis_development_cases`에서 제안 계보
 
 관계 규칙과 프롬프트는 런타임 설정으로 관리한다.
 
-- `ontologyRelationRules`: `ruleId | label | condition | relationType | signalType | promptHint` 형식의 관계 규칙 목록. 운영에서는 RuleBox semantic profile로 저장된 뒤 TypeDB schema function으로 컴파일되어 InferenceBox materialization에 쓰인다.
+- `ontologyRelationRules`: `ruleId | label | condition | relationType | signalType | promptHint` 형식의 관계 규칙 목록. 운영에서는 RuleBox semantic profile로 저장되고 직접 TypeQL 조회와 InferenceBox materialization에 쓰인다.
 - `aiPromptTemplates`: 투자 인사이트와 근거 신호별 AI 의견/질문 템플릿. 실제 투자 발송 타입은 `investmentInsight`이며, `modelBuy`, `holdingTiming`, `monitorTrendChange`, `externalDartDisclosure` 같은 타입은 인사이트 합성에 들어가는 근거 신호 템플릿으로 유지한다. 사용자가 일부만 수정해도 나머지는 기본 템플릿을 유지한다.
 - `aiPromptPolicy`: 제공 데이터만 사용, 부족 데이터 표시, 투자 판단과 발송 우선도 분리 같은 공통 가드레일.
 
-설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이다. 새 투자 의미를 추가할 때는 TBox/ABox fact, RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, AI prompt contract, 알림 문구를 함께 갱신해야 한다.
+설정의 관계 규칙과 프롬프트는 UI, 메시지, AI 리뷰 정보의 운영 계약이다. 새 투자 의미를 추가할 때는 TBox/ABox fact, RuleBox semantic profile, TypeDB direct TypeQL rule materialization, InferenceBox payload, AI prompt contract, 알림 문구를 함께 갱신해야 한다.
 
 ## Company Valuation Snapshots
 
-시세 기반 `investmentInsight`는 공용 `CompanyKnowledge`에서 만든 `ValuationSnapshot`을 함께 읽는다. 스냅샷은 PER, 선행 PER, PBR, PEG, EPS, ROE, 배당수익률 같은 회사 평가 지표와 `ReportingBasis`, `ValuationDataQuality`, 원천·기준일을 연결한다. 회사·재무 ABox는 계정과 무관한 KnowledgeWorld로 한 번만 저장하며, 시세 이벤트는 해당 종목의 현재 MarketWorld와 기존 회사 스냅샷을 결합해 TypeDB schema function rule을 실행한다.
+시세 기반 `investmentInsight`는 공용 `CompanyKnowledge`에서 만든 `ValuationSnapshot`을 함께 읽는다. 스냅샷은 PER, 선행 PER, PBR, PEG, EPS, ROE, 배당수익률 같은 회사 평가 지표와 `ReportingBasis`, `ValuationDataQuality`, 원천·기준일을 연결한다. 회사·재무 ABox는 계정과 무관한 KnowledgeWorld로 한 번만 저장하며, 시세 이벤트는 해당 종목의 현재 MarketWorld와 기존 회사 스냅샷을 결합해 직접 TypeQL 규칙을 실행한다.
 
 알림의 `회사 가치 참고` 숫자는 AI가 생성하지 않고 원본 ABox 사실을 결정론적으로 표시한다. 회사 밸류에이션 규칙이 성립하지 않으면 `decisionRole=reference`로 표시하여 매수·매도 판단에서 제외한다. `quality_valuation`, `valuation_stretch`, `value_trap`, `unsupported_rerating`, `forward_expectation` 계열 규칙이 실제 InferenceBox에 성립한 경우에만 `decisionRole=decision-evidence`로 승격하고, AI 입력에 성립 규칙 ID를 함께 보낸다.
 
@@ -375,7 +375,7 @@ AI에는 다음 데이터를 함께 전달한다.
 
 - 새 TBox 클래스, 관계 타입, 바운디드 컨텍스트 규칙은 `domain/ontology_tbox.py`에 추가한다.
 - 새 ABox 인스턴스 생성은 `domain/ontology.py`에 추가하고, `tboxClass` 또는 `tboxClasses`를 지정해 `boundedContext`가 자동 부여되게 한다.
-- 새 런타임 판단은 먼저 RuleBox semantic profile, TypeDB schema function materialization, InferenceBox payload, 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이나 실험 추론기가 아니라 프롬프트 조립과 read model formatting 보조 로직으로만 사용한다.
+- 새 런타임 판단은 먼저 RuleBox semantic profile, TypeDB direct TypeQL rule materialization, InferenceBox payload, 온톨로지 relation catalog에 추가한다. Python `domain/ontology_relation_reasoning.py`는 운영 fallback이나 실험 추론기가 아니라 프롬프트 조립과 read model formatting 보조 로직으로만 사용한다.
 - 새 AI 설명은 `aiPromptTemplates`와 `aiPromptPolicy`의 계약을 함께 갱신한다.
 - 외부 뉴스, 공시, 매크로 데이터는 먼저 `ExternalSignal` 또는 구체 클래스(`NewsEvent`, `DisclosureEvent`, `MacroIndicator`)의 ABox 관측값으로 만들고, 필요하면 `Evidence`, `Belief`, `Insight`로 파생한다.
 - 새 관계가 AI 의견을 바꿔야 하면 relation properties에 `polarity`, `opinionImpact`, `riskImpact`, `supportImpact`, `aiInfluenceLabel`을 명시한다.

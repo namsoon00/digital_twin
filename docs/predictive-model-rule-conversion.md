@@ -116,7 +116,7 @@ when an older persisted catalog does not contain the routing metadata.
 
 ## Performance and Complexity
 
-The change reduces TypeDB predicate volume, schema-function shape, and repeated
+The change reduces TypeDB predicate volume, direct-query complexity, and repeated
 account work. The model pass builds one entity/relation index, compiles each
 rule's market-owned conditions once, and evaluates all affected contracts over
 those immutable structures. Shared-world scoring prevents one market event

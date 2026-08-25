@@ -93,7 +93,6 @@ from ..application.reasoning_shadow_service import (
 from ..application.ontology_reasoning_proof_service import OntologyReasoningProofService
 from ..application.ontology_maintenance_service import OntologyMaintenanceRunner
 from ..application.ontology_inference_detail_service import OntologyInferenceDetailRunner
-from ..application.ontology_rulebox_prewarm_service import OntologyRuleboxPrewarmRunner
 from ..application.ontology_world_projection_service import OntologyWorldProjectionRunner
 from ..application.ontology_portfolio_rebuild_service import (
     OntologyPortfolioRebuildRunner,
@@ -1362,43 +1361,6 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
     )
 
 
-def build_ontology_rulebox_prewarm_runner(
-    settings=None,
-    candidate_mode: bool = False,
-) -> OntologyRuleboxPrewarmRunner:
-    """Build the compiler worker for the active or isolated candidate store.
-
-    A blue-green candidate has its own TypeDB process and data directory. It
-    must not publish compiler activity into the production MySQL hand-off or
-    inspect the live reasoning queue, because neither resource is shared with
-    the candidate schema writer.
-    """
-    configured_settings = settings or runtime_settings()
-    store_settings = dict(configured_settings)
-    store_settings["_skipOperationalHistoryRetention"] = "1"
-    store_settings["_skipOperationalSchemaBootstrap"] = "1"
-    storage_guard = None if candidate_mode else typedb_capacity_guard(
-        configured_settings,
-        "rulebox-prewarm",
-        stores.operational_storage_capacity_state_store(store_settings),
-    )
-    return OntologyRuleboxPrewarmRunner(
-        ontology_repository=ontology_repository_from_settings(configured_settings),
-        settings=configured_settings,
-        reasoning_queue_probe=(
-            (lambda: {"status": "candidate-isolated", "effectivePendingCount": 0})
-            if candidate_mode
-            else build_ontology_reasoning_queue_probe(configured_settings)
-        ),
-        prewarm_state_store=(
-            None
-            if candidate_mode
-            else stores.ontology_rulebox_prewarm_state_store(store_settings)
-        ),
-        storage_guard=storage_guard,
-    )
-
-
 def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunner:
     """Build the isolated, low-priority scoped ABox retention worker."""
 
@@ -1507,9 +1469,6 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
     ontology_repository = ontology_repository_from_settings(configured_settings)
     cursor_store = stores.ontology_reasoning_cursor_store(reasoning_store_settings)
     maintenance_state_store = stores.ontology_maintenance_state_store(
-        reasoning_store_settings,
-    )
-    rulebox_prewarm_state_store = stores.ontology_rulebox_prewarm_state_store(
         reasoning_store_settings,
     )
     snapshot_readiness_source = LatestMonitorSnapshotReasoningSource(
@@ -1744,22 +1703,7 @@ def build_ontology_reasoning_runner(settings=None, event_publisher=None) -> Onto
         projection_lease_recovery=projection_lease_recovery,
         projection_coordinator_lease_recovery=projection_coordinator_lease_recovery,
         snapshot_readiness_probe=source_snapshot_preflight,
-        rulebox_prewarm_probe=(
-            getattr(ontology_repository, "schema_function_prewarm_status")
-            if callable(getattr(ontology_repository, "schema_function_prewarm_status", None))
-            else None
-        ),
         operational_settings_refresher=refresh_reasoning_monitor_settings,
-        rulebox_prewarm_activity_probe=(
-            getattr(rulebox_prewarm_state_store, "load")
-            if callable(getattr(rulebox_prewarm_state_store, "load", None))
-            else None
-        ),
-        rulebox_prewarm_state_writer=(
-            getattr(rulebox_prewarm_state_store, "replace")
-            if callable(getattr(rulebox_prewarm_state_store, "replace", None))
-            else None
-        ),
         maintenance_yield_state_probe=(
             getattr(maintenance_state_store, "load")
             if callable(getattr(maintenance_state_store, "load", None))
@@ -2148,33 +2092,6 @@ def build_v2_reasoning_engine(
         or candidate_rulebox.get("ruleboxRulesHash")
         or payload_hash(candidate_rulebox.get("rules") or [])
     )
-    prewarm_status_reader = getattr(repository, "schema_function_prewarm_status", None)
-    schema_function_readiness = {}
-    if callable(prewarm_status_reader):
-        try:
-            schema_function_readiness = dict(prewarm_status_reader() or {})
-        except Exception as error:  # noqa: BLE001 - startup must fail closed without a fallback path.
-            schema_function_readiness = {
-                "status": "error",
-                "functionsReady": False,
-                "reason": str(error)[:220],
-            }
-    direct_fallback_reader = getattr(
-        repository,
-        "schema_function_direct_query_fallback_enabled",
-        None,
-    )
-    direct_typeql_fallback_ready = bool(
-        callable(direct_fallback_reader) and direct_fallback_reader()
-    )
-    if (
-        schema_function_readiness
-        and not bool(schema_function_readiness.get("functionsReady"))
-        and not direct_typeql_fallback_ready
-    ):
-        raise RuntimeError(
-            "The independent V2 TypeDB functions are not ready and its direct TypeQL fallback is disabled"
-        )
     release_identity = reasoning_release_identity(descriptor, rulebox_fingerprint)
     candidate_settings["_reasoningEngineReleaseFingerprint"] = str(
         release_identity.get("releaseFingerprint") or ""
@@ -2273,10 +2190,9 @@ def build_v2_reasoning_engine(
                 or ""
             ),
         },
-        "schemaFunctionReadiness": {
-            "status": str(schema_function_readiness.get("status") or "unknown"),
-            "functionsReady": bool(schema_function_readiness.get("functionsReady")),
-            "directTypeqlFallbackReady": direct_typeql_fallback_ready,
+        "ruleExecutionReadiness": {
+            "status": "ready",
+            "mode": "typedb-direct-typeql",
         },
     })
     registry_store.update_health(descriptor.deployment_id, existing_health)

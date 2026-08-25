@@ -42,6 +42,20 @@ class NotificationRenderingService:
 
     def render(self, job: NotificationJob) -> str:
         self.apply_send_time_context(job)
+        if bool((job.context or {}).get("notificationReplayPreserveOriginal")):
+            rendered = str(job.text or "").strip()
+            context = dict(job.context or {})
+            context["notificationPresentationAudit"] = {
+                "version": "notification-replay-preserved-v1",
+                "detailLevel": "archived-original",
+                "renderedBytes": len(rendered.encode("utf-8")),
+                "renderedSha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                "replaySourceJobId": str(context.get("replaySourceJobId") or ""),
+                "originalBodyPreserved": True,
+            }
+            job.context = context
+            job.text = rendered
+            return rendered
         if self.context_enricher:
             self.context_enricher(job)
         self.apply_investment_presentation_contract(job)
@@ -97,7 +111,24 @@ class NotificationRenderingService:
         context = dict(job.context or {})
         context.setdefault("messageType", INVESTMENT_INSIGHT)
         context.setdefault("notificationDetailLevel", "concise")
+        narrative_payload = (
+            dict(context.get("notificationNarrativeBrief") or {})
+            if isinstance(context.get("notificationNarrativeBrief"), dict)
+            else {}
+        )
+        publication = (
+            dict(context.get("notificationNarrativePublication") or {})
+            if isinstance(context.get("notificationNarrativePublication"), dict)
+            else {}
+        )
+        stored_contract = bool(
+            narrative_payload.get("version")
+            and publication.get("version") == "investment-narrative-publication-v1"
+            and isinstance(narrative_payload.get("claims"), list)
+        )
         validated = context.get("notificationAiValidatedResponse")
+        if stored_contract and not isinstance(validated, dict):
+            validated = context.get("notificationInferenceResponse") or context.get("validatedDecisionResponse")
         if isinstance(validated, dict) and validated:
             response = NotificationAIValidatedResponse.from_dict(validated)
         else:
@@ -124,11 +155,19 @@ class NotificationRenderingService:
                 response.hypothesis_comparison_state = "not-required"
                 response.hypothesis_selection_source = "not-required"
                 response.decision_abstention = {}
-        narrative = build_investment_narrative_brief(context, response)
-        apply_narrative_brief_to_response(narrative, response)
-        narrative_payload = narrative.to_dict()
-        narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
-        writer = dict(narrative.writer_provenance)
+        if stored_contract:
+            writer = dict(
+                context.get("notificationWriterProvenance")
+                or narrative_payload.get("writerProvenance")
+                or {}
+            )
+        else:
+            narrative = build_investment_narrative_brief(context, response)
+            apply_narrative_brief_to_response(narrative, response)
+            narrative_payload = narrative.to_dict()
+            narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
+            publication = narrative.publication.to_dict()
+            writer = dict(narrative.writer_provenance)
         writer_kind = str(writer.get("writerKind") or "deterministic")
         mode = (
             "typedb-context-observation"
@@ -138,7 +177,7 @@ class NotificationRenderingService:
         context.update({
             "validatedDecisionResponse": response.to_dict(),
             "notificationNarrativeBrief": narrative_payload,
-            "notificationNarrativePublication": narrative.publication.to_dict(),
+            "notificationNarrativePublication": publication,
             "notificationWriterProvenance": writer,
             "notificationClaimValidation": dict(response.claim_validation or {}),
         })

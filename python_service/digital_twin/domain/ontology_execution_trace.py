@@ -435,7 +435,7 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
                 key: item.get(key)
                 for key in [
                     "nativeRuleId",
-                    "schemaFunctionName",
+                    "typeqlExecutionMode",
                     "rowCount",
                     "queryComplexity",
                     "anyConditionQueryCount",

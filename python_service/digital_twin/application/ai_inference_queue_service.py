@@ -99,6 +99,56 @@ def attach_execution_writer_provenance(
             context[key] = response
 
 
+def sync_execution_publication_audit(
+    context: Dict[str, object],
+    execution_audit: Dict[str, object],
+    response,
+    *,
+    fallback_reason: str = "",
+    narrative_only: bool = False,
+    initial_contract_error: str = "",
+    contract_error: str = "",
+) -> None:
+    """Bind the execution audit to the one canonical publication decision."""
+
+    publication = dict(context.get("notificationNarrativePublication") or {})
+    ai_claim_count = max(0, int(publication.get("aiClaimCount") or 0))
+    publication_fallback = bool(publication.get("fallbackUsed"))
+    if fallback_reason:
+        adoption_state = "typedb-fallback"
+    elif ai_claim_count <= 0 or publication_fallback:
+        adoption_state = "executed-not-adopted"
+    elif narrative_only:
+        adoption_state = "narrative-adopted-action-not-applicable"
+    else:
+        adoption_state = "decision-and-narrative-adopted"
+    validation = dict(getattr(response, "claim_validation", {}) or {})
+    execution_audit.update({
+        "adoptionState": adoption_state,
+        "actionAuthority": str(
+            publication.get("actionAuthority")
+            or ("typedb" if narrative_only else "ai-judgement")
+        ),
+        # This is intentionally an exact copy. Validation counters belong in
+        # claimValidationSummary and must never create a second publication state.
+        "claimPublication": publication,
+        "claimValidationSummary": {
+            "status": str(validation.get("status") or "unavailable"),
+            "verifiedClaimCount": max(0, int(validation.get("verifiedClaimCount") or 0)),
+            "rejectedClaimCount": max(0, int(validation.get("rejectedClaimCount") or 0)),
+            "sections": sorted({
+                str(item.get("section") or "")
+                for item in validation.get("validations") or []
+                if isinstance(item, dict)
+                and str(item.get("status") or "") == "verified"
+                and str(item.get("section") or "")
+            }),
+            "initialContractError": str(initial_contract_error or ""),
+            "contractError": str(contract_error or ""),
+        },
+    })
+
+
 def typedb_inference_fallback_response(context: Dict[str, object], reason: object):
     """Build a customer-safe TypeDB-only alert when the optional AI stage fails."""
 
@@ -488,7 +538,6 @@ class AIInferenceQueueRunner:
         )
         action_plan = None if narrative_only else self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
-        publication = dict(enriched.get("notificationNarrativePublication") or {})
         continuity_packet = (
             dict(context.get("decisionContinuityPacket") or {})
             if isinstance(context.get("decisionContinuityPacket"), dict)
@@ -503,14 +552,6 @@ class AIInferenceQueueRunner:
             "model": request.model,
             "reasoningEffort": request.reasoning_effort,
             "reviewMode": request.review_mode,
-            "adoptionState": (
-                "narrative-adopted-action-not-applicable"
-                if narrative_only and publication.get("status") == "published"
-                else "typedb-fallback"
-                if fallback_reason
-                else "decision-and-narrative-adopted"
-            ),
-            "actionAuthority": str(publication.get("actionAuthority") or ("typedb" if narrative_only else "ai-judgement")),
             "promptHash": prompt_hash,
             "promptBytes": prompt_bytes,
             "prompt": executed_prompt,
@@ -557,27 +598,27 @@ class AIInferenceQueueRunner:
                 "finalState": str(response.hypothesis_comparison_state or ""),
                 "selectedHypothesisId": str(response.selected_hypothesis_id or ""),
             },
-            "claimPublication": {
-                **publication,
-                "status": str(publication.get("status") or (response.claim_validation or {}).get("status") or "unavailable"),
-                "verifiedClaimCount": response.verified_claim_count,
-                "rejectedClaimCount": response.rejected_claim_count,
-                "sections": sorted(response.verified_claim_sections),
-                "initialContractError": (
-                    judgement_outcome.initial_publication_error
-                    if judgement_outcome is not None
-                    else ""
-                ),
-                "contractError": (
-                    judgement_outcome.final_publication_error
-                    if judgement_outcome is not None
-                    else ""
-                ),
-            },
             "ontologyDecisionQuality": dict(context.get("ontologyDecisionQuality") or {}),
             "ontologyQualityGate": dict(context.get("ontologyQualityGate") or {}),
             "latencyMs": latency_ms,
         }
+        sync_execution_publication_audit(
+            enriched,
+            execution_audit,
+            response,
+            fallback_reason=fallback_reason,
+            narrative_only=narrative_only,
+            initial_contract_error=(
+                judgement_outcome.initial_publication_error
+                if judgement_outcome is not None
+                else ""
+            ),
+            contract_error=(
+                judgement_outcome.final_publication_error
+                if judgement_outcome is not None
+                else ""
+            ),
+        )
         enriched["notificationAiExecutionAudit"] = execution_audit
         attach_execution_writer_provenance(enriched, execution_audit)
         result = AIInferenceResult.create(
@@ -624,6 +665,13 @@ class AIInferenceQueueRunner:
                         "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
                     },
                 })
+                sync_execution_publication_audit(
+                    enriched,
+                    execution_audit,
+                    response,
+                    fallback_reason=fallback_reason,
+                    narrative_only=False,
+                )
                 enriched["notificationAiExecutionAudit"] = execution_audit
                 attach_execution_writer_provenance(enriched, execution_audit)
                 result = AIInferenceResult.create(
@@ -739,6 +787,13 @@ class AIInferenceQueueRunner:
             },
             "latencyMs": 0,
         }
+        sync_execution_publication_audit(
+            enriched,
+            enriched["notificationAiExecutionAudit"],
+            response,
+            fallback_reason=fallback_reason,
+            narrative_only=request.review_mode == "context-narrative",
+        )
         attach_execution_writer_provenance(
             enriched,
             enriched["notificationAiExecutionAudit"],

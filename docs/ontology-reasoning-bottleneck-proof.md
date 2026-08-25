@@ -12,7 +12,7 @@ The command combines two independent evidence sources:
 1. Recent completed production projections from MySQL, including top-level
    ABox/native timings, native sub-stage timings, and per-rule query traces.
 2. A live read-only replay against the currently active RuleBox and ABox.
-   It executes schema-function or direct TypeQL reads, matched-evidence reads, and in-memory
+   It executes direct TypeQL reads, matched-evidence reads, and in-memory
    InferenceBox graph construction. It does not sync functions, write an ABox
    or InferenceBox, activate a generation, or run retention.
 

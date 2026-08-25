@@ -27,16 +27,16 @@ Operational flow:
 1. Source adapters collect Toss, KIS, market-data, news, disclosure, macro, FX, account, and runtime-setting facts.
 2. Application services persist those facts in the operational DB or pass them through account snapshots.
 3. The ontology projection builds ABox facts from the current snapshot and stores them in TypeDB.
-4. TypeDB schema function rules read the TypeDB ABox and write generation-scoped InferenceBox output.
+4. TypeDB direct TypeQL rules read the TypeDB ABox and write generation-scoped InferenceBox output.
 5. Monitoring reads InferenceBox relation context and creates `investmentInsight` notification candidates.
 6. AI receives the graph context, writes a constrained opinion, and the system validates it before delivery.
 7. Notification workers apply cooldown, novelty, message-template, and transport policy.
 
 Important boundaries:
 
-- TBox vocabulary lives in domain ontology catalog modules. ABox facts come from current account and market state. InferenceBox is the materialized result of TypeDB schema function rules.
-- `typedb_ontology.py` owns TypeDB storage, RuleBox profile to schema function sync, function query execution, generation-scoped InferenceBox writes, retention pruning, and diagnostics metadata.
-- The old graph reasoner modules have been removed. `ontology_relation_reasoning.py` remains only as a prompt/read-model helper; runtime investment judgement must not fall back to Python inference. TypeDB schema function sync/query failure blocks investment judgement and should produce diagnostics with `pythonCompatibilityReasonerUsed=false`.
+- TBox vocabulary lives in domain ontology catalog modules. ABox facts come from current account and market state. InferenceBox is the materialized result of TypeDB direct TypeQL rules.
+- `typedb_ontology.py` owns TypeDB storage, RuleBox-to-TypeQL query planning and execution, generation-scoped InferenceBox writes, retention pruning, and diagnostics metadata.
+- The old graph reasoner modules have been removed. `ontology_relation_reasoning.py` remains only as a prompt/read-model helper; runtime investment judgement must not fall back to Python inference. Direct TypeQL query failure blocks investment judgement and should produce diagnostics with `pythonCompatibilityReasonerUsed=false`.
 - API and UI names may still contain `rulebox` for compatibility. Treat them as rule-profile management surfaces, not as a separate runtime reasoning engine.
 - If InferenceBox relation and trace counts are zero while there are holdings/watchlist facts, investment judgement should be blocked or downgraded to an operational diagnostics alert.
 
@@ -48,9 +48,9 @@ npm run python:ontology-reasoning:once
 npm run python:service:status
 ```
 
-Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialized`, `materializationSource=typedb-abox-native-rule`, `typedbSchemaFunctionUsed=true`, `typedbNativeRuleSkippedCount=0`, non-zero relation/trace counts for meaningful account data, and `pythonCompatibilityReasonerUsed=false`.
+Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialized`, `materializationSource=typedb-abox-native-rule`, `typedbRuleExecutionStrategy=direct-typeql`, `typedbNativeRuleSkippedCount=0`, non-zero relation/trace counts for meaningful account data, and `pythonCompatibilityReasonerUsed=false`.
 
-After a cold TypeDB restart, a seed can report `schemaFunctionSync.status=deferred` while the static TBox and RuleBox are already current. The first eligible native executions compile only their selected RuleBox functions in `TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE` groups (default `3`) with the separate `TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS` request limit (default `30`). A `deferred-schema-function-provisioning` result preserves the prior verified ABox/InferenceBox and retries; it must never publish a partial investment judgement.
+After a cold TypeDB restart, static TBox and RuleBox seeding must finish before workers start. Rule execution then uses direct TypeQL immediately; there is no function compilation or prewarm gate. An incomplete direct query preserves the prior verified ABox/InferenceBox and must never publish a partial investment judgement.
 
 ## DDD Boundaries
 
@@ -262,8 +262,6 @@ Configuration:
 - `EXTERNAL_DART_LOOKBACK_DAYS`: OpenDART disclosure lookback, default 14.
 - `EXTERNAL_DART_COMPANY_FUNDAMENTALS_ENABLED`: collect bounded official company overview, financial statement, and executive facts for the company KnowledgeWorld, default 1.
 - `EXTERNAL_DART_CORP_CODES`: ticker-to-corp-code mappings, for example `005930=00126380;000660=00164779`.
-- `ONTOLOGY_RULEBOX_PREWARM_ENABLED`: keep the dedicated TypeDB schema-function preparation worker enabled, especially after a clean database bootstrap or rotation, default 1.
-- `ONTOLOGY_RULEBOX_PREWARM_REQUIRE_READY_FOR_INFERENCE`: block live inference until every generated TypeDB function receipt is ready. The production default is 0 so bounded Direct TypeQL keeps alerts available while background compilation waits for an empty queue.
 
 Temporal ontology reasoning groups repeated monitor snapshots before RuleBox derives risk/support episodes. This prevents alerts from judging only the latest price point.
 

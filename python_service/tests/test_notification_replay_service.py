@@ -7,6 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.notification_replay_service import NotificationReplayService
+from digital_twin.application.notification.rendering import NotificationRenderingService
 from digital_twin.domain.notifications import NotificationJob, notification_debug_number
 
 
@@ -47,6 +48,7 @@ class FakeAccountRepository:
 class FakeRunner:
     def __init__(self):
         self.deliveries = []
+        self.render_calls = 0
 
     def apply_account_delivery_context(self, job, account):
         if account:
@@ -55,6 +57,7 @@ class FakeRunner:
             job.context = context
 
     def render(self, job):
+        self.render_calls += 1
         context = dict(job.context or {})
         context["rendered"] = True
         job.context = context
@@ -90,6 +93,8 @@ class NotificationReplayServiceTests(unittest.TestCase):
         self.assertEqual(result.status, "dry-run")
         self.assertEqual(result.source_job_id, source.job_id)
         self.assertIn("[재발송] 원본 알림 " + notification_debug_number(source.job_id), result.message)
+        self.assertTrue(result.message.endswith("원본 본문"))
+        self.assertNotIn("렌더링된 본문", result.message)
         self.assertEqual(result.message_type, "ontologyInferenceMissing")
 
     def test_replay_direct_delivers_and_records_replay_metadata(self):
@@ -114,6 +119,9 @@ class NotificationReplayServiceTests(unittest.TestCase):
         self.assertTrue(replay.context["notificationTestBypassPolicy"])
         self.assertEqual(replay.context["replaySourceJobId"], source.job_id)
         self.assertEqual(replay.context["deliveryProfile"], "unit")
+        self.assertTrue(replay.context["notificationReplayPreserveOriginal"])
+        self.assertEqual(0, runner.render_calls)
+        self.assertTrue(runner.deliveries[0][1].endswith("원본 본문"))
 
     def test_replay_queue_uses_new_job_without_dedupe_key(self):
         source = NotificationJob.create(
@@ -134,8 +142,29 @@ class NotificationReplayServiceTests(unittest.TestCase):
         self.assertNotEqual(replay.job_id, source.job_id)
         self.assertEqual(replay.dedupe_key, "")
         self.assertEqual(replay.context["notificationReplayMode"], "queue")
+        self.assertTrue(replay.context["notificationReplayPreserveOriginal"])
+
+    def test_queued_replay_renderer_preserves_the_archived_body(self):
+        source = NotificationJob.create(
+            "원본 AI 판단\n• 근거 전체",
+            account_id="main",
+            message_type="investmentInsight",
+            context={},
+        )
+        service, queue, _runner = self.service_with(source)
+        result = service.replay(source.job_id)
+        replay = next(job for job in queue.items if job.job_id == result.replay_job_id)
+        expected = replay.text
+        renderer = NotificationRenderingService(
+            template_renderer=lambda _job: (_ for _ in ()).throw(AssertionError("must not rerender")),
+        )
+
+        rendered = renderer.render(replay)
+
+        self.assertEqual(expected, rendered)
+        self.assertEqual(expected, replay.text)
+        self.assertTrue(replay.context["notificationPresentationAudit"]["originalBodyPreserved"])
 
 
 if __name__ == "__main__":
     unittest.main()
-

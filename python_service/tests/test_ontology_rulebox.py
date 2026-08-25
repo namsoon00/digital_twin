@@ -1326,26 +1326,12 @@ class OntologyRuleBoxTests(unittest.TestCase):
             def clear_inferencebox(self):
                 return {"configured": True, "status": "ok", "graphStore": "typedb", "clearedBox": "InferenceBox"}
 
-            def schema_function_prewarm_readiness(self, rules, world_id=""):
-                del world_id
-                rule_list = list(rules or [])
-                return {
-                    "configured": True,
-                    "status": "ok",
-                    "graphStore": "typedb",
-                    "syncedCount": len(rule_list),
-                    "syncedFunctionCount": len(rule_list),
-                    "skippedCount": 0,
-                    "failedCount": 0,
-                }
-
             def match_typedb_native_rules(self, rules, target_symbols=None, **_kwargs):
                 rule = list(rules or [])[0]
                 return {
                     "status": "ok",
                     "graphStore": "typedb",
                     "nativeQueryUsed": True,
-                    "schemaFunctionUsed": True,
                     "executedRuleCount": 1,
                     "skippedRuleCount": 0,
                     "matchedCount": 1,

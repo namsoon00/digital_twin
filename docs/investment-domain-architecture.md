@@ -45,7 +45,7 @@ Writes use stable IDs and unique source references. Broker fills use provider ex
 
 TypeDB owns the semantic read model:
 
-- TBox classes, relation types, bounded contexts, and TypeDB schema functions
+- TBox classes, relation types, bounded contexts, and governed RuleBox profiles
 - Current compact ABox observations and exact model-contract evidence with provenance and freshness
 - Generation-scoped InferenceBox relations and traces
 - Links between mandate, exposure, decision, execution, and outcome concepts
@@ -58,7 +58,7 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 2. Projection builds only the affected ABox fact families and records provenance, observation time, and policy version.
 3. The statistical-model stage reads one immutable temporal and factual market ABox, evaluates all affected predictive contracts in one indexed shared-world pass, and emits versioned exact-contract evidence plus sample, freshness, validation, and decision-eligibility state.
 4. Question routing selects model contracts and TypeDB resolvers by input fact family, dependency key, world scope, freshness requirement, decision stage, and cost hint.
-5. TypeDB schema functions join exact model evidence with semantic, private account, policy, quality, and execution facts and materialize one immutable InferenceBox generation.
+5. Direct TypeQL rules join exact model evidence with semantic, private account, policy, quality, and execution facts and materialize one immutable InferenceBox generation.
 6. The investment brain builds competing hypotheses from exact contracts, active TypeDB traces, and explicit counter-evidence.
 7. The decision-continuity assembler loads the immediately prior decision plus its bounded follow-up, observed outcome, account-activity, execution, and review facts.
 8. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.

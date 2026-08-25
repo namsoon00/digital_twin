@@ -21,7 +21,6 @@ from .mysql_operational_core_stores import (
     MySQLOperationalStorageCapacityStateStore,
     MySQLOntologyInferenceDetailStateStore,
     MySQLOntologyMaintenanceStateStore,
-    MySQLOntologyRuleboxPrewarmStateStore,
     MySQLOntologyReasoningCursorStore,
     MySQLOntologyWorldProjectionStateStore,
     MySQLRuntimeSettingsStore,

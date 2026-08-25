@@ -3849,7 +3849,7 @@ class PortfolioOntologyProjectionRecorder:
                 "status": "ready",
                 "ruleCount": stored_count,
                 "ruleboxRulesHash": stored_hash,
-                "sourceOfTruth": "typedb-schema-function-rules",
+                "sourceOfTruth": "typedb-direct-typeql-rules",
                 "ruleCatalogStore": "typedb",
                 "inputRelationTypes": rulebox_input_relation_types(stored_rules),
                 "bootstrapRuleCount": int(
@@ -3905,7 +3905,7 @@ class PortfolioOntologyProjectionRecorder:
         return {
             "status": "seeded" if bool((seeded or {}).get("seeded")) else str((seeded or {}).get("status") or "not-seeded"),
             "ruleCount": int((seeded or {}).get("ruleCount") or 0),
-            "sourceOfTruth": "typedb-schema-function-rules",
+            "sourceOfTruth": "typedb-direct-typeql-rules",
             "ruleCatalogStore": "typedb",
             "inputRelationTypes": rulebox_input_relation_types(expected_rules),
             "bootstrapRuleCount": expected_count,
@@ -6002,7 +6002,7 @@ class PortfolioOntologyProjectionRecorder:
                 payload["_inferenceWriteLeaseOwner"] = str(inference_write_lease.get("leaseOwner") or "")
             if isinstance(preflight_graph, PortfolioOntology):
                 # The graph was just validated and staged by this same writer
-                # lease. TypeDB still evaluates every schema function; this
+                # lease. TypeDB still evaluates every selected direct TypeQL rule; this
                 # object can only prove an impossible condition and avoids a
                 # second exact ABox read before that evaluation.
                 payload["_nativePreflightProjectionGraph"] = preflight_graph
@@ -6049,39 +6049,6 @@ class PortfolioOntologyProjectionRecorder:
                 result["status"] = "deferred-inference-write-lease"
                 result["preservedActiveGeneration"] = True
                 result["reason"] = reason
-                return
-            if str(execution.get("status") or "") == "deferred-schema-function-provisioning":
-                # Native functions are compiled from the durable RuleBox by a
-                # dedicated background prewarm worker. Only a fully prepared
-                # set may produce investment inference, so restore the prior
-                # aligned ABox/InferenceBox rather than exposing a new ABox
-                # against stale deductions.
-                reason = str(
-                    execution.get("reason")
-                    or "TypeDB schema function prewarm is still in progress."
-                )
-                result["inferenceBox"] = {
-                    "configured": True,
-                    "status": "deferred-schema-function-provisioning",
-                    "graphStore": active_key,
-                    "source": "typedbInferenceBox",
-                    "nativeTypeDbReasoningUsed": False,
-                    "reason": reason,
-                }
-                finalization_started = time.perf_counter()
-                self.reconcile_abox_activation_after_inference(result, inference_symbols, world_id=world_id)
-                runtime_stages["aboxActivationFinalizationMs"] = int((time.perf_counter() - finalization_started) * 1000)
-                # Even a first-ever deployment has no predecessor to restore.
-                # It is still controlled provisioning back-pressure, not a
-                # RuleBox failure, so keep the request retryable until the
-                # remaining functions can produce a complete generation.
-                result["status"] = "deferred-schema-function-provisioning"
-                result["retryable"] = True
-                result["recommendedRetryAfterSeconds"] = int(
-                    execution.get("recommendedRetryAfterSeconds") or 10
-                )
-                result["reason"] = reason
-                result["saved"] = False
                 return
             if str(execution.get("status") or "") == "invalid-abox-generation":
                 # A stale InferenceBox can still be readable while the active
@@ -6852,7 +6819,7 @@ class PortfolioOntologyProjectionRecorder:
 
         MySQL stores only the immutable scope fingerprints and TypeDB's
         completed match set. It never asserts a new match or decides an
-        investment action; the next TypeDB schema-function query remains the
+        investment action; the next direct TypeQL query remains the
         evaluator.
         """
         if not self.projection_run_store:

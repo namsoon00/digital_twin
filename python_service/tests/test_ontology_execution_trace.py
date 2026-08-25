@@ -186,7 +186,7 @@ class OntologyExecutionTraceTests(unittest.TestCase):
                 "nativeRuleSelectionDeferredRuleIds": ["rule.research"],
                 "typedbNativeRuleMatchedRuleIds": ["rule.price"],
                 "nativeMatchResult": {
-                    "nativeExecutionMode": "schema-function",
+                    "nativeExecutionMode": "typedb-native-direct-typeql",
                     "matches": [{"ruleId": "rule.price"}],
                     "executedRules": [
                         {"ruleId": "rule.price", "elapsedMs": 9000, "queryCount": 1},

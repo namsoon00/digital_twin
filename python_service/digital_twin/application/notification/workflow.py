@@ -17,6 +17,7 @@ from ...domain.message_types import (
 from ...domain.monitoring import RealtimeMonitor
 from ...domain.notification_ai import enrich_notification_ai_context
 from ...domain.notification_ai_delivery import final_ai_delivery_decision
+from ...domain.notification_delivery_explanation import build_customer_delivery_explanation
 from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse, ai_gate_enabled_for_message_type
 from ...domain.notification_ai_gate_validation import local_validated_ai_response
 from ...domain.notification_ai_decision_brief import (
@@ -560,6 +561,9 @@ class NotificationQueueRunner:
             if not self.apply_market_hours_gate(job, "발송 직전"):
                 processed += 1
                 continue
+            if not self.apply_customer_delivery_explanation_gate(job):
+                processed += 1
+                continue
             self.record_lifecycle(job, "ready_to_render", "ready")
             self.active_job_stage = "rendering"
             message = self.render(job)
@@ -735,6 +739,104 @@ class NotificationQueueRunner:
             job.context = context
             return True
         return True
+
+    def apply_customer_delivery_explanation_gate(self, job: NotificationJob) -> bool:
+        """Freeze one customer-visible reason after every delivery gate passed."""
+
+        if str(job.message_type or "") != INVESTMENT_INSIGHT:
+            return True
+        context = dict(job.context or {})
+        explanation = build_customer_delivery_explanation(
+            message_type=job.message_type,
+            source_event_name=job.source_event_name,
+            source_event_id=job.source_event_id,
+            context=context,
+        )
+        validation = (
+            dict(explanation.get("validation") or {})
+            if isinstance(explanation.get("validation"), dict)
+            else {}
+        )
+        context.update({
+            "customerDeliveryExplanation": explanation,
+            "customerDeliveryExplanationRequired": True,
+            "customerDeliveryExplanationValidationState": str(validation.get("state") or "invalid"),
+        })
+        job.context = context
+        if validation.get("state") == "valid":
+            self.record_lifecycle(
+                job,
+                "delivery_reason_validated",
+                "ready",
+                metadata={
+                    "version": str(explanation.get("version") or ""),
+                    "purpose": str(explanation.get("purpose") or ""),
+                    "primaryCause": str((explanation.get("primaryCause") or {}).get("category") or ""),
+                },
+            )
+            return True
+        errors = [str(item or "").strip() for item in validation.get("errors") or [] if str(item or "").strip()]
+        reason = "사용자 알림 발송 사유 계약 오류"
+        if errors:
+            reason += ": " + ", ".join(errors[:6])
+        context.update({
+            "deliverySuppressionReason": "customer_delivery_explanation_invalid",
+            "deliverySuppressionDetail": reason,
+        })
+        job.context = context
+        if hasattr(self.queue, "mark_suppressed"):
+            self.queue.mark_suppressed(job, reason)
+        else:
+            self.queue.mark_failed(job, reason)
+        self.record_lifecycle(
+            job,
+            "delivery_reason_validated",
+            "invalid",
+            reason,
+            {"errors": errors, "sourceEventName": job.source_event_name},
+        )
+        self.record_operational_delivery(job, "suppressed", reason)
+        self.mark_reasoning_case_suppressed(job, reason)
+        self.notify_delivery_explanation_contract_error(job, reason, errors)
+        self.last_run_details.append(self.job_detail(job, "suppressed", reason))
+        return False
+
+    def notify_delivery_explanation_contract_error(
+        self,
+        job: NotificationJob,
+        reason: str,
+        errors: List[str],
+    ) -> None:
+        """Report deterministic contract failures without retrying the customer alert."""
+
+        if self.dry_run or not callable(self.operations_notifier_factory):
+            return
+        message = "\n".join([
+            "🚨 시스템 오류",
+            "• 구성요소: Python notification delivery explanation",
+            "• 오류 유형: NotificationDeliveryContractError",
+            "• 오류 내용: " + reason,
+            "• 단계: final delivery reason validation",
+            "• 알림 작업: " + notification_debug_number(job.job_id),
+            "• 원본 이벤트: " + (str(job.source_event_name or "-")[:191]),
+        ])
+        context = dict(job.context or {})
+        try:
+            delivery = self.operations_notifier_factory(None).send(message)
+            context["customerDeliveryExplanationOperationalAlert"] = {
+                "attempted": True,
+                "delivered": bool(getattr(delivery, "delivered", False)),
+                "provider": str(getattr(delivery, "label", "") or ""),
+                "errors": list(errors or []),
+            }
+        except Exception as error:  # noqa: BLE001 - the original deterministic suppression remains authoritative.
+            context["customerDeliveryExplanationOperationalAlert"] = {
+                "attempted": True,
+                "delivered": False,
+                "error": str(error)[:180],
+                "errors": list(errors or []),
+            }
+        job.context = context
 
     def message_type_allowed(self, message_type: object) -> bool:
         value = str(message_type or "").strip()

@@ -76,6 +76,7 @@ from ..domain.message_types import (
 from ..domain.notification_icon_policy import notification_message_icon, notification_title_with_context_icon
 from ..domain.notification_ai_gate_text import user_friendly_ai_text
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from ..domain.notification_delivery_explanation import build_customer_delivery_explanation
 from ..domain.ontology_decision_state import ACTION_ENVELOPE_STATUS_LABELS
 from ..domain.data_freshness import age_minutes
 from ..domain.market_hours import DEFAULT_MARKET_HOUR_SESSIONS
@@ -3086,6 +3087,11 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     customer_text = notification_customer_text(job)
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     trigger_ledger = context.get("deliveryTriggerLedger") if isinstance(context.get("deliveryTriggerLedger"), list) else []
+    delivery_explanation = (
+        dict(context.get("customerDeliveryExplanation") or {})
+        if isinstance(context.get("customerDeliveryExplanation"), dict)
+        else {}
+    )
     title_source = context.get("headline") if job.message_type == INVESTMENT_INSIGHT else (context.get("title") or context.get("headline") or "")
     if job.message_type == INVESTMENT_INSIGHT:
         validated = context.get("notificationAiValidatedResponse") if isinstance(context.get("notificationAiValidatedResponse"), dict) else {}
@@ -3154,6 +3160,13 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
         "deliveryGateReason": context.get("deliveryGateReason") or "",
         "deliveryReasons": [str(item) for item in reasons],
         "deliveryTriggerLedgerVersion": context.get("deliveryTriggerLedgerVersion") or "",
+        "customerDeliveryExplanation": delivery_explanation if detail else {},
+        "customerDeliveryExplanationVersion": delivery_explanation.get("version") or "",
+        "customerDeliveryExplanationValidationState": str((
+            (delivery_explanation.get("validation") or {}).get("state")
+            if isinstance(delivery_explanation.get("validation"), dict)
+            else context.get("customerDeliveryExplanationValidationState")
+        ) or ""),
         "deliveryTriggerLedger": [
             dict(item) for item in trigger_ledger if isinstance(item, dict)
         ] if detail else [],
@@ -4488,18 +4501,49 @@ def notification_template_test_payload(payload: Dict[str, object]):
         "notificationTestBypassPolicy": bypass_policy,
         "messageType": event.rule or message_type,
     })
+    public_event = alert_event_public_payload(event)
+    source_event = new_domain_event(
+        NOTIFICATION_TEST_REQUESTED,
+        event.key or message_type,
+        {"messageType": message_type, "accountId": account.account_id, "accountLabel": account.label, "event": public_event},
+    )
     message = notification_store().render(event.rule, context)
     job = NotificationJob.create(
         message,
         account_id=account.account_id,
         account_label=account.label,
         message_type=event.rule or message_type,
+        source_event_id=source_event.event_id,
+        source_event_name=source_event.name,
         context=context,
     )
     synchronous_test = bool(dry_run or bypass_policy)
     runner = build_notification_queue_runner(dry_run=synchronous_test)
     runner.apply_account_delivery_context(job, account)
     if synchronous_test:
+        if str(job.message_type or "") == INVESTMENT_INSIGHT:
+            explanation = build_customer_delivery_explanation(
+                message_type=job.message_type,
+                source_event_name=job.source_event_name,
+                source_event_id=job.source_event_id,
+                context=job.context,
+            )
+            validation = explanation.get("validation") if isinstance(explanation.get("validation"), dict) else {}
+            if validation.get("state") != "valid":
+                return 422, {
+                    "delivered": False,
+                    "messageType": message_type,
+                    "error": "검증 알림의 발송 사유 계약을 만들지 못했습니다.",
+                    "validation": validation,
+                    "event": public_event,
+                }
+            test_context = dict(job.context or {})
+            test_context.update({
+                "customerDeliveryExplanation": explanation,
+                "customerDeliveryExplanationRequired": True,
+                "customerDeliveryExplanationValidationState": "valid",
+            })
+            job.context = test_context
         rendered_message = runner.render(job)
         if rendered_message:
             job.text = rendered_message
@@ -4512,14 +4556,6 @@ def notification_template_test_payload(payload: Dict[str, object]):
             "message": job.text,
             "event": alert_event_public_payload(event),
         }
-    public_event = alert_event_public_payload(event)
-    source_event = new_domain_event(
-        NOTIFICATION_TEST_REQUESTED,
-        event.key or message_type,
-        {"messageType": message_type, "accountId": account.account_id, "accountLabel": account.label, "event": public_event},
-    )
-    job.source_event_id = source_event.event_id
-    job.source_event_name = source_event.name
     if bypass_policy:
         store = notification_queue_store()
         job.status = "processing"

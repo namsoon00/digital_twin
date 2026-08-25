@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import hashlib
 from typing import Callable, Dict, List, Optional
 
+from ..domain.notification_delivery_explanation import build_customer_delivery_explanation
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
 
@@ -144,18 +145,31 @@ class NotificationReplayService:
             "replaySourceNotificationNumber": notification_debug_number(source.job_id),
             "replaySourceStatus": source.status,
             "replaySourceMessageType": source.message_type,
+            "replaySourceEventId": source.source_event_id,
+            "replaySourceEventName": source.source_event_name,
             "notificationTestBypassPolicy": bool(direct),
         })
-        return NotificationJob.create(
+        replay_job = NotificationJob.create(
             source.text,
             account_id=source.account_id,
             account_label=source.account_label,
             message_type=source.message_type,
             source_event_id=source.source_event_id,
-            source_event_name=source.source_event_name or "notification.replay_requested",
+            source_event_name="notification.replay_requested",
             dedupe_key="",
             context=context,
         )
+        if str(source.message_type or "") == "investmentInsight":
+            replay_context = dict(replay_job.context or {})
+            replay_context["customerDeliveryExplanation"] = build_customer_delivery_explanation(
+                message_type=replay_job.message_type,
+                source_event_name=replay_job.source_event_name,
+                source_event_id=replay_job.source_event_id,
+                context=replay_context,
+            )
+            replay_context["customerDeliveryExplanationRequired"] = True
+            replay_job.context = replay_context
+        return replay_job
 
     def replay_message(self, source: NotificationJob, message: str) -> str:
         header = "[재발송] 원본 알림 " + notification_debug_number(source.job_id)

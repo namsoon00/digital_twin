@@ -13650,16 +13650,21 @@ class PythonServiceTests(unittest.TestCase):
                 mock.patch("digital_twin.infrastructure.service_factory.notifier_for_account", return_value=FakeNotifier()):
             status, payload = notification_template_test_payload({"messageType": "investmentInsight", "bypassPolicy": True})
 
-        self.assertEqual(200, status)
+        self.assertEqual(200, status, payload)
         self.assertTrue(payload["delivered"])
         self.assertTrue(payload["direct"])
         self.assertFalse(payload["queued"])
         self.assertEqual("investmentInsight", payload["messageType"])
         self.assertTrue(sent_messages)
+        self.assertIn("검증 발송", sent_messages[0])
         jobs = TestNotificationJobStore().jobs()
         self.assertEqual(1, len(jobs))
         self.assertEqual("done", jobs[0].status)
         self.assertEqual("investmentInsight", jobs[0].message_type)
+        self.assertEqual(
+            "verification",
+            jobs[0].context["customerDeliveryExplanation"]["primaryCause"]["category"],
+        )
 
     def test_investment_insight_test_send_records_typedb_projection_before_type_check(self):
         registry = AccountRegistry()

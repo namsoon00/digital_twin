@@ -8,7 +8,7 @@ from typing import Dict, List, Mapping
 from ...domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
 
 
-PIPELINE_TRACE_VERSION = "notification-pipeline-trace-v1"
+PIPELINE_TRACE_VERSION = "notification-pipeline-trace-v2"
 SENSITIVE_KEY_PARTS = (
     "apikey",
     "api_key",
@@ -238,6 +238,8 @@ class NotificationTraceQueryService:
         )
         narrative = _mapping(reasoning.get("narrative"))
         presentation = _mapping(context.get("notificationPresentationAudit"))
+        delivery_explanation = _mapping(context.get("customerDeliveryExplanation"))
+        delivery_explanation_validation = _mapping(delivery_explanation.get("validation"))
         event = _mapping(source_event)
 
         event_id = str(
@@ -280,6 +282,7 @@ class NotificationTraceQueryService:
             or ""
         )
         rendered_at = _last_at(lifecycle, {"rendered", "ready_to_render"})
+        delivery_reason_at = _last_at(lifecycle, {"delivery_reason_validated"})
         delivery_started = min(
             [str(item.get("startedAt") or "") for item in attempts if str(item.get("startedAt") or "")],
             default="",
@@ -421,6 +424,20 @@ class NotificationTraceQueryService:
                     "evidenceFingerprint": _mapping(narrative.get("claimValidation")).get("evidenceFingerprint"),
                 },
                 details={"claimPublication": claim_publication, "narrative": narrative},
+            ),
+            _stage(
+                "delivery-explanation",
+                "사용자 발송 사유 검증",
+                "completed" if delivery_explanation_validation.get("state") == "valid" else "failed" if delivery_explanation_validation.get("state") == "invalid" else "missing",
+                "원천 이벤트와 최종 판단 전이를 대조해 왜 지금 발송하는지 한 가지 주 사유로 확정했습니다.",
+                started_at=delivery_reason_at,
+                completed_at=delivery_reason_at,
+                identifiers={
+                    "contractVersion": delivery_explanation.get("version"),
+                    "purpose": delivery_explanation.get("purpose"),
+                    "primaryCause": _mapping(delivery_explanation.get("primaryCause")).get("category"),
+                },
+                details={"customerDeliveryExplanation": delivery_explanation},
             ),
             _stage(
                 "rendering",

@@ -13,6 +13,7 @@ class NotificationStage(str, Enum):
     RECEIVED = "received"
     ELIGIBILITY_CHECKED = "eligibility_checked"
     AWAITING_DECISION = "awaiting_decision"
+    DELIVERY_REASON_VALIDATED = "delivery_reason_validated"
     READY_TO_RENDER = "ready_to_render"
     RENDERED = "rendered"
     DISPATCHING = "dispatching"
@@ -39,14 +40,22 @@ ALLOWED_NOTIFICATION_TRANSITIONS = {
     },
     NotificationStage.ELIGIBILITY_CHECKED: {
         NotificationStage.AWAITING_DECISION,
+        NotificationStage.DELIVERY_REASON_VALIDATED,
         NotificationStage.READY_TO_RENDER,
         NotificationStage.SUPPRESSED,
         NotificationStage.EXPIRED,
         NotificationStage.FAILED,
     },
     NotificationStage.AWAITING_DECISION: {
+        NotificationStage.DELIVERY_REASON_VALIDATED,
         NotificationStage.READY_TO_RENDER,
         NotificationStage.SUPERSEDED,
+        NotificationStage.SUPPRESSED,
+        NotificationStage.EXPIRED,
+        NotificationStage.FAILED,
+    },
+    NotificationStage.DELIVERY_REASON_VALIDATED: {
+        NotificationStage.READY_TO_RENDER,
         NotificationStage.SUPPRESSED,
         NotificationStage.EXPIRED,
         NotificationStage.FAILED,
@@ -69,6 +78,7 @@ ALLOWED_NOTIFICATION_TRANSITIONS = {
     },
     NotificationStage.FAILED: {
         NotificationStage.ELIGIBILITY_CHECKED,
+        NotificationStage.DELIVERY_REASON_VALIDATED,
         NotificationStage.READY_TO_RENDER,
         NotificationStage.DISPATCHING,
         NotificationStage.SUPPRESSED,

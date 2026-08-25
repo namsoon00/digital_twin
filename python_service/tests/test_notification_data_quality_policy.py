@@ -915,7 +915,12 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             quiet_hours_enabled=False,
         )
         jobs = [
-            NotificationJob.create("투자 알림", account_id="main", message_type=INVESTMENT_INSIGHT),
+            NotificationJob.create(
+                "투자 알림",
+                account_id="main",
+                message_type=INVESTMENT_INSIGHT,
+                source_event_name="notification.verification",
+            ),
             NotificationJob.create("작업 완료", account_id="main", message_type=WORK_HANDOFF),
         ]
 

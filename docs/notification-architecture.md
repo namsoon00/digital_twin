@@ -25,6 +25,10 @@ remain outside this context.
   state and allowed transition vocabulary.
 - `NotificationDocument`, `NotificationSection`, and `DeliveryReceipt`:
   transport-neutral presentation and channel result contracts.
+- `CustomerDeliveryExplanation`: the single validated customer projection of
+  why an eligible notification is being delivered now. It is derived from the
+  source-event envelope, final decision transitions, and delivery trigger
+  ledger after every delivery gate has passed.
 
 The domain package imports neither MySQL nor Telegram.
 
@@ -74,8 +78,10 @@ The old `application/notification_service.py` and
 5. Dispatch eligibility is checked after the decision is stored. Market-hours
    policy may send all off-hours decisions, send only TypeDB-backed material
    events and urgent transitions, or defer delivery until a later observation.
-   The final text is then rendered once and
-   hashed.
+   The worker then freezes and validates one `CustomerDeliveryExplanation`.
+   A contradictory investment explanation is suppressed and reported to the
+   operations channel. The final text is rendered once and hashed only after
+   that contract passes.
 6. A delivery attempt is stored before calling Telegram or another channel.
 7. The attempt and terminal lifecycle state are updated after the channel
    result. The read model exposes attempt start and channel completion as
@@ -86,16 +92,26 @@ The old `application/notification_service.py` and
    timeline. The notification detail UI displays it in stored chronological
    order and exposes the full JSON audit payload.
 
-Every admission result also stores `notification-delivery-trigger-ledger-v1`.
+Every admission result also stores `notification-delivery-trigger-ledger-v2`.
 This ledger keeps the configured condition, TypeDB relation-state change,
 cooldown or repeat release, and final delivery gate as separate records. It is
 delivery provenance only: it explains why a message was sent or withheld and
 must never be used as investment evidence or an action-selection input.
 
+The ledger is audit provenance, not customer prose. The customer message reads
+only `customer-delivery-explanation-v1`, which has exactly one primary cause.
+Matched TypeDB rules and their observed values remain in the inference section
+and cannot be substituted for the delivery cause. Replay and verification jobs
+carry their own source-event purpose even when an archived investment body is
+preserved.
+
 ## Performance Rules
 
 - No TypeDB query or AI inference is added to notification ingress, admission,
   rendering, or transport.
+- Delivery-explanation finalization is one bounded in-memory pass over the
+  already stored transition and trigger data. It performs no external or
+  database read.
 - Admission policy receives already-loaded history facts; it does not open a
   database connection.
 - Initial lifecycle records are written in the same short transaction as the

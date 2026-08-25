@@ -412,7 +412,7 @@ def relation_delivery_diff(
             "changed": False,
             "material": False,
             "changeClass": "unavailable",
-            "reason": "No graph-backed relation context is available.",
+            "reason": "그래프 관계 판단 정보가 없습니다.",
             "addedEvidenceKeys": [],
             "removedEvidenceKeys": [],
         }
@@ -427,7 +427,7 @@ def relation_delivery_diff(
             "reason": (
                 "New actionable graph-backed relation context."
                 if initial_material
-                else "Initial non-actionable graph state recorded as a delivery baseline."
+                else "최초 비실행 그래프 상태를 발송 비교 기준선으로 기록했습니다."
             ),
             "currentFingerprint": current.get("fingerprint"),
             "previousFingerprint": "",
@@ -465,7 +465,7 @@ def relation_delivery_diff(
                 "changed": True,
                 "material": True,
                 "changeClass": "material",
-                "reason": "A previously suppressed initial baseline now contains an actionable graph decision.",
+                "reason": "이전에 보류한 최초 기준선에서 실행 검토가 필요한 그래프 판단이 확인됐습니다.",
                 "currentFingerprint": current.get("fingerprint"),
                 "previousFingerprint": previous.get("fingerprint"),
                 "changedComponents": ["delivery-policy"],
@@ -489,10 +489,10 @@ def relation_delivery_diff(
             "material": False,
             "changeClass": "context-drift" if context_components else "unchanged",
             "reason": (
-                "Graph context drift without a new decision-changing source event: "
+                "판단 변경 원문 없이 관계 맥락만 달라짐: "
                 + ", ".join(labels.get(key, key) for key in context_components)
                 if context_components
-                else "Graph-backed relationship evidence is unchanged."
+                else "그래프 관계 근거가 이전과 같습니다."
             ),
             "currentFingerprint": current.get("fingerprint"),
             "previousFingerprint": previous.get("fingerprint"),
@@ -554,9 +554,9 @@ def relation_delivery_diff(
         "material": material,
         "changeClass": "material" if material else "context-drift",
         "reason": (
-            "Meaningful graph relation change: " + ", ".join(labels.get(key, key) for key in material_components)
+            "사용자 판단에 영향을 주는 관계 변화: " + ", ".join(labels.get(key, key) for key in material_components)
             if material
-            else "Graph context drift without a new decision-changing source event: "
+            else "판단 변경 원문 없이 관계 맥락만 달라짐: "
             + ", ".join(labels.get(key, key) for key in context_components)
         ),
         "currentFingerprint": current.get("fingerprint"),

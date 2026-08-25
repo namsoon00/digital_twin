@@ -5,6 +5,7 @@ from typing import Dict, List
 
 from .notification_ai_context import relation_context_value
 from .notification_ai_gate_sources import all_source_urls_for_context, source_detail_map
+from .notification_delivery_explanation import customer_delivery_explanation_lines
 from .news_analysis import (
     NEWS_MATERIALITY_STATE_LABELS,
     NEWS_RELEVANCE_STATE_LABELS,
@@ -458,6 +459,9 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
         },
         delivery_audit={
             **delivery,
+            "customerDeliveryExplanation": dict(values.get("customerDeliveryExplanation") or {})
+            if isinstance(values.get("customerDeliveryExplanation"), dict)
+            else {},
             "triggerLedgerVersion": values.get("deliveryTriggerLedgerVersion"),
             "triggerLedger": [
                 dict(item)
@@ -471,6 +475,11 @@ def build_notification_reasoning_report(context: Dict[str, object], customer_job
 
 
 def customer_alert_reason_lines(context: Dict[str, object]) -> List[str]:
+    explanation = context.get("customerDeliveryExplanation")
+    if isinstance(explanation, dict):
+        return customer_delivery_explanation_lines(context)
+    if context.get("customerDeliveryExplanationRequired"):
+        return []
     relation = relation_context_value(context or {})
     decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
     why_now = relation.get("whyNow") if isinstance(relation.get("whyNow"), dict) else {}

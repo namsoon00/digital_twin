@@ -118,6 +118,8 @@ class NotificationReplayServiceTests(unittest.TestCase):
         self.assertTrue(replay.context["notificationReplay"])
         self.assertTrue(replay.context["notificationTestBypassPolicy"])
         self.assertEqual(replay.context["replaySourceJobId"], source.job_id)
+        self.assertEqual("notification.replay_requested", replay.source_event_name)
+        self.assertEqual(source.source_event_name, replay.context["replaySourceEventName"])
         self.assertEqual(replay.context["deliveryProfile"], "unit")
         self.assertTrue(replay.context["notificationReplayPreserveOriginal"])
         self.assertEqual(0, runner.render_calls)
@@ -146,7 +148,16 @@ class NotificationReplayServiceTests(unittest.TestCase):
         self.assertNotEqual(replay.job_id, source.job_id)
         self.assertEqual(replay.dedupe_key, "")
         self.assertEqual(replay.context["notificationReplayMode"], "queue")
+        self.assertEqual("notification.replay_requested", replay.source_event_name)
         self.assertTrue(replay.context["notificationReplayPreserveOriginal"])
+        self.assertEqual(
+            "replay",
+            replay.context["customerDeliveryExplanation"]["primaryCause"]["category"],
+        )
+        self.assertEqual(
+            "valid",
+            replay.context["customerDeliveryExplanation"]["validation"]["state"],
+        )
 
     def test_queued_replay_renderer_preserves_the_archived_body(self):
         source = NotificationJob.create(

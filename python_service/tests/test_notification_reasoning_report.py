@@ -578,6 +578,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
             account_id="main",
             account_label="기본 계정",
             message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
             context=enriched,
         )
         queue = MemoryQueue([customer_job])
@@ -648,6 +649,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
             account_id="main",
             account_label="기본 계정",
             message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
             context=enriched,
         )
         queue = MemoryQueue([customer_job])
@@ -683,6 +685,7 @@ class NotificationReasoningReportTests(unittest.TestCase):
             account_id="main",
             account_label="기본 계정",
             message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
             context=enriched,
         )
 
@@ -713,8 +716,18 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("operator queue unavailable", customer_job.context["operatorReasoningReportError"])
 
     def test_runner_immediately_releases_claimed_batch_after_render_failure(self):
-        first = NotificationJob.create("first", account_id="main", message_type=INVESTMENT_INSIGHT)
-        second = NotificationJob.create("second", account_id="main", message_type=INVESTMENT_INSIGHT)
+        first = NotificationJob.create(
+            "first",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
+        )
+        second = NotificationJob.create(
+            "second",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
+        )
 
         class ClaimedQueue(MemoryQueue):
             def claim_pending(self, **_kwargs):
@@ -743,7 +756,12 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertIn("claim을 즉시 회수", second.last_error)
 
     def test_runner_does_not_claim_jobs_when_account_lookup_fails(self):
-        job = NotificationJob.create("message", account_id="main", message_type=INVESTMENT_INSIGHT)
+        job = NotificationJob.create(
+            "message",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
+        )
 
         class Queue(MemoryQueue):
             claimed = False
@@ -766,7 +784,12 @@ class NotificationReasoningReportTests(unittest.TestCase):
         self.assertEqual("pending", job.status)
 
     def test_runner_finalizes_without_resending_when_storage_fails_after_delivery(self):
-        job = NotificationJob.create("message", account_id="main", message_type=INVESTMENT_INSIGHT)
+        job = NotificationJob.create(
+            "message",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            source_event_name="notification.verification",
+        )
 
         class FlakyDoneQueue(MemoryQueue):
             mark_done_calls = 0

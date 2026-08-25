@@ -226,6 +226,16 @@ class NotificationModularizationTests(unittest.TestCase):
                     "decisionAssurance": {"executionEligibility": "review-only"},
                     "rawResponse": "must-not-leak",
                 },
+                "customerDeliveryExplanation": {
+                    "version": "customer-delivery-explanation-v1",
+                    "purpose": "investment-change",
+                    "primaryCause": {
+                        "category": "readiness-transition",
+                        "summary": "판단 자료 상태가 바뀌어 다시 확인합니다.",
+                    },
+                    "supportingCauses": [],
+                    "validation": {"state": "valid", "errors": []},
+                },
             },
         )
         reasoning = {
@@ -283,13 +293,13 @@ class NotificationModularizationTests(unittest.TestCase):
         )
 
         pipeline = trace["pipeline"]
-        self.assertEqual("notification-pipeline-trace-v1", pipeline["contractVersion"])
-        self.assertEqual(9, pipeline["stageCount"])
+        self.assertEqual("notification-pipeline-trace-v2", pipeline["contractVersion"])
+        self.assertEqual(10, pipeline["stageCount"])
         self.assertEqual(
             [
                 "source-event", "v2-reasoning", "ontology-quality",
                 "decision-synthesis", "ai-packet", "ai-response",
-                "claim-validation", "rendering", "delivery",
+                "claim-validation", "delivery-explanation", "rendering", "delivery",
             ],
             [item["key"] for item in pipeline["stages"]],
         )
@@ -299,6 +309,8 @@ class NotificationModularizationTests(unittest.TestCase):
     def test_lifecycle_contract_rejects_out_of_order_delivery(self):
         self.assertTrue(notification_transition_allowed("rendered", "dispatching"))
         self.assertTrue(notification_transition_allowed("dispatching", "delivered"))
+        self.assertTrue(notification_transition_allowed("awaiting_decision", "delivery_reason_validated"))
+        self.assertTrue(notification_transition_allowed("delivery_reason_validated", "ready_to_render"))
         self.assertFalse(notification_transition_allowed("received", "delivered"))
 
     def test_notification_application_package_has_no_infrastructure_dependency(self):

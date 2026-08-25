@@ -376,7 +376,7 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("sufficient", detail["job"]["actionFlow"]["dataReadiness"]["dataState"])
         self.assertTrue(detail["job"]["reasoningTrace"]["missingData"])
         self.assertEqual("notification-trace-v2", detail["job"]["notificationTrace"]["contractVersion"])
-        self.assertEqual(9, detail["job"]["notificationTrace"]["pipeline"]["stageCount"])
+        self.assertEqual(10, detail["job"]["notificationTrace"]["pipeline"]["stageCount"])
         self.assertLess(len(json.dumps(detail, ensure_ascii=False).encode("utf-8")), 100_000)
         self.assertEqual("reasoning", reasoning["section"])
         self.assertIn("ruleEvaluations", reasoning["reasoning"])
@@ -485,6 +485,19 @@ class NotificationReverseReasoningTests(unittest.TestCase):
                 "status": "matched",
             },
         ]
+        context["customerDeliveryExplanation"] = {
+            "version": "customer-delivery-explanation-v1",
+            "purpose": "investment-change",
+            "primaryCause": {
+                "code": "material-evidence",
+                "category": "material-evidence",
+                "label": "새 판단 자료",
+                "summary": "새 판단 자료가 확인됐습니다: 삼성전자 자금조달 공시",
+                "sourceReferences": ["evidence:disclosure"],
+            },
+            "supportingCauses": [],
+            "validation": {"state": "valid", "errors": []},
+        }
         job = NotificationJob.create("알림 본문", message_type="investmentInsight", context=context)
 
         payload = notification_job_public_payload(job, detail=True)
@@ -493,6 +506,11 @@ class NotificationReverseReasoningTests(unittest.TestCase):
         self.assertEqual("삼성전자 자금조달 공시", payload["customerDeliveryTriggers"][0]["sourceTitle"])
         self.assertEqual(1, len(payload["internalDeliveryChecks"]))
         self.assertEqual("condition:body-present", payload["internalDeliveryChecks"][0]["triggerId"])
+        self.assertEqual("valid", payload["customerDeliveryExplanationValidationState"])
+        self.assertEqual(
+            "material-evidence",
+            payload["customerDeliveryExplanation"]["primaryCause"]["category"],
+        )
 
 
 if __name__ == "__main__":

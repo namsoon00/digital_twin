@@ -31296,7 +31296,9 @@
   function researchEvidenceKoreanSummary(item) {
     item = item || {};
     var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
-    var summary = item.articleSummaryKo || item.analysisSummary || item.summaryKo || item.bodySummary || item.summary || item.description
+    var disclosure = item.disclosureAnalysis && typeof item.disclosureAnalysis === "object" ? item.disclosureAnalysis
+      : (payload.disclosureAnalysis && typeof payload.disclosureAnalysis === "object" ? payload.disclosureAnalysis : {});
+    var summary = disclosure.summary || item.articleSummaryKo || item.analysisSummary || item.summaryKo || item.bodySummary || item.summary || item.description
       || payload.articleSummaryKo || payload.analysisSummary || payload.summaryKo || payload.bodySummary || payload.summary || payload.description
       || item.title || payload.title || "기사 분석이 아직 준비되지 않았습니다.";
     if (hasCorruptNewsText(summary)) return "원문 인코딩 점검으로 요약을 보류했습니다.";
@@ -31364,6 +31366,60 @@
       tone: state === "ready" ? "watch" : (state === "blocked" ? "danger" : "caution"),
       issues: Array.isArray(quality.issues) ? quality.issues : []
     };
+  }
+
+  function researchDisclosureDetail(item) {
+    item = item || {};
+    var payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+    var analysis = item.disclosureAnalysis && typeof item.disclosureAnalysis === "object" ? item.disclosureAnalysis
+      : (payload.disclosureAnalysis && typeof payload.disclosureAnalysis === "object" ? payload.disclosureAnalysis : {});
+    var quality = item.disclosureDocumentQuality && typeof item.disclosureDocumentQuality === "object" ? item.disclosureDocumentQuality
+      : (payload.disclosureDocumentQuality && typeof payload.disclosureDocumentQuality === "object" ? payload.disclosureDocumentQuality : {});
+    var audit = item.eligibilityAudit && typeof item.eligibilityAudit === "object" ? item.eligibilityAudit : {};
+    return {
+      analysis: analysis,
+      quality: quality,
+      audit: audit,
+      confirmedFacts: Array.isArray(analysis.confirmedFacts) ? analysis.confirmedFacts : [],
+      watchItems: Array.isArray(analysis.watchItems) ? analysis.watchItems : [],
+      sourceSections: Array.isArray(analysis.sourceSections) ? analysis.sourceSections : [],
+      numbers: Array.isArray(analysis.materialNumbers) ? analysis.materialNumbers : [],
+      reasonCodes: Array.isArray(audit.reasonCodes) ? audit.reasonCodes : [],
+      documentState: String(item.officialDocumentState || payload.officialDocumentState || "metadata-only"),
+      documentVerified: Boolean(item.documentVerified || payload.documentVerified),
+      analysisReady: Boolean(item.analysisReady || payload.analysisReady),
+      documentCharCount: Number(item.documentCharCount || payload.documentCharCount || quality.documentCharCount || 0),
+      sourceDocuments: item.sourceDocuments && typeof item.sourceDocuments === "object" ? item.sourceDocuments : {},
+      sourceRevision: String(item.sourceRevision || payload.sourceRevision || payload.receiptNo || payload.accessionNumber || ""),
+      sourceAsOf: String(item.sourceAsOf || payload.sourceAsOf || item.publishedAt || item.observedAt || "")
+    };
+  }
+
+  function renderResearchDisclosureSections(item) {
+    var detail = researchDisclosureDetail(item);
+    var analysis = detail.analysis;
+    var facts = detail.confirmedFacts.length
+      ? '<ul>' + detail.confirmedFacts.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>'
+      : '<p>공식 원문에서 확인된 구조화 사실이 아직 없습니다.</p>';
+    var watches = detail.watchItems.length
+      ? '<ul>' + detail.watchItems.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>'
+      : '<p>후속 확인 항목을 준비 중입니다.</p>';
+    var sections = detail.sourceSections.length ? '<details class="oa-reasoning-technical"><summary>원문 근거 위치</summary><ol>' + detail.sourceSections.map(function (entry) {
+      return '<li><p>' + escapeHtml((entry || {}).text || entry) + '</p><code>' + escapeHtml(String((entry || {}).start)) + ' - ' + escapeHtml(String((entry || {}).end)) + '</code></li>';
+    }).join("") + '</ol></details>' : '';
+    var auditText = [
+      '웹 ' + (detail.audit.displayEligible ? '표시' : '차단'),
+      '알림 ' + (detail.audit.alertEligible ? '가능' : '차단'),
+      '판단 ' + (detail.audit.reasoningEligible ? '가능' : '차단'),
+      '프롬프트 ' + (detail.audit.promptEligible ? '포함 가능' : '제외')
+    ].join(' · ');
+    return [
+      '<section class="work-detail-section primary"><strong>확인된 사실</strong>' + facts + '</section>',
+      '<section class="work-detail-section"><strong>투자 영향 경로</strong><p>' + escapeHtml(analysis.impactSummary || '공식 원문 검증 후 영향 경로를 판단합니다.') + '</p></section>',
+      '<section class="work-detail-section"><strong>불확실성과 다음 확인</strong><p>' + escapeHtml(analysis.uncertaintySummary || '원문 검증 상태를 확인해야 합니다.') + '</p>' + watches + '</section>',
+      '<section class="work-detail-section"><strong>수집·사용 감사</strong><p>' + escapeHtml(auditText) + '</p><small>' + escapeHtml(detail.reasonCodes.join(' · ') || '제외 사유 없음') + '</small><div class="notification-detail-tags"><span>문서 ' + escapeHtml(detail.documentState) + '</span><span>본문 ' + escapeHtml(detail.documentCharCount.toLocaleString('ko-KR')) + '자</span><span>revision ' + escapeHtml(detail.sourceRevision || '-') + '</span><span>기준 ' + escapeHtml(formatFeedTime(detail.sourceAsOf) || '-') + '</span></div></section>',
+      sections
+    ].join('');
   }
 
   function researchEvidenceImpactMeta(item) {
@@ -31551,6 +31607,7 @@
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
     var key = feedEvidenceKey(item, index);
     var expanded = state.expandedResearchEvidenceKey === key;
+    var isDisclosure = ["disclosure", "filing", "sec-filing", "sec_filing"].indexOf(String(item.kind || "").toLowerCase()) >= 0;
     return [
       '<section class="feed-impact-card compact ' + escapeHtml(impact.tone) + (expanded ? " active" : "") + '"' + cardTypeAttrs("evidence-card", impact.tone) + cardFormatAttrs("document-card", "compact") + '>',
       '<div class="feed-impact-card-head">',
@@ -31562,7 +31619,7 @@
       '<b>' + escapeHtml(impact.materialityLabel) + '</b>',
       '</div>',
       '<div class="feed-impact-body">',
-      '<p><strong>기사 요약</strong> ' + escapeHtml(summary) + '</p>',
+      '<p><strong>' + escapeHtml(isDisclosure ? "공시 요약" : "기사 요약") + '</strong> ' + escapeHtml(summary) + '</p>',
       '<h3>주가 영향: ' + escapeHtml(impact.label) + ' · ' + escapeHtml(researchEvidenceKindLabel(item.kind)) + '</h3>',
       '<div class="feed-impact-tags">',
       '<span>' + escapeHtml(impact.sourceTrustLabel) + '</span>',
@@ -31577,7 +31634,7 @@
       '</div>',
       '</div>',
       '<footer class="feed-impact-article">',
-      '<span>기사</span>',
+      '<span>' + escapeHtml(isDisclosure ? "공시" : "기사") + '</span>',
       '<strong>' + escapeHtml(translation.displayTitle || "제목 없음") + '</strong>',
       translation.showOriginal ? '<em>원제 ' + escapeHtml(translation.original) + '</em>' : '',
       '<button class="mini-button" type="button" data-research-evidence-toggle="' + escapeHtml(key) + '">' + escapeHtml(expanded ? "상세 표시 중" : "상세") + '</button>',
@@ -31619,6 +31676,8 @@
     var promptAdmission = researchPromptAdmissionMeta(item);
     var translation = researchEvidenceTranslationMeta(item);
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
+    var isDisclosure = ["disclosure", "filing", "sec-filing", "sec_filing"].indexOf(String(item.kind || "").toLowerCase()) >= 0;
+    var disclosure = researchDisclosureDetail(item);
     var canDelete = Boolean(item.evidenceId) && item.evidenceId !== "preview:005930:news";
     var deleting = state.researchEvidenceDeleting === item.evidenceId;
     return [
@@ -31636,19 +31695,22 @@
       renderNotificationDetailMetric("주장 검증", claimMeta.label, claimMeta.tone),
       renderNotificationDetailMetric("AI 사용", promptAdmission.label, promptAdmission.tone),
       renderNotificationDetailMetric("신선도", promptAdmission.freshnessLabel, promptAdmission.tone),
+      isDisclosure ? renderNotificationDetailMetric("공식 원문", disclosure.documentVerified ? "검증 완료" : "메타데이터만", disclosure.documentVerified ? "watch" : "caution") : '',
+      isDisclosure ? renderNotificationDetailMetric("공시 분석", disclosure.analysisReady ? "준비 완료" : "보류", disclosure.analysisReady ? "watch" : "caution") : '',
       renderNotificationDetailMetric("번역", translation.label, translation.tone),
       renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
       '</div>',
       '<section class="inline-detail-block primary">',
-      '<strong>기사 요약</strong>',
+      '<strong>' + escapeHtml(isDisclosure ? "공시 요약" : "기사 요약") + '</strong>',
       '<p>' + escapeHtml(summary) + '</p>',
       '</section>',
+      isDisclosure ? renderResearchDisclosureSections(item) : '',
       '<section class="inline-detail-block">',
-      '<strong>주가 영향 판단</strong>',
+      '<strong>' + escapeHtml(isDisclosure ? "공시 영향 판단" : "주가 영향 판단") + '</strong>',
       '<p>' + escapeHtml(impact.summary) + '</p>',
       '</section>',
       '<section class="inline-detail-block">',
-      '<strong>기사</strong>',
+      '<strong>' + escapeHtml(isDisclosure ? "공시 원문" : "기사") + '</strong>',
       '<p>' + escapeHtml(translation.displayTitle || "제목 없음") + '</p>',
       translation.showOriginal ? '<p class="subtle">원제 ' + escapeHtml(translation.original) + '</p>' : '',
       '<div class="inline-detail-tags">',
@@ -31688,6 +31750,8 @@
     var promptAdmission = researchPromptAdmissionMeta(item);
     var translation = researchEvidenceTranslationMeta(item);
     var summaryQuality = researchEvidenceSummaryQualityMeta(item);
+    var isDisclosure = ["disclosure", "filing", "sec-filing", "sec_filing"].indexOf(String(item.kind || "").toLowerCase()) >= 0;
+    var disclosure = researchDisclosureDetail(item);
     return {
       kicker: "Research Evidence",
       title: translation.displayTitle || displayName || symbol || "뉴스·근거 상세",
@@ -31706,20 +31770,23 @@
         renderNotificationDetailMetric("데이터", sourceMeta.dataLabel, sourceMeta.tone),
         renderNotificationDetailMetric("AI 사용", promptAdmission.label, promptAdmission.tone),
         renderNotificationDetailMetric("신선도", promptAdmission.freshnessLabel, promptAdmission.tone),
+        isDisclosure ? renderNotificationDetailMetric("공식 원문", disclosure.documentVerified ? "검증 완료" : "메타데이터만", disclosure.documentVerified ? "watch" : "caution") : '',
+        isDisclosure ? renderNotificationDetailMetric("공시 분석", disclosure.analysisReady ? "준비 완료" : "보류", disclosure.analysisReady ? "watch" : "caution") : '',
         renderNotificationDetailMetric("번역", translation.label, translation.tone),
         renderNotificationDetailMetric("요약", summaryQuality.label, summaryQuality.tone),
         '</div>',
         '</section>',
         '<section class="work-detail-section primary">',
-        '<strong>기사 요약</strong>',
+        '<strong>' + escapeHtml(isDisclosure ? "공시 요약" : "기사 요약") + '</strong>',
         '<p>' + escapeHtml(summary) + '</p>',
         '</section>',
+        isDisclosure ? renderResearchDisclosureSections(item) : '',
         '<section class="work-detail-section">',
-        '<strong>주가 영향 판단</strong>',
+        '<strong>' + escapeHtml(isDisclosure ? "공시 영향 판단" : "주가 영향 판단") + '</strong>',
         '<p>' + escapeHtml(impact.summary) + '</p>',
         '</section>',
         '<section class="work-detail-section">',
-        '<strong>기사</strong>',
+        '<strong>' + escapeHtml(isDisclosure ? "공시 원문" : "기사") + '</strong>',
         '<p>' + escapeHtml(translation.displayTitle || "제목 없음") + '</p>',
         translation.showOriginal ? '<p class="subtle">원제 ' + escapeHtml(translation.original) + '</p>' : '',
         '<div class="notification-detail-tags">',

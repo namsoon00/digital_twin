@@ -1371,6 +1371,23 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         )
         self.assertEqual("1200", candidate["seedTimeoutSeconds"])
 
+    def test_candidate_data_path_owner_probe_ignores_reaped_zombie(self):
+        candidate_path = str(Path("/tmp/orbit-alpha-candidate").resolve())
+        process_rows = "\n".join([
+            "101 Z    /tmp/typedb_server_bin --storage.data-directory " + candidate_path,
+            "102 RNs  /tmp/typedb_server_bin --storage.data-directory " + candidate_path,
+            "103 S    /tmp/typedb_server_bin --storage.data-directory /tmp/other",
+        ])
+
+        with patch.object(
+            service_manager.subprocess,
+            "check_output",
+            return_value=process_rows,
+        ):
+            owners = service_manager.typedb_process_ids_for_data_path(candidate_path)
+
+        self.assertEqual([102], owners)
+
     def test_candidate_seed_retry_stops_all_data_path_owners_before_restart(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

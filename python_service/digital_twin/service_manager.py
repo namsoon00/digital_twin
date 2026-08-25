@@ -2239,7 +2239,7 @@ def typedb_process_ids_for_data_path(data_path: object) -> List[int]:
         return []
     try:
         output = subprocess.check_output(
-            ["ps", "-axo", "pid=,command="],
+            ["ps", "-axo", "pid=,state=,command="],
             text=True,
             stderr=subprocess.DEVNULL,
         )
@@ -2247,8 +2247,17 @@ def typedb_process_ids_for_data_path(data_path: object) -> List[int]:
         return []
     result = []
     for line in output.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) != 2 or path not in parts[1] or "typedb_server_bin" not in parts[1]:
+        parts = line.strip().split(None, 2)
+        if len(parts) != 3:
+            continue
+        state = str(parts[1] or "").upper()
+        command = str(parts[2] or "")
+        # A terminated child can remain briefly as a zombie until its parent
+        # reaps the exit status. It no longer owns RocksDB files and must not
+        # fence a new isolated candidate.
+        if state.startswith("Z"):
+            continue
+        if path not in command or "typedb_server_bin" not in command:
             continue
         try:
             pid = int(parts[0])
@@ -2269,7 +2278,7 @@ def stop_typedb_stage_data_path_processes(spec: Dict[str, object]) -> bool:
             continue
     deadline = time.monotonic() + 30.0
     while pids and time.monotonic() < deadline:
-        pids = [pid for pid in pids if pid_exists(pid)]
+        pids = typedb_process_ids_for_data_path(spec.get("dataPath"))
         if pids:
             time.sleep(0.2)
     for pid in pids:
@@ -2277,7 +2286,7 @@ def stop_typedb_stage_data_path_processes(spec: Dict[str, object]) -> bool:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             continue
-    return not any(pid_exists(pid) for pid in pids)
+    return not typedb_process_ids_for_data_path(spec.get("dataPath"))
 
 
 def clear_typedb_stage_incomplete_checkpoints(spec: Dict[str, object]) -> List[str]:

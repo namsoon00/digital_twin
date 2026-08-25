@@ -151,6 +151,7 @@ class NotificationTraceQueryService:
         reasoning_case: Mapping[str, object] = None,
         ai_trace: Mapping[str, object] = None,
         rendered_message: str = "",
+        include_stage_details: bool = True,
     ) -> Dict[str, object]:
         job = job_or_id if hasattr(job_or_id, "job_id") else None
         job_id = str(getattr(job, "job_id", "") or job_or_id or "")
@@ -306,6 +307,9 @@ class NotificationTraceQueryService:
             or "missing"
         )
         case_stage = str(case.get("stage") or "")
+        def stage_details(value: Mapping[str, object]) -> Dict[str, object]:
+            return dict(value or {}) if include_stage_details else {}
+
         stages = [
             _stage(
                 "source-event",
@@ -315,7 +319,7 @@ class NotificationTraceQueryService:
                 started_at=event_at,
                 completed_at=event_at,
                 identifiers={"sourceEventId": event_id, "correlationId": event.get("correlationId") or event.get("correlation_id")},
-                details={"event": event, "notificationSourceTrace": context.get("notificationSourceTrace") or {}},
+                details=stage_details({"event": event, "notificationSourceTrace": context.get("notificationSourceTrace") or {}}),
             ),
             _stage(
                 "v2-reasoning",
@@ -332,7 +336,7 @@ class NotificationTraceQueryService:
                     "inferenceGenerationId": quality.get("inferenceGenerationId") or snapshot.get("inferenceGenerationId"),
                     "deploymentId": quality.get("deploymentId") or case.get("deploymentId"),
                 },
-                details={
+                details=stage_details({
                     "reasoningCase": case,
                     "snapshot": snapshot,
                     "executionLedger": reasoning.get("executionLedger") or {},
@@ -340,7 +344,7 @@ class NotificationTraceQueryService:
                     "matchedRules": reasoning.get("matchedRules") or [],
                     "inferenceTraces": reasoning.get("inferenceTraces") or [],
                     "hypotheses": reasoning.get("hypotheses") or [],
-                },
+                }),
             ),
             _stage(
                 "ontology-quality",
@@ -350,7 +354,7 @@ class NotificationTraceQueryService:
                 started_at=quality_at,
                 completed_at=quality_at,
                 identifiers={"qualitySampleId": quality.get("qualitySampleId"), "fingerprint": quality.get("fingerprint")},
-                details={"qualitySnapshot": quality, "qualityGate": quality_gate},
+                details=stage_details({"qualitySnapshot": quality, "qualityGate": quality_gate}),
             ),
             _stage(
                 "decision-synthesis",
@@ -363,13 +367,13 @@ class NotificationTraceQueryService:
                     "synthesisId": synthesis.get("synthesis_id") or synthesis.get("synthesisId"),
                     "selectedRuleId": synthesis.get("selected_rule_id") or synthesis.get("selectedRuleId"),
                 },
-                details={
+                details=stage_details({
                     "decisionSynthesis": synthesis,
                     "finalDecision": reasoning.get("finalDecision") or {},
                     "aiComparison": reasoning.get("aiComparison") or {},
                     "assessmentBundle": reasoning.get("assessmentBundle") or {},
                     "decisionAssurance": validated_response.get("decisionAssurance") or {},
-                },
+                }),
             ),
             _stage(
                 "ai-packet",
@@ -384,14 +388,14 @@ class NotificationTraceQueryService:
                     "promptHash": packet.get("promptHash") or ai_execution.get("promptHash"),
                     "evidenceFingerprint": packet.get("evidenceFingerprint"),
                 },
-                details={
+                details=stage_details({
                     "inferencePacket": packet,
                     "decisionCore": ai_execution.get("decisionCore") or {},
                     "decisionBrief": ai_execution.get("decisionBrief") or {},
                     "contextRouting": ai_execution.get("contextRouting") or {},
                     "promptRelease": ai_execution.get("promptRelease") or {},
                     "prompt": ai_execution.get("prompt") or "",
-                },
+                }),
             ),
             _stage(
                 "ai-response",
@@ -410,7 +414,7 @@ class NotificationTraceQueryService:
                     "resultId": ai_runtime.get("resultId") or queue_state.get("resultId"),
                     "model": ai_execution.get("model") or ai_runtime.get("model"),
                 },
-                details={"runtime": ai_runtime, "executionAudit": ai_execution, "validatedResponse": validated_response},
+                details=stage_details({"runtime": ai_runtime, "executionAudit": ai_execution, "validatedResponse": validated_response}),
             ),
             _stage(
                 "claim-validation",
@@ -423,7 +427,7 @@ class NotificationTraceQueryService:
                     "inferencePacketId": _mapping(narrative.get("claimValidation")).get("inferencePacketId"),
                     "evidenceFingerprint": _mapping(narrative.get("claimValidation")).get("evidenceFingerprint"),
                 },
-                details={"claimPublication": claim_publication, "narrative": narrative},
+                details=stage_details({"claimPublication": claim_publication, "narrative": narrative}),
             ),
             _stage(
                 "delivery-explanation",
@@ -437,7 +441,7 @@ class NotificationTraceQueryService:
                     "purpose": delivery_explanation.get("purpose"),
                     "primaryCause": _mapping(delivery_explanation.get("primaryCause")).get("category"),
                 },
-                details={"customerDeliveryExplanation": delivery_explanation},
+                details=stage_details({"customerDeliveryExplanation": delivery_explanation}),
             ),
             _stage(
                 "rendering",
@@ -447,7 +451,7 @@ class NotificationTraceQueryService:
                 started_at=_first_at(lifecycle, {"ready_to_render", "rendered"}),
                 completed_at=rendered_at,
                 identifiers={"narrativeFingerprint": narrative.get("fingerprint") or presentation.get("narrativeFingerprint")},
-                details={"writerProvenance": narrative.get("writerProvenance") or {}, "presentationAudit": presentation, "renderedMessage": rendered_message},
+                details=stage_details({"writerProvenance": narrative.get("writerProvenance") or {}, "presentationAudit": presentation, "renderedMessage": rendered_message}),
             ),
             _stage(
                 "delivery",
@@ -457,7 +461,7 @@ class NotificationTraceQueryService:
                 started_at=delivery_started,
                 completed_at=delivery_completed,
                 identifiers={"attemptIds": [item.get("attemptId") for item in attempts]},
-                details={"lifecycle": lifecycle, "deliveryAttempts": attempts},
+                details=stage_details({"lifecycle": lifecycle, "deliveryAttempts": attempts}),
             ),
         ]
         for sequence, item in enumerate(stages, start=1):

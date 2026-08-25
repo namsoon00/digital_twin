@@ -4,6 +4,11 @@ from typing import Dict, Iterable, List
 
 from .data_freshness import parse_datetime
 ALERT_STATES = {"degraded", "failed", "stale"}
+NEWS_INTERNAL_STATUS_SOURCES = {
+    "claim-governance",
+    "news-collection-runner",
+    "news-quality-admission",
+}
 
 
 def integer(value: object) -> int:
@@ -26,9 +31,15 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "failureCount": 0,
             "suppressedCount": 0,
             "circuitOpenCount": 0,
+            "primaryRequestCount": 0,
+            "fallbackRequestCount": 0,
+            "totalDurationMs": 0,
+            "maxDurationMs": 0,
             "itemCount": 0,
             "feedCandidateCount": 0,
             "candidateCount": 0,
+            "bodyCacheHitCount": 0,
+            "bodyCacheWaitCount": 0,
             "bodyMissingCount": 0,
             "googleOriginalUrlResolveFailedCount": 0,
             "googleOriginalUrlBudgetRejectedCount": 0,
@@ -40,6 +51,14 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
             "messages": [],
         })
         row["requestCount"] += 1
+        provider_role = str(status.get("providerRole") or "").strip().lower()
+        if provider_role == "primary":
+            row["primaryRequestCount"] += 1
+        elif provider_role == "fallback":
+            row["fallbackRequestCount"] += 1
+        duration_ms = integer(status.get("durationMs"))
+        row["totalDurationMs"] += duration_ms
+        row["maxDurationMs"] = max(row["maxDurationMs"], duration_ms)
         if status.get("providerSuppressed"):
             row["suppressedCount"] += 1
             row["circuitOpenCount"] += int(bool(status.get("circuitOpen")))
@@ -57,6 +76,8 @@ def provider_health_rows(statuses: Iterable[Dict[str, object]]) -> List[Dict[str
         feed_candidates = integer(status.get("feedCandidateCount"))
         row["feedCandidateCount"] += feed_candidates
         row["candidateCount"] += max(integer(status.get("candidateCount")), feed_candidates)
+        row["bodyCacheHitCount"] += integer(status.get("bodyCacheHitCount"))
+        row["bodyCacheWaitCount"] += integer(status.get("bodyCacheWaitCount"))
         row["bodyMissingCount"] += integer(status.get("bodyMissingCount"))
         row["googleOriginalUrlResolveFailedCount"] += integer(status.get("googleOriginalUrlResolveFailedCount"))
         row["googleOriginalUrlBudgetRejectedCount"] += integer(status.get("googleOriginalUrlBudgetRejectedCount"))
@@ -255,10 +276,32 @@ def evaluate_news_collection_health(
     zero_runs = 0 if fetched_count else integer(previous.get("consecutiveZeroRuns")) + 1
     last_non_zero_at = checked_at if fetched_count else str(previous.get("lastNonZeroAt") or "")
     providers = provider_health_rows(result.get("statuses") or [])
-    provider_rows = [row for row in providers if str(row.get("source") or "") != "claim-governance"]
+    provider_rows = [
+        row for row in providers
+        if str(row.get("source") or "") not in NEWS_INTERNAL_STATUS_SOURCES
+    ]
     provider_failures = sum(integer(row.get("failureCount")) for row in provider_rows)
     provider_successes = sum(integer(row.get("successCount")) for row in provider_rows)
     provider_suppressed = sum(integer(row.get("suppressedCount")) for row in provider_rows)
+    target_statuses = [
+        row for row in result.get("statuses") or []
+        if (
+            isinstance(row, dict)
+            and str(row.get("symbol") or "").strip()
+            and str(row.get("source") or row.get("provider") or "").strip() not in NEWS_INTERNAL_STATUS_SOURCES
+        )
+    ]
+    successful_target_symbols = {
+        str(row.get("symbol") or "").upper().strip()
+        for row in target_statuses
+        if row.get("ok") is not False and not row.get("providerSuppressed")
+    }
+    failed_target_symbols = {
+        str(row.get("symbol") or "").upper().strip()
+        for row in target_statuses
+        if row.get("ok") is False
+    }
+    uncovered_failure_symbols = failed_target_symbols - successful_target_symbols
     provider_candidates = sum(integer(row.get("candidateCount")) for row in providers)
     body_missing_count = sum(integer(row.get("bodyMissingCount")) for row in providers)
     original_url_failure_count = sum(integer(row.get("googleOriginalUrlResolveFailedCount")) for row in providers)
@@ -286,7 +329,7 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "failed", "all-providers-failed", "구성된 뉴스 공급자 요청이 모두 실패했습니다."
     elif provider_suppressed and not provider_successes:
         state, reason_code, reason = "degraded", "all-providers-suppressed", "보호 회로가 뉴스 공급자 요청을 일시 중지했고 대체 공급자도 이번 실행에서 확보하지 못했습니다."
-    elif provider_failures:
+    elif provider_failures and (uncovered_failure_symbols or not failed_target_symbols):
         state, reason_code, reason = "degraded", "partial-provider-failure", "일부 뉴스 공급자 요청이 실패해 나머지 공급자 데이터만 사용합니다."
     elif ungoverned_evidence_count or unsafe_syndicated_count:
         state, reason_code, reason = "degraded", "claim-governance-anomaly", "수집 근거 중 일부가 주장 검증 게이트를 통과하지 못했거나 재게시 중복이 독립 출처로 판정되었습니다."

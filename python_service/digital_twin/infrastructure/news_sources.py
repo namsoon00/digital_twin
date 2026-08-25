@@ -6,9 +6,11 @@ import signal
 import socket
 import subprocess
 import threading
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -40,6 +42,7 @@ DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
 DEFAULT_NEWS_COLLECTION_PROVIDERS = ["google_rss_us", "yahoo_search", "yahoo_finance", "gdelt"]
 DEFAULT_KOREAN_NEWS_COLLECTION_PROVIDERS = ["google_rss_kr", "yahoo_search", "yahoo_finance", "gdelt"]
+KOREAN_ONLY_NEWS_PROVIDER_NAMES = {"google_rss_kr", "google_news_kr", "rss_kr", "kr"}
 NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {
     "google_rss_kr",
@@ -504,14 +507,29 @@ class NewsSourceGateway:
         self._google_original_url_fetches_for_target = 0
         self._current_provider_diagnostics: Dict[str, int] = {}
         self._suppressed_providers: Dict[str, Dict[str, str]] = {}
+        self._provider_diagnostics_local = threading.local()
+        self._provider_state_lock = threading.Lock()
+        self._fetch_budget_lock = threading.Lock()
+        self._article_body_cache_lock = threading.Lock()
+        self._article_body_cache: Dict[str, Dict[str, object]] = {}
+        self._article_body_inflight: Dict[str, threading.Event] = {}
 
     def begin_run(self) -> Dict[str, int]:
         """Reset counters whose configured limit is explicitly per collection run."""
-        self._article_body_fetches_used = 0
-        self._article_body_fetches_for_target = 0
-        self._google_original_url_fetches_used = 0
-        self._google_original_url_fetches_for_target = 0
-        self._suppressed_providers = {}
+        with self._fetch_budget_lock:
+            self._article_body_fetches_used = 0
+            self._article_body_fetches_for_target = 0
+            self._google_original_url_fetches_used = 0
+            self._google_original_url_fetches_for_target = 0
+        with self._provider_state_lock:
+            self._suppressed_providers = {}
+        current = time.monotonic()
+        with self._article_body_cache_lock:
+            self._article_body_cache = {
+                key: value
+                for key, value in self._article_body_cache.items()
+                if float(value.get("expiresAt") or 0) > current
+            }
         self.reset_provider_diagnostics()
         return {
             "articleBodyFetchesUsed": self._article_body_fetches_used,
@@ -520,11 +538,13 @@ class NewsSourceGateway:
         }
 
     def reset_provider_diagnostics(self) -> None:
-        self._current_provider_diagnostics = {
+        diagnostics = {
             "feedCandidateCount": 0,
             "candidateCount": 0,
             "preliminaryRejectedCount": 0,
             "bodyFetchAttemptCount": 0,
+            "bodyCacheHitCount": 0,
+            "bodyCacheWaitCount": 0,
             "bodyMissingCount": 0,
             "bodyBudgetRejectedCount": 0,
             "googleOriginalUrlResolveAttemptCount": 0,
@@ -537,11 +557,21 @@ class NewsSourceGateway:
             "feedOnlyQualityRejectedCount": 0,
             "acceptedCount": 0,
         }
+        self._provider_diagnostics_local.value = diagnostics
+        if threading.current_thread() is threading.main_thread():
+            self._current_provider_diagnostics = diagnostics
+
+    def current_provider_diagnostics(self) -> Dict[str, int]:
+        value = getattr(self._provider_diagnostics_local, "value", None)
+        if isinstance(value, dict):
+            return value
+        return self._current_provider_diagnostics
 
     def record_provider_diagnostic(self, key: str, count: int = 1) -> None:
-        if key not in self._current_provider_diagnostics:
-            self._current_provider_diagnostics[key] = 0
-        self._current_provider_diagnostics[key] += max(0, int(count or 0))
+        diagnostics = self.current_provider_diagnostics()
+        if key not in diagnostics:
+            diagnostics[key] = 0
+        diagnostics[key] += max(0, int(count or 0))
 
     def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> object:
@@ -635,7 +665,10 @@ class NewsSourceGateway:
         if target.is_korean_market():
             ordered = korean + configured
         else:
-            ordered = [provider for provider in configured if provider not in korean]
+            # The Korean list is an ordering policy and intentionally contains
+            # shared providers such as Yahoo and GDELT. Only locale-specific
+            # Korean feeds must be removed for international symbols.
+            ordered = [provider for provider in configured if provider not in KOREAN_ONLY_NEWS_PROVIDER_NAMES]
         providers: List[str] = []
         for provider in ordered:
             if provider and provider not in providers:
@@ -691,6 +724,20 @@ class NewsSourceGateway:
             0.5,
             60.0,
         )
+
+    def bounded_parallel_enabled(self) -> bool:
+        if "newsCollectionBoundedParallelEnabled" not in self.settings:
+            return False
+        return truthy(self.settings.get("newsCollectionBoundedParallelEnabled"), True)
+
+    def provider_parallelism(self) -> int:
+        return int_setting(self.settings, "newsCollectionProviderParallelism", 2, 1, 4)
+
+    def primary_provider_count(self) -> int:
+        return int_setting(self.settings, "newsCollectionPrimaryProviderCount", 2, 1, 4)
+
+    def primary_minimum_items(self) -> int:
+        return int_setting(self.settings, "newsCollectionPrimaryMinimumItems", 2, 1, 20)
 
     @contextmanager
     def provider_deadline(self, provider: str):
@@ -753,6 +800,15 @@ class NewsSourceGateway:
     def article_body_minimum_chars(self) -> int:
         return int_setting(self.settings, "newsCollectionArticleBodyMinimumChars", 280, 80, ARTICLE_TEXT_LIMIT)
 
+    def article_body_cache_seconds(self) -> float:
+        return float_setting(self.settings, "newsCollectionArticleBodyCacheMinutes", 180.0, 1.0, 1440.0) * 60.0
+
+    def article_body_failure_cache_seconds(self) -> float:
+        return float_setting(self.settings, "newsCollectionArticleBodyFailureCacheMinutes", 5.0, 0.0, 60.0) * 60.0
+
+    def article_body_cache_max_entries(self) -> int:
+        return int_setting(self.settings, "newsCollectionArticleBodyCacheMaxEntries", 512, 16, 5000)
+
     def google_original_url_resolution_enabled(self) -> bool:
         return truthy(self.settings.get("newsCollectionGoogleOriginalUrlResolveEnabled"), True)
 
@@ -763,16 +819,40 @@ class NewsSourceGateway:
         return int_setting(self.settings, "newsCollectionGoogleOriginalUrlMaxPerRun", 6, 0, 10000)
 
     def google_original_url_budget_available(self) -> bool:
-        return (
-            self._google_original_url_fetches_for_target < self.google_original_url_max_per_target()
-            and self._google_original_url_fetches_used < self.google_original_url_max_per_run()
-        )
+        with self._fetch_budget_lock:
+            return (
+                self._google_original_url_fetches_for_target < self.google_original_url_max_per_target()
+                and self._google_original_url_fetches_used < self.google_original_url_max_per_run()
+            )
+
+    def reserve_google_original_url_budget(self) -> bool:
+        with self._fetch_budget_lock:
+            if (
+                self._google_original_url_fetches_for_target >= self.google_original_url_max_per_target()
+                or self._google_original_url_fetches_used >= self.google_original_url_max_per_run()
+            ):
+                return False
+            self._google_original_url_fetches_for_target += 1
+            self._google_original_url_fetches_used += 1
+            return True
 
     def article_body_budget_available(self) -> bool:
-        return (
-            self._article_body_fetches_for_target < self.article_body_max_per_target()
-            and self._article_body_fetches_used < self.article_body_max_per_run()
-        )
+        with self._fetch_budget_lock:
+            return (
+                self._article_body_fetches_for_target < self.article_body_max_per_target()
+                and self._article_body_fetches_used < self.article_body_max_per_run()
+            )
+
+    def reserve_article_body_budget(self) -> bool:
+        with self._fetch_budget_lock:
+            if (
+                self._article_body_fetches_for_target >= self.article_body_max_per_target()
+                or self._article_body_fetches_used >= self.article_body_max_per_run()
+            ):
+                return False
+            self._article_body_fetches_for_target += 1
+            self._article_body_fetches_used += 1
+            return True
 
     def article_content_for_url(self, url: str) -> Dict[str, str]:
         if not self.article_body_enabled():
@@ -780,23 +860,67 @@ class NewsSourceGateway:
         normalized = str(url or "").strip()
         if not normalized.startswith(("http://", "https://")):
             return {"text": "", "canonicalUrl": "", "publisher": ""}
-        if not self.article_body_budget_available():
+        cache_key = canonical_evidence_url(normalized) or normalized
+        current = time.monotonic()
+        with self._article_body_cache_lock:
+            cached = self._article_body_cache.get(cache_key) or {}
+            if float(cached.get("expiresAt") or 0) > current:
+                self.record_provider_diagnostic("bodyCacheHitCount")
+                return dict(cached.get("content") or {})
+            wait_event = self._article_body_inflight.get(cache_key)
+            owns_fetch = wait_event is None
+            if owns_fetch:
+                wait_event = threading.Event()
+                self._article_body_inflight[cache_key] = wait_event
+        if not owns_fetch:
+            self.record_provider_diagnostic("bodyCacheWaitCount")
+            wait_event.wait(timeout=self.article_body_timeout_seconds() + 1.0)
+            with self._article_body_cache_lock:
+                cached = self._article_body_cache.get(cache_key) or {}
+                if float(cached.get("expiresAt") or 0) > time.monotonic():
+                    self.record_provider_diagnostic("bodyCacheHitCount")
+                    return dict(cached.get("content") or {})
             return {"text": "", "canonicalUrl": "", "publisher": ""}
-        self._article_body_fetches_for_target += 1
-        self._article_body_fetches_used += 1
+        content = {"text": "", "canonicalUrl": "", "publisher": ""}
         try:
-            raw_html = self.fetch_text(normalized, {
-                "Accept": "text/html,application/xhtml+xml",
-                "User-Agent": "DigitalTwin/1.0",
-            })
-        except Exception:  # noqa: BLE001 - article-body fetch must not block headline collection.
-            return {"text": "", "canonicalUrl": "", "publisher": ""}
-        metadata = article_metadata_from_html(raw_html, normalized)
-        return {
-            "text": extract_article_text(raw_html),
-            "canonicalUrl": metadata["canonicalUrl"],
-            "publisher": metadata["publisher"],
-        }
+            if not self.reserve_article_body_budget():
+                return content
+            try:
+                raw_html = self.fetch_text(normalized, {
+                    "Accept": "text/html,application/xhtml+xml",
+                    "User-Agent": "DigitalTwin/1.0",
+                })
+                metadata = article_metadata_from_html(raw_html, normalized)
+                content = {
+                    "text": extract_article_text(raw_html),
+                    "canonicalUrl": metadata["canonicalUrl"],
+                    "publisher": metadata["publisher"],
+                }
+            except Exception:  # noqa: BLE001 - article-body fetch must not block headline collection.
+                pass
+            cache_seconds = (
+                self.article_body_cache_seconds()
+                if content.get("text")
+                else self.article_body_failure_cache_seconds()
+            )
+            if cache_seconds > 0:
+                with self._article_body_cache_lock:
+                    if len(self._article_body_cache) >= self.article_body_cache_max_entries():
+                        oldest_key = min(
+                            self._article_body_cache,
+                            key=lambda key: float(self._article_body_cache[key].get("expiresAt") or 0),
+                        )
+                        self._article_body_cache.pop(oldest_key, None)
+                    self._article_body_cache[cache_key] = {
+                        "content": dict(content),
+                        "expiresAt": time.monotonic() + cache_seconds,
+                    }
+            return content
+        finally:
+            with self._article_body_cache_lock:
+                completed = self._article_body_inflight.pop(cache_key, None)
+                if completed:
+                    completed.set()
 
     def article_text_for_url(self, url: str) -> str:
         return self.article_content_for_url(url)["text"]
@@ -871,11 +995,9 @@ class NewsSourceGateway:
         """Resolve a Google RSS interstitial before requesting the publisher body."""
         if not self.google_news_article_link(url):
             return str(url or "").strip()
-        if not self.google_original_url_resolution_enabled() or not self.google_original_url_budget_available():
+        if not self.google_original_url_resolution_enabled() or not self.reserve_google_original_url_budget():
             self.record_provider_diagnostic("googleOriginalUrlBudgetRejectedCount")
             return ""
-        self._google_original_url_fetches_for_target += 1
-        self._google_original_url_fetches_used += 1
         self.record_provider_diagnostic("googleOriginalUrlResolveAttemptCount")
         try:
             interstitial = self.fetch_text(str(url), {
@@ -1054,32 +1176,20 @@ class NewsSourceGateway:
         statuses: List[Dict[str, object]] = []
         seen = set()
         limit = self.per_symbol_limit()
-        self._article_body_fetches_for_target = 0
-        self._google_original_url_fetches_for_target = 0
-        for provider in self.providers_for_target(target):
+        with self._fetch_budget_lock:
+            self._article_body_fetches_for_target = 0
+            self._google_original_url_fetches_for_target = 0
+        providers = self.providers_for_target(target)
+        primary_count = min(len(providers), self.primary_provider_count())
+        primary = providers[:primary_count]
+        fallback = providers[primary_count:]
+
+        def merge_result(provider: str, fetched: List[ResearchEvidence], status: Dict[str, object], role: str) -> None:
             remaining = max(0, limit - len(items))
-            if remaining <= 0:
-                break
-            suppressed = self._suppressed_providers.get(provider)
-            if suppressed:
-                statuses.append({
-                    "source": provider,
-                    "symbol": target.normalized_symbol(),
-                    "ok": True,
-                    "count": 0,
-                    "status": str(suppressed.get("status") or "provider-suppressed"),
-                    "providerSuppressed": True,
-                    "circuitOpen": str(suppressed.get("kind") or "") == "circuit-open",
-                    "message": str(suppressed.get("message") or "")[:180],
-                })
-                continue
-            try:
-                self.reset_provider_diagnostics()
-                with self.provider_deadline(provider):
-                    fetched = self.fetch_provider(provider, target)
-                saved = 0
+            saved = 0
+            if remaining:
                 for item in fetched:
-                    key = item.url or item.title
+                    key = canonical_evidence_url(item.url) or compact_text(item.title, 300).casefold()
                     if not key or key in seen:
                         continue
                     seen.add(key)
@@ -1087,42 +1197,105 @@ class NewsSourceGateway:
                     saved += 1
                     if saved >= remaining:
                         break
-                diagnostics = dict(self._current_provider_diagnostics)
-                statuses.append({
-                    "source": provider,
-                    "symbol": target.normalized_symbol(),
-                    "ok": True,
-                    "count": saved,
-                    **diagnostics,
-                    "status": "ok" if saved else provider_empty_status(diagnostics),
-                })
-            except (ExternalCircuitOpen, ExternalRateLimited) as error:
-                # The external guard already decided this provider must pause.
-                # Do not fan the same known outage across every symbol or let
-                # the operational health model mistake the intentional bypass
-                # for several new provider failures.
-                kind = "circuit-open" if isinstance(error, ExternalCircuitOpen) else "rate-limited"
-                status = kind + "-suppressed"
-                message = str(error)[:180]
+            status["count"] = saved
+            status["providerRole"] = role
+            statuses.append(status)
+
+        if self.bounded_parallel_enabled() and len(primary) > 1:
+            workers = min(self.provider_parallelism(), len(primary))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="news-provider") as executor:
+                futures = {
+                    provider: executor.submit(self.collect_provider_result, provider, target)
+                    for provider in primary
+                }
+                primary_results = {
+                    provider: futures[provider].result()
+                    for provider in primary
+                }
+            for provider in primary:
+                fetched, status = primary_results[provider]
+                status["parallelBatch"] = True
+                merge_result(provider, fetched, status, "primary")
+        else:
+            for provider in primary:
+                fetched, status = self.collect_provider_result(provider, target)
+                merge_result(provider, fetched, status, "primary")
+                if len(items) >= limit:
+                    break
+
+        if len(items) < min(limit, self.primary_minimum_items()):
+            for provider in fallback:
+                fetched, status = self.collect_provider_result(provider, target)
+                merge_result(provider, fetched, status, "fallback")
+                if len(items) >= min(limit, self.primary_minimum_items()):
+                    break
+        ranked = sorted(items, key=self.evidence_rank_key, reverse=True)
+        return ranked[: self.per_symbol_limit()], statuses
+
+    def collect_provider_result(
+        self,
+        provider: str,
+        target: NewsCollectionTarget,
+    ) -> Tuple[List[ResearchEvidence], Dict[str, object]]:
+        started = time.monotonic()
+        with self._provider_state_lock:
+            suppressed = dict(self._suppressed_providers.get(provider) or {})
+        if suppressed:
+            return [], {
+                "source": provider,
+                "symbol": target.normalized_symbol(),
+                "ok": True,
+                "count": 0,
+                "status": str(suppressed.get("status") or "provider-suppressed"),
+                "providerSuppressed": True,
+                "circuitOpen": str(suppressed.get("kind") or "") == "circuit-open",
+                "message": str(suppressed.get("message") or "")[:180],
+                "durationMs": 0,
+            }
+        try:
+            self.reset_provider_diagnostics()
+            with self.provider_deadline(provider):
+                fetched = self.fetch_provider(provider, target)
+            diagnostics = dict(self.current_provider_diagnostics())
+            return fetched, {
+                "source": provider,
+                "symbol": target.normalized_symbol(),
+                "ok": True,
+                "count": len(fetched),
+                **diagnostics,
+                "status": "ok" if fetched else provider_empty_status(diagnostics),
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
+        except (ExternalCircuitOpen, ExternalRateLimited) as error:
+            kind = "circuit-open" if isinstance(error, ExternalCircuitOpen) else "rate-limited"
+            status = kind + "-suppressed"
+            message = str(error)[:180]
+            with self._provider_state_lock:
                 self._suppressed_providers[provider] = {
                     "kind": kind,
                     "status": status,
                     "message": message,
                 }
-                statuses.append({
-                    "source": provider,
-                    "symbol": target.normalized_symbol(),
-                    "ok": True,
-                    "count": 0,
-                    "status": status,
-                    "providerSuppressed": True,
-                    "circuitOpen": kind == "circuit-open",
-                    "message": message,
-                })
-            except Exception as error:  # noqa: BLE001 - one feed must not stop the collection cycle.
-                statuses.append({"source": provider, "symbol": target.normalized_symbol(), "ok": False, "message": str(error)[:180]})
-        ranked = sorted(items, key=self.evidence_rank_key, reverse=True)
-        return ranked[: self.per_symbol_limit()], statuses
+            return [], {
+                "source": provider,
+                "symbol": target.normalized_symbol(),
+                "ok": True,
+                "count": 0,
+                "status": status,
+                "providerSuppressed": True,
+                "circuitOpen": kind == "circuit-open",
+                "message": message,
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
+        except Exception as error:  # noqa: BLE001 - one feed must not stop the collection cycle.
+            return [], {
+                "source": provider,
+                "symbol": target.normalized_symbol(),
+                "ok": False,
+                "count": 0,
+                "message": str(error)[:180],
+                "durationMs": int((time.monotonic() - started) * 1000),
+            }
 
     def evidence_rank_key(self, item: ResearchEvidence) -> tuple:
         payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
@@ -1308,7 +1481,7 @@ class NewsSourceGateway:
                     len(candidates) - index,
                 )
                 if not evidence:
-                    if not int(self._current_provider_diagnostics.get("candidateCount") or 0):
+                    if not int(self.current_provider_diagnostics().get("candidateCount") or 0):
                         self.record_provider_diagnostic("candidateCount")
                     self.record_provider_diagnostic("googleOriginalUrlBudgetRejectedCount")
                 break

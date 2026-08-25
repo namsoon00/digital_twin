@@ -1,4 +1,5 @@
 import sys
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,6 +62,21 @@ class NewsCollectionQualityTests(unittest.TestCase):
         gateway.begin_run()
 
         self.assertTrue(gateway.article_text_for_url("https://example.test/second"))
+
+    def test_article_body_cache_reuses_content_without_spending_run_budget(self):
+        calls = []
+        html = "<html><body><article><p>Apple reported improved services revenue and a detailed outlook.</p></article></body></html>"
+        gateway = NewsSourceGateway(
+            {"newsCollectionArticleBodyMaxPerRun": "1"},
+            fetch_text=lambda url, _headers=None: calls.append(url) or html,
+        )
+
+        first = gateway.article_content_for_url("https://example.test/story?utm_source=rss")
+        second = gateway.article_content_for_url("https://example.test/story")
+
+        self.assertEqual(first, second)
+        self.assertEqual(1, len(calls))
+        self.assertEqual(1, gateway._article_body_fetches_used)
 
     def test_compact_gdelt_timestamp_is_normalized_and_rejected_when_stale(self):
         parsed = parse_news_timestamp("20260719T091519")
@@ -532,6 +548,45 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertEqual("circuit-open-suppressed", first_statuses[0]["status"])
         self.assertTrue(second_statuses[0]["providerSuppressed"])
         self.assertTrue(second_statuses[0]["circuitOpen"])
+
+    def test_bounded_parallel_primary_wave_skips_unneeded_fallback_provider(self):
+        barrier = threading.Barrier(2)
+        calls = []
+        gateway = NewsSourceGateway({
+            "newsCollectionInternationalProviders": "primary_a,primary_b,fallback_c",
+            "newsCollectionBoundedParallelEnabled": "1",
+            "newsCollectionProviderParallelism": "2",
+            "newsCollectionPrimaryProviderCount": "2",
+            "newsCollectionPrimaryMinimumItems": "1",
+        })
+        evidence = self.evidence()
+
+        def fetch_provider(provider, _target):
+            calls.append(provider)
+            if provider in {"primary_a", "primary_b"}:
+                barrier.wait(timeout=1)
+            return [evidence] if provider == "primary_a" else []
+
+        gateway.fetch_provider = fetch_provider
+        items, statuses = gateway.collect_for_target(self.target())
+
+        self.assertEqual([evidence.evidence_id], [item.evidence_id for item in items])
+        self.assertEqual({"primary_a", "primary_b"}, set(calls))
+        self.assertNotIn("fallback_c", calls)
+        self.assertTrue(all(status.get("parallelBatch") for status in statuses))
+        self.assertTrue(all(status.get("providerRole") == "primary" for status in statuses))
+
+    def test_international_target_keeps_shared_yahoo_and_gdelt_providers(self):
+        gateway = NewsSourceGateway({
+            "newsCollectionInternationalProviders": "google_rss_us,yahoo_search,yahoo_finance,gdelt",
+            "newsCollectionKoreanProviders": "google_rss_kr,yahoo_search,yahoo_finance,gdelt",
+            "newsCollectionGdeltSyncEnabled": "1",
+        })
+
+        self.assertEqual(
+            ["google_rss_us", "yahoo_search", "yahoo_finance", "gdelt"],
+            gateway.providers_for_target(self.target()),
+        )
 
     def test_collection_governs_retained_and_new_claims_across_cycles(self):
         observed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

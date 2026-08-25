@@ -57,9 +57,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None, admission_policy=None):
         super().__init__(settings)
         self.admission_policy = admission_policy or NotificationAdmissionPolicy()
-        from .mysql_operational import MySQLNotificationRuleStore
+        skip_rule_seed = str(
+            self.runtime_settings.get("_skipNotificationRuleDefaultsSeed") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not skip_rule_seed:
+            from .mysql_operational import MySQLNotificationRuleStore
 
-        MySQLNotificationRuleStore(self.runtime_settings)
+            MySQLNotificationRuleStore(self.runtime_settings)
         # Read-side stores are constructed by several HTTP projections. Do not
         # scan and rewrite historical article delivery rows on construction;
         # duplicate checks already merge the durable ledger with bounded live

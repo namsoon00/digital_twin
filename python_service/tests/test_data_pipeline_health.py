@@ -2,7 +2,11 @@ import unittest
 from datetime import datetime, timezone
 
 from digital_twin.application.data_pipeline_health_service import DataPipelineHealthService
-from digital_twin.domain.data_pipeline_health import evaluate_market_data_collection_health, evaluate_news_collection_health
+from digital_twin.domain.data_pipeline_health import (
+    evaluate_market_data_collection_health,
+    evaluate_news_collection_health,
+    provider_health_rows,
+)
 
 
 class MemoryStore:
@@ -55,6 +59,47 @@ class DataPipelineHealthTests(unittest.TestCase):
         self.assertEqual(0, health.provider_failure_count)
         self.assertEqual(1, health.provider_suppressed_count)
         self.assertEqual(1, health.provider_rows[1]["circuitOpenCount"])
+
+    def test_redundant_provider_failure_does_not_degrade_covered_symbol(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 1,
+            "savedCount": 1,
+            "statuses": [
+                {"source": "google_rss_us", "symbol": "AAPL", "ok": False, "message": "timeout"},
+                {"source": "yahoo_search", "symbol": "AAPL", "ok": True, "count": 1},
+            ],
+        })
+
+        self.assertEqual("healthy", health.state)
+        self.assertEqual("fresh-evidence-collected", health.reason_code)
+        self.assertEqual(1, health.provider_failure_count)
+
+    def test_internal_quality_success_does_not_hide_provider_failure(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "statuses": [
+                {"source": "google_rss_us", "symbol": "AAPL", "ok": False, "message": "timeout"},
+                {"source": "news-quality-admission", "symbol": "AAPL", "ok": True, "count": 0},
+            ],
+        })
+
+        self.assertEqual("failed", health.state)
+        self.assertEqual("all-providers-failed", health.reason_code)
+
+    def test_provider_health_rows_keep_role_and_latency_metrics(self):
+        rows = provider_health_rows([
+            {"source": "google_rss_us", "ok": True, "providerRole": "primary", "durationMs": 120},
+            {"source": "google_rss_us", "ok": True, "providerRole": "fallback", "durationMs": 80},
+        ])
+
+        self.assertEqual(2, rows[0]["requestCount"])
+        self.assertEqual(1, rows[0]["primaryRequestCount"])
+        self.assertEqual(1, rows[0]["fallbackRequestCount"])
+        self.assertEqual(200, rows[0]["totalDurationMs"])
+        self.assertEqual(120, rows[0]["maxDurationMs"])
 
     def test_all_suppressed_news_providers_remain_visible_as_degraded(self):
         health = evaluate_news_collection_health({

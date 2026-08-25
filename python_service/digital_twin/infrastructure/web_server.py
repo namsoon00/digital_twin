@@ -243,6 +243,7 @@ def operational_read_settings() -> Dict[str, object]:
     settings = dict(runtime_settings(fast_operational_read=True))
     settings["_skipOperationalHistoryRetention"] = "1"
     settings["_skipOperationalSchemaBootstrap"] = "1"
+    settings["_skipNotificationRuleDefaultsSeed"] = "1"
     return settings
 
 
@@ -1087,6 +1088,10 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "newsCollectionProviders",
         "newsCollectionInternationalProviders",
         "newsCollectionKoreanProviders",
+        "newsCollectionBoundedParallelEnabled",
+        "newsCollectionProviderParallelism",
+        "newsCollectionPrimaryProviderCount",
+        "newsCollectionPrimaryMinimumItems",
         "newsCollectionGoogleKrEnabled",
         "newsCollectionGoogleUsEnabled",
         "newsCollectionYahooSearchEnabled",
@@ -1096,6 +1101,9 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "newsCollectionGoogleOriginalUrlMaxPerTarget",
         "newsCollectionGoogleOriginalUrlMaxPerRun",
         "newsCollectionArticleBodyMinimumChars",
+        "newsCollectionArticleBodyCacheMinutes",
+        "newsCollectionArticleBodyFailureCacheMinutes",
+        "newsCollectionArticleBodyCacheMaxEntries",
         "newsCollectionQualityGateEnabled",
         "newsCollectionMinimumRelevanceState",
         "newsCollectionMinimumMaterialityState",
@@ -2796,8 +2804,8 @@ def notification_store():
     return stores.notification_template_store()
 
 
-def notification_queue_store():
-    return stores.notification_job_store(operational_read_settings())
+def notification_queue_store(settings: Dict[str, object] = None):
+    return stores.notification_job_store(settings or operational_read_settings())
 
 
 def notification_rule_store():
@@ -3082,8 +3090,14 @@ def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, objec
     }
 
 
-def notification_job_public_payload(job: NotificationJob, detail: bool = False, stale_minutes: int = None) -> Dict[str, object]:
+def notification_job_public_payload(
+    job: NotificationJob,
+    detail: bool = False,
+    stale_minutes: int = None,
+    settings: Dict[str, object] = None,
+) -> Dict[str, object]:
     context = job.context or {}
+    configured_settings = settings or operational_read_settings()
     customer_text = notification_customer_text(job)
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     trigger_ledger = context.get("deliveryTriggerLedger") if isinstance(context.get("deliveryTriggerLedger"), list) else []
@@ -3125,7 +3139,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
     api_source = str(context.get("apiSource") or context.get("quoteSource") or context.get("sourceApi") or "notification_jobs")
     if stale_minutes is None:
         try:
-            stale_minutes = max(1, int(runtime_settings().get("notificationProcessingStaleMinutes") or 2))
+            stale_minutes = max(1, int(configured_settings.get("notificationProcessingStaleMinutes") or 2))
         except (TypeError, ValueError):
             stale_minutes = 2
     payload = {
@@ -3236,7 +3250,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
             relation = dict(relation or {}) if isinstance(relation, dict) else {}
             generation_id = str(relation.get("inferenceGenerationId") or "").strip()
             if generation_id:
-                execution_store = stores.ontology_projection_run_store(runtime_settings())
+                execution_store = stores.ontology_projection_run_store(configured_settings)
                 payload["reasoningTrace"]["executionLedger"] = (
                     execution_store.execution_trace_for_inference_generation(
                         generation_id,
@@ -3257,7 +3271,7 @@ def notification_job_public_payload(job: NotificationJob, detail: bool = False, 
                 or episode.get("episodeId")
                 or ""
             ).strip()
-            lifecycle = stores.investment_domain_store(runtime_settings()).lifecycle_trace(episode_id)
+            lifecycle = stores.investment_domain_store(configured_settings).lifecycle_trace(episode_id)
             payload["investmentLifecycle"] = lifecycle
             payload["reasoningTrace"]["investmentLifecycle"] = lifecycle
         except Exception as error:  # noqa: BLE001 - the immutable reasoning trace remains usable.
@@ -3517,6 +3531,7 @@ def _notification_detail_section_payload(
             "jobId": payload.get("jobId"),
             "section": section,
             "aiExecution": ai,
+            "aiRuntime": payload.get("aiRuntime") or {},
             "aiComparison": reasoning.get("aiComparison") or {},
             "finalDecision": reasoning.get("finalDecision") or {},
             "narrative": reasoning.get("narrative") or {},
@@ -3547,13 +3562,18 @@ def notification_job_detail_payload(
     section: str = "summary",
     include_sensitive: bool = True,
 ) -> Dict[str, object]:
-    store = notification_queue_store()
+    configured = operational_read_settings()
+    store = notification_queue_store(configured)
     job = store.get(job_id)
     if not job:
         return {}
     normalized_section = str(section or "summary").strip().lower()
-    include_full_reasoning = normalized_section in {"reasoning", "delivery"}
-    payload = notification_job_public_payload(job, detail=include_full_reasoning)
+    include_full_reasoning = normalized_section == "reasoning"
+    payload = notification_job_public_payload(
+        job,
+        detail=include_full_reasoning,
+        settings=configured,
+    )
     if not include_full_reasoning:
         customer_text = notification_customer_text(job)
         payload["fullText"] = full_notification_text(customer_text)
@@ -3574,7 +3594,6 @@ def notification_job_detail_payload(
     try:
         from ..application.notification.query import NotificationTraceQueryService
 
-        configured = runtime_settings()
         source_event = {}
         if job.source_event_id and normalized_section in {"reasoning", "delivery"}:
             try:
@@ -3603,14 +3622,18 @@ def notification_job_detail_payload(
                 ai_trace = stores.ai_inference_queue_store(configured).trace_for_notification(job.job_id)
             except Exception as error:  # noqa: BLE001 - notification execution audit is the fallback.
                 ai_trace = {"lookupError": str(error)}
-        payload["notificationTrace"] = NotificationTraceQueryService(store).trace_for_job(
-            job,
-            reasoning_trace=payload.get("reasoningTrace") or {},
-            source_event=source_event,
-            reasoning_case=reasoning_case,
-            ai_trace=ai_trace,
-            rendered_message=str(payload.get("fullText") or ""),
-        )
+        if normalized_section in {"summary", "delivery"}:
+            payload["notificationTrace"] = NotificationTraceQueryService(store).trace_for_job(
+                job,
+                reasoning_trace=payload.get("reasoningTrace") or {},
+                source_event=source_event,
+                reasoning_case=reasoning_case,
+                ai_trace=ai_trace,
+                rendered_message=str(payload.get("fullText") or ""),
+                include_stage_details=False,
+            )
+        if ai_trace:
+            payload["aiRuntime"] = ai_trace
         if reasoning_case and isinstance(payload.get("reasoningTrace"), dict):
             payload["reasoningTrace"]["reasoningCase"] = reasoning_case
     except Exception as error:  # noqa: BLE001 - the saved notification remains readable without its timeline.
@@ -5450,7 +5473,8 @@ def console_portfolio_api_payload(query: Dict[str, List[str]], view: str) -> Dic
     account_id = first_query(query, "accountId") or "default"
     portfolio_id = first_query(query, "portfolioId") or "portfolio:" + account_id
     lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle(portfolio_id)
-    return console_read_model_service(settings).portfolio(lifecycle, view)
+    snapshot = flow_lens_read_payload(query)
+    return console_read_model_service(settings).portfolio(lifecycle, view, snapshot=snapshot)
 
 
 def console_market_instruments_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:

@@ -24291,6 +24291,20 @@
   function notificationJobDecisionFactors(job) {
     if (!job) return [];
     var rows = [];
+    var explanation = job.customerDeliveryExplanation && typeof job.customerDeliveryExplanation === "object"
+      ? job.customerDeliveryExplanation
+      : {};
+    var explanationValidation = explanation.validation && typeof explanation.validation === "object"
+      ? explanation.validation
+      : {};
+    var primaryCause = explanation.primaryCause && typeof explanation.primaryCause === "object"
+      ? explanation.primaryCause
+      : {};
+    if (explanationValidation.state === "valid" && primaryCause.summary) {
+      rows.push({ label: String(primaryCause.summary), tone: "watch" });
+    } else if (explanationValidation.state === "invalid") {
+      rows.push({ label: "사용자 발송 사유 계약 오류", tone: "danger" });
+    }
     var inferenceTransition = job.investmentNotificationTransition && typeof job.investmentNotificationTransition === "object"
       ? job.investmentNotificationTransition
       : {};
@@ -24301,12 +24315,14 @@
     if (freshRecheck.requested) {
       rows.push({ label: "오래된 판단 대신 최신 데이터 재수집을 예약했습니다.", tone: "watch" });
     }
-    if (job.deliveryGateReason) {
+    if (!primaryCause.summary && job.deliveryGateReason) {
       rows.push({ label: String(job.deliveryGateReason), tone: notificationDecisionFactorTone(job.deliveryGateReason) });
     }
-    (Array.isArray(job.deliveryReasons) ? job.deliveryReasons : []).slice(0, 5).forEach(function (reason) {
-      rows.push({ label: String(reason || ""), tone: notificationDecisionFactorTone(reason) });
-    });
+    if (!primaryCause.summary) {
+      (Array.isArray(job.deliveryReasons) ? job.deliveryReasons : []).slice(0, 5).forEach(function (reason) {
+        rows.push({ label: String(reason || ""), tone: notificationDecisionFactorTone(reason) });
+      });
+    }
     if (Number(job.repeatRecentCount || 0) > 0) {
       rows.push({
         label: "같은 내용 " + String(job.repeatWindowMinutes || 0) + "분 내 " + String(job.repeatRecentCount || 0) + "회 확인",
@@ -24345,6 +24361,12 @@
 
   function renderNotificationTriggerLedger(job) {
     var allRows = Array.isArray(job && job.deliveryTriggerLedger) ? job.deliveryTriggerLedger : [];
+    var explanation = job && job.customerDeliveryExplanation && typeof job.customerDeliveryExplanation === "object"
+      ? job.customerDeliveryExplanation
+      : {};
+    var validation = explanation.validation && typeof explanation.validation === "object" ? explanation.validation : {};
+    var primaryCause = explanation.primaryCause && typeof explanation.primaryCause === "object" ? explanation.primaryCause : {};
+    var supportingCauses = Array.isArray(explanation.supportingCauses) ? explanation.supportingCauses : [];
     var customerRows = Array.isArray(job && job.customerDeliveryTriggers)
       ? job.customerDeliveryTriggers
       : allRows.filter(function (item) { return item && item.customerVisible === true; });
@@ -24361,6 +24383,7 @@
           item.threshold !== undefined && item.threshold !== "" ? "기준 " + String(item.threshold) : "",
           item.sourceTitle ? "원문 " + String(item.sourceTitle) : "",
           item.sourceProvider ? "출처 " + String(item.sourceProvider) : "",
+          Array.isArray(item.sourceReferences) && item.sourceReferences.length ? "참조 " + item.sourceReferences.join(", ") : "",
           Array.isArray(item.ruleIds) && item.ruleIds.length ? "규칙 " + item.ruleIds.join(", ") : "",
           Array.isArray(item.evidenceIds) && item.evidenceIds.length ? "근거 " + item.evidenceIds.join(", ") : ""
         ].filter(Boolean).join(" · ");
@@ -24368,8 +24391,23 @@
       }).join("");
     }
     var sections = [];
+    if (primaryCause.summary) {
+      sections.push(
+        '<section class="notification-detail-section"><strong>사용자에게 표시된 발송 사유</strong>' +
+        '<div class="notification-detail-reasons">' + renderRows([primaryCause].concat(supportingCauses)) + '</div>' +
+        '<p class="notification-detail-note">계약 ' + escapeHtml(explanation.version || "-") +
+        ' · 검증 ' + escapeHtml(validation.state || "확인 필요") + '</p></section>'
+      );
+    } else if (validation.state === "invalid") {
+      sections.push(
+        '<section class="notification-detail-section"><strong>사용자 발송 사유 계약 오류</strong>' +
+        '<div class="notification-detail-reasons"><p><b>검증 실패</b> ' +
+        escapeHtml((Array.isArray(validation.errors) ? validation.errors : []).join(", ") || "원인 기록 없음") +
+        '</p></div></section>'
+      );
+    }
     if (customerRows.length) {
-      sections.push('<section class="notification-detail-section"><strong>사용자 알림 계기</strong><div class="notification-detail-reasons">' + renderRows(customerRows) + '</div></section>');
+      sections.push('<details class="notification-detail-section"><summary><strong>발송 계기 원장</strong></summary><div class="notification-detail-reasons">' + renderRows(customerRows) + '</div></details>');
     }
     if (internalRows.length) {
       sections.push('<details class="notification-detail-section"><summary><strong>내부 발송 검사</strong></summary><div class="notification-detail-reasons">' + renderRows(internalRows) + '</div></details>');
@@ -25341,6 +25379,7 @@
       received: "요청 수신",
       eligibility_checked: "발송 적격성 확인",
       awaiting_decision: "AI 판단 대기",
+      delivery_reason_validated: "사용자 발송 사유 검증",
       ready_to_render: "렌더링 준비",
       rendered: "메시지 렌더링",
       dispatching: "채널 전송 시도",

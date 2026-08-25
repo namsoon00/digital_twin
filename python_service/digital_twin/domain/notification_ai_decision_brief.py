@@ -775,6 +775,9 @@ def _compact_portfolio_lifecycle(
             item,
             (
                 "symbol", "currentWeightPct", "profitLossRate", "marketValueKrw",
+                "accountValueKrw", "accountValueBasis", "brokerGrossValueKrw",
+                "brokerNetValueKrw", "markToMarketValueKrw", "valuationSnapshotId",
+                "valuationFxSource", "valuationFxState", "valuationFxAsOf",
                 "holdingDays", "openedAt", "lastIncreaseAt", "lastDecreaseAt",
             ),
         )
@@ -786,7 +789,9 @@ def _compact_portfolio_lifecycle(
             _selected_fields(
                 item,
                 (
-                    "symbol", "profitLossRate", "marketValueKrw", "holdingDays",
+                    "symbol", "profitLossRate", "marketValueKrw", "accountValueKrw",
+                    "accountValueBasis", "brokerGrossValueKrw", "brokerNetValueKrw",
+                    "markToMarketValueKrw", "valuationSnapshotId", "holdingDays",
                     "openedAt", "lastIncreaseAt", "lastDecreaseAt",
                 ),
             )

@@ -24,6 +24,17 @@ def first_number(item: Dict[str, object], keys: List[str]) -> float:
     return 0.0
 
 
+def nested_number(item: Dict[str, object], container_keys: List[str], value_keys: List[str]) -> float:
+    for container_key in container_keys:
+        container = item.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for value_key in value_keys:
+            if container.get(value_key) not in (None, ""):
+                return number(container.get(value_key))
+    return 0.0
+
+
 def optional_number(item: Dict[str, object], keys: List[str]):
     for key in keys:
         if key in item and item.get(key) not in (None, ""):
@@ -396,6 +407,35 @@ def normalize_position(item: Dict[str, object]) -> Position:
     if currency.upper() == "KRW" and not market_value_krw:
         market_value_krw = native_market_value
 
+    broker_market_value = first_number(item, [
+        "brokerMarketValue", "broker_market_value", "brokerGrossNative", "broker_gross_native",
+    ]) or nested_number(item, ["marketValue", "market_value"], ["amount", "value"])
+    if not broker_market_value:
+        broker_market_value = native_market_value
+    broker_market_value_after_cost = first_number(item, [
+        "brokerMarketValueAfterCost", "broker_market_value_after_cost", "brokerNetNative", "broker_net_native",
+    ]) or nested_number(item, ["marketValue", "market_value"], ["amountAfterCost", "amount_after_cost"])
+    broker_purchase_amount = first_number(item, [
+        "brokerPurchaseAmount", "broker_purchase_amount", "brokerPurchaseNative", "broker_purchase_native",
+    ]) or nested_number(item, ["marketValue", "market_value"], ["purchaseAmount", "purchase_amount"])
+    broker_market_value_krw = first_number(item, [
+        "brokerMarketValueKrw", "brokerMarketValueKRW", "broker_market_value_krw", "brokerGrossBase", "broker_gross_base",
+    ])
+    broker_market_value_after_cost_krw = first_number(item, [
+        "brokerMarketValueAfterCostKrw", "brokerMarketValueAfterCostKRW",
+        "broker_market_value_after_cost_krw", "brokerNetBase", "broker_net_base",
+    ])
+    mark_to_market_value = first_number(item, [
+        "markToMarketValue", "mark_to_market_value", "markToMarketNative", "mark_to_market_native",
+    ]) or estimated_native_market_value or native_market_value
+    mark_to_market_value_krw = first_number(item, [
+        "markToMarketValueKrw", "markToMarketValueKRW", "mark_to_market_value_krw",
+        "markToMarketBase", "mark_to_market_base",
+    ])
+    account_value_krw = first_number(item, [
+        "accountValueKrw", "accountValueKRW", "account_value_krw", "accountValueBase", "account_value_base",
+    ])
+
     profit_loss = first_number(item, [
         "profitLoss",
         "profit_loss",
@@ -407,6 +447,13 @@ def normalize_position(item: Dict[str, object]) -> Position:
     profit_loss_krw = first_number(item, BASE_PROFIT_LOSS_KEYS)
     if currency.upper() == "KRW" and not profit_loss_krw:
         profit_loss_krw = profit_loss
+    broker_profit_loss = first_number(item, [
+        "brokerProfitLoss", "broker_profit_loss", "brokerProfitLossNative", "broker_profit_loss_native",
+    ]) or nested_number(item, ["profitLoss", "profit_loss"], ["amount", "value"]) or profit_loss
+    broker_profit_loss_after_cost = first_number(item, [
+        "brokerProfitLossAfterCost", "broker_profit_loss_after_cost",
+        "brokerProfitLossNetNative", "broker_profit_loss_net_native",
+    ]) or nested_number(item, ["profitLoss", "profit_loss"], ["amountAfterCost", "amount_after_cost"])
     exchange_rate = first_number(item, EXCHANGE_RATE_KEYS)
     raw_rate = (
         number(item.get("profitLossRate"))
@@ -671,6 +718,22 @@ def normalize_position(item: Dict[str, object]) -> Position:
         indicator_fetched_at=str(item.get("indicatorFetchedAt") or item.get("indicator_fetched_at") or ""),
         market_value=native_market_value,
         market_value_krw=market_value_krw,
+        broker_market_value=broker_market_value,
+        broker_market_value_after_cost=broker_market_value_after_cost,
+        broker_purchase_amount=broker_purchase_amount,
+        broker_profit_loss=broker_profit_loss,
+        broker_profit_loss_after_cost=broker_profit_loss_after_cost,
+        broker_market_value_krw=broker_market_value_krw,
+        broker_market_value_after_cost_krw=broker_market_value_after_cost_krw,
+        broker_source_as_of=str(item.get("brokerSourceAsOf") or item.get("broker_source_as_of") or ""),
+        mark_to_market_value=mark_to_market_value,
+        mark_to_market_value_krw=mark_to_market_value_krw,
+        account_value_krw=account_value_krw,
+        account_value_basis=str(item.get("accountValueBasis") or item.get("account_value_basis") or ""),
+        valuation_fx_source=str(item.get("valuationFxSource") or item.get("valuation_fx_source") or ""),
+        valuation_fx_state=str(item.get("valuationFxState") or item.get("valuation_fx_state") or ""),
+        valuation_fx_as_of=str(item.get("valuationFxAsOf") or item.get("valuation_fx_as_of") or ""),
+        valuation_snapshot_id=str(item.get("valuationSnapshotId") or item.get("valuation_snapshot_id") or ""),
         profit_loss=profit_loss,
         profit_loss_krw=profit_loss_krw,
         profit_loss_rate=raw_rate,

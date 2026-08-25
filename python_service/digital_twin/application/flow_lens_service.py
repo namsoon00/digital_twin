@@ -64,7 +64,25 @@ def position_payload(position: Position) -> Dict[str, object]:
         "updatedAt": position.updated_at,
         "source": position.source,
         "marketValue": position.market_value,
+        "marketValueKrw": position.market_value_krw,
+        "brokerMarketValue": position.broker_market_value,
+        "brokerMarketValueAfterCost": position.broker_market_value_after_cost,
+        "brokerPurchaseAmount": position.broker_purchase_amount,
+        "brokerProfitLoss": position.broker_profit_loss,
+        "brokerProfitLossAfterCost": position.broker_profit_loss_after_cost,
+        "brokerMarketValueKrw": position.broker_market_value_krw,
+        "brokerMarketValueAfterCostKrw": position.broker_market_value_after_cost_krw,
+        "brokerSourceAsOf": position.broker_source_as_of,
+        "markToMarketValue": position.mark_to_market_value,
+        "markToMarketValueKrw": position.mark_to_market_value_krw,
+        "accountValueKrw": position.account_value_krw,
+        "accountValueBasis": position.account_value_basis,
+        "valuationFxSource": position.valuation_fx_source,
+        "valuationFxState": position.valuation_fx_state,
+        "valuationFxAsOf": position.valuation_fx_as_of,
+        "valuationSnapshotId": position.valuation_snapshot_id,
         "profitLoss": position.profit_loss,
+        "profitLossKrw": position.profit_loss_krw,
         "profitLossRate": position.profit_loss_rate,
         "tradeStrength": position.trade_strength,
         "tradingValue": position.trading_value,
@@ -105,9 +123,20 @@ def position_payload(position: Position) -> Dict[str, object]:
 
 
 def portfolio_payload(portfolio) -> Dict[str, object]:
-    if isinstance(portfolio, dict):
-        return dict(portfolio)
-    return asdict(portfolio)
+    payload = dict(portfolio) if isinstance(portfolio, dict) else asdict(portfolio)
+    aliases = {
+        "valuation_snapshot_id": "valuationSnapshotId",
+        "valuation_basis": "valuationBasis",
+        "broker_comparable_total": "brokerComparableTotal",
+        "broker_gross_total": "brokerGrossTotal",
+        "broker_net_total": "brokerNetTotal",
+        "mark_to_market_total": "markToMarketTotal",
+        "account_equity_total": "accountEquityTotal",
+    }
+    for source_key, target_key in aliases.items():
+        if payload.get(target_key) in (None, "") and payload.get(source_key) not in (None, ""):
+            payload[target_key] = payload[source_key]
+    return payload
 
 
 def demo_toss_portfolio(reason: str = "", demo_positions_provider: Callable = None) -> Dict[str, object]:
@@ -213,7 +242,12 @@ def base_market_value(item: Dict[str, object], rates: Dict[str, float]) -> float
     # Monitor snapshots retain their domain snake_case payload.  Prefer the
     # KRW value when it is present because it already includes the provider's
     # exchange rate and is the account's base-currency truth.
-    krw_value = number(item.get("marketValueKrw") or item.get("market_value_krw"))
+    krw_value = number(
+        item.get("accountValueKrw")
+        or item.get("account_value_krw")
+        or item.get("marketValueKrw")
+        or item.get("market_value_krw")
+    )
     if krw_value:
         return max(0.0, krw_value)
     return max(0.0, value_in_base(number(item.get("marketValue")), currency_for_item(item), rates))
@@ -369,6 +403,22 @@ def merge_market_cache_fields(
         "current_price": "currentPrice",
         "market_value": "marketValue",
         "market_value_krw": "marketValueKrw",
+        "broker_market_value": "brokerMarketValue",
+        "broker_market_value_after_cost": "brokerMarketValueAfterCost",
+        "broker_purchase_amount": "brokerPurchaseAmount",
+        "broker_profit_loss": "brokerProfitLoss",
+        "broker_profit_loss_after_cost": "brokerProfitLossAfterCost",
+        "broker_market_value_krw": "brokerMarketValueKrw",
+        "broker_market_value_after_cost_krw": "brokerMarketValueAfterCostKrw",
+        "broker_source_as_of": "brokerSourceAsOf",
+        "mark_to_market_value": "markToMarketValue",
+        "mark_to_market_value_krw": "markToMarketValueKrw",
+        "account_value_krw": "accountValueKrw",
+        "account_value_basis": "accountValueBasis",
+        "valuation_fx_source": "valuationFxSource",
+        "valuation_fx_state": "valuationFxState",
+        "valuation_fx_as_of": "valuationFxAsOf",
+        "valuation_snapshot_id": "valuationSnapshotId",
         "profit_loss": "profitLoss",
         "profit_loss_krw": "profitLossKrw",
         "profit_loss_rate": "profitLossRate",
@@ -424,6 +474,14 @@ def portfolio_summary_from_payload(portfolio: Dict[str, object]) -> PortfolioSum
         markets=list(portfolio.get("markets") or []),
         sectors=list(portfolio.get("sectors") or []),
         concentration=number(portfolio.get("concentration")),
+        valuation_snapshot_id=str(portfolio.get("valuationSnapshotId") or portfolio.get("valuation_snapshot_id") or ""),
+        valuation_basis=str(portfolio.get("valuationBasis") or portfolio.get("valuation_basis") or ""),
+        broker_comparable_total=number(portfolio.get("brokerComparableTotal") or portfolio.get("broker_comparable_total")),
+        broker_gross_total=number(portfolio.get("brokerGrossTotal") or portfolio.get("broker_gross_total")),
+        broker_net_total=number(portfolio.get("brokerNetTotal") or portfolio.get("broker_net_total")),
+        mark_to_market_total=number(portfolio.get("markToMarketTotal") or portfolio.get("mark_to_market_total")),
+        account_equity_total=number(portfolio.get("accountEquityTotal") or portfolio.get("account_equity_total")),
+        valuation=dict(portfolio.get("valuation") or {}) if isinstance(portfolio.get("valuation"), dict) else {},
     )
 
 
@@ -851,7 +909,8 @@ def build_toss_lens_snapshot(
 ) -> Dict[str, object]:
     positions = list(toss.get("positions") or [])
     computed_portfolio = build_toss_portfolio(positions, dict(toss.get("account") or {}), fx_rates)
-    source_portfolio = dict(toss.get("portfolio") or {})
+    source_portfolio = portfolio_payload(dict(toss.get("portfolio") or {}))
+    toss["portfolio"] = source_portfolio
     # Monitor snapshots can intentionally carry only totals.  Keep those
     # values authoritative while supplying missing derived exposure fields so
     # downstream cards never depend on an optional payload key.

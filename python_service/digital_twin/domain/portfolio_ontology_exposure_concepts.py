@@ -19,6 +19,7 @@ from .instrument_profiles import (
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .portfolio import PortfolioSummary, Position
+from .portfolio_calculations import position_account_value_in_base
 from .portfolio_ontology_catalog import FACTOR_BENCHMARKS, SECTOR_FACTORS
 from .portfolio_ontology_market_concepts import symbol_key
 from .portfolio_ontology_runtime_concepts import is_holding_position
@@ -38,7 +39,7 @@ def unique_list(values: List[str]) -> List[str]:
 
 def position_weight(position: Position, portfolio: PortfolioSummary) -> float:
     base = number(portfolio.total) or number(portfolio.invested)
-    return (number(position.market_value) / base) * 100 if base else 0.0
+    return (position_account_value_in_base(position) / base) * 100 if base else 0.0
 
 
 def factor_labels_for_position(position: Position) -> List[str]:
@@ -577,7 +578,7 @@ def add_portfolio_factor_exposure_concepts(
     if not total:
         return
     currency_exposure: Dict[str, float] = {}
-    raw_position_total = sum(number(position.market_value) for position in observed_positions if is_holding_position(position))
+    raw_position_total = sum(position_account_value_in_base(position) for position in observed_positions if is_holding_position(position))
     sector_positions: Dict[str, int] = {}
     mandate = dict(mandate or {})
     currency_limit = number(mandate.get("fx_exposure_review_pct") or mandate.get("fxExposureReviewPct"))
@@ -589,7 +590,7 @@ def add_portfolio_factor_exposure_concepts(
         currency = str(position.currency or "").upper().strip()
         sector = str(position.sector or "기타").strip() or "기타"
         if currency:
-            currency_exposure[currency] = currency_exposure.get(currency, 0.0) + number(position.market_value)
+            currency_exposure[currency] = currency_exposure.get(currency, 0.0) + position_account_value_in_base(position)
         sector_positions[sector] = sector_positions.get(sector, 0) + 1
     for currency, value in sorted(currency_exposure.items()):
         ratio = (value / raw_position_total) * 100 if raw_position_total else 0.0

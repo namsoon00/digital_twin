@@ -170,7 +170,7 @@ class ConsoleReadModelService:
     ) -> Dict[str, object]:
         compact_cases = self.enrich_decision_cases(cases)
         decisions = _rows(compact_cases.get("items"))
-        portfolio = self.portfolio(lifecycle, "summary")
+        portfolio = self.portfolio(lifecycle, "summary", snapshot=snapshot)
         tasks = []
         for item in decisions:
             attention = _mapping(item.get("attention"))
@@ -271,8 +271,21 @@ class ConsoleReadModelService:
             },
         }
 
-    def portfolio(self, lifecycle: Mapping[str, object], view: str = "summary") -> Dict[str, object]:
+    def portfolio(
+        self,
+        lifecycle: Mapping[str, object],
+        view: str = "summary",
+        snapshot: Optional[Mapping[str, object]] = None,
+    ) -> Dict[str, object]:
         lifecycle = _mapping(lifecycle)
+        snapshot = _mapping(snapshot)
+        toss = _mapping(snapshot.get("toss"))
+        current_portfolio = _mapping(snapshot.get("portfolio")) or _mapping(toss.get("portfolio"))
+        current_positions = {
+            _text(row.get("symbol")).upper(): row
+            for row in _rows(toss.get("positions"))
+            if _text(row.get("symbol"))
+        }
         state = _mapping(lifecycle.get("portfolioState"))
         checkpoint = _mapping(lifecycle.get("snapshotCheckpoint"))
         risk = _mapping(lifecycle.get("portfolioRiskSnapshot"))
@@ -281,6 +294,17 @@ class ConsoleReadModelService:
         cycle = _mapping(lifecycle.get("portfolioDecisionCycle"))
         positions = []
         for row in _rows(state.get("positions")):
+            current = current_positions.get(_text(row.get("symbol")).upper())
+            if current:
+                for key in [
+                    "marketValueKrw", "accountValueKrw", "accountValueBasis",
+                    "brokerGrossValueKrw", "brokerNetValueKrw", "markToMarketValueKrw",
+                    "brokerMarketValueKrw", "brokerMarketValueAfterCostKrw",
+                    "markToMarketValueKrw", "valuationSnapshotId", "valuationFxSource",
+                    "valuationFxState", "valuationFxAsOf", "currentPrice", "profitLossRate",
+                ]:
+                    if current.get(key) not in (None, ""):
+                        row[key] = current[key]
             row.update(self._symbol_detail(row.get("symbol"), row))
             positions.append(row)
         positions.sort(key=lambda item: _number(item.get("currentWeightPct")), reverse=True)
@@ -302,6 +326,38 @@ class ConsoleReadModelService:
             "rebalanceStatus": _text(rebalance.get("status")) or "not-ready",
             "reconciliationStatus": _text(_mapping(lifecycle.get("reconciliation")).get("status")) or "unknown",
         }
+        if current_portfolio:
+            current_total = _first(current_portfolio, "accountEquityTotal", "account_equity_total", "total")
+            current_cash = _first(current_portfolio, "cash")
+            current_invested = _first(current_portfolio, "invested")
+            if current_total is not None:
+                summary["total"] = _number(current_total)
+            if current_cash is not None:
+                summary["cash"] = _number(current_cash)
+            if current_invested is not None:
+                summary["invested"] = _number(current_invested)
+            summary.update({
+                "observedAt": _text(snapshot.get("generatedAt")) or summary["observedAt"],
+                "valuationSnapshotId": _text(_first(current_portfolio, "valuationSnapshotId", "valuation_snapshot_id")),
+                "valuationBasis": _text(_first(current_portfolio, "valuationBasis", "valuation_basis")) or "legacy-unknown",
+                "brokerComparableTotal": _number(_first(current_portfolio, "brokerComparableTotal", "broker_comparable_total")),
+                "brokerGrossTotal": _number(_first(current_portfolio, "brokerGrossTotal", "broker_gross_total")),
+                "brokerNetTotal": _number(_first(current_portfolio, "brokerNetTotal", "broker_net_total")),
+                "markToMarketTotal": _number(_first(current_portfolio, "markToMarketTotal", "mark_to_market_total")),
+                "valuation": _mapping(current_portfolio.get("valuation")),
+                "valuationSource": "current-account-snapshot",
+            })
+        else:
+            summary.update({
+                "valuationSnapshotId": _text(checkpoint.get("valuationSnapshotId")),
+                "valuationBasis": _text(checkpoint.get("valuationBasis")) or "legacy-unknown",
+                "brokerComparableTotal": _number(checkpoint.get("brokerComparableTotal")),
+                "brokerGrossTotal": _number(checkpoint.get("brokerGrossTotal")),
+                "brokerNetTotal": _number(checkpoint.get("brokerNetTotal")),
+                "markToMarketTotal": _number(checkpoint.get("markToMarketTotal")),
+                "valuation": {},
+                "valuationSource": "portfolio-lifecycle-checkpoint",
+            })
         base = {
             "version": CONSOLE_READ_MODEL_VERSION,
             "view": view,
@@ -403,7 +459,9 @@ class ConsoleReadModelService:
                 "currentPrice": _number(_first(row, "currentPrice", "current_price")),
                 "changeRate": _number(_first(row, "changeRate", "change_rate")),
                 "quantity": _number(row.get("quantity")),
-                "marketValueKrw": _number(_first(row, "marketValueKrw", "market_value_krw")),
+                "marketValueKrw": _number(_first(row, "accountValueKrw", "account_value_krw", "marketValueKrw", "market_value_krw")),
+                "accountValueBasis": _text(_first(row, "accountValueBasis", "account_value_basis")) or "legacy-unknown",
+                "valuationSnapshotId": _text(_first(row, "valuationSnapshotId", "valuation_snapshot_id")),
                 "profitLossRate": _number(_first(row, "profitLossRate", "profit_loss_rate")),
                 "ma5": _number(row.get("ma5")),
                 "ma20": _number(row.get("ma20")),

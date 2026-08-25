@@ -123,6 +123,28 @@ class ConsoleReadModelServiceTests(unittest.TestCase):
         self.assertNotIn("payload", activity["ledgerEntries"][0])
         self.assertNotIn("envelope", activity["actionPlans"][0])
 
+    def test_dashboard_uses_current_valuation_snapshot_over_older_checkpoint(self):
+        snapshot = {
+            "generatedAt": "2026-08-26T01:02:03Z",
+            "portfolio": {
+                "total": 950000,
+                "invested": 850000,
+                "cash": 100000,
+                "valuationSnapshotId": "portfolio-valuation:new",
+                "valuationBasis": "broker-net",
+                "brokerGrossTotal": 960000,
+                "brokerNetTotal": 950000,
+                "markToMarketTotal": 970000,
+            },
+        }
+
+        payload = self.service.dashboard_summary(snapshot, self.lifecycle(), {"items": []}, {"events": []})
+
+        self.assertEqual(950000, payload["portfolio"]["total"])
+        self.assertEqual("portfolio-valuation:new", payload["portfolio"]["valuationSnapshotId"])
+        self.assertEqual("broker-net", payload["portfolio"]["valuationBasis"])
+        self.assertEqual("current-account-snapshot", payload["portfolio"]["valuationSource"])
+
     def test_decision_heads_keep_list_contract_and_drop_full_trace_payloads(self):
         payload = self.service.decision_heads({
             "version": "investment-case-v4",

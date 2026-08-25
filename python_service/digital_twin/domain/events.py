@@ -1009,6 +1009,11 @@ def snapshot_collected_event(snapshot: AccountSnapshot) -> DomainEvent:
             "portfolioTotal": snapshot.portfolio.total,
             "portfolioInvested": snapshot.portfolio.invested,
             "portfolioCash": snapshot.portfolio.cash,
+            "valuationSnapshotId": snapshot.portfolio.valuation_snapshot_id,
+            "valuationBasis": snapshot.portfolio.valuation_basis or "legacy-unknown",
+            "brokerGrossTotal": snapshot.portfolio.broker_gross_total,
+            "brokerNetTotal": snapshot.portfolio.broker_net_total,
+            "markToMarketTotal": snapshot.portfolio.mark_to_market_total,
             "metadata": compact_snapshot_event_metadata(getattr(snapshot, "metadata", {}) or {}),
         },
     )

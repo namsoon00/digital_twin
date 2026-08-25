@@ -74,6 +74,12 @@ class PortfolioSnapshotCheckpoint:
     total_quantity: Decimal
     cash_balance: Decimal
     portfolio_total: Decimal
+    valuation_snapshot_id: str = ""
+    valuation_basis: str = ""
+    broker_comparable_total: Decimal = Decimal("0")
+    broker_gross_total: Decimal = Decimal("0")
+    broker_net_total: Decimal = Decimal("0")
+    mark_to_market_total: Decimal = Decimal("0")
     version: int = 0
     status: str = "accepted"
     quarantine_reason: str = ""
@@ -91,6 +97,12 @@ class PortfolioSnapshotCheckpoint:
             total_quantity=sum((decimal_value(item.get("quantity")) for item in positions.values()), Decimal("0")),
             cash_balance=decimal_value(getattr(getattr(snapshot, "portfolio", None), "cash", 0)),
             portfolio_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "total", 0)),
+            valuation_snapshot_id=str(getattr(getattr(snapshot, "portfolio", None), "valuation_snapshot_id", "") or ""),
+            valuation_basis=str(getattr(getattr(snapshot, "portfolio", None), "valuation_basis", "") or ""),
+            broker_comparable_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "broker_comparable_total", 0)),
+            broker_gross_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "broker_gross_total", 0)),
+            broker_net_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "broker_net_total", 0)),
+            mark_to_market_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "mark_to_market_total", 0)),
             version=max(0, int(version or 0)),
         )
 
@@ -107,6 +119,12 @@ class PortfolioSnapshotCheckpoint:
             total_quantity=decimal_value(row.get("totalQuantity") or row.get("total_quantity")),
             cash_balance=decimal_value(row.get("cashBalance") or row.get("cash_balance")),
             portfolio_total=decimal_value(row.get("portfolioTotal") or row.get("portfolio_total")),
+            valuation_snapshot_id=str(row.get("valuationSnapshotId") or row.get("valuation_snapshot_id") or ""),
+            valuation_basis=str(row.get("valuationBasis") or row.get("valuation_basis") or ""),
+            broker_comparable_total=decimal_value(row.get("brokerComparableTotal") or row.get("broker_comparable_total")),
+            broker_gross_total=decimal_value(row.get("brokerGrossTotal") or row.get("broker_gross_total")),
+            broker_net_total=decimal_value(row.get("brokerNetTotal") or row.get("broker_net_total")),
+            mark_to_market_total=decimal_value(row.get("markToMarketTotal") or row.get("mark_to_market_total")),
             version=int(row.get("checkpointVersion") or row.get("version") or 0),
             status=str(row.get("status") or "accepted"),
             quarantine_reason=str(row.get("quarantineReason") or row.get("quarantine_reason") or ""),
@@ -124,6 +142,12 @@ class PortfolioSnapshotCheckpoint:
             "totalQuantity": str(self.total_quantity),
             "cashBalance": str(self.cash_balance),
             "portfolioTotal": str(self.portfolio_total),
+            "valuationSnapshotId": self.valuation_snapshot_id,
+            "valuationBasis": self.valuation_basis,
+            "brokerComparableTotal": str(self.broker_comparable_total),
+            "brokerGrossTotal": str(self.broker_gross_total),
+            "brokerNetTotal": str(self.broker_net_total),
+            "markToMarketTotal": str(self.mark_to_market_total),
             "checkpointVersion": self.version,
             "status": self.status,
             "quarantineReason": self.quarantine_reason,
@@ -293,7 +317,10 @@ class PortfolioStateSnapshot:
         ledger_entries: Iterable[PortfolioLedgerEntry],
     ):
         entries = list(ledger_entries or [])
-        total = max(0.0, float(getattr(getattr(snapshot, "portfolio", None), "total", 0) or 0)) or 1.0
+        portfolio = getattr(snapshot, "portfolio", None)
+        total = max(0.0, float(getattr(portfolio, "total", 0) or 0)) or 1.0
+        valuation_snapshot_id = str(getattr(portfolio, "valuation_snapshot_id", "") or "")
+        valuation_basis = str(getattr(portfolio, "valuation_basis", "") or "")
         observed_at = str(getattr(snapshot, "generated_at", "") or "")
         states: List[Dict[str, object]] = []
         for position in getattr(snapshot, "positions", []) or []:
@@ -311,6 +338,11 @@ class PortfolioStateSnapshot:
             opened_time = parse_time(opened_at)
             current_time = parse_time(observed_at)
             holding_days = max(0, int((current_time - opened_time).total_seconds() // 86400)) if current_time and opened_time else 0
+            account_value = float(
+                getattr(position, "account_value_krw", 0)
+                or getattr(position, "market_value_krw", 0)
+                or 0
+            )
             states.append({
                 "symbol": symbol,
                 "name": str(position.name or symbol),
@@ -319,8 +351,17 @@ class PortfolioStateSnapshot:
                 "quantity": str(decimal_value(position.quantity)),
                 "averagePrice": float(position.average_price or 0),
                 "currentPrice": float(position.current_price or 0),
-                "marketValueKrw": float(position.market_value_krw or 0),
-                "currentWeightPct": float(position.market_value_krw or 0) / total * 100,
+                "marketValueKrw": account_value,
+                "accountValueKrw": account_value,
+                "accountValueBasis": str(getattr(position, "account_value_basis", "") or valuation_basis),
+                "brokerGrossValueKrw": float(getattr(position, "broker_market_value_krw", 0) or 0),
+                "brokerNetValueKrw": float(getattr(position, "broker_market_value_after_cost_krw", 0) or 0),
+                "markToMarketValueKrw": float(getattr(position, "mark_to_market_value_krw", 0) or 0),
+                "valuationSnapshotId": str(getattr(position, "valuation_snapshot_id", "") or valuation_snapshot_id),
+                "valuationFxSource": str(getattr(position, "valuation_fx_source", "") or ""),
+                "valuationFxState": str(getattr(position, "valuation_fx_state", "") or ""),
+                "valuationFxAsOf": str(getattr(position, "valuation_fx_as_of", "") or ""),
+                "currentWeightPct": account_value / total * 100,
                 "profitLossRate": float(getattr(position, "profit_loss_rate", 0) or 0),
                 "openedAt": opened_at,
                 "holdingDays": holding_days,

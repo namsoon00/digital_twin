@@ -94,6 +94,22 @@ class Position:
     indicator_fetched_at: str = ""
     market_value: float = 0.0
     market_value_krw: float = 0.0
+    broker_market_value: float = 0.0
+    broker_market_value_after_cost: float = 0.0
+    broker_purchase_amount: float = 0.0
+    broker_profit_loss: float = 0.0
+    broker_profit_loss_after_cost: float = 0.0
+    broker_market_value_krw: float = 0.0
+    broker_market_value_after_cost_krw: float = 0.0
+    broker_source_as_of: str = ""
+    mark_to_market_value: float = 0.0
+    mark_to_market_value_krw: float = 0.0
+    account_value_krw: float = 0.0
+    account_value_basis: str = ""
+    valuation_fx_source: str = ""
+    valuation_fx_state: str = ""
+    valuation_fx_as_of: str = ""
+    valuation_snapshot_id: str = ""
     profit_loss: float = 0.0
     profit_loss_krw: float = 0.0
     profit_loss_rate: float = 0.0
@@ -150,6 +166,14 @@ class PortfolioSummary:
     markets: List[Dict[str, object]]
     sectors: List[Dict[str, object]]
     concentration: float
+    valuation_snapshot_id: str = ""
+    valuation_basis: str = ""
+    broker_comparable_total: float = 0.0
+    broker_gross_total: float = 0.0
+    broker_net_total: float = 0.0
+    mark_to_market_total: float = 0.0
+    account_equity_total: float = 0.0
+    valuation: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -322,6 +346,41 @@ def account_snapshot_from_monitor_state(state: Dict[str, object]) -> Optional[Ac
             return list(value)
         return []
 
+    portfolio = from_mapping(PortfolioSummary, state.get("portfolio"))
+    positions = [
+        from_mapping(Position, item)
+        for item in values_from_map(state.get("positions"))
+        if isinstance(item, dict)
+    ]
+    watchlist = [
+        from_mapping(Position, item)
+        for item in values_from_map(state.get("watchlist"))
+        if isinstance(item, dict)
+    ]
+    metadata = copy.deepcopy(state.get("metadata") or {})
+    if not portfolio.valuation_basis:
+        portfolio.valuation_basis = "legacy-unknown"
+        portfolio.account_equity_total = portfolio.total
+        portfolio.mark_to_market_total = portfolio.total
+        portfolio.valuation = {
+            "version": "legacy-portfolio-valuation-v1",
+            "displayBasis": "legacy-unknown",
+            "migrationState": "source-fields-unavailable",
+            "observedAt": str(state.get("generatedAt") or state.get("generated_at") or ""),
+        }
+        for position in positions:
+            position.mark_to_market_value = position.mark_to_market_value or position.market_value
+            position.mark_to_market_value_krw = position.mark_to_market_value_krw or position.market_value_krw
+            position.account_value_krw = position.account_value_krw or position.market_value_krw
+            position.account_value_basis = position.account_value_basis or "legacy-unknown"
+        for position in watchlist:
+            position.mark_to_market_value = position.mark_to_market_value or position.market_value
+            position.mark_to_market_value_krw = position.mark_to_market_value_krw or position.market_value_krw
+        metadata["valuationCompatibility"] = {
+            "state": "legacy-unknown",
+            "reason": "historical snapshot did not preserve broker gross/net fields",
+            "recollectRequired": True,
+        }
     return AccountSnapshot(
         account_id=str(state.get("accountId") or state.get("account_id") or "portfolio"),
         account_label=str(state.get("accountLabel") or state.get("account_label") or "투자 계좌"),
@@ -329,24 +388,16 @@ def account_snapshot_from_monitor_state(state: Dict[str, object]) -> Optional[Ac
         mode=str(state.get("mode") or ""),
         status=str(state.get("status") or ""),
         generated_at=str(state.get("generatedAt") or state.get("generated_at") or ""),
-        portfolio=from_mapping(PortfolioSummary, state.get("portfolio")),
-        positions=[
-            from_mapping(Position, item)
-            for item in values_from_map(state.get("positions"))
-            if isinstance(item, dict)
-        ],
+        portfolio=portfolio,
+        positions=positions,
         decisions=[
             from_mapping(DecisionItem, item)
             for item in values_from_map(state.get("decisions"))
             if isinstance(item, dict)
         ],
         external_signals=copy.deepcopy(state.get("externalSignals") or {}),
-        watchlist=[
-            from_mapping(Position, item)
-            for item in values_from_map(state.get("watchlist"))
-            if isinstance(item, dict)
-        ],
-        metadata=copy.deepcopy(state.get("metadata") or {}),
+        watchlist=watchlist,
+        metadata=metadata,
     )
 
 

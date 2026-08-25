@@ -31,6 +31,7 @@ from ..domain.portfolio_calculations import (
     portfolio_summary,
     runtime_fx_currencies_from_external_signals,
 )
+from ..domain.portfolio_valuation import BROKER_NET_BASIS, MARK_TO_MARKET_BASIS, normalized_valuation_basis
 from ..domain.strategy import decisions_for_positions
 from ..domain.volume_time_adjustment import trading_value_snapshot
 from .external_signals import ExternalSignalProvider
@@ -568,6 +569,11 @@ class TossProvider:
         self.token_cache_hits = 0
         self.token_expires_at = ""
         self.account_source_fingerprint = ""
+        self.cash_balances: Dict[str, Dict[str, object]] = {}
+        self.cash_balance_failures: List[str] = []
+
+    def cash_balances_complete(self) -> bool:
+        return not self.cash_balance_failures and {"KRW", "USD"}.issubset(self.cash_balances)
 
     def diagnostics_payload(self) -> Dict[str, object]:
         return {
@@ -579,6 +585,11 @@ class TossProvider:
                 "authRefreshes": self.auth_refreshes,
                 "tokenCacheHits": self.token_cache_hits,
                 "tokenExpiresAt": self.token_expires_at,
+                "cashBalances": {
+                    currency: dict(payload)
+                    for currency, payload in self.cash_balances.items()
+                },
+                "cashBalanceFailures": list(self.cash_balance_failures),
             }
         }
 
@@ -729,7 +740,7 @@ class TossProvider:
             if not account_seq:
                 return "live", "계좌 식별값 없음", [], account_cash, account_currency, []
             buying_power, token = self.fetch_buying_power(token, account_seq)
-            if buying_power:
+            if buying_power and self.cash_balances_complete():
                 account_cash = buying_power
                 account_currency = "KRW"
             holdings_payload, token = self.token_request(
@@ -739,7 +750,11 @@ class TossProvider:
                 token,
                 {"X-Tossinvest-Account": account_seq},
             )
-            positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
+            holdings_fetched_at = utc_now_iso()
+            positions = [
+                replace(normalize_position(item), broker_source_as_of=holdings_fetched_at)
+                for item in normalize_holdings(holdings_payload)
+            ]
             position_prices, token = self.safe_fetch_prices(token, [position.symbol for position in positions if position.symbol and not position.is_cash()])
             positions, token = self.enrich_positions_with_candles(token, positions, position_prices)
             watchlist, token = self.fetch_watchlist_quotes(token, positions)
@@ -765,7 +780,11 @@ class TossProvider:
                 token,
                 {"X-Tossinvest-Account": account_seq},
             )
-            positions = [normalize_position(item) for item in normalize_holdings(holdings_payload)]
+            holdings_fetched_at = utc_now_iso()
+            positions = [
+                replace(normalize_position(item), broker_source_as_of=holdings_fetched_at)
+                for item in normalize_holdings(holdings_payload)
+            ]
             holding_symbols = {position.symbol.upper() for position in positions if position.symbol}
             watchlist: List[Position] = []
             seen_watchlist = set()
@@ -788,7 +807,9 @@ class TossProvider:
 
     def fetch_buying_power(self, token: str, account_seq: str) -> Tuple[float, str]:
         total = 0.0
-        rates = currency_rates()
+        rates = currency_rates(self.settings)
+        self.cash_balances = {}
+        self.cash_balance_failures = []
         for currency in ["KRW", "USD"]:
             try:
                 query = urllib.parse.urlencode({"currency": currency})
@@ -800,9 +821,16 @@ class TossProvider:
                     {"X-Tossinvest-Account": account_seq},
                 )
             except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError):
+                self.cash_balance_failures.append(currency)
                 continue
             data = payload.get("data") or payload.get("result") or payload
             amount = number(data.get("cashBuyingPower") if isinstance(data, dict) else 0)
+            self.cash_balances[currency] = {
+                "currency": currency,
+                "amount": amount,
+                "source": "Toss /api/v1/buying-power",
+                "sourceAsOf": utc_now_iso(),
+            }
             total += amount * rates.get(currency, 1.0)
         return total, token
 
@@ -1207,6 +1235,8 @@ class TossProvider:
             market=str(quote.get("market") or position.market or cached.get("market") or ""),
             market_value=market_value,
             market_value_krw=market_value_krw,
+            mark_to_market_value=market_value,
+            mark_to_market_value_krw=market_value_krw,
             profit_loss=profit_loss,
             profit_loss_krw=profit_loss_krw,
             profit_loss_rate=profit_loss_rate,
@@ -1332,14 +1362,41 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     account_context = account.ontology_account_context()
     fx_rates = currency_rates_from_external_signals(settings, external_signals)
     runtime_fx_currencies = runtime_fx_currencies_from_external_signals(external_signals)
-    positions = apply_position_base_currency_values(positions, fx_rates, runtime_fx_currencies)
-    watchlist = apply_position_base_currency_values(watchlist, fx_rates, runtime_fx_currencies)
+    if provider.cash_balances_complete():
+        cash = sum(
+            number(item.get("amount")) * fx_rates.get(str(currency).upper(), 1.0)
+            for currency, item in provider.cash_balances.items()
+        )
+        currency = "KRW"
+    valuation_basis = normalized_valuation_basis(
+        settings.get("portfolioValuationBasis"),
+        BROKER_NET_BASIS,
+    )
+    generated_at = utc_now_iso()
+    positions = apply_position_base_currency_values(
+        positions,
+        fx_rates,
+        runtime_fx_currencies,
+        external_signals=external_signals,
+        valuation_basis=valuation_basis,
+    )
+    watchlist = apply_position_base_currency_values(
+        watchlist,
+        fx_rates,
+        runtime_fx_currencies,
+        external_signals=external_signals,
+        valuation_basis=MARK_TO_MARKET_BASIS,
+    )
     portfolio = portfolio_summary(
         positions,
         cash,
         currency,
         fx_rates,
         runtime_fx_currencies,
+        valuation_basis=valuation_basis,
+        account_id=account.account_id,
+        observed_at=generated_at,
+        external_signals=external_signals,
     )
     decisions = decisions_for_positions(
         positions,
@@ -1359,11 +1416,18 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
     ).hexdigest()
     metadata["accountContext"] = account_context
     metadata["marketProxyQuotes"] = market_proxy_quote_context(settings, provider.quote_cache, external_signals=external_signals)
+    metadata["valuation"] = {
+        key: value
+        for key, value in portfolio.valuation.items()
+        if key != "positions"
+    }
     complete_account_balance = mode == "live" and status == "토스 계좌 동기화"
     metadata["accountSnapshotCompleteness"] = {
         "holdings": "complete" if complete_account_balance else "incomplete",
-        "cash": "complete" if complete_account_balance else "incomplete",
+        "cash": "complete" if complete_account_balance and provider.cash_balances_complete() else "incomplete",
         "source": "toss-account-provider-response",
+        "cashCurrencies": sorted(provider.cash_balances),
+        "cashFailedCurrencies": list(provider.cash_balance_failures),
     }
     return AccountSnapshot(
         account_id=account.account_id,
@@ -1371,7 +1435,7 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
         provider=account.provider,
         mode=mode,
         status=status,
-        generated_at=utc_now_iso(),
+        generated_at=generated_at,
         portfolio=portfolio,
         positions=positions,
         decisions=decisions,

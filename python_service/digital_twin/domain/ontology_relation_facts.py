@@ -19,6 +19,7 @@ from .portfolio_ontology_valuation_concepts import (
     valuation_values,
 )
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
+from .portfolio_calculations import position_account_value_in_base
 from .valuation_ai_proposals import ai_valuation_proposal_rows
 from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 from ..news_intelligence.domain.eligibility import assess_news_eligibility
@@ -35,14 +36,14 @@ def _position_weight(position: Position, portfolio: PortfolioSummary) -> float:
     invested = number(portfolio.invested)
     if invested <= 0:
         return 0.0
-    return (number(position.market_value) / invested) * 100.0
+    return (position_account_value_in_base(position) / invested) * 100.0
 
 
 def _position_account_weight(position: Position, portfolio: PortfolioSummary) -> float:
     total = number(portfolio.total)
     if total <= 0:
         return 0.0
-    return (number(position.market_value) / total) * 100.0
+    return (position_account_value_in_base(position) / total) * 100.0
 
 
 def _investor_flow(position: Position) -> Dict[str, object]:
@@ -1004,6 +1005,21 @@ def position_signal_facts(
         "profitLossRate": number(position.profit_loss_rate),
         "profitLoss": number(position.profit_loss),
         "marketValue": number(position.market_value),
+        "marketValueKrw": number(position.market_value_krw),
+        "accountValueKrw": position_account_value_in_base(position),
+        "accountValueBasis": str(getattr(position, "account_value_basis", "") or "legacy-unknown"),
+        "brokerGrossValueKrw": number(getattr(position, "broker_market_value_krw", 0)),
+        "brokerNetValueKrw": number(getattr(position, "broker_market_value_after_cost_krw", 0)),
+        "markToMarketValueKrw": number(getattr(position, "mark_to_market_value_krw", 0)),
+        "valuationSnapshotId": str(getattr(position, "valuation_snapshot_id", "") or ""),
+        "portfolioTotal": number(portfolio.total),
+        "portfolioInvested": number(portfolio.invested),
+        "portfolioCash": number(portfolio.cash),
+        "portfolioConcentration": number(portfolio.concentration),
+        "valuationBasis": str(getattr(portfolio, "valuation_basis", "") or "legacy-unknown"),
+        "brokerGrossTotal": number(getattr(portfolio, "broker_gross_total", 0)),
+        "brokerNetTotal": number(getattr(portfolio, "broker_net_total", 0)),
+        "markToMarketTotal": number(getattr(portfolio, "mark_to_market_total", 0)),
         "quantity": number(position.quantity),
         "sellableQuantity": number(position.sellable_quantity),
         "averagePrice": number(position.average_price),

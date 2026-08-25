@@ -10,6 +10,7 @@ from .ontology_projection_fingerprint import is_volatile_lifecycle_key, stable_v
 from .ontology_schema import add_entity, add_relation
 from .parsing import parse_assignments
 from .portfolio import PortfolioSummary, Position
+from .portfolio_calculations import position_account_value_in_base
 
 
 SENSITIVE_SIGNAL_TOKENS = ("secret", "token", "password", "clientid", "client_id", "accountseq", "account_seq", "chatid", "chat_id", "key")
@@ -141,7 +142,7 @@ def unique_list(values: Iterable[str]) -> List[str]:
 
 def position_weight(position: Position, portfolio: PortfolioSummary) -> float:
     base = number(portfolio.total) or number(portfolio.invested)
-    return (number(position.market_value) / base) * 100 if base else 0.0
+    return (position_account_value_in_base(position) / base) * 100 if base else 0.0
 
 
 def is_watchlist_position(position: Position) -> bool:

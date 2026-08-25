@@ -1065,8 +1065,9 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
     def holding_snapshot_value_text(self, item: Position) -> str:
         currency = item.currency or ""
         original = money(item.market_value, currency) if currency and currency != "KRW" else ""
-        krw = money(item.market_value_krw or item.market_value, "KRW")
-        if original and item.market_value_krw:
+        account_value = item.account_value_krw or item.market_value_krw or item.market_value
+        krw = money(account_value, "KRW")
+        if original and account_value:
             return original + " (약 " + krw + ")"
         return original or krw
 

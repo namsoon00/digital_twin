@@ -109,7 +109,11 @@ def monitor_account_state(monitor_store, account_id: str) -> Dict[str, object]:
 
 
 def position_value(position: object) -> float:
-    return max(0.0, number(getattr(position, "market_value_krw", 0) or getattr(position, "market_value", 0)))
+    return max(0.0, number(
+        getattr(position, "account_value_krw", 0)
+        or getattr(position, "market_value_krw", 0)
+        or getattr(position, "market_value", 0)
+    ))
 
 
 def stable_exposure_snapshot_id(portfolio_id: str, metrics: Iterable[ExposureMetric]) -> str:
@@ -1164,7 +1168,14 @@ class DecisionActionPlanningService:
         exchange_rate = max(0.0, number(position.get("exchange_rate") or position.get("exchangeRate")))
         quantity = max(0.0, number(position.get("quantity")))
         sellable = max(0.0, number(position.get("sellable_quantity") or position.get("sellableQuantity") or quantity))
-        value = max(0.0, number(position.get("market_value_krw") or position.get("marketValueKrw") or position.get("market_value") or position.get("marketValue")))
+        value = max(0.0, number(
+            position.get("account_value_krw")
+            or position.get("accountValueKrw")
+            or position.get("market_value_krw")
+            or position.get("marketValueKrw")
+            or position.get("market_value")
+            or position.get("marketValue")
+        ))
         total = max(0.0, number(portfolio.get("total")))
         cash = max(0.0, number(portfolio.get("cash")))
         blocked = []

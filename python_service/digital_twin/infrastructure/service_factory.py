@@ -143,7 +143,8 @@ from .news_ai_analyzer import news_ai_analyzer_from_settings
 from .external_signals import ExternalSignalProvider
 from .external_api.adapters import default_external_dataset_registry
 from .external_api.legacy_import import LegacyExternalSignalImporter
-from .settings import currency_rates, runtime_settings, utc_now
+from .settings import currency_rates, data_dir, runtime_settings, utc_now
+from .graph_writer_guard import LocalGraphWriterGuard
 from .symbol_sources import RemoteSymbolSourceGateway
 from .toss_snapshots import TossProvider, build_snapshot, demo_positions
 from .reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
@@ -162,6 +163,14 @@ from ..domain.statistical_signals import (
 
 
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def ontology_graph_single_writer_enabled(settings=None) -> bool:
+    value = str(
+        dict(settings or {}).get("ontologyGraphSingleWriterEnabled", "1")
+        or ""
+    ).strip().lower()
+    return value not in DISABLED_SETTING_VALUES
 
 
 def setting_truthy(value: object, default: bool = True) -> bool:
@@ -2293,13 +2302,92 @@ def build_v2_reasoning_job_runner(
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
     from .mysql_reasoning_ingress import MySQLReasoningIngressRouter
 
+    registry = stores.reasoning_engine_registry_store(configured)
+    selected_deployment = dict(registry.get(selected_deployment_id) or {})
+    graph_database = str(
+        selected_deployment.get("graphStoreBinding")
+        or selected_deployment.get("graph_store_binding")
+        or ""
+    ).strip()
+    role = str(worker_role or "configured").strip().lower()
+    control = registry.control()
+    if role == "candidate":
+        protected_bindings = set()
+        for protected_id in {
+            str(control.active_deployment_id or "").strip(),
+            str(control.delivery_deployment_id or "").strip(),
+        }:
+            if not protected_id:
+                continue
+            protected = dict(registry.get(protected_id) or {})
+            binding = str(
+                protected.get("graphStoreBinding")
+                or protected.get("graph_store_binding")
+                or ""
+            ).strip()
+            if binding:
+                protected_bindings.add(binding)
+        if graph_database and graph_database in protected_bindings:
+            health = dict(selected_deployment.get("health") or {})
+            health.update({
+                "status": "blocked",
+                "candidateGraphIsolation": {
+                    "status": "blocked",
+                    "isolated": False,
+                    "graphStoreBinding": graph_database,
+                    "protectedGraphStoreBindings": sorted(protected_bindings),
+                    "reasonCode": "candidate-graph-store-not-isolated",
+                },
+                "lastError": (
+                    "Candidate TypeDB graphStoreBinding must be isolated from active delivery."
+                ),
+            })
+            registry.update_health(selected_deployment_id, health)
+            raise RuntimeError(
+                "Candidate TypeDB graphStoreBinding is shared with active delivery: "
+                + graph_database
+            )
+
+    single_writer = ontology_graph_single_writer_enabled(configured)
+    graph_writer_guard = (
+        LocalGraphWriterGuard(
+            graph_database,
+            role=role,
+            deployment_id=selected_deployment_id,
+            lock_directory=data_dir() / "graph-writer-locks",
+        )
+        if single_writer
+        else None
+    )
+    background_graph_tasks = []
+    delivery_id = str(control.delivery_deployment_id or control.active_deployment_id or "").strip()
+    if single_writer and role in {"delivery", "active"} and selected_deployment_id == delivery_id:
+        world_projection_runner = build_ontology_world_projection_runner(configured)
+        maintenance_runner = build_ontology_maintenance_runner(configured)
+        background_graph_tasks = [
+            {
+                "name": "shared-world-projection",
+                "runner": world_projection_runner,
+                "intervalSeconds": int(
+                    configured.get("ontologyWorldProjectionIntervalSeconds") or 10
+                ),
+            },
+            {
+                "name": "abox-maintenance",
+                "runner": maintenance_runner,
+                "intervalSeconds": int(
+                    configured.get("ontologyAboxMaintenanceIntervalSeconds") or 60
+                ),
+            },
+        ]
+
     return IndependentReasoningJobRunner(
         queue=stores.reasoning_engine_job_store(configured),
         engine=build_v2_reasoning_engine(
             configured,
             deployment_id=selected_deployment_id,
         ),
-        registry=stores.reasoning_engine_registry_store(configured),
+        registry=registry,
         settings=configured,
         worker_id=worker_id,
         event_reader=stores.event_log(configured),
@@ -2310,6 +2398,8 @@ def build_v2_reasoning_job_runner(
         ),
         route_reconciler=MySQLReasoningIngressRouter(store_settings).reconcile,
         deployment_role=worker_role,
+        graph_writer_guard=graph_writer_guard,
+        background_graph_tasks=background_graph_tasks,
     )
 
 

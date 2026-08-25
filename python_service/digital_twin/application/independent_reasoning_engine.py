@@ -135,6 +135,41 @@ def waits_for_shared_world_projection(result: object) -> bool:
     )
 
 
+def waits_for_graph_writer(result: object) -> bool:
+    """Return whether a deferred turn is ordinary single-writer back-pressure."""
+
+    values = dict(result or {}) if isinstance(result, Mapping) else {}
+    statuses = {
+        str(values.get("status") or "").strip().lower(),
+        str(values.get("reason_code") or values.get("reasonCode") or "").strip().lower(),
+    }
+    for projection in dict(values.get("projection_results") or {}).values():
+        if not isinstance(projection, Mapping):
+            continue
+        statuses.update({
+            str(projection.get("status") or "").strip().lower(),
+            str(
+                projection.get("failureReasonCode")
+                or projection.get("reasonCode")
+                or ""
+            ).strip().lower(),
+        })
+    statuses.discard("")
+    return bool(
+        statuses.intersection({
+            "deferred-projection-coordinator",
+            "deferred-scoped-write-lease",
+            "deferred-inference-write-lease",
+            "deferred-write-lease",
+            "deferred-premise-world-write-lease",
+            "deferred-market-world-write-lease",
+            "self-owned-coordinator-not-released",
+            "typedb-graph-writer-owned",
+        })
+        or any(status.endswith("-write-lease") for status in statuses)
+    )
+
+
 def alert_event_payload(event: object) -> Dict[str, object]:
     source_metadata = deepcopy(getattr(event, "metadata", {}) or {})
     metadata = {
@@ -1388,6 +1423,8 @@ class IndependentReasoningJobRunner:
         execution_guard=None,
         route_reconciler=None,
         deployment_role: str = "configured",
+        graph_writer_guard=None,
+        background_graph_tasks=None,
     ):
         import os
         import socket
@@ -1401,6 +1438,19 @@ class IndependentReasoningJobRunner:
         self.execution_guard = execution_guard
         self.route_reconciler = route_reconciler
         self.deployment_role = str(deployment_role or "configured").strip().lower()
+        self.graph_writer_guard = graph_writer_guard
+        self.background_graph_tasks = [
+            {
+                **dict(task or {}),
+                "name": str(dict(task or {}).get("name") or "background-graph-task"),
+                "intervalSeconds": max(
+                    1,
+                    int(dict(task or {}).get("intervalSeconds") or 10),
+                ),
+            }
+            for task in background_graph_tasks or []
+            if callable(getattr(dict(task or {}).get("runner"), "run_once", None))
+        ]
         self.route_reconciliation = None
         self.route_reconciled_at = 0.0
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
@@ -1410,11 +1460,25 @@ class IndependentReasoningJobRunner:
         self._last_case_expiry_at = 0.0
         self._last_case_expiry: Dict[str, object] = {"status": "not-run", "expiredCount": 0}
         self._last_worker_heartbeat_at = 0.0
+        self._background_graph_next_at = {
+            task["name"]: 0.0 for task in self.background_graph_tasks
+        }
+        self._background_graph_cursor = 0
+        self._last_background_graph_turn: Dict[str, object] = {"status": "not-run"}
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
     def run_once(self) -> Dict[str, object]:
+        ownership = self.acquire_graph_writer_ownership()
+        if not bool(ownership.get("acquired")):
+            return self.graph_writer_deferred_result(ownership)
+        try:
+            return self._run_once()
+        finally:
+            self.release_graph_writer_ownership()
+
+    def _run_once(self) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
@@ -1622,8 +1686,10 @@ class IndependentReasoningJobRunner:
                 outcome = "excluded"
             elif status == "deferred" and result.get("retryable"):
                 projection_waits = []
+                writer_back_pressure = waits_for_graph_writer(result)
                 wait_for_projection = (
                     waits_for_shared_world_projection(result)
+                    and not writer_back_pressure
                     and callable(getattr(self.queue, "await_world_projection", None))
                 )
                 for job_id in job_ids:
@@ -1655,6 +1721,8 @@ class IndependentReasoningJobRunner:
                     if terminal_projection_wait
                     else "awaiting-world-projection"
                     if wait_for_projection
+                    else "awaiting-graph-writer"
+                    if writer_back_pressure
                     else "deferred"
                 )
             elif status == "rejected" and callable(getattr(self.queue, "supersede", None)):
@@ -1723,9 +1791,9 @@ class IndependentReasoningJobRunner:
                 "lastRunAt": utc_now_iso(),
                 "queue": self.queue_summary(descriptor.deployment_id),
             })
-            if outcome == "awaiting-world-projection":
+            if outcome in {"awaiting-world-projection", "awaiting-graph-writer"}:
                 health["status"] = "deferred"
-                health["dependencyStatus"] = "awaiting-world-projection"
+                health["dependencyStatus"] = outcome
                 health["dependencyReasonCode"] = str(
                     result.get("reason_code") or result.get("reasonCode") or ""
                 )
@@ -2201,11 +2269,109 @@ class IndependentReasoningJobRunner:
                 "updatedAt": utc_now_iso(),
             }
             health["workerHeartbeats"] = heartbeats
+            health["graphWriter"] = self.graph_writer_status()
             self.registry.update_health(deployment_id, health)
         except Exception:  # noqa: BLE001 - queue leases remain the execution authority.
             return False
         self._last_worker_heartbeat_at = now
         return True
+
+    def acquire_graph_writer_ownership(self) -> Dict[str, object]:
+        guard = self.graph_writer_guard
+        acquire = getattr(guard, "acquire", None)
+        if not callable(acquire):
+            return {
+                "acquired": True,
+                "status": "not-configured",
+                "mode": "compatibility",
+            }
+        try:
+            return dict(acquire() or {})
+        except Exception as error:  # noqa: BLE001 - fail closed before claiming a graph job.
+            return {
+                "acquired": False,
+                "status": "error",
+                "reason": str(error)[:240],
+            }
+
+    def release_graph_writer_ownership(self) -> Dict[str, object]:
+        release = getattr(self.graph_writer_guard, "release", None)
+        if not callable(release):
+            return {"status": "not-configured", "released": False}
+        try:
+            return dict(release() or {})
+        except Exception as error:  # noqa: BLE001 - process exit remains the final local lock release.
+            return {"status": "error", "released": False, "reason": str(error)[:240]}
+
+    def graph_writer_status(self) -> Dict[str, object]:
+        reader = getattr(self.graph_writer_guard, "status", None)
+        status = dict(reader() or {}) if callable(reader) else {
+            "acquired": True,
+            "status": "not-configured",
+            "mode": "compatibility",
+        }
+        status["singleWriter"] = bool(self.graph_writer_guard)
+        status["backgroundTaskCount"] = len(self.background_graph_tasks)
+        status["lastBackgroundTurn"] = dict(self._last_background_graph_turn)
+        return status
+
+    def graph_writer_deferred_result(self, ownership: Mapping[str, object]) -> Dict[str, object]:
+        return {
+            "status": "deferred",
+            "processedCount": 0,
+            "retryable": True,
+            "retryAfterSeconds": 5,
+            "reasonCode": "typedb-graph-writer-owned",
+            "reason": str(
+                ownership.get("reason")
+                or "Another process owns the TypeDB graph writer boundary."
+            )[:300],
+            "graphWriter": dict(ownership or {}),
+        }
+
+    def run_background_graph_turn(self) -> Dict[str, object]:
+        tasks = self.background_graph_tasks
+        if not tasks:
+            return {"status": "not-configured"}
+        now = time.monotonic()
+        for offset in range(len(tasks)):
+            index = (self._background_graph_cursor + offset) % len(tasks)
+            task = tasks[index]
+            name = str(task.get("name") or "background-graph-task")
+            if now < float(self._background_graph_next_at.get(name) or 0.0):
+                continue
+            runner = task.get("runner")
+            started = time.monotonic()
+            try:
+                parameters = inspect.signature(runner.run_once).parameters
+                raw_result = (
+                    runner.run_once(limit=1)
+                    if "limit" in parameters
+                    else runner.run_once()
+                )
+                result = dict(raw_result or {})
+            except Exception as error:  # noqa: BLE001 - a background lane cannot stop live reasoning.
+                result = {"status": "error", "reason": str(error)[:240]}
+            interval = max(1, int(task.get("intervalSeconds") or 10))
+            try:
+                retry_after = max(0, int(float(result.get("retryAfterSeconds") or 0)))
+            except (TypeError, ValueError):
+                retry_after = 0
+            self._background_graph_next_at[name] = time.monotonic() + min(
+                interval,
+                retry_after or interval,
+            )
+            self._background_graph_cursor = (index + 1) % len(tasks)
+            self._last_background_graph_turn = {
+                "status": str(result.get("status") or "unknown"),
+                "task": name,
+                "durationMs": int((time.monotonic() - started) * 1000),
+                "completedCount": int(result.get("completedCount") or 0),
+                "retryCount": int(result.get("retryCount") or 0),
+                "reason": str(result.get("reason") or "")[:180],
+            }
+            return dict(self._last_background_graph_turn)
+        return {"status": "not-due"}
 
     def repair_ingress(self, deployment_id: str) -> int:
         reader = getattr(self.event_reader, "unmaterialized_reasoning_engine_events", None)
@@ -2235,11 +2401,24 @@ class IndependentReasoningJobRunner:
 
     def watch(self) -> None:
         interval = _int_setting(self.settings, "reasoningEngineV2IntervalSeconds", 5, 1, 300)
-        while True:
-            result = self.run_once()
-            if result.get("status") == "inactive-control-binding":
-                return
-            if result.get("status") == "idle":
-                time.sleep(interval)
-            elif result.get("status") in {"disabled", "deferred"}:
-                time.sleep(interval)
+        ownership = self.acquire_graph_writer_ownership()
+        if not bool(ownership.get("acquired")):
+            self._last_background_graph_turn = self.graph_writer_deferred_result(ownership)
+            return
+        try:
+            while True:
+                result = self._run_once()
+                if result.get("status") == "inactive-control-binding":
+                    return
+                self.run_background_graph_turn()
+                if result.get("status") == "idle":
+                    time.sleep(interval)
+                elif result.get("status") in {
+                    "disabled",
+                    "deferred",
+                    "awaiting-graph-writer",
+                    "awaiting-world-projection",
+                }:
+                    time.sleep(interval)
+        finally:
+            self.release_graph_writer_ownership()

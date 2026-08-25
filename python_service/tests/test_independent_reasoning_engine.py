@@ -126,6 +126,66 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_job_runner_holds_graph_writer_around_one_shot_execution(self):
+        class Guard:
+            def __init__(self):
+                self.calls = []
+
+            def acquire(self):
+                self.calls.append("acquire")
+                return {"acquired": True, "status": "acquired"}
+
+            def release(self):
+                self.calls.append("release")
+                return {"status": "released"}
+
+            def status(self):
+                return {"acquired": self.calls[-1:] == ["acquire"]}
+
+        guard = Guard()
+        runner = IndependentReasoningJobRunner(
+            SimpleNamespace(),
+            SimpleNamespace(),
+            SimpleNamespace(),
+            graph_writer_guard=guard,
+        )
+        runner._run_once = lambda: {"status": "idle", "processedCount": 0}
+
+        result = runner.run_once()
+
+        self.assertEqual("idle", result["status"])
+        self.assertEqual(["acquire", "release"], guard.calls)
+
+    def test_job_runner_executes_one_due_background_graph_task_per_turn(self):
+        class TaskRunner:
+            def __init__(self, status):
+                self.status = status
+                self.calls = 0
+
+            def run_once(self, limit=0):
+                self.calls += 1
+                return {"status": self.status, "completedCount": limit}
+
+        first = TaskRunner("ok")
+        second = TaskRunner("partial")
+        runner = IndependentReasoningJobRunner(
+            SimpleNamespace(),
+            SimpleNamespace(),
+            SimpleNamespace(),
+            background_graph_tasks=[
+                {"name": "world", "runner": first, "intervalSeconds": 10},
+                {"name": "maintenance", "runner": second, "intervalSeconds": 60},
+            ],
+        )
+
+        first_turn = runner.run_background_graph_turn()
+        second_turn = runner.run_background_graph_turn()
+
+        self.assertEqual("world", first_turn["task"])
+        self.assertEqual("maintenance", second_turn["task"])
+        self.assertEqual(1, first.calls)
+        self.assertEqual(1, second.calls)
+
     def test_partitioned_executor_reports_exact_evaluated_symbol_coverage(self):
         class Recorder:
             @staticmethod
@@ -1879,6 +1939,71 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("deferred", registry.health["status"])
         self.assertEqual("awaiting-world-projection", registry.health["dependencyStatus"])
         self.assertNotIn("lastError", registry.health)
+
+    def test_runner_does_not_charge_world_projection_attempt_for_writer_contention(self):
+        class Queue:
+            def __init__(self):
+                self.deferred = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{"jobId": "job:aapl", "sourceEvent": source_event("AAPL", []).to_dict()}]
+
+            def await_world_projection(self, *_args, **_kwargs):
+                raise AssertionError("writer contention must not consume dependency attempts")
+
+            def defer(self, job_id, reason, retry_after_seconds):
+                self.deferred.append((job_id, reason, retry_after_seconds))
+
+            @staticmethod
+            def summary(_deployment_id):
+                return {"pendingCount": 1, "awaitingWorldProjectionCount": 0}
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+            @staticmethod
+            def consume(_events):
+                return {
+                    "request_id": "request:aapl",
+                    "status": "deferred",
+                    "retryable": True,
+                    "retry_after_seconds": 10,
+                    "reason": "Another graph writer owns the coordinator.",
+                    "reason_code": "deferred-projection-coordinator",
+                    "projection_results": {
+                        "acct": {
+                            "status": "deferred-scoped-write-lease",
+                            "failureReasonCode": "deferred-projection-coordinator",
+                            "failureStage": "shared-world-projection",
+                        }
+                    },
+                }
+
+            @staticmethod
+            def health():
+                return {"status": "degraded", "monitorRunnerUsed": False}
+
+        class Registry:
+            def __init__(self):
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        queue = Queue()
+        registry = Registry()
+
+        result = IndependentReasoningJobRunner(queue, Engine(), registry).run_once()
+
+        self.assertEqual("awaiting-graph-writer", result["status"])
+        self.assertEqual("job:aapl", queue.deferred[0][0])
+        self.assertEqual(10, queue.deferred[0][2])
+        self.assertEqual("deferred", registry.health["status"])
 
     def test_runner_terminally_fails_non_retryable_projection_integrity_error(self):
         class Queue:

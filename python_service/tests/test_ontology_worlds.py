@@ -840,6 +840,70 @@ class MultiAccountProjectionTests(unittest.TestCase):
             repository.saved_markets[world.world_id].worldview["inferenceTargetSymbols"],
         )
 
+    def test_shared_world_releases_coordinator_when_world_lease_lookup_raises(self):
+        class LeaseFailureRepository(self.FakeRepository):
+            def __init__(self):
+                super().__init__()
+                self.coordinator_releases = []
+
+            def acquire_projection_coordinator_lease(self, owner, world_id=""):
+                return {
+                    "acquired": True,
+                    "status": "acquired",
+                    "leaseOwner": owner,
+                    "leaseToken": "coordinator-token",
+                    "worldId": world_id,
+                }
+
+            def release_projection_coordinator_lease(self, lease):
+                self.coordinator_releases.append(dict(lease))
+                return {"status": "released"}
+
+            def acquire_scoped_abox_write_lease(self, owner, world_id=""):
+                raise RuntimeError("lease lookup failed")
+
+        repository = LeaseFailureRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        world = shared_premise_world("kr", "tenant-a")
+
+        result = recorder.project_shared_world_update(sample_graph("005930"), world, "premise")
+
+        self.assertEqual("deferred-premise-world-write-lease", result["status"])
+        self.assertEqual("released", result["projectionCoordinatorRelease"]["status"])
+        self.assertEqual(1, len(repository.coordinator_releases))
+
+    def test_shared_world_releases_coordinator_when_world_lease_is_busy(self):
+        class BusyLeaseRepository(self.FakeRepository):
+            def __init__(self):
+                super().__init__()
+                self.coordinator_releases = []
+
+            def acquire_projection_coordinator_lease(self, owner, world_id=""):
+                return {
+                    "acquired": True,
+                    "status": "acquired",
+                    "leaseOwner": owner,
+                    "leaseToken": "coordinator-token",
+                    "worldId": world_id,
+                }
+
+            def release_projection_coordinator_lease(self, lease):
+                self.coordinator_releases.append(dict(lease))
+                return {"status": "released"}
+
+            def acquire_scoped_abox_write_lease(self, owner, world_id=""):
+                return {"acquired": False, "status": "held", "leaseOwner": "other"}
+
+        repository = BusyLeaseRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        world = shared_premise_world("kr", "tenant-a")
+
+        result = recorder.project_shared_world_update(sample_graph("005930"), world, "premise")
+
+        self.assertEqual("deferred-premise-world-write-lease", result["status"])
+        self.assertEqual("released", result["projectionCoordinatorRelease"]["status"])
+        self.assertEqual(1, len(repository.coordinator_releases))
+
     def test_market_world_contract_bump_replaces_legacy_shared_manifest(self):
         repository = self.FakeRepository()
         recorder = PortfolioOntologyProjectionRecorder(

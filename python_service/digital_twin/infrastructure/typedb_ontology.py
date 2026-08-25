@@ -3057,14 +3057,26 @@ class ScopedABoxManifestMixin:
 
     @contextmanager
     def projection_coordinator_write_scope(self, owner: str, world_id: str = ""):
-        """Reuse an outer coordinator lease or release the one acquired here."""
-        lease = self.acquire_projection_coordinator_lease(owner, world_id=world_id)
-        adopted = bool(lease.get("adopted"))
+        """Reuse an explicit outer scope or release the lease acquired here.
+
+        Public top-level acquisition deliberately does not adopt a thread-local
+        lease.  Only this context manager may do so, which prevents a leaked
+        lease from being mistaken for a legitimate nested write on the next
+        worker job.
+        """
+        depth = int(getattr(self._projection_coordinator_local, "explicit_scope_depth", 0) or 0)
+        self._projection_coordinator_local.explicit_scope_depth = depth + 1
+        lease: Dict[str, object] = {}
         try:
-            yield lease
+            lease = self.acquire_projection_coordinator_lease(owner, world_id=world_id)
+            adopted = bool((lease or {}).get("adopted"))
+            try:
+                yield lease
+            finally:
+                if bool((lease or {}).get("acquired")) and not adopted:
+                    self.release_projection_coordinator_lease(lease)
         finally:
-            if bool(lease.get("acquired")) and not adopted:
-                self.release_projection_coordinator_lease(lease)
+            self._projection_coordinator_local.explicit_scope_depth = depth
 
     def acquire_projection_coordinator_lease(
         self,
@@ -3078,6 +3090,7 @@ class ScopedABoxManifestMixin:
         self,
         owner: str,
         world_id: str = "",
+        allow_adopt: bool = False,
     ) -> Dict[str, object]:
         """Serialize physical TypeDB writes across portfolio and shared worlds.
 
@@ -3086,13 +3099,30 @@ class ScopedABoxManifestMixin:
         World merge cannot contend with a PortfolioWorld activation halfway
         through its native InferenceBox lifecycle.
         """
+        allow_adopt = bool(
+            allow_adopt
+            or int(getattr(self._projection_coordinator_local, "explicit_scope_depth", 0) or 0) > 0
+        )
         active = self.active_projection_coordinator_lease()
         if bool(active.get("acquired")):
+            if allow_adopt:
+                return {
+                    **active,
+                    "status": "adopted",
+                    "adopted": True,
+                    "requestedWorldId": str(world_id or ""),
+                }
             return {
                 **active,
-                "status": "adopted",
-                "adopted": True,
+                "acquired": False,
+                "status": "self-owned-coordinator-not-released",
                 "requestedWorldId": str(world_id or ""),
+                "recommendedRetryAfterSeconds": self.typedb_projection_coordinator_retry_seconds(),
+                "reason": (
+                    "The previous top-level TypeDB projection coordinator lease "
+                    "is still owned by this worker and must be released before "
+                    "another graph write starts."
+                ),
             }
         if not self.typedb_projection_coordinator_enabled():
             response = {
@@ -3140,12 +3170,13 @@ class ScopedABoxManifestMixin:
     def _release_projection_coordinator_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
         if bool((lease or {}).get("adopted")):
             return {"status": "adopted-by-caller"}
-        try:
-            if str((lease or {}).get("status") or "") == "disabled":
-                return {"status": "disabled"}
-            return self.release_scoped_abox_write_lease(lease)
-        finally:
+        if str((lease or {}).get("status") or "") == "disabled":
             self.forget_projection_coordinator_lease(lease)
+            return {"status": "disabled"}
+        result = dict(self.release_scoped_abox_write_lease(lease) or {})
+        if str(result.get("status") or "") in {"released", "not-owner", "missing"}:
+            self.forget_projection_coordinator_lease(lease)
+        return result
 
     def release_scoped_abox_write_lease(self, lease: Dict[str, object]) -> Dict[str, object]:
         if not (lease or {}).get("acquired"):

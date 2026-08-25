@@ -273,6 +273,24 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("7", workers["news"]["processNice"])
         self.assertNotIn("processNice", workers["web"])
 
+    def test_v2_single_writer_embeds_world_projection_and_maintenance(self):
+        with patch.object(service_manager, "runtime_settings", return_value={
+            "mysqlRuntimeManaged": "0",
+            "ontologyTypeDbEnabled": "0",
+            "timeSeriesQuestDbEnabled": "0",
+            "reasoningEngineActiveVersion": "v2",
+            "reasoningEngineV2IndependentEnabled": "1",
+            "reasoningEngineV2DeploymentId": "v2-r2",
+            "reasoningEngineCandidateDeploymentId": "",
+            "ontologyGraphSingleWriterEnabled": "1",
+            "notificationAiQueueWorkerCount": "0",
+        }):
+            workers = service_manager.worker_specs()
+
+        self.assertIn("reasoning-engine-delivery", workers)
+        self.assertNotIn("ontology-world-projection", workers)
+        self.assertNotIn("ontology-maintenance", workers)
+
     def test_blue_green_candidate_validates_each_reasoning_database(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

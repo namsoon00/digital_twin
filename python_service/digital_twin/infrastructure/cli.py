@@ -21,6 +21,7 @@ from ..news_intelligence.application.revalidate_articles import RevalidateNewsIn
 from .admin_preview import write_admin_preview
 from .event_bus import default_event_bus
 from . import operational_store as stores
+from .graph_writer_guard import LocalGraphWriterGuard
 from .mysql_operational_connection import (
     MySQLOperationalConnection,
     mysql_deadlock_retry_count,
@@ -101,6 +102,7 @@ from .schedulers import (
 )
 from .settings import (
     SECRET_SETTING_KEYS,
+    data_dir,
     read_settings_store,
     runtime_settings,
     save_runtime_settings,
@@ -108,6 +110,43 @@ from .settings import (
     write_settings_store,
 )
 from .toss_snapshots import build_snapshot
+
+
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def run_local_graph_write(settings, role: str, operation):
+    """Run an administrative graph mutation under the process writer boundary."""
+
+    enabled = str(
+        dict(settings or {}).get("ontologyGraphSingleWriterEnabled", "1") or ""
+    ).strip().lower() not in DISABLED_VALUES
+    if not enabled:
+        return operation()
+    guard = LocalGraphWriterGuard(
+        str(
+            dict(settings or {}).get("typedbDatabase")
+            or "orbit_alpha_ontology"
+        ).strip(),
+        role=role,
+        lock_directory=data_dir() / "graph-writer-locks",
+    )
+    ownership = guard.acquire()
+    if not bool(ownership.get("acquired")):
+        return {
+            "status": "blocked",
+            "reasonCode": "typedb-graph-writer-owned",
+            "reason": str(
+                ownership.get("reason")
+                or "Another process owns the TypeDB graph writer boundary."
+            ),
+            "graphWriter": ownership,
+        }
+    try:
+        result = operation()
+        return dict(result or {}) if isinstance(result, Mapping) else result
+    finally:
+        guard.release()
 
 
 def account_from_args(args) -> AccountConfig:
@@ -634,7 +673,11 @@ def ontology_world_projection_command(args) -> int:
     settings = runtime_settings(fast_operational_read=True)
     if args.ontology_world_projection_action == "rebuild-portfolios":
         limit = int(getattr(args, "limit", "") or 0)
-        result = build_ontology_portfolio_rebuild_runner(settings).run(limit=limit)
+        result = run_local_graph_write(
+            settings,
+            "cli-world-portfolio-rebuild",
+            lambda: build_ontology_portfolio_rebuild_runner(settings).run(limit=limit),
+        )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "") in {"ok", "empty"} else 1
     runner = build_ontology_world_projection_runner(settings)
@@ -647,41 +690,43 @@ def ontology_world_projection_command(args) -> int:
         print(json.dumps({"status": "ok", "requeuedFailedCount": requeued, "outbox": runner.outbox.summary()}, ensure_ascii=False))
         return 0
     if args.ontology_world_projection_action == "rebuild":
-        result = (
-            runner.rebuild_candidate_from_completed(limit=limit)
-            if bool(getattr(args, "read_only_source", False))
-            else runner.rebuild_after_typedb_reset(limit=limit)
+        result = run_local_graph_write(
+            settings,
+            "cli-world-rebuild",
+            lambda: (
+                runner.rebuild_candidate_from_completed(limit=limit)
+                if bool(getattr(args, "read_only_source", False))
+                else runner.rebuild_after_typedb_reset(limit=limit)
+            ),
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "") in {"ok", "empty"} else 1
     if args.ontology_world_projection_action == "once":
-        print(json.dumps(runner.run_once(limit=limit), ensure_ascii=False))
-        return 0
+        result = run_local_graph_write(
+            settings,
+            "cli-world-projection",
+            lambda: runner.run_once(limit=limit),
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "") != "blocked" else 1
     if args.ontology_world_projection_action == "watch":
         interval = int(
             os.environ.get("ONTOLOGY_WORLD_PROJECTION_INTERVAL_SECONDS")
             or settings.get("ontologyWorldProjectionIntervalSeconds")
             or 10
         )
-        isolated_cycle = None
-        isolation_value = str(
-            os.environ.get("ONTOLOGY_WORLD_PROJECTION_PROCESS_ISOLATION_ENABLED")
-            or settings.get("ontologyWorldProjectionProcessIsolationEnabled")
-            or "1"
-        ).strip().lower()
-        if isolation_value not in {"0", "false", "no", "off", "disabled"}:
-            project_root = Path(__file__).resolve().parents[3]
-            isolated_cycle = IsolatedOntologyReasoningCycle(
-                [
-                    sys.executable,
-                    "-u",
-                    str(project_root / "python_service" / "service.py"),
-                    "ontology-world-projection",
-                    "once",
-                ],
-                working_directory=str(project_root),
-            )
-        OntologyWorldProjectionScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever(limit=limit)
+        def watch():
+            OntologyWorldProjectionScheduler(
+                runner,
+                interval,
+                isolated_cycle=None,
+            ).run_forever(limit=limit)
+            return {"status": "stopped"}
+
+        result = run_local_graph_write(settings, "cli-world-projection-watch", watch)
+        if str(result.get("status") or "") == "blocked":
+            print(json.dumps(result, ensure_ascii=False))
+            return 1
         return 0
     return 1
 
@@ -740,28 +785,31 @@ def ontology_maintenance_command(args) -> int:
         print(json.dumps(runner.status(), ensure_ascii=False))
         return 0
     if args.ontology_maintenance_action == "once":
-        print(json.dumps(runner.run_once(), ensure_ascii=False))
-        return 0
+        result = run_local_graph_write(
+            settings,
+            "cli-abox-maintenance",
+            runner.run_once,
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "") != "blocked" else 1
     if args.ontology_maintenance_action == "watch":
         interval = int(
             os.environ.get("ONTOLOGY_ABOX_MAINTENANCE_INTERVAL_SECONDS")
             or settings.get("ontologyAboxMaintenanceIntervalSeconds")
             or runner.interval_seconds()
         )
-        isolated_cycle = None
-        if runner.process_isolation_enabled():
-            project_root = Path(__file__).resolve().parents[3]
-            isolated_cycle = IsolatedOntologyReasoningCycle(
-                [
-                    sys.executable,
-                    "-u",
-                    str(project_root / "python_service" / "service.py"),
-                    "ontology-maintenance",
-                    "once",
-                ],
-                working_directory=str(project_root),
-            )
-        OntologyMaintenanceScheduler(runner, interval, isolated_cycle=isolated_cycle).run_forever()
+        def watch():
+            OntologyMaintenanceScheduler(
+                runner,
+                interval,
+                isolated_cycle=None,
+            ).run_forever()
+            return {"status": "stopped"}
+
+        result = run_local_graph_write(settings, "cli-abox-maintenance-watch", watch)
+        if str(result.get("status") or "") == "blocked":
+            print(json.dumps(result, ensure_ascii=False))
+            return 1
         return 0
     return 1
 
@@ -770,18 +818,22 @@ def ontology_command(args) -> int:
     settings = runtime_settings()
     repository = ontology_repository_from_settings(settings)
     if args.ontology_action == "seed":
-        payload = {
-            "replaceRuleBox": bool(args.replace_rulebox),
-            "clearInference": bool(args.clear_inference),
-            "recoverScopedABoxWriteLease": bool(getattr(args, "recover_scoped_write_lease", False)),
-        }
-        result = repository.seed_ontology(payload)
-        recovery = getattr(repository, "recover_pending_abox_activation", None)
-        if callable(recovery):
-            try:
-                result["pendingAboxActivationRecovery"] = recovery()
-            except Exception as error:  # noqa: BLE001 - do not start dependent workers against an unknown ABox generation.
-                result["pendingAboxActivationRecovery"] = {"status": "error", "reason": str(error)[:180]}
+        def seed():
+            payload = {
+                "replaceRuleBox": bool(args.replace_rulebox),
+                "clearInference": bool(args.clear_inference),
+                "recoverScopedABoxWriteLease": bool(getattr(args, "recover_scoped_write_lease", False)),
+            }
+            result = repository.seed_ontology(payload)
+            recovery = getattr(repository, "recover_pending_abox_activation", None)
+            if callable(recovery):
+                try:
+                    result["pendingAboxActivationRecovery"] = recovery()
+                except Exception as error:  # noqa: BLE001 - do not start dependent workers against an unknown ABox generation.
+                    result["pendingAboxActivationRecovery"] = {"status": "error", "reason": str(error)[:180]}
+            return result
+
+        result = run_local_graph_write(settings, "cli-ontology-seed", seed)
         print(json.dumps(result, ensure_ascii=False))
         # A current static ontology is a successful seed no-op. Returning a
         # non-zero code here prevents the service manager from starting all
@@ -792,28 +844,32 @@ def ontology_command(args) -> int:
             and recovery_status in {"skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged"}
         ) else 1
     if args.ontology_action == "recover-scoped-write-lease":
-        recovery = getattr(repository, "recover_scoped_abox_write_lease_after_managed_shutdown", None)
-        if not callable(recovery):
-            result = {"status": "unsupported", "reason": "Graph store has no scoped ABox write lease recovery."}
-        else:
+        def recover_scoped_lease():
+            recovery = getattr(repository, "recover_scoped_abox_write_lease_after_managed_shutdown", None)
+            if not callable(recovery):
+                return {"status": "unsupported", "reason": "Graph store has no scoped ABox write lease recovery."}
             try:
-                result = recovery()
+                return recovery()
             except Exception as error:  # noqa: BLE001 - worker startup must not proceed against an unknown lease owner.
-                result = {"status": "error", "reason": str(error)[:180]}
+                return {"status": "error", "reason": str(error)[:180]}
+
+        result = run_local_graph_write(settings, "cli-scoped-lease-recovery", recover_scoped_lease)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "") in {
             "cleared", "empty", "disabled", "skipped", "active-owner",
             "foreign-owner", "legacy-owner-unknown", "invalid-owner",
         } else 1
     if args.ontology_action == "recover-abox-activation":
-        recovery = getattr(repository, "recover_pending_abox_activation", None)
-        if not callable(recovery):
-            result = {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
-        else:
+        def recover_activation():
+            recovery = getattr(repository, "recover_pending_abox_activation", None)
+            if not callable(recovery):
+                return {"status": "skipped", "reason": "Graph store has no pending ABox activation journal."}
             try:
-                result = recovery()
+                return recovery()
             except Exception as error:  # noqa: BLE001 - expose the blocking TypeDB state to the operator.
-                result = {"status": "error", "reason": str(error)[:180]}
+                return {"status": "error", "reason": str(error)[:180]}
+
+        result = run_local_graph_write(settings, "cli-abox-activation-recovery", recover_activation)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "") in {
             "skipped", "disabled", "finalized", "restored", "cleared-stale", "retry-required", "staged",

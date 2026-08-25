@@ -1,5 +1,6 @@
 """Versioned reasoning-engine release registration and guarded switching."""
 
+import hashlib
 import inspect
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
@@ -33,6 +34,12 @@ class ReasoningEnginePlatformService:
             self.settings.get("reasoningEngineV2IndependentEnabled") or "1"
         ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
+    def bool_setting(self, key: str, fallback: bool) -> bool:
+        value = self.settings.get(key)
+        if value is None or str(value).strip() == "":
+            return bool(fallback)
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
     def int_setting(self, key: str, fallback: int, lower: int = 0, upper: int = 100000) -> int:
         try:
             value = int(float(str(self.settings.get(key) or fallback)))
@@ -46,6 +53,89 @@ class ReasoningEnginePlatformService:
         except (TypeError, ValueError):
             value = fallback
         return max(lower, min(upper, value))
+
+    def isolated_candidate_graph_database(
+        self,
+        deployment_id: str,
+        release_id: str,
+        protected_bindings: Iterable[str],
+    ) -> str:
+        protected = {str(item or "").strip() for item in protected_bindings if str(item or "").strip()}
+        configured = str(
+            self.settings.get("reasoningEngineCandidateTypeDbDatabase")
+            or self.settings.get("reasoningEngineShadowTypeDbDatabase")
+            or ""
+        ).strip()
+        if configured and configured not in protected:
+            return configured
+        digest = hashlib.sha256(
+            (str(deployment_id or "") + "|" + str(release_id or "")).encode("utf-8")
+        ).hexdigest()[:16]
+        return "orbit_alpha_ontology_candidate_" + digest
+
+    def candidate_graph_isolation(self, control=None) -> Dict[str, object]:
+        selected = control or self.registry.control()
+        selected_mapping = dict(selected or {}) if isinstance(selected, Mapping) else {}
+
+        def control_value(snake_name: str, camel_name: str) -> str:
+            return str(
+                selected_mapping.get(snake_name)
+                or selected_mapping.get(camel_name)
+                or getattr(selected, snake_name, "")
+                or ""
+            ).strip()
+
+        candidate_id = control_value("candidate_deployment_id", "candidateDeploymentId")
+        protected_ids = {
+            control_value("active_deployment_id", "activeDeploymentId"),
+            control_value("delivery_deployment_id", "deliveryDeploymentId"),
+        }
+        protected_bindings = set()
+        getter = getattr(self.registry, "get", None)
+        if not callable(getter):
+            return {
+                "status": "unavailable",
+                "isolated": None,
+                "candidateDeploymentId": candidate_id,
+                "candidateGraphStoreBinding": "",
+                "protectedGraphStoreBindings": [],
+                "reasonCode": "graph-store-binding-unavailable",
+            }
+        for deployment_id in protected_ids:
+            if not deployment_id:
+                continue
+            row = dict(getter(deployment_id) or {})
+            binding = str(row.get("graphStoreBinding") or row.get("graph_store_binding") or "").strip()
+            if binding:
+                protected_bindings.add(binding)
+        candidate = dict(getter(candidate_id) or {}) if candidate_id else {}
+        candidate_binding = str(
+            candidate.get("graphStoreBinding") or candidate.get("graph_store_binding") or ""
+        ).strip()
+        isolated = (
+            bool(candidate_binding not in protected_bindings)
+            if candidate_id and candidate_binding and protected_bindings
+            else None
+            if candidate_id
+            else False
+        )
+        return {
+            "status": (
+                "isolated" if isolated is True
+                else "blocked" if isolated is False and candidate_id
+                else "unavailable" if candidate_id
+                else "not-configured"
+            ),
+            "isolated": isolated,
+            "candidateDeploymentId": candidate_id,
+            "candidateGraphStoreBinding": candidate_binding,
+            "protectedGraphStoreBindings": sorted(protected_bindings),
+            "reasonCode": (
+                "" if isolated is True or not candidate_id
+                else "candidate-graph-store-not-isolated" if isolated is False
+                else "graph-store-binding-unavailable"
+            ),
+        }
 
     def independent_queue_summary(
         self,
@@ -504,6 +594,7 @@ class ReasoningEnginePlatformService:
                 "status": str(rule_execution.get("status") or "ready"),
                 "mode": str(rule_execution.get("mode") or "typedb-direct-typeql"),
             },
+            "graphWriter": dict(health.get("graphWriter") or {}),
             "workerHeartbeats": dict(health.get("workerHeartbeats") or {}),
             "lastRun": {
                 "status": str(last_result.get("status") or ""),
@@ -561,6 +652,7 @@ class ReasoningEnginePlatformService:
         active = self._compact_deployment(active_row)
         delivery = self._compact_deployment(by_id.get(delivery_id) or {})
         candidate = self._compact_deployment(by_id.get(candidate_id) or {}) if candidate_id else {}
+        candidate_graph_isolation = self.candidate_graph_isolation(control)
         queue = dict(platform_state.get("independentQueue") or {})
         if str(queue.get("deploymentId") or "") != active_id:
             # During an immutable release registration the configured V2
@@ -634,6 +726,8 @@ class ReasoningEnginePlatformService:
                 or delivery_heartbeat_age > heartbeat_critical_seconds
             ):
                 reasons.append("delivery-reasoning-worker-heartbeat-missing")
+            if candidate_id and candidate_graph_isolation.get("isolated") is False:
+                reasons.append("candidate-graph-store-not-isolated")
             status = "ready" if not reasons else "degraded"
         result = {
             "status": status,
@@ -646,6 +740,22 @@ class ReasoningEnginePlatformService:
             "activeDeployment": active,
             "deliveryDeployment": delivery,
             "candidateDeployment": candidate,
+            "candidateGraphIsolation": candidate_graph_isolation,
+            "writerTopology": {
+                "mode": (
+                    "single-process"
+                    if self.bool_setting("ontologyGraphSingleWriterEnabled", True)
+                    else "legacy-multi-process"
+                ),
+                "graphStoreBinding": str(delivery.get("graphStoreBinding") or ""),
+                "owner": dict(delivery.get("graphWriter") or {}),
+                "worldProjectionEmbedded": self.bool_setting(
+                    "ontologyGraphSingleWriterEnabled", True
+                ),
+                "maintenanceEmbedded": self.bool_setting(
+                    "ontologyGraphSingleWriterEnabled", True
+                ),
+            },
             "workerLiveness": {
                 "delivery": {
                     **delivery_heartbeat,
@@ -784,11 +894,30 @@ class ReasoningEnginePlatformService:
         active_is_v2 = str(
             active_row.get("engineVersion") or active_row.get("engine_version") or ""
         ).strip().lower() == "v2"
-        inherited_graph_store = str(
-            active_row.get("graphStoreBinding")
-            or active_row.get("graph_store_binding")
-            or ""
-        ).strip() if active_is_v2 else ""
+        protected_graph_stores = set()
+        for protected_id in protected:
+            protected_row = dict(self.registry.get(protected_id) or {})
+            protected_binding = str(
+                protected_row.get("graphStoreBinding")
+                or protected_row.get("graph_store_binding")
+                or ""
+            ).strip()
+            if protected_binding:
+                protected_graph_stores.add(protected_binding)
+        requested_graph_store = str(graph_database or "").strip()
+        if requested_graph_store and requested_graph_store in protected_graph_stores:
+            return {
+                "status": "blocked",
+                "deploymentId": clean_deployment_id,
+                "blockers": ["candidate-graph-store-must-be-isolated"],
+                "graphStoreBinding": requested_graph_store,
+                "protectedGraphStoreBindings": sorted(protected_graph_stores),
+            }
+        candidate_graph_store = requested_graph_store or self.isolated_candidate_graph_database(
+            clean_deployment_id,
+            clean_release_id,
+            protected_graph_stores,
+        )
         inherited_time_series = str(
             active_row.get("timeSeriesBackendId")
             or active_row.get("time_series_backend_id")
@@ -800,13 +929,7 @@ class ReasoningEnginePlatformService:
             engine_version=base.engine_version,
             deployment_id=clean_deployment_id,
             status="provisioning",
-            graph_store_binding=str(
-                graph_database or inherited_graph_store or base.graph_store_binding
-            ).strip(),
-            # A new immutable release of the active V2 engine is a code/model
-            # release, not a storage migration. Inherit the active V2 binding
-            # even when a previously configured candidate made descriptors()
-            # select the comparison backend.
+            graph_store_binding=candidate_graph_store,
             time_series_backend_id=inherited_time_series or base.time_series_backend_id,
             release_bundle=EngineReleaseBundle(
                 tbox_release_id=bundle.tbox_release_id,

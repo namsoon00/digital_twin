@@ -5183,13 +5183,16 @@ class PortfolioOntologyProjectionRecorder:
                     world_id=shared_world.world_id,
                 )
             except Exception as error:  # noqa: BLE001 - the portfolio world must remain independently usable.
+                coordinator_release = self.release_projection_coordinator_lease(coordinator_lease)
                 return {
                     **world_metadata(shared_world),
                     "status": "deferred-" + status_prefix + "-write-lease",
                     "projectionKind": kind,
                     "reason": "Shared " + world_label + " write lease lookup failed: " + str(error)[:180],
+                    "projectionCoordinatorRelease": coordinator_release,
                 }
             if not bool(merge_lease.get("acquired")):
+                coordinator_release = self.release_projection_coordinator_lease(coordinator_lease)
                 return {
                     **world_metadata(shared_world),
                     "status": "deferred-" + status_prefix + "-write-lease",
@@ -5201,6 +5204,7 @@ class PortfolioOntologyProjectionRecorder:
                         for key, value in dict(merge_lease or {}).items()
                         if key != "propertiesJson"
                     },
+                    "projectionCoordinatorRelease": coordinator_release,
                 }
         try:
             pending_activation_recovery: Dict[str, object] = {}
@@ -7654,10 +7658,28 @@ class PortfolioOntologyProjectionRecorder:
         releaser = getattr(self.repository, "release_projection_coordinator_lease", None)
         if not callable(releaser):
             return {"status": "unsupported"}
-        try:
-            return dict(releaser(lease) or {})
-        except Exception as error:  # noqa: BLE001 - durable expiry remains the final recovery path.
-            return {"status": "error", "reason": str(error)[:180]}
+        last_result: Dict[str, object] = {}
+        for attempt in range(1, 3):
+            try:
+                last_result = dict(releaser(lease) or {})
+            except Exception as error:  # noqa: BLE001 - the same owner token is safe to retry.
+                last_result = {"status": "error", "reason": str(error)[:180]}
+            if str(last_result.get("status") or "") in {
+                "released", "disabled", "not-owner", "missing", "unsupported",
+            }:
+                if attempt > 1:
+                    last_result["releaseAttempts"] = attempt
+                return last_result
+        return {
+            **last_result,
+            "status": "error",
+            "releaseAttempts": 2,
+            "retryable": True,
+            "reason": str(
+                last_result.get("reason")
+                or "TypeDB projection coordinator release did not reach a terminal state."
+            )[:180],
+        }
 
     def begin_projection_audit_run(
         self,

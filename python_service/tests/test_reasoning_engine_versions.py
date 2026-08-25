@@ -578,6 +578,79 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertFalse(result["deployment"]["capabilities"]["productionDelivery"])
         self.assertTrue(result["deployment"]["capabilities"]["shadowComparison"])
 
+    def test_register_v2_release_rejects_active_graph_database_reuse(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-active": {
+                        "deploymentId": "v2-active",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "graphStoreBinding": "typedb-production",
+                    },
+                }
+                self.control_value = EngineControlState("v2-active", "v2-active", "", 4)
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def control(self):
+                return self.control_value
+
+        platform = ReasoningEnginePlatformService(Registry(), {})
+
+        result = platform.register_v2_release(
+            "v2-candidate",
+            "release-candidate",
+            graph_database="typedb-production",
+        )
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual(["candidate-graph-store-must-be-isolated"], result["blockers"])
+
+    def test_register_v2_release_derives_isolated_database_when_unspecified(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-active": {
+                        "deploymentId": "v2-active",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "graphStoreBinding": "typedb-production",
+                    },
+                }
+                self.control_value = EngineControlState("v2-active", "v2-active", "", 4)
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def control(self):
+                return self.control_value
+
+            def upsert(self, descriptor):
+                self.rows[descriptor.deployment_id] = descriptor.to_dict()
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                del expected_version
+                self.control_value = EngineControlState(active, delivery, candidate, 5)
+                return self.control_value
+
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineShadowTypeDbDatabase": "typedb-production"},
+        )
+
+        result = platform.register_v2_release("v2-candidate", "release-candidate")
+
+        self.assertEqual("registered", result["status"])
+        self.assertNotEqual("typedb-production", result["deployment"]["graphStoreBinding"])
+        self.assertTrue(
+            result["deployment"]["graphStoreBinding"].startswith("orbit_alpha_ontology_candidate_")
+        )
+
     def test_active_v2_status_reads_the_configured_worker_queue_not_rollback_queue(self):
         class Registry:
             def __init__(self):
@@ -1059,6 +1132,12 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "status": "active",
                     "releaseBundle": {"release_id": "release-r24"},
                     "health": {
+                        "graphWriter": {
+                            "singleWriter": True,
+                            "role": "delivery",
+                            "processId": 1234,
+                            "acquired": True,
+                        },
                         "schemaFunctionReadiness": {
                             "status": "provisioning",
                             "functionsReady": False,
@@ -1101,6 +1180,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             "typedb-direct-typeql",
             result["activeDeployment"]["ruleExecutionReadiness"]["mode"],
         )
+        self.assertEqual("single-process", result["writerTopology"]["mode"])
+        self.assertEqual(1234, result["writerTopology"]["owner"]["processId"])
 
 
 if __name__ == "__main__":

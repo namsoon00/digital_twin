@@ -11914,6 +11914,51 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", result["status"])
         self.assertEqual("adopted", result["projectionCoordinator"]["status"])
 
+    def test_top_level_projection_acquire_does_not_adopt_a_leaked_local_lease(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        outer = {
+            "acquired": True,
+            "status": "acquired",
+            "leaseOwner": "scoped-abox:leaked",
+            "leaseToken": "leaked-token",
+            "propertiesJson": "{}",
+            "worldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+        }
+        repository.track_projection_coordinator_lease(outer)
+
+        second = repository.acquire_projection_coordinator_lease(
+            "next-top-level-job",
+            world_id="portfolio:local:other",
+        )
+
+        self.assertFalse(second["acquired"])
+        self.assertEqual("self-owned-coordinator-not-released", second["status"])
+        self.assertNotIn("adopted", second)
+        repository.forget_projection_coordinator_lease(outer)
+
+    def test_failed_projection_release_keeps_local_ownership_visible(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        lease = {
+            "acquired": True,
+            "status": "acquired",
+            "leaseOwner": "scoped-abox:release-failed",
+            "leaseToken": "release-failed-token",
+            "propertiesJson": "{}",
+            "worldId": TYPEDB_PROJECTION_COORDINATOR_WORLD_ID,
+        }
+        repository.track_projection_coordinator_lease(lease)
+
+        with patch.object(
+            repository,
+            "release_scoped_abox_write_lease",
+            return_value={"status": "error", "reason": "temporary failure"},
+        ):
+            result = repository.release_projection_coordinator_lease(lease)
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual("release-failed-token", repository.active_projection_coordinator_lease()["leaseToken"])
+        repository.forget_projection_coordinator_lease(lease)
+
     def test_typedb_rulebox_empty_result_materializes_aligned_no_match_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         rule_snapshot = {

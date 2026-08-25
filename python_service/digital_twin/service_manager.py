@@ -715,6 +715,9 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     independent_v2_enabled = truthy(
         (settings or {}).get("reasoningEngineV2IndependentEnabled", "1")
     )
+    single_graph_writer_enabled = truthy(
+        (settings or {}).get("ontologyGraphSingleWriterEnabled", "1")
+    )
     configured_v2_id = str(
         (settings or {}).get("reasoningEngineV2DeploymentId") or ""
     ).strip()
@@ -730,6 +733,12 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         name: spec
         for name, spec in BASE_WORKERS.items()
         if not (name == "ontology-reasoning" and active_engine_version != "v1")
+        and not (
+            name in {"ontology-world-projection", "ontology-maintenance"}
+            and active_engine_version == "v2"
+            and independent_v2_enabled
+            and single_graph_writer_enabled
+        )
         and not (
             name in {"reasoning-engine-delivery", "reasoning-engine-shadow"}
             and not independent_v2_enabled

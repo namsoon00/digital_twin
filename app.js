@@ -5764,6 +5764,7 @@
       fredApiKey: settingValue("fredApiKey"),
       opendartApiKey: settingValue("opendartApiKey"),
       fxRates: settingValue("fxRates"),
+      portfolioValuationBasis: settingValue("portfolioValuationBasis"),
       valuationAssumptions: settingValue("valuationAssumptions"),
       aiValuationAutoProposalEnabled: settingValue("aiValuationAutoProposalEnabled"),
       aiValuationCurrentPriceAnchorEnabled: settingValue("aiValuationCurrentPriceAnchorEnabled"),
@@ -14176,6 +14177,12 @@
       total: numeric(portfolio.total),
       invested: numeric(portfolio.invested),
       cash: numeric(portfolio.cash),
+      valuationBasis: String(portfolio.valuationBasis || portfolio.valuation_basis || "legacy-unknown"),
+      valuationSnapshotId: String(portfolio.valuationSnapshotId || portfolio.valuation_snapshot_id || ""),
+      brokerComparableTotal: numeric(portfolio.brokerComparableTotal || portfolio.broker_comparable_total),
+      brokerGrossTotal: numeric(portfolio.brokerGrossTotal || portfolio.broker_gross_total),
+      brokerNetTotal: numeric(portfolio.brokerNetTotal || portfolio.broker_net_total),
+      markToMarketTotal: numeric(portfolio.markToMarketTotal || portfolio.mark_to_market_total),
       pnl: pnl,
       pnlAvailable: pnlItems.length > 0,
       holdingCount: holdings.length,
@@ -14646,8 +14653,9 @@
     var blockers = Array.isArray(dashboard.blockerGroups) ? dashboard.blockerGroups : [];
     var totalValue = hasNumericValue(dashboardPortfolio.total) ? numeric(dashboardPortfolio.total) : portfolio.total;
     var positionCount = hasNumericValue(dashboardPortfolio.positionCount) ? numeric(dashboardPortfolio.positionCount) : portfolio.holdingCount;
+    var valuationBasis = String(dashboardPortfolio.valuationBasis || portfolio.valuationBasis || "legacy-unknown");
     var metrics = [
-      { label: "총 평가", value: formatMoney(totalValue), detail: positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
+      { label: portfolioValuationMetricLabel(valuationBasis), value: formatMoney(totalValue), detail: portfolioValuationBasisLabel(valuationBasis) + " · " + positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
       { label: "현금", value: hasNumericValue(dashboardPortfolio.cash) ? formatMoney(dashboardPortfolio.cash) : formatMoney(portfolio.cash), detail: "포트폴리오 원장", target: { type: "tab", value: "portfolio" } },
       { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch", target: { type: "detail", value: "today-work-queue" } },
       { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음", target: upcoming[0] ? { type: "detail", value: "investment-calendar-event", key: upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "" } : { type: "tab", value: "calendar" } },
@@ -23288,13 +23296,16 @@
 
   function renderAccountBalanceAudit(snapshot) {
     var portfolio = (snapshot || {}).portfolio || {};
+    var basis = String(portfolio.valuationBasis || portfolio.valuation_basis || "legacy-unknown");
     return [
       '<section class="account-balance-audit">',
       '<div class="account-balance-grid">',
       renderAccountControlMetric("투자 평가액", formatMoney(portfolio.invested || 0), "보유 종목 원화환산", "neutral"),
       renderAccountControlMetric("현금/주문 가능", formatMoney(portfolio.cash || 0), portfolioCashBasisText(snapshot || {}, portfolio), "neutral"),
-      renderAccountControlMetric("총 평가", formatMoney(portfolio.total || 0), "스냅샷 portfolio.total", "ok"),
+      renderAccountControlMetric(portfolioValuationMetricLabel(basis), formatMoney(portfolio.total || 0), portfolioValuationBasisLabel(basis), "ok"),
       renderAccountControlMetric("산식 차이", exposureDiffText(portfolio.total || 0, numeric(portfolio.invested) + numeric(portfolio.cash)), "total - (invested + cash)", Math.abs(numeric(portfolio.total) - numeric(portfolio.invested) - numeric(portfolio.cash)) < 1 ? "ok" : "warn"),
+      renderAccountControlMetric("토스 비용 전", formatMoney(portfolio.brokerGrossTotal || portfolio.broker_gross_total || 0), "broker gross + cash", "neutral"),
+      renderAccountControlMetric("분석 시가", formatMoney(portfolio.markToMarketTotal || portfolio.mark_to_market_total || 0), "최신 시세 × 수량 + 현금", "neutral"),
       '</div>',
       '<div class="account-balance-ledger">',
       '<div class="account-board-title">',
@@ -23432,6 +23443,7 @@
   function renderAccountBalancePanel(snapshot) {
     snapshot = snapshot || {};
     var portfolio = (snapshot || {}).portfolio || {};
+    var basis = String(portfolio.valuationBasis || portfolio.valuation_basis || "legacy-unknown");
     var formulaTotal = numeric(portfolio.invested) + numeric(portfolio.cash);
     return [
       '<article class="panel account-balance-panel account-balance-workspace">',
@@ -23442,7 +23454,7 @@
       '<p class="subtle">화면의 평가액이 어떤 현금 기준, 환율, 보유 원장 합계에서 나왔는지 한 화면에서 대조합니다.</p>',
       '</div>',
       '<div class="account-balance-total">',
-      '<em>총 평가</em>',
+      '<em>' + escapeHtml(portfolioValuationMetricLabel(basis)) + '</em>',
       '<strong>' + escapeHtml(formatMoney(portfolio.total || 0)) + '</strong>',
       '<span>' + escapeHtml(exposureDiffText(portfolio.total || 0, formulaTotal)) + '</span>',
       '</div>',
@@ -28938,6 +28950,8 @@
   }
 
   function portfolioPositionBaseValue(item, rates) {
+    var accountValue = numeric(item && (item.accountValueKrw || item.account_value_krw));
+    if (accountValue) return Math.max(0, accountValue);
     var marketValue = numeric(item && item.marketValue);
     if (!marketValue && numeric(item && item.quantity) && currentPriceOf(item || {})) {
       marketValue = numeric(item.quantity) * currentPriceOf(item);
@@ -28969,6 +28983,32 @@
     var diff = numeric(actual) - numeric(expected);
     if (Math.abs(diff) < 1) return "일치";
     return "차이 " + (diff > 0 ? "+" : "-") + formatMoney(Math.abs(diff));
+  }
+
+  function portfolioValuationBasisLabel(value) {
+    return ({
+      "broker-net": "토스 비용 반영",
+      "broker-gross": "토스 비용 전",
+      "mark-to-market": "분석 시가",
+      "legacy-unknown": "과거 기준 미확인"
+    })[String(value || "").toLowerCase()] || "평가 기준 미확인";
+  }
+
+  function portfolioValuationMetricLabel(value) {
+    var basis = String(value || "").toLowerCase();
+    if (basis === "mark-to-market") return "분석 시가 총 평가";
+    if (basis === "legacy-unknown") return "총 평가";
+    return "토스 기준 총 평가";
+  }
+
+  function portfolioValuationFxText(portfolio) {
+    var valuation = (portfolio && portfolio.valuation) || {};
+    var context = valuation.fxContext || {};
+    var rows = Object.keys(context).sort().map(function (currency) {
+      var item = context[currency] || {};
+      return currency + " " + Number(item.rate || 0).toLocaleString("ko-KR") + " (" + (item.source || item.state || "미확인") + ")";
+    });
+    return rows.length ? rows.join(", ") : portfolioFxRateText(portfolioFxRates());
   }
 
   function portfolioCashBasisText(snapshot, portfolio) {
@@ -29005,10 +29045,16 @@
     var sectorTotal = portfolioSum(portfolio.sectors || [], function (sector) { return sector.value; });
     var formulaTotal = numeric(portfolio.invested) + numeric(portfolio.cash);
     var source = (snapshot.toss && snapshot.toss.status ? snapshot.toss.status : "토스 스냅샷") + " · " + (snapshot.dataMode || (snapshot.mock ? "mock" : "live"));
+    var basis = String(portfolio.valuationBasis || portfolio.valuation_basis || "legacy-unknown");
+    var valuation = portfolio.valuation || {};
+    var snapshotId = String(portfolio.valuationSnapshotId || portfolio.valuation_snapshot_id || valuation.valuationSnapshotId || "");
+    var componentAsOf = valuation.componentAsOf || {};
     var rows = [
       ["데이터 원천", source],
-      ["노출 계산 기준", "KRW 기준 원화환산 · 총 평가 = 투자 평가액 + 현금/주문 가능"],
-      ["환율 기준", portfolioFxRateText(rates)],
+      ["총 평가 기준", portfolioValuationBasisLabel(basis)],
+      ["평가 스냅샷", snapshotId ? snapshotId.slice(-12) : "과거 기준 미확인"],
+      ["환율 기준", portfolioValuationFxText(portfolio)],
+      ["구성 시각", [componentAsOf.holdings && "잔고 " + formatClock(componentAsOf.holdings), componentAsOf.prices && "시세 " + formatClock(componentAsOf.prices), componentAsOf.fx && "환율 " + formatClock(componentAsOf.fx)].filter(Boolean).join(" · ") || formatClock(snapshot.generatedAt)],
       ["현금 기준", portfolioCashBasisText(snapshot, portfolio)],
       ["총 평가 산식", formatMoney(portfolio.invested || 0) + " + " + formatMoney(portfolio.cash || 0) + " = " + formatMoney(formulaTotal)],
       ["총 평가 차이", exposureDiffText(portfolio.total || 0, formulaTotal)],
@@ -33089,6 +33135,11 @@
         '<span class="setting-field-label">환율 설정</span>',
         '<div class="form-control-shell"><textarea data-setting="fxRates" rows="2" autocomplete="off" placeholder="USD=1400">' + escapeHtml(settingValue("fxRates") || defaultSettings.fxRates) + '</textarea></div>',
         '</label>',
+        renderSettingSelect("portfolioValuationBasis", "계좌 총 평가 기준", [
+          { value: "broker-net", label: "토스 비용 반영" },
+          { value: "broker-gross", label: "토스 비용 전" },
+          { value: "mark-to-market", label: "최신 분석 시가" }
+        ]),
         '<label class="setting-field wide">',
         '<span class="setting-field-label">종목별 투자 타입 프로필</span>',
         '<span class="setting-field-help">형식: 심볼|설명|타입들|의도|민감도|정책. 예: MSTR|비트코인 프록시 성장주|BitcoinProxy,HighVolatilityGrowth|trading|btc:high,fx:high|allowAddOnStrength=1,trimOnTrendBreak=1</span>',

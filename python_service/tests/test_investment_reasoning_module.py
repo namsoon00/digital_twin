@@ -90,6 +90,59 @@ class InMemoryDecisionEpisodeStore:
 
 
 class ReasoningCaseDispositionTests(unittest.TestCase):
+    def test_inference_result_persists_rule_match_values_without_another_graph_query(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+
+        completed = orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {"account:1": {
+                "inferenceBox": {
+                    "sourceAboxSnapshotId": "abox:1",
+                    "inferenceGenerationId": "generation:1",
+                    "sharedPremiseInferenceGenerationId": "shared:7",
+                    "sharedPremiseSourceAboxSnapshotId": "shared-abox:7",
+                    "traces": [{
+                        "id": "trace:recovery",
+                        "ruleId": "graph.watchlist.recovery.v1",
+                        "evidenceUsableForJudgement": True,
+                        "matchedConditions": [{
+                            "conditionId": "price-above-ma20",
+                            "field": "ma20Distance",
+                            "observedValue": 4.2,
+                            "ruleConditionShape": {
+                                "conditionId": "price-above-ma20",
+                                "kind": "subject_property",
+                                "field": "ma20Distance",
+                                "operator": ">",
+                                "value": 0,
+                            },
+                            "source": "KIS",
+                            "sourceAsOf": "2026-08-25T01:00:00Z",
+                            "freshnessStatus": "fresh",
+                        }],
+                    }],
+                },
+            }},
+            11,
+        )
+
+        evaluations = completed.inference_result.rule_evaluations
+        self.assertEqual(1, len(evaluations))
+        self.assertEqual("graph.watchlist.recovery.v1", evaluations[0].rule_id)
+        self.assertEqual(4.2, evaluations[0].proof.conditions[0].observed_value)
+        self.assertEqual(0, evaluations[0].proof.conditions[0].expected_value)
+        self.assertEqual("shared:7", evaluations[0].proof.premise_lineage.shared_generation_id)
+        restored = type(completed.inference_result).from_dict(completed.inference_result.to_dict())
+        self.assertEqual(evaluations[0].proof.proof_id, restored.rule_evaluations[0].proof.proof_id)
+
     def test_stale_case_expiry_is_terminal_and_projected_to_decision_history(self):
         repository = InMemoryReasoningCaseRepository()
         decision_store = InMemoryDecisionEpisodeStore()

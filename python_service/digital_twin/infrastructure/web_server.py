@@ -3421,12 +3421,151 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     }
 
 
-def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owner") -> Dict[str, object]:
+def _compact_notification_stage(stage: object) -> Dict[str, object]:
+    value = dict(stage or {}) if isinstance(stage, dict) else {}
+    return {
+        key: value.get(key)
+        for key in (
+            "sequence", "key", "title", "status", "summary", "startedAt",
+            "completedAt", "durationMs", "identifiers",
+        )
+        if value.get(key) not in (None, "", [], {})
+    }
+
+
+def _compact_notification_reasoning_trace(trace: object) -> Dict[str, object]:
+    value = dict(trace or {}) if isinstance(trace, dict) else {}
+    ai = dict(value.get("aiExecution") or {}) if isinstance(value.get("aiExecution"), dict) else {}
+    narrative = dict(value.get("narrative") or {}) if isinstance(value.get("narrative"), dict) else {}
+    rule_evaluations = [
+        dict(item) for item in value.get("ruleEvaluations") or [] if isinstance(item, dict)
+    ]
+    proof_available = len([
+        item for item in rule_evaluations
+        if str(((item.get("proof") or {}).get("status") if isinstance(item.get("proof"), dict) else "") or "") == "available"
+    ])
+    return {
+        key: value.get(key)
+        for key in (
+            "version", "status", "reason", "jobId", "jobStatus", "snapshotBound",
+            "subject", "snapshot", "finalDecision", "aiComparison", "steps", "completeness",
+            "missingData",
+        )
+        if value.get(key) not in (None, "", [], {})
+    } | {
+        "aiExecution": {
+            key: ai.get(key)
+            for key in (
+                "status", "requestId", "model", "reasoningEffort", "reviewMode",
+                "adoptionState", "actionAuthority", "validationState", "latencyMs",
+                "executed", "responseSource", "writerProvenance", "claimPublication",
+            )
+            if ai.get(key) not in (None, "", [], {})
+        },
+        "narrative": {
+            "writerProvenance": narrative.get("writerProvenance") or {},
+            "publication": narrative.get("publication") or {},
+            "metrics": narrative.get("metrics") or {},
+        },
+        "ruleProofSummary": {
+            "evaluationCount": len(rule_evaluations),
+            "availableProofCount": proof_available,
+            "legacyUnavailableCount": max(0, len(rule_evaluations) - proof_available),
+        },
+    }
+
+
+def _compact_notification_pipeline(trace: object) -> Dict[str, object]:
+    value = dict(trace or {}) if isinstance(trace, dict) else {}
+    pipeline = dict(value.get("pipeline") or {}) if isinstance(value.get("pipeline"), dict) else {}
+    compact_pipeline = {
+        key: pipeline.get(key)
+        for key in ("contractVersion", "status", "complete", "stageCount", "bottleneck", "links")
+        if pipeline.get(key) not in (None, "", [], {})
+    }
+    compact_pipeline["stages"] = [_compact_notification_stage(item) for item in pipeline.get("stages") or []]
+    return {
+        "contractVersion": value.get("contractVersion") or "notification-trace-v2",
+        "jobId": value.get("jobId") or "",
+        "pipeline": compact_pipeline,
+    }
+
+
+def _notification_detail_section_payload(
+    payload: Dict[str, object],
+    section: str,
+    *,
+    include_sensitive: bool,
+) -> Dict[str, object]:
+    reasoning = dict(payload.get("reasoningTrace") or {})
+    trace = dict(payload.get("notificationTrace") or {})
+    if section == "reasoning":
+        ai = dict(reasoning.get("aiExecution") or {})
+        reasoning["aiExecution"] = {
+            key: ai.get(key)
+            for key in ("status", "requestId", "reviewMode", "adoptionState", "actionAuthority", "executed")
+            if ai.get(key) not in (None, "", [], {})
+        }
+        reasoning.pop("narrative", None)
+        return {"jobId": payload.get("jobId"), "section": section, "reasoning": reasoning}
+    if section == "ai-review":
+        ai = dict(reasoning.get("aiExecution") or {})
+        if not include_sensitive:
+            from ..application.notification.query import redact_notification_trace_data
+
+            ai = dict(redact_notification_trace_data(ai) or {})
+            ai.pop("prompt", None)
+            ai["promptAccess"] = "owner-only"
+        return {
+            "jobId": payload.get("jobId"),
+            "section": section,
+            "aiExecution": ai,
+            "aiComparison": reasoning.get("aiComparison") or {},
+            "finalDecision": reasoning.get("finalDecision") or {},
+            "narrative": reasoning.get("narrative") or {},
+        }
+    if section == "delivery":
+        pipeline = dict(trace.get("pipeline") or {})
+        stages = [
+            dict(item) for item in pipeline.get("stages") or []
+            if isinstance(item, dict) and item.get("key") in {"source-event", "rendering", "delivery"}
+        ]
+        pipeline["stages"] = stages
+        pipeline["stageCount"] = len(stages)
+        return {
+            "jobId": payload.get("jobId"),
+            "section": section,
+            "lifecycle": trace.get("lifecycle") or [],
+            "deliveryAttempts": trace.get("deliveryAttempts") or [],
+            "timeline": trace.get("timeline") or [],
+            "pipeline": pipeline,
+        }
+    return {}
+
+
+def notification_job_detail_payload(
+    job_id: str,
+    recipient_id: str = "local-owner",
+    *,
+    section: str = "summary",
+    include_sensitive: bool = True,
+) -> Dict[str, object]:
     store = notification_queue_store()
     job = store.get(job_id)
     if not job:
         return {}
-    payload = notification_job_public_payload(job, detail=True)
+    normalized_section = str(section or "summary").strip().lower()
+    include_full_reasoning = normalized_section in {"reasoning", "delivery"}
+    payload = notification_job_public_payload(job, detail=include_full_reasoning)
+    if not include_full_reasoning:
+        customer_text = notification_customer_text(job)
+        payload["fullText"] = full_notification_text(customer_text)
+        payload["actionFlow"] = notification_action_flow(job.context or {})
+        payload["reasoningTrace"] = build_notification_reverse_reasoning_trace(
+            job.context or {},
+            job_id=job.job_id,
+            job_status=job.status,
+        )
     if hasattr(store, "receipt_states"):
         receipt = store.receipt_states(recipient_id, [job.job_id]).get(job.job_id, {})
         payload.update({
@@ -3440,7 +3579,7 @@ def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owne
 
         configured = runtime_settings()
         source_event = {}
-        if job.source_event_id:
+        if job.source_event_id and normalized_section in {"reasoning", "delivery"}:
             try:
                 event = stores.event_log(configured).get(job.source_event_id)
                 source_event = event.to_dict() if event else {}
@@ -3455,16 +3594,18 @@ def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owne
             or ""
         ).strip()
         reasoning_case = {}
-        if case_id:
+        if case_id and normalized_section == "reasoning":
             try:
                 case = stores.investment_reasoning_case_store(configured).get(case_id)
                 reasoning_case = case.to_dict() if case else case_context
             except Exception as error:  # noqa: BLE001 - compact immutable context remains usable.
                 reasoning_case = {**case_context, "caseId": case_id, "lookupError": str(error)}
-        try:
-            ai_trace = stores.ai_inference_queue_store(configured).trace_for_notification(job.job_id)
-        except Exception as error:  # noqa: BLE001 - notification execution audit is the fallback.
-            ai_trace = {"lookupError": str(error)}
+        ai_trace = {}
+        if normalized_section == "ai-review":
+            try:
+                ai_trace = stores.ai_inference_queue_store(configured).trace_for_notification(job.job_id)
+            except Exception as error:  # noqa: BLE001 - notification execution audit is the fallback.
+                ai_trace = {"lookupError": str(error)}
         payload["notificationTrace"] = NotificationTraceQueryService(store).trace_for_job(
             job,
             reasoning_trace=payload.get("reasoningTrace") or {},
@@ -3492,6 +3633,21 @@ def notification_job_detail_payload(job_id: str, recipient_id: str = "local-owne
                 "stages": [],
             },
         }
+    if normalized_section in {"reasoning", "ai-review", "delivery"}:
+        return _notification_detail_section_payload(
+            payload,
+            normalized_section,
+            include_sensitive=include_sensitive,
+        )
+    payload["detailContractVersion"] = "notification-detail-v2"
+    payload["detailSections"] = {
+        "summary": "/api/notification-jobs/" + job.job_id,
+        "reasoning": "/api/notification-jobs/" + job.job_id + "/reasoning",
+        "aiReview": "/api/notification-jobs/" + job.job_id + "/ai-review",
+        "delivery": "/api/notification-jobs/" + job.job_id + "/delivery",
+    }
+    payload["reasoningTrace"] = _compact_notification_reasoning_trace(payload.get("reasoningTrace"))
+    payload["notificationTrace"] = _compact_notification_pipeline(payload.get("notificationTrace"))
     return {"job": payload}
 
 
@@ -6201,11 +6357,25 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             payload = update_notification_receipt_payload(job_id, self.read_json_body())
             return self.send_payload(200 if not payload.get("error") else 404, payload)
 
+        notification_section_match = re.match(
+            r"^/api/notification-jobs/([^/]+)/(reasoning|ai-review|delivery)$",
+            path,
+        )
+        if notification_section_match and self.command == "GET":
+            payload = notification_job_detail_payload(
+                urllib.parse.unquote(notification_section_match.group(1)),
+                first_query(query, "recipientId") or "local-owner",
+                section=notification_section_match.group(2),
+                include_sensitive=not self.share_access().shared,
+            )
+            return self.send_payload(200 if payload.get("jobId") else 404, payload or {"error": "알림 작업을 찾지 못했습니다."})
+
         notification_job_match = re.match(r"^/api/notification-jobs/([^/]+)$", path)
         if notification_job_match and self.command == "GET":
             payload = notification_job_detail_payload(
                 urllib.parse.unquote(notification_job_match.group(1)),
                 first_query(query, "recipientId") or "local-owner",
+                include_sensitive=not self.share_access().shared,
             )
             return self.send_payload(200 if payload.get("job") else 404, payload or {"error": "알림 작업을 찾지 못했습니다."})
 

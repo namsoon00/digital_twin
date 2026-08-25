@@ -28,6 +28,7 @@ from ...domain.investment_reasoning import (
     InferenceResult,
     ReasoningCase,
     DecisionSynthesis,
+    rule_evaluation_records_from_projection_results,
 )
 from .episode_projection import V2DecisionEpisodeProjector
 
@@ -186,6 +187,7 @@ class InvestmentReasoningOrchestrator:
                 for identity in identities.values()
             ),
             projection_results={str(key): dict(value or {}) for key, value in projection_results.items()},
+            rule_evaluations=rule_evaluation_records_from_projection_results(projection_results),
             duration_ms=max(0, int(duration_ms or 0)),
         )
         if reasoning_case.stage == CASE_INPUT_READY:

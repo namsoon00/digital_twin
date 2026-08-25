@@ -24,6 +24,14 @@ from .ontology_rule_manifest import rule_domain_manifest
 from .ontology_schema import abox_relation_properties
 
 
+def shared_premise_original_rule_id(rule_id: str) -> str:
+    value = str(rule_id or "")
+    for prefix in ("shared.premise.any.", "shared.premise."):
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    return ""
+
+
 def materialize_rule_inference(
     graph: PortfolioOntology,
     rule: GraphInferenceRule,
@@ -97,6 +105,12 @@ def materialize_rule_inference(
     review_level = review_level_for(rule.action_level, data_state)
     evidence_relation_ids = [str(item) for item in context.get("evidenceRelationIds") or []]
     trace_id = entity_id("inference-trace", symbol + ":" + rule.rule_id)
+    original_rule_id = shared_premise_original_rule_id(rule.rule_id)
+    premise_properties = ({
+        "premiseProofId": trace_id,
+        "originalRuleId": original_rule_id,
+        "sharedPremiseEvidenceIds": evidence_relation_ids,
+    } if original_rule_id else {})
     trace_label = display_name + " · " + rule.label
     graph.entities.append(OntologyEntity(trace_id, trace_label, "inference-trace", inference_properties({
         "tboxClass": "InferenceTrace",
@@ -125,6 +139,7 @@ def materialize_rule_inference(
         **family_properties,
         **lifecycle_properties,
         **interpretation_properties,
+        **premise_properties,
     })))
     explanation_entities = materialize_inference_explanation_entities(
         graph,
@@ -243,6 +258,7 @@ def materialize_rule_inference(
             "inferenceTraceId": trace_id,
             **family_properties,
             **lifecycle_properties,
+            **premise_properties,
         })))
         relation_properties = {
             "symbol": symbol,
@@ -279,6 +295,7 @@ def materialize_rule_inference(
             **rule_contract_properties,
             **family_properties,
             **lifecycle_properties,
+            **premise_properties,
         }
         graph.relations.append(OntologyRelation(
             stock.entity_id,
@@ -562,6 +579,13 @@ def grounded_inference_context(
                     item["relationType"] = relation.relation_type
                     item["targetId"] = relation.target if relation.source == stock.entity_id else relation.source
                     item["targetKind"] = target.kind if target else ""
+                    if target and target.kind == "shared-market-premise":
+                        item["premiseLineage"] = {
+                            "premiseProofId": target_properties.get("premiseProofId"),
+                            "originalRuleId": target_properties.get("originalRuleId"),
+                            "evidenceIds": target_properties.get("sharedPremiseEvidenceIds") or [],
+                            "status": "available" if target_properties.get("premiseProofId") else "legacy-unavailable",
+                        }
         grounded_conditions.append(item)
     grounded_count = sum(1 for item in grounded_conditions if condition_is_grounded(item))
     required_conditions = [

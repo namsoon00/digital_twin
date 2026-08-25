@@ -89,6 +89,7 @@ def compact_ai_queue_context(context: Mapping[str, object]) -> Dict[str, object]
             "symbol",
             "investmentReasoningCaseId",
             "notificationAiDecisionContractVersion",
+            "notificationAiReviewMode",
             "notificationAiExecutionProfile",
             "notificationAiReplayManifest",
         ]
@@ -828,7 +829,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                        request.status, request.attempts, request.available_at,
                        request.created_at, request.updated_at,
                        request.started_at, request.completed_at,
-                       request.superseded_by, request.last_error,
+                       request.superseded_by, request.last_error, request.context_json,
                        result.result_id, result.source AS result_source,
                        result.validation_state AS result_validation_state,
                        result.latency_ms, result.prompt_bytes,
@@ -844,6 +845,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ).fetchone()
         if not row:
             return {}
+        queue_context = _json_loads(row.get("context_json"), {})
+        response = _json_loads(row.get("response_json"), {})
         return {
             "requestId": _clean(row.get("request_id")),
             "notificationJobId": _clean(row.get("notification_job_id")),
@@ -854,6 +857,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "promptVersion": _clean(row.get("prompt_version")),
             "model": _clean(row.get("model")),
             "reasoningEffort": _clean(row.get("reasoning_effort")),
+            "reviewMode": _clean(queue_context.get("notificationAiReviewMode") or response.get("reviewMode")) or "investment-judgement",
             "priority": int(row.get("priority") or 0),
             "status": _clean(row.get("status")),
             "attempts": int(row.get("attempts") or 0),
@@ -870,7 +874,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "latencyMs": int(row.get("latency_ms") or 0),
             "promptBytes": int(row.get("prompt_bytes") or 0),
             "resultCreatedAt": _clean(row.get("result_created_at")),
-            "response": _json_loads(row.get("response_json"), {}),
+            "response": response,
         }
 
     def summary(self) -> Dict[str, object]:

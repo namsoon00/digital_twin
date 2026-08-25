@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict
 
 from .notification_ai_gate_contracts import NOTIFICATION_AI_GATE_VERSION
+from .context_observation_notifications import typedb_context_observation_contract
 from .notifications import NotificationJob
 from .portfolio import utc_now_iso
 
@@ -25,6 +26,8 @@ AI_INFERENCE_RETRY = "retry"
 AI_INFERENCE_COMPLETED = "completed"
 AI_INFERENCE_FAILED = "failed"
 AI_INFERENCE_SUPERSEDED = "superseded"
+AI_REVIEW_MODE_INVESTMENT_JUDGEMENT = "investment-judgement"
+AI_REVIEW_MODE_CONTEXT_NARRATIVE = "context-narrative"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -97,6 +100,15 @@ def notification_ai_queue_priority(context: Dict[str, object]) -> int:
     return min(60, priority)
 
 
+def notification_ai_review_mode(context: Dict[str, object]) -> str:
+    configured = _clean(_mapping(context).get("notificationAiReviewMode")).lower()
+    if configured in {AI_REVIEW_MODE_INVESTMENT_JUDGEMENT, AI_REVIEW_MODE_CONTEXT_NARRATIVE}:
+        return configured
+    if typedb_context_observation_contract(context):
+        return AI_REVIEW_MODE_CONTEXT_NARRATIVE
+    return AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
+
+
 @dataclass
 class AIInferenceRequest:
     request_id: str
@@ -108,6 +120,7 @@ class AIInferenceRequest:
     symbol: str
     inference_generation_id: str
     context_hash: str
+    review_mode: str = AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
     context: Dict[str, object] = field(default_factory=dict)
     prompt_version: str = NOTIFICATION_AI_GATE_VERSION
     model: str = "gpt-5.6-sol"
@@ -137,6 +150,8 @@ class AIInferenceRequest:
         prompt_version: str = NOTIFICATION_AI_GATE_VERSION,
     ) -> "AIInferenceRequest":
         captured = dict(context or {})
+        review_mode = notification_ai_review_mode(captured)
+        captured["notificationAiReviewMode"] = review_mode
         subject = notification_ai_subject(captured)
         stamp = utc_now_iso()
         return cls(
@@ -149,6 +164,7 @@ class AIInferenceRequest:
             symbol=subject["symbol"],
             inference_generation_id=subject["inferenceGenerationId"],
             context_hash=_canonical_hash(captured),
+            review_mode=review_mode,
             context=captured,
             prompt_version=_clean(prompt_version) or NOTIFICATION_AI_GATE_VERSION,
             model=_clean(model) or "gpt-5.6-sol",
@@ -171,6 +187,7 @@ class AIInferenceRequest:
             "subjectKey": "subject_key",
             "inferenceGenerationId": "inference_generation_id",
             "contextHash": "context_hash",
+            "reviewMode": "review_mode",
             "promptVersion": "prompt_version",
             "reasoningEffort": "reasoning_effort",
             "availableAt": "available_at",
@@ -191,6 +208,10 @@ class AIInferenceRequest:
             if aliases.get(str(key), str(key)) in allowed
         }
         normalized["context"] = _mapping(normalized.get("context"))
+        normalized["review_mode"] = notification_ai_review_mode({
+            **normalized["context"],
+            "notificationAiReviewMode": normalized.get("review_mode"),
+        })
         normalized["priority"] = int(normalized.get("priority") or 20)
         normalized["attempts"] = int(normalized.get("attempts") or 0)
         return cls(**normalized)
@@ -206,6 +227,7 @@ class AIInferenceRequest:
             "subject_key": "subjectKey",
             "inference_generation_id": "inferenceGenerationId",
             "context_hash": "contextHash",
+            "review_mode": "reviewMode",
             "prompt_version": "promptVersion",
             "reasoning_effort": "reasoningEffort",
             "available_at": "availableAt",
@@ -233,6 +255,7 @@ class AIInferenceResult:
     validation_state: str
     latency_ms: int
     prompt_bytes: int
+    review_mode: str = AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
     response: Dict[str, object] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now_iso)
 
@@ -247,6 +270,8 @@ class AIInferenceResult:
         latency_ms: int,
         prompt_bytes: int,
     ) -> "AIInferenceResult":
+        response_payload = dict(response or {})
+        response_payload.setdefault("reviewMode", request.review_mode)
         return cls(
             result_id=uuid.uuid4().hex,
             request_id=request.request_id,
@@ -257,7 +282,8 @@ class AIInferenceResult:
             validation_state=_clean(validation_state) or "conditional",
             latency_ms=max(0, int(latency_ms or 0)),
             prompt_bytes=max(0, int(prompt_bytes or 0)),
-            response=dict(response or {}),
+            review_mode=request.review_mode,
+            response=response_payload,
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -271,6 +297,7 @@ class AIInferenceResult:
             "validationState": self.validation_state,
             "latencyMs": self.latency_ms,
             "promptBytes": self.prompt_bytes,
+            "reviewMode": self.review_mode,
             "response": dict(self.response or {}),
             "createdAt": self.created_at,
         }

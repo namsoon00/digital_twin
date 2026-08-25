@@ -227,12 +227,45 @@ class NarrativeClaimValidation:
 
 
 @dataclass(frozen=True)
+class NarrativePublicationResult:
+    """Final, immutable ownership decision for customer-facing narrative claims."""
+
+    status: str
+    writer_kind: str
+    review_mode: str
+    action_authority: str
+    accepted_claim_ids: Tuple[str, ...] = ()
+    rejected_claim_ids: Tuple[str, ...] = ()
+    ai_claim_count: int = 0
+    deterministic_claim_count: int = 0
+    fallback_used: bool = False
+    fallback_reason: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        return {
+            "version": "investment-narrative-publication-v1",
+            "status": payload.pop("status"),
+            "writerKind": payload.pop("writer_kind"),
+            "reviewMode": payload.pop("review_mode"),
+            "actionAuthority": payload.pop("action_authority"),
+            "acceptedClaimIds": list(payload.pop("accepted_claim_ids")),
+            "rejectedClaimIds": list(payload.pop("rejected_claim_ids")),
+            "aiClaimCount": payload.pop("ai_claim_count"),
+            "deterministicClaimCount": payload.pop("deterministic_claim_count"),
+            "fallbackUsed": payload.pop("fallback_used"),
+            "fallbackReason": payload.pop("fallback_reason"),
+        }
+
+
+@dataclass(frozen=True)
 class InvestmentNarrativeBrief:
     intent: str
     writer_provenance: Dict[str, object]
     evidence_ledger: Tuple[Dict[str, object], ...]
     claims: Tuple[Dict[str, object], ...]
     validations: Tuple[Dict[str, object], ...]
+    publication: NarrativePublicationResult
     hard_blocked: bool = False
     hard_block_reasons: Tuple[str, ...] = ()
     metrics: Dict[str, object] = field(default_factory=dict)
@@ -246,6 +279,7 @@ class InvestmentNarrativeBrief:
             "evidenceLedger": [dict(item) for item in self.evidence_ledger],
             "claims": [dict(item) for item in self.claims],
             "validations": [dict(item) for item in self.validations],
+            "publication": self.publication.to_dict(),
             "hardBlocked": self.hard_blocked,
             "hardBlockReasons": list(self.hard_block_reasons),
             "metrics": dict(self.metrics),
@@ -941,7 +975,87 @@ def build_investment_narrative_brief(
             status="verified",
             writer_kind="deterministic",
         ).to_dict())
+    if not verified_claims and response_claims:
+        fallback_provenance = {
+            **provenance,
+            "writerKind": "typedb",
+            "label": "TypeDB 근거 요약",
+            "aiAuthored": False,
+            "fallbackUsed": True,
+            "fallbackReason": "ai-narrative-claims-rejected",
+            "decisionOwner": "typedb",
+        }
+        generated_claims = _fallback_claims(
+            response,
+            ledger,
+            "typedb",
+            narrative_only=str(provenance.get("writerRole") or "") == "narrative-only",
+        )
+        generated_context = dict(context or {})
+        generated_context["_notificationAiPreparedDecisionCore"] = {
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+        }
+        fallback_claims, fallback_validation = normalize_narrative_claims(
+            generated_context,
+            {"narrativeClaims": generated_claims},
+            writer_kind="typedb",
+        )
+        verified_claims = [
+            item for item in fallback_claims
+            if next((row.get("status") for row in fallback_validation.get("validations") or [] if row.get("claimId") == item.get("claimId")), "verified") != "rejected"
+        ]
+        validations.extend(list(fallback_validation.get("validations") or []))
+        provenance = fallback_provenance
     rejected = len([item for item in validations if item.get("status") == "rejected"])
+    rejected_claim_ids = _unique([
+        item.get("claimId") for item in validations if item.get("status") == "rejected"
+    ], 200)
+    accepted_claim_ids = _unique([item.get("claimId") for item in verified_claims], 200)
+    ai_claim_count = len([item for item in verified_claims if item.get("writerKind") == "ai"])
+    deterministic_claim_count = len(verified_claims) - ai_claim_count
+    review_mode = _text(
+        _mapping(context).get("notificationAiReviewMode")
+        or ("context-narrative" if provenance.get("writerRole") == "narrative-only" else "investment-judgement"),
+        80,
+    )
+    if ai_claim_count and deterministic_claim_count:
+        publication_writer = "hybrid"
+        publication_label = "AI 분석 + 시스템 검증"
+    elif ai_claim_count:
+        publication_writer = "ai"
+        publication_label = "AI 분석"
+    else:
+        publication_writer = str(provenance.get("writerKind") or "deterministic")
+        publication_label = str(provenance.get("label") or "시스템 근거 요약")
+    fallback_used = not ai_claim_count and bool(
+        provenance.get("fallbackUsed") or str(getattr(response, "raw_response", "") or "").strip()
+    )
+    fallback_reason = str(provenance.get("fallbackReason") or "")
+    if fallback_used and not fallback_reason:
+        fallback_reason = "no-verified-ai-claims"
+    publication = NarrativePublicationResult(
+        status="published" if accepted_claim_ids else "blocked",
+        writer_kind=publication_writer,
+        review_mode=review_mode,
+        action_authority="typedb" if review_mode == "context-narrative" else "ai-judgement",
+        accepted_claim_ids=tuple(accepted_claim_ids),
+        rejected_claim_ids=tuple(rejected_claim_ids),
+        ai_claim_count=ai_claim_count,
+        deterministic_claim_count=deterministic_claim_count,
+        fallback_used=fallback_used,
+        fallback_reason=fallback_reason,
+    )
+    provenance = {
+        **provenance,
+        "writerKind": publication_writer,
+        "label": publication_label,
+        "aiAuthored": bool(ai_claim_count),
+        "fallbackUsed": fallback_used,
+        "fallbackReason": fallback_reason,
+        "writerRole": "narrative-only" if review_mode == "context-narrative" else "decision-and-narrative",
+        "decisionOwner": "typedb" if review_mode == "context-narrative" else ("ai" if ai_claim_count else "typedb"),
+    }
     metrics = {
         "evidenceCount": len(ledger),
         "claimCount": len(claims),
@@ -959,6 +1073,7 @@ def build_investment_narrative_brief(
         evidence_ledger=tuple(ledger),
         claims=tuple(verified_claims),
         validations=tuple(validations),
+        publication=publication,
         metrics=metrics,
     )
 
@@ -988,6 +1103,7 @@ def apply_narrative_brief_to_response(brief: InvestmentNarrativeBrief, response:
         "status": "verified" if not brief.metrics.get("rejectedClaimCount") else "partial",
         "validations": list(brief.validations),
         **dict(brief.metrics),
+        "publication": brief.publication.to_dict(),
     }
 
 

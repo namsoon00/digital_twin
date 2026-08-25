@@ -272,13 +272,30 @@ def context_with_validated_ai_response(
     settings: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     normalize_validated_ai_explanation(response)
-    enriched = context_with_ai_decision_transition(context or {}, response.action)
-    reconciled_change, false_initial_history = reconcile_change_analysis_with_decision_history(
-        enriched,
-        response.action,
-        response.change_analysis,
-    )
-    response.change_analysis = reconciled_change
+    review_mode = str((context or {}).get("notificationAiReviewMode") or "investment-judgement")
+    narrative_only = review_mode == "context-narrative"
+    if narrative_only:
+        enriched = dict(context or {})
+        response.action = "NO_ACTION"
+        response.action_label = "매매 판단 없음"
+        response.investment_view_action = ""
+        response.execution_action = "NO_ACTION"
+        response.execution_disposition = "reference-only"
+        response.precomputed_action = "NO_ACTION"
+        response.hypotheses = []
+        response.selected_hypothesis_id = ""
+        response.hypothesis_comparison_state = "not-required"
+        response.hypothesis_selection_source = "not-required"
+        response.decision_abstention = {}
+        false_initial_history = False
+    else:
+        enriched = context_with_ai_decision_transition(context or {}, response.action)
+        reconciled_change, false_initial_history = reconcile_change_analysis_with_decision_history(
+            enriched,
+            response.action,
+            response.change_analysis,
+        )
+        response.change_analysis = reconciled_change
     response.change_analysis = _dedupe_sentences(response.change_analysis)
     if false_initial_history:
         warning = "저장된 이전 AI 판단과 맞지 않는 첫 판단 표현을 결정 이력 기준으로 보정했습니다."
@@ -301,6 +318,8 @@ def context_with_validated_ai_response(
     enriched["notificationAiValidatedResponse"] = payload
     enriched["validatedDecisionResponse"] = payload
     enriched["notificationNarrativeBrief"] = narrative_payload
+    enriched["notificationNarrativePublication"] = narrative_brief.publication.to_dict()
+    enriched["notificationAiReviewMode"] = review_mode
     enriched["notificationWriterProvenance"] = dict(narrative_brief.writer_provenance)
     enriched["notificationClaimValidation"] = dict(response.claim_validation or {})
     enriched = context_with_investment_notification_state(enriched)

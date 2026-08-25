@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import hashlib
+import json
 from typing import Dict, Iterable, Mapping, Tuple
 
 from ..hypothesis_catalog import hypothesis_family_definition
@@ -13,7 +15,8 @@ from ..ontology_change_impact import requested_scope_families_for_event_fact_typ
 
 INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v2"
 FACT_DELTA_VERSION = "investment-fact-delta-v1"
-INFERENCE_RESULT_VERSION = "investment-inference-result-v1"
+INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
+RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v1"
 DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v2"
 
@@ -43,6 +46,11 @@ def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, Mapping) else {}
+
+
+def _stable_id(prefix: str, *values: object) -> str:
+    material = json.dumps(values, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
+    return prefix + ":" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
 def _reasoning_lane(fact_types: Iterable[str], work_classes: Iterable[str]) -> str:
@@ -366,6 +374,245 @@ class DecisionSynthesis:
 
 
 @dataclass(frozen=True)
+class ConditionEvidence:
+    """One persisted rule condition with the observation that satisfied it."""
+
+    condition_id: str
+    kind: str = ""
+    role: str = "required"
+    field: str = ""
+    operator: str = ""
+    expected_value: object = None
+    observed_value: object = None
+    result: str = "matched"
+    relation_type: str = ""
+    relation_id: str = ""
+    target_id: str = ""
+    target_kind: str = ""
+    source: str = ""
+    source_as_of: str = ""
+    freshness: str = ""
+    evidence_ids: Tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ConditionEvidence":
+        payload = dict(value or {})
+        shape = _mapping(payload.get("ruleConditionShape"))
+        relation_id = str(payload.get("relationId") or "")
+        evidence_ids = _texts(payload.get("evidenceIds") or payload.get("evidence_ids"))
+        if relation_id and relation_id not in evidence_ids:
+            evidence_ids = _texts((*evidence_ids, relation_id))
+        return cls(
+            condition_id=str(payload.get("condition_id") or payload.get("conditionId") or shape.get("conditionId") or ""),
+            kind=str(payload.get("kind") or shape.get("kind") or ""),
+            role=str(payload.get("role") or shape.get("role") or "required"),
+            field=str(payload.get("field") or shape.get("field") or ""),
+            operator=str(payload.get("operator") or shape.get("operator") or ""),
+            expected_value=payload.get("expected_value", payload.get("expectedValue", shape.get("value"))),
+            observed_value=payload.get("observed_value", payload.get("observedValue")),
+            result=str(payload.get("result") or payload.get("status") or ("matched" if not payload.get("absenceSatisfied") else "absence-matched")),
+            relation_type=str(payload.get("relation_type") or payload.get("relationType") or shape.get("relationType") or ""),
+            relation_id=relation_id,
+            target_id=str(payload.get("target_id") or payload.get("targetId") or ""),
+            target_kind=str(payload.get("target_kind") or payload.get("targetKind") or shape.get("targetKind") or ""),
+            source=str(payload.get("source") or payload.get("observationSource") or ""),
+            source_as_of=str(payload.get("source_as_of") or payload.get("sourceAsOf") or payload.get("observedAt") or ""),
+            freshness=str(payload.get("freshness") or payload.get("freshnessStatus") or ""),
+            evidence_ids=evidence_ids,
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["evidence_ids"] = list(self.evidence_ids)
+        return payload
+
+
+@dataclass(frozen=True)
+class PremiseLineage:
+    """Exact shared-world lineage used by an account-overlay rule match."""
+
+    shared_generation_id: str = ""
+    source_abox_snapshot_id: str = ""
+    premise_proof_id: str = ""
+    original_rule_id: str = ""
+    evidence_ids: Tuple[str, ...] = ()
+    status: str = "unavailable"
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "PremiseLineage":
+        payload = dict(value or {})
+        generation_id = str(payload.get("shared_generation_id") or payload.get("sharedGenerationId") or payload.get("sharedPremiseInferenceGenerationId") or "")
+        snapshot_id = str(payload.get("source_abox_snapshot_id") or payload.get("sourceAboxSnapshotId") or payload.get("sharedPremiseSourceAboxSnapshotId") or "")
+        proof_id = str(payload.get("premise_proof_id") or payload.get("premiseProofId") or "")
+        original_rule_id = str(payload.get("original_rule_id") or payload.get("originalRuleId") or payload.get("sourceRuleId") or "")
+        evidence_ids = _texts(payload.get("evidence_ids") or payload.get("evidenceIds"))
+        status = str(payload.get("status") or ("available" if generation_id or snapshot_id or proof_id else "unavailable"))
+        return cls(generation_id, snapshot_id, proof_id, original_rule_id, evidence_ids, status)
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["evidence_ids"] = list(self.evidence_ids)
+        return payload
+
+
+@dataclass(frozen=True)
+class RuleMatchProof:
+    """Immutable proof that links a matched rule to concrete ABox evidence."""
+
+    proof_id: str
+    rule_id: str
+    trace_id: str = ""
+    subject_id: str = ""
+    matched: bool = True
+    conditions: Tuple[ConditionEvidence, ...] = ()
+    evidence_ids: Tuple[str, ...] = ()
+    premise_lineage: PremiseLineage = field(default_factory=PremiseLineage)
+    status: str = "available"
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "RuleMatchProof":
+        payload = dict(value or {})
+        conditions = tuple(
+            ConditionEvidence.from_dict(item)
+            for item in payload.get("conditions") or payload.get("matchedConditions") or []
+            if isinstance(item, Mapping)
+        )
+        rule_id = str(payload.get("rule_id") or payload.get("ruleId") or "")
+        trace_id = str(payload.get("trace_id") or payload.get("traceId") or payload.get("id") or "")
+        evidence_ids = _texts(payload.get("evidence_ids") or payload.get("evidenceIds") or payload.get("evidenceRelationIds"))
+        evidence_ids = _texts((*evidence_ids, *(evidence_id for condition in conditions for evidence_id in condition.evidence_ids)))
+        proof_id = str(payload.get("proof_id") or payload.get("proofId") or "") or _stable_id("rule-proof", rule_id, trace_id, evidence_ids)
+        lineage = payload.get("premise_lineage") or payload.get("premiseLineage") or {}
+        if not lineage:
+            lineage = next((
+                item.get("premiseLineage")
+                for item in payload.get("conditions") or payload.get("matchedConditions") or []
+                if isinstance(item, Mapping) and isinstance(item.get("premiseLineage"), Mapping)
+            ), {})
+        return cls(
+            proof_id=proof_id,
+            rule_id=rule_id,
+            trace_id=trace_id,
+            subject_id=str(payload.get("subject_id") or payload.get("subjectId") or payload.get("sourceId") or ""),
+            matched=bool(payload.get("matched", True)),
+            conditions=conditions,
+            evidence_ids=evidence_ids,
+            premise_lineage=PremiseLineage.from_dict(lineage if isinstance(lineage, Mapping) else {}),
+            status=str(payload.get("status") or ("available" if conditions or evidence_ids else "legacy-unavailable")),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["conditions"] = [item.to_dict() for item in self.conditions]
+        payload["evidence_ids"] = list(self.evidence_ids)
+        payload["premise_lineage"] = self.premise_lineage.to_dict()
+        return payload
+
+
+@dataclass(frozen=True)
+class RuleEvaluationRecord:
+    """One rule evaluation retained with the reasoning generation that ran it."""
+
+    evaluation_id: str
+    account_id: str
+    rule_id: str
+    source_abox_snapshot_id: str = ""
+    inference_generation_id: str = ""
+    matched: bool = True
+    selected: bool = False
+    decision_eligible: bool = False
+    failure_reason: str = ""
+    proof: RuleMatchProof = field(default_factory=lambda: RuleMatchProof("", "", status="legacy-unavailable"))
+    version: str = RULE_EVALUATION_RECORD_VERSION
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "RuleEvaluationRecord":
+        payload = dict(value or {})
+        proof_value = payload.get("proof") or payload.get("matchProof") or {}
+        proof = RuleMatchProof.from_dict(proof_value if isinstance(proof_value, Mapping) else {})
+        return cls(
+            evaluation_id=str(payload.get("evaluation_id") or payload.get("evaluationId") or ""),
+            account_id=str(payload.get("account_id") or payload.get("accountId") or ""),
+            rule_id=str(payload.get("rule_id") or payload.get("ruleId") or proof.rule_id),
+            source_abox_snapshot_id=str(payload.get("source_abox_snapshot_id") or payload.get("sourceAboxSnapshotId") or ""),
+            inference_generation_id=str(payload.get("inference_generation_id") or payload.get("inferenceGenerationId") or ""),
+            matched=bool(payload.get("matched", True)),
+            selected=bool(payload.get("selected")),
+            decision_eligible=bool(payload.get("decision_eligible") or payload.get("decisionEligible")),
+            failure_reason=str(payload.get("failure_reason") or payload.get("failureReason") or ""),
+            proof=proof,
+            version=str(payload.get("version") or RULE_EVALUATION_RECORD_VERSION),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["proof"] = self.proof.to_dict()
+        return payload
+
+
+def rule_evaluation_records_from_projection_results(
+    projection_results: Mapping[str, object],
+) -> Tuple[RuleEvaluationRecord, ...]:
+    """Project already-returned InferenceBox traces into compact audit records."""
+
+    records = []
+    seen = set()
+    for account_id, raw_projection in (projection_results or {}).items():
+        projection = _mapping(raw_projection)
+        inference = _mapping(projection.get("inferenceBox"))
+        snapshot_id = str(inference.get("sourceAboxSnapshotId") or projection.get("sourceAboxSnapshotId") or "")
+        generation_id = str(inference.get("inferenceGenerationId") or projection.get("inferenceGenerationId") or "")
+        shared_lineage = {
+            "sharedGenerationId": inference.get("sharedPremiseInferenceGenerationId"),
+            "sourceAboxSnapshotId": inference.get("sharedPremiseSourceAboxSnapshotId"),
+        }
+        for raw_trace in inference.get("traces") or []:
+            trace = _mapping(raw_trace)
+            properties = _mapping(trace.get("properties"))
+            merged = {**properties, **trace}
+            rule_id = str(merged.get("ruleId") or merged.get("sourceRuleId") or "")
+            trace_id = str(merged.get("traceId") or merged.get("id") or merged.get("inferenceTraceId") or "")
+            if not rule_id:
+                continue
+            key = (str(account_id), rule_id, trace_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            condition_lineage = next((
+                item.get("premiseLineage")
+                for item in merged.get("matchedConditions") or []
+                if isinstance(item, Mapping) and isinstance(item.get("premiseLineage"), Mapping)
+            ), {})
+            lineage = {
+                **condition_lineage,
+                **shared_lineage,
+                "premiseProofId": merged.get("premiseProofId"),
+                "originalRuleId": merged.get("originalRuleId") or merged.get("sourceRuleId"),
+                "evidenceIds": merged.get("sharedPremiseEvidenceIds") or [],
+            }
+            proof = RuleMatchProof.from_dict({
+                **merged,
+                "ruleId": rule_id,
+                "traceId": trace_id,
+                "conditions": merged.get("matchedConditions") or [],
+                "premiseLineage": lineage,
+            })
+            evaluation_id = _stable_id("rule-evaluation", account_id, generation_id, rule_id, trace_id)
+            records.append(RuleEvaluationRecord(
+                evaluation_id=evaluation_id,
+                account_id=str(account_id),
+                rule_id=rule_id,
+                source_abox_snapshot_id=snapshot_id,
+                inference_generation_id=generation_id,
+                matched=True,
+                selected=bool(merged.get("selected") or merged.get("isSelected")),
+                decision_eligible=bool(merged.get("decisionEligible") or merged.get("evidenceUsableForJudgement")),
+                proof=proof,
+            ))
+    return tuple(records)
+
+
+@dataclass(frozen=True)
 class InferenceResult:
     source_abox_snapshot_ids: Tuple[str, ...] = ()
     inference_generation_ids: Tuple[str, ...] = ()
@@ -375,6 +622,7 @@ class InferenceResult:
     trace_count: int = 0
     trace_complete: bool = False
     projection_results: Dict[str, object] = field(default_factory=dict)
+    rule_evaluations: Tuple[RuleEvaluationRecord, ...] = ()
     duration_ms: int = 0
     version: str = INFERENCE_RESULT_VERSION
 
@@ -385,6 +633,7 @@ class InferenceResult:
             "verified_account_ids", "failed_account_ids",
         ]:
             payload[key] = list(payload[key])
+        payload["rule_evaluations"] = [item.to_dict() for item in self.rule_evaluations]
         return payload
 
     @classmethod
@@ -399,6 +648,11 @@ class InferenceResult:
             trace_count=max(0, int(payload.get("trace_count") or payload.get("traceCount") or 0)),
             trace_complete=bool(payload.get("trace_complete") or payload.get("traceComplete")),
             projection_results=_mapping(payload.get("projection_results") or payload.get("projectionResults")),
+            rule_evaluations=tuple(
+                RuleEvaluationRecord.from_dict(item)
+                for item in payload.get("rule_evaluations") or payload.get("ruleEvaluations") or []
+                if isinstance(item, Mapping)
+            ),
             duration_ms=max(0, int(payload.get("duration_ms") or payload.get("durationMs") or 0)),
             version=str(payload.get("version") or INFERENCE_RESULT_VERSION),
         )

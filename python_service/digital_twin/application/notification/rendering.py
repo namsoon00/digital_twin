@@ -138,6 +138,7 @@ class NotificationRenderingService:
         context.update({
             "validatedDecisionResponse": response.to_dict(),
             "notificationNarrativeBrief": narrative_payload,
+            "notificationNarrativePublication": narrative.publication.to_dict(),
             "notificationWriterProvenance": writer,
             "notificationClaimValidation": dict(response.claim_validation or {}),
         })

@@ -8,8 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict
 
-from ..domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
-from ..domain.context_observation_notifications import typedb_context_observation_contract
+from ..domain.ai_inference_queue import (
+    AIInferenceRequest,
+    AIInferenceResult,
+    notification_ai_review_mode,
+)
 from ..domain.investment_brain import decision_episode_from_context
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
@@ -174,7 +177,9 @@ class NotificationAIRequestEnqueuer:
             or reasoning_case_context.get("caseId")
             or ""
         )
-        narrative_only = bool(typedb_context_observation_contract(context).get("requiresAiNarrative"))
+        review_mode = notification_ai_review_mode(context)
+        narrative_only = review_mode == "context-narrative"
+        context["notificationAiReviewMode"] = review_mode
         if reasoning_case_id and self.reasoning_orchestrator is not None and not narrative_only:
             context = self.reasoning_orchestrator.capture_ai_context(
                 reasoning_case_id,
@@ -334,7 +339,8 @@ class AIInferenceQueueRunner:
 
     def process_request(self, request: AIInferenceRequest) -> str:
         context = dict(request.context or {})
-        narrative_only = bool(typedb_context_observation_contract(context).get("requiresAiNarrative"))
+        narrative_only = request.review_mode == "context-narrative"
+        context["notificationAiReviewMode"] = request.review_mode
         try:
             if request.message_type == INVESTMENT_INSIGHT:
                 context = context_with_previous_investment_decision(
@@ -482,6 +488,7 @@ class AIInferenceQueueRunner:
         )
         action_plan = None if narrative_only else self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
+        publication = dict(enriched.get("notificationNarrativePublication") or {})
         continuity_packet = (
             dict(context.get("decisionContinuityPacket") or {})
             if isinstance(context.get("decisionContinuityPacket"), dict)
@@ -495,6 +502,15 @@ class AIInferenceQueueRunner:
             "promptVersion": request.prompt_version,
             "model": request.model,
             "reasoningEffort": request.reasoning_effort,
+            "reviewMode": request.review_mode,
+            "adoptionState": (
+                "narrative-adopted-action-not-applicable"
+                if narrative_only and publication.get("status") == "published"
+                else "typedb-fallback"
+                if fallback_reason
+                else "decision-and-narrative-adopted"
+            ),
+            "actionAuthority": str(publication.get("actionAuthority") or ("typedb" if narrative_only else "ai-judgement")),
             "promptHash": prompt_hash,
             "promptBytes": prompt_bytes,
             "prompt": executed_prompt,
@@ -542,7 +558,8 @@ class AIInferenceQueueRunner:
                 "selectedHypothesisId": str(response.selected_hypothesis_id or ""),
             },
             "claimPublication": {
-                "status": str((response.claim_validation or {}).get("status") or "unavailable"),
+                **publication,
+                "status": str(publication.get("status") or (response.claim_validation or {}).get("status") or "unavailable"),
                 "verifiedClaimCount": response.verified_claim_count,
                 "rejectedClaimCount": response.rejected_claim_count,
                 "sections": sorted(response.verified_claim_sections),

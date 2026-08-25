@@ -14,6 +14,8 @@ from typing import Dict, Iterable, List
 
 from .notification_ai_context import relation_context_value
 from .notification_ai_gate_sources import all_source_urls_for_context, source_detail_map
+from .context_observation_notifications import typedb_context_observation_contract
+from .investment_reasoning.contracts import RuleEvaluationRecord, RuleMatchProof
 
 
 TRACE_VERSION = "notification-reasoning-timeline-v3"
@@ -25,6 +27,7 @@ ACTION_LABELS = {
     "TRIM": "분할축소",
     "SELL": "매도",
     "AVOID": "회피",
+    "NO_ACTION": "매매 판단 없음",
 }
 
 STANCE_LABELS = {
@@ -476,6 +479,9 @@ def build_notification_reverse_reasoning_trace(
         narrative.get("writerProvenance")
     )
     claim_validation = _dict(values.get("notificationClaimValidation"))
+    publication = _dict(values.get("notificationNarrativePublication")) or _dict(
+        narrative.get("publication")
+    )
     prompt_context = _dict(values.get("notificationAiPromptContext"))
     hypotheses = _hypothesis_rows(relation, ai)
     selected_hypothesis_id = _text(
@@ -494,9 +500,49 @@ def build_notification_reverse_reasoning_trace(
     rules = _rule_rows(relation, selected_rule_ids)
     traces = _trace_rows(relation, rules)
     graph = _dict(relation.get("graphStoreInference"))
+    review_mode = _text(
+        values.get("notificationAiReviewMode")
+        or ai_execution.get("reviewMode")
+        or publication.get("reviewMode"),
+        80,
+    )
+    context_observation = bool(typedb_context_observation_contract(values))
+    if not review_mode:
+        review_mode = "context-narrative" if context_observation else "investment-judgement"
+    if not publication:
+        legacy_publication = _dict(ai_execution.get("claimPublication"))
+        publication = {
+            "version": "legacy-notification-publication",
+            "status": "legacy-unavailable",
+            "reviewMode": review_mode,
+            "actionAuthority": "typedb" if review_mode == "context-narrative" else "unrecorded",
+            "legacyValidationStatus": _text(legacy_publication.get("status"), 80),
+            "legacyVerifiedClaimCount": int(legacy_publication.get("verifiedClaimCount") or 0),
+            "legacyRejectedClaimCount": int(legacy_publication.get("rejectedClaimCount") or 0),
+            "fallbackReason": _text(writer.get("fallbackReason"), 180),
+        }
+    adoption_state = _text(ai_execution.get("adoptionState"), 100)
+    if not adoption_state:
+        if ai_execution.get("aiAttempted") and writer.get("aiAuthored"):
+            adoption_state = "legacy-adopted"
+        elif ai_execution.get("aiAttempted"):
+            adoption_state = "executed-not-adopted"
+        else:
+            adoption_state = "not-executed"
+    action_authority = _text(
+        ai_execution.get("actionAuthority")
+        or publication.get("actionAuthority")
+        or ("typedb" if review_mode == "context-narrative" else ""),
+        80,
+    )
     comparison_state = _text(ai.get("hypothesisComparisonState"), 80)
     selected_action = _text(ai.get("action"), 80)
     selected_action_label = _text(ai.get("actionLabel"), 100) or ACTION_LABELS.get(selected_action, selected_action)
+    if context_observation or review_mode == "context-narrative":
+        selected_action = "NO_ACTION"
+        selected_action_label = ACTION_LABELS["NO_ACTION"]
+        selected_hypothesis_id = ""
+        selected_hypothesis = {}
     precomputed_action = _text(ai.get("precomputedAction") or plan.get("precomputedAction"), 80)
     primary_action = _text(plan.get("primaryActionLabel") or decision.get("label"), 220)
     delivery_reasons = _unique(values.get("deliveryReasons") or [], 5, 240)
@@ -517,6 +563,42 @@ def build_notification_reverse_reasoning_trace(
         if _text(relation.get(key), 180)
     }
     alternatives = [item for item in hypotheses if item.get("hypothesisId") != selected_hypothesis_id]
+    rule_evaluations = []
+    for trace in traces:
+        rule_id = _text(trace.get("ruleId") or trace.get("sourceRuleId"), 220)
+        trace_id = _text(trace.get("traceId") or trace.get("id") or trace.get("inferenceTraceId"), 220)
+        if not rule_id:
+            continue
+        condition_lineage = next((
+            item.get("premiseLineage")
+            for item in trace.get("matchedConditions") or []
+            if isinstance(item, dict) and isinstance(item.get("premiseLineage"), dict)
+        ), {})
+        proof = RuleMatchProof.from_dict({
+            **trace,
+            "ruleId": rule_id,
+            "traceId": trace_id,
+            "conditions": trace.get("matchedConditions") or [],
+            "premiseLineage": {
+                **condition_lineage,
+                "sharedGenerationId": graph.get("sharedPremiseInferenceGenerationId") or relation.get("sharedPremiseInferenceGenerationId"),
+                "sourceAboxSnapshotId": graph.get("sharedPremiseSourceAboxSnapshotId") or relation.get("sharedPremiseSourceAboxSnapshotId"),
+                "premiseProofId": trace.get("premiseProofId"),
+                "originalRuleId": trace.get("originalRuleId") or trace.get("sourceRuleId"),
+                "evidenceIds": trace.get("sharedPremiseEvidenceIds") or [],
+            },
+        })
+        rule_evaluations.append(RuleEvaluationRecord(
+            evaluation_id="rule-evaluation:" + (trace_id or rule_id),
+            account_id=_text(values.get("accountId"), 180),
+            rule_id=rule_id,
+            source_abox_snapshot_id=_text(relation.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId"), 220),
+            inference_generation_id=_text(relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId"), 220),
+            matched=True,
+            selected=rule_id in selected_rule_ids,
+            decision_eligible=bool(trace.get("decisionEligible") or trace.get("evidenceUsableForJudgement")),
+            proof=proof,
+        ).to_dict())
     traceability = _traceability_rows(relation, ai, selected_hypothesis, writer)
     fact_rows = _fact_rows(facts)
     source_rows = _source_rows(values)
@@ -610,6 +692,8 @@ def build_notification_reverse_reasoning_trace(
             "alternativeAction": _dict(ai.get("alternativeAction")),
             "decisionOwner": _text(writer.get("decisionOwner"), 80),
             "writerLabel": _text(writer.get("label"), 120),
+            "reviewMode": review_mode,
+            "actionAuthority": action_authority,
         },
         "aiComparison": {
             "precomputedAction": precomputed_action,
@@ -644,6 +728,9 @@ def build_notification_reverse_reasoning_trace(
             "promptId": _text(prompt_context.get("promptId"), 160),
             "model": _text(ai_execution.get("model"), 120),
             "reasoningEffort": _text(ai_execution.get("reasoningEffort"), 40),
+            "reviewMode": review_mode,
+            "adoptionState": adoption_state,
+            "actionAuthority": action_authority,
             "promptHash": _text(ai_execution.get("promptHash"), 80),
             "promptBytes": int(ai_execution.get("promptBytes") or 0),
             "prompt": str(ai_execution.get("prompt") or ""),
@@ -681,12 +768,14 @@ def build_notification_reverse_reasoning_trace(
             "evidenceLedger": [dict(item) for item in narrative.get("evidenceLedger") or [] if isinstance(item, dict)],
             "metrics": _dict(narrative.get("metrics")),
             "claimValidation": claim_validation,
+            "publication": publication,
         },
         "selectedHypothesis": selected_hypothesis,
         "assessmentBundle": _dict(relation.get("assessmentBundle")),
         "hypotheses": hypotheses,
         "alternativeHypotheses": alternatives,
         "matchedRules": rules,
+        "ruleEvaluations": rule_evaluations,
         "inferenceTraces": traces,
         "inputFacts": fact_rows,
         "sources": source_rows,

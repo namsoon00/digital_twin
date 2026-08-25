@@ -47,6 +47,12 @@ def _safe(value: object, key: str = "") -> object:
     return value
 
 
+def redact_notification_trace_data(value: object) -> object:
+    """Return the share-safe form used by notification trace projections."""
+
+    return _safe(value)
+
+
 def _timestamp(value: object):
     text = str(value or "").strip()
     if not text:
@@ -285,6 +291,11 @@ class NotificationTraceQueryService:
 
         quality_status = str(quality.get("status") or quality_gate.get("validationState") or "missing")
         ai_status = str(ai_runtime.get("status") or ai_execution.get("status") or queue_state.get("status") or "missing")
+        ai_review_mode = str(
+            context.get("notificationAiReviewMode")
+            or ai_execution.get("reviewMode")
+            or "investment-judgement"
+        )
         claim_publication = _mapping(ai_execution.get("claimPublication"))
         claim_status = str(
             claim_publication.get("status")
@@ -381,9 +392,13 @@ class NotificationTraceQueryService:
             ),
             _stage(
                 "ai-response",
-                "AI 판단 응답",
+                "AI 참고 서술 응답" if ai_review_mode == "context-narrative" else "AI 판단 응답",
                 "failed" if ai_status == "failed" else "conditional" if ai_status == "typedb-fallback" else "completed" if validated_response else "in-progress" if ai_status in {"pending", "processing", "awaiting-ai", "retry"} else "missing",
-                "AI 행동 판단과 경쟁 가설 비교 결과를 검증 가능한 응답 계약으로 받았습니다.",
+                (
+                    "AI가 TypeDB 행동을 바꾸지 않고 참고 설명만 작성했습니다."
+                    if ai_review_mode == "context-narrative"
+                    else "AI 행동 판단과 경쟁 가설 비교 결과를 검증 가능한 응답 계약으로 받았습니다."
+                ),
                 started_at=ai_started or ai_queued,
                 completed_at=ai_completed,
                 duration_ms=ai_execution.get("latencyMs") or ai_runtime.get("latencyMs") or 0,

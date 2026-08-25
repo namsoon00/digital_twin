@@ -23,11 +23,16 @@ from .case import (
 from .contracts import (
     AIJudgmentResult,
     ActionAlternative,
+    ConditionEvidence,
     DecisionSynthesis,
     FactDelta,
     FinalDecision,
     HypothesisRecord,
     InferenceResult,
+    PremiseLineage,
+    RuleEvaluationRecord,
+    RuleMatchProof,
+    rule_evaluation_records_from_projection_results,
 )
 from .hypotheses import GraphHypothesisManager
 from .synthesis import decision_synthesis_from_relation_context
@@ -36,6 +41,7 @@ from .rule_inventory import reasoning_rule_inventory
 __all__ = [
     "AIJudgmentResult",
     "ActionAlternative",
+    "ConditionEvidence",
     "CASE_AI_COMPLETED",
     "CASE_AI_PENDING",
     "CASE_BLOCKED",
@@ -59,7 +65,11 @@ __all__ = [
     "GraphHypothesisManager",
     "HypothesisRecord",
     "InferenceResult",
+    "PremiseLineage",
+    "RuleEvaluationRecord",
+    "RuleMatchProof",
     "ReasoningCase",
     "decision_synthesis_from_relation_context",
     "reasoning_rule_inventory",
+    "rule_evaluation_records_from_projection_results",
 ]

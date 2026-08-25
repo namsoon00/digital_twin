@@ -368,6 +368,7 @@ class NotificationNarrativeTests(unittest.TestCase):
             context=context,
         )
         request = AIInferenceRequest.create(job, context)
+        self.assertEqual("context-narrative", request.review_mode)
 
         class Queue:
             enriched = None
@@ -434,6 +435,11 @@ class NotificationNarrativeTests(unittest.TestCase):
         self.assertEqual("typedb", writer["decisionOwner"])
         self.assertEqual(request.model, writer["model"])
         self.assertEqual(request.request_id, writer["requestId"])
+        self.assertEqual("NO_ACTION", queue.enriched["notificationAiValidatedResponse"]["action"])
+        publication = queue.enriched["notificationNarrativePublication"]
+        self.assertEqual("context-narrative", publication["reviewMode"])
+        self.assertEqual("typedb", publication["actionAuthority"])
+        self.assertEqual(1, publication["aiClaimCount"])
 
 
 if __name__ == "__main__":

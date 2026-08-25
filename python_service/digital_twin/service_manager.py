@@ -384,6 +384,19 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             or os.environ.get("TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED")
             or "0"
         ),
+        "schemaFunctionProvisionBatchSize": str(
+            (settings or {}).get("typedbSchemaFunctionProvisionBatchSize") or "1"
+        ),
+        "schemaFunctionProvisionTimeoutSeconds": str(
+            (settings or {}).get("typedbSchemaFunctionProvisionTimeoutSeconds") or "900"
+        ),
+        "schemaFunctionPrewarmMaxAttempts": str(
+            (settings or {}).get("typedbBlueGreenFunctionPrewarmMaxAttempts") or "60"
+        ),
+        "schemaFunctionPrewarmAttemptTimeoutSeconds": str(
+            (settings or {}).get("typedbBlueGreenFunctionPrewarmAttemptTimeoutSeconds")
+            or "1200"
+        ),
         # A fresh TypeDB needs to persist the complete static TBox, RuleBox,
         # and language contract before any ABox worker is allowed to run.
         # The safe one-query static writes intentionally trade bootstrap speed
@@ -1548,6 +1561,122 @@ def record_typedb_auto_rotation_state(**updates: object) -> Dict[str, object]:
     return marker
 
 
+def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str, object]:
+    """Keep the durable rotation receipt useful without storing process output."""
+
+    source = dict(payload or {})
+    seed_contracts = {}
+    for database, contract in dict(source.get("validatedSeedContracts") or {}).items():
+        values = dict(contract or {})
+        seed_contracts[str(database)] = {
+            "status": str(values.get("status") or "unknown"),
+            "ready": bool(values.get("ready")),
+            "ruleCount": int_value(values.get("ruleCount"), 0, 0),
+            "ruleboxFingerprint": str(values.get("activeRuleboxFingerprint") or ""),
+            "tboxFingerprint": str(values.get("activeTboxFingerprint") or ""),
+            "schemaContractFingerprint": str(values.get("activeSchemaContractFingerprint") or ""),
+            "failedChecks": list(values.get("failedChecks") or []),
+        }
+    function_readiness = {}
+    for database, readiness in dict(source.get("validatedFunctionReadiness") or {}).items():
+        values = dict(readiness or {})
+        function_readiness[str(database)] = {
+            "status": str(values.get("status") or "unknown"),
+            "complete": bool(values.get("complete")),
+            "logicalRuleCount": int_value(values.get("logicalRuleCount"), 0, 0),
+            "expectedFunctionCount": int_value(values.get("expectedFunctionCount"), 0, 0),
+            "verifiedFunctionCount": int_value(values.get("verifiedFunctionCount"), 0, 0),
+            "missingFunctionCount": int_value(values.get("missingFunctionCount"), 0, 0),
+        }
+    summary = {
+        "status": str(source.get("status") or "unknown"),
+        "database": str(source.get("database") or ""),
+        "validatedDatabases": list(source.get("validatedDatabases") or []),
+        "validatedInferenceModes": dict(source.get("validatedInferenceModes") or {}),
+        "validatedReleaseContracts": dict(source.get("validatedReleaseContracts") or {}),
+        "validatedSeedContracts": seed_contracts,
+        "validatedFunctionReadiness": function_readiness,
+    }
+    for key in ("seedContract", "releaseContract", "inferenceReadiness"):
+        if isinstance(source.get(key), dict):
+            summary[key] = dict(source.get(key) or {})
+    if isinstance(source.get("functionPrewarm"), dict):
+        prewarm = dict(source.get("functionPrewarm") or {})
+        attempts = list(prewarm.get("attempts") or [])
+        summary["functionPrewarm"] = {
+            "status": str(prewarm.get("status") or "unknown"),
+            "ready": bool(prewarm.get("ready")),
+            "attemptCount": int_value(prewarm.get("attemptCount"), len(attempts), 0),
+            "lastAttempt": dict(attempts[-1] or {}) if attempts else {},
+            "readiness": dict(prewarm.get("readiness") or {}),
+            "reason": str(prewarm.get("reason") or "")[:300],
+        }
+    return summary
+
+
+def record_typedb_rulebox_deployment_event(
+    operation_id: str,
+    phase: str,
+    status: str,
+    database: str = "",
+    details: Dict[str, object] = None,
+) -> Dict[str, object]:
+    """Best-effort operational audit; audit failure never weakens cutover gates."""
+
+    try:
+        from .domain.events import ontology_rulebox_deployment_changed_event
+        from .infrastructure.operational_store import event_log
+
+        configured = runtime_settings(fast_operational_read=True)
+        event = ontology_rulebox_deployment_changed_event(
+            operation_id,
+            phase,
+            status,
+            database=database,
+            details=dict(details or {}),
+        )
+        event_log(configured).handle(event)
+        return {"recorded": True, "eventId": event.event_id}
+    except Exception as error:  # noqa: BLE001 - active TypeDB safety takes precedence.
+        return {"recorded": False, "reason": str(error)[:180]}
+
+
+def enable_rulebox_prewarm_after_verified_cutover(operation_id: str) -> Dict[str, object]:
+    """Enable future delta compilation only after a verified candidate serves."""
+
+    try:
+        from .domain.events import DomainEvent, SETTINGS_UPDATED
+        from .infrastructure.operational_store import event_log
+        from .infrastructure.settings import save_runtime_settings
+
+        saved = save_runtime_settings({"ontologyRuleboxPrewarmEnabled": "1"})
+        enabled = truthy(saved.get("ontologyRuleboxPrewarmEnabled"))
+        audit = {"recorded": False}
+        try:
+            configured = runtime_settings(fast_operational_read=True)
+            event = DomainEvent(
+                name=SETTINGS_UPDATED,
+                aggregate_id="runtime",
+                payload={
+                    "keys": ["ontologyRuleboxPrewarmEnabled"],
+                    "reason": "verified-blue-green-rulebox-cutover",
+                    "operationId": str(operation_id or "")[:191],
+                },
+                correlation_id=("rulebox-deployment:" + str(operation_id or ""))[:191],
+            )
+            event_log(configured).handle(event)
+            audit = {"recorded": True, "eventId": event.event_id}
+        except Exception as error:  # noqa: BLE001 - setting persistence already succeeded.
+            audit = {"recorded": False, "reason": str(error)[:180]}
+        return {
+            "enabled": enabled,
+            "setting": "ontologyRuleboxPrewarmEnabled",
+            "audit": audit,
+        }
+    except Exception as error:  # noqa: BLE001 - serving candidate remains valid without the worker.
+        return {"enabled": False, "reason": str(error)[:180]}
+
+
 def typedb_storage_preflight(spec: Dict[str, object]) -> Dict[str, object]:
     return typedb_storage_health(
         {
@@ -2017,6 +2146,18 @@ def typedb_rulebox_prewarm_status_command(_spec: Dict[str, object]) -> List[str]
     ]
 
 
+def typedb_rulebox_candidate_prewarm_command(_spec: Dict[str, object]) -> List[str]:
+    return [
+        sys.executable,
+        "-u",
+        "python_service/service.py",
+        "ontology-rulebox-prewarm",
+        "once",
+        "--force",
+        "--candidate",
+    ]
+
+
 def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
     """Pin maintenance commands to the exact TypeDB instance being managed."""
     environment = managed_process_environment(spec)
@@ -2043,6 +2184,18 @@ def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
                 int_value(spec.get("freshSchemaBootstrapTimeoutSeconds"), 900, 1),
                 int_value(spec.get("schemaOperationTimeoutSeconds"), 120, 1),
             )),
+            # Candidate compilation is isolated from the active TypeDB and
+            # must converge on a complete function catalogue before cutover.
+            "ONTOLOGY_RULEBOX_PREWARM_ENABLED": "1",
+            "ONTOLOGY_RULEBOX_PREWARM_REQUIRE_READY_FOR_INFERENCE": "1",
+            "TYPEDB_NATIVE_RULE_DIRECT_QUERY_FALLBACK_ENABLED": "0",
+            "TYPEDB_SCHEMA_FUNCTION_PROBE_INTERVAL_SECONDS": "0",
+            "TYPEDB_SCHEMA_FUNCTION_PROVISION_BATCH_SIZE": str(
+                spec.get("schemaFunctionProvisionBatchSize") or "1"
+            ),
+            "TYPEDB_SCHEMA_FUNCTION_PROVISION_TIMEOUT_SECONDS": str(
+                spec.get("schemaFunctionProvisionTimeoutSeconds") or "900"
+            ),
         })
     return environment
 
@@ -2148,23 +2301,35 @@ def clear_typedb_stage_incomplete_checkpoints(spec: Dict[str, object]) -> List[s
     return removed
 
 
-def restart_typedb_stage_for_seed_retry(spec: Dict[str, object]) -> bool:
-    """Cancel a detached schema commit, then resume from durable batches."""
+def restart_typedb_stage_for_schema_retry(
+    spec: Dict[str, object],
+    reason: str = "schema retry",
+) -> bool:
+    """Cancel a detached candidate schema client and reopen durable batches."""
     if str(spec.get("role") or "") != "typedb-stage":
         return False
-    append_log(spec["log"], "seed retry requires candidate server restart")
+    append_log(spec["log"], str(reason or "schema retry") + " requires candidate server restart")
     stop_worker(spec)
     if not stop_typedb_stage_data_path_processes(spec):
-        append_log(spec["log"], "seed retry candidate data path still owned")
+        append_log(spec["log"], str(reason or "schema retry") + " candidate data path still owned")
         return False
     removed = clear_typedb_stage_incomplete_checkpoints(spec)
     if removed:
         append_log(
             spec["log"],
-            "seed retry removed incomplete checkpoints count=" + str(len(removed)),
+            str(reason or "schema retry") + " removed incomplete checkpoints count=" + str(len(removed)),
         )
     remove_pid(spec["pid"])
-    return launch_typedb_stage_process(spec, "seed retry candidate restart")
+    return launch_typedb_stage_process(
+        spec,
+        str(reason or "schema retry") + " candidate restart",
+    )
+
+
+def restart_typedb_stage_for_seed_retry(spec: Dict[str, object]) -> bool:
+    """Cancel a detached seed schema commit, then resume durable batches."""
+
+    return restart_typedb_stage_for_schema_retry(spec, "seed retry")
 
 
 def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
@@ -2275,13 +2440,85 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             release_typedb_rotation_lock(maintenance_lock)
 
 
-def validate_typedb_candidate_inference_runtime(spec: Dict[str, object]) -> Dict[str, object]:
-    """Require a complete native-rule read path before blue-green cutover.
+def typedb_rulebox_readiness_summary(payload: Dict[str, object]) -> Dict[str, object]:
+    """Flatten receipt-backed RuleBox readiness for promotion decisions."""
 
-    Generated TypeDB functions are an optimization. A fresh candidate can be
-    activated while they are still staging only when bounded direct TypeQL is
-    explicitly enabled; the following portfolio rebuild then exercises that
-    fallback against real durable snapshots.
+    values = dict(payload or {})
+    prewarm = dict(values.get("prewarm") or values)
+    namespace_rows = [
+        dict(item or {})
+        for item in prewarm.get("namespaceResults") or []
+        if isinstance(item, dict)
+    ]
+    results = [
+        dict(item.get("result") or {})
+        for item in namespace_rows
+    ]
+    expected_function_count = sum(
+        int_value(item.get("expectedFunctionCount"), 0, 0)
+        for item in results
+    )
+    verified_function_count = sum(
+        int_value(
+            dict(item.get("functionProbe") or {}).get("verifiedFunctionCount")
+            or item.get("syncedFunctionCount"),
+            0,
+            0,
+        )
+        for item in results
+    )
+    missing_function_count = sum(
+        int_value(
+            item.get("missingFunctionCount"),
+            max(0, int_value(item.get("expectedFunctionCount"), 0, 0)),
+            0,
+        )
+        for item in results
+    )
+    logical_rule_count = max([
+        int_value(item.get("logicalRuleCount"), 0, 0)
+        for item in results
+    ] or [int_value(prewarm.get("ruleCount"), 0, 0)])
+    expected_bridge_count = sum(
+        int_value(item.get("expectedSharedModelSignalBridgeFunctionCount"), 0, 0)
+        for item in results
+    )
+    functions_ready = bool(prewarm.get("functionsReady"))
+    if functions_ready and expected_function_count:
+        verified_function_count = expected_function_count
+        missing_function_count = 0
+    complete = bool(
+        functions_ready
+        and logical_rule_count > 0
+        and expected_function_count > 0
+        and verified_function_count == expected_function_count
+        and missing_function_count == 0
+    )
+    return {
+        "status": str(prewarm.get("status") or "unknown"),
+        "functionsReady": functions_ready,
+        "complete": complete,
+        "logicalRuleCount": logical_rule_count,
+        "expectedFunctionCount": expected_function_count,
+        "verifiedFunctionCount": verified_function_count,
+        "missingFunctionCount": missing_function_count,
+        "expectedSharedModelSignalBridgeFunctionCount": expected_bridge_count,
+        "verifiedSharedModelSignalBridgeFunctionCount": (
+            expected_bridge_count if complete else 0
+        ),
+        "ruleboxMetadata": dict(prewarm.get("ruleboxMetadata") or {}),
+    }
+
+
+def validate_typedb_candidate_inference_runtime(
+    spec: Dict[str, object],
+    require_functions: bool = False,
+) -> Dict[str, object]:
+    """Read native-rule readiness, optionally enforcing the promotion gate.
+
+    Active-store diagnostics may still report bounded direct TypeQL fallback.
+    Blue-green preparation always sets ``require_functions`` and therefore
+    cannot promote a candidate until every expected function is verified.
     """
     try:
         result = subprocess.run(
@@ -2313,22 +2550,364 @@ def validate_typedb_candidate_inference_runtime(spec: Dict[str, object]) -> Dict
             "ready": False,
             "reason": "Invalid RuleBox readiness response: " + str(error)[:180],
         }
-    prewarm = dict(payload.get("prewarm") or {})
-    functions_ready = bool(prewarm.get("functionsReady"))
+    readiness = typedb_rulebox_readiness_summary(payload)
+    functions_ready = bool(readiness.get("complete"))
     direct_fallback_ready = truthy(spec.get("schemaFunctionDirectQueryFallbackEnabled"))
+    strict = bool(require_functions or truthy(spec.get("candidateRequireSchemaFunctions")))
+    ready = functions_ready if strict else bool(functions_ready or direct_fallback_ready)
     return {
-        "status": "ready" if functions_ready or direct_fallback_ready else "blocked",
-        "ready": bool(functions_ready or direct_fallback_ready),
+        "status": "ready" if ready else "blocked",
+        "ready": ready,
         "mode": "schema-functions" if functions_ready else "direct-typeql-fallback",
         "functionsReady": functions_ready,
         "directTypeqlFallbackReady": direct_fallback_ready,
-        "ruleCount": int_value(prewarm.get("ruleCount"), 0, 0),
+        "strictSchemaFunctionsRequired": strict,
+        "ruleCount": int_value(readiness.get("logicalRuleCount"), 0, 0),
+        "readiness": readiness,
         "reason": (
             ""
-            if functions_ready or direct_fallback_ready
+            if ready
+            else "Candidate promotion requires every expected TypeDB schema function receipt."
+            if strict
             else "TypeDB schema functions are incomplete and direct TypeQL fallback is disabled."
         ),
     }
+
+
+def command_json_payload(output: object) -> Dict[str, object]:
+    """Read the final JSON object emitted by a maintenance subprocess."""
+
+    for line in reversed(str(output or "").splitlines()):
+        candidate = str(line or "").strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def interrupted_typedb_schema_operation(payload: Dict[str, object]) -> bool:
+    text = " ".join(str(dict(payload or {}).get(key) or "") for key in [
+        "reason", "stderr", "stdout", "workerOutput",
+    ]).lower()
+    return any(token in text for token in [
+        "keep-alive timed out",
+        "operation timed out",
+        "deadline exceeded",
+        "transport error",
+        "connection reset",
+        "connection closed",
+        "unable to connect to typedb server",
+    ])
+
+
+def prewarm_typedb_candidate_rulebox_functions(spec: Dict[str, object]) -> Dict[str, object]:
+    """Converge an isolated candidate on a complete schema-function receipt.
+
+    Every pass deploys one bounded physical batch and then reads the durable
+    receipt. A timed-out client may leave the TypeDB compiler running, so the
+    candidate process is restarted before the next probe. The active TypeDB
+    and its live reasoning queue are never touched.
+    """
+
+    max_attempts = int_value(spec.get("schemaFunctionPrewarmMaxAttempts"), 60, 1)
+    attempt_timeout = int_value(
+        spec.get("schemaFunctionPrewarmAttemptTimeoutSeconds"),
+        1200,
+        30,
+    )
+    attempts = []
+    last_verified = -1
+    consecutive_no_progress = 0
+
+    initial = validate_typedb_candidate_inference_runtime(spec, require_functions=True)
+    if bool(initial.get("ready")):
+        return {
+            "status": "ready",
+            "ready": True,
+            "attemptCount": 0,
+            "attempts": [],
+            "readiness": dict(initial.get("readiness") or {}),
+        }
+
+    for attempt in range(1, max_attempts + 1):
+        timed_out = False
+        try:
+            completed = subprocess.run(
+                low_priority_command(spec, typedb_rulebox_candidate_prewarm_command(spec)),
+                cwd=str(ROOT_DIR),
+                env=typedb_subprocess_environment(spec),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=attempt_timeout,
+            )
+            payload = command_json_payload(completed.stdout)
+            process_result = {
+                "returnCode": completed.returncode,
+                "status": str(payload.get("status") or "invalid-output"),
+                "reason": str(
+                    payload.get("reason")
+                    or completed.stderr
+                    or ("candidate prewarm emitted no JSON" if not payload else "")
+                )[:220],
+                "payload": payload,
+            }
+        except subprocess.TimeoutExpired as error:
+            timed_out = True
+            process_result = {
+                "returnCode": None,
+                "status": "timeout",
+                "reason": "Candidate RuleBox prewarm exceeded " + str(attempt_timeout) + " seconds.",
+                "stdout": str(error.stdout or "")[-500:],
+                "stderr": str(error.stderr or "")[-500:],
+            }
+        except OSError as error:
+            process_result = {
+                "returnCode": None,
+                "status": "error",
+                "reason": str(error)[:220],
+            }
+
+        restart_required = timed_out or interrupted_typedb_schema_operation(process_result)
+        if restart_required:
+            if not restart_typedb_stage_for_schema_retry(spec, "function prewarm retry"):
+                return {
+                    "status": "candidate-restart-failed",
+                    "ready": False,
+                    "attemptCount": attempt,
+                    "attempts": attempts + [{
+                        "attempt": attempt,
+                        "status": str(process_result.get("status") or "error"),
+                        "restarted": False,
+                    }],
+                    "reason": "Candidate TypeDB could not restart after an interrupted schema compile.",
+                }
+
+        readiness = validate_typedb_candidate_inference_runtime(spec, require_functions=True)
+        summary = dict(readiness.get("readiness") or {})
+        verified = int_value(summary.get("verifiedFunctionCount"), 0, 0)
+        attempts.append({
+            "attempt": attempt,
+            "status": str(process_result.get("status") or "unknown"),
+            "restarted": restart_required,
+            "verifiedFunctionCount": verified,
+            "expectedFunctionCount": int_value(summary.get("expectedFunctionCount"), 0, 0),
+            "missingFunctionCount": int_value(summary.get("missingFunctionCount"), 0, 0),
+        })
+        append_log(
+            spec["log"],
+            "candidate function prewarm attempt=" + str(attempt)
+            + " status=" + str(process_result.get("status") or "unknown")
+            + " verified=" + str(verified)
+            + "/" + str(summary.get("expectedFunctionCount") or 0),
+        )
+        if bool(readiness.get("ready")):
+            return {
+                "status": "ready",
+                "ready": True,
+                "attemptCount": attempt,
+                "attempts": attempts,
+                "readiness": summary,
+            }
+
+        if verified > last_verified:
+            last_verified = verified
+            consecutive_no_progress = 0
+        else:
+            consecutive_no_progress += 1
+
+        process_status = str(process_result.get("status") or "").strip().lower()
+        return_code = process_result.get("returnCode")
+        if (
+            return_code not in {0, None}
+            or process_status not in {"provisioning", "timeout", "error"}
+            or (process_status == "error" and not restart_required)
+        ):
+            return {
+                "status": "candidate-prewarm-failed",
+                "ready": False,
+                "attemptCount": attempt,
+                "attempts": attempts,
+                "readiness": summary,
+                "reason": str(process_result.get("reason") or "Candidate function prewarm failed."),
+            }
+        if consecutive_no_progress >= 3:
+            if not restart_typedb_stage_for_schema_retry(spec, "function prewarm no-progress"):
+                return {
+                    "status": "candidate-no-progress",
+                    "ready": False,
+                    "attemptCount": attempt,
+                    "attempts": attempts,
+                    "readiness": summary,
+                    "reason": "Candidate function receipts made no progress and the recovery restart failed.",
+                }
+            consecutive_no_progress = 0
+        time.sleep(1.0)
+
+    final = validate_typedb_candidate_inference_runtime(spec, require_functions=True)
+    return {
+        "status": "candidate-prewarm-incomplete",
+        "ready": False,
+        "attemptCount": max_attempts,
+        "attempts": attempts,
+        "readiness": dict(final.get("readiness") or {}),
+        "reason": "Candidate did not reach complete schema-function readiness within the bounded attempts.",
+    }
+
+
+def validate_typedb_candidate_seed_contract(
+    spec: Dict[str, object],
+    settings_provider=None,
+    repository_factory=None,
+) -> Dict[str, object]:
+    """Prove that a candidate contains this build's complete static ontology.
+
+    The seed command can finish through a fresh write, a relation repair, or
+    an unchanged manifest after a candidate restart. Normalize those paths to
+    one promotion receipt instead of trusting only the subprocess exit code.
+    """
+
+    if settings_provider is None:
+        settings_provider = runtime_settings
+    if repository_factory is None:
+        from .infrastructure.ontology_graph_store import ontology_repository_from_settings
+        repository_factory = ontology_repository_from_settings
+
+    try:
+        try:
+            configured = dict(settings_provider(fast_operational_read=True) or {})
+        except TypeError:
+            configured = dict(settings_provider() or {})
+        database_name = str(spec.get("typedbDatabase") or "").strip()
+        candidate_settings = {
+            **configured,
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": str(spec.get("healthAddress") or ""),
+            "typedbHttpAddress": str(spec.get("httpAddress") or ""),
+            "typedbDatabase": database_name,
+            "typedbUser": str(spec.get("typedbUser") or configured.get("typedbUser") or "admin"),
+            "typedbPassword": str(spec.get("typedbPassword") or configured.get("typedbPassword") or "password"),
+            "typedbTlsEnabled": str(spec.get("typedbTlsEnabled") or configured.get("typedbTlsEnabled") or "0"),
+        }
+        snapshot = dict(repository_factory(candidate_settings).rulebox_snapshot() or {})
+        from .domain.ontology_rulebox_governance import rulebox_rules_hash
+        from .domain.ontology_schema import default_tbox_metadata
+
+        snapshot_rules = snapshot.get("rules") if isinstance(snapshot.get("rules"), list) else []
+        candidate_rulebox_fingerprint = str(
+            snapshot.get("sourceRulesHash")
+            or snapshot.get("rulesHash")
+            or snapshot.get("ruleboxRulesHash")
+            or (rulebox_rules_hash(snapshot_rules) if snapshot_rules else "")
+        ).strip()
+        attestation = dict(spec.get("_typedbSeedAttestation") or {})
+        preflight = dict(
+            attestation.get("postSeedPreflight")
+            or attestation.get("seedPreflight")
+            or {}
+        )
+        manifest = dict(preflight.get("staticSeedManifest") or {})
+        expected_tbox_fingerprint = str(
+            manifest.get("expectedTboxFingerprint")
+            or default_tbox_metadata().get("fingerprint")
+            or ""
+        ).strip()
+        active_tbox_fingerprint = str(manifest.get("activeTboxFingerprint") or "").strip()
+        expected_rulebox_fingerprint = str(
+            manifest.get("expectedRuleboxFingerprint")
+            or attestation.get("expectedRuleBoxHash")
+            or ""
+        ).strip()
+        active_rulebox_fingerprint = str(
+            manifest.get("activeRuleboxFingerprint")
+            or attestation.get("activeRuleBoxHash")
+            or (attestation.get("ruleBoxReplaceResult") or {}).get("ruleboxRulesHash")
+            or ""
+        ).strip()
+        expected_schema_fingerprint = str(
+            manifest.get("expectedSchemaContractFingerprint") or ""
+        ).strip()
+        active_schema_fingerprint = str(
+            manifest.get("activeSchemaContractFingerprint") or ""
+        ).strip()
+        expected_static_fingerprint = str(manifest.get("expectedFingerprint") or "").strip()
+        active_static_fingerprint = str(manifest.get("activeFingerprint") or "").strip()
+        rulebox_write_verified = bool(
+            attestation.get("ruleBoxReplaced")
+            or (
+                attestation.get("ruleBoxAlreadyCurrent")
+                and attestation.get("ruleBoxHashMatched")
+            )
+        )
+        rule_count = int_value(
+            attestation.get("activeRuleBoxRuleCount")
+            or snapshot.get("ruleCount")
+            or snapshot.get("ruleboxRuleCount"),
+            0,
+            0,
+        )
+        checks = {
+            "seedSaved": bool(attestation.get("saved")),
+            "preflightReady": bool(preflight.get("ready")),
+            "tboxMatches": bool(preflight.get("tboxMatches")),
+            "ruleboxMatches": bool(preflight.get("ruleboxMatches")),
+            "languageRegistryMatches": bool(preflight.get("languageRegistryMatches")),
+            "schemaContractMatches": bool(preflight.get("schemaContractMatches")),
+            "staticSeedFingerprintMatches": bool(
+                expected_static_fingerprint
+                and active_static_fingerprint == expected_static_fingerprint
+            ),
+            "tboxFingerprintMatches": bool(
+                expected_tbox_fingerprint
+                and active_tbox_fingerprint == expected_tbox_fingerprint
+            ),
+            "ruleboxFingerprintMatches": bool(
+                candidate_rulebox_fingerprint
+                and expected_rulebox_fingerprint == candidate_rulebox_fingerprint
+                and active_rulebox_fingerprint == candidate_rulebox_fingerprint
+            ),
+            "schemaContractFingerprintMatches": bool(
+                expected_schema_fingerprint
+                and active_schema_fingerprint == expected_schema_fingerprint
+            ),
+            "ruleboxWriteVerified": rulebox_write_verified,
+            "ruleCountVerified": rule_count > 0,
+        }
+        ready = bool(
+            str(snapshot.get("status") or "") == "ok"
+            and snapshot_rules
+            and all(checks.values())
+        )
+        failed_checks = [name for name, passed in checks.items() if not passed]
+        return {
+            "status": "ready" if ready else "seed-contract-incomplete",
+            "ready": ready,
+            "database": database_name,
+            "seedStatus": str(attestation.get("status") or "unknown"),
+            "candidateRuleboxFingerprint": candidate_rulebox_fingerprint,
+            "expectedRuleboxFingerprint": expected_rulebox_fingerprint,
+            "activeRuleboxFingerprint": active_rulebox_fingerprint,
+            "expectedTboxFingerprint": expected_tbox_fingerprint,
+            "activeTboxFingerprint": active_tbox_fingerprint,
+            "expectedSchemaContractFingerprint": expected_schema_fingerprint,
+            "activeSchemaContractFingerprint": active_schema_fingerprint,
+            "ruleCount": rule_count,
+            "checks": checks,
+            "failedChecks": failed_checks,
+            "reason": "" if ready else "Candidate seed contract checks failed: " + ", ".join(failed_checks),
+        }
+    except Exception as error:  # noqa: BLE001 - candidate promotion must fail closed.
+        return {
+            "status": "seed-contract-error",
+            "ready": False,
+            "database": str(spec.get("typedbDatabase") or ""),
+            "reason": str(error)[:300],
+        }
 
 
 def validate_typedb_candidate_release_contract(
@@ -2505,34 +3084,25 @@ def validate_typedb_candidate_release_contract(
                 rule.to_dict()
                 for rule in default_graph_inference_rules()
             ])
-            seed_attestation = dict(spec.get("_typedbSeedAttestation") or {})
-            post_seed_preflight = dict(seed_attestation.get("postSeedPreflight") or {})
+            seed_contract = dict(spec.get("_typedbSeedContract") or {})
+            if not seed_contract:
+                seed_contract = validate_typedb_candidate_seed_contract(
+                    spec,
+                    settings_provider=settings_provider,
+                    repository_factory=repository_factory,
+                )
             attested_rulebox_fingerprint = str(
-                seed_attestation.get("activeRuleBoxHash")
-                or (seed_attestation.get("ruleBoxReplaceResult") or {}).get("ruleboxRulesHash")
-                or ""
+                seed_contract.get("activeRuleboxFingerprint") or ""
             ).strip()
-            attested_rule_count = int_value(
-                seed_attestation.get("activeRuleBoxRuleCount"),
-                0,
-                0,
-            )
-            if not frozen_candidate_fingerprint and not (
-                str(seed_attestation.get("status") or "") in {"ok", "unchanged"}
-                and bool(seed_attestation.get("saved"))
-                and bool(seed_attestation.get("ruleBoxReplaceRequested"))
-                and bool(seed_attestation.get("ruleBoxReplaced"))
-                and bool(post_seed_preflight.get("ready"))
-                and bool(post_seed_preflight.get("schemaContractMatches"))
-                and attested_rulebox_fingerprint
-                and attested_rule_count > 0
-            ):
+            attested_rule_count = int_value(seed_contract.get("ruleCount"), 0, 0)
+            if not bool(seed_contract.get("ready")):
                 return {
                     "status": "registered-candidate-seed-attestation-missing",
                     "ready": False,
                     "database": database_name,
                     "candidateDeploymentId": candidate_deployment_id,
                     "candidateRuleboxFingerprint": candidate_fingerprint,
+                    "seedContract": seed_contract,
                     "reason": (
                         "The registered candidate has no complete, read-back-verified "
                         "TypeDB seed attestation."
@@ -2568,6 +3138,7 @@ def validate_typedb_candidate_release_contract(
                 "sourceRuleboxFingerprint": source_rulebox_fingerprint,
                 "attestedRuleboxFingerprint": attested_rulebox_fingerprint,
                 "attestedRuleCount": attested_rule_count,
+                "seedContract": seed_contract,
                 "governedDeployments": [{
                     "deploymentId": candidate_deployment_id,
                     "status": str(registered_candidate.get("status") or ""),
@@ -3430,6 +4001,11 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
         # replay fail on its first ontology-node write.
         "seedOnStart": "1",
         "seedReplaceRuleBox": "1",
+        # A candidate is promotable only after every generated function has a
+        # durable deployment receipt. The active store may keep its bounded
+        # fallback while this isolated process compiles.
+        "schemaFunctionDirectQueryFallbackEnabled": "0",
+        "candidateRequireSchemaFunctions": "1",
         # TypeDB 3.12 can spend more than 15 minutes compiling the first cold
         # schema commit. Interrupting it during checkpoint replacement may
         # leave a transient checkpoint directory that crashes the next server.
@@ -3508,7 +4084,9 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             return {"status": "candidate-start-failed", "candidate": candidate}
         validated_databases = []
         validated_inference_modes = {}
+        validated_seed_contracts = {}
         validated_release_contracts = {}
+        validated_function_readiness = {}
         for database_spec in typedb_blue_green_database_specs(candidate):
             database_name = str(database_spec.get("typedbDatabase") or "")
             if not ensure_typedb_seeded(database_spec):
@@ -3517,20 +4095,40 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                     "database": database_name,
                     "candidate": candidate,
                 }
-            inference_readiness = validate_typedb_candidate_inference_runtime(database_spec)
-            if not bool(inference_readiness.get("ready")):
+            seed_contract = validate_typedb_candidate_seed_contract(database_spec)
+            if not bool(seed_contract.get("ready")):
                 return {
-                    "status": "candidate-inference-readiness-failed",
+                    "status": "candidate-seed-contract-failed",
                     "database": database_name,
-                    "inferenceReadiness": inference_readiness,
+                    "seedContract": seed_contract,
                     "candidate": candidate,
                 }
+            database_spec["_typedbSeedContract"] = seed_contract
             release_contract = validate_typedb_candidate_release_contract(database_spec)
             if not bool(release_contract.get("ready")):
                 return {
                     "status": "candidate-release-contract-failed",
                     "database": database_name,
                     "releaseContract": release_contract,
+                    "candidate": candidate,
+                }
+            function_prewarm = prewarm_typedb_candidate_rulebox_functions(database_spec)
+            if not bool(function_prewarm.get("ready")):
+                return {
+                    "status": "candidate-function-prewarm-failed",
+                    "database": database_name,
+                    "functionPrewarm": function_prewarm,
+                    "candidate": candidate,
+                }
+            inference_readiness = validate_typedb_candidate_inference_runtime(
+                database_spec,
+                require_functions=True,
+            )
+            if not bool(inference_readiness.get("ready")):
+                return {
+                    "status": "candidate-inference-readiness-failed",
+                    "database": database_name,
+                    "inferenceReadiness": inference_readiness,
                     "candidate": candidate,
                 }
             if not ensure_typedb_shared_world_projection_rebuilt(database_spec, force=True):
@@ -3555,8 +4153,12 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             validated_inference_modes[database_name] = str(
                 inference_readiness.get("mode") or "unknown"
             )
+            validated_seed_contracts[database_name] = seed_contract
             validated_release_contracts[database_name] = str(
                 release_contract.get("status") or "unknown"
+            )
+            validated_function_readiness[database_name] = dict(
+                inference_readiness.get("readiness") or {}
             )
         return {
             "status": "prepared",
@@ -3564,7 +4166,9 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             "candidateSizeBytes": directory_size_bytes(candidate_path),
             "validatedDatabases": validated_databases,
             "validatedInferenceModes": validated_inference_modes,
+            "validatedSeedContracts": validated_seed_contracts,
             "validatedReleaseContracts": validated_release_contracts,
+            "validatedFunctionReadiness": validated_function_readiness,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {
@@ -3734,6 +4338,8 @@ def typedb_rotate(
 
     result = {}
     candidate = {}
+    operation_id = uuid.uuid4().hex
+    candidate_validation = {}
     services_stopped = False
     restart_attempted = False
     try:
@@ -3753,20 +4359,37 @@ def typedb_rotate(
             lastAutoRotationStatus="running",
         )
         if truthy(spec.get("blueGreenRotationEnabled")):
+            record_typedb_rulebox_deployment_event(
+                operation_id,
+                "candidate-started",
+                "running",
+                database=str(spec.get("typedbDatabase") or ""),
+                details={"rotationReason": str(rotation_reason or decision.get("reason") or "manual")},
+            )
             prepared = prepare_typedb_blue_green_candidate(spec)
             candidate = dict(prepared.get("candidate") or {})
+            candidate_validation = typedb_candidate_validation_summary(prepared)
             if prepared.get("status") != "prepared":
                 cleanup_typedb_candidate(candidate, remove_data=True)
                 result = {
                     "status": "candidate-failed-active-preserved",
+                    "operationId": operation_id,
                     "reason": str(prepared.get("reason") or prepared.get("status") or "candidate validation failed"),
                     "database": str(prepared.get("database") or ""),
+                    "candidateValidation": candidate_validation,
                     "activeStorePreserved": True,
                 }
                 record_typedb_auto_rotation_state(
                     lastAutoRotationFinishedAt=iso_now(),
                     lastAutoRotationStatus="candidate-failed-active-preserved",
                     lastAutoRotationResult=result,
+                )
+                result["audit"] = record_typedb_rulebox_deployment_event(
+                    operation_id,
+                    "candidate-validation",
+                    "failed",
+                    database=str(prepared.get("database") or spec.get("typedbDatabase") or ""),
+                    details=candidate_validation,
                 )
                 result["failureIncident"] = record_typedb_auto_rotation_incident(
                     spec,
@@ -3775,11 +4398,20 @@ def typedb_rotate(
                 )
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
+            record_typedb_rulebox_deployment_event(
+                operation_id,
+                "candidate-validation",
+                "ready",
+                database=str(spec.get("typedbDatabase") or ""),
+                details=candidate_validation,
+            )
             if not typedb_maintenance_lock_owned(rotation_lock):
                 cleanup_typedb_candidate(candidate, remove_data=False)
                 result = {
                     "status": "cutover-fenced-active-preserved",
+                    "operationId": operation_id,
                     "reason": "TypeDB maintenance ownership changed before cutover.",
+                    "candidateValidation": candidate_validation,
                     "activeStorePreserved": True,
                 }
                 record_typedb_auto_rotation_state(
@@ -3787,12 +4419,21 @@ def typedb_rotate(
                     lastAutoRotationStatus="cutover-fenced-active-preserved",
                     lastAutoRotationResult=result,
                 )
+                result["audit"] = record_typedb_rulebox_deployment_event(
+                    operation_id,
+                    "cutover",
+                    "fenced",
+                    database=str(spec.get("typedbDatabase") or ""),
+                    details=candidate_validation,
+                )
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
             cleanup_typedb_candidate(candidate, remove_data=False)
             services_stopped = True
             stop(include_supervisor=False)
             result = swap_typedb_blue_green_data_paths(spec, candidate)
+            result["operationId"] = operation_id
+            result["candidateValidation"] = candidate_validation
         else:
             services_stopped = True
             stop(include_supervisor=False)
@@ -3818,6 +4459,17 @@ def typedb_rotate(
                 decision,
                 alert_kind="typedb-auto-rotation-failed",
             )
+            if candidate_validation:
+                result["audit"] = record_typedb_rulebox_deployment_event(
+                    operation_id,
+                    "cutover",
+                    "failed",
+                    database=str(spec.get("typedbDatabase") or ""),
+                    details={
+                        "candidateValidation": candidate_validation,
+                        "reason": str(result.get("reason") or result.get("status") or "")[:300],
+                    },
+                )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 1
         start_status = start()
@@ -3834,6 +4486,19 @@ def typedb_rotate(
             start_status = 1
         if start_status == 0 and result.get("status") == "swapped":
             result["retiredPathsRemoved"] = prune_retired_typedb_data_paths(spec)
+            result["ruleboxPrewarmActivation"] = enable_rulebox_prewarm_after_verified_cutover(
+                operation_id
+            )
+            result["audit"] = record_typedb_rulebox_deployment_event(
+                operation_id,
+                "cutover",
+                "promoted",
+                database=str(spec.get("typedbDatabase") or ""),
+                details={
+                    "candidateValidation": candidate_validation,
+                    "ruleboxPrewarmActivation": result["ruleboxPrewarmActivation"],
+                },
+            )
         record_typedb_auto_rotation_state(
             lastAutoRotationFinishedAt=iso_now(),
             lastAutoRotationStatus="ok" if start_status == 0 else "restart-failed",
@@ -3841,6 +4506,9 @@ def typedb_rotate(
                 "status": result.get("status"),
                 "restartStatus": result.get("restartStatus"),
                 "previousSizeBytes": result.get("previousSizeBytes"),
+                "operationId": result.get("operationId"),
+                "candidateValidation": candidate_validation,
+                "ruleboxPrewarmActivation": result.get("ruleboxPrewarmActivation"),
             },
         )
         if start_status != 0:
@@ -3849,6 +4517,14 @@ def typedb_rotate(
                 decision,
                 alert_kind="typedb-auto-rotation-failed",
             )
+            if candidate_validation:
+                result["audit"] = record_typedb_rulebox_deployment_event(
+                    operation_id,
+                    "cutover",
+                    "restart-failed",
+                    database=str(spec.get("typedbDatabase") or ""),
+                    details={"candidateValidation": candidate_validation},
+                )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return start_status
     finally:

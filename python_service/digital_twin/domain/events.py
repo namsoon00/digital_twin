@@ -51,6 +51,7 @@ HYPOTHESIS_DEVELOPMENT_DEPLOYED = "investment_hypothesis.development_deployed"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED = "ontology.reasoning_queue_health_changed"
+ONTOLOGY_RULEBOX_DEPLOYMENT_CHANGED = "ontology.rulebox_deployment_changed"
 OPERATIONAL_STORAGE_CAPACITY_CHANGED = "operations.storage_capacity_changed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
 INVESTMENT_CALENDAR_EVENT_REMOVED = "investment_calendar.event_removed"
@@ -155,6 +156,30 @@ def system_error_reported_event(
             "fingerprint": str(fingerprint or ""),
             "occurrenceCount": max(1, int(occurrence_count or 1)),
         },
+    )
+
+
+def ontology_rulebox_deployment_changed_event(
+    operation_id: str,
+    phase: str,
+    status: str,
+    database: str = "",
+    details: Mapping[str, object] = None,
+) -> DomainEvent:
+    """Record bounded schema-function deployment evidence for operations."""
+
+    clean_operation_id = str(operation_id or uuid.uuid4().hex).strip()[:191]
+    return DomainEvent(
+        name=ONTOLOGY_RULEBOX_DEPLOYMENT_CHANGED,
+        aggregate_id=("rulebox-deployment:" + clean_operation_id)[:191],
+        payload={
+            "operationId": clean_operation_id,
+            "phase": str(phase or "unknown")[:64],
+            "status": str(status or "unknown")[:64],
+            "database": str(database or "")[:191],
+            "details": dict(details or {}),
+        },
+        correlation_id=("rulebox-deployment:" + clean_operation_id)[:191],
     )
 
 

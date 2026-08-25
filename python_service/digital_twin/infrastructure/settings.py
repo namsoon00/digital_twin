@@ -453,6 +453,8 @@ TEXT_SETTING_KEYS = [
     "typedbBlueGreenMaxLoadPerCpu",
     "typedbBlueGreenMinimumAvailableMemoryPercent",
     "typedbBlueGreenProcessNice",
+    "typedbBlueGreenFunctionPrewarmMaxAttempts",
+    "typedbBlueGreenFunctionPrewarmAttemptTimeoutSeconds",
     "typedbProcessNice",
     "typedbBlueGreenSeedCompatibilityDatabasesEnabled",
     "typedbPortfolioWorldProjectionRebuildLimit",
@@ -2357,6 +2359,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbBlueGreenProcessNice",
             "TYPEDB_BLUE_GREEN_PROCESS_NICE",
             "10",
+        ),
+        "typedbBlueGreenFunctionPrewarmMaxAttempts": value(
+            "typedbBlueGreenFunctionPrewarmMaxAttempts",
+            "TYPEDB_BLUE_GREEN_FUNCTION_PREWARM_MAX_ATTEMPTS",
+            "60",
+        ),
+        "typedbBlueGreenFunctionPrewarmAttemptTimeoutSeconds": value(
+            "typedbBlueGreenFunctionPrewarmAttemptTimeoutSeconds",
+            "TYPEDB_BLUE_GREEN_FUNCTION_PREWARM_ATTEMPT_TIMEOUT_SECONDS",
+            "1200",
         ),
         "typedbProcessNice": value(
             "typedbProcessNice",

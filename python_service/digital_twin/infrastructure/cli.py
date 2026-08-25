@@ -737,7 +737,11 @@ def ontology_inference_detail_command(args) -> int:
 
 def ontology_rulebox_prewarm_command(args) -> int:
     settings = runtime_settings(fast_operational_read=True)
-    runner = build_ontology_rulebox_prewarm_runner(settings)
+    candidate_mode = bool(getattr(args, "candidate", False))
+    runner = build_ontology_rulebox_prewarm_runner(
+        settings,
+        candidate_mode=candidate_mode,
+    )
     if args.ontology_rulebox_prewarm_action == "status":
         print(json.dumps(runner.status(), ensure_ascii=False))
         return 0
@@ -2155,6 +2159,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ontology_rulebox_prewarm_once = ontology_rulebox_prewarm_actions.add_parser("once")
     ontology_rulebox_prewarm_once.add_argument("--force", action="store_true")
+    ontology_rulebox_prewarm_once.add_argument(
+        "--candidate",
+        action="store_true",
+        help="Compile an isolated blue-green candidate without production queue hand-offs",
+    )
     ontology_rulebox_prewarm_actions.add_parser("watch")
     ontology_rulebox_prewarm_actions.add_parser("status")
     ontology_rulebox_prewarm.set_defaults(func=ontology_rulebox_prewarm_command)

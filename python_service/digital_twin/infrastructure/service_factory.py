@@ -1362,13 +1362,22 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
     )
 
 
-def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewarmRunner:
-    """Build the isolated compiler worker for the active TypeDB RuleBox."""
+def build_ontology_rulebox_prewarm_runner(
+    settings=None,
+    candidate_mode: bool = False,
+) -> OntologyRuleboxPrewarmRunner:
+    """Build the compiler worker for the active or isolated candidate store.
+
+    A blue-green candidate has its own TypeDB process and data directory. It
+    must not publish compiler activity into the production MySQL hand-off or
+    inspect the live reasoning queue, because neither resource is shared with
+    the candidate schema writer.
+    """
     configured_settings = settings or runtime_settings()
     store_settings = dict(configured_settings)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
-    storage_guard = typedb_capacity_guard(
+    storage_guard = None if candidate_mode else typedb_capacity_guard(
         configured_settings,
         "rulebox-prewarm",
         stores.operational_storage_capacity_state_store(store_settings),
@@ -1376,8 +1385,16 @@ def build_ontology_rulebox_prewarm_runner(settings=None) -> OntologyRuleboxPrewa
     return OntologyRuleboxPrewarmRunner(
         ontology_repository=ontology_repository_from_settings(configured_settings),
         settings=configured_settings,
-        reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
-        prewarm_state_store=stores.ontology_rulebox_prewarm_state_store(store_settings),
+        reasoning_queue_probe=(
+            (lambda: {"status": "candidate-isolated", "effectivePendingCount": 0})
+            if candidate_mode
+            else build_ontology_reasoning_queue_probe(configured_settings)
+        ),
+        prewarm_state_store=(
+            None
+            if candidate_mode
+            else stores.ontology_rulebox_prewarm_state_store(store_settings)
+        ),
         storage_guard=storage_guard,
     )
 

@@ -1,7 +1,13 @@
 import unittest
 from types import SimpleNamespace
 
-from digital_twin.application.news_digest_service import NewsDigestEnqueuer, confirmed_fact_lines, item_summary
+from digital_twin.application.news_digest_service import (
+    NewsDigestEnqueuer,
+    confirmed_fact_lines,
+    item_investment_impact,
+    item_summary,
+    item_watch_text,
+)
 from digital_twin.application.notification_service import DisclosureAnalysisNotificationEnricher
 from digital_twin.domain.accounts import AccountConfig
 from digital_twin.domain.events import DomainEvent, RESEARCH_EVIDENCE_COLLECTED
@@ -98,7 +104,7 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
             },
         )
 
-    def enqueuer(self, queue):
+    def enqueuer(self, queue, evidence_repository=None):
         monitor_store = SimpleNamespace(previous={
             "main": {
                 "positions": {},
@@ -112,7 +118,47 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
             monitor_store=monitor_store,
             queue=queue,
             settings={},
+            evidence_repository=evidence_repository,
         )
+
+    def test_durable_compact_event_reloads_canonical_quality_state(self):
+        queue = MemoryNotificationQueue()
+        evidence = self.evidence()
+        repository = SimpleNamespace(get=lambda evidence_id: evidence if evidence_id == evidence.evidence_id else None)
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "alertEligibleItems": [{
+                    "evidenceId": evidence.evidence_id,
+                    "symbol": "AAPL",
+                    "kind": "news",
+                    "title": evidence.title,
+                }],
+            },
+        )
+
+        self.enqueuer(queue, repository).handle(event)
+
+        self.assertEqual(1, len(queue.jobs))
+        self.assertEqual(evidence.evidence_id, queue.jobs[0].context["newsDigest"]["primaryEvidenceId"])
+
+    def test_authoritative_empty_alert_set_never_falls_back_to_material_items(self):
+        queue = MemoryNotificationQueue()
+        event = DomainEvent(
+            name=RESEARCH_EVIDENCE_COLLECTED,
+            aggregate_id="news:AAPL",
+            payload={
+                "alertEligibleCount": 0,
+                "materialChangedCount": 1,
+                "materialChangedItems": [self.evidence().to_dict()],
+            },
+        )
+
+        queued = self.enqueuer(queue).handle(event)
+
+        self.assertEqual(0, queued)
+        self.assertEqual([], queue.jobs)
 
     def test_confirmed_facts_use_a_distinct_target_sentence_when_takeaway_matches_summary(self):
         item = {
@@ -155,6 +201,26 @@ class NewsDigestEnqueuerTests(unittest.TestCase):
         }
 
         self.assertEqual([second], confirmed_fact_lines(item))
+
+    def test_disclosure_alert_uses_structured_document_analysis(self):
+        item = {
+            "kind": "disclosure",
+            "publishedAt": "2026-08-25T00:00:00Z",
+            "payload": {
+                "receiptNo": "202608250001",
+                "disclosureAnalysis": {
+                    "summary": "이사회가 자기주식 취득을 결의했습니다.",
+                    "impactSummary": "유통 주식 수 감소 가능성을 확인할 공시입니다.",
+                    "confirmedFacts": ["보통주 1,000,000주를 취득하기로 결정했습니다."],
+                    "watchItems": ["실제 취득 체결 내역을 확인합니다."],
+                },
+            },
+        }
+
+        self.assertEqual("이사회가 자기주식 취득을 결의했습니다", item_summary(item))
+        self.assertEqual(["보통주 1,000,000주를 취득하기로 결정했습니다."], confirmed_fact_lines(item))
+        self.assertEqual("유통 주식 수 감소 가능성을 확인할 공시입니다", item_investment_impact(item))
+        self.assertEqual("실제 취득 체결 내역을 확인합니다.", item_watch_text(item))
 
     def test_enqueues_news_digest_with_short_source_link(self):
         queue = MemoryNotificationQueue()

@@ -495,6 +495,7 @@ def compact_research_item_for_event_storage(value: object) -> Dict[str, object]:
     if isinstance(analysis, Mapping):
         compact_analysis = {}
         for key, limit in {
+            "status": 64,
             "impactLabelKo": 160,
             "impactPolarity": 64,
             "impactReasonKo": 1000,
@@ -537,7 +538,7 @@ def compact_research_item_for_event_storage(value: object) -> Dict[str, object]:
             text = _event_text(article_facts.get(key), limit)
             if text:
                 compact_facts[key] = text
-        for key in ("bodyAvailable",):
+        for key in ("bodyAvailable", "bodyQualityPassed"):
             if key in article_facts:
                 compact_facts[key] = bool(article_facts.get(key))
         if "bodyCharCount" in article_facts:
@@ -550,6 +551,18 @@ def compact_research_item_for_event_storage(value: object) -> Dict[str, object]:
             compact_facts["keySentences"] = sentences
         if compact_facts:
             compact["articleFacts"] = compact_facts
+
+    summary_quality = pick("articleSummaryQuality")
+    if isinstance(summary_quality, Mapping):
+        compact_summary_quality = {}
+        state = _event_text(summary_quality.get("state"), 64)
+        if state:
+            compact_summary_quality["state"] = state
+        issues = _event_text_list(summary_quality.get("issues"), limit=8, item_limit=240)
+        if issues:
+            compact_summary_quality["issues"] = issues
+        if compact_summary_quality:
+            compact["articleSummaryQuality"] = compact_summary_quality
 
     quality_gate = pick("qualityGate")
     if isinstance(quality_gate, Mapping):
@@ -597,6 +610,85 @@ def compact_research_item_for_event_storage(value: object) -> Dict[str, object]:
             compact_governance["reasons"] = reasons
         if compact_governance:
             compact["evidenceGovernance"] = compact_governance
+
+    for source_key, boolean_keys, text_keys, list_keys in (
+        (
+            "newsEligibility",
+            ("archiveEligible", "displayEligible", "alertEligible", "reasoningEligible"),
+            ("reviewState",),
+            ("reviewReasonCodes", "alertReasonCodes", "reasoningReasonCodes"),
+        ),
+        (
+            "promptEvidenceAdmission",
+            ("displayEligible", "alertEligible", "referenceEligible", "decisionEligible", "promptEligible"),
+            ("version", "usage", "freshnessState", "sourceAsOf", "checkedAt"),
+            ("reasonCodes",),
+        ),
+    ):
+        state = pick(source_key)
+        if not isinstance(state, Mapping):
+            continue
+        bounded_state = {}
+        for key in boolean_keys:
+            if key in state:
+                bounded_state[key] = bool(state.get(key))
+        for key in text_keys:
+            text = _event_text(state.get(key), 96 if key != "sourceAsOf" else 80)
+            if text:
+                bounded_state[key] = text
+        for key in list_keys:
+            values = _event_text_list(state.get(key), limit=10, item_limit=240)
+            if values:
+                bounded_state[key] = values
+        if bounded_state:
+            compact[source_key] = bounded_state
+
+    for key, limit in {
+        "officialDocumentState": 64,
+        "officialDocumentType": 96,
+        "officialDocumentQuality": 64,
+        "receiptNo": 64,
+        "receiptDate": 40,
+        "reportName": 800,
+        "sourceRevision": 191,
+        "sourceAsOf": 80,
+        "documentHash": 96,
+    }.items():
+        text = _event_text(pick(key), limit)
+        if text:
+            compact[key] = text
+    for key in ("metadataVerified", "documentVerified", "analysisReady"):
+        value = pick(key)
+        if value is not None:
+            compact[key] = bool(value)
+    disclosure_analysis = pick("disclosureAnalysis")
+    if isinstance(disclosure_analysis, Mapping):
+        compact_disclosure = {}
+        for key, limit in {
+            "status": 64,
+            "version": 96,
+            "source": 120,
+            "summary": 1400,
+            "impactSummary": 1400,
+            "uncertaintySummary": 1200,
+        }.items():
+            text = _event_text(disclosure_analysis.get(key), limit)
+            if text:
+                compact_disclosure[key] = text
+        lines = _event_text_list(disclosure_analysis.get("lines"), limit=6, item_limit=600)
+        if lines:
+            compact_disclosure["lines"] = lines
+        for key, count, item_limit in (
+            ("confirmedFacts", 4, 600),
+            ("materialNumbers", 12, 120),
+            ("documentDates", 8, 80),
+            ("watchItems", 4, 400),
+        ):
+            values = _event_text_list(disclosure_analysis.get(key), limit=count, item_limit=item_limit)
+            if values:
+                compact_disclosure[key] = values
+        if compact_disclosure:
+            compact["disclosureAnalysis"] = compact_disclosure
     return {key: value for key, value in compact.items() if value not in (None, "", [], {})}
 
 
@@ -605,15 +697,15 @@ def compact_research_evidence_event_payload_for_storage(payload: Mapping[str, ob
     compact: Dict[str, object] = {}
     for key in (
         "source", "status", "targetCount", "fetchedCount", "savedCount", "changedCount",
-        "materialChangedCount", "lifecycleChangedCount",
+        "materialChangedCount", "alertEligibleCount", "lifecycleChangedCount",
     ):
         if key in source:
             compact[key] = source.get(key)
-    for key in ("symbols", "changedSymbols", "materialChangedSymbols", "inferenceChangedSymbols", "providers"):
+    for key in ("symbols", "changedSymbols", "materialChangedSymbols", "alertEligibleSymbols", "inferenceChangedSymbols", "providers"):
         values = _event_text_list(source.get(key), limit=100, item_limit=96)
         if values:
             compact[key] = values
-    for key in ("changedItems", "materialChangedItems"):
+    for key in ("changedItems", "materialChangedItems", "alertEligibleItems"):
         values = source.get(key)
         if not isinstance(values, (list, tuple, set)):
             continue
@@ -624,7 +716,7 @@ def compact_research_evidence_event_payload_for_storage(payload: Mapping[str, ob
                 items.append(item)
             if len(items) >= 100:
                 break
-        if items:
+        if items or key == "alertEligibleItems":
             compact[key] = items
     assessments = compact_materiality_assessment_event_payloads(source.get("materialityAssessments"), limit=100)
     if assessments:
@@ -635,6 +727,15 @@ def compact_research_evidence_event_payload_for_storage(payload: Mapping[str, ob
     revisions = compact_fact_revisions_for_event(source.get("factRevisionsBySymbol"), limit=100)
     if revisions:
         compact["factRevisionsBySymbol"] = revisions
+    for key, limit in {
+        "eventContract": 96,
+        "eligibilityPolicy": 96,
+    }.items():
+        text = _event_text(source.get(key), limit)
+        if text:
+            compact[key] = text
+    if "allowHistoricalAlert" in source:
+        compact["allowHistoricalAlert"] = bool(source.get("allowHistoricalAlert"))
     return compact
 
 
@@ -1002,14 +1103,20 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
             "changedSymbols": list(payload.get("changedSymbols") or symbols)[:100],
             "materialChangedCount": int(payload.get("materialChangedCount") or len(material_symbols) or 0),
             "materialChangedSymbols": material_symbols[:100],
+            "alertEligibleCount": int(payload.get("alertEligibleCount") or len(payload.get("alertEligibleItems") or []) or 0),
+            "alertEligibleSymbols": list(payload.get("alertEligibleSymbols") or [])[:100],
             "changedItems": list(payload.get("changedItems") or [])[:100],
             "materialChangedItems": list(payload.get("materialChangedItems") or [])[:100],
+            "alertEligibleItems": list(payload.get("alertEligibleItems") or [])[:100],
             "materialityAssessments": list(payload.get("materialityAssessments") or [])[:100],
             "evidenceDeltas": list(payload.get("evidenceDeltas") or [])[:200],
             "inferenceChangedSymbols": list(payload.get("inferenceChangedSymbols") or [])[:100],
             "factRevisionsBySymbol": dict(payload.get("factRevisionsBySymbol") or {}),
             "lifecycleChangedCount": int(payload.get("lifecycleChangedCount") or 0),
             "providers": list(payload.get("providers") or [])[:20],
+            "eventContract": "research-evidence-change-v2",
+            "eligibilityPolicy": "display-alert-reasoning-independent-v1",
+            "allowHistoricalAlert": bool(payload.get("allowHistoricalAlert", False)),
         },
     )
 
@@ -1017,7 +1124,10 @@ def research_evidence_collected_event(payload: Dict[str, object]) -> DomainEvent
 def news_article_analyzed_event(payload: Dict[str, object]) -> DomainEvent:
     """Publish only alert-eligible news across the bounded-context boundary."""
     items = []
-    for item in list(payload.get("materialChangedItems") or []):
+    candidates = payload.get("alertEligibleItems")
+    if not isinstance(candidates, list):
+        candidates = payload.get("materialChangedItems") or payload.get("changedItems") or []
+    for item in list(candidates or []):
         if not isinstance(item, dict) or str(item.get("kind") or "").lower() != "news":
             continue
         raw = item.get("payload") if isinstance(item.get("payload"), dict) else {}

@@ -453,6 +453,19 @@ def _external_evidence(
                 reason_counts[str(reason)] = int(reason_counts.get(str(reason)) or 0) + 1
             return
         eligible_count += 1
+        disclosure_analysis = _mapping(row.get("disclosureAnalysis"))
+        if disclosure_analysis:
+            row["disclosureAnalysis"] = {
+                "status": disclosure_analysis.get("status"),
+                "version": disclosure_analysis.get("version"),
+                "summary": disclosure_analysis.get("summary"),
+                "impactSummary": disclosure_analysis.get("impactSummary"),
+                "uncertaintySummary": disclosure_analysis.get("uncertaintySummary"),
+                "confirmedFacts": list(disclosure_analysis.get("confirmedFacts") or [])[:4],
+                "materialNumbers": list(disclosure_analysis.get("materialNumbers") or [])[:12],
+                "documentDates": list(disclosure_analysis.get("documentDates") or [])[:8],
+                "watchItems": list(disclosure_analysis.get("watchItems") or [])[:4],
+            }
         row["evidenceUse"] = "action" if directly_linked and admission.get("usage") == "decision" else "rule-scoped-reference"
         row["promptAdmission"] = admission
         rows.append(row)
@@ -472,6 +485,7 @@ def _external_evidence(
                     "entityResolutionStatus", "decisionInlineEligible", "displayEligible",
                     "alertEligible", "reasoningEligible", "officialDocumentState",
                     "documentVerified", "analysisReady", "reportName", "receiptDate",
+                    "sourceAsOf", "sourceRevision", "documentHash", "disclosureAnalysis",
                 ),
             ),
             directly_linked,

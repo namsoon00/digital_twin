@@ -362,6 +362,12 @@ class MySQLNewsDigestReconciliationStateStore(MySQLAppStore):
     store_id = "news_digest_reconciliation_state"
 
 
+class MySQLExternalEvidenceProjectionStateStore(MySQLAppStore):
+    """Keeps the durable external-fact projection cursor across restarts."""
+
+    store_id = "external_evidence_projection_state"
+
+
 class MySQLOperationalStorageCapacityStateStore(MySQLAppStore):
     """Keeps one compact capacity incident state across worker restarts."""
 

@@ -28,6 +28,7 @@ from ..domain.news_ai_analysis import (
     source_language,
     summary_quality_payload,
 )
+from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain import news_analysis as news_domain
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 
@@ -304,6 +305,15 @@ class NewsAnalysisEnrichmentRunner:
         mutation_payload = mutation.to_dict() if hasattr(mutation, "to_dict") else {}
         materiality = [evidence_materiality(item, self.settings).to_dict() for item in changed_items]
         material_items = [item for item, state in zip(changed_items, materiality) if state.get("passed")]
+        alert_items = [
+            item for item in changed_items
+            if assess_prompt_evidence(
+                item.raw_payload,
+                kind=item.kind,
+                published_at=item.published_at,
+                observed_at=item.observed_at,
+            ).alert_eligible
+        ]
         payload = {
             "source": "news-analysis-enrichment",
             "status": "ok",
@@ -315,8 +325,11 @@ class NewsAnalysisEnrichmentRunner:
             "changedSymbols": changed_symbols,
             "materialChangedCount": len(material_items),
             "materialChangedSymbols": sorted({item.symbol for item in material_items if item.symbol}),
+            "alertEligibleCount": len(alert_items),
+            "alertEligibleSymbols": sorted({item.symbol for item in alert_items if item.symbol}),
             "changedItems": [item.to_dict() for item in changed_items[:50]],
             "materialChangedItems": [item.to_dict() for item in material_items[:50]],
+            "alertEligibleItems": [item.to_dict() for item in alert_items[:50]],
             "materialityAssessments": materiality,
             "evidenceDeltas": list(mutation_payload.get("evidenceDeltas") or [
                 delta.to_dict() if hasattr(delta, "to_dict") else delta

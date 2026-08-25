@@ -507,6 +507,39 @@ class InvestmentCalendarServiceTests(unittest.TestCase):
         self.assertTrue(saved.payload["autoDetected"])
         self.assertEqual("research:AAPL:sec:f6", saved.payload["sourceEvidenceId"])
 
+    def test_verified_disclosure_analysis_supplies_calendar_date(self):
+        evidence = {
+            "evidenceId": "research:005930:dart:buyback",
+            "symbol": "005930",
+            "kind": "disclosure",
+            "source": "OpenDART",
+            "title": "자기주식 취득 결정",
+            "summary": "회사가 자기주식 취득을 결의했습니다.",
+            "url": "https://dart.fss.or.kr/example",
+            "publishedAt": "2026-08-25T00:00:00Z",
+            "observedAt": "2026-08-25T00:10:00Z",
+            "materialityState": "material",
+            "sourceTrustState": "trusted",
+            "dataState": "sufficient",
+            "validationState": "ready",
+            "payload": {
+                "documentVerified": True,
+                "analysisReady": True,
+                "disclosureAnalysis": {
+                    "confirmedFacts": ["자기주식 취득은 2026-08-26부터 시작합니다."],
+                    "documentDates": ["2026-08-26"],
+                },
+            },
+        }
+
+        candidates = calendar_candidate_sets_from_research_items([evidence])
+
+        self.assertEqual(1, len(candidates["ready"]))
+        candidate = candidates["ready"][0]
+        self.assertEqual("capitalMarketEvent", candidate.event_type)
+        self.assertEqual("2026-08-26", candidate.payload["eventLocalDate"])
+        self.assertTrue(candidate.payload["officialSource"])
+
     def test_research_evidence_without_event_date_is_not_registered_by_default(self):
         store = MemoryCalendarStore()
         extractor = InvestmentCalendarExtractionService(

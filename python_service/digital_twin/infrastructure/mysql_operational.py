@@ -16,6 +16,7 @@ from .mysql_operational_core_stores import (
     MySQLCryptoMarketSignalCache,
     MySQLDataPipelineHealthStore,
     MySQLExternalSignalCache,
+    MySQLExternalEvidenceProjectionStateStore,
     MySQLNewsDigestReconciliationStateStore,
     MySQLOperationalStorageCapacityStateStore,
     MySQLOntologyInferenceDetailStateStore,

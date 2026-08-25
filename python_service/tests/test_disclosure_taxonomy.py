@@ -4,7 +4,7 @@ from unittest.mock import patch
 from digital_twin.domain.disclosure_analysis import build_disclosure_analysis_prompt
 from digital_twin.domain.disclosure_taxonomy import classify_disclosure
 from digital_twin.domain.disclosure_quality import assess_disclosure_document, normalize_official_document_text
-from digital_twin.domain.investment_research import research_evidence_from_facts
+from digital_twin.domain.investment_research import disclosure_evidence_payload, research_evidence_from_facts
 from digital_twin.infrastructure.disclosure_analyzer import CommandDisclosureAnalyzer
 
 
@@ -74,6 +74,46 @@ class DisclosureTaxonomyTests(unittest.TestCase):
         self.assertEqual("listing-transaction", ipo_reply["disclosureCategory"])
         self.assertEqual("material", ipo_reply["materialityState"])
         self.assertEqual("title-and-document", ipo_reply["classificationBasis"])
+
+    def test_merger_title_outranks_generic_financial_terms_in_document(self):
+        classified = classify_disclosure(
+            "주요사항보고서(회사합병결정)",
+            "회사합병결정",
+            "OpenDART",
+            "합병 대상 회사의 매출액과 영업이익을 함께 기재했습니다.",
+        )
+        payload = disclosure_evidence_payload(
+            {},
+            title="주요사항보고서(회사합병결정)",
+            source="OpenDART",
+            document_text="회사는 합병을 결정했습니다. 합병 대상 회사의 매출액과 영업이익을 함께 기재했습니다. " * 4,
+            document_quality="body",
+            metadata_verified=True,
+        )
+
+        self.assertEqual("capital_policy", classified["eventType"])
+        self.assertIn("회사 구조", payload["disclosureAnalysis"]["summary"])
+
+    def test_structured_facts_downrank_contact_rows_and_filter_noise_numbers(self):
+        payload = disclosure_evidence_payload(
+            {},
+            title="생산중단",
+            source="OpenDART",
+            document_text=(
+                "담당부서명 IR팀 담당자명 홍길동 tel 02-3458-3139 fax 02-3458-3033. "
+                "회사는 2026-08-21 전 사업장의 생산을 중단하기로 결정했습니다. "
+                "생산중단 분야의 최근 매출액은 42.29%이며 관련 발행주식은 265,390,108주입니다. "
+                "노사 교섭이 타결되면 생산을 재개하고 후속 공시를 제출할 예정입니다."
+            ),
+            document_quality="body",
+            metadata_verified=True,
+        )
+        analysis = payload["disclosureAnalysis"]
+
+        self.assertTrue(all("담당자명" not in item for item in analysis["confirmedFacts"]))
+        self.assertIn("42.29%", analysis["materialNumbers"])
+        self.assertIn("265,390,108주", analysis["materialNumbers"])
+        self.assertNotIn("3458", analysis["materialNumbers"])
 
     def test_document_quality_strips_css_and_rejects_dart_error_response(self):
         cleaned = normalize_official_document_text(

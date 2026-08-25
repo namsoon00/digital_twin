@@ -22,7 +22,7 @@ from ..domain.news_collection_quality import (
     assess_news_collection_admission,
     news_collection_admission_summary,
 )
-from ..domain.prompt_evidence_admission import attach_prompt_evidence_admission
+from ..domain.prompt_evidence_admission import assess_prompt_evidence, attach_prompt_evidence_admission
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
@@ -925,6 +925,21 @@ class NewsCollectionRunner:
                 if assessment.get("passed")
             ]
             material_symbols = sorted(set(str(item.symbol or "").upper().strip() for item in material_items if str(item.symbol or "").strip()))
+            alert_items = [
+                item for item in items
+                if assess_prompt_evidence(
+                    item.raw_payload,
+                    kind=item.kind,
+                    published_at=item.published_at,
+                    observed_at=item.observed_at,
+                    now=self.cleanup_now(),
+                ).alert_eligible
+            ]
+            alert_symbols = sorted({
+                str(item.symbol or "").upper().strip()
+                for item in alert_items
+                if str(item.symbol or "").strip()
+            })
             mutation_payload = mutation.to_dict() if hasattr(mutation, "to_dict") else {}
             tracks_eligible_set = mutation is not None or hasattr(self.evidence_store, "last_evidence_deltas")
             evidence_deltas = list(
@@ -969,9 +984,12 @@ class NewsCollectionRunner:
                 "changedSymbols": symbols,
                 "materialChangedCount": len(material_items),
                 "materialChangedSymbols": material_symbols,
+                "alertEligibleCount": len(alert_items),
+                "alertEligibleSymbols": alert_symbols,
                 "inferenceChangedSymbols": inference_changed_symbols,
                 "changedItems": [item.to_dict() for item in items[:50]],
                 "materialChangedItems": [item.to_dict() for item in material_items[:50]],
+                "alertEligibleItems": [item.to_dict() for item in alert_items[:50]],
                 "materialityAssessments": materiality_assessments,
                 "evidenceDeltas": evidence_deltas[:200],
                 "factRevisionsBySymbol": fact_revisions,

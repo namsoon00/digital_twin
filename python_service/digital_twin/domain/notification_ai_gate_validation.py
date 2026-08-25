@@ -1497,6 +1497,18 @@ def compact_research_evidence_for_ai(rows: object, limit: int = 8) -> List[objec
         governance = item.get("evidenceGovernance") if isinstance(item.get("evidenceGovernance"), dict) else {}
         analysis = item.get("aiAnalysis") if isinstance(item.get("aiAnalysis"), dict) else {}
         eligibility = item.get("newsEligibility") if isinstance(item.get("newsEligibility"), dict) else {}
+        disclosure_analysis = item.get("disclosureAnalysis") if isinstance(item.get("disclosureAnalysis"), dict) else {}
+        compact_disclosure_analysis = {
+            "status": disclosure_analysis.get("status"),
+            "version": disclosure_analysis.get("version"),
+            "summary": _bounded_ai_text(disclosure_analysis.get("summary"), 700),
+            "impactSummary": _bounded_ai_text(disclosure_analysis.get("impactSummary"), 700),
+            "uncertaintySummary": _bounded_ai_text(disclosure_analysis.get("uncertaintySummary"), 600),
+            "confirmedFacts": _bounded_ai_list(disclosure_analysis.get("confirmedFacts") or [], 4, 500),
+            "materialNumbers": _bounded_ai_list(disclosure_analysis.get("materialNumbers") or [], 12, 100),
+            "documentDates": _bounded_ai_list(disclosure_analysis.get("documentDates") or [], 8, 80),
+            "watchItems": _bounded_ai_list(disclosure_analysis.get("watchItems") or [], 4, 300),
+        }
         compact = {
             "evidenceId": item.get("evidenceId"),
             "kind": item.get("kind"),
@@ -1534,6 +1546,13 @@ def compact_research_evidence_for_ai(rows: object, limit: int = 8) -> List[objec
             "documentVerified": item.get("documentVerified"),
             "analysisReady": item.get("analysisReady"),
             "promptEvidenceAdmission": item.get("promptEvidenceAdmission"),
+            "sourceAsOf": item.get("sourceAsOf"),
+            "sourceRevision": item.get("sourceRevision"),
+            "documentHash": item.get("documentHash"),
+            "disclosureAnalysis": {
+                key: value for key, value in compact_disclosure_analysis.items()
+                if value not in (None, "", [], {})
+            },
             "independentSourceCount": governance.get("independentSourceCount"),
             "publishedAt": item.get("publishedAt"),
             "observedAt": item.get("observedAt"),

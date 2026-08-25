@@ -125,3 +125,39 @@ class ConsoleListPayloadTests(unittest.TestCase):
         self.assertEqual(2, payload["claimVerification"]["independentSourceCount"])
         self.assertEqual(1, len(payload["claimVerification"]["officialEvidenceIds"]))
         self.assertNotIn("claimLedger", payload)
+
+    def test_research_list_exposes_official_analysis_audit_without_full_document(self):
+        evidence = ResearchEvidence(
+            evidence_id="research:005930:dart:official",
+            symbol="005930",
+            kind="disclosure",
+            source="OpenDART",
+            title="자기주식 취득 결정",
+            summary="공시 요약",
+            published_at="2026-08-25T00:00:00Z",
+            raw_payload={
+                "officialDocumentState": "document-verified",
+                "documentVerified": True,
+                "analysisReady": True,
+                "documentHash": "document-hash",
+                "documentCharCount": 2400,
+                "sourceRevision": "202608250001",
+                "sourceAsOf": "2026-08-25T00:00:00Z",
+                "officialDocumentText": "공식 원문 전체는 목록 응답에 포함하지 않습니다.",
+                "disclosureAnalysis": {
+                    "status": "ready",
+                    "version": "disclosure-analysis-v5",
+                    "summary": "회사가 자기주식 취득을 결의했습니다.",
+                    "confirmedFacts": ["보통주 1,000,000주를 취득합니다."],
+                    "sourceSections": [{"text": "근거 문장", "start": 0, "end": 5}],
+                },
+            },
+        )
+
+        payload = research_evidence_list_payload(evidence)
+
+        self.assertTrue(payload["documentVerified"])
+        self.assertEqual(2400, payload["documentCharCount"])
+        self.assertEqual("202608250001", payload["sourceRevision"])
+        self.assertEqual("회사가 자기주식 취득을 결의했습니다.", payload["disclosureAnalysis"]["summary"])
+        self.assertNotIn("officialDocumentText", payload["payload"])

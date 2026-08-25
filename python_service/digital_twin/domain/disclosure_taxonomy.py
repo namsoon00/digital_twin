@@ -44,6 +44,15 @@ def classify_disclosure(
         materiality = "material" if body else "notable"
         category = "listing-transaction"
         reason = "listing-or-ipo-transaction-update"
+    elif _contains(header, [
+        "유상증자", "무상증자", "전환사채", "신주인수권", "교환사채", "감자",
+        "자기주식", "자사주", "주식소각", "배당", "주식분할", "주식병합", "합병", "회사분할",
+        "공개매수", "최대주주변경", "13d", "13g", "offering", "buyback",
+    ]):
+        event_type = "capital_policy"
+        materiality = "material"
+        category = "capital-structure"
+        reason = "capital-structure-or-shareholder-return-change"
     elif form in {"10-K", "10-Q", "20-F", "40-F"} or _contains(header, [
         "사업보고서", "분기보고서", "반기보고서", "실적", "영업(잠정)실적",
     ]):

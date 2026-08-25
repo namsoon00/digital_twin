@@ -58,6 +58,21 @@ class ResearchEvidenceGovernanceService:
             43200,
         )
 
+    def official_max_age_minutes(self) -> int:
+        return int_setting(
+            self.settings,
+            "officialEvidenceMaxAgeMinutes",
+            7 * 24 * 60,
+            60,
+            90 * 24 * 60,
+        )
+
+    def governance_max_age_minutes(self, items: List[ResearchEvidence]) -> int:
+        base = self.max_age_minutes()
+        if any(str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"} for item in items or []):
+            return max(base, self.official_max_age_minutes())
+        return base
+
     def load_items(self, symbol: str = "", limit: int = 500) -> List[ResearchEvidence]:
         bounded_limit = max(1, min(5000, int(limit or 500)))
         if not hasattr(self.evidence_store, "latest_page"):
@@ -94,7 +109,8 @@ class ResearchEvidenceGovernanceService:
         disclosure_items = [item for item in items if str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"}]
         for item in disclosure_items:
             payload = dict(item.raw_payload or {})
-            item.raw_payload = disclosure_evidence_payload(
+            existing_analysis = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
+            rebuilt_payload = disclosure_evidence_payload(
                 payload,
                 title=str(item.title or payload.get("reportName") or payload.get("officialDocumentType") or "공시"),
                 source=str(item.source or payload.get("sourcePublisher") or "공식 공시"),
@@ -105,6 +121,23 @@ class ResearchEvidenceGovernanceService:
                     and str(item.published_at or item.observed_at or "").strip()
                 ),
             )
+            existing_source = str(existing_analysis.get("source") or "").strip().casefold()
+            if (
+                existing_analysis.get("status") == "ready"
+                and existing_analysis.get("sourceTextHash") == rebuilt_payload.get("documentHash")
+                and not existing_source.startswith("로컬")
+            ):
+                rebuilt_analysis = dict(rebuilt_payload.get("disclosureAnalysis") or {})
+                for key in ("lines", "source", "raw_output", "summary", "impactSummary", "watchItems"):
+                    if existing_analysis.get(key) not in (None, "", [], {}):
+                        rebuilt_analysis[key] = existing_analysis.get(key)
+                rebuilt_analysis.update({
+                    "version": rebuilt_payload.get("disclosureAnalysis", {}).get("version"),
+                    "status": "ready",
+                    "sourceTextHash": rebuilt_payload.get("documentHash"),
+                })
+                rebuilt_payload["disclosureAnalysis"] = rebuilt_analysis
+            item.raw_payload = rebuilt_payload
         normalize_evidence_sources(
             news_items,
             self.settings.get("researchClaimSourceRegistry") or "",
@@ -123,7 +156,7 @@ class ResearchEvidenceGovernanceService:
             _accepted, verified, rejected = governed_evidence(
                 group,
                 self.target_for_items(item_symbol, group),
-                self.max_age_minutes(),
+                self.governance_max_age_minutes(group),
                 str(self.settings.get("investmentBrainResearchMinimumSourceTrustState") or "standard"),
                 policy=claim_policy(self.settings),
             )
@@ -139,6 +172,7 @@ class ResearchEvidenceGovernanceService:
                 item,
                 self.settings.get("researchClaimSourceRegistry") or "",
             )
+        for item in written_items:
             item.raw_payload = attach_prompt_evidence_admission(
                 item.raw_payload,
                 kind=item.kind,
@@ -203,5 +237,7 @@ class ResearchEvidenceGovernanceService:
                 item for item in prompt_admissions
                 if "evidence-stale" in list(item.get("reasonCodes") or [])
             ]),
-            "maxAgeMinutes": self.max_age_minutes(),
+            "maxAgeMinutes": max(self.max_age_minutes(), self.official_max_age_minutes()),
+            "newsMaxAgeMinutes": self.max_age_minutes(),
+            "officialMaxAgeMinutes": self.official_max_age_minutes(),
         }

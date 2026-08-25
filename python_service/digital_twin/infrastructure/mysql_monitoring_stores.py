@@ -13,6 +13,7 @@ from ..domain.crypto_market_signals import (
 )
 from ..domain.events import (
     DomainEvent,
+    EXTERNAL_FACT_CHANGED,
     ONTOLOGY_REASONING_REQUESTED,
     RESEARCH_EVIDENCE_COLLECTED,
     alerts_detected_event,
@@ -1133,6 +1134,35 @@ class MySQLEventLog(MySQLOperationalConnection):
                 LIMIT %s
                 """,
                 (RESEARCH_EVIDENCE_COLLECTED, after_time, after_time, after_id, bounded),
+            ).fetchall()
+        return [domain_event_from_row(row) for row in rows]
+
+    def external_fact_events_after(
+        self,
+        after_occurred_at: str = "",
+        after_event_id: str = "",
+        limit: int = 100,
+    ) -> List[DomainEvent]:
+        """Read durable external fact changes for official-evidence projection."""
+
+        bounded = max(1, min(500, int(limit or 100)))
+        after_time = str(after_occurred_at or "1970-01-01T00:00:00Z").strip()
+        after_id = str(after_event_id or "").strip()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event_id, name, aggregate_id, occurred_at,
+                       correlation_id, payload_json, event_json
+                FROM domain_events
+                WHERE name = %s
+                  AND (
+                    occurred_at > %s
+                    OR (occurred_at = %s AND event_id > %s)
+                  )
+                ORDER BY occurred_at, event_id
+                LIMIT %s
+                """,
+                (EXTERNAL_FACT_CHANGED, after_time, after_time, after_id, bounded),
             ).fetchall()
         return [domain_event_from_row(row) for row in rows]
 

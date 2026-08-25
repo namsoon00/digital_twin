@@ -2,7 +2,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
-from .disclosure_analysis import DISCLOSURE_ANALYSIS_PROMPT_VERSION, local_disclosure_analysis
+from .disclosure_analysis import DISCLOSURE_ANALYSIS_PROMPT_VERSION, disclosure_analysis_payload, local_disclosure_analysis
 from .disclosure_quality import apply_disclosure_document_quality
 from .disclosure_taxonomy import classify_disclosure
 from .market_data import clamp, number
@@ -323,8 +323,15 @@ class ResearchEvidence:
             "promptEvidenceAdmission": dict(payload.get("promptEvidenceAdmission") or {}),
             "claimLedger": dict(payload.get("claimLedger") or {}),
             "officialDocumentState": str(payload.get("officialDocumentState") or ""),
+            "officialDocumentType": str(payload.get("officialDocumentType") or ""),
+            "officialDocumentQuality": str(payload.get("officialDocumentQuality") or ""),
+            "metadataVerified": bool(payload.get("metadataVerified")),
             "documentVerified": bool(payload.get("documentVerified")),
             "analysisReady": bool(payload.get("analysisReady")),
+            "documentHash": str(payload.get("documentHash") or ""),
+            "sourceRevision": str(payload.get("sourceRevision") or ""),
+            "sourceAsOf": str(payload.get("sourceAsOf") or self.published_at or self.observed_at),
+            "disclosureAnalysis": dict(payload.get("disclosureAnalysis") or {}),
             "sourcePublisher": str(payload.get("sourcePublisher") or ""),
             "sourceOrigin": str(payload.get("sourceOrigin") or ""),
             "payload": payload,
@@ -643,6 +650,14 @@ def sec_filing_url(cik: object, accession: object, primary_document: object) -> 
     return "https://www.sec.gov/Archives/edgar/data/" + cik_text + "/" + accession_text + "/" + document
 
 
+def sec_filing_index_url(cik: object, accession: object) -> str:
+    cik_text = "".join(ch for ch in str(cik or "") if ch.isdigit()).lstrip("0")
+    accession_text = str(accession or "").replace("-", "").strip()
+    if not cik_text or not accession_text:
+        return ""
+    return "https://www.sec.gov/Archives/edgar/data/" + cik_text + "/" + accession_text + "/"
+
+
 def disclosure_evidence_payload(
     base_payload: Dict[str, object],
     *,
@@ -657,6 +672,8 @@ def disclosure_evidence_payload(
         "officialDocumentText": compact_text(document_text, 20000),
         "officialDocumentQuality": str(document_quality or "metadata-only").strip(),
     }
+    payload.setdefault("reportName", str(title or "").strip())
+    payload.setdefault("sourcePublisher", str(source or "").strip())
     payload = apply_disclosure_document_quality(payload, metadata_verified=metadata_verified)
     payload.update(classify_disclosure(
         title,
@@ -676,12 +693,32 @@ def disclosure_evidence_payload(
         },
         "rawLines": [title, str(payload.get("officialDocumentPreview") or "")],
     })
-    source_hash = hashlib.sha256(str(payload.get("officialDocumentText") or title).encode("utf-8")).hexdigest()[:24]
+    document_text_value = str(payload.get("officialDocumentText") or "")
+    source_hash = hashlib.sha256(str(document_text_value or title).encode("utf-8")).hexdigest()
     payload["disclosureAnalysis"] = {
-        **analysis.to_dict(),
+        **disclosure_analysis_payload({
+            "reportName": title,
+            "provider": source,
+            "officialDocumentText": document_text_value,
+            "analysisReady": payload.get("analysisReady"),
+            "metadata": {
+                "reportName": title,
+                "provider": source,
+                "receiptNo": payload.get("receiptNo"),
+                "receiptDate": payload.get("receiptDate"),
+            },
+        }, analysis),
         "version": DISCLOSURE_ANALYSIS_PROMPT_VERSION,
         "status": "ready" if payload.get("analysisReady") else "metadata-only",
         "sourceTextHash": source_hash,
+    }
+    payload["documentHash"] = source_hash if document_text_value else ""
+    payload["documentCharCount"] = len(document_text_value)
+    payload["documentLifecycle"] = {
+        "fetchState": "fetched" if document_text_value else "metadata-only",
+        "parseState": "parsed" if payload.get("documentVerified") else "not-parsed",
+        "verificationState": "verified" if payload.get("documentVerified") else "pending",
+        "analysisState": "analyzed" if payload.get("analysisReady") else "pending",
     }
     return payload
 
@@ -707,6 +744,11 @@ def sec_research_evidence(symbol: str, sec: Dict[str, object]) -> List[ResearchE
             "officialDocumentPreview": compact_text(latest.get("documentTextPreview") or document_text, 700),
             "officialDocumentType": form,
             "sourcePublisher": source,
+            "accessionNumber": str(latest.get("accessionNumber") or ""),
+            "filingDate": filing_date,
+            "reportDate": str(latest.get("reportDate") or ""),
+            "primaryDocument": str(latest.get("primaryDocument") or ""),
+            "filingIndexUrl": sec_filing_index_url(sec.get("cik"), latest.get("accessionNumber")),
         }, title=form, source=source, document_text=document_text, document_quality=document_quality, metadata_verified=bool(form and filing_date))
         evidence.append(ResearchEvidence(
             evidence_id="research:" + normalized_symbol + ":sec:" + (str(latest.get("accessionNumber") or form)),
@@ -807,7 +849,12 @@ def research_evidence_from_facts(symbol: str, facts: Dict[str, object]) -> List[
                 "officialDocumentType": report,
                 "sourcePublisher": source,
                 "receiptNo": receipt_no,
+                "receiptDate": receipt_date,
                 "reportName": report,
+                "corpName": str(disclosure_item.get("corpName") or disclosure.get("corpName") or ""),
+                "filerName": str(disclosure_item.get("flrName") or ""),
+                "remarks": str(disclosure_item.get("remarks") or ""),
+                "officialDocumentUrl": opendart_url(receipt_no),
             }, title=report, source=source, document_text=document_text, document_quality=document_quality, metadata_verified=bool(report and receipt_date and receipt_no))
             evidence.append(ResearchEvidence(
                 evidence_id="research:" + normalized_symbol + ":dart:" + (receipt_no or report),

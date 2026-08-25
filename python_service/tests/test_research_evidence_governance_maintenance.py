@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.research_evidence_governance_service import ResearchEvidenceGovernanceService, payload_signature
-from digital_twin.domain.investment_research import ResearchEvidence, research_evidence_from_external_signals
+from digital_twin.domain.investment_research import ResearchEvidence, disclosure_evidence_payload, research_evidence_from_external_signals
 from digital_twin.domain.market_data import normalize_position
 from digital_twin.infrastructure.external_signal_provider_market import dart_document_text
 from digital_twin.infrastructure.external_signal_provider_sec import sec_document_text
@@ -30,6 +30,17 @@ class MemoryEvidenceStore:
 
 
 class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
+    def test_official_evidence_uses_its_longer_governance_window(self):
+        news = ResearchEvidence("news", "AAPL", "news", "Reuters", "News")
+        filing = ResearchEvidence("filing", "AAPL", "filing", "SEC EDGAR", "10-Q")
+        service = ResearchEvidenceGovernanceService(MemoryEvidenceStore([]), {
+            "newsEvidenceMaxAgeMinutes": "4320",
+            "officialEvidenceMaxAgeMinutes": "10080",
+        })
+
+        self.assertEqual(4320, service.governance_max_age_minutes([news]))
+        self.assertEqual(10080, service.governance_max_age_minutes([news, filing]))
+
     def test_payload_signature_ignores_volatile_prompt_age_but_tracks_freshness_state(self):
         first = {
             "promptEvidenceAdmission": {
@@ -93,6 +104,8 @@ class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
         self.assertIn("official-document-content-missing", metadata_only.raw_payload["evidenceGovernance"]["reasons"])
         self.assertEqual("partial", metadata_only.data_state)
         self.assertEqual("conditional", metadata_only.validation_state)
+        self.assertIn("promptEvidenceAdmission", metadata_only.raw_payload)
+        self.assertFalse(metadata_only.raw_payload["promptEvidenceAdmission"]["promptEligible"])
 
         second = service.revalidate(limit=20, dry_run=True)
 
@@ -113,6 +126,39 @@ class ResearchEvidenceGovernanceMaintenanceTests(unittest.TestCase):
         self.assertIn("Revenue increased", sec_text)
         self.assertNotIn("ignore", sec_text)
         self.assertIn("자사주 취득", dart_text)
+
+    def test_revalidation_preserves_current_ai_disclosure_analysis(self):
+        document = "회사는 자기주식 1,000,000주를 취득하기로 결정했고 실제 집행 내역은 후속 공시합니다. " * 4
+        payload = disclosure_evidence_payload(
+            {"receiptNo": "202608250001", "receiptDate": "20260825"},
+            title="자기주식 취득 결정",
+            source="OpenDART",
+            document_text=document,
+            document_quality="body",
+            metadata_verified=True,
+        )
+        payload["disclosureAnalysis"] = {
+            **payload["disclosureAnalysis"],
+            "source": "Codex AI (GPT-5.6 Sol · max)",
+            "summary": "AI가 문서에 근거해 생성한 요약입니다.",
+            "sourceTextHash": payload["documentHash"],
+        }
+        evidence = ResearchEvidence(
+            "research:005930:dart:202608250001",
+            "005930",
+            "disclosure",
+            "OpenDART",
+            "자기주식 취득 결정",
+            "공시 요약",
+            published_at="2026-08-25",
+            raw_payload=payload,
+        )
+        service = ResearchEvidenceGovernanceService(MemoryEvidenceStore([evidence]), {})
+
+        service.revalidate(limit=10)
+
+        self.assertEqual("Codex AI (GPT-5.6 Sol · max)", evidence.raw_payload["disclosureAnalysis"]["source"])
+        self.assertEqual("AI가 문서에 근거해 생성한 요약입니다.", evidence.raw_payload["disclosureAnalysis"]["summary"])
 
     def test_provider_collects_official_document_body_and_maps_it_to_evidence(self):
         dart_zip = io.BytesIO()

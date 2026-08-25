@@ -3512,16 +3512,21 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     store = stores.research_evidence_store()
     items, total = store.latest_page(symbol=symbol, kind=kind, limit=limit, offset=offset, query=search)
     analysis_rows = []
+    official_rows = []
     if hasattr(store, "latest"):
         try:
             analysis_rows = list(store.latest(kind="news", limit=500) or [])
+            for official_kind in ["disclosure", "filing", "sec-filing"]:
+                official_rows.extend(list(store.latest(kind=official_kind, limit=500) or []))
         except Exception:  # noqa: BLE001 - the evidence list is still useful when aggregate diagnostics fail.
             analysis_rows = []
+            official_rows = []
     return {
         "items": [research_evidence_list_payload(item) for item in items],
         "summary": store.summary(),
         "claimQuality": claim_quality_summary(items),
         "articleAnalysis": research_evidence_article_analysis_summary(analysis_rows),
+        "officialAnalysis": research_evidence_official_analysis_summary(official_rows),
         "symbol": symbol,
         "kind": kind,
         "limit": limit,
@@ -3529,6 +3534,48 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "total": total,
         "query": search,
     }
+
+
+def research_evidence_official_analysis_summary(items) -> Dict[str, object]:
+    rows = [
+        item for item in items or []
+        if str(getattr(item, "kind", "") or "").lower() in {"disclosure", "filing", "sec-filing"}
+    ]
+    counts = {
+        "officialCount": len(rows),
+        "metadataOnlyCount": 0,
+        "documentVerifiedCount": 0,
+        "analysisReadyCount": 0,
+        "alertEligibleCount": 0,
+        "promptEligibleCount": 0,
+        "needsReviewCount": 0,
+        "providerCounts": {},
+        "issueCounts": {},
+    }
+    for item in rows:
+        raw = item.raw_payload if isinstance(getattr(item, "raw_payload", None), dict) else {}
+        quality = raw.get("disclosureDocumentQuality") if isinstance(raw.get("disclosureDocumentQuality"), dict) else {}
+        analysis = raw.get("disclosureAnalysis") if isinstance(raw.get("disclosureAnalysis"), dict) else {}
+        admission = assess_prompt_evidence(
+            raw,
+            kind=item.kind,
+            published_at=item.published_at,
+            observed_at=item.observed_at,
+        ).to_dict()
+        counts["metadataOnlyCount"] += int(str(raw.get("officialDocumentState") or "") == "metadata-only")
+        counts["documentVerifiedCount"] += int(bool(raw.get("documentVerified")))
+        counts["analysisReadyCount"] += int(bool(raw.get("analysisReady")))
+        counts["alertEligibleCount"] += int(bool(admission.get("alertEligible")))
+        counts["promptEligibleCount"] += int(bool(admission.get("promptEligible")))
+        counts["needsReviewCount"] += int(bool(analysis.get("needsReview")))
+        provider = str(item.source or "unknown")
+        counts["providerCounts"][provider] = int(counts["providerCounts"].get(provider) or 0) + 1
+        for issue in quality.get("issues") or []:
+            key = str(issue or "unknown")
+            counts["issueCounts"][key] = int(counts["issueCounts"].get(key) or 0) + 1
+    counts["providerCounts"] = dict(sorted(counts["providerCounts"].items()))
+    counts["issueCounts"] = dict(sorted(counts["issueCounts"].items()))
+    return counts
 
 
 def research_evidence_article_analysis_summary(items) -> Dict[str, object]:
@@ -3668,6 +3715,9 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
     article_verification = source_provenance.get("articleVerification") if isinstance(source_provenance.get("articleVerification"), dict) else {}
     claim_ledger = raw.get("claimLedger") if isinstance(raw.get("claimLedger"), dict) else {}
     claim_summary = claim_ledger.get("summary") if isinstance(claim_ledger.get("summary"), dict) else {}
+    disclosure_analysis = raw.get("disclosureAnalysis") if isinstance(raw.get("disclosureAnalysis"), dict) else {}
+    disclosure_quality = raw.get("disclosureDocumentQuality") if isinstance(raw.get("disclosureDocumentQuality"), dict) else {}
+    document_lifecycle = raw.get("documentLifecycle") if isinstance(raw.get("documentLifecycle"), dict) else {}
     article_summary_ko = str(raw.get("articleSummaryKo") or "")
     article_summary_quality = raw.get("articleSummaryQuality") if isinstance(raw.get("articleSummaryQuality"), dict) else {}
     summary_issues = list(article_summary_quality.get("issues") or [])
@@ -3716,10 +3766,20 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "sourcePlatform": str(raw.get("sourcePlatform") or ""),
         "newsEligibility": news_eligibility,
         "archiveEligible": bool(news_eligibility.get("archiveEligible")) if news_eligibility else True,
-        "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else True,
-        "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else False,
-        "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(governance.get("investmentJudgmentEligible")),
+        "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else bool(prompt_admission.get("displayEligible")),
+        "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else bool(prompt_admission.get("alertEligible")),
+        "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(prompt_admission.get("decisionEligible")),
         "promptEvidenceAdmission": prompt_admission,
+        "eligibilityAudit": {
+            "displayEligible": bool(news_eligibility.get("displayEligible")) if news_eligibility else bool(prompt_admission.get("displayEligible")),
+            "alertEligible": bool(news_eligibility.get("alertEligible")) if news_eligibility else bool(prompt_admission.get("alertEligible")),
+            "reasoningEligible": bool(news_eligibility.get("reasoningEligible")) if news_eligibility else bool(prompt_admission.get("decisionEligible")),
+            "promptEligible": bool(prompt_admission.get("promptEligible")),
+            "usage": str(prompt_admission.get("usage") or "blocked"),
+            "freshnessState": str(prompt_admission.get("freshnessState") or "unknown"),
+            "reasonCodes": list(prompt_admission.get("reasonCodes") or []),
+            "reviewReasonCodes": list(news_eligibility.get("reviewReasonCodes") or []) if news_eligibility else [],
+        },
         "reviewState": str(news_eligibility.get("reviewState") or "") if news_eligibility else "",
         "reviewReasonCodes": list(news_eligibility.get("reviewReasonCodes") or []) if news_eligibility else [],
         "storyClusterId": str(raw.get("storyClusterId") or ""),
@@ -3727,6 +3787,37 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "officialDocumentState": str(raw.get("officialDocumentState") or ""),
         "documentVerified": bool(raw.get("documentVerified")),
         "analysisReady": bool(raw.get("analysisReady")),
+        "metadataVerified": bool(raw.get("metadataVerified")),
+        "documentHash": str(raw.get("documentHash") or ""),
+        "documentCharCount": int(raw.get("documentCharCount") or disclosure_quality.get("documentCharCount") or 0),
+        "officialDocumentPreview": str(raw.get("officialDocumentPreview") or "")[:2000],
+        "disclosureDocumentQuality": disclosure_quality,
+        "documentLifecycle": document_lifecycle,
+        "disclosureAnalysis": {
+            "status": str(disclosure_analysis.get("status") or ""),
+            "version": str(disclosure_analysis.get("version") or ""),
+            "source": str(disclosure_analysis.get("source") or ""),
+            "summary": str(disclosure_analysis.get("summary") or ""),
+            "impactSummary": str(disclosure_analysis.get("impactSummary") or ""),
+            "uncertaintySummary": str(disclosure_analysis.get("uncertaintySummary") or ""),
+            "confirmedFacts": list(disclosure_analysis.get("confirmedFacts") or [])[:4],
+            "materialNumbers": list(disclosure_analysis.get("materialNumbers") or [])[:12],
+            "documentDates": list(disclosure_analysis.get("documentDates") or [])[:8],
+            "watchItems": list(disclosure_analysis.get("watchItems") or [])[:4],
+            "sourceSections": list(disclosure_analysis.get("sourceSections") or [])[:4],
+            "needsReview": bool(disclosure_analysis.get("needsReview")),
+            "lines": list(disclosure_analysis.get("lines") or [])[:6],
+        },
+        "sourceRevision": str(raw.get("sourceRevision") or raw.get("receiptNo") or raw.get("accessionNumber") or ""),
+        "sourceAsOf": str(raw.get("sourceAsOf") or item.published_at or item.observed_at or ""),
+        "sourceFetchedAt": str(raw.get("sourceFetchedAt") or ""),
+        "sourceDocuments": {
+            "primaryUrl": str(item.url or raw.get("officialDocumentUrl") or ""),
+            "filingIndexUrl": str(raw.get("filingIndexUrl") or ""),
+            "primaryDocument": str(raw.get("primaryDocument") or ""),
+            "receiptNo": str(raw.get("receiptNo") or ""),
+            "accessionNumber": str(raw.get("accessionNumber") or ""),
+        },
         "disclosureCategory": str(raw.get("disclosureCategory") or ""),
         "disclosureTaxonomyVersion": str(raw.get("version") or "") if str(item.kind or "").lower() in {"disclosure", "filing", "sec-filing"} else "",
         "publisher": str(source_identity.get("publisher") or original_publisher.get("name") or raw.get("articlePublisher") or item.source),
@@ -3801,6 +3892,8 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         return {}
     projected, analysis_source = projected_research_evidence(item)
     payload = projected.to_dict()
+    payload.update(research_evidence_list_payload(projected))
+    payload["payload"] = dict(projected.raw_payload or {})
     payload["promptEvidenceAdmission"] = assess_prompt_evidence(
         projected.raw_payload,
         kind=projected.kind,

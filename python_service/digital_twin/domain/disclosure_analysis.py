@@ -4,8 +4,18 @@ from typing import Dict, List
 
 from .disclosure_quality import normalize_official_document_text
 
-DISCLOSURE_ANALYSIS_PROMPT_VERSION = "disclosure-analysis-v3"
+DISCLOSURE_ANALYSIS_PROMPT_VERSION = "disclosure-analysis-v5"
 SECTION_LABELS = ["의미", "영향", "확인", "대응"]
+FACT_PRIORITY_TERMS = (
+    "결정", "계약", "취득", "처분", "소각", "발행", "중단", "재개", "합병",
+    "분할", "배당", "변동", "지분율", "매출", "영업이익", "순이익", "금액",
+    "수량", "기간", "일자", "비율", "목적", "상대방", "전망", "파업",
+)
+FACT_NOISE_TERMS = (
+    "담당부서", "담당자명", "본점 소재지", "홈페이지", "작성 책임자", "대표이사",
+    "금융위원회 귀중", "한국거래소 귀중", "증권선물위원회 귀중", "허위기재",
+    "기재누락", "생년월일", "사업자등록번호", "성별", "국적", "tel ", "fax", "(전 화)", "(전화)",
+)
 
 
 @dataclass
@@ -127,6 +137,101 @@ def compact_line(text: str, limit: int = 160) -> str:
     return cleaned[: max(0, limit - 1)].rstrip() + "…"
 
 
+def disclosure_analysis_payload(
+    context: Dict[str, object],
+    result: DisclosureAnalysisResult,
+) -> Dict[str, object]:
+    """Build a source-bound analysis packet without inventing document facts."""
+
+    document_text = normalize_official_document_text((context or {}).get("officialDocumentText"), 20000)
+    metadata = disclosure_summary(context)
+    labeled = {}
+    for line in list(result.lines or []):
+        label, value = split_labeled_text(line)
+        if label and value:
+            labeled[label] = value
+    sentences: List[Dict[str, object]] = []
+    for part in re.split(r"(?<=[.!?。！？])\s+|[\r\n]+", document_text):
+        sentence = re.sub(r"\s+", " ", str(part or "")).strip(" -•·\t")
+        if len(sentence) < 28:
+            continue
+        start = document_text.find(sentence)
+        score = sum(2 for term in FACT_PRIORITY_TERMS if term in sentence)
+        score += 2 if re.search(r"\d[\d,]*(?:\.\d+)?\s*(?:%|원|억원|백만원|달러|USD|KRW|주|shares?)", sentence, re.IGNORECASE) else 0
+        score += 1 if re.search(r"(?:19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}|(?:19|20)\d{6}", sentence) else 0
+        score -= sum(5 for term in FACT_NOISE_TERMS if term.casefold() in sentence.casefold())
+        sentences.append({
+            "text": compact_line(sentence, 600),
+            "start": start,
+            "end": start + len(sentence) if start >= 0 else -1,
+            "score": score,
+        })
+        if len(sentences) >= 80:
+            break
+    selected_sections = sorted(sentences, key=lambda item: (-int(item.get("score") or 0), int(item.get("start") or 0)))[:4]
+    selected_sections = [
+        {key: value for key, value in item.items() if key != "score"}
+        for item in selected_sections
+    ]
+    date_tokens = []
+    for value in re.findall(r"\b(?:19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}\b|\b(?:19|20)\d{6}\b", document_text):
+        if value not in date_tokens:
+            date_tokens.append(value)
+        if len(date_tokens) >= 8:
+            break
+    number_tokens = []
+    number_sections = [item for item in sentences if int(item.get("score") or 0) >= 0]
+    fact_text = " ".join(item["text"] for item in number_sections) or " ".join(item["text"] for item in selected_sections) or document_text
+    number_candidates = []
+    seen_numbers = set()
+    for match in re.finditer(
+        r"(?:[$₩]\s*)?\d[\d,]*(?:\.\d+)?\s*(?:%|bp|bps|원|억원|백만원|천원|달러|USD|KRW|주|shares?)?",
+        fact_text,
+        flags=re.IGNORECASE,
+    ):
+        token = re.sub(r"\s+", " ", match.group(0)).strip()
+        compact_digits = re.sub(r"\D", "", token)
+        has_unit = bool(re.search(r"[$₩%]|(?:bp|bps|원|억원|백만원|천원|달러|USD|KRW|주|shares?)$", token, re.IGNORECASE))
+        number_context = fact_text[max(0, match.start() - 24):match.start()].casefold()
+        if token in date_tokens or compact_digits in {re.sub(r"\D", "", value) for value in date_tokens}:
+            continue
+        if not has_unit and "," not in token and len(compact_digits) < 7:
+            continue
+        if not has_unit and any(term in number_context for term in ["tel", "fax", "전화", "회사코드", "접수번호"]):
+            continue
+        if token and token not in seen_numbers:
+            priority = 4 if re.search(r"[$₩%]|(?:원|억원|백만원|천원|달러|USD|KRW)$", token, re.IGNORECASE) else 3 if has_unit else 2 if "," in token else 1
+            number_candidates.append((priority, match.start(), token))
+            seen_numbers.add(token)
+    number_tokens = [item[2] for item in sorted(number_candidates, key=lambda item: (-item[0], item[1]))[:12]]
+    analysis_ready = disclosure_analysis_ready(context) and bool(document_text)
+    confirmed_facts = [item["text"] for item in selected_sections[:3]] if analysis_ready else []
+    if not confirmed_facts:
+        confirmed_facts = [
+            value for value in [
+                ("보고서명 " + metadata["reportName"]) if metadata.get("reportName") else "",
+                ("접수일 " + metadata["receiptDate"]) if metadata.get("receiptDate") else "",
+                ("접수번호 " + metadata["receiptNo"]) if metadata.get("receiptNo") else "",
+            ] if value
+        ]
+    return {
+        **result.to_dict(),
+        "summary": labeled.get("의미") or (confirmed_facts[0] if confirmed_facts else "분석 준비 중"),
+        "impactSummary": labeled.get("영향") or "원문 근거가 부족해 투자 영향을 판단할 수 없습니다.",
+        "uncertaintySummary": (
+            "공식 원문에서 추출한 사실만 사용했습니다. 수치의 비교 기준과 시장 반응은 별도 확인이 필요합니다."
+            if analysis_ready
+            else "공식 원문이 검증되지 않아 제목과 접수 메타데이터 외의 내용은 확인되지 않았습니다."
+        ),
+        "watchItems": [value for value in [labeled.get("확인"), labeled.get("대응")] if value],
+        "confirmedFacts": confirmed_facts[:4],
+        "materialNumbers": number_tokens,
+        "documentDates": date_tokens,
+        "sourceSections": selected_sections,
+        "needsReview": not analysis_ready,
+    }
+
+
 def clean_analysis_lines(output: str) -> List[str]:
     lines: List[str] = []
     for line in str(output or "").splitlines():
@@ -195,6 +300,11 @@ def local_disclosure_analysis(context: Dict[str, object], source: str = "로컬 
         impact = "운영자금 확보에는 도움이 될 수 있지만 주당가치 희석과 단기 수급 부담이 생길 수 있습니다."
         check = "발행 규모, 발행가, 사용 목적, 기존 주식 수 대비 희석률을 확인하세요."
         action = "희석률이 크거나 목적이 불명확하면 추가 매수보다 리스크 한도를 먼저 낮추세요."
+    elif any(term in normalized for term in ["합병", "분할", "영업양수", "영업양도"]):
+        meaning = "회사 구조, 사업 포트폴리오, 지배구조가 바뀔 수 있는 공시입니다."
+        impact = "사업 가치 재평가가 가능하지만 비율과 일정에 따라 주주가치 훼손 위험도 있습니다."
+        check = "합병·분할 비율, 기준가, 주식매수청구권, 일정, 시너지 근거를 확인하세요."
+        action = "이벤트 완료 전 변동성이 커질 수 있어 비중과 손절 기준을 먼저 정리하세요."
     elif any(term in normalized for term in ["잠정실적", "영업실적", "매출액", "손익구조"]):
         meaning = "실적 추정 또는 확정치 변화와 관련된 공시입니다."
         impact = "컨센서스 대비 차이에 따라 주가 재평가나 실망 매물이 나올 수 있습니다."
@@ -221,11 +331,6 @@ def local_disclosure_analysis(context: Dict[str, object], source: str = "로컬 
             impact = "취득·소각은 수급과 주주가치에 우호적일 수 있으나 실제 집행 여부가 중요합니다."
             check = "취득인지 소각인지, 규모, 기간, 목적, 실제 집행률을 확인하세요."
             action = "취득·소각이면 긍정 요인을 반영하되 가격 반응과 집행률을 추적하세요."
-    elif any(term in normalized for term in ["합병", "분할", "영업양수", "영업양도"]):
-        meaning = "회사 구조, 사업 포트폴리오, 지배구조가 바뀔 수 있는 공시입니다."
-        impact = "사업 가치 재평가가 가능하지만 비율과 일정에 따라 주주가치 훼손 위험도 있습니다."
-        check = "합병·분할 비율, 기준가, 주식매수청구권, 일정, 시너지 근거를 확인하세요."
-        action = "이벤트 완료 전 변동성이 커질 수 있어 비중과 손절 기준을 먼저 정리하세요."
     elif "주요사항보고서" in normalized:
         meaning = "투자 판단에 중요한 회사 이벤트를 묶어 알리는 보고서입니다."
         impact = "세부 항목이 자금조달, 계약, 소송, 구조개편 중 무엇인지에 따라 영향이 크게 달라집니다."

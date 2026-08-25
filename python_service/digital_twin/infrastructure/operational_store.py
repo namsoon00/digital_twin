@@ -11,6 +11,7 @@ from .mysql_operational import (
     MySQLNewsDigestReconciliationStateStore,
     MySQLEventLog,
     MySQLExternalSignalCache,
+    MySQLExternalEvidenceProjectionStateStore,
     MySQLOperationalStorageCapacityStateStore,
     MySQLInvestmentCalendarCandidateStore,
     MySQLInvestmentCalendarStore,
@@ -90,6 +91,11 @@ def external_signal_cache(settings: Dict[str, str] = None):
 def external_data_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLExternalDataStore(configured)
+
+
+def external_evidence_projection_state_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLExternalEvidenceProjectionStateStore(configured)
 
 
 def company_knowledge_cache(settings: Dict[str, str] = None):

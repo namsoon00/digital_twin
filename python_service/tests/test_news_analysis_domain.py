@@ -1193,6 +1193,55 @@ class NewsAnalysisDomainTests(unittest.TestCase):
             for item in graph.relations
         ))
 
+    def test_ontology_projection_materializes_official_document_analysis(self):
+        evidence = ResearchEvidence(
+            "research:005930:dart:official",
+            "005930",
+            "disclosure",
+            "OpenDART",
+            "자기주식 취득 결정",
+            "회사가 자기주식 취득을 결의했습니다.",
+            "https://dart.fss.or.kr/example",
+            "2026-08-25T00:00:00Z",
+            "support",
+            published_at="2026-08-25T00:00:00Z",
+            raw_payload={
+                "relationScope": "direct",
+                "officialDocumentState": "document-verified",
+                "metadataVerified": True,
+                "documentVerified": True,
+                "analysisReady": True,
+                "documentHash": "document-hash",
+                "sourceRevision": "202608250001",
+                "sourceAsOf": "2026-08-25T00:00:00Z",
+                "disclosureAnalysis": {
+                    "status": "ready",
+                    "version": "disclosure-analysis-v5",
+                    "summary": "회사가 자기주식 취득을 결의했습니다.",
+                    "confirmedFacts": ["보통주 1,000,000주를 취득합니다."],
+                },
+            },
+        )
+        graph = PortfolioOntology("official-disclosure")
+
+        add_research_evidence_concepts(
+            graph,
+            "stock:005930",
+            "",
+            "",
+            "005930",
+            {},
+            {"researchEvidence": {"005930": [evidence.to_dict()]}},
+        )
+
+        research = next(item for item in graph.entities if item.kind == "research-evidence")
+        self.assertEqual("document-verified", research.properties["officialDocumentState"])
+        self.assertEqual("202608250001", research.properties["sourceRevision"])
+        self.assertEqual(
+            "회사가 자기주식 취득을 결의했습니다.",
+            research.properties["disclosureAnalysis"]["summary"],
+        )
+
     def test_korean_article_summary_removes_translation_preface_for_english_source(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
 

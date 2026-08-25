@@ -240,6 +240,7 @@ def evidence_text(item: Dict[str, object]) -> str:
     payload = evidence_payload(item)
     ai_analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
     summary = ai_analysis.get("summary") if isinstance(ai_analysis.get("summary"), dict) else {}
+    disclosure_analysis = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
     structured_values = []
     for container in nested_dicts(item):
         for key in [
@@ -263,6 +264,12 @@ def evidence_text(item: Dict[str, object]) -> str:
         article_facts_text(payload),
         summary.get("briefKo"),
         " ".join(str(value) for value in summary.get("watchPoints") or []),
+        disclosure_analysis.get("summary"),
+        disclosure_analysis.get("impactSummary"),
+        " ".join(str(value) for value in disclosure_analysis.get("confirmedFacts") or []),
+        " ".join(str(value) for value in disclosure_analysis.get("materialNumbers") or []),
+        " ".join(str(value) for value in disclosure_analysis.get("documentDates") or []),
+        " ".join(str(value) for value in disclosure_analysis.get("watchItems") or []),
         " ".join(clean_text(value, 300) for value in structured_values if clean_text(value, 300)),
     ]
     return "\n".join(clean_text(part, 1500) for part in parts if clean_text(part))
@@ -343,7 +350,7 @@ def structured_event_type(item: Dict[str, object], text: str) -> Tuple[str, List
             return "spinoff", [parser + " spinoff"]
         if any(term in lowered for term in ["신규상장", "이전상장", "재상장", "상장예정", "상장 예정"]):
             return "listing", [parser + " listing"]
-        if any(term in lowered for term in ["액면분할", "주식분할", "감자", "공개매수", "자사주"]):
+        if any(term in lowered for term in ["액면분할", "주식분할", "감자", "공개매수", "자사주", "자기주식"]):
             return "capitalMarketEvent", [parser + " capital-market action"]
     return "", []
 

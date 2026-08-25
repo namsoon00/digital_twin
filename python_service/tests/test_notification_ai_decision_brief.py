@@ -631,6 +631,21 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
                 "officialDocumentState": "document-verified",
                 "documentVerified": True,
                 "analysisReady": True,
+                "sourceAsOf": "2026-08-10T01:00:00Z",
+                "sourceRevision": "202608100001",
+                "documentHash": "abc123",
+                "officialDocumentText": "<html>원문 전체는 프롬프트에 들어가면 안 됩니다.</html>",
+                "disclosureAnalysis": {
+                    "status": "ready",
+                    "version": "disclosure-analysis-v5",
+                    "summary": "회사가 주요 계약 체결을 공시했습니다.",
+                    "impactSummary": "향후 매출 반영 시점을 확인해야 합니다.",
+                    "uncertaintySummary": "계약 이행 조건은 후속 공시 확인이 필요합니다.",
+                    "confirmedFacts": ["계약 금액은 100억원입니다."],
+                    "materialNumbers": ["100억원"],
+                    "watchItems": ["계약 이행 여부"],
+                    "sourceSections": [{"text": "원문 전체", "start": 0, "end": 5}],
+                },
                 "promptEvidenceAdmission": {"usage": "reference", "promptEligible": True},
             },
         )
@@ -651,7 +666,14 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
 
         self.assertTrue(compact["documentVerified"])
         self.assertTrue(compact["analysisReady"])
+        self.assertEqual("202608100001", compact["sourceRevision"])
+        self.assertEqual("회사가 주요 계약 체결을 공시했습니다.", compact["disclosureAnalysis"]["summary"])
+        self.assertNotIn("officialDocumentText", compact)
+        self.assertNotIn("sourceSections", compact["disclosureAnalysis"])
         self.assertEqual("action", core["externalEvidence"][0]["evidenceUse"])
+        self.assertEqual("100억원", core["externalEvidence"][0]["disclosureAnalysis"]["materialNumbers"][0])
+        self.assertNotIn("officialDocumentText", json.dumps(core, ensure_ascii=False))
+        self.assertNotIn("<html>", json.dumps(core, ensure_ascii=False))
         self.assertEqual(1, audit["included"]["actionExternalEvidenceCount"])
 
     def test_v2_ai_brief_uses_relation_matching_decision_synthesis_hypotheses(self):

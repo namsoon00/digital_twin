@@ -1290,6 +1290,10 @@ def governed_evidence(
     """
     if "minimum_source_reliability" in legacy_policy:
         minimum_source_trust_state = normalized_source_trust_state(legacy_policy["minimum_source_reliability"])
+    checked_at = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    checked_at_text = checked_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     normalized_policy = claim_policy(policy)
     deduped: List[ResearchEvidence] = []
     seen_ids = set()
@@ -1485,7 +1489,7 @@ def governed_evidence(
             "verificationStatus": str(best_claim.get("verificationStatus") or baseline.verification_status),
             "claimState": str(best_claim.get("state") or ("rejected" if missing_claim_source or not base_accepted else "verified-secondary")),
             "entityResolutionStatus": str(best_claim.get("entityResolutionStatus") or baseline.entity_resolution_status),
-            "checkedAt": utc_now_iso(),
+            "checkedAt": checked_at_text,
             "reasons": list(best_claim.get("reasons") or missing_claim_reasons),
             "investmentJudgmentEligible": bool(eligible and not missing_claim_source),
             "sourcePolicy": "official-first-claim-ledger-v1",

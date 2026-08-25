@@ -59,6 +59,19 @@ class DomainEventStoragePayloadTests(unittest.TestCase):
             "payload": {
                 "articleText": "raw article body " * 10000,
                 "claimLedger": {"claims": ["raw claim " * 4000]},
+                "articleSummaryQuality": {"state": "ready", "issues": []},
+                "newsEligibility": {
+                    "displayEligible": True,
+                    "alertEligible": True,
+                    "reasoningEligible": False,
+                    "reasoningReasonCodes": ["claim-governance-not-eligible"],
+                },
+                "promptEvidenceAdmission": {
+                    "usage": "alert",
+                    "alertEligible": True,
+                    "promptEligible": False,
+                    "reasonCodes": ["claim-governance-not-eligible"],
+                },
             },
             "aiAnalysis": {
                 "summary": "analysis summary",
@@ -84,11 +97,58 @@ class DomainEventStoragePayloadTests(unittest.TestCase):
 
         self.assertNotIn("payload", item)
         self.assertNotIn("articleText", json.dumps(item, ensure_ascii=False))
+        self.assertTrue(item["newsEligibility"]["alertEligible"])
+        self.assertFalse(item["newsEligibility"]["reasoningEligible"])
+        self.assertFalse(item["promptEvidenceAdmission"]["promptEligible"])
         self.assertNotIn("signature", delta)
         self.assertNotIn("previousSignature", delta)
         self.assertTrue(delta["signatureDigest"])
         self.assertTrue(delta["previousSignatureDigest"])
         self.assertLess(len(encoded), 20000)
+
+    def test_research_event_storage_keeps_bounded_official_analysis(self):
+        event = research_evidence_collected_event({
+            "source": "official",
+            "changedItems": [{
+                "evidenceId": "research:005930:dart:1",
+                "symbol": "005930",
+                "kind": "disclosure",
+                "title": "자기주식 취득 결정",
+                "payload": {
+                    "officialDocumentText": "공식 문서 원문 " * 1000,
+                    "documentVerified": True,
+                    "analysisReady": True,
+                    "disclosureAnalysis": {
+                        "summary": "회사가 자기주식 취득을 결의했습니다.",
+                        "confirmedFacts": ["보통주 1,000,000주를 취득합니다."],
+                        "materialNumbers": ["1,000,000주"],
+                        "documentDates": ["2026-08-26"],
+                        "watchItems": ["실제 취득 체결 내역"],
+                    },
+                },
+            }],
+        })
+
+        stored = domain_event_storage_payload(event.name, event.payload)
+        item = stored["changedItems"][0]
+
+        self.assertNotIn("officialDocumentText", json.dumps(item, ensure_ascii=False))
+        self.assertEqual(["2026-08-26"], item["disclosureAnalysis"]["documentDates"])
+        self.assertEqual(["보통주 1,000,000주를 취득합니다."], item["disclosureAnalysis"]["confirmedFacts"])
+
+    def test_research_event_storage_preserves_authoritative_empty_alert_set(self):
+        event = research_evidence_collected_event({
+            "changedItems": [self.large_research_item()],
+            "materialChangedItems": [self.large_research_item()],
+            "alertEligibleItems": [],
+            "alertEligibleCount": 0,
+        })
+
+        stored = domain_event_storage_payload(event.name, event.payload)
+
+        self.assertIn("alertEligibleItems", stored)
+        self.assertEqual([], stored["alertEligibleItems"])
+        self.assertEqual(0, stored["alertEligibleCount"])
 
     def test_reasoning_mailbox_contract_uses_compact_evidence_delta(self):
         request = ontology_reasoning_requested_event(

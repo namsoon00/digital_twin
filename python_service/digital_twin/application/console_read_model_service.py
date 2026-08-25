@@ -463,6 +463,7 @@ class ConsoleReadModelService:
             "sourceTotal": int(payload.get("total") or len(_rows(payload.get("items")))),
             "summary": _mapping(payload.get("summary")),
             "articleAnalysis": _mapping(payload.get("articleAnalysis")),
+            "officialAnalysis": _mapping(payload.get("officialAnalysis")),
         }
 
     def _evidence_head(self, row: Mapping[str, object]) -> Dict[str, object]:
@@ -475,7 +476,11 @@ class ConsoleReadModelService:
             "articleSummaryKo", "originalTitle", "translatedTitleKo", "sourceLanguage", "translationStatus",
             "summaryQualityState", "analysisStatus", "articleReadStatus", "stockImpactLabel",
             "stockImpactPolarity", "stockImpactReasonKo", "displayEligible", "detailPath", "publisher",
-            "publisherDomain",
+            "publisherDomain", "alertEligible", "reasoningEligible", "promptEvidenceAdmission",
+            "eligibilityAudit", "officialDocumentState", "metadataVerified", "documentVerified",
+            "analysisReady", "documentHash", "documentCharCount", "officialDocumentPreview",
+            "disclosureDocumentQuality", "documentLifecycle", "disclosureAnalysis", "sourceRevision",
+            "sourceAsOf", "sourceFetchedAt", "sourceDocuments", "disclosureCategory",
         ]
         projected = {key: row.get(key) for key in keys if key in row}
         projected.update(detail)

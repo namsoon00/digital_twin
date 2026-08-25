@@ -48,6 +48,7 @@ class ExternalDataCollectionService:
         store,
         transition_service=None,
         legacy_importer=None,
+        evidence_reconciler=None,
         worker_id: str = "external-data-1",
         now_provider=None,
     ):
@@ -56,6 +57,7 @@ class ExternalDataCollectionService:
         self.store = store
         self.transition_service = transition_service or ExternalFactTransitionService()
         self.legacy_importer = legacy_importer
+        self.evidence_reconciler = evidence_reconciler
         self.worker_id = str(worker_id or "external-data-1")
         self.now_provider = now_provider or utc_now
         self._last_partition_sync_at = None
@@ -117,6 +119,7 @@ class ExternalDataCollectionService:
         if not self.enabled() and not force:
             return {"status": "disabled", "processedCount": 0}
         migration = self.legacy_importer.import_if_empty() if self.legacy_importer else {"status": "not-configured"}
+        projection_before = self.reconcile_official_evidence()
         cleanup = self.cleanup_history_if_due(force=force)
         sync = self.sync_partitions(force=force)
         if force and hasattr(self.store, "make_due"):
@@ -134,6 +137,7 @@ class ExternalDataCollectionService:
                 "partitionSync": sync,
                 "legacyMigration": migration,
                 "historyCleanup": cleanup,
+                "officialEvidenceProjection": projection_before,
                 "summary": self.store.summary(),
             }
         provider_groups: Dict[str, List[object]] = {}
@@ -159,6 +163,7 @@ class ExternalDataCollectionService:
                             })
         failures = [item for item in results if item.get("status") == "error"]
         deferred = [item for item in results if item.get("status") == "deferred"]
+        projection_after = self.reconcile_official_evidence()
         return {
             "status": "partial" if failures else "ok",
             "processedCount": len(results),
@@ -169,8 +174,25 @@ class ExternalDataCollectionService:
             "partitionSync": sync,
             "legacyMigration": migration,
             "historyCleanup": cleanup,
+            "officialEvidenceProjection": {
+                "before": projection_before,
+                "after": projection_after,
+            },
             "summary": self.store.summary(),
         }
+
+    def reconcile_official_evidence(self) -> Dict[str, object]:
+        if not self.evidence_reconciler:
+            return {"status": "not-configured", "processedCount": 0, "projectedCount": 0}
+        try:
+            return dict(self.evidence_reconciler.run_once() or {})
+        except Exception as error:  # noqa: BLE001 - durable cursor keeps the failed event replayable.
+            return {
+                "status": "error",
+                "processedCount": 0,
+                "projectedCount": 0,
+                "reason": str(error)[:500],
+            }
 
     def cleanup_history_if_due(self, force: bool = False) -> Dict[str, object]:
         if not callable(getattr(self.store, "cleanup_history", None)):
@@ -316,5 +338,6 @@ class ExternalDataCollectionService:
             "concurrency": self.concurrency(),
             "leaseSeconds": self.lease_seconds(),
             "registry": self.registry.descriptors(self.settings),
+            "officialEvidenceProjection": dict(getattr(self.evidence_reconciler, "last_result", {}) or {}),
             **self.store.summary(),
         }

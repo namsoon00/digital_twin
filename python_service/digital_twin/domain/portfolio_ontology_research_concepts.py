@@ -589,6 +589,22 @@ def add_research_evidence_concepts(
             "promptEvidenceAdmission": raw_payload.get("promptEvidenceAdmission"),
             "promptEvidenceUsage": (raw_payload.get("promptEvidenceAdmission") or {}).get("usage") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else "",
             "promptEvidenceEligible": bool((raw_payload.get("promptEvidenceAdmission") or {}).get("promptEligible")) if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else False,
+            "officialDocumentState": raw_payload.get("officialDocumentState"),
+            "metadataVerified": bool(raw_payload.get("metadataVerified")),
+            "documentVerified": bool(raw_payload.get("documentVerified")),
+            "analysisReady": bool(raw_payload.get("analysisReady")),
+            "documentHash": raw_payload.get("documentHash"),
+            "sourceRevision": raw_payload.get("sourceRevision"),
+            "sourceAsOf": raw_payload.get("sourceAsOf") or item.published_at or item.observed_at,
+            "disclosureAnalysis": {
+                key: (raw_payload.get("disclosureAnalysis") or {}).get(key)
+                for key in [
+                    "status", "version", "summary", "impactSummary",
+                    "uncertaintySummary", "confirmedFacts", "materialNumbers", "documentDates", "watchItems",
+                ]
+                if isinstance(raw_payload.get("disclosureAnalysis"), dict)
+                and (raw_payload.get("disclosureAnalysis") or {}).get(key) not in (None, "", [], {})
+            },
         })
         prompt_admission = raw_payload.get("promptEvidenceAdmission") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else {}
         if prompt_admission:

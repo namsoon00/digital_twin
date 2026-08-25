@@ -26,6 +26,7 @@ from ..domain.news_analysis import (
 from ..domain.news_ai_analysis import clean_summary_text, summary_texts_similar
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
+from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain.sent_article_filter import (
     article_digest_context_item,
     article_has_new_story_fact,
@@ -314,7 +315,17 @@ def grouped_event_items(items: List[Dict[str, object]]) -> List[List[Dict[str, o
 def confirmed_fact_lines(item: Dict[str, object]) -> List[str]:
     payload = item_payload(item)
     if item_event_kind(item) == "disclosure":
+        analysis = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
+        facts = analysis.get("confirmedFacts") if isinstance(analysis.get("confirmedFacts"), list) else []
         rows = []
+        for fact in facts:
+            value = bounded_text(fact, 220)
+            if value and value not in rows:
+                rows.append(value)
+            if len(rows) >= 3:
+                return rows
+        if rows:
+            return rows
         receipt_date = clean_text(item.get("receiptDate") or payload.get("receiptDate") or payload.get("receipt_date") or item.get("publishedAt"))
         receipt_no = clean_text(item.get("receiptNo") or payload.get("receiptNo") or payload.get("receipt_no"))
         if receipt_date:
@@ -478,9 +489,11 @@ def article_facts_line(item: Dict[str, object]) -> str:
 
 def item_summary(item: Dict[str, object]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    disclosure = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
     summary = ai_summary(item)
     return (
-        bounded_text(clean_article_summary_noise(summary.get("briefKo")), 420)
+        bounded_text(clean_summary_text(disclosure.get("summary")), 420)
+        or bounded_text(clean_article_summary_noise(summary.get("briefKo")), 420)
         or bounded_text(clean_article_summary_noise(summary.get("oneLineKo")), 260)
         or bounded_text(clean_article_summary_noise(item.get("articleSummaryKo")), 360)
         or bounded_text(clean_article_summary_noise(item.get("analysisSummary")), 260)
@@ -552,9 +565,16 @@ def item_action_boundary(item: Dict[str, object]) -> str:
 
 
 def item_investment_impact(item: Dict[str, object]) -> str:
+    payload = item_payload(item)
+    disclosure = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
     summary = ai_summary(item)
     why_it_matters = bounded_text(clean_summary_text(summary.get("whyItMatters")), 360)
-    return why_it_matters or item_portfolio_implication(item) or item_impact_reason(item)
+    return (
+        bounded_text(clean_summary_text(disclosure.get("impactSummary")), 360)
+        or why_it_matters
+        or item_portfolio_implication(item)
+        or item_impact_reason(item)
+    )
 
 
 def normalized_impact_kind(item: Dict[str, object]) -> str:
@@ -616,7 +636,13 @@ def compact_digest_line(label: str, value: object, seen: List[str], limit: int =
 
 
 def item_watch_text(item: Dict[str, object]) -> str:
-    return ai_watch_line(item) or "다음 장 가격 반응과 거래량 동반 여부"
+    payload = item_payload(item)
+    disclosure = payload.get("disclosureAnalysis") if isinstance(payload.get("disclosureAnalysis"), dict) else {}
+    watch_points = disclosure.get("watchItems") if isinstance(disclosure.get("watchItems"), list) else []
+    disclosure_watch = ", ".join(
+        value for value in (bounded_text(item, 80) for item in watch_points[:4]) if value
+    )
+    return disclosure_watch or ai_watch_line(item) or "다음 장 가격 반응과 거래량 동반 여부"
 
 
 def alert_reason_context_item(item: Dict[str, object]) -> Dict[str, object]:
@@ -812,12 +838,15 @@ class NewsDigestEnqueuer:
         queue,
         settings: Dict[str, object] = None,
         max_items: int = 3,
+        evidence_repository=None,
     ):
         self.account_repository = account_repository
         self.monitor_store = monitor_store
         self.queue = queue
         self.settings = dict(settings or {})
         self.max_items = max(1, int(max_items or 3))
+        self.evidence_repository = evidence_repository
+        self.last_audit: Dict[str, object] = {}
 
     def require_article_body(self) -> bool:
         value = self.settings.get("newsDigestRequireArticleBody")
@@ -900,8 +929,19 @@ class NewsDigestEnqueuer:
             return False
         states = item_news_states(item)
         if item_event_kind(item) == "disclosure":
+            payload = item_payload(item)
+            admission_state = payload.get("promptEvidenceAdmission") if isinstance(payload.get("promptEvidenceAdmission"), dict) else {}
+            admission_eligible = True
+            if admission_state:
+                admission_eligible = assess_prompt_evidence(
+                    {**payload, **{key: value for key, value in item.items() if key != "payload"}},
+                    kind=item.get("kind") or "disclosure",
+                    published_at=item.get("publishedAt"),
+                    observed_at=item.get("observedAt"),
+                ).alert_eligible
             return (
-                state_at_least(states["sourceTrustState"], self.minimum_source_trust_state(), ("unknown", "limited", "standard", "trusted"))
+                admission_eligible
+                and state_at_least(states["sourceTrustState"], self.minimum_source_trust_state(), ("unknown", "limited", "standard", "trusted"))
                 and state_at_least(states["materialityState"], self.minimum_materiality_state(), ("context", "notable", "material"))
                 and states["validationState"] != "blocked"
             )
@@ -937,6 +977,13 @@ class NewsDigestEnqueuer:
             return 0
         items = self.event_items(event)
         if not items:
+            self.last_audit = {
+                "eventId": event.event_id,
+                "eventName": event.name,
+                "candidateCount": 0,
+                "queuedCount": 0,
+                "reason": "no-alert-eligible-items",
+            }
             return 0
         queued = 0
         accounts = [account for account in (self.account_repository.load() or []) if isinstance(account, AccountConfig) and account.enabled]
@@ -944,6 +991,14 @@ class NewsDigestEnqueuer:
             scoped_items = self.items_for_account(account, items)
             if scoped_items:
                 queued += self.enqueue_account_digest(account, scoped_items, event)
+        self.last_audit = {
+            "eventId": event.event_id,
+            "eventName": event.name,
+            "candidateCount": len(items),
+            "accountCount": len(accounts),
+            "queuedCount": queued,
+            "reason": "queued" if queued else "no-matching-account-or-duplicate",
+        }
         return queued
 
     def previously_sent_article_keys(self, account: AccountConfig) -> set:
@@ -990,13 +1045,16 @@ class NewsDigestEnqueuer:
 
     def event_items(self, event: DomainEvent) -> List[Dict[str, object]]:
         payload = event.payload or {}
-        if "materialChangedItems" in payload:
+        if "alertEligibleItems" in payload or "alertEligibleCount" in payload:
+            raw_items = payload.get("alertEligibleItems") or []
+        elif "materialChangedItems" in payload:
             raw_items = payload.get("materialChangedItems") or []
         else:
             raw_items = payload.get("changedItems") or []
         if not isinstance(raw_items, list):
             return []
         items = [dict(item) for item in raw_items if isinstance(item, dict)]
+        items = self.hydrate_canonical_items(items)
         items = [item for item in items if item_event_kind(item) in {"news", "disclosure"}]
         items = [self.refresh_item_analysis(item) for item in items]
         items = [item for item in items if relation_scope_is_investable(self.item_relation_scope(item))]
@@ -1012,6 +1070,38 @@ class NewsDigestEnqueuer:
             items = [item for item in items if self.item_passes_quality_gate(item)]
         items.sort(key=item_sort_key, reverse=True)
         return items
+
+    def hydrate_canonical_items(self, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        """Reload compact durable event references from the canonical store.
+
+        The event log deliberately omits article bodies and model payloads. A
+        replay must therefore make its eligibility decision from the canonical
+        evidence revision instead of treating missing compact fields as a
+        quality failure.
+        """
+        getter = getattr(self.evidence_repository, "get", None)
+        if not callable(getter):
+            return items
+        hydrated = []
+        for compact in items:
+            evidence_id = item_evidence_id(compact)
+            canonical = None
+            if evidence_id:
+                try:
+                    canonical = getter(evidence_id)
+                except Exception:  # noqa: BLE001 - compact fallback remains replayable.
+                    canonical = None
+            if canonical is None or not callable(getattr(canonical, "to_dict", None)):
+                hydrated.append(compact)
+                continue
+            current = canonical.to_dict()
+            # Event-local transition metadata remains authoritative while the
+            # complete quality and provenance state comes from canonical data.
+            for key in ("storyUpdate", "portfolioBucket", "displayName"):
+                if key in compact:
+                    current[key] = compact.get(key)
+            hydrated.append(current)
+        return hydrated
 
     def account_symbols(self, account: AccountConfig) -> Tuple[Dict[str, str], Dict[str, str]]:
         holdings: Dict[str, str] = {}

@@ -55,6 +55,10 @@ from ..application.instrument_timeline_query_service import InstrumentTimelineQu
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.external_data.collection_service import ExternalDataCollectionService
+from ..application.external_data.research_evidence_projection_service import (
+    ExternalFactResearchEvidenceReconciler,
+    ExternalOfficialEvidenceProjectionService,
+)
 from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
 from ..application.news_ai_analysis_service import NewsAiAnalysisService
@@ -104,7 +108,6 @@ from ..domain.events import (
     DATA_PIPELINE_HEALTH_CHANGED,
     ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
     OPERATIONAL_STORAGE_CAPACITY_CHANGED,
-    NEWS_ARTICLE_ANALYZED,
     RESEARCH_EVIDENCE_COLLECTED,
 )
 from ..domain.market_data import number
@@ -304,13 +307,14 @@ def news_event_bus(settings=None) -> EventBus:
     configured_settings = settings or runtime_settings()
     bus = default_event_bus()
     bus.subscribe(
-        NEWS_ARTICLE_ANALYZED,
+        RESEARCH_EVIDENCE_COLLECTED,
         NewsDigestEnqueuer(
             account_repository=stores.account_registry(configured_settings),
             monitor_store=stores.monitor_store(configured_settings),
             queue=stores.notification_job_store(configured_settings),
             settings=configured_settings,
             max_items=int(number(configured_settings.get("newsDigestMaxItems")) or 3),
+            evidence_repository=stores.research_evidence_store(configured_settings),
         ).handle,
     )
     bus.subscribe(
@@ -626,6 +630,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
                 queue=stores.notification_job_store(settings),
                 settings=settings,
                 max_items=int(number(settings.get("newsDigestMaxItems")) or 3),
+                evidence_repository=stores.research_evidence_store(settings),
             ),
             cursor_store=stores.news_digest_reconciliation_state_store(settings),
         )
@@ -869,6 +874,13 @@ def build_external_data_collection_runner(settings=None) -> ExternalDataCollecti
     configured_settings = dict(settings or runtime_settings())
     registry = default_external_dataset_registry(configured_settings)
     store = stores.external_data_store(configured_settings)
+    evidence_projector = ExternalOfficialEvidenceProjectionService(
+        fact_store=store,
+        evidence_store=stores.research_evidence_store(configured_settings),
+        event_publisher=news_event_bus(configured_settings),
+        settings=configured_settings,
+        disclosure_analyzer=disclosure_analyzer_from_settings(configured_settings),
+    )
     return ExternalDataCollectionService(
         settings=configured_settings,
         registry=registry,
@@ -878,6 +890,14 @@ def build_external_data_collection_runner(settings=None) -> ExternalDataCollecti
             store,
             registry,
             configured_settings,
+        ),
+        evidence_reconciler=ExternalFactResearchEvidenceReconciler(
+            event_reader=stores.event_log(configured_settings),
+            projector=evidence_projector,
+            cursor_store=stores.external_evidence_projection_state_store(configured_settings),
+            batch_size=int(number(configured_settings.get("externalEvidenceProjectionBatchSize")) or 100),
+            initial_lookback_minutes=int(number(configured_settings.get("externalEvidenceProjectionInitialLookbackMinutes")) or 10),
+            max_replay_age_minutes=int(number(configured_settings.get("externalEvidenceProjectionMaxReplayAgeMinutes")) or 180),
         ),
         worker_id="external-data-" + str(os.getpid()),
     )

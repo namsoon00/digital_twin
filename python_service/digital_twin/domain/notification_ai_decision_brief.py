@@ -564,6 +564,7 @@ EVIDENCE_DECISION_FIELDS = (
     "investmentJudgmentEligible", "verificationStatus", "entityResolutionStatus",
     "decisionInlineEligible", "displayEligible", "alertEligible", "reasoningEligible",
     "officialDocumentState", "documentVerified", "analysisReady", "promptEvidenceAdmission",
+    "sourceAsOf", "sourceRevision", "documentHash", "disclosureAnalysis",
 )
 
 ACCOUNT_STRATEGY_FIELDS = (

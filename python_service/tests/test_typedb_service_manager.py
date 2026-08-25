@@ -494,10 +494,11 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
         from digital_twin.domain.ontology_schema import default_tbox_metadata
 
-        rulebox_fingerprint = rulebox_rules_hash([
+        source_rulebox_fingerprint = rulebox_rules_hash([
             rule.to_dict()
             for rule in default_graph_inference_rules()
         ])
+        runtime_rulebox_fingerprint = "runtime-rulebox-fingerprint"
         static_rulebox_fingerprint = "static-rulebox-fingerprint"
         manifest = {
             "expectedFingerprint": "static-fingerprint",
@@ -523,7 +524,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 return {
                     "status": "ok",
                     "rules": [{"ruleId": "rule:test"}],
-                    "sourceRulesHash": rulebox_fingerprint,
+                    "sourceRulesHash": runtime_rulebox_fingerprint,
                     "ruleCount": 1,
                 }
 
@@ -539,6 +540,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     "status": "ok",
                     "saved": True,
                     "ruleBoxReplaced": True,
+                    "activeRuleBoxHash": runtime_rulebox_fingerprint,
                     "activeRuleBoxRuleCount": 1,
                     "postSeedPreflight": preflight,
                 },
@@ -564,6 +566,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertTrue(fresh["ready"])
         self.assertTrue(unchanged["ready"])
+        self.assertEqual(source_rulebox_fingerprint, fresh["sourceRuleboxFingerprint"])
+        self.assertEqual(runtime_rulebox_fingerprint, fresh["activeRuleboxFingerprint"])
         self.assertEqual([], unchanged["failedChecks"])
 
     def test_blue_green_candidate_stops_before_world_rebuild_on_release_mismatch(self):

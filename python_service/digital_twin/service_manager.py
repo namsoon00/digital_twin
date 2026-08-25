@@ -2858,6 +2858,10 @@ def validate_typedb_candidate_seed_contract(
                 and attestation.get("ruleBoxHashMatched")
             )
         )
+        # The static manifest hashes the authored payload, while the runtime
+        # snapshot hashes TypeDB's normalized readback. Non-executable catalog
+        # metadata is not round-tripped, so prove each hash in its own domain
+        # rather than requiring the two fingerprints to be identical.
         rule_count = int_value(
             attestation.get("activeRuleBoxRuleCount")
             or snapshot.get("ruleCount")
@@ -2886,7 +2890,6 @@ def validate_typedb_candidate_seed_contract(
             ),
             "runtimeRuleboxFingerprintMatches": bool(
                 candidate_rulebox_fingerprint
-                and source_rulebox_fingerprint == candidate_rulebox_fingerprint
                 and (
                     not attested_runtime_rulebox_fingerprint
                     or attested_runtime_rulebox_fingerprint == candidate_rulebox_fingerprint
@@ -2910,8 +2913,11 @@ def validate_typedb_candidate_seed_contract(
             "ready": ready,
             "database": database_name,
             "seedStatus": str(attestation.get("status") or "unknown"),
+            "sourceRuleboxFingerprint": source_rulebox_fingerprint,
             "candidateRuleboxFingerprint": candidate_rulebox_fingerprint,
-            "expectedRuleboxFingerprint": source_rulebox_fingerprint,
+            "expectedRuleboxFingerprint": (
+                attested_runtime_rulebox_fingerprint or candidate_rulebox_fingerprint
+            ),
             "activeRuleboxFingerprint": candidate_rulebox_fingerprint,
             "attestedRuntimeRuleboxFingerprint": attested_runtime_rulebox_fingerprint,
             "expectedStaticRuleboxFingerprint": expected_static_rulebox_fingerprint,

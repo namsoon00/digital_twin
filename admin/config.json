@@ -13,7 +13,7 @@
     "공유 미리보기에서는 서버 설정과 계정 DB 쓰기를 차단합니다."
   ],
   "localData": {
-    "generatedAt": "2026-08-15T23:16:49.340210Z",
+    "generatedAt": "2026-08-25T08:58:13.140521Z",
     "sources": {
       "settings": "data/settings.json",
       "settingsExists": true
@@ -72,7 +72,7 @@
       "monitorAccountIntervalSeconds": "120",
       "monitorAccountBatchSize": "10",
       "monitorAccountLockSeconds": "600",
-      "marketObservationRawDeliveryMode": "always",
+      "marketObservationRawDeliveryMode": "critical-only",
       "marketObservationImmediatePriceChangePct": "3",
       "marketObservationImmediateCadenceMinutes": "10",
       "modelName": "나의 매수/매도 모델",
@@ -153,6 +153,7 @@
       "externalDartCorpCodes": "005930=00126380\n000660=00164779\n035420=00266961",
       "externalDartDocumentTextEnabled": "1",
       "externalDartDocumentTextMaxChars": "6000",
+      "externalDartDocumentMaxPerSymbol": "3",
       "externalNewsEnabled": "0",
       "externalNewsProvider": "auto",
       "externalNewsMaxSymbols": "3",
@@ -277,7 +278,6 @@
       "typedbIncrementalEquivalenceAuditSamplePct": "1",
       "typedbNativeRuleParallelism": "2",
       "typedbNativeRuleExecutionBudgetSeconds": "300",
-      "typedbNativeRuleDirectQueryFallbackEnabled": "1",
       "typedbPersistentDriverEnabled": "1",
       "ontologyReasoningQueueAlertEnabled": "1",
       "ontologyReasoningQueueWarningAgeMinutes": "2",
@@ -300,6 +300,22 @@
       "marketMaterialityTrendDistanceChangePct": "1",
       "marketMaterialityVolumeRatio": "1.5",
       "marketMaterialityInvestorFlowRatioPct": "15",
+      "marketSignalTransitionPolicyEnabled": "1",
+      "marketSignalPersistenceObservations": "2",
+      "marketSignalPricePersistenceObservations": "2",
+      "marketSignalPriceResetPct": "0.25",
+      "marketSignalPriceImmediatePct": "3",
+      "marketSignalOrderbookEnterPct": "25",
+      "marketSignalOrderbookExitPct": "15",
+      "marketSignalTradeStrengthBand": "10",
+      "marketSignalTradeStrengthExitBand": "2",
+      "marketSignalVolumeEnterRatio": "1.5",
+      "marketSignalVolumeExitRatio": "1.2",
+      "marketSignalInvestorFlowExitPct": "10",
+      "marketSignalTrendCrossBufferPct": "0.3",
+      "marketSignalTrendCrossExitPct": "0.1",
+      "marketSignalTrendDistanceExitPct": "1.5",
+      "marketSignalDataStatePersistenceObservations": "2",
       "dartDisclosureAiAnalysisEnabled": "1",
       "dartDisclosureAiUseCodex": "1",
       "dartDisclosureAiTimeoutSeconds": "90"
@@ -1086,6 +1102,12 @@
           "label": "OpenDART 원문 최대 글자",
           "type": "number",
           "default": "6000"
+        },
+        {
+          "key": "externalDartDocumentMaxPerSymbol",
+          "label": "종목별 중요 공시 원문 수",
+          "type": "number",
+          "default": "3"
         },
         {
           "key": "externalNewsEnabled",
@@ -2066,12 +2088,6 @@
           "unit": "seconds"
         },
         {
-          "key": "typedbNativeRuleDirectQueryFallbackEnabled",
-          "label": "함수 미준비 시 제한된 직접 TypeQL 추론",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
           "key": "ontologyReasoningMinIntervalSeconds",
           "label": "종목별 추론 병합 간격",
           "type": "number",
@@ -2096,7 +2112,7 @@
           "key": "ontologyReasoningMarketMinIntervalSeconds",
           "label": "시세·수급 추론 최소 간격",
           "type": "number",
-          "default": "120",
+          "default": "180",
           "unit": "seconds"
         },
         {
@@ -2427,77 +2443,6 @@
           "unit": "seconds"
         },
         {
-          "key": "ontologyRuleboxPrewarmEnabled",
-          "label": "RuleBox 함수 사전 준비 워커",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmRequireReadyForInference",
-          "label": "함수 준비 전 투자 판단 보류",
-          "type": "toggle",
-          "default": "0"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmDeferWhenReasoningPending",
-          "label": "추론 대기 중 함수 사전 준비 유예",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmBacklogRecoveryEnabled",
-          "label": "오래된 대기열 컴파일 위험 진단",
-          "type": "toggle",
-          "default": "0"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmBacklogRecoveryAgeSeconds",
-          "label": "함수 준비 우선 복구 대기 기준",
-          "type": "number",
-          "default": "90",
-          "unit": "seconds"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmBacklogRecoveryMinPendingEntries",
-          "label": "함수 준비 우선 복구 최소 대기 수",
-          "type": "number",
-          "default": "2"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmBacklogRecoveryRetrySeconds",
-          "label": "함수 준비 복구 재점검",
-          "type": "number",
-          "default": "5",
-          "unit": "seconds"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmIntervalSeconds",
-          "label": "RuleBox 함수 사전 준비 유휴 점검 주기",
-          "type": "number",
-          "default": "15",
-          "unit": "seconds"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmIdleQuietSeconds",
-          "label": "RuleBox 함수 준비 전 큐 무활동 시간",
-          "type": "number",
-          "default": "300",
-          "unit": "seconds"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmExecutionTimeoutSeconds",
-          "label": "RuleBox 함수 준비 유지보수 시간 상한",
-          "type": "number",
-          "default": "1500",
-          "unit": "seconds"
-        },
-        {
-          "key": "ontologyRuleboxPrewarmProcessIsolationEnabled",
-          "label": "RuleBox 함수 준비 프로세스 격리",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
           "key": "ontologyAboxMaintenanceDeferWhenReasoningPending",
           "label": "추론 대기 중 ABox 정리 유예",
           "type": "toggle",
@@ -2638,6 +2583,117 @@
           "unit": "%"
         },
         {
+          "key": "marketSignalTransitionPolicyEnabled",
+          "label": "시장 신호 상태 전이 정책",
+          "type": "toggle",
+          "default": "1"
+        },
+        {
+          "key": "marketSignalPersistenceObservations",
+          "label": "신호 확정 반복 관측 수",
+          "type": "number",
+          "default": "2",
+          "unit": "observations"
+        },
+        {
+          "key": "marketSignalPricePersistenceObservations",
+          "label": "가격 변화 확정 반복 관측 수",
+          "type": "number",
+          "default": "2",
+          "unit": "observations"
+        },
+        {
+          "key": "marketSignalPriceResetPct",
+          "label": "누적 가격 기준선 복귀 폭",
+          "type": "number",
+          "default": "0.25",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalPriceImmediatePct",
+          "label": "가격 급변 즉시 추론 기준",
+          "type": "number",
+          "default": "3",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalOrderbookEnterPct",
+          "label": "호가 불균형 진입 기준",
+          "type": "number",
+          "default": "25",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalOrderbookExitPct",
+          "label": "호가 불균형 해제 기준",
+          "type": "number",
+          "default": "15",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalTradeStrengthBand",
+          "label": "체결강도 방향 진입 폭",
+          "type": "number",
+          "default": "10",
+          "unit": "index"
+        },
+        {
+          "key": "marketSignalTradeStrengthExitBand",
+          "label": "체결강도 방향 해제 폭",
+          "type": "number",
+          "default": "2",
+          "unit": "index"
+        },
+        {
+          "key": "marketSignalVolumeEnterRatio",
+          "label": "거래량 확인 진입 배율",
+          "type": "number",
+          "default": "1.5",
+          "unit": "x"
+        },
+        {
+          "key": "marketSignalVolumeExitRatio",
+          "label": "거래량 확인 해제 배율",
+          "type": "number",
+          "default": "1.2",
+          "unit": "x"
+        },
+        {
+          "key": "marketSignalInvestorFlowExitPct",
+          "label": "투자자 수급 압력 해제 비중",
+          "type": "number",
+          "default": "10",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalTrendCrossBufferPct",
+          "label": "이동평균 교차 확정 완충 폭",
+          "type": "number",
+          "default": "0.3",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalTrendCrossExitPct",
+          "label": "이동평균 교차 중립 복귀 폭",
+          "type": "number",
+          "default": "0.1",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalTrendDistanceExitPct",
+          "label": "이동평균 이격 해제 폭",
+          "type": "number",
+          "default": "1.5",
+          "unit": "%"
+        },
+        {
+          "key": "marketSignalDataStatePersistenceObservations",
+          "label": "데이터 상태 확정 반복 관측 수",
+          "type": "number",
+          "default": "2",
+          "unit": "observations"
+        },
+        {
           "key": "dartDisclosureAiAnalysisEnabled",
           "label": "공시 AI 해석 사용",
           "type": "toggle",
@@ -2729,32 +2785,6 @@
           "default": "1"
         },
         {
-          "key": "typedbProcessSchemaFunctionCacheEnabled",
-          "label": "TypeDB 함수 검증 프로세스 캐시",
-          "type": "toggle",
-          "default": "1"
-        },
-        {
-          "key": "typedbSchemaFunctionProbeIntervalSeconds",
-          "label": "TypeDB 함수 전수 검증 간격",
-          "type": "number",
-          "default": "300",
-          "unit": "seconds"
-        },
-        {
-          "key": "typedbSchemaFunctionProvisionBatchSize",
-          "label": "TypeDB 함수 배포 유지보수 배치 규칙 수",
-          "type": "number",
-          "default": "1"
-        },
-        {
-          "key": "typedbSchemaFunctionProvisionTimeoutSeconds",
-          "label": "TypeDB 함수 배포 완료 대기",
-          "type": "number",
-          "default": "900",
-          "unit": "seconds"
-        },
-        {
           "key": "typedbProjectionCoordinatorEnabled",
           "label": "TypeDB 전역 투영 조정",
           "type": "toggle",
@@ -2819,6 +2849,13 @@
           "unit": "%"
         },
         {
+          "key": "typedbCapacityAutoRotateWalMb",
+          "label": "TypeDB WAL 재구축 기준",
+          "type": "number",
+          "default": "4096",
+          "unit": "MB"
+        },
+        {
           "key": "typedbCapacityAutoRotateFreeSpaceMb",
           "label": "공용 디스크 기반 재구축 기준",
           "type": "number",
@@ -2841,9 +2878,9 @@
         },
         {
           "key": "typedbCapacityAutoRotateFailureRetrySeconds",
-          "label": "TypeDB 회전 실패 재시도 간격",
+          "label": "TypeDB 회전 실패 첫 재시도 간격",
           "type": "number",
-          "default": "120",
+          "default": "300",
           "unit": "seconds"
         },
         {
@@ -2861,6 +2898,13 @@
           "unit": "MB"
         },
         {
+          "key": "typedbBlueGreenRetiredRetentionMinutes",
+          "label": "블루그린 롤백 세대 보관",
+          "type": "number",
+          "default": "120",
+          "unit": "minutes"
+        },
+        {
           "key": "typedbAgeResetEnabled",
           "label": "TypeDB 보관 시간 점검",
           "type": "toggle",
@@ -2870,14 +2914,14 @@
           "key": "typedbDataRetentionHours",
           "label": "TypeDB 보관 시간",
           "type": "number",
-          "default": "24",
+          "default": "72",
           "unit": "hours"
         },
         {
           "key": "typedbDataMaxSizeMb",
           "label": "TypeDB 최대 용량",
           "type": "number",
-          "default": "8192",
+          "default": "16384",
           "unit": "MB"
         },
         {
@@ -3656,5 +3700,5 @@
       ]
     }
   ],
-  "buildId": "04f64461ef41"
+  "buildId": "22d6274d68a2"
 }

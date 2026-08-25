@@ -24315,22 +24315,37 @@
   }
 
   function renderNotificationTriggerLedger(job) {
-    var rows = Array.isArray(job && job.deliveryTriggerLedger) ? job.deliveryTriggerLedger : [];
-    if (!rows.length) return "";
-    return [
-      '<section class="notification-detail-section"><strong>실제 발송 계기</strong><div class="notification-detail-reasons">',
-      rows.map(function (item) {
+    var allRows = Array.isArray(job && job.deliveryTriggerLedger) ? job.deliveryTriggerLedger : [];
+    var customerRows = Array.isArray(job && job.customerDeliveryTriggers)
+      ? job.customerDeliveryTriggers
+      : allRows.filter(function (item) { return item && item.customerVisible === true; });
+    var internalRows = Array.isArray(job && job.internalDeliveryChecks)
+      ? job.internalDeliveryChecks
+      : allRows.filter(function (item) { return !item || item.customerVisible !== true; });
+    function renderRows(rows) {
+      return rows.map(function (item) {
         var label = String(item.label || item.kind || "발송 조건");
         var reason = String(item.reason || "기록된 설명 없음");
         var values = [
           item.previousValue !== undefined && item.previousValue !== "" ? "이전 " + String(item.previousValue) : "",
           item.currentValue !== undefined && item.currentValue !== "" ? "현재 " + (Array.isArray(item.currentValue) ? item.currentValue.join(", ") : String(item.currentValue)) : "",
-          item.threshold !== undefined && item.threshold !== "" ? "기준 " + String(item.threshold) : ""
+          item.threshold !== undefined && item.threshold !== "" ? "기준 " + String(item.threshold) : "",
+          item.sourceTitle ? "원문 " + String(item.sourceTitle) : "",
+          item.sourceProvider ? "출처 " + String(item.sourceProvider) : "",
+          Array.isArray(item.ruleIds) && item.ruleIds.length ? "규칙 " + item.ruleIds.join(", ") : "",
+          Array.isArray(item.evidenceIds) && item.evidenceIds.length ? "근거 " + item.evidenceIds.join(", ") : ""
         ].filter(Boolean).join(" · ");
         return '<p><b>' + escapeHtml(label) + '</b> ' + escapeHtml(reason) + (values ? '<br><span>' + escapeHtml(values) + '</span>' : '') + '</p>';
-      }).join(""),
-      '</div></section>'
-    ].join("");
+      }).join("");
+    }
+    var sections = [];
+    if (customerRows.length) {
+      sections.push('<section class="notification-detail-section"><strong>사용자 알림 계기</strong><div class="notification-detail-reasons">' + renderRows(customerRows) + '</div></section>');
+    }
+    if (internalRows.length) {
+      sections.push('<details class="notification-detail-section"><summary><strong>내부 발송 검사</strong></summary><div class="notification-detail-reasons">' + renderRows(internalRows) + '</div></details>');
+    }
+    return sections.join("");
   }
 
   function notificationJobSimilarityText(job) {

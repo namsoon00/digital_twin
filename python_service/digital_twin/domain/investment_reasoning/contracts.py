@@ -146,6 +146,8 @@ class HypothesisRecord:
     outcome_metric: str = ""
     falsification_contract: str = ""
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
+    claim_contract: Dict[str, object] = field(default_factory=dict)
+    qualification: Dict[str, object] = field(default_factory=dict)
     account_id: str = ""
     subject_symbol: str = ""
     inference_generation_id: str = ""
@@ -234,6 +236,12 @@ class HypothesisRecord:
                 or (family_definition.falsification_contract if family_definition else "")
             ),
             knowledge_basis=knowledge_basis,
+            claim_contract=dict(
+                payload.get("claimContract")
+                or payload.get("claim_contract")
+                or {}
+            ),
+            qualification=dict(payload.get("qualification") or {}),
             account_id=str(payload.get("accountId") or payload.get("account_id") or ""),
             subject_symbol=str(payload.get("subjectSymbol") or payload.get("subject_symbol") or "").upper(),
             inference_generation_id=str(

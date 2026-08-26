@@ -1,7 +1,10 @@
 from copy import deepcopy
 import unittest
 
-from digital_twin.application.hypothesis_proposal_service import HypothesisProposalService
+from digital_twin.application.hypothesis_proposal_service import (
+    HypothesisProposalQueueRunner,
+    HypothesisProposalService,
+)
 from digital_twin.application.investment_brain_service import InvestmentBrainService
 from digital_twin.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from digital_twin.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
@@ -298,6 +301,34 @@ class FakeResearchStore:
     def list_hypothesis_proposals(self, status="", symbol="", limit=50):
         rows = [item.to_dict() for item in self.proposals]
         return rows[:limit]
+
+
+class FakeHypothesisProposalQueueStore(FakeResearchStore):
+    def __init__(self, requests):
+        super().__init__()
+        self.requests = list(requests or [])
+        self.completed = []
+        self.failed = []
+
+    def claim_hypothesis_proposal_requests(self, worker_id, limit=1):
+        del worker_id
+        rows = self.requests[:limit]
+        self.requests = self.requests[limit:]
+        return rows
+
+    def complete_hypothesis_proposal_request(self, request_id, result):
+        self.completed.append((request_id, dict(result or {})))
+
+    def fail_hypothesis_proposal_request(self, request_id, error):
+        self.failed.append((request_id, str(error)))
+
+    def hypothesis_proposal_request_summary(self):
+        return {
+            "status": "ok",
+            "pendingCount": len(self.requests),
+            "completedCount": len(self.completed),
+            "failedCount": len(self.failed),
+        }
 
 
 class FakeResearchGateway:
@@ -1463,6 +1494,32 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(1, result["proposalCount"])
         self.assertEqual(["relation-risk"], result["proposals"][0]["supportingEvidenceIds"])
         self.assertEqual("review-required", result["proposals"][0]["status"])
+
+    def test_hypothesis_proposal_queue_runs_outside_reasoning_and_completes_request(self):
+        store = FakeHypothesisProposalQueueStore([{
+            "requestId": "proposal-request:1",
+            "accountId": "account-1",
+            "symbol": "005930",
+            "question": {"questionId": "question-1"},
+            "hypothesisSet": {"hypotheses": []},
+            "researchRun": {},
+            "relationContext": {
+                "inferenceGenerationId": "generation:1",
+                "graphStoreInference": {
+                    "relations": [{"id": "relation-risk"}],
+                    "traces": [],
+                },
+            },
+        }])
+        service = HypothesisProposalService(store, FakeHypothesisAdvisor())
+        runner = HypothesisProposalQueueRunner(store, service, worker_id="worker:test")
+
+        result = runner.run_once(limit=1)
+
+        self.assertEqual(1, result["processedCount"])
+        self.assertEqual([], store.failed)
+        self.assertEqual("review-required", store.completed[0][1]["status"])
+        self.assertEqual(1, len(store.proposals))
 
     def test_outcome_feedback_is_recorded_once_per_configured_horizon(self):
         brain = hypothesis_set_from_relation_context(relation_context())

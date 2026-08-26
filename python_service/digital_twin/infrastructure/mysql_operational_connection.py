@@ -2126,6 +2126,31 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_decision_outcome_targets (
+        target_id VARCHAR(191) PRIMARY KEY,
+        episode_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        horizon_minutes INT NOT NULL DEFAULT 0,
+        target_at VARCHAR(40) NOT NULL DEFAULT '',
+        maximum_delay_minutes INT NOT NULL DEFAULT 0,
+        contract_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        exclusion_reason VARCHAR(191) NOT NULL DEFAULT '',
+        outcome_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_decision_outcome_target_contract (
+            episode_id, horizon_minutes, contract_fingerprint
+        ),
+        KEY idx_decision_outcome_targets_due (account_id, status, target_at, target_id),
+        KEY idx_decision_outcome_targets_subject (account_id, symbol, status, target_at),
+        KEY idx_decision_outcome_targets_episode (episode_id, status, horizon_minutes)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS mysql_retention_runs (
         run_id VARCHAR(191) PRIMARY KEY,
         profile VARCHAR(96) NOT NULL DEFAULT '',
@@ -2192,6 +2217,28 @@ MYSQL_SCHEMA = [
         review_note TEXT NOT NULL,
         KEY idx_hypothesis_proposals_symbol_status (symbol, status, updated_at),
         KEY idx_hypothesis_proposals_status_time (status, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_proposal_requests (
+        request_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        gap_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        available_at VARCHAR(40) NOT NULL DEFAULT '',
+        lease_owner VARCHAR(191) NOT NULL DEFAULT '',
+        lease_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        result_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_hypothesis_proposal_gap (account_id, symbol, gap_fingerprint),
+        KEY idx_hypothesis_proposal_requests_ready (status, available_at, created_at),
+        KEY idx_hypothesis_proposal_requests_subject (account_id, symbol, status, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

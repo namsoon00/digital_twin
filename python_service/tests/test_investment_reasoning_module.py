@@ -46,6 +46,10 @@ from digital_twin.domain.investment_reasoning import (
     reasoning_rule_inventory,
 )
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.domain.rule_claim_contract import (
+    hypothesis_qualification,
+    resolved_rule_claim_contract,
+)
 
 
 class InMemoryReasoningCaseRepository:
@@ -87,6 +91,15 @@ class InMemoryDecisionEpisodeStore:
     def save(self, episode):
         self.episodes[episode.episode_id] = episode
         return episode
+
+
+class InMemoryHypothesisProposalRequestStore:
+    def __init__(self):
+        self.requests = {}
+
+    def enqueue_hypothesis_proposal_request(self, payload):
+        self.requests[payload["requestId"]] = dict(payload)
+        return dict(payload)
 
 
 class ReasoningCaseDispositionTests(unittest.TestCase):
@@ -313,6 +326,11 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
         "evidenceIndependenceKey": "trend-recovery",
         "plainLanguageBasis": "가격 회복이 이어질 수 있다는 검증 대상 가설입니다.",
     }
+    claim_contract = resolved_rule_claim_contract({
+        "ruleId": "graph.price.recovery.v1",
+        "label": "Price recovery is supported",
+        "knowledgeBasis": knowledge_basis,
+    })
     return {
         "metadata": {
             "ontologyRelationContext": {
@@ -357,6 +375,8 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
                             "outcomeMetric": "benchmark-adjusted-return",
                             "falsificationContract": "opposite transition is observed",
                             "knowledgeBasis": knowledge_basis,
+                            "claimContract": claim_contract.to_dict(),
+                            "qualification": hypothesis_qualification(claim_contract),
                         }],
                     },
                 },
@@ -1010,6 +1030,14 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual("benchmark-adjusted-return", graph_hypotheses[0].outcome_metric)
         self.assertEqual("opposite transition is observed", graph_hypotheses[0].falsification_contract)
         self.assertEqual(("trace:price-recovery",), graph_hypotheses[0].causal_trace_ids)
+        self.assertEqual(
+            "rule-claim:graph.price.recovery.v1",
+            graph_hypotheses[0].claim_contract["claimContractId"],
+        )
+        self.assertEqual(
+            "conditional-investment-evidence",
+            graph_hypotheses[0].qualification["decisionAuthority"],
+        )
         self.assertEqual((), invented_hypotheses)
 
     def test_hypothesis_manager_filters_other_subjects_and_generations(self):
@@ -1037,7 +1065,13 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
     def test_case_is_published_only_after_inference_ai_validation_and_delivery(self):
         repository = InMemoryReasoningCaseRepository()
-        orchestrator = InvestmentReasoningOrchestrator(repository)
+        decision_store = InMemoryDecisionEpisodeStore()
+        proposal_store = InMemoryHypothesisProposalRequestStore()
+        orchestrator = InvestmentReasoningOrchestrator(
+            repository,
+            decision_episode_store=decision_store,
+            hypothesis_proposal_request_store=proposal_store,
+        )
         request = reasoning_request()
         reasoning_case = orchestrator.start(request, {
             "releaseFingerprint": "release:1",
@@ -1084,6 +1118,32 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
         self.assertEqual(CASE_VALIDATED, validated.stage)
         self.assertFalse(validated.final_decision.published)
+        self.assertEqual(1, len(decision_store.episodes))
+        episode = next(iter(decision_store.episodes.values()))
+        contract = episode.facts_at_decision["hypothesisOutcomeContract"]
+        self.assertTrue(episode.facts_at_decision["calibrationPolicy"]["eligible"])
+        self.assertEqual("rule-claim:graph.price.recovery.v1", contract["claimContractId"])
+        self.assertEqual("rulebox", contract["criteriaOrigin"])
+        self.assertTrue(contract["contractFingerprint"])
+        self.assertEqual("generation:1", contract["inferenceGenerationId"])
+        self.assertTrue(contract["sourceFactIndependenceKey"])
+        self.assertNotEqual("generation:1", contract["sourceFactIndependenceKey"])
+        self.assertEqual(1, len(proposal_store.requests))
+        proposal_request = next(iter(proposal_store.requests.values()))
+        self.assertEqual(
+            ["fewer-than-two-independent-predictive-hypotheses"],
+            proposal_request["gapReasons"],
+        )
+        self.assertEqual(
+            "review-required-no-automatic-rulebox-deployment",
+            proposal_request["governance"],
+        )
+        proposal_inference = proposal_request["relationContext"]["graphStoreInference"]
+        self.assertIn(
+            "evidence:price-window",
+            [item["id"] for item in proposal_inference["relations"]],
+        )
+        self.assertEqual("trace:price-recovery", proposal_inference["traces"][0]["id"])
         published = orchestrator.notification_published({
             "investmentReasoningCaseId": reasoning_case.case_id,
         })

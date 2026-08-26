@@ -160,6 +160,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
+            self.sync_outcome_targets(connection, episode, stamp)
             for condition in list(episode.follow_up_conditions or []) + list(episode.unsupported_follow_ups or []):
                 if not isinstance(condition, dict) or not str(condition.get("conditionId") or "").strip():
                     continue
@@ -212,6 +213,184 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 )
         return episode
 
+    def sync_outcome_targets(self, connection, episode: DecisionEpisode, stamp: str = "") -> Dict[str, object]:
+        """Persist the immutable observation schedule in the decision transaction."""
+
+        stamp = canonical_investment_timestamp(stamp) or utc_now_iso()
+        facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
+        calibration = facts.get("calibrationPolicy") if isinstance(facts.get("calibrationPolicy"), dict) else {}
+        completeness = self.episode_outcome_contract_completeness(episode)
+        contract = self.episode_outcome_contract(episode) if completeness.get("complete") else {}
+        eligible = bool(
+            episode.selected_hypothesis_id
+            and calibration.get("eligible") is True
+            and completeness.get("complete")
+        )
+        if not eligible:
+            reason = str(
+                calibration.get("reason")
+                or ("outcome-contract-incomplete" if not completeness.get("complete") else "calibration-ineligible")
+            )[:191]
+            target_id = stable_id("decision-outcome-target-excluded", episode.episode_id)
+            payload = {
+                "requestId": target_id,
+                "episodeId": episode.episode_id,
+                "symbol": episode.symbol,
+                "horizonMinutes": 0,
+                "decidedAt": episode.decided_at,
+                "targetAt": episode.decided_at,
+                "status": "excluded",
+                "exclusionReason": reason,
+                "predictionContractCompleteness": completeness,
+            }
+            self.upsert_outcome_target(
+                connection,
+                target_id,
+                episode,
+                0,
+                episode.decided_at,
+                0,
+                "",
+                "excluded",
+                reason,
+                payload,
+                stamp,
+            )
+            return {"status": "excluded", "targetCount": 0, "reason": reason}
+
+        connection.execute(
+            "DELETE FROM investment_decision_outcome_targets "
+            "WHERE episode_id = %s AND status = 'excluded'",
+            (episode.episode_id,),
+        )
+        fingerprint = str(contract.get("contractFingerprint") or "")
+        maximum_delay = int(contract.get("maximumObservationDelayMinutes") or 0)
+        target_count = 0
+        for horizon_minutes in self.episode_outcome_horizons(episode):
+            target_at = outcome_target_at(episode, horizon_minutes)
+            if not target_at:
+                continue
+            target_id = stable_id(
+                "decision-outcome-target",
+                episode.episode_id,
+                horizon_minutes,
+                fingerprint,
+            )
+            payload = {
+                "requestId": target_id,
+                "episodeId": episode.episode_id,
+                "symbol": episode.symbol,
+                "subjectName": episode.subject_name,
+                "market": str(facts.get("market") or ""),
+                "currency": str(facts.get("currency") or ""),
+                "horizonMinutes": horizon_minutes,
+                "decidedAt": episode.decided_at,
+                "targetAt": target_at,
+                "maximumObservationDelayMinutes": maximum_delay,
+                "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
+                "hypothesisOutcomeContract": contract,
+                "benchmarkSymbol": contract_benchmark_symbol(contract, facts),
+            }
+            self.upsert_outcome_target(
+                connection,
+                target_id,
+                episode,
+                horizon_minutes,
+                target_at,
+                maximum_delay,
+                fingerprint,
+                "pending",
+                "",
+                payload,
+                stamp,
+            )
+            target_count += 1
+        return {"status": "scheduled", "targetCount": target_count}
+
+    @staticmethod
+    def upsert_outcome_target(
+        connection,
+        target_id: str,
+        episode: DecisionEpisode,
+        horizon_minutes: int,
+        target_at: str,
+        maximum_delay_minutes: int,
+        contract_fingerprint: str,
+        status: str,
+        exclusion_reason: str,
+        payload: Dict[str, object],
+        stamp: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO investment_decision_outcome_targets (
+                target_id, episode_id, account_id, symbol, horizon_minutes,
+                target_at, maximum_delay_minutes, contract_fingerprint,
+                status, exclusion_reason, outcome_id, payload_json,
+                created_at, updated_at, observed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s, '')
+            ON DUPLICATE KEY UPDATE
+                target_at = VALUES(target_at),
+                maximum_delay_minutes = VALUES(maximum_delay_minutes),
+                exclusion_reason = IF(
+                    investment_decision_outcome_targets.status = 'observed',
+                    investment_decision_outcome_targets.exclusion_reason,
+                    VALUES(exclusion_reason)
+                ),
+                status = IF(
+                    investment_decision_outcome_targets.status = 'observed',
+                    investment_decision_outcome_targets.status,
+                    VALUES(status)
+                ),
+                payload_json = VALUES(payload_json),
+                updated_at = VALUES(updated_at)
+            """,
+            (
+                target_id,
+                episode.episode_id,
+                episode.account_id,
+                episode.symbol,
+                int(horizon_minutes or 0),
+                str(target_at or ""),
+                int(maximum_delay_minutes or 0),
+                str(contract_fingerprint or ""),
+                str(status or "pending"),
+                str(exclusion_reason or "")[:191],
+                json_dumps(payload),
+                stamp,
+                stamp,
+            ),
+        )
+
+    def backfill_outcome_targets(self, account_id: str, limit: int = 2000) -> Dict[str, object]:
+        """One-time safe migration using only contracts frozen in each episode."""
+
+        account_id = str(account_id or "")
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT episodes.payload_json, episodes.status, episodes.decided_at "
+                "FROM investment_decision_episodes AS episodes "
+                "LEFT JOIN investment_decision_outcome_targets AS targets "
+                "ON targets.episode_id = episodes.episode_id "
+                "WHERE episodes.account_id = %s AND targets.episode_id IS NULL "
+                "ORDER BY episodes.decided_at ASC, episodes.episode_id ASC LIMIT %s",
+                (account_id, max(1, min(10000, int(limit or 2000)))),
+            ).fetchall()
+            stamp = utc_now_iso()
+            scheduled = 0
+            excluded = 0
+            for row in rows or []:
+                episode = self.episode_from_row(row)
+                result = self.sync_outcome_targets(connection, episode, stamp)
+                scheduled += int(result.get("targetCount") or 0)
+                excluded += 1 if result.get("status") == "excluded" else 0
+        return {
+            "status": "backfilled" if rows else "already-initialized",
+            "episodeCount": len(rows or []),
+            "scheduledTargetCount": scheduled,
+            "excludedEpisodeCount": excluded,
+        }
+
     def outcome_horizons(self) -> List[int]:
         return outcome_horizon_minutes(
             self.runtime_settings.get("investmentBrainOutcomeObservationMinutes") or "60,1440,7200,28800",
@@ -249,6 +428,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             "inferenceGenerationId",
             "marketIndependenceKey",
             "accountIndependenceKey",
+            "sourceFactIndependenceKey",
             "predictionTarget",
             "expectedDirection",
             "expectedOutcome",
@@ -677,47 +857,78 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
     ) -> List[Dict[str, object]]:
         observed_stamp = canonical_investment_timestamp(observed_at) or utc_now_iso()
         target_limit = max(1, min(1000, int(limit or self.outcome_batch_size())))
-        episode_limit = max(target_limit, min(2000, target_limit * max(1, len(self.outcome_horizons()))))
+        self.backfill_outcome_targets(account_id)
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT payload_json, status, decided_at
-                FROM investment_decision_episodes
-                WHERE account_id = %s AND status IN ('active', 'observed')
-                ORDER BY decided_at ASC, episode_id ASC
+                SELECT payload_json
+                FROM investment_decision_outcome_targets
+                WHERE account_id = %s AND status = 'pending' AND target_at <= %s
+                ORDER BY target_at ASC, target_id ASC
                 LIMIT %s
                 """,
-                (str(account_id or ""), episode_limit),
+                (str(account_id or ""), observed_stamp, target_limit),
             ).fetchall()
-        episodes = self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
         targets: List[Dict[str, object]] = []
-        for episode in episodes:
-            if not self.episode_outcome_contract_completeness(episode).get("complete"):
-                continue
-            contract = self.episode_outcome_contract(episode)
-            benchmark_symbol = contract_benchmark_symbol(contract, episode.facts_at_decision)
-            for horizon_minutes in due_outcome_horizon_minutes_all(episode, observed_stamp, self.episode_outcome_horizons(episode)):
-                target_at = outcome_target_at(episode, horizon_minutes)
-                if not target_at:
-                    continue
-                targets.append({
-                    "requestId": stable_id("decision-outcome-target", episode.episode_id, horizon_minutes),
-                    "episodeId": episode.episode_id,
-                    "symbol": episode.symbol,
-                    "subjectName": episode.subject_name,
-                    "market": str((episode.facts_at_decision or {}).get("market") or ""),
-                    "currency": str((episode.facts_at_decision or {}).get("currency") or ""),
-                    "horizonMinutes": horizon_minutes,
-                    "decidedAt": episode.decided_at,
-                    "targetAt": target_at,
-                    "maximumObservationDelayMinutes": contract.get("maximumObservationDelayMinutes"),
-                    "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
-                    "hypothesisOutcomeContract": contract,
-                    "benchmarkSymbol": benchmark_symbol,
-                })
-                if len(targets) >= target_limit:
-                    return targets
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if payload:
+                targets.append(payload)
         return targets
+
+    def outcome_target_summary(self, account_id: str = "", symbol: str = "") -> Dict[str, object]:
+        clauses = []
+        params: List[object] = []
+        if account_id:
+            clauses.append("account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            clauses.append("symbol = %s")
+            params.append(str(symbol).upper())
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        due_clause = (" AND " + " AND ".join(clauses)) if clauses else ""
+        now = utc_now_iso()
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count, MIN(target_at) AS oldest_target_at, "
+                "MAX(updated_at) AS latest_updated_at "
+                "FROM investment_decision_outcome_targets" + where + " GROUP BY status",
+                tuple(params),
+            ).fetchall()
+            due = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(target_at) AS oldest_target_at "
+                "FROM investment_decision_outcome_targets WHERE status = 'pending' "
+                "AND target_at <= %s" + due_clause,
+                tuple([now] + params),
+            ).fetchone()
+            latest = connection.execute(
+                "SELECT MAX(observed_at) AS latest_observed_at FROM investment_decision_outcomes"
+                + where,
+                tuple(params),
+            ).fetchone()
+        states = {
+            str(row.get("status") or "unknown"): {
+                "count": int(row.get("count") or 0),
+                "oldestTargetAt": str(row.get("oldest_target_at") or ""),
+                "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
+            }
+            for row in rows or []
+        }
+        due_count = int((due or {}).get("count") or 0)
+        return {
+            "status": "warning" if due_count else "ok",
+            "checkedAt": now,
+            "accountId": str(account_id or ""),
+            "symbol": str(symbol or "").upper(),
+            "pendingTargetCount": int((states.get("pending") or {}).get("count") or 0),
+            "dueTargetCount": due_count,
+            "oldestDueTargetAt": str((due or {}).get("oldest_target_at") or ""),
+            "observedTargetCount": int((states.get("observed") or {}).get("count") or 0),
+            "excludedTargetCount": int((states.get("excluded") or {}).get("count") or 0),
+            "latestOutcomeObservedAt": str((latest or {}).get("latest_observed_at") or ""),
+            "states": states,
+            "contract": "durable-decision-outcome-target-v1",
+        }
 
     def record_observation(
         self,
@@ -978,6 +1189,21 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             connection.execute(
                 "UPDATE investment_decision_episodes SET status = %s, decided_at = %s, payload_json = %s, updated_at = %s WHERE episode_id = %s",
                 ("observed", episode.decided_at, json_dumps(episode_payload), utc_now_iso(), episode.episode_id),
+            )
+            horizon_minutes = int((outcome.payload or {}).get("horizonMinutes") or 0)
+            fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
+            connection.execute(
+                "UPDATE investment_decision_outcome_targets "
+                "SET status = 'observed', outcome_id = %s, observed_at = %s, updated_at = %s "
+                "WHERE episode_id = %s AND horizon_minutes = %s AND contract_fingerprint = %s",
+                (
+                    outcome.outcome_id,
+                    outcome.observed_at,
+                    utc_now_iso(),
+                    episode.episode_id,
+                    horizon_minutes,
+                    fingerprint,
+                ),
             )
         return outcome
 

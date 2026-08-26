@@ -10,6 +10,154 @@ from .operational_common import json_dumps
 
 
 class MySQLInvestmentResearchStore(MySQLOperationalConnection):
+    def enqueue_hypothesis_proposal_request(self, payload: Dict[str, object]) -> Dict[str, object]:
+        item = dict(payload or {})
+        request_id = str(item.get("requestId") or "").strip()
+        account_id = str(item.get("accountId") or "").strip()
+        symbol = str(item.get("symbol") or "").upper().strip()
+        fingerprint = str(item.get("gapFingerprint") or "").strip()
+        if not request_id or not symbol or not fingerprint:
+            raise ValueError("hypothesis proposal request identity is incomplete")
+        stamp = utc_now_iso()
+        item.update({
+            "requestId": request_id,
+            "accountId": account_id,
+            "symbol": symbol,
+            "gapFingerprint": fingerprint,
+            "status": "pending",
+            "queuedAt": str(item.get("queuedAt") or stamp),
+        })
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO investment_hypothesis_proposal_requests (
+                    request_id, account_id, symbol, gap_fingerprint, status,
+                    attempts, available_at, lease_owner, lease_expires_at,
+                    last_error, payload_json, result_json, created_at, updated_at, completed_at
+                ) VALUES (%s, %s, %s, %s, 'pending', 0, %s, '', '', '', %s, '{}', %s, %s, '')
+                ON DUPLICATE KEY UPDATE
+                    payload_json = IF(
+                        investment_hypothesis_proposal_requests.status IN ('completed', 'processing', 'failed'),
+                        investment_hypothesis_proposal_requests.payload_json,
+                        VALUES(payload_json)
+                    ),
+                    available_at = investment_hypothesis_proposal_requests.available_at,
+                    status = investment_hypothesis_proposal_requests.status,
+                    updated_at = VALUES(updated_at)
+                """,
+                (
+                    request_id,
+                    account_id,
+                    symbol,
+                    fingerprint,
+                    stamp,
+                    json_dumps(item),
+                    stamp,
+                    stamp,
+                ),
+            )
+            row = connection.execute(
+                "SELECT status, attempts, payload_json FROM investment_hypothesis_proposal_requests "
+                "WHERE account_id = %s AND symbol = %s AND gap_fingerprint = %s",
+                (account_id, symbol, fingerprint),
+            ).fetchone()
+        return {
+            **_json_loads((row or {}).get("payload_json"), item),
+            "status": str((row or {}).get("status") or "pending"),
+            "attempts": int((row or {}).get("attempts") or 0),
+        }
+
+    def claim_hypothesis_proposal_requests(
+        self,
+        worker_id: str,
+        limit: int = 1,
+        lease_seconds: int = 300,
+    ) -> List[Dict[str, object]]:
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        lease_until = (now + timedelta(seconds=max(60, int(lease_seconds or 300)))).isoformat().replace("+00:00", "Z")
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE investment_hypothesis_proposal_requests "
+                "SET status = 'pending', lease_owner = '', lease_expires_at = '', updated_at = %s "
+                "WHERE status = 'processing' AND lease_expires_at <> '' AND lease_expires_at < %s",
+                (stamp, stamp),
+            )
+        claimed = []
+        for _index in range(max(1, min(10, int(limit or 1)))):
+            with self.transaction() as connection:
+                row = connection.execute(
+                    "SELECT request_id, payload_json, attempts FROM investment_hypothesis_proposal_requests "
+                    "WHERE status = 'pending' AND available_at <= %s "
+                    "ORDER BY created_at, request_id LIMIT 1 FOR UPDATE",
+                    (stamp,),
+                ).fetchone()
+                if not row:
+                    break
+                cursor = connection.execute(
+                    "UPDATE investment_hypothesis_proposal_requests "
+                    "SET status = 'processing', attempts = attempts + 1, lease_owner = %s, "
+                    "lease_expires_at = %s, updated_at = %s "
+                    "WHERE request_id = %s AND status = 'pending'",
+                    (str(worker_id or "hypothesis-proposal"), lease_until, stamp, str(row.get("request_id") or "")),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+                    continue
+                payload = _json_loads(row.get("payload_json"), {})
+                payload["attempts"] = int(row.get("attempts") or 0) + 1
+                claimed.append(payload)
+        return claimed
+
+    def complete_hypothesis_proposal_request(
+        self,
+        request_id: str,
+        result: Dict[str, object],
+    ) -> None:
+        stamp = utc_now_iso()
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE investment_hypothesis_proposal_requests "
+                "SET status = 'completed', result_json = %s, lease_owner = '', lease_expires_at = '', "
+                "last_error = '', completed_at = %s, updated_at = %s WHERE request_id = %s",
+                (json_dumps(result), stamp, stamp, str(request_id or "")),
+            )
+
+    def fail_hypothesis_proposal_request(self, request_id: str, error: str) -> None:
+        now = datetime.now(timezone.utc)
+        stamp = now.isoformat().replace("+00:00", "Z")
+        retry_at = (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE investment_hypothesis_proposal_requests "
+                "SET status = IF(attempts >= 3, 'failed', 'pending'), available_at = %s, "
+                "lease_owner = '', lease_expires_at = '', last_error = %s, updated_at = %s "
+                "WHERE request_id = %s",
+                (retry_at, str(error or "")[:1000], stamp, str(request_id or "")),
+            )
+
+    def hypothesis_proposal_request_summary(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count, MIN(created_at) AS oldest_at, "
+                "MAX(updated_at) AS latest_at FROM investment_hypothesis_proposal_requests GROUP BY status"
+            ).fetchall()
+        states = {
+            str(row.get("status") or "unknown"): {
+                "count": int(row.get("count") or 0),
+                "oldestAt": str(row.get("oldest_at") or ""),
+                "latestAt": str(row.get("latest_at") or ""),
+            }
+            for row in rows or []
+        }
+        return {
+            "status": "error" if states.get("failed") else "ok",
+            "pendingCount": int((states.get("pending") or {}).get("count") or 0),
+            "processingCount": int((states.get("processing") or {}).get("count") or 0),
+            "completedCount": int((states.get("completed") or {}).get("count") or 0),
+            "failedCount": int((states.get("failed") or {}).get("count") or 0),
+            "states": states,
+        }
+
     def save_run(self, run: ResearchRun) -> ResearchRun:
         stamp = utc_now_iso()
         payload = run.to_dict()

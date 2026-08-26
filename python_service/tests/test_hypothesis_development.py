@@ -56,6 +56,19 @@ class MemoryExperimentStore:
         self.rows[experiment.experiment_id] = experiment
 
 
+class MemoryProposalStore:
+    def __init__(self, rows=None):
+        self.rows = list(rows or [])
+
+    def list_hypothesis_proposals(self, status="", symbol="", limit=50):
+        rows = list(self.rows)
+        if status:
+            rows = [item for item in rows if item.get("status") == status]
+        if symbol:
+            rows = [item for item in rows if item.get("symbol") == symbol]
+        return rows[:limit]
+
+
 class FakeRuleCandidateService:
     def __init__(self):
         self.calls = []
@@ -261,6 +274,26 @@ class HypothesisDevelopmentServiceTest(unittest.TestCase):
         self.assertEqual(case.source_proposal_ids, ["proposal:1", "proposal:2"])
         self.assertEqual(case.inference_generation_ids, ["inference-generation:1", "inference-generation:2"])
         self.assertEqual(len(candidate_service.calls), 1)
+
+    def test_reconcile_proposal_backlog_creates_only_missing_development_case(self):
+        service, case_store, _, candidate_service, _ = build_service([
+            "2026-01-01T00:00:00Z",
+            "2026-02-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        ])
+        service.proposal_store = MemoryProposalStore([
+            {**proposal("proposal:existing"), "status": "review-required"},
+            {**proposal("proposal:rejected", "거절된 별도 가설"), "status": "rejected"},
+        ])
+
+        first = service.reconcile_proposal_backlog(limit=5)
+        second = service.reconcile_proposal_backlog(limit=5)
+
+        self.assertEqual("reconciled", first["status"])
+        self.assertEqual(1, first["processedCount"])
+        self.assertEqual("idle", second["status"])
+        self.assertEqual(1, len(case_store.rows))
+        self.assertEqual(1, len(candidate_service.calls))
 
     def test_non_causal_constraint_is_rejected_before_ai_compilation(self):
         service, case_store, _, candidate_service, repository = build_service([])

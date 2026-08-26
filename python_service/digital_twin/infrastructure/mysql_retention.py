@@ -70,6 +70,8 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "investment_decision_episodes",
     "investment_decision_follow_ups",
     "investment_decision_outcomes",
+    "investment_decision_outcome_targets",
+    "investment_hypothesis_proposal_requests",
     "mysql_retention_runs",
     "investment_hypothesis_lifecycle_states",
     "investment_hypothesis_lifecycle_events",

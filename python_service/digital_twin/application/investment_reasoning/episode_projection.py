@@ -6,8 +6,18 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 
 from ...domain.investment_brain import (
     DecisionEpisode,
+    canonical_investment_timestamp,
     reasoning_case_decision_episode_id,
     stable_id,
+)
+from ...domain.hypothesis_outcome_contract import (
+    HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
+    outcome_contract_completeness,
+    outcome_contract_fingerprint,
+)
+from ...domain.rule_claim_contract import (
+    RuleClaimContract,
+    authored_outcome_contract_complete,
 )
 from ...domain.investment_reasoning import (
     CASE_BLOCKED,
@@ -100,6 +110,8 @@ def _hypothesis_payload(hypothesis) -> Dict[str, object]:
         "theoryFamily": hypothesis.theory_family,
         "thesisFamily": hypothesis.thesis_family,
         "knowledgeBasis": dict(hypothesis.knowledge_basis or {}),
+        "claimContract": dict(hypothesis.claim_contract or {}),
+        "qualification": dict(hypothesis.qualification or {}),
         "predictionTarget": hypothesis.prediction_target,
         "expectedDirection": hypothesis.expected_direction,
         "expectedOutcome": hypothesis.expected_outcome,
@@ -108,6 +120,86 @@ def _hypothesis_payload(hypothesis) -> Dict[str, object]:
         "falsificationContract": hypothesis.falsification_contract,
         "inferenceGenerationId": hypothesis.inference_generation_id,
         "candidateAction": hypothesis.candidate_action,
+    }
+
+
+def _selected_hypothesis_outcome_contract(
+    hypothesis,
+    inference_generation_id: str,
+    effective_at: str,
+    source_fact_independence_key: str = "",
+) -> Tuple[Dict[str, object], Dict[str, object]]:
+    """Freeze only the exact predictive RuleBox contract carried by V2.
+
+    Re-resolving an old rule against today's catalog would contaminate replay.
+    The selected hypothesis must therefore carry the authored contract from the
+    generation that produced it or remain explicitly ineligible.
+    """
+
+    if not hypothesis:
+        return {}, {"eligible": False, "reason": "no-selected-hypothesis"}
+    claim = RuleClaimContract.from_dict(hypothesis.claim_contract)
+    rule_ids = _unique(hypothesis.supporting_rule_ids)
+    if not claim.claim_contract_id:
+        return {}, {"eligible": False, "reason": "selected-hypothesis-claim-contract-missing"}
+    if claim.rule_id not in rule_ids:
+        return {}, {"eligible": False, "reason": "selected-hypothesis-claim-lineage-mismatch"}
+    if not claim.is_predictive or claim.decision_authority != "conditional-investment-evidence":
+        return {}, {"eligible": False, "reason": "selected-claim-is-not-predictive"}
+    if not authored_outcome_contract_complete(claim.outcome_contract):
+        return {}, {"eligible": False, "reason": "selected-predictive-contract-incomplete"}
+    generation_id = _text(inference_generation_id)
+    if not generation_id:
+        return {}, {"eligible": False, "reason": "inference-generation-missing"}
+    independence_identity = (
+        claim.evidence_independence_key
+        or hypothesis.family_id
+        or hypothesis.hypothesis_id
+    )
+    independence_event = _text(source_fact_independence_key) or generation_id
+    contract = {
+        **claim.outcome_contract.to_dict(),
+        "contractVersion": HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
+        "criteriaOrigin": "rulebox",
+        "effectiveAt": canonical_investment_timestamp(effective_at) or effective_at,
+        "selectedHypothesisId": hypothesis.hypothesis_id,
+        "hypothesisContractId": claim.claim_contract_id,
+        "claimContractId": claim.claim_contract_id,
+        "sourceRuleIds": rule_ids,
+        "inferenceGenerationId": generation_id,
+        "sourceFactIndependenceKey": independence_event,
+        "marketIndependenceKey": stable_id(
+            "market-hypothesis-outcome-episode",
+            independence_identity,
+            independence_event,
+        ),
+        "accountIndependenceKey": stable_id(
+            "account-hypothesis-outcome-episode",
+            hypothesis.account_id or "default",
+            independence_identity,
+            independence_event,
+        ),
+        "predictionTarget": claim.prediction_target or hypothesis.prediction_target,
+        "expectedDirection": claim.expected_direction or hypothesis.expected_direction,
+        "expectedOutcome": claim.expected_outcome or hypothesis.expected_outcome,
+        "outcomeMetric": claim.outcome_metric or hypothesis.outcome_metric,
+        "falsificationContract": (
+            claim.falsification_contract or hypothesis.falsification_contract
+        ),
+    }
+    contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
+    completeness = outcome_contract_completeness(contract)
+    if not completeness.get("complete"):
+        return contract, {
+            "eligible": False,
+            "reason": "frozen-outcome-contract-incomplete",
+            "missing": list(completeness.get("missing") or []),
+        }
+    return contract, {
+        "eligible": True,
+        "reason": "selected-predictive-rulebox-contract-frozen",
+        "contractFingerprint": contract["contractFingerprint"],
+        "hypothesisContractId": claim.claim_contract_id,
     }
 
 
@@ -165,6 +257,19 @@ def decision_episode_from_reasoning_case(
         else "conditional"
     )
     decided_at = reasoning_case.completed_at or reasoning_case.updated_at or reasoning_case.created_at
+    source_fact_independence_key = stable_id(
+        "reasoning-source-fact-delta",
+        list(reasoning_case.fact_delta.source_event_ids),
+        reasoning_case.fact_delta.source_observed_at,
+        symbol,
+        list(reasoning_case.fact_delta.fact_types),
+    ) if reasoning_case.fact_delta.source_event_ids else inference_generation_id
+    outcome_contract, calibration_policy = _selected_hypothesis_outcome_contract(
+        selected,
+        inference_generation_id,
+        decided_at,
+        source_fact_independence_key,
+    )
     episode_id = reasoning_case_decision_episode_id(reasoning_case.case_id, account_id, symbol)
     release_manifest = dict(reasoning_case.release_manifest or {})
     engine_manifest = {
@@ -273,10 +378,8 @@ def decision_episode_from_reasoning_case(
             "aiJudgment": judgment.to_dict() if judgment else {},
             "finalDecision": final.to_dict() if final else {},
             "pointInTimeInputFingerprint": reasoning_case.input_fingerprint,
-            "calibrationPolicy": {
-                "eligible": False,
-                "reason": "explicit-hypothesis-outcome-contract-required",
-            },
+            **({"hypothesisOutcomeContract": outcome_contract} if outcome_contract else {}),
+            "calibrationPolicy": calibration_policy,
         },
         "engineVersion": "independent-reasoning-v2",
     }
@@ -286,8 +389,129 @@ def decision_episode_from_reasoning_case(
 class V2DecisionEpisodeProjector:
     """Idempotent adapter from ReasoningCase to the shared decision history."""
 
-    def __init__(self, decision_episode_store=None):
+    def __init__(
+        self,
+        decision_episode_store=None,
+        hypothesis_proposal_request_store=None,
+    ):
         self.decision_episode_store = decision_episode_store
+        self.hypothesis_proposal_request_store = hypothesis_proposal_request_store
+
+    @staticmethod
+    def hypothesis_gap_request(
+        reasoning_case: ReasoningCase,
+        episode: DecisionEpisode,
+        synthesis=None,
+    ) -> Dict[str, object]:
+        if not reasoning_case.hypotheses:
+            return {}
+        eligible_ids = set(getattr(synthesis, "eligible_hypothesis_ids", ()) or ())
+        reasons = []
+        if len(eligible_ids) < 2:
+            reasons.append("fewer-than-two-independent-predictive-hypotheses")
+        if not episode.selected_hypothesis_id:
+            reasons.append("no-selected-hypothesis")
+        if not reasons:
+            return {}
+        hypothesis_rows = [_hypothesis_payload(item) for item in reasoning_case.hypotheses]
+        evidence_ids = _unique(
+            evidence_id
+            for item in reasoning_case.hypotheses
+            for evidence_id in (
+                list(item.supporting_evidence_ids)
+                + list(item.counter_evidence_ids)
+                + list(item.causal_trace_ids)
+            )
+        )
+        proof_traces = []
+        proof_relations = []
+        inference = reasoning_case.inference_result
+        for evaluation in list(getattr(inference, "rule_evaluations", ()) or ())[:20]:
+            proof = evaluation.proof.to_dict()
+            trace_id = _text(proof.get("trace_id") or proof.get("proof_id"))
+            proof_traces.append({
+                **proof,
+                "id": trace_id,
+                "ruleId": evaluation.rule_id,
+                "selected": bool(evaluation.selected),
+            })
+            for condition in list(evaluation.proof.conditions or ()):
+                relation_id = _text(condition.relation_id) or stable_id(
+                    "hypothesis-gap-condition-evidence",
+                    evaluation.rule_id,
+                    condition.condition_id,
+                    condition.field,
+                    condition.observed_value,
+                )
+                proof_relations.append({
+                    "id": relation_id,
+                    "type": "RULE_CONDITION_EVIDENCE",
+                    "ruleId": evaluation.rule_id,
+                    "conditionId": condition.condition_id,
+                    "field": condition.field,
+                    "operator": condition.operator,
+                    "expectedValue": condition.expected_value,
+                    "observedValue": condition.observed_value,
+                    "source": condition.source,
+                    "sourceAsOf": condition.source_as_of,
+                    "freshness": condition.freshness,
+                })
+        proof_relation_ids = {
+            _text(item.get("id"))
+            for item in proof_relations
+            if _text(item.get("id"))
+        }
+        proposal_relations = proof_relations[:40]
+        proposal_relations.extend(
+            {"id": evidence_id, "type": "GRAPH_EVIDENCE_REFERENCE"}
+            for evidence_id in evidence_ids
+            if evidence_id not in proof_relation_ids
+        )
+        gap_fingerprint = stable_id(
+            "hypothesis-gap",
+            episode.symbol,
+            sorted(eligible_ids),
+            sorted(
+                rule_id
+                for item in reasoning_case.hypotheses
+                for rule_id in item.supporting_rule_ids
+            ),
+            sorted(evidence_ids),
+            reasons,
+        )
+        request_id = stable_id(
+            "hypothesis-proposal-request",
+            episode.account_id,
+            episode.symbol,
+            gap_fingerprint,
+        )
+        return {
+            "requestId": request_id,
+            "accountId": episode.account_id,
+            "symbol": episode.symbol,
+            "gapFingerprint": gap_fingerprint,
+            "gapReasons": reasons,
+            "sourceDecisionEpisodeId": episode.episode_id,
+            "inferenceGenerationId": episode.inference_generation_id,
+            "question": episode.question.to_dict(),
+            "hypothesisSet": {
+                **episode.hypothesis_set.to_dict(),
+                "hypotheses": hypothesis_rows,
+            },
+            "researchRun": {},
+            "relationContext": {
+                "inferenceGenerationId": episode.inference_generation_id,
+                "graphStoreInference": {
+                    "relations": proposal_relations[:40],
+                    "traces": proof_traces[:20] or [
+                        {"id": trace_id, "status": "reference-only"}
+                        for item in reasoning_case.hypotheses
+                        for trace_id in item.causal_trace_ids
+                    ][:20],
+                },
+            },
+            "governance": "review-required-no-automatic-rulebox-deployment",
+        }
 
     def project(self, reasoning_case: ReasoningCase) -> List[DecisionEpisode]:
         if (
@@ -303,5 +527,18 @@ class V2DecisionEpisodeProjector:
                 symbol,
                 synthesis,
             )
-            saved.append(self.decision_episode_store.save(episode))
+            saved_episode = self.decision_episode_store.save(episode)
+            saved.append(saved_episode)
+            enqueue = getattr(
+                self.hypothesis_proposal_request_store,
+                "enqueue_hypothesis_proposal_request",
+                None,
+            )
+            gap_request = self.hypothesis_gap_request(
+                reasoning_case,
+                saved_episode,
+                synthesis,
+            )
+            if callable(enqueue) and gap_request:
+                enqueue(gap_request)
         return saved

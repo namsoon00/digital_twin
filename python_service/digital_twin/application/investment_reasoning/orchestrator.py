@@ -99,6 +99,8 @@ def _prompt_hypotheses(reasoning_case: ReasoningCase, relation: Mapping[str, obj
             "outcomeMetric": hypothesis.outcome_metric,
             "falsificationContract": hypothesis.falsification_contract,
             "knowledgeBasis": deepcopy(hypothesis.knowledge_basis),
+            "claimContract": deepcopy(hypothesis.claim_contract),
+            "qualification": deepcopy(hypothesis.qualification),
             "evidenceState": "supported",
             "approvalStatus": "approved-active",
             "verificationStatus": hypothesis.validation_state or "verified",
@@ -118,10 +120,19 @@ def _prompt_hypotheses(reasoning_case: ReasoningCase, relation: Mapping[str, obj
 class InvestmentReasoningOrchestrator:
     """One public lifecycle over replaceable TypeDB and AI worker stages."""
 
-    def __init__(self, repository, hypothesis_manager=None, decision_episode_store=None):
+    def __init__(
+        self,
+        repository,
+        hypothesis_manager=None,
+        decision_episode_store=None,
+        hypothesis_proposal_request_store=None,
+    ):
         self.repository = repository
         self.hypothesis_manager = hypothesis_manager or GraphHypothesisManager()
-        self.episode_projector = V2DecisionEpisodeProjector(decision_episode_store)
+        self.episode_projector = V2DecisionEpisodeProjector(
+            decision_episode_store,
+            hypothesis_proposal_request_store=hypothesis_proposal_request_store,
+        )
 
     def _persist(self, reasoning_case: ReasoningCase) -> ReasoningCase:
         saved = self.repository.save(reasoning_case)

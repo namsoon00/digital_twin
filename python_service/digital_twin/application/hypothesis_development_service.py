@@ -165,6 +165,43 @@ class HypothesisDevelopmentService:
             "results": results,
         }
 
+    def reconcile_proposal_backlog(self, limit: int = 5) -> Dict[str, object]:
+        """Create missing development cases for proposals persisted before automation."""
+
+        if (
+            not self.proposal_store
+            or not hasattr(self.proposal_store, "list_hypothesis_proposals")
+            or not self.case_store
+        ):
+            return {"status": "unavailable", "processedCount": 0, "results": []}
+        proposals = self.proposal_store.list_hypothesis_proposals("", "", 500) or []
+        results = []
+        for proposal in proposals:
+            if not isinstance(proposal, dict):
+                continue
+            status = str(proposal.get("status") or "review-required").strip().lower()
+            if status in {"rejected"}:
+                continue
+            incoming = HypothesisDevelopmentCase.from_proposal(proposal)
+            existing = self.case_store.get_by_fingerprint(incoming.fingerprint)
+            if existing:
+                continue
+            try:
+                results.append(self.ingest_proposal(proposal))
+            except Exception as error:  # noqa: BLE001 - one legacy proposal cannot block recovery.
+                results.append({
+                    "status": "error",
+                    "proposalId": str(proposal.get("proposalId") or ""),
+                    "reason": str(error)[:500],
+                })
+            if len(results) >= max(1, min(50, int(limit or 5))):
+                break
+        return {
+            "status": "reconciled" if results else "idle",
+            "processedCount": len(results),
+            "results": results,
+        }
+
     def compile_candidate(self, case: HypothesisDevelopmentCase) -> Dict[str, object]:
         if not self.rule_candidate_service or not hasattr(self.rule_candidate_service, "propose_hypothesis"):
             return {"status": "disabled", "reason": "가설 규칙 후보 서비스가 구성되지 않았습니다.", "candidates": []}

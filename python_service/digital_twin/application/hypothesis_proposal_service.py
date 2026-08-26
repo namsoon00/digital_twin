@@ -1,4 +1,6 @@
-from typing import Dict, Iterable, List
+import time
+import uuid
+from typing import Dict, List
 
 from ..domain.events import hypothesis_proposed_event, hypothesis_reviewed_event
 from ..domain.investment_brain import NovelHypothesisProposal, stable_id
@@ -96,6 +98,16 @@ class HypothesisProposalService:
 
     def known_evidence_ids(self, context: Dict[str, object]) -> set:
         ids = set()
+        hypothesis_set = context.get("hypothesisSet") if isinstance(context.get("hypothesisSet"), dict) else {}
+        for hypothesis in hypothesis_set.get("hypotheses") or []:
+            if not isinstance(hypothesis, dict):
+                continue
+            for key in ["supportingEvidenceIds", "counterEvidenceIds", "causalPathIds", "causalTraceIds"]:
+                ids.update(
+                    str(item or "").strip()
+                    for item in hypothesis.get(key) or []
+                    if str(item or "").strip()
+                )
         for item in context.get("inferenceRelations") or []:
             if not isinstance(item, dict):
                 continue
@@ -134,3 +146,65 @@ class HypothesisProposalService:
             self.event_publisher.publish(event)
         else:
             self.event_publisher.handle(event)
+
+
+class HypothesisProposalQueueRunner:
+    """Run bounded AI proposal work outside realtime reasoning latency."""
+
+    def __init__(self, store, proposal_service: HypothesisProposalService, worker_id: str = ""):
+        self.store = store
+        self.proposal_service = proposal_service
+        self.worker_id = str(worker_id or "hypothesis-proposal-" + uuid.uuid4().hex[:12])
+        self.last_results: List[Dict[str, object]] = []
+        self.last_reconciled_at = 0.0
+
+    def run_once(self, limit: int = 1) -> Dict[str, object]:
+        self.last_results = []
+        claim = getattr(self.store, "claim_hypothesis_proposal_requests", None)
+        requests = claim(self.worker_id, limit=max(1, min(3, int(limit or 1)))) if callable(claim) else []
+        for request in requests:
+            request_id = str(request.get("requestId") or "")
+            try:
+                result = self.proposal_service.propose(
+                    str(request.get("accountId") or ""),
+                    str(request.get("symbol") or ""),
+                    dict(request.get("question") or {}),
+                    dict(request.get("hypothesisSet") or {}),
+                    dict(request.get("researchRun") or {}),
+                    dict(request.get("relationContext") or {}),
+                )
+                self.store.complete_hypothesis_proposal_request(request_id, result)
+                self.last_results.append({"requestId": request_id, **dict(result or {})})
+            except Exception as error:  # noqa: BLE001 - one AI proposal cannot stop research work.
+                self.store.fail_hypothesis_proposal_request(request_id, str(error))
+                self.last_results.append({
+                    "requestId": request_id,
+                    "status": "error",
+                    "reason": str(error)[:180],
+                })
+        reconciliation = self.reconcile_backlog_if_due()
+        return {
+            "status": "ok",
+            "processedCount": len(requests),
+            "results": self.last_results,
+            "developmentBacklog": reconciliation,
+            "queue": self.status(),
+        }
+
+    def reconcile_backlog_if_due(self, interval_seconds: int = 3600) -> Dict[str, object]:
+        now = time.monotonic()
+        if self.last_reconciled_at and now - self.last_reconciled_at < max(60, interval_seconds):
+            return {"status": "not-due", "processedCount": 0}
+        self.last_reconciled_at = now
+        development = getattr(self.proposal_service, "development_service", None)
+        reconcile = getattr(development, "reconcile_proposal_backlog", None)
+        if not callable(reconcile):
+            return {"status": "unavailable", "processedCount": 0}
+        try:
+            return dict(reconcile(limit=3) or {})
+        except Exception as error:  # noqa: BLE001 - backlog recovery is not realtime-critical.
+            return {"status": "error", "processedCount": 0, "reason": str(error)[:180]}
+
+    def status(self) -> Dict[str, object]:
+        summary = getattr(self.store, "hypothesis_proposal_request_summary", None)
+        return dict(summary() or {}) if callable(summary) else {"status": "unavailable"}

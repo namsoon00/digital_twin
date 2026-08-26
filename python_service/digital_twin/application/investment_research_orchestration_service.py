@@ -612,9 +612,15 @@ class InvestmentResearchOrchestrationService:
 
 
 class InvestmentResearchQueueRunner:
-    def __init__(self, store, orchestrator: InvestmentResearchOrchestrationService):
+    def __init__(
+        self,
+        store,
+        orchestrator: InvestmentResearchOrchestrationService,
+        hypothesis_proposal_runner=None,
+    ):
         self.store = store
         self.orchestrator = orchestrator
+        self.hypothesis_proposal_runner = hypothesis_proposal_runner
         self.last_results: List[Dict[str, object]] = []
 
     def run_once(self, limit: int = 5) -> Dict[str, object]:
@@ -636,11 +642,17 @@ class InvestmentResearchQueueRunner:
                 )
                 self.orchestrator.persist_run(failed)
                 self.last_results.append(failed.to_dict())
+        proposal_result = (
+            self.hypothesis_proposal_runner.run_once(limit=1)
+            if self.hypothesis_proposal_runner is not None
+            else {"status": "not-configured", "processedCount": 0}
+        )
         return {
             "status": "ok",
             "processedCount": len(runs),
             "queuedCount": self.store.queued_count() if self.store and hasattr(self.store, "queued_count") else 0,
             "results": self.last_results,
+            "hypothesisProposalAutomation": proposal_result,
         }
 
     def status(self) -> Dict[str, object]:
@@ -648,6 +660,11 @@ class InvestmentResearchQueueRunner:
             "status": "ready",
             "queuedCount": self.store.queued_count() if self.store and hasattr(self.store, "queued_count") else 0,
             "lastResults": self.last_results[-20:],
+            "hypothesisProposalAutomation": (
+                self.hypothesis_proposal_runner.status()
+                if self.hypothesis_proposal_runner is not None
+                else {"status": "not-configured"}
+            ),
         }
 
 

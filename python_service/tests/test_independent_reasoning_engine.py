@@ -126,6 +126,57 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_v2_executor_observes_lifecycle_after_projection_is_attached(self):
+        class Recorder:
+            @staticmethod
+            def world_partitioned_reasoning_enabled():
+                return False
+
+            @staticmethod
+            def record_snapshot(_snapshot, **_kwargs):
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "status": "ok",
+                        "nativeTypeDbReasoningUsed": True,
+                        "generationAligned": True,
+                        "inferenceGenerationId": "generation:feedback:1",
+                    },
+                }
+
+        class Observer:
+            calls = 0
+
+            def observe_snapshot(self, snapshot):
+                self.calls += 1
+                projection = snapshot.metadata["ontology"]["projection"]
+                return {
+                    "status": "ok",
+                    "generationId": projection["inferenceBox"]["inferenceGenerationId"],
+                }
+
+        observer = Observer()
+        executor = ScopedTypeDBInferenceExecutor(
+            Recorder(),
+            post_inference_observer=observer,
+        )
+        request = independent_reasoning_request(
+            "ontology-v2-shadow",
+            [source_event("NVDA", ["acct"])],
+        )
+
+        result = executor.execute(
+            request,
+            [SimpleNamespace(account_id="acct", metadata={})],
+        )["acct"]
+
+        self.assertEqual(1, observer.calls)
+        self.assertEqual("ok", result["hypothesisLifecycle"]["status"])
+        self.assertEqual(
+            "generation:feedback:1",
+            result["hypothesisLifecycle"]["generationId"],
+        )
+
     def test_job_runner_holds_graph_writer_around_one_shot_execution(self):
         class Guard:
             def __init__(self):

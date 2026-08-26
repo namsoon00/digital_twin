@@ -290,6 +290,14 @@ class OntologyDiagnosticsService:
         except Exception as error:  # noqa: BLE001 - diagnostics must remain available without feedback history.
             return {"status": "error", "reason": str(error)[:180]}
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        target_pipeline = {"status": "unavailable"}
+        if hasattr(self.decision_episode_store, "outcome_target_summary"):
+            try:
+                target_pipeline = self.decision_episode_store.outcome_target_summary(
+                    symbol=clean_symbols[0] if len(clean_symbols) == 1 else "",
+                )
+            except Exception as error:  # noqa: BLE001 - performance history remains available.
+                target_pipeline = {"status": "error", "reason": str(error)[:180]}
         rule_outcomes = []
         for row in result.get("byRule") or []:
             if not isinstance(row, dict):
@@ -323,6 +331,7 @@ class OntologyDiagnosticsService:
             ),
             "hypothesisCount": len(result.get("byHypothesis") or []),
             "ruleOutcomes": rule_outcomes[:80],
+            "outcomeTargetPipeline": target_pipeline,
             "automaticDeployment": False,
         }
 

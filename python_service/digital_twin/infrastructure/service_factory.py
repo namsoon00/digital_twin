@@ -35,7 +35,10 @@ from ..application.shared_instrument_inference_service import SharedInstrumentIn
 from ..application.investment_brain_service import InvestmentBrainService
 from ..application.investment_domain_service import InvestmentDomainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
-from ..application.hypothesis_proposal_service import HypothesisProposalService
+from ..application.hypothesis_proposal_service import (
+    HypothesisProposalQueueRunner,
+    HypothesisProposalService,
+)
 from ..application.hypothesis_lifecycle_service import HypothesisLifecycleService
 from ..application.hypothesis_lifecycle_policy_service import HypothesisLifecyclePolicyService
 from ..application.hypothesis_policy_governance_service import HypothesisPolicyGovernanceService
@@ -811,6 +814,10 @@ def build_investment_research_queue_runner(settings=None) -> InvestmentResearchQ
     return InvestmentResearchQueueRunner(
         store=research_store,
         orchestrator=build_investment_research_orchestrator(configured_settings, research_store),
+        hypothesis_proposal_runner=HypothesisProposalQueueRunner(
+            research_store,
+            build_hypothesis_proposal_service(configured_settings, research_store),
+        ),
     )
 
 
@@ -2228,6 +2235,7 @@ def build_v2_reasoning_engine(
         inference_executor=ScopedTypeDBInferenceExecutor(
             projection_recorder,
             shared_inference_service=shared_inference_service,
+            post_inference_observer=build_hypothesis_lifecycle_service(store_settings),
             settings=candidate_settings,
         ),
         candidate_builder=V2GraphDecisionCandidateBuilder(
@@ -2246,6 +2254,7 @@ def build_v2_reasoning_engine(
         reasoning_orchestrator=InvestmentReasoningOrchestrator(
             stores.investment_reasoning_case_store(store_settings),
             decision_episode_store=stores.investment_decision_episode_store(store_settings),
+            hypothesis_proposal_request_store=stores.investment_research_store(store_settings),
         ),
         shared_inference_service=shared_inference_service,
     )

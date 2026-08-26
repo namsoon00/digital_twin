@@ -543,15 +543,39 @@ class ScopedTypeDBInferenceExecutor:
         self,
         projection_recorder,
         shared_inference_service=None,
+        post_inference_observer=None,
         settings: Mapping[str, object] = None,
         sleep=time.sleep,
     ):
         self.projection_recorder = projection_recorder
         self.shared_inference_service = shared_inference_service
+        self.post_inference_observer = post_inference_observer
         self.settings = dict(settings or {})
         self.sleep = sleep
         self.last_shared_publication = {"status": "not-configured"}
         self.last_shared_publication_ms = 0
+
+    def observe_projection_result(self, snapshot, result: Mapping[str, object]) -> Dict[str, object]:
+        """Run audit feedback only after the exact V2 projection is attached."""
+
+        payload = dict(result or {})
+        metadata = dict(getattr(snapshot, "metadata", {}) or {})
+        ontology = dict(metadata.get("ontology") or {})
+        ontology["projection"] = payload
+        metadata["ontology"] = ontology
+        snapshot.metadata = metadata
+        observer = self.post_inference_observer
+        if observer is None:
+            return {"status": "not-configured"}
+        callback = getattr(observer, "observe_snapshot", None)
+        if not callable(callback):
+            callback = observer if callable(observer) else None
+        if not callable(callback):
+            return {"status": "invalid-observer"}
+        try:
+            return dict(callback(snapshot) or {})
+        except Exception as error:  # noqa: BLE001 - feedback audit cannot invalidate a verified generation.
+            return {"status": "error", "reason": str(error)[:180]}
 
     def shared_premise_inline_retry_count(self) -> int:
         # A production worker gets one cheap retry for a coordinator hand-off.
@@ -786,6 +810,10 @@ class ScopedTypeDBInferenceExecutor:
                         "publicationStatus": "not-required-existing-head",
                         "publishedSharedSymbolCount": 0,
                     }
+                    result["hypothesisLifecycle"] = self.observe_projection_result(
+                        snapshot,
+                        result,
+                    )
                     results[account_id] = result
                     progress(
                         "ontology_projection.reused_exact_inference",
@@ -842,6 +870,7 @@ class ScopedTypeDBInferenceExecutor:
                 )
                 if callable(evidence_composer):
                     result = dict(evidence_composer(result, reuse_proof) or result)
+            result["hypothesisLifecycle"] = self.observe_projection_result(snapshot, result)
             results[account_id] = result
             if partitioned_mode:
                 premise_selection = (

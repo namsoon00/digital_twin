@@ -622,6 +622,9 @@ def cloudflare_share_worker_spec(settings: Dict[str, object]) -> Dict[str, objec
             ]).keys()).strip(os.pathsep),
             "SHARE_FIXED_ENTRY_URL": fixed_entry_url(settings),
             "SHARE_PUBLISH_TARGET": "1" if truthy((settings or {}).get("cloudflareSharePublishTargetEnabled", "1")) else "0",
+            "SHARE_TUNNEL_ROTATION_MINUTES": str((settings or {}).get("cloudflareShareRotationMinutes") or "360"),
+            "SHARE_TUNNEL_HEALTH_CHECK_SECONDS": str((settings or {}).get("cloudflareShareHealthCheckSeconds") or "60"),
+            "SHARE_TUNNEL_ROTATION_GRACE_SECONDS": str((settings or {}).get("cloudflareShareRotationGraceSeconds") or "120"),
         },
         "missingReason": missing,
     }

@@ -161,6 +161,7 @@ from ..infrastructure.share_runtime import (
     active_share_runtime_state,
     fixed_access_url,
     fixed_entry_url,
+    request_share_tunnel_rotation,
 )
 from ..infrastructure.flow_lens_read_model import FlowLensReadModel
 from ..infrastructure.settings import ROOT_DIR, read_json, runtime_settings, save_runtime_settings, write_private_json
@@ -712,6 +713,20 @@ def share_runtime_status_payload(access: ShareAccess = None, settings: Dict[str,
         "targetPublishStatus": str(runtime.get("targetPublishStatus") or ("waiting" if runtime else "inactive")),
         "targetPublishedAt": str(runtime.get("targetPublishedAt") or ""),
         "targetPublishError": str(runtime.get("targetPublishError") or "")[:500] if privileged else "",
+        "rotationStatus": str(runtime.get("rotationStatus") or ("active" if runtime else "inactive")),
+        "rotationCount": int(runtime.get("rotationCount") or 0),
+        "rotationMinutes": int(runtime.get("rotationMinutes") or 0),
+        "rotationGraceSeconds": int(runtime.get("rotationGraceSeconds") or 0),
+        "tunnelStartedAt": str(runtime.get("tunnelStartedAt") or ""),
+        "renewAt": str(runtime.get("renewAt") or ""),
+        "lastRotationAt": str(runtime.get("lastRotationAt") or ""),
+        "lastRotationReason": str(runtime.get("lastRotationReason") or ""),
+        "lastRotationStatus": str(runtime.get("lastRotationStatus") or ""),
+        "lastRotationError": str(runtime.get("lastRotationError") or "")[:500] if privileged else "",
+        "lastHealthCheckAt": str(runtime.get("lastHealthCheckAt") or ""),
+        "lastHealthStatus": str(runtime.get("lastHealthStatus") or "unknown"),
+        "lastHealthError": str(runtime.get("lastHealthError") or "")[:500] if privileged else "",
+        "consecutiveHealthFailures": int(runtime.get("consecutiveHealthFailures") or 0),
         "runtimeIdentity": identity,
         "accessLinkPolicy": "fragment-only",
     }
@@ -6129,6 +6144,15 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, self.share_access().to_public_dict())
         if path == "/api/share/status" and self.command == "GET":
             return self.send_payload(200, share_runtime_status_payload(self.share_access()))
+        if path == "/api/share/rotate" and self.command == "POST":
+            if not self.ensure_writable("공유 보기 모드에서는 터널 주소를 갱신할 수 없습니다."):
+                return
+            body = self.read_json_body()
+            payload = request_share_tunnel_rotation(
+                reason=str(body.get("reason") or "manual"),
+                requested_by=str(self.share_access().role or "local-owner"),
+            )
+            return self.send_payload(202, payload)
         if path == "/api/version" and self.command == "GET":
             return self.send_payload(200, {
                 **runtime_identity(),

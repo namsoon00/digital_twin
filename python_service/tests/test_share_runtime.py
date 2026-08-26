@@ -9,6 +9,7 @@ from digital_twin.infrastructure.share_runtime import (
     active_share_runtime_state,
     fixed_access_url,
     load_or_create_share_credentials,
+    request_share_tunnel_rotation,
 )
 
 
@@ -56,6 +57,24 @@ class ShareRuntimeTests(unittest.TestCase):
 
             with patch("digital_twin.infrastructure.share_runtime.os.kill", side_effect=OSError):
                 self.assertEqual({}, active_share_runtime_state(path))
+
+    def test_rotation_request_is_private_and_contains_a_stable_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "share-rotation-request.json"
+
+            queued = request_share_tunnel_rotation(
+                reason="owner-request",
+                requested_by="local-owner",
+                path=path,
+            )
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertEqual("queued", queued["status"])
+            self.assertEqual("owner-request", saved["reason"])
+            self.assertEqual("local-owner", saved["requestedBy"])
+            self.assertTrue(saved["requestId"].startswith("share-rotation-"))
+            self.assertTrue(saved["requestedAt"].endswith("Z"))
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
 
 
 if __name__ == "__main__":

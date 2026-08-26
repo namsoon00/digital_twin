@@ -53,8 +53,17 @@ function publicTargetPayload(state, revision, now) {
 }
 
 function readRuntimeState() {
-  const payload = JSON.parse(fs.readFileSync(runtimeStatePath, "utf8"));
+  let payload = {};
+  try {
+    payload = JSON.parse(fs.readFileSync(runtimeStatePath, "utf8"));
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") throw error;
+  }
   if (!payload || typeof payload !== "object") throw new Error("공유 런타임 상태 형식이 올바르지 않습니다.");
+  const targetBaseUrl = String(process.env.SHARE_TARGET_BASE_URL || "").trim();
+  if (targetBaseUrl) payload.baseUrl = targetBaseUrl;
+  const targetProvider = String(process.env.SHARE_TARGET_PROVIDER || "").trim();
+  if (targetProvider) payload.provider = targetProvider;
   return payload;
 }
 

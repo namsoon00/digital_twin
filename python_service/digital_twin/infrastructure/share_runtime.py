@@ -35,6 +35,12 @@ def share_runtime_state_path(environment: Mapping[str, object] = None) -> Path:
     return Path(configured).expanduser().resolve() if configured else ROOT_DIR / "data" / "share-runtime.json"
 
 
+def share_rotation_request_path(environment: Mapping[str, object] = None) -> Path:
+    source = environment if environment is not None else os.environ
+    configured = _configured(source.get("SHARE_ROTATION_REQUEST_PATH"))
+    return Path(configured).expanduser().resolve() if configured else ROOT_DIR / "data" / "share-rotation-request.json"
+
+
 def _read_object(path: Path) -> Dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -126,6 +132,22 @@ def fixed_access_url(entry_url: str, token_name: str, token: str) -> str:
 
 def read_share_runtime_state(path: Path = None) -> Dict[str, object]:
     return _read_object(Path(path) if path else share_runtime_state_path())
+
+
+def request_share_tunnel_rotation(
+    reason: object = "manual",
+    requested_by: object = "local-owner",
+    path: Path = None,
+) -> Dict[str, object]:
+    target = Path(path) if path else share_rotation_request_path()
+    payload = {
+        "requestId": "share-rotation-" + secrets.token_hex(8),
+        "reason": _configured(reason)[:120] or "manual",
+        "requestedBy": _configured(requested_by)[:120] or "local-owner",
+        "requestedAt": _utc_now(),
+    }
+    _write_private_object(target, payload)
+    return dict(payload, status="queued")
 
 
 def process_is_alive(pid: object) -> bool:

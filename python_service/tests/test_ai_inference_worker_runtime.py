@@ -39,6 +39,9 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             "cloudflareShareManagedEnabled": "1",
             "webPort": "3100",
             "cloudflareSharePort": "3101",
+            "cloudflareShareRotationMinutes": "240",
+            "cloudflareShareHealthCheckSeconds": "45",
+            "cloudflareShareRotationGraceSeconds": "90",
         }), patch.object(
             service_manager,
             "share_credentials_environment",
@@ -54,6 +57,9 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
         self.assertEqual("cloudflare-share", share["role"])
         self.assertEqual("3100", share["env"]["PORT"])
         self.assertEqual("cloudflared", share["env"]["TUNNEL_PROVIDER"])
+        self.assertEqual("240", share["env"]["SHARE_TUNNEL_ROTATION_MINUTES"])
+        self.assertEqual("45", share["env"]["SHARE_TUNNEL_HEALTH_CHECK_SECONDS"])
+        self.assertEqual("90", share["env"]["SHARE_TUNNEL_ROTATION_GRACE_SECONDS"])
         self.assertEqual("private-view-token", specs["web"]["env"]["SHARE_VIEW_TOKEN"])
         self.assertIn("scripts/share-local.js", " ".join(share["command"]))
 

@@ -7,6 +7,13 @@ const os = require("os");
 const path = require("path");
 const vm = require("vm");
 const { publicTargetPayload, validTunnelBaseUrl } = require("./publish-live-target");
+const {
+  healthRotationRequired,
+  lifecycleConfig,
+  nextRotationAt,
+  retryDelayMs,
+  rotationDue
+} = require("./share-tunnel-lifecycle");
 
 const rootDir = path.resolve(__dirname, "..");
 // A fresh smoke database creates the complete operational schema on its first
@@ -255,6 +262,8 @@ function checkWorkflowConsoleContract() {
   const symbolStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_symbol_universe.py"), "utf8");
   const webServer = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "web_server.py"), "utf8");
   const webRestart = fs.readFileSync(path.join(rootDir, "scripts", "restart-web-service.js"), "utf8");
+  const shareLifecycle = fs.readFileSync(path.join(rootDir, "scripts", "share-local.js"), "utf8");
+  const fixedEntry = fs.readFileSync(path.join(rootDir, "public", "live", "index.html"), "utf8");
 
   const tabBlock = code.slice(code.indexOf("var tabs = ["), code.indexOf("var bottomTabIds"));
   const activeTabs = ["overview", "portfolio", "calendar", "feed", "modeling", "notifications", "experiments", "settings", "operations"];
@@ -323,6 +332,31 @@ function checkWorkflowConsoleContract() {
       && webServer.indexOf('path == "/api/version"') >= 0
       && webRestart.indexOf("writeManagedPid(child.pid)") >= 0,
     "고정 공유 주소 상태, 버전 확인 또는 전체 링크 복사 UI 계약이 없습니다."
+  );
+  const lifecycle = lifecycleConfig({});
+  const startedAt = "2026-08-26T00:00:00.000Z";
+  const renewAt = nextRotationAt(startedAt, lifecycle.rotationIntervalMs);
+  assertOk(
+    lifecycle.rotationMinutes === 360
+      && lifecycle.healthCheckSeconds === 60
+      && lifecycle.rotationGraceSeconds === 120
+      && lifecycle.targetPropagationTimeoutSeconds === 120
+      && !rotationDue("2026-08-26T05:59:59.000Z", renewAt)
+      && rotationDue("2026-08-26T06:00:00.000Z", renewAt)
+      && !healthRotationRequired(2, 3)
+      && healthRotationRequired(3, 3)
+      && retryDelayMs(1) === 5000
+      && retryDelayMs(20) === 300000,
+    "공유 터널 선제 갱신, 건강 확인 또는 실패 재시도 정책이 올바르지 않습니다."
+  );
+  assertOk(
+    shareLifecycle.indexOf('rotationStatus: "confirming"') >= 0
+      && shareLifecycle.indexOf("waitForPublishedTarget(candidateTunnel)") >= 0
+      && shareLifecycle.indexOf('rotateTunnel("proactive-renewal")') >= 0
+      && shareLifecycle.indexOf("consumeRotationRequest()") >= 0
+      && fixedEntry.indexOf("retryTimer = window.setTimeout(loadTarget, 10000)") >= 0
+      && fixedEntry.indexOf('document.addEventListener("visibilitychange"') >= 0,
+    "고정 주소 무중단 전환 확인, 자동 갱신 또는 진입 페이지 자동 복구 계약이 없습니다."
   );
   assertOk(
     webServer.indexOf("def investment_calendar_read_service") >= 0

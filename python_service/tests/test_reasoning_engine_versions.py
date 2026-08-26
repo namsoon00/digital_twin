@@ -1,4 +1,5 @@
 import unittest
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -84,6 +85,35 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual(1, result["unresolvedFailureCount"])
         self.assertEqual(60, result["resolvedFailureCount"])
         self.assertEqual({"typedbCandidateVerificationError": 1}, result["unresolvedFailureReasonCounts"])
+
+    def test_validation_window_counts_only_jobs_claimed_after_the_marker(self):
+        class Connection:
+            def __init__(self):
+                self.queries = []
+
+            def execute(self, sql, params=()):
+                self.queries.append((sql, tuple(params)))
+                return SimpleNamespace(fetchall=lambda: [])
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            @contextmanager
+            def connect(self):
+                yield connection
+
+        result = object.__new__(Store).summary(
+            "ontology-v2-candidate",
+            completed_since="2026-08-26T08:27:29Z",
+        )
+
+        cohort_queries = [
+            sql for sql, _params in connection.queries
+            if "validation_cohort_id" not in sql and "claimed_at >= %s" in sql
+        ]
+        self.assertTrue(cohort_queries)
+        self.assertTrue(all("completed_at >= %s" not in sql for sql in cohort_queries))
+        self.assertEqual(0, result["sampleCount"])
 
     def test_v2_release_preflight_migrates_rulebox_before_freezing_snapshot(self):
         from digital_twin.domain.ontology_rule_ownership import (

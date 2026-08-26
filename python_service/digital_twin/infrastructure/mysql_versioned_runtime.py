@@ -2192,7 +2192,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             cohort_conditions.append("validation_cohort_id = %s")
             cohort_params.append(str(validation_cohort_id or ""))
         if str(completed_since or ""):
-            cohort_conditions.append("completed_at >= %s")
+            # A validation window owns executions that started after the
+            # marker. Filtering by completion time admits an already-running
+            # warmup job and its historical queue wait into the cohort.
+            cohort_conditions.append("claimed_at >= %s")
             cohort_params.append(str(completed_since or ""))
         cohort_where = where
         for condition in cohort_conditions:

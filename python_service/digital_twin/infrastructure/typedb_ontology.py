@@ -7982,10 +7982,10 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # production worker therefore retains one process-local driver while
         # its supervisor still owns a killable process boundary.
         self._persistent_driver_enabled = bool(persistent_driver_enabled)
-        # Set only by the isolated blue-green PortfolioWorld replay process.
-        # The manager has just created this database and seeded static boxes,
-        # so no PortfolioWorld ABox can be reused. Normal live repositories
-        # always retain immutable storage identity verification.
+        # Set only for an isolated provisioning deployment. The control plane
+        # has fenced its database from active delivery, so no PortfolioWorld
+        # ABox can be reused. Normal live repositories always retain immutable
+        # storage identity verification.
         self._fresh_candidate_rebuild = bool(fresh_candidate_rebuild)
         self._fresh_schema_bootstrap_batch_size = max(
             DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
@@ -9413,7 +9413,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # timeout and can poison the first connection. Bootstrap the bounded
         # base contract directly; retries can still resume from inspected text.
         schema_text = ""
-        if self._fresh_candidate_rebuild and self._database_created_in_process:
+        if self._fresh_candidate_rebuild:
             if self.http_address:
                 self.synchronize_base_schema_batches_http(
                     schema_text,
@@ -9438,27 +9438,6 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 schema_text,
                 flags=re.MULTILINE,
             ))
-            # A registered candidate database can exist before its first
-            # worker process opens it. It is still a fresh isolated store even
-            # though ensure_database() did not create it in this process.
-            if self._fresh_candidate_rebuild and not schema_type_names:
-                if self.http_address:
-                    self.synchronize_base_schema_batches_http(
-                        schema_text,
-                        batch_size=self._fresh_schema_bootstrap_batch_size,
-                        operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
-                    )
-                else:
-                    self.synchronize_base_schema_batches(
-                        driver,
-                        imported,
-                        schema_text,
-                        batch_size=self._fresh_schema_bootstrap_batch_size,
-                        operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
-                    )
-                self._base_schema_ready_fingerprint = schema_fingerprint
-                self.mark_process_base_schema_ready(schema_fingerprint)
-                return
             # A new database has no ontology types yet. Reading the static
             # manifest first issues a query against those missing types and
             # can invalidate the driver's connection before this schema write.

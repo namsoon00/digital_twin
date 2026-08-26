@@ -1390,7 +1390,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 patch.object(repository, "mark_process_base_schema_ready") as mark_ready:
             repository.ensure_schema(object(), imported)
 
-        inspect_schema.assert_called_once()
+        inspect_schema.assert_not_called()
         http_sync.assert_called_once_with(
             "",
             batch_size=512,

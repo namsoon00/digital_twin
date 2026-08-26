@@ -3,8 +3,8 @@ from typing import Dict
 from ....application.external_data.registry import ExternalDatasetRegistry
 from .coingecko import CoinGeckoMarketAdapter
 from .fred import FredMacroAdapter
-from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter
-from .sec import SecCompanyFactsAdapter, SecSubmissionsAdapter
+from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter, OpenDartDocumentAdapter
+from .sec import SecCompanyFactsAdapter, SecDocumentAdapter, SecSubmissionsAdapter
 from .yfinance import YFinanceProfileAdapter
 from .alpha_vantage import AlphaVantageQuoteAdapter
 
@@ -15,8 +15,10 @@ def default_external_dataset_registry(settings: Dict[str, object]) -> ExternalDa
         CoinGeckoMarketAdapter(),
         FredMacroAdapter(),
         OpenDartDisclosureAdapter(),
+        OpenDartDocumentAdapter(),
         OpenDartCompanyFactsAdapter(),
         SecSubmissionsAdapter(),
+        SecDocumentAdapter(),
         SecCompanyFactsAdapter(),
         YFinanceProfileAdapter("price"),
         YFinanceProfileAdapter("options"),

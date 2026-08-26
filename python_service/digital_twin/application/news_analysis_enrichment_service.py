@@ -15,7 +15,7 @@ import uuid
 
 from ..domain.data_freshness import age_minutes, parse_datetime
 from ..domain.events import news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event
-from ..domain.evidence_delta import evidence_content_signature
+from ..domain.evidence_delta import evidence_content_signature, evidence_story_key
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
@@ -180,8 +180,11 @@ class NewsAnalysisEnrichmentRunner:
         translation_pending = language == "en" and str(payload.get("translationStatus") or "").lower() != "complete"
         states = news_domain.news_state_rank(item.state_payload())
         governance = payload.get("evidenceGovernance") if isinstance(payload.get("evidenceGovernance"), dict) else {}
+        audience = str(payload.get("collectionAudience") or "").strip().lower()
+        audience_rank = 2 if audience == "holding" else 1 if audience == "watchlist" else 0
         published = parse_datetime(item.published_at or item.observed_at)
         return (
+            audience_rank,
             bool(governance.get("investmentJudgmentEligible")),
             *states,
             bool(facts.get("bodyAvailable")),
@@ -202,7 +205,21 @@ class NewsAnalysisEnrichmentRunner:
 
     def candidates(self) -> List[ResearchEvidence]:
         rows = list(self.evidence_store.latest(kind="news", limit=self.scan_limit()) or [])
-        return sorted((item for item in rows if self.should_retry(item)), key=self.priority, reverse=True)
+        ordered = sorted((item for item in rows if self.should_retry(item)), key=self.priority, reverse=True)
+        selected = []
+        seen = set()
+        for item in ordered:
+            story_key = evidence_story_key(item) or item.evidence_id
+            if story_key in seen:
+                continue
+            seen.add(story_key)
+            selected.append(item)
+        self._last_candidate_scan = {
+            "scannedCount": len(rows),
+            "retryableCount": len(ordered),
+            "deduplicatedCount": max(0, len(ordered) - len(selected)),
+        }
+        return selected
 
     def durable_queue_enabled(self) -> bool:
         return all(callable(getattr(self.evidence_store, name, None)) for name in (
@@ -214,7 +231,7 @@ class NewsAnalysisEnrichmentRunner:
     def queue_priority(self, item: ResearchEvidence) -> int:
         values = self.priority(item)
         ranks = []
-        for value in values[1:5]:
+        for value in values[2:6]:
             try:
                 ranks.append(max(0, int(value)))
             except (TypeError, ValueError):
@@ -227,14 +244,15 @@ class NewsAnalysisEnrichmentRunner:
             int((datetime.now(timezone.utc) - published_at).total_seconds() // 3600),
         ) if published_at else 1999
         score = (
-            (500000 if bool(values[0]) else 0)
+            max(0, min(2, int(values[0] or 0))) * 180000
+            + (300000 if bool(values[1]) else 0)
             + ranks[0] * 80000
             + ranks[1] * 40000
             + ranks[2] * 20000
             + ranks[3] * 10000
-            + (8000 if len(values) > 5 and bool(values[5]) else 0)
-            + (4000 if len(values) > 6 and bool(values[6]) else 0)
-            + (2000 if len(values) > 7 and bool(values[7]) else 0)
+            + (8000 if len(values) > 6 and bool(values[6]) else 0)
+            + (4000 if len(values) > 7 and bool(values[7]) else 0)
+            + (2000 if len(values) > 8 and bool(values[8]) else 0)
             + max(0, 1999 - min(1999, age_hours))
         )
         return min(1000000, score)
@@ -274,6 +292,7 @@ class NewsAnalysisEnrichmentRunner:
             "retryMinutes": self.retry_minutes(),
             "pendingCount": len(candidates),
             "pendingTranslationCount": pending_translation,
+            "candidateScan": dict(getattr(self, "_last_candidate_scan", {}) or {}),
         }
 
     def status(self) -> Dict[str, object]:

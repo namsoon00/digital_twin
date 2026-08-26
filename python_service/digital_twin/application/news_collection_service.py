@@ -708,15 +708,25 @@ class NewsCollectionRunner:
 
     def all_targets(self) -> List[NewsCollectionTarget]:
         targets: Dict[str, NewsCollectionTarget] = {}
+        target_roles: Dict[str, str] = {}
         if self.include_holdings():
-            for item in snapshot_items(getattr(self.monitor_store, "previous", {}) or {}):
-                self.add_target(targets, item)
+            for state in (getattr(self.monitor_store, "previous", {}) or {}).values():
+                positions = state.get("positions") if isinstance(state, dict) else {}
+                for item in positions.values() if isinstance(positions, dict) else []:
+                    if not isinstance(item, dict):
+                        continue
+                    self.add_target(targets, item)
+                    symbol = str(item.get("symbol") or "").upper().strip()
+                    if symbol:
+                        target_roles[symbol] = "holding"
         if self.include_watchlist():
             for account in self.account_repository.load() or []:
                 if not isinstance(account, AccountConfig) or not account.enabled:
                     continue
                 for symbol in account.watchlist_symbols or []:
                     self.add_target(targets, {"symbol": symbol})
+                    target_roles.setdefault(str(symbol or "").upper().strip(), "watchlist")
+        self._target_roles = target_roles
         return sorted(
             targets.values(),
             key=lambda target: (target.normalized_symbol(), target.normalized_market(), str(target.name or "").casefold()),
@@ -815,6 +825,13 @@ class NewsCollectionRunner:
             processed_symbols.append(target.symbol)
             try:
                 items, target_statuses = self.gateway.collect_for_target(target)
+                audience = getattr(self, "_target_roles", {}).get(target.normalized_symbol(), "watchlist")
+                for item in items:
+                    if not isinstance(item, ResearchEvidence):
+                        continue
+                    payload = dict(item.raw_payload or {})
+                    payload["collectionAudience"] = audience
+                    item.raw_payload = payload
                 if self.article_analysis_service and hasattr(self.article_analysis_service, "analyze_many"):
                     analyze_many = self.article_analysis_service.analyze_many
                     try:

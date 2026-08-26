@@ -144,6 +144,43 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
 
         return int(self.transaction_with_deadlock_retry("external-data-sync-partitions", mutation) or 0)
 
+    def enqueue_followups(self, plans: Iterable[tuple], now: datetime = None) -> int:
+        """Insert immutable document work once; normal leases own retries."""
+        current = now or utc_now()
+        stamp = iso(current)
+        rows = list(plans or [])
+        if not rows:
+            return 0
+
+        def mutation(connection):
+            saved = 0
+            for descriptor, request in rows:
+                if not isinstance(descriptor, DatasetDescriptor):
+                    continue
+                cursor = connection.execute(
+                    """
+                    INSERT IGNORE INTO external_dataset_state (
+                        dataset_id, partition_key, provider_id, subject_json, watermark_json,
+                        priority, active, job_status, next_due_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 1, 'pending', %s, %s, %s)
+                    """,
+                    (
+                        descriptor.dataset_id,
+                        str(request.partition_key or "")[:191],
+                        descriptor.provider_id,
+                        json_dumps(request.subject.to_dict()),
+                        json_dumps(request.watermark),
+                        int(request.priority or descriptor.priority),
+                        stamp,
+                        stamp,
+                        stamp,
+                    ),
+                )
+                saved += int(cursor.rowcount or 0)
+            return saved
+
+        return int(self.transaction_with_deadlock_retry("external-data-enqueue-followups", mutation) or 0)
+
     def claim_due(
         self,
         worker_id: str,
@@ -490,16 +527,19 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 revision_inserted = bool(cursor.rowcount)
             if changed and event:
                 insert_domain_event_with_connection(connection, event)
+            completed_once = descriptor.completion_mode == "once"
             connection.execute(
                 """
                 UPDATE external_dataset_state
-                SET job_status = 'pending', next_due_at = %s, last_success_at = %s,
+                SET active = %s, job_status = %s, next_due_at = %s, last_success_at = %s,
                     source_as_of = %s, watermark_json = %s, lease_owner = '', lease_until = '',
                     attempt_count = 0, consecutive_failures = 0, last_error = '', updated_at = %s
                 WHERE dataset_id = %s AND partition_key = %s AND lease_owner = %s
                 """,
                 (
-                    next_due_at,
+                    0 if completed_once else 1,
+                    "completed" if completed_once else "pending",
+                    "" if completed_once else next_due_at,
                     stamp,
                     str(observation.source_as_of or "")[:80],
                     json_dumps(observation.watermark),
@@ -759,11 +799,13 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             dataset_rows = connection.execute(
                 """
                 SELECT dataset_id, provider_id, job_status, COUNT(*) AS row_count,
-                       SUM(CASE WHEN next_due_at <= %s THEN 1 ELSE 0 END) AS due_count,
+                       SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active_count,
+                       SUM(CASE WHEN active = 1 AND next_due_at <= %s THEN 1 ELSE 0 END) AS due_count,
                        MIN(next_due_at) AS next_due_at, MAX(last_success_at) AS last_success_at,
                        MAX(source_as_of) AS source_as_of, MAX(last_error) AS last_error
                 FROM external_dataset_state
                 WHERE active = 1
+                   OR (job_status = 'completed' AND dataset_id IN ('opendart.document', 'sec.document'))
                 GROUP BY dataset_id, provider_id, job_status
                 ORDER BY dataset_id, job_status
                 """,
@@ -795,6 +837,8 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                     "providerId": str(row.get("provider_id") or ""),
                     "status": str(row.get("job_status") or ""),
                     "partitionCount": int(row.get("row_count") or 0),
+                    "activeCount": int(row.get("active_count") or 0),
+                    "completedCount": int(row.get("row_count") or 0) if str(row.get("job_status") or "") == "completed" else 0,
                     "dueCount": int(row.get("due_count") or 0),
                     "nextDueAt": str(row.get("next_due_at") or ""),
                     "lastSuccessAt": str(row.get("last_success_at") or ""),

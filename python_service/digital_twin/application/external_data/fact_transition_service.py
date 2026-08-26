@@ -60,12 +60,17 @@ class ExternalFactTransitionService:
     """Detect source changes without deciding an investment action."""
 
     DOCUMENT_DATASETS = {
-        "sec.submissions",
+        "sec.document",
         "sec.company_facts",
-        "opendart.disclosures",
+        "opendart.document",
         "opendart.company_facts",
         "yfinance.fundamental",
         "yfinance.analyst",
+    }
+
+    DISCOVERY_DATASETS = {
+        "sec.submissions",
+        "opendart.disclosures",
     }
 
     def assess(
@@ -83,6 +88,14 @@ class ExternalFactTransitionService:
         changed = bool(fields) or previous_revision != str(source_revision or "")
         if not changed:
             return FactTransition(False, False, "unchanged", [], "same source revision")
+        if dataset_id in self.DISCOVERY_DATASETS:
+            return FactTransition(
+                True,
+                False,
+                "document-discovery",
+                fields,
+                "filing metadata changed; verified document collection decides materiality",
+            )
         if dataset_id in self.DOCUMENT_DATASETS:
             return FactTransition(True, True, "source-revision", fields, "new or revised source document")
         if dataset_id == "fred.macro":

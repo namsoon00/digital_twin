@@ -72,6 +72,8 @@ class DatasetDescriptor:
     max_partitions: int = 100
     revision_mode: str = "current"
     materiality_policy: str = "revision"
+    partition_strategy: str = "subjects"
+    completion_mode: str = "recurring"
 
     def enabled(self, settings: Dict[str, object]) -> bool:
         return setting_enabled(settings, self.enabled_setting, True) if self.enabled_setting else True
@@ -149,6 +151,15 @@ class CollectionJob:
             lease_until=str(values.get("leaseUntil") or ""),
             watermark=dict(values.get("watermark") or {}),
         )
+
+
+@dataclass(frozen=True)
+class FollowupCollectionRequest:
+    dataset_id: str
+    partition_key: str
+    subject: ExternalSubject
+    watermark: Dict[str, object] = field(default_factory=dict)
+    priority: int = 50
 
 
 @dataclass(frozen=True)

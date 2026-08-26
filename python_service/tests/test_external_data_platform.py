@@ -9,6 +9,7 @@ from digital_twin.application.external_data.contracts import (
     CollectionPartition,
     DatasetDescriptor,
     ExternalSubject,
+    FollowupCollectionRequest,
     SourceObservation,
 )
 from digital_twin.application.external_data.fact_transition_service import ExternalFactTransitionService
@@ -65,12 +66,50 @@ class ConcurrencyTrackingAdapter(StaticAdapter):
             self.active -= 1
 
 
+class FollowupAdapter:
+    descriptor = DatasetDescriptor(
+        dataset_id="test.document",
+        provider_id="test-provider",
+        capability="document",
+        cadence_seconds=600,
+        freshness_seconds=900,
+        partition_strategy="followup",
+        completion_mode="once",
+    )
+
+    def partitions(self, _subjects, _settings):
+        raise AssertionError("follow-up datasets must not create static partitions")
+
+    def fetch(self, job, _settings):
+        return SourceObservation(
+            dataset_id=self.descriptor.dataset_id,
+            provider_id=self.descriptor.provider_id,
+            subject_key=job.subject.subject_key,
+            source_revision=str(job.watermark.get("revision") or "document-1"),
+            source_as_of="2026-08-16T00:00:00Z",
+            fetched_at="2026-08-16T00:00:01Z",
+            payload={"document": dict(job.watermark)},
+        )
+
+
+class FollowupSourceAdapter(StaticAdapter):
+    def followup_requests(self, observation, _settings):
+        return [FollowupCollectionRequest(
+            dataset_id="test.document",
+            partition_key=observation.subject_key + ":document-1",
+            subject=ExternalSubject(observation.subject_key, symbol=observation.subject_key),
+            watermark={"revision": "document-1"},
+            priority=60,
+        )]
+
+
 class MemoryCollectionStore:
     def __init__(self):
         self.jobs = []
         self.completed = []
         self.events = []
         self.recorded = []
+        self.followups = []
 
     def list_subjects(self):
         return [ExternalSubject("NVDA", symbol="NVDA", market="US", currency="USD")]
@@ -106,6 +145,12 @@ class MemoryCollectionStore:
         if event:
             self.events.append(event)
         return {"changed": True}
+
+    def enqueue_followups(self, plans, now=None):
+        del now
+        for descriptor, request in plans:
+            self.followups.append((descriptor, request))
+        return len(plans)
 
     def mark_provider_success(self, descriptor):
         del descriptor
@@ -178,6 +223,18 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(["NVDA"], [item.partition_key for item in partitions])
         self.assertEqual("test-provider", registry.adapter("test.market").descriptor.provider_id)
 
+    def test_followup_document_work_is_durable_and_not_a_static_partition(self):
+        store = MemoryCollectionStore()
+        registry = ExternalDatasetRegistry([FollowupSourceAdapter(), FollowupAdapter()])
+        service = ExternalDataCollectionService({}, registry, store, now_provider=lambda: NOW)
+
+        result = service.run_once()
+
+        self.assertEqual(1, result["results"][0]["followupCount"])
+        self.assertEqual("test.document", store.followups[0][0].dataset_id)
+        self.assertEqual("NVDA:document-1", store.followups[0][1].partition_key)
+        self.assertNotIn("test.document", registry.static_dataset_ids({}))
+
     def test_collection_service_executes_vendor_fetch_outside_request_path(self):
         store = MemoryCollectionStore()
         service = ExternalDataCollectionService(
@@ -225,6 +282,32 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertTrue(small.changed)
         self.assertFalse(small.material)
         self.assertTrue(material.material)
+
+    def test_filing_metadata_only_schedules_documents_without_reasoning_event(self):
+        service = ExternalFactTransitionService()
+        previous = {
+            "sourceRevision": "filing-list-one",
+            "payload": {"items": [{"receiptNo": "one"}]},
+        }
+
+        metadata = service.assess(
+            "opendart.disclosures",
+            previous,
+            {"items": [{"receiptNo": "two"}]},
+            "filing-list-two",
+        )
+        document = service.assess(
+            "opendart.document",
+            previous,
+            {"documentText": "verified official document body"},
+            "document-two",
+        )
+
+        self.assertTrue(metadata.changed)
+        self.assertFalse(metadata.material)
+        self.assertEqual("document-discovery", metadata.change_type)
+        self.assertTrue(document.material)
+        self.assertEqual("source-revision", document.change_type)
 
     def test_same_provider_jobs_are_serialized_while_provider_groups_are_parallelizable(self):
         adapter = ConcurrencyTrackingAdapter()

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.events import DomainEvent
+from ..domain.data_freshness import parse_datetime
 from ..domain.evidence_delta import (
     EvidenceMutation,
     clean_lifecycle_state,
@@ -54,6 +55,13 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "analysisReady",
     "disclosureAnalysis",
     "promptEvidenceAdmission",
+    "documentHash",
+    "documentCharCount",
+    "documentLifecycle",
+    "officialDocumentDatasetId",
+    "officialDocumentFactRevision",
+    "officialDocumentFactPayloadHash",
+    "officialDocumentFetchedAt",
 }
 
 AUTHORITATIVE_EVIDENCE_STATE_KEYS = {
@@ -121,6 +129,14 @@ def merge_derived_evidence_payload(
             "analysisReady",
             "disclosureDocumentQuality",
             "disclosureAnalysis",
+            "promptEvidenceAdmission",
+            "documentHash",
+            "documentCharCount",
+            "documentLifecycle",
+            "officialDocumentDatasetId",
+            "officialDocumentFactRevision",
+            "officialDocumentFactPayloadHash",
+            "officialDocumentFetchedAt",
         ]:
             if key in previous:
                 merged[key] = previous.get(key)
@@ -325,6 +341,23 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 """,
                 (stamp,),
             ).fetchone()
+            ready = connection.execute(
+                """
+                SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at,
+                       MAX(priority) AS highest_priority
+                FROM news_analysis_work_items
+                WHERE (work_state = 'pending')
+                   OR (work_state = 'retrying' AND (not_before_at = '' OR not_before_at <= %s))
+                   OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
+                """,
+                (stamp, stamp),
+            ).fetchone() or {}
+        oldest_ready = str(ready.get("oldest_updated_at") or "")
+        oldest_parsed = parse_datetime(oldest_ready)
+        oldest_age_minutes = max(
+            0,
+            int((datetime.now(timezone.utc) - oldest_parsed).total_seconds() // 60),
+        ) if oldest_parsed else 0
         return {
             "durable": True,
             "states": [
@@ -338,6 +371,10 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 for row in rows or []
             ],
             "reclaimableLeaseCount": int((reclaimable or {}).get("count") or 0),
+            "readyCount": int(ready.get("count") or 0),
+            "oldestReadyAt": oldest_ready,
+            "oldestReadyAgeMinutes": oldest_age_minutes,
+            "highestReadyPriority": int(ready.get("highest_priority") or 0),
         }
 
     def write_batch_size(self) -> int:

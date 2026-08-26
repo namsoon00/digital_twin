@@ -9,6 +9,7 @@ from digital_twin.application.external_data.research_evidence_projection_service
 )
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult
 from digital_twin.domain.events import EXTERNAL_FACT_CHANGED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent
+from digital_twin.infrastructure.mysql_research_evidence import merge_derived_evidence_payload
 
 
 class MemoryFactStore:
@@ -99,14 +100,14 @@ class MemoryCursor:
         self.state = dict(payload)
 
 
-def dart_fact():
+def dart_fact(dataset_id="opendart.document"):
     document = (
         "삼성전자는 2026년 8월 25일 이사회에서 보통주 1,000,000주를 취득하기로 결정했다. "
         "취득 예정 금액은 100,000,000,000원이며 취득 기간은 2026-08-26부터 2026-11-25까지다. "
         "취득 목적은 주주가치 제고이며 실제 집행 결과는 추후 공시한다."
     )
     return {
-        "datasetId": "opendart.disclosures",
+        "datasetId": dataset_id,
         "subjectKey": "005930",
         "providerId": "opendart",
         "sourceRevision": "dart-batch-20260825",
@@ -138,14 +139,14 @@ def dart_fact():
     }
 
 
-def sec_fact():
+def sec_fact(dataset_id="sec.document"):
     document = (
         "Apple Inc. reported quarterly revenue of $100,000,000,000 for the period ended 2026-06-30. "
         "The filing states that operating income increased and identifies product demand and foreign exchange as material factors. "
         "Management will discuss the results in the next earnings call."
     )
     return {
-        "datasetId": "sec.submissions",
+        "datasetId": dataset_id,
         "subjectKey": "AAPL",
         "providerId": "sec-edgar",
         "sourceRevision": "0000320193-26-000100",
@@ -190,8 +191,8 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
     def event(self):
         return DomainEvent(
             name=EXTERNAL_FACT_CHANGED,
-            aggregate_id="opendart.disclosures:005930",
-            payload={"datasetId": "opendart.disclosures", "subjectKey": "005930"},
+            aggregate_id="opendart.document:005930",
+            payload={"datasetId": "opendart.document", "subjectKey": "005930"},
             occurred_at="2026-08-25T00:05:00Z",
             event_id="event-dart-1",
         )
@@ -236,8 +237,35 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
 
         self.assertEqual(1, analyzer.calls)
 
-    def test_metadata_only_disclosure_can_alert_but_cannot_enter_prompt(self):
-        row = copy.deepcopy(dart_fact())
+    def test_metadata_refresh_preserves_verified_document_provenance(self):
+        previous = {
+            "officialDocumentText": "verified official filing body",
+            "documentVerified": True,
+            "analysisReady": True,
+            "documentHash": "document-hash",
+            "officialDocumentDatasetId": "opendart.document",
+            "officialDocumentFactRevision": "receipt:document-hash",
+            "promptEvidenceAdmission": {"promptEligible": True, "alertEligible": True},
+            "disclosureDocumentQuality": {"documentVerified": True},
+        }
+        incoming = {
+            "officialDocumentText": "",
+            "documentVerified": False,
+            "analysisReady": False,
+            "documentHash": "",
+            "promptEvidenceAdmission": {"promptEligible": False, "alertEligible": False},
+            "disclosureDocumentQuality": {"documentVerified": False},
+        }
+
+        merged = merge_derived_evidence_payload(previous, incoming)
+
+        self.assertTrue(merged["documentVerified"])
+        self.assertEqual("document-hash", merged["documentHash"])
+        self.assertEqual("opendart.document", merged["officialDocumentDatasetId"])
+        self.assertTrue(merged["promptEvidenceAdmission"]["promptEligible"])
+
+    def test_metadata_only_disclosure_is_stored_but_cannot_alert_or_enter_prompt(self):
+        row = copy.deepcopy(dart_fact("opendart.disclosures"))
         disclosure = row["payload"]["dartDisclosures"]["005930"]
         disclosure["documentText"] = ""
         disclosure["documentTextQuality"] = "metadata-only"
@@ -251,15 +279,21 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
             now_provider=lambda: self.now,
         )
 
-        result = projector.project_event(self.event())
+        event = DomainEvent(
+            name=EXTERNAL_FACT_CHANGED,
+            aggregate_id="opendart.disclosures:005930",
+            payload={"datasetId": "opendart.disclosures", "subjectKey": "005930"},
+            occurred_at="2026-08-25T00:05:00Z",
+            event_id="event-dart-metadata-1",
+        )
+        result = projector.project_event(event)
 
         self.assertEqual("ok", result["status"])
         evidence = next(iter(projector.evidence_store.items.values()))
         admission = evidence.raw_payload["promptEvidenceAdmission"]
-        self.assertTrue(admission["alertEligible"])
         self.assertFalse(admission["promptEligible"])
         collected = self.publisher.events[-1]
-        self.assertEqual(1, collected.payload["alertEligibleCount"])
+        self.assertEqual(0, collected.payload["alertEligibleCount"])
 
     def test_projects_verified_sec_filing_with_accession_provenance(self):
         row = sec_fact()
@@ -274,8 +308,8 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         )
         event = DomainEvent(
             name=EXTERNAL_FACT_CHANGED,
-            aggregate_id="sec.submissions:AAPL",
-            payload={"datasetId": "sec.submissions", "subjectKey": "AAPL"},
+            aggregate_id="sec.document:AAPL",
+            payload={"datasetId": "sec.document", "subjectKey": "AAPL"},
             occurred_at="2026-08-25T00:05:00Z",
             event_id="event-sec-1",
         )
@@ -307,7 +341,7 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual(1, first["currentFactBackfill"]["processedCount"])
         self.assertEqual(0, second["currentFactBackfill"]["processedCount"])
         self.assertTrue(cursor.state["currentFactBackfillCompleted"])
-        self.assertEqual("official-evidence-projection-v2", cursor.state["currentFactBackfillVersion"])
+        self.assertEqual("official-evidence-projection-v3", cursor.state["currentFactBackfillVersion"])
         collected = next(event for event in self.publisher.events if event.name == RESEARCH_EVIDENCE_COLLECTED)
         self.assertEqual(0, collected.payload["alertEligibleCount"])
 
@@ -325,6 +359,18 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
 
         self.assertEqual(1, result["processedCount"])
         self.assertEqual("event-dart-1", cursor.state["lastEventId"])
+
+        restarted = ExternalFactResearchEvidenceReconciler(
+            MemoryEventReader([]),
+            self.projector,
+            cursor,
+            initial_lookback_minutes=120,
+            now_provider=lambda: self.now,
+        )
+        status = restarted.status()
+        self.assertTrue(status["durable"])
+        self.assertEqual("ok", status["status"])
+        self.assertEqual("event-dart-1", status["cursorEventId"])
 
 
 if __name__ == "__main__":

@@ -99,7 +99,7 @@ class ExternalDataCollectionService:
         plans = [(descriptor_by_dataset[item.dataset_id], item) for item in partitions]
         saved = self.store.sync_partitions(
             plans,
-            descriptor_by_dataset.keys(),
+            self.registry.static_dataset_ids(self.settings),
             now=self.now_provider(),
         )
         self._last_partition_sync_at = self.now_provider()
@@ -187,6 +187,9 @@ class ExternalDataCollectionService:
         try:
             return dict(self.evidence_reconciler.run_once() or {})
         except Exception as error:  # noqa: BLE001 - durable cursor keeps the failed event replayable.
+            recorder = getattr(self.evidence_reconciler, "record_failure", None)
+            if callable(recorder):
+                recorder(error)
             return {
                 "status": "error",
                 "processedCount": 0,
@@ -276,6 +279,12 @@ class ExternalDataCollectionService:
                 due_at,
                 event=event,
             )
+            followup_plans = self.registry.followups(job.dataset_id, observation, self.settings)
+            followup_count = (
+                int(self.store.enqueue_followups(followup_plans, now=self.now_provider()) or 0)
+                if followup_plans and callable(getattr(self.store, "enqueue_followups", None))
+                else 0
+            )
             self.store.mark_provider_success(descriptor)
             completed = self.now_provider()
             response_bytes = len(json.dumps(observation.payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -300,7 +309,8 @@ class ExternalDataCollectionService:
                 "sourceAsOf": observation.source_as_of,
                 "changed": bool(committed.get("changed")),
                 "materialChange": bool(transition.material and committed.get("changed")),
-                "nextDueAt": due_at,
+                "nextDueAt": "" if descriptor.completion_mode == "once" else due_at,
+                "followupCount": followup_count,
             }
         except Exception as error:  # noqa: BLE001 - provider failures are durable operational state.
             completed = self.now_provider()
@@ -330,6 +340,12 @@ class ExternalDataCollectionService:
             }
 
     def status(self) -> Dict[str, object]:
+        projection_status = {}
+        loader = getattr(self.evidence_reconciler, "status", None)
+        if callable(loader):
+            projection_status = dict(loader() or {})
+        elif self.evidence_reconciler:
+            projection_status = dict(getattr(self.evidence_reconciler, "last_result", {}) or {})
         return {
             "enabled": self.enabled(),
             "workerId": self.worker_id,
@@ -338,6 +354,6 @@ class ExternalDataCollectionService:
             "concurrency": self.concurrency(),
             "leaseSeconds": self.lease_seconds(),
             "registry": self.registry.descriptors(self.settings),
-            "officialEvidenceProjection": dict(getattr(self.evidence_reconciler, "last_result", {}) or {}),
+            "officialEvidenceProjection": projection_status,
             **self.store.summary(),
         }

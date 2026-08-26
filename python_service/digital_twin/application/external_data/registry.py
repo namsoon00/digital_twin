@@ -1,6 +1,12 @@
 from typing import Dict, Iterable, List
 
-from .contracts import CollectionPartition, ExternalDatasetAdapter, ExternalSubject
+from .contracts import (
+    CollectionPartition,
+    ExternalDatasetAdapter,
+    ExternalSubject,
+    FollowupCollectionRequest,
+    SourceObservation,
+)
 
 
 class ExternalDatasetRegistry:
@@ -39,9 +45,40 @@ class ExternalDatasetRegistry:
             descriptor = adapter.descriptor
             if not descriptor.enabled(settings):
                 continue
+            if descriptor.partition_strategy == "followup":
+                continue
             partitions = adapter.partitions(subject_rows, settings)
             rows.extend(partitions[:descriptor.resolved_max_partitions(settings)])
         return rows
+
+    def static_dataset_ids(self, settings: Dict[str, object]) -> List[str]:
+        return [
+            adapter.descriptor.dataset_id
+            for adapter in self.adapters()
+            if adapter.descriptor.enabled(settings)
+            and adapter.descriptor.partition_strategy != "followup"
+        ]
+
+    def followups(
+        self,
+        source_dataset_id: str,
+        observation: SourceObservation,
+        settings: Dict[str, object],
+    ) -> List[tuple]:
+        source = self.adapter(source_dataset_id)
+        planner = getattr(source, "followup_requests", None)
+        if not callable(planner):
+            return []
+        plans = []
+        for request in planner(observation, settings) or []:
+            if not isinstance(request, FollowupCollectionRequest):
+                continue
+            target = self.adapter(request.dataset_id)
+            descriptor = target.descriptor
+            if not descriptor.enabled(settings) or descriptor.partition_strategy != "followup":
+                continue
+            plans.append((descriptor, request))
+        return plans
 
     def descriptors(self, settings: Dict[str, object] = None) -> List[Dict[str, object]]:
         configured = dict(settings or {})
@@ -52,6 +89,8 @@ class ExternalDatasetRegistry:
                 "capability": adapter.descriptor.capability,
                 "priority": adapter.descriptor.priority,
                 "materialityPolicy": adapter.descriptor.materiality_policy,
+                "partitionStrategy": adapter.descriptor.partition_strategy,
+                "completionMode": adapter.descriptor.completion_mode,
                 "enabled": adapter.descriptor.enabled(configured),
                 "cadenceSeconds": adapter.descriptor.resolved_cadence_seconds(configured),
                 "freshnessSeconds": adapter.descriptor.resolved_freshness_seconds(configured),

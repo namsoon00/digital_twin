@@ -273,6 +273,43 @@ class NewsAnalysisEnrichmentRunnerTests(unittest.TestCase):
 
         self.assertGreater(runner.priority(governed), runner.priority(regular))
 
+    def test_holding_news_is_prioritized_before_watchlist_news(self):
+        holding = self.evidence()
+        holding.raw_payload["collectionAudience"] = "holding"
+        watchlist = self.evidence()
+        watchlist.evidence_id = "research:AAPL:news:watchlist"
+        watchlist.raw_payload["collectionAudience"] = "watchlist"
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=object(),
+            analysis_service=None,
+            settings={"newsAiAnalysisAsyncEnabled": "1"},
+        )
+
+        self.assertGreater(runner.queue_priority(holding), runner.queue_priority(watchlist))
+
+    def test_candidate_scan_collapses_same_story_before_ai_queueing(self):
+        primary = self.evidence()
+        duplicate = self.evidence()
+        duplicate.evidence_id = "research:AAPL:news:syndicated-copy"
+        duplicate.source = "Syndicated Wire"
+        duplicate.url = "https://example.test/syndicated/apple-services"
+
+        class Store:
+            @staticmethod
+            def latest(**_kwargs):
+                return [primary, duplicate]
+
+        runner = NewsAnalysisEnrichmentRunner(
+            evidence_store=Store(),
+            analysis_service=object(),
+            settings={"newsAiAnalysisAsyncEnabled": "1"},
+        )
+
+        candidates = runner.candidates()
+
+        self.assertEqual(1, len(candidates))
+        self.assertEqual(1, runner._last_candidate_scan["deduplicatedCount"])
+
     def test_worker_retries_stored_summary_with_navigation_headline_contamination(self):
         published_at = self.recent_timestamp()
         evidence = ResearchEvidence(

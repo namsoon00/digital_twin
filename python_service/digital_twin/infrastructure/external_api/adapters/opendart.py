@@ -1,6 +1,19 @@
+import hashlib
+import urllib.parse
 from typing import Dict, Iterable, List
 
-from ....application.external_data.contracts import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
+from ....application.external_data.contracts import (
+    CollectionJob,
+    CollectionPartition,
+    DatasetDescriptor,
+    ExternalSubject,
+    FollowupCollectionRequest,
+    SourceObservation,
+    bounded_int,
+)
+from ....domain.disclosure_quality import assess_disclosure_document
+from ....domain.disclosure_taxonomy import classify_disclosure
+from ...external_signal_utils import dart_document_text
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
 
 
@@ -43,9 +56,12 @@ class OpenDartDisclosureAdapter:
             signals,
             [position_for(job.subject)],
             include_fundamentals=False,
-            include_document=True,
+            include_document=False,
         )
         row = require_payload(signals, "dartDisclosures", job.subject.symbol)
+        for item in row.get("items") if isinstance(row.get("items"), list) else []:
+            if isinstance(item, dict):
+                item.update(classify_disclosure(item.get("reportName"), item.get("reportName"), "OpenDART"))
         receipt = str(row.get("receiptNo") or "")
         as_of = source_as_of(row, signals.get("fetchedAt"))
         return observation(
@@ -55,6 +71,115 @@ class OpenDartDisclosureAdapter:
             preferred_revision=receipt,
             preferred_source_as_of=as_of,
             watermark={"receiptNo": receipt},
+        )
+
+    def followup_requests(
+        self,
+        observation: SourceObservation,
+        settings: Dict[str, object],
+    ) -> List[FollowupCollectionRequest]:
+        symbol = str(observation.subject_key or "").upper().strip()
+        group = observation.payload.get("dartDisclosures") if isinstance(observation.payload, dict) else {}
+        row = group.get(symbol) if isinstance(group, dict) and isinstance(group.get(symbol), dict) else {}
+        items = [item for item in row.get("items") or [] if isinstance(item, dict)]
+        prioritized = [
+            item for index, item in enumerate(items)
+            if index == 0 or str(item.get("materialityState") or "") in {"notable", "material"}
+        ]
+        limit = bounded_int(settings.get("externalDartDocumentMaxPerSymbol"), 3, 1, 5)
+        requests = []
+        for item in prioritized[:limit]:
+            receipt = str(item.get("receiptNo") or "").strip()
+            if not receipt:
+                continue
+            requests.append(FollowupCollectionRequest(
+                dataset_id="opendart.document",
+                partition_key=symbol + ":" + receipt + ":body-v1",
+                subject=ExternalSubject(
+                    subject_key=symbol,
+                    symbol=symbol,
+                    name=str(item.get("corpName") or row.get("corpName") or symbol),
+                    market="KR",
+                    currency="KRW",
+                    source="opendart-disclosure",
+                ),
+                watermark={"receiptNo": receipt, "metadata": dict(item)},
+                priority=75 if item is prioritized[0] else 70,
+            ))
+        return requests
+
+
+class OpenDartDocumentAdapter:
+    descriptor = DatasetDescriptor(
+        dataset_id="opendart.document",
+        provider_id="opendart",
+        capability="official-document-body",
+        cadence_seconds=86400,
+        freshness_seconds=90 * 86400,
+        priority=75,
+        rate_limit_seconds=1,
+        enabled_setting="externalDartDocumentTextEnabled",
+        max_partitions=1000,
+        revision_mode="immutable",
+        materiality_policy="document-hash",
+        partition_strategy="followup",
+        completion_mode="once",
+    )
+
+    def partitions(self, _subjects: Iterable[ExternalSubject], _settings: Dict[str, object]) -> List[CollectionPartition]:
+        return []
+
+    def fetch(self, job: CollectionJob, settings: Dict[str, object]):
+        api_key = str(settings.get("opendartApiKey") or "").strip()
+        receipt = str(job.watermark.get("receiptNo") or "").strip()
+        if not api_key or not receipt:
+            raise RuntimeError("OpenDART document job is missing API key or receipt number")
+        provider = legacy_provider(settings, externalDartEnabled="1")
+        url = "https://opendart.fss.or.kr/api/document.xml?" + urllib.parse.urlencode({
+            "crtfc_key": api_key,
+            "rcept_no": receipt,
+        })
+        raw = provider.guarded_call(
+            "OpenDART",
+            "document:" + job.subject.symbol + ":" + receipt,
+            lambda: provider.fetch_bytes(url, {"Accept": "application/zip,application/xml"}),
+        )
+        text = dart_document_text(raw, bounded_int(settings.get("externalDartDocumentTextMaxChars"), 6000, 500, 20000))
+        assessment = assess_disclosure_document(text, "body")
+        metadata = dict(job.watermark.get("metadata") or {})
+        metadata.update({
+            "provider": "OpenDART",
+            "receiptNo": receipt,
+            "documentText": assessment.document_text,
+            "documentTextPreview": assessment.document_text[:700],
+            "documentTextQuality": "body" if assessment.document_verified else "insufficient",
+            "documentState": assessment.state,
+        })
+        row = {
+            "provider": "OpenDART",
+            "corpName": str(metadata.get("corpName") or job.subject.name or job.subject.symbol),
+            "reportName": str(metadata.get("reportName") or "OpenDART 공시"),
+            "receiptNo": receipt,
+            "receiptDate": str(metadata.get("receiptDate") or ""),
+            "items": [metadata],
+            "documentText": assessment.document_text,
+            "documentTextPreview": assessment.document_text[:700],
+            "documentTextQuality": "body" if assessment.document_verified else "insufficient",
+            "documentState": assessment.state,
+        }
+        digest = hashlib.sha256(assessment.document_text.encode("utf-8")).hexdigest()
+        return observation(
+            self.descriptor,
+            job.subject.symbol,
+            {"dartDisclosures": {job.subject.symbol: row}},
+            preferred_revision=receipt + ":" + digest,
+            preferred_source_as_of=str(metadata.get("receiptDate") or ""),
+            watermark={"receiptNo": receipt, "documentHash": digest},
+            quality={
+                "dataUsable": bool(assessment.document_verified),
+                "provider": "opendart",
+                "documentState": assessment.state,
+            },
         )
 
 

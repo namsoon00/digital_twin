@@ -135,6 +135,7 @@ from ..infrastructure.service_factory import (
     build_rule_change_candidate_service,
     build_symbol_universe_service,
     build_external_data_collection_runner,
+    build_news_analysis_enrichment_runner,
     build_market_data_collection_runner,
     build_monitor_runner,
     build_flow_lens_service,
@@ -495,7 +496,12 @@ def realtime_status_payload() -> Dict[str, object]:
 
 def external_data_status_payload() -> Dict[str, object]:
     try:
-        return build_external_data_collection_runner().status()
+        payload = dict(build_external_data_collection_runner().status() or {})
+        try:
+            payload["newsAnalysis"] = build_news_analysis_enrichment_runner().status()
+        except Exception as error:  # noqa: BLE001 - official collection status remains independently useful.
+            payload["newsAnalysis"] = {"status": "unavailable", "error": str(error)[:240]}
+        return payload
     except Exception as error:  # noqa: BLE001 - status remains inspectable while MySQL starts.
         return {
             "enabled": False,
@@ -3950,7 +3956,7 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         # retry it when a clean source becomes available.
         article_summary_ko = "원문 인코딩 점검으로 요약을 보류했습니다."
     compact_raw = {}
-    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo", "originalTitle", "translatedTitleKo", "sourceLanguage", "translationStatus", "summaryQualityState", "articleSummaryQuality"]:
+    for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo", "originalTitle", "translatedTitleKo", "sourceLanguage", "translationStatus", "summaryQualityState", "articleSummaryQuality", "externalFactDatasetId", "externalFactSourceRevision", "officialDocumentDatasetId", "officialDocumentFactRevision", "officialDocumentFactPayloadHash", "officialDocumentFetchedAt"]:
         if raw.get(key) not in (None, "", [], {}):
             compact_raw[key] = raw.get(key)
     return {
@@ -4013,6 +4019,12 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "metadataVerified": bool(raw.get("metadataVerified")),
         "documentHash": str(raw.get("documentHash") or ""),
         "documentCharCount": int(raw.get("documentCharCount") or disclosure_quality.get("documentCharCount") or 0),
+        "externalFactDatasetId": str(raw.get("externalFactDatasetId") or ""),
+        "externalFactSourceRevision": str(raw.get("externalFactSourceRevision") or ""),
+        "officialDocumentDatasetId": str(raw.get("officialDocumentDatasetId") or ""),
+        "officialDocumentFactRevision": str(raw.get("officialDocumentFactRevision") or ""),
+        "officialDocumentFactPayloadHash": str(raw.get("officialDocumentFactPayloadHash") or ""),
+        "officialDocumentFetchedAt": str(raw.get("officialDocumentFetchedAt") or ""),
         "officialDocumentPreview": str(raw.get("officialDocumentPreview") or "")[:2000],
         "disclosureDocumentQuality": disclosure_quality,
         "documentLifecycle": document_lifecycle,

@@ -21,11 +21,16 @@ from ...domain.materiality import evidence_materiality
 from ...domain.prompt_evidence_admission import assess_prompt_evidence, attach_prompt_evidence_admission
 
 
-OFFICIAL_DATASET_IDS = {"opendart.disclosures", "sec.submissions"}
+OFFICIAL_DATASET_IDS = {
+    "opendart.disclosures",
+    "opendart.document",
+    "sec.submissions",
+    "sec.document",
+}
 OFFICIAL_EVIDENCE_KINDS = {"disclosure", "filing", "sec-filing", "sec_filing"}
 DEFAULT_INITIAL_LOOKBACK_MINUTES = 10
 DEFAULT_MAX_REPLAY_AGE_MINUTES = 180
-CURRENT_FACT_BACKFILL_VERSION = "official-evidence-projection-v2"
+CURRENT_FACT_BACKFILL_VERSION = "official-evidence-projection-v3"
 
 
 def _text(value: object) -> str:
@@ -149,6 +154,13 @@ class ExternalOfficialEvidenceProjectionService:
                 "documentHash": document_hash,
                 "documentCharCount": len(document_text),
             })
+            if document_text:
+                payload.update({
+                    "officialDocumentDatasetId": dataset_id,
+                    "officialDocumentFactRevision": source_revision,
+                    "officialDocumentFactPayloadHash": _text(row.get("payloadHash")),
+                    "officialDocumentFetchedAt": _text(row.get("fetchedAt")),
+                })
             item.raw_payload = payload
             self.enrich_disclosure_analysis(item)
 
@@ -186,7 +198,12 @@ class ExternalOfficialEvidenceProjectionService:
             material_items = [item for item, assessment in zip(changed_items, assessments) if assessment.get("passed")]
             alert_items = [
                 item for item in changed_items
-                if allow_alert and assess_prompt_evidence(
+                if allow_alert
+                and dataset_id in {"opendart.document", "sec.document"}
+                and bool((item.raw_payload or {}).get("documentVerified"))
+                and bool((item.raw_payload or {}).get("analysisReady"))
+                and bool((item.raw_payload or {}).get("documentHash"))
+                and assess_prompt_evidence(
                     item.raw_payload,
                     kind=item.kind,
                     published_at=item.published_at,
@@ -339,6 +356,46 @@ class ExternalFactResearchEvidenceReconciler:
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self.last_result: Dict[str, object] = {}
 
+    def status(self) -> Dict[str, object]:
+        state = dict(self.cursor_store.load() or {}) if self.cursor_store else {}
+        if not state:
+            return dict(self.last_result or {})
+        return {
+            "status": _text(state.get("lastProjectionStatus") or "idle"),
+            "lastAttemptAt": _text(state.get("lastAttemptAt")),
+            "lastSuccessAt": _text(state.get("lastSuccessAt")),
+            "lastErrorAt": _text(state.get("lastErrorAt")),
+            "lastError": _text(state.get("lastError")),
+            "processedCount": int(state.get("lastProcessedCount") or 0),
+            "projectedCount": int(state.get("lastProjectedCount") or 0),
+            "writtenCount": int(state.get("lastWrittenCount") or 0),
+            "totalProcessedCount": int(state.get("processedCount") or 0),
+            "cursorOccurredAt": _text(state.get("lastOccurredAt")),
+            "cursorEventId": _text(state.get("lastEventId")),
+            "hasMore": bool(state.get("lastHasMore")),
+            "currentFactBackfillVersion": _text(state.get("currentFactBackfillVersion")),
+            "currentFactBackfillCompleted": bool(state.get("currentFactBackfillCompleted")),
+            "durable": True,
+        }
+
+    def record_failure(self, error: Exception) -> None:
+        if not self.cursor_store:
+            return
+        state = dict(self.cursor_store.load() or {})
+        now = self.now_provider()
+        if not isinstance(now, datetime):
+            now = datetime.now(timezone.utc)
+        if not now.tzinfo:
+            now = now.replace(tzinfo=timezone.utc)
+        state.update({
+            "lastProjectionStatus": "error",
+            "lastAttemptAt": _timestamp(now),
+            "lastErrorAt": _timestamp(now),
+            "lastError": _text(error)[:500],
+        })
+        self.cursor_store.replace(state)
+        self.last_result = self.status()
+
     def backfill_current_facts(self, state: Dict[str, object]) -> Dict[str, object]:
         """Project the latest official facts once without replaying alerts."""
 
@@ -418,6 +475,11 @@ class ExternalFactResearchEvidenceReconciler:
                 "lastProcessedCount": processed,
                 "lastProjectedCount": projected,
                 "lastWrittenCount": written,
+                "lastProjectionStatus": "ok" if processed else "idle",
+                "lastAttemptAt": _timestamp(now),
+                "lastSuccessAt": _timestamp(now),
+                "lastError": "",
+                "lastHasMore": len(events) >= self.batch_size,
                 "updatedAt": _timestamp(now),
             }
             self.cursor_store.replace(next_state)

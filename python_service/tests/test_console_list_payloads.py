@@ -141,6 +141,12 @@ class ConsoleListPayloadTests(unittest.TestCase):
                 "analysisReady": True,
                 "documentHash": "document-hash",
                 "documentCharCount": 2400,
+                "externalFactDatasetId": "opendart.disclosures",
+                "externalFactSourceRevision": "metadata-revision",
+                "officialDocumentDatasetId": "opendart.document",
+                "officialDocumentFactRevision": "document-revision",
+                "officialDocumentFactPayloadHash": "document-payload-hash",
+                "officialDocumentFetchedAt": "2026-08-25T00:02:00Z",
                 "sourceRevision": "202608250001",
                 "sourceAsOf": "2026-08-25T00:00:00Z",
                 "officialDocumentText": "공식 원문 전체는 목록 응답에 포함하지 않습니다.",
@@ -159,5 +165,10 @@ class ConsoleListPayloadTests(unittest.TestCase):
         self.assertTrue(payload["documentVerified"])
         self.assertEqual(2400, payload["documentCharCount"])
         self.assertEqual("202608250001", payload["sourceRevision"])
+        self.assertEqual("opendart.disclosures", payload["externalFactDatasetId"])
+        self.assertEqual("opendart.document", payload["officialDocumentDatasetId"])
+        self.assertEqual("document-revision", payload["officialDocumentFactRevision"])
+        self.assertEqual("document-payload-hash", payload["officialDocumentFactPayloadHash"])
+        self.assertEqual("2026-08-25T00:02:00Z", payload["officialDocumentFetchedAt"])
         self.assertEqual("회사가 자기주식 취득을 결의했습니다.", payload["disclosureAnalysis"]["summary"])
         self.assertNotIn("officialDocumentText", payload["payload"])

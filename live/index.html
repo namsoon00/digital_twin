@@ -198,6 +198,7 @@
       var copy = document.getElementById("status-copy");
       var meta = document.getElementById("status-meta");
       var dot = document.getElementById("status-dot");
+      var retryTimer = 0;
 
       function setStatus(kind, heading, message, detail) {
         dot.className = "status-dot" + (kind ? " " + kind : "");
@@ -218,6 +219,7 @@
       }
 
       function connect() {
+        if (retryTimer) window.clearTimeout(retryTimer);
         if (!target || !token) {
           form.hidden = false;
           input.focus();
@@ -232,6 +234,8 @@
       }
 
       async function loadTarget() {
+        if (retryTimer) window.clearTimeout(retryTimer);
+        retryTimer = 0;
         form.hidden = true;
         setStatus("", "연결 상태 확인 중", "최신 공유 주소를 조회하고 있습니다.", "");
         try {
@@ -248,8 +252,9 @@
           connect();
         } catch (_error) {
           target = null;
-          setStatus("error", "현재 앱에 연결할 수 없습니다", "로컬 앱이나 공유 터널이 재시작 중일 수 있습니다.", "잠시 후 다시 확인하세요.");
+          setStatus("error", "연결을 복구하고 있습니다", "로컬 앱이나 공유 터널이 갱신 중일 수 있습니다.", "10초마다 자동으로 다시 확인합니다.");
           form.hidden = false;
+          retryTimer = window.setTimeout(loadTarget, 10000);
         }
       }
 
@@ -262,7 +267,13 @@
         }
         connect();
       });
-      document.getElementById("retry-button").addEventListener("click", loadTarget);
+      document.getElementById("retry-button").addEventListener("click", function () {
+        if (retryTimer) window.clearTimeout(retryTimer);
+        loadTarget();
+      });
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && !target) loadTarget();
+      });
       loadTarget();
     }());
   </script>

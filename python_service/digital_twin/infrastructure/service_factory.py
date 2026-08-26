@@ -2193,7 +2193,28 @@ def build_v2_reasoning_engine(
         }),
         settings=candidate_settings,
         source="reasoning-engine-v2-independent",
+        frozen_rulebox_catalog=candidate_rulebox,
+        frozen_tbox_metadata={
+            **dict(rulebox_release_preflight.get("tboxReleasePreflight") or {}),
+            "status": "ok",
+        },
     )
+    runtime_rulebox_catalog = projection_recorder.ensure_rulebox_ready()
+    runtime_world_partition = projection_recorder.world_rule_partition(
+        runtime_rulebox_catalog
+    )
+    if (
+        str(runtime_rulebox_catalog.get("status") or "") != "ready"
+        or str(runtime_world_partition.get("status") or "") != "ready"
+    ):
+        raise RuntimeError(
+            "The independent V2 frozen ontology release could not be warmed: "
+            + str(
+                runtime_rulebox_catalog.get("reason")
+                or (runtime_world_partition.get("failures") or [{}])[0].get("reason")
+                or "unknown"
+            )[:220]
+        )
     shared_inference_store = stores.shared_instrument_inference_store(store_settings)
     shared_inference_service = SharedInstrumentInferenceService(
         shared_inference_store,
@@ -2242,6 +2263,21 @@ def build_v2_reasoning_engine(
                 (rulebox_release_preflight.get("ruleCatalogMigration") or {}).get("status")
                 or ""
             ),
+        },
+        "runtimeOntologyRelease": {
+            "status": "ready",
+            "catalogSource": str(
+                runtime_rulebox_catalog.get("runtimeCatalogSource") or ""
+            ),
+            "ruleCount": int(runtime_rulebox_catalog.get("ruleCount") or 0),
+            "sharedRuleCount": int(
+                runtime_world_partition.get("sharedRuleCount") or 0
+            ),
+            "overlayRuleCount": int(
+                runtime_world_partition.get("overlayRuleCount") or 0
+            ),
+            "tboxSource": "frozen-v2-release",
+            "warmed": True,
         },
         "ruleExecutionReadiness": {
             "status": "ready",

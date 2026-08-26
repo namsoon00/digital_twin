@@ -884,6 +884,80 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertFalse(result["bootstrapCatalogChecked"])
         self.assertEqual("stored-catalog-ready", result["ruleCatalogMigration"]["status"])
 
+    def test_v2_projection_recorder_reuses_frozen_rulebox_and_tbox_release(self):
+        rules = rulebox_rules_to_payload(default_graph_inference_rules())
+        expected_rule_count = len(rules)
+
+        class Repository:
+            store_key = "typedb"
+
+            def rulebox_snapshot(self):
+                raise AssertionError("a frozen V2 release must not reread RuleBox")
+
+            def active_tbox_metadata(self):
+                raise AssertionError("a frozen V2 release must not reread TBox")
+
+        source_catalog = {
+            "configured": True,
+            "status": "ok",
+            "rules": rules,
+            "ruleCount": len(rules),
+            "ruleboxRulesHash": "frozen-rulebox-hash",
+        }
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            frozen_rulebox_catalog=source_catalog,
+            frozen_tbox_metadata={
+                "version": "frozen-tbox-version",
+                "fingerprint": "frozen-tbox-fingerprint",
+                "source": "typedb-release-preflight",
+            },
+        )
+        source_catalog["rules"].clear()
+
+        first = recorder.ensure_rulebox_ready()
+        second = recorder.ensure_rulebox_ready()
+        active_tbox = recorder.active_tbox_context()
+
+        self.assertEqual("ready", first["status"])
+        self.assertEqual("ready", second["status"])
+        self.assertEqual("frozen-v2-release", first["runtimeCatalogSource"])
+        self.assertTrue(first["releaseCatalogReused"])
+        self.assertEqual(expected_rule_count, len(recorder.rulebox_rules_for_impact()))
+        self.assertEqual("ok", active_tbox["status"])
+        self.assertEqual("frozen-tbox-fingerprint", active_tbox["fingerprint"])
+        self.assertEqual("frozen-v2-release", active_tbox["runtimeCatalogSource"])
+        self.assertTrue(active_tbox["releaseMetadataReused"])
+
+    def test_v2_projection_recorder_compiles_frozen_world_partition_once(self):
+        from digital_twin.domain.world_partitioned_reasoning import (
+            compile_world_partitioned_rules as compile_partition,
+        )
+
+        rules = rulebox_rules_to_payload(default_graph_inference_rules())
+        recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            frozen_rulebox_catalog={
+                "configured": True,
+                "status": "ok",
+                "rules": rules,
+                "ruleCount": len(rules),
+            },
+        )
+        catalog = recorder.ensure_rulebox_ready()
+
+        with patch(
+            "digital_twin.infrastructure.ontology_projection.compile_world_partitioned_rules",
+            wraps=compile_partition,
+        ) as compiler:
+            first = recorder.world_rule_partition(catalog)
+            first["sharedRuleIds"].clear()
+            second = recorder.world_rule_partition(catalog)
+
+        self.assertEqual(1, compiler.call_count)
+        self.assertEqual("ready", second["status"])
+        self.assertTrue(second["sharedRuleIds"])
+
     def test_typedb_schema_defines_nodes_assertions_and_storage_keys(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 

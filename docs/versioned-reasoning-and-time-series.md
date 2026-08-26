@@ -207,6 +207,14 @@ execution stage, lifecycle class, decision effect, disabled rules, invalid
 dependency contracts, and high-cost rules. A changed RuleBox requires a new
 deployment release rather than silently mixing evidence cohorts.
 
+The release preflight also verifies the deployed TBox and freezes both TBox
+metadata and the complete RuleBox catalog in the V2 worker. Per-symbol jobs
+reuse that in-memory release snapshot; they do not reread or migrate static
+ontology definitions. Only material ABox scopes are projected at runtime. An
+unchanged scoped Manifest may reuse its aligned native inference generation,
+but only when the compact result-slot proof matches the same TBox, RuleBox,
+deployment namespace, source ABox, and target scope.
+
 Register that successor as a rolling candidate before restarting the V2
 worker:
 

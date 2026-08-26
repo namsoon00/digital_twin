@@ -1281,6 +1281,8 @@ class PortfolioOntologyProjectionRecorder:
         runtime_context_overrides: Dict[str, Dict[str, object]] = None,
         settings: Dict[str, object] = None,
         source: str = "monitoring",
+        frozen_rulebox_catalog: Dict[str, object] = None,
+        frozen_tbox_metadata: Dict[str, object] = None,
     ):
         self.repository = repository
         self.quality_store = quality_store
@@ -1303,6 +1305,27 @@ class PortfolioOntologyProjectionRecorder:
         self.last_runtime_context_cache_status: Dict[str, Dict[str, object]] = {}
         self.investment_domain_store = investment_domain_store
         self.settings = dict(settings or {})
+        self._frozen_rulebox_catalog = (
+            deepcopy(frozen_rulebox_catalog)
+            if isinstance(frozen_rulebox_catalog, dict)
+            else None
+        )
+        self._frozen_tbox_metadata = (
+            deepcopy(frozen_tbox_metadata)
+            if isinstance(frozen_tbox_metadata, dict)
+            else None
+        )
+        self._rulebox_impact_rules = (
+            [
+                dict(item)
+                for item in (self._frozen_rulebox_catalog or {}).get("rules") or []
+                if isinstance(item, dict)
+            ]
+            if self._frozen_rulebox_catalog is not None
+            else None
+        )
+        self._frozen_rulebox_readiness = None
+        self._frozen_world_rule_partition = None
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
             decision_episode_store=decision_episode_store,
             market_time_series_store=market_time_series_store,
@@ -1413,6 +1436,11 @@ class PortfolioOntologyProjectionRecorder:
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
     def world_rule_partition(self, rule_catalog: Dict[str, object]) -> Dict[str, object]:
+        if (
+            self._frozen_rulebox_catalog is not None
+            and isinstance(self._frozen_world_rule_partition, dict)
+        ):
+            return self.copy_world_rule_partition(self._frozen_world_rule_partition)
         rows = [
             dict(item) for item in (rule_catalog or {}).get("rules") or []
             if isinstance(item, dict)
@@ -1426,7 +1454,26 @@ class PortfolioOntologyProjectionRecorder:
             parsed = rulebox_rules_from_payload({"rules": rows})
         except ValueError as error:
             return {"status": "invalid", "failures": [{"reason": str(error)}]}
-        return compile_world_partitioned_rules(parsed)
+        partition = compile_world_partitioned_rules(parsed)
+        if self._frozen_rulebox_catalog is not None:
+            self._frozen_world_rule_partition = self.copy_world_rule_partition(partition)
+        return partition
+
+    @staticmethod
+    def copy_world_rule_partition(partition: Dict[str, object]) -> Dict[str, object]:
+        """Copy mutable containers while sharing frozen compiled rule values."""
+
+        copied = dict(partition or {})
+        for key in [
+            "sharedRules",
+            "overlayRules",
+            "sharedRuleIds",
+            "overlayRuleIds",
+        ]:
+            copied[key] = list(copied.get(key) or [])
+        copied["failures"] = deepcopy(copied.get("failures") or [])
+        copied["rules"] = deepcopy(copied.get("rules") or [])
+        return copied
 
     @staticmethod
     def catalog_for_rules(
@@ -2077,6 +2124,21 @@ class PortfolioOntologyProjectionRecorder:
                 ),
             },
             "runtimeStages": runtime_stages,
+            "releaseCatalog": {
+                "source": str(
+                    catalog.get("runtimeCatalogSource")
+                    or catalog.get("ruleCatalogStore")
+                    or "typedb-runtime"
+                ),
+                "ruleCount": int(catalog.get("ruleCount") or 0),
+                "ruleboxRulesHash": str(catalog.get("ruleboxRulesHash") or ""),
+                "ruleboxReused": bool(catalog.get("releaseCatalogReused")),
+                "tboxSource": (
+                    "frozen-v2-release"
+                    if self._frozen_tbox_metadata is not None
+                    else "typedb-runtime"
+                ),
+            },
             "modelSignalBridgeExecution": model_signal_bridge_execution,
             "activationLifecycle": compact_staged_abox_activation_lifecycle(
                 execution
@@ -3824,6 +3886,83 @@ class PortfolioOntologyProjectionRecorder:
         }
 
     def ensure_rulebox_ready(self) -> Dict[str, object]:
+        if self._frozen_rulebox_catalog is not None:
+            cached_readiness = getattr(self, "_frozen_rulebox_readiness", None)
+            if isinstance(cached_readiness, dict):
+                return deepcopy(cached_readiness)
+
+            def freeze_readiness(result: Dict[str, object]) -> Dict[str, object]:
+                self._frozen_rulebox_readiness = deepcopy(result)
+                return deepcopy(result)
+
+            snapshot = deepcopy(self._frozen_rulebox_catalog)
+            stored_rules = [
+                dict(item) for item in snapshot.get("rules") or []
+                if isinstance(item, dict)
+            ]
+            self._rulebox_impact_rules = stored_rules
+            stored_count = int(
+                snapshot.get("ruleboxRuleCount")
+                or snapshot.get("ruleCount")
+                or len(stored_rules)
+            )
+            stored_hash = str(
+                snapshot.get("ruleboxRulesHash")
+                or snapshot.get("sourceRulesHash")
+                or snapshot.get("rulesHash")
+                or ""
+            ).strip()
+            if not stored_hash and stored_rules:
+                stored_hash = compute_rulebox_rules_hash(stored_rules)
+            if (
+                not snapshot.get("configured")
+                or str(snapshot.get("status") or "") != "ok"
+                or not stored_rules
+                or stored_count <= 0
+            ):
+                return freeze_readiness({
+                    "status": "not-ready",
+                    "reason": "The frozen V2 RuleBox release is unavailable or empty.",
+                    "ruleCount": stored_count,
+                    "runtimeCatalogSource": "frozen-v2-release",
+                })
+            if rulebox_catalog_requires_bootstrap_repair(stored_rules):
+                return freeze_readiness({
+                    "status": "not-ready",
+                    "reason": (
+                        "The frozen V2 RuleBox requires migration. Register a new "
+                        "release after completing RuleBox preflight."
+                    ),
+                    "ruleCount": stored_count,
+                    "ruleboxRulesHash": stored_hash,
+                    "runtimeCatalogSource": "frozen-v2-release",
+                })
+            missing_decision_policy = rulebox_rules_missing_decision_stage(stored_rules)
+            if missing_decision_policy:
+                return freeze_readiness({
+                    "status": "not-ready",
+                    "reason": "TypeDB 추론 규칙의 파생 관계에 decisionStage가 없습니다.",
+                    "ruleCount": stored_count,
+                    "ruleboxRulesHash": stored_hash,
+                    "missingDecisionStageRuleIds": missing_decision_policy,
+                    "runtimeCatalogSource": "frozen-v2-release",
+                })
+            return freeze_readiness({
+                "status": "ready",
+                "ruleCount": stored_count,
+                "ruleboxRulesHash": stored_hash,
+                "sourceOfTruth": "typedb-frozen-v2-release",
+                "ruleCatalogStore": "release-memory",
+                "runtimeCatalogSource": "frozen-v2-release",
+                "releaseCatalogReused": True,
+                "inputRelationTypes": rulebox_input_relation_types(stored_rules),
+                "bootstrapCatalogChecked": False,
+                "ruleCatalogMigration": {
+                    "status": "release-preflight-complete",
+                    "required": False,
+                    "saved": False,
+                },
+            })
         self._rulebox_impact_rules = None
         if not hasattr(self.repository, "rulebox_snapshot"):
             return {}
@@ -4357,6 +4496,13 @@ class PortfolioOntologyProjectionRecorder:
         return store_key + "|instance:" + str(id(self.repository))
 
     def active_tbox_context(self) -> Dict[str, object]:
+        if self._frozen_tbox_metadata is not None:
+            return {
+                **deepcopy(self._frozen_tbox_metadata),
+                "status": "ok",
+                "runtimeCatalogSource": "frozen-v2-release",
+                "releaseMetadataReused": True,
+            }
         if not hasattr(self.repository, "active_tbox_metadata"):
             return {}
         try:

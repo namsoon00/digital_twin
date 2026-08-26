@@ -2276,6 +2276,8 @@ def build_v2_reasoning_engine(
     if str(descriptor.engine_version or "").lower() != "v2":
         raise RuntimeError("The V2 reasoning deployment descriptor is unavailable")
 
+    deployment_row = dict(platform.registry.get(descriptor.deployment_id) or {})
+    deployment_health = dict(deployment_row.get("health") or {})
     candidate_settings = dict(configured)
     candidate_settings["typedbDatabase"] = platform.graph_database_for(
         descriptor.deployment_id
@@ -2286,7 +2288,19 @@ def build_v2_reasoning_engine(
     candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
     candidate_settings["ontologyInferenceDetailOutboxEnabled"] = "1"
     candidate_settings["ontologyAsyncQualityRecordEnabled"] = "0"
-    if str(descriptor.status or "").strip().lower() == "provisioning":
+    provisioning_contract = dict(
+        deployment_health.get("graphStoreProvisioning") or {}
+    )
+    reuses_existing_graph_store = (
+        str(provisioning_contract.get("mode") or "").strip().lower()
+        == "reuse-existing"
+        and str(provisioning_contract.get("database") or "").strip()
+        == str(candidate_settings.get("typedbDatabase") or "").strip()
+    )
+    if (
+        str(descriptor.status or "").strip().lower() == "provisioning"
+        and not reuses_existing_graph_store
+    ):
         candidate_settings["typedbFreshCandidateRebuild"] = "1"
     candidate_settings["_reasoningEngineDeploymentId"] = descriptor.deployment_id
     candidate_settings["_reasoningEngineVersion"] = descriptor.engine_version
@@ -2303,8 +2317,6 @@ def build_v2_reasoning_engine(
         settings=candidate_settings,
     )
     repository = ontology_repository_from_settings(candidate_settings)
-    deployment_row = dict(platform.registry.get(descriptor.deployment_id) or {})
-    deployment_health = dict(deployment_row.get("health") or {})
     engine_control = platform.registry.control()
     protected_deployment_ids = {
         str(engine_control.active_deployment_id or "").strip(),

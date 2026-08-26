@@ -987,6 +987,21 @@ class ReasoningEnginePlatformService:
             capabilities=dict(base.capabilities),
         )
         self.registry.upsert(descriptor)
+        update_health = getattr(self.registry, "update_health", None)
+        if requested_graph_store and callable(update_health):
+            # Supplying a graph database is an explicit assertion that its
+            # storage lifecycle is managed outside this release registration.
+            # Preserve that bootstrap contract so a provisioning worker does
+            # not redefine an already complete TypeDB schema.
+            existing_health = dict((self.registry.get(clean_deployment_id) or {}).get("health") or {})
+            update_health(clean_deployment_id, {
+                **existing_health,
+                "graphStoreProvisioning": {
+                    "mode": "reuse-existing",
+                    "database": candidate_graph_store,
+                    "source": "explicit-release-registration",
+                },
+            })
         if existing and str(existing.get("status") or "") == "retired":
             self.registry.transition(clean_deployment_id, "provisioning")
         next_control = self.registry.set_control(

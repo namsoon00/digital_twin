@@ -792,6 +792,9 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             def update_capabilities(self, deployment_id, capabilities):
                 self.rows[deployment_id]["capabilities"] = dict(capabilities)
 
+            def update_health(self, deployment_id, health):
+                self.rows[deployment_id]["health"] = dict(health)
+
         registry = Registry()
         platform = ReasoningEnginePlatformService(registry, {})
 
@@ -814,6 +817,14 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("questdb-active", result["deployment"]["timeSeriesBackendId"])
         self.assertFalse(result["deployment"]["capabilities"]["productionDelivery"])
         self.assertTrue(result["deployment"]["capabilities"]["shadowComparison"])
+        self.assertEqual(
+            {
+                "mode": "reuse-existing",
+                "database": "orbit-alpha-v2",
+                "source": "explicit-release-registration",
+            },
+            result["deployment"]["health"]["graphStoreProvisioning"],
+        )
 
     def test_register_v2_release_rejects_active_graph_database_reuse(self):
         class Registry:

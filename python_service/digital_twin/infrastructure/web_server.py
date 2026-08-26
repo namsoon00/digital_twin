@@ -3957,10 +3957,10 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     symbol = configured(first_query(query, "symbol")).upper()
     kind = configured(first_query(query, "kind"))
     search = configured(first_query(query, "query") or first_query(query, "q"))
-    store = stores.research_evidence_store()
     page_key = "|".join([symbol or "all", kind or "all", search or "all", str(limit), str(offset)])
 
     def load_page() -> Dict[str, object]:
+        store = stores.research_evidence_store()
         items, total = store.latest_page(
             symbol=symbol,
             kind=kind,

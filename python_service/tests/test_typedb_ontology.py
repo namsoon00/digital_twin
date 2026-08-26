@@ -1209,7 +1209,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         inspect_schema.assert_not_called()
         synchronize.assert_called_once()
         self.assertEqual("", synchronize.call_args.args[2])
-        self.assertEqual(512, synchronize.call_args.kwargs["batch_size"])
+        self.assertEqual(64, synchronize.call_args.kwargs["batch_size"])
         self.assertEqual(900.0, synchronize.call_args.kwargs["operation_timeout_seconds"])
         mark_ready.assert_called_once()
         repository.invalidate_process_base_schema_readiness()
@@ -1368,7 +1368,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         http_sync.assert_called_once_with(
             "",
-            batch_size=512,
+            batch_size=64,
             operation_timeout_seconds=900.0,
         )
         grpc_sync.assert_not_called()
@@ -1393,7 +1393,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         inspect_schema.assert_not_called()
         http_sync.assert_called_once_with(
             "",
-            batch_size=512,
+            batch_size=64,
             operation_timeout_seconds=900.0,
         )
         grpc_sync.assert_not_called()

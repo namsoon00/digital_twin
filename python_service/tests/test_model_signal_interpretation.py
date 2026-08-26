@@ -40,10 +40,10 @@ class ModelSignalInterpretationTests(unittest.TestCase):
         groups = model_signal_bridge_groups(self.rules, enabled_only=True)
 
         self.assertEqual("ok", manifest["status"])
-        self.assertEqual(75, len(policies))
-        self.assertEqual(74, manifest["activePolicyCount"])
+        self.assertEqual(74, len(policies))
+        self.assertEqual(73, manifest["activePolicyCount"])
         self.assertEqual(3, manifest["bridgeFunctionCount"])
-        self.assertEqual(71, manifest["eliminatedPerRuleFunctionCount"])
+        self.assertEqual(70, manifest["eliminatedPerRuleFunctionCount"])
         self.assertEqual({"stock", "holding", "watchlist"}, {
             group.source_scope for group in groups
         })
@@ -78,11 +78,11 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             enabled_only=True,
         )
 
-        self.assertEqual(74, partition["logicalModelSignalPolicyCount"])
-        self.assertEqual(59, partition["batchedSimplePolicyCount"])
+        self.assertEqual(73, partition["logicalModelSignalPolicyCount"])
+        self.assertEqual(58, partition["batchedSimplePolicyCount"])
         self.assertEqual(15, partition["constrainedPolicyCount"])
         self.assertEqual(3, partition["modelSignalBridgeReadCount"])
-        self.assertEqual(56, partition["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual(55, partition["eliminatedModelSignalPolicyQueryCount"])
         self.assertEqual({"stock", "holding", "watchlist"}, set(
             partition["bridgeSourceScopes"]
         ))
@@ -101,11 +101,11 @@ class ModelSignalInterpretationTests(unittest.TestCase):
         )
 
         self.assertEqual("ready", compiled["status"])
-        self.assertEqual(74, partition["logicalModelSignalPolicyCount"])
-        self.assertEqual(74, partition["batchedSimplePolicyCount"])
+        self.assertEqual(73, partition["logicalModelSignalPolicyCount"])
+        self.assertEqual(73, partition["batchedSimplePolicyCount"])
         self.assertEqual(0, partition["constrainedPolicyCount"])
         self.assertEqual(1, partition["modelSignalBridgeReadCount"])
-        self.assertEqual(73, partition["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual(72, partition["eliminatedModelSignalPolicyQueryCount"])
         self.assertEqual(["stock"], partition["bridgeSourceScopes"])
 
         plan = typedb_model_signal_bridge_batch_plan(
@@ -116,9 +116,9 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             } for rule in shared_rules],
             ["005930"],
         )
-        self.assertEqual(74, plan["logicalModelSignalPolicyCount"])
+        self.assertEqual(73, plan["logicalModelSignalPolicyCount"])
         self.assertEqual(1, plan["modelSignalBridgeReadCount"])
-        self.assertEqual(73, plan["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual(72, plan["eliminatedModelSignalPolicyQueryCount"])
 
     def test_runtime_batch_plan_replaces_59_reads_with_three_bridge_reads(self):
         entries = [{
@@ -131,13 +131,13 @@ class ModelSignalInterpretationTests(unittest.TestCase):
             ["005930"],
         )
 
-        self.assertEqual(59, plan["batchedSimplePolicyCount"])
+        self.assertEqual(58, plan["batchedSimplePolicyCount"])
         self.assertEqual(15, plan["constrainedPolicyCount"])
         self.assertEqual(3, plan["modelSignalBridgeReadCount"])
-        self.assertEqual(56, plan["eliminatedModelSignalPolicyQueryCount"])
+        self.assertEqual(55, plan["eliminatedModelSignalPolicyQueryCount"])
         self.assertEqual(18, plan["plannedModelSignalQueryCount"])
         self.assertEqual(
-            len(self.active_rules) - 59,
+            len(self.active_rules) - 58,
             len(plan["regularEntries"]),
         )
         self.assertTrue(all(
@@ -212,9 +212,9 @@ class ModelSignalInterpretationTests(unittest.TestCase):
         ]
         bridge_entities = [item for item in graph.entities if item.kind == "model-signal-bridge"]
 
-        self.assertEqual(75, len(policy_entities))
+        self.assertEqual(74, len(policy_entities))
         self.assertEqual(3, len(bridge_entities))
-        self.assertEqual(75, sum(
+        self.assertEqual(74, sum(
             item.relation_type == "APPLIES_SIGNAL_INTERPRETATION"
             for item in graph.relations
         ))

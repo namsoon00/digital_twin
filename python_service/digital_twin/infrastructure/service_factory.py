@@ -118,6 +118,7 @@ from ..domain.monitoring import RealtimeMonitor
 from ..domain.portfolio import account_snapshot_from_monitor_state
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
+from ..domain.ontology_rulebox_governance import rulebox_rules_hash
 from ..domain.reasoning_engine_versions import reasoning_release_identity
 from ..domain.investment_reasoning import reasoning_rule_inventory
 from ..domain.ontology_worlds import portfolio_world_id
@@ -277,8 +278,115 @@ def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
     }
 
 
-def prepare_v2_rulebox_release(repository, settings=None):
-    """Migrate the persisted RuleBox before calculating a release fingerprint."""
+def prepare_v2_rulebox_release(repository, settings=None, release_guard=None):
+    """Read or migrate one V2 ontology release before freezing it in memory.
+
+    A provisioning deployment may repair its isolated RuleBox before its first
+    release fingerprint is recorded. An active, delivery-authorized, or
+    already-frozen candidate is immutable: startup verifies its persisted
+    fingerprints and must never rewrite that graph store in place.
+    """
+
+    guard = dict(release_guard or {})
+    immutable_release = bool(guard.get("immutable"))
+    expected_rulebox_fingerprint = str(
+        guard.get("ruleboxFingerprint")
+        or guard.get("rulebox_fingerprint")
+        or ""
+    ).strip()
+    expected_tbox_fingerprint = str(
+        guard.get("tboxFingerprint")
+        or guard.get("tbox_fingerprint")
+        or ""
+    ).strip()
+    expected_tbox_version = str(
+        guard.get("tboxVersion")
+        or guard.get("tbox_version")
+        or ""
+    ).strip()
+
+    if immutable_release:
+        try:
+            snapshot = dict(repository.rulebox_snapshot() or {})
+        except Exception as error:
+            raise RuntimeError(
+                "The immutable V2 RuleBox release is unavailable: "
+                + str(error)[:220]
+            ) from error
+        if str(snapshot.get("status") or "") != "ok" or not snapshot.get("rules"):
+            raise RuntimeError("The immutable V2 RuleBox release is unavailable or empty")
+        actual_rulebox_fingerprint = str(
+            snapshot.get("sourceRulesHash")
+            or snapshot.get("rulesHash")
+            or snapshot.get("ruleboxRulesHash")
+            or rulebox_rules_hash(snapshot.get("rules") or [])
+        ).strip()
+        if (
+            not expected_rulebox_fingerprint
+            or actual_rulebox_fingerprint != expected_rulebox_fingerprint
+        ):
+            raise RuntimeError(
+                "The immutable V2 RuleBox release fingerprint does not match its "
+                "deployment record: "
+                + (actual_rulebox_fingerprint or "unknown")
+                + " != "
+                + (expected_rulebox_fingerprint or "missing")
+                + ". Register a new V2 deployment or restore the frozen release."
+            )
+        try:
+            deployed_tbox = dict(repository.active_tbox_metadata() or {})
+        except Exception as error:
+            raise RuntimeError(
+                "The immutable V2 TBox release cannot be verified: "
+                + str(error)[:220]
+            ) from error
+        actual_tbox_fingerprint = str(deployed_tbox.get("fingerprint") or "").strip()
+        actual_tbox_version = str(deployed_tbox.get("version") or "").strip()
+        if (
+            str(deployed_tbox.get("status") or "") != "ok"
+            or not expected_tbox_fingerprint
+            or actual_tbox_fingerprint != expected_tbox_fingerprint
+            or (expected_tbox_version and actual_tbox_version != expected_tbox_version)
+        ):
+            raise RuntimeError(
+                "The immutable V2 TBox release fingerprint does not match its "
+                "deployment record: "
+                + (actual_tbox_version or "unknown")
+                + "/"
+                + (actual_tbox_fingerprint or "unknown")
+                + " != "
+                + (expected_tbox_version or actual_tbox_version or "unknown")
+                + "/"
+                + (expected_tbox_fingerprint or "missing")
+                + ". Register a new V2 deployment or restore the frozen release."
+            )
+        model_signal_contract = v2_model_signal_release_contract(snapshot, settings)
+        if model_signal_contract["status"] != "matched":
+            raise RuntimeError(
+                "The immutable V2 RuleBox requires model-signal releases that the "
+                "runtime scorer does not produce: "
+                + ", ".join(model_signal_contract["missingReleaseIds"])
+            )
+        snapshot["frozenReleaseVerified"] = True
+        return snapshot, {
+            "status": "ready",
+            "ruleCount": int(snapshot.get("ruleCount") or len(snapshot.get("rules") or [])),
+            "ruleboxRulesHash": actual_rulebox_fingerprint,
+            "sourceOfTruth": "typedb-immutable-v2-release",
+            "ruleCatalogStore": "typedb",
+            "modelSignalReleasePreflight": model_signal_contract,
+            "tboxReleasePreflight": {
+                "status": "matched",
+                "version": actual_tbox_version,
+                "fingerprint": actual_tbox_fingerprint,
+                "source": str(deployed_tbox.get("source") or ""),
+            },
+            "ruleCatalogMigration": {
+                "status": "immutable-release-reused",
+                "required": False,
+                "saved": False,
+            },
+        }
 
     readiness = PortfolioOntologyProjectionRecorder(
         repository,
@@ -2135,9 +2243,36 @@ def build_v2_reasoning_engine(
         settings=candidate_settings,
     )
     repository = ontology_repository_from_settings(candidate_settings)
+    deployment_row = dict(platform.registry.get(descriptor.deployment_id) or {})
+    deployment_health = dict(deployment_row.get("health") or {})
+    engine_control = platform.registry.control()
+    protected_deployment_ids = {
+        str(engine_control.active_deployment_id or "").strip(),
+        str(engine_control.delivery_deployment_id or "").strip(),
+    }
+    protected_deployment_ids.discard("")
+    frozen_release_recorded = bool(
+        str(deployment_health.get("candidateReleaseId") or "").strip()
+        and str(deployment_health.get("ruleboxFingerprint") or "").strip()
+    )
     candidate_rulebox, rulebox_release_preflight = prepare_v2_rulebox_release(
         repository,
         candidate_settings,
+        release_guard={
+            "immutable": (
+                descriptor.deployment_id in protected_deployment_ids
+                or frozen_release_recorded
+            ),
+            "ruleboxFingerprint": str(
+                deployment_health.get("ruleboxFingerprint") or ""
+            ),
+            "tboxFingerprint": str(
+                deployment_health.get("tboxFingerprint") or ""
+            ),
+            "tboxVersion": str(
+                descriptor.release_bundle.tbox_release_id or ""
+            ).split("@", 1)[0],
+        },
     )
     rulebox_fingerprint = str(
         candidate_rulebox.get("sourceRulesHash")

@@ -448,12 +448,12 @@ class StatisticalSignalTests(unittest.TestCase):
         ]
 
         self.assertTrue(validation["valid"])
-        self.assertEqual(75, len(predictive))
+        self.assertEqual(74, len(predictive))
         self.assertTrue(all((item.get("statisticalSignalContract") or {}).get("signalTypes") for item in predictive))
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
-        self.assertEqual(43, len(migration["not-applicable"]))
-        self.assertEqual(75, len(migration["model-signal-production"]))
+        self.assertEqual(44, len(migration["not-applicable"]))
+        self.assertEqual(74, len(migration["model-signal-production"]))
         self.assertEqual([], migration.get("shadow-signal-required") or [])
         flow_rule = next(
             item for item in predictive
@@ -484,7 +484,7 @@ class StatisticalSignalTests(unittest.TestCase):
         release = statistical_rule_candidate_release(default_graph_inference_rules())
 
         self.assertEqual("disabled-candidate", release["status"])
-        self.assertEqual(75, release["candidateCount"])
+        self.assertEqual(74, release["candidateCount"])
         self.assertEqual(27, len(price_signal_rule_candidates(default_graph_inference_rules())))
         self.assertFalse(release["productionEligible"])
         for rule in release["rules"]:
@@ -539,9 +539,9 @@ class StatisticalSignalTests(unittest.TestCase):
             if rule.resolved_knowledge_basis.migration_disposition == "awaiting-governed-model-scorer"
         ]
 
-        self.assertEqual(75, len(production))
+        self.assertEqual(74, len(production))
         self.assertEqual(0, len(waiting))
-        self.assertEqual(74, sum(rule.enabled for rule in production))
+        self.assertEqual(73, sum(rule.enabled for rule in production))
         self.assertEqual(
             ["graph.holding.trend_transition.risk.v1"],
             [rule.rule_id for rule in production if not rule.enabled],

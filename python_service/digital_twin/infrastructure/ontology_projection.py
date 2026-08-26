@@ -4275,7 +4275,10 @@ class PortfolioOntologyProjectionRecorder:
                     "ruleCount": stored_count,
                     "runtimeCatalogSource": "frozen-v2-release",
                 })
-            if rulebox_catalog_requires_bootstrap_repair(stored_rules):
+            if (
+                rulebox_catalog_requires_bootstrap_repair(stored_rules)
+                and not bool(snapshot.get("frozenReleaseVerified"))
+            ):
                 return freeze_readiness({
                     "status": "not-ready",
                     "reason": (

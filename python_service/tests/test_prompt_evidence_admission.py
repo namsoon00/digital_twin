@@ -65,6 +65,7 @@ class PromptEvidenceAdmissionTests(unittest.TestCase):
             "dataState": "sufficient",
             "officialDocumentState": "document-verified",
             "documentVerified": True,
+            "documentHash": "sha256:verified-disclosure-document",
             "analysisReady": True,
             "evidenceGovernance": {"investmentJudgmentEligible": True},
         }, now=NOW, directly_linked=True)
@@ -83,6 +84,7 @@ class PromptEvidenceAdmissionTests(unittest.TestCase):
             "dataState": "sufficient",
             "officialDocumentState": "document-verified",
             "documentVerified": True,
+            "documentHash": "sha256:verified-disclosure-document",
             "analysisReady": True,
             "evidenceGovernance": {"investmentJudgmentEligible": True},
         }, now=NOW, directly_linked=True)

@@ -65,6 +65,9 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual({"typedbCandidateVerificationError": 1}, result["unresolvedFailureReasonCounts"])
 
     def test_v2_release_preflight_migrates_rulebox_before_freezing_snapshot(self):
+        from digital_twin.domain.ontology_rule_ownership import (
+            RULE_OWNERSHIP_CONTRACT_VERSION,
+        )
         from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
         from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
 
@@ -105,9 +108,113 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("migrated", readiness["ruleCatalogMigration"]["status"])
         self.assertEqual(["snapshot", "save", "snapshot", "snapshot"], repository.calls)
         self.assertEqual(
-            "ontology-rule-ownership-v1",
+            RULE_OWNERSHIP_CONTRACT_VERSION,
             snapshot["rules"][0]["knowledge_basis"]["ownershipContractVersion"],
         )
+
+    def test_v2_release_preflight_reuses_exact_immutable_release_without_migration(self):
+        from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
+        from digital_twin.domain.ontology_schema import default_tbox_metadata
+        from digital_twin.infrastructure.ontology_projection import (
+            PortfolioOntologyProjectionRecorder,
+            bootstrap_rule_catalog,
+        )
+        from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
+
+        rules = deepcopy(bootstrap_rule_catalog()["rules"])
+        rules[0]["knowledge_basis"]["ownershipContractVersion"] = "frozen-old-contract"
+        frozen_hash = rulebox_rules_hash(rules)
+        expected_tbox = default_tbox_metadata()
+
+        class Repository:
+            store_key = "typedb"
+
+            def __init__(self):
+                self.calls = []
+
+            def rulebox_snapshot(self):
+                self.calls.append("snapshot")
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": deepcopy(rules),
+                    "ruleCount": len(rules),
+                    "ruleboxRulesHash": frozen_hash,
+                }
+
+            def save_rulebox(self, _payload):
+                self.calls.append("save")
+                raise AssertionError("an immutable release must never be migrated")
+
+            def active_tbox_metadata(self):
+                self.calls.append("tbox")
+                return {**expected_tbox, "status": "ok", "source": "test"}
+
+        repository = Repository()
+
+        snapshot, readiness = prepare_v2_rulebox_release(
+            repository,
+            {},
+            release_guard={
+                "immutable": True,
+                "ruleboxFingerprint": frozen_hash,
+                "tboxFingerprint": expected_tbox["fingerprint"],
+                "tboxVersion": expected_tbox["version"],
+            },
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            frozen_rulebox_catalog=snapshot,
+            frozen_tbox_metadata=readiness["tboxReleasePreflight"],
+        )
+
+        self.assertEqual(["snapshot", "tbox"], repository.calls)
+        self.assertTrue(snapshot["frozenReleaseVerified"])
+        self.assertEqual("immutable-release-reused", readiness["ruleCatalogMigration"]["status"])
+        self.assertEqual("ready", recorder.ensure_rulebox_ready()["status"])
+
+    def test_v2_release_preflight_rejects_immutable_fingerprint_mismatch_without_write(self):
+        from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
+        from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
+
+        rules = deepcopy(bootstrap_rule_catalog()["rules"])
+
+        class Repository:
+            def __init__(self):
+                self.calls = []
+
+            def rulebox_snapshot(self):
+                self.calls.append("snapshot")
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": deepcopy(rules),
+                    "ruleCount": len(rules),
+                    "ruleboxRulesHash": "actual-release-hash",
+                }
+
+            def save_rulebox(self, _payload):
+                self.calls.append("save")
+                raise AssertionError("a mismatched immutable release must not be rewritten")
+
+            def active_tbox_metadata(self):
+                self.calls.append("tbox")
+                raise AssertionError("RuleBox mismatch must fail before TBox access")
+
+        repository = Repository()
+
+        with self.assertRaisesRegex(RuntimeError, "immutable V2 RuleBox release fingerprint"):
+            prepare_v2_rulebox_release(
+                repository,
+                {},
+                release_guard={
+                    "immutable": True,
+                    "ruleboxFingerprint": "expected-release-hash",
+                    "tboxFingerprint": "expected-tbox-hash",
+                },
+            )
+
+        self.assertEqual(["snapshot"], repository.calls)
 
     def test_v2_release_preflight_rejects_unavailable_model_signal_release(self):
         from digital_twin.infrastructure.service_factory import (

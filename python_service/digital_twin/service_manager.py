@@ -2364,6 +2364,43 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
             release_typedb_rotation_lock(maintenance_lock)
 
 
+def ensure_typedb_startup_seed_contract(spec: Dict[str, object]) -> bool:
+    """Keep a proven serving generation available when startup repair fails.
+
+    The active TypeDB seed command is allowed to fail closed while preserving
+    the previously published generation.  Treating that result as a process
+    startup failure makes launchd tear down MySQL and every unrelated worker,
+    then repeat the same expensive WAL replay.  An isolated candidate still
+    fails hard because it has no previously promoted generation to serve.
+    """
+
+    if ensure_typedb_seeded(spec):
+        return True
+    failure = dict(spec.get("_typedbSeedFailure") or {})
+    preserved = bool(failure.get("preservedActiveGeneration"))
+    if (
+        str(spec.get("role") or "") == "typedb"
+        and preserved
+        and typedb_driver_ready(spec)
+    ):
+        reason = str(
+            failure.get("reason")
+            or failure.get("status")
+            or "startup seed repair deferred"
+        )[:300]
+        spec["_typedbServingPreservedGeneration"] = True
+        append_log(
+            spec["log"],
+            "seed degraded; serving preserved active generation. " + reason,
+        )
+        print(
+            str(spec["label"])
+            + " startup seed repair deferred; serving the preserved active generation."
+        )
+        return True
+    return False
+
+
 def validate_typedb_candidate_inference_runtime(
     spec: Dict[str, object],
 ) -> Dict[str, object]:
@@ -3000,9 +3037,12 @@ def start_worker(spec: Dict[str, object]) -> int:
     if str(spec.get("role") or "") == "typedb":
         if not wait_for_typedb_ready(spec):
             return 1
-        if not ensure_typedb_seeded(spec):
+        if not ensure_typedb_startup_seed_contract(spec):
             return 1
-        if not ensure_typedb_shared_world_projection_rebuilt(spec):
+        if (
+            not bool(spec.get("_typedbServingPreservedGeneration"))
+            and not ensure_typedb_shared_world_projection_rebuilt(spec)
+        ):
             return 1
     elif role in {"mysql", "questdb", "web"}:
         if not wait_for_tcp_service(spec):

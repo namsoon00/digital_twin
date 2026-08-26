@@ -215,6 +215,13 @@ unchanged scoped Manifest may reuse its aligned native inference generation,
 but only when the compact result-slot proof matches the same TBox, RuleBox,
 deployment namespace, source ABox, and target scope.
 
+RuleBox migration is permitted only while a new isolated deployment is still
+provisioning and has not frozen its first release fingerprint. Active,
+delivery-authorized, and already-frozen candidate deployments perform a
+read-only fingerprint check at startup. A mismatch fails fast and requires
+restoring that immutable release or registering a successor; startup must
+never rewrite the active graph store in place.
+
 Register that successor as a rolling candidate before restarting the V2
 worker:
 

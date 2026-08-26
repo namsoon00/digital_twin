@@ -10388,6 +10388,56 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
             self.assertIn("seed failed attempt=1 exit=1", spec["log"].read_text(encoding="utf-8"))
 
+    def test_active_typedb_serves_preserved_generation_after_seed_repair_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "log": Path(temp) / "typedb.log",
+                "_typedbSeedFailure": {
+                    "status": "schema-bootstrap-failed",
+                    "reason": "schema repair timed out",
+                    "preservedActiveGeneration": True,
+                    "retryable": True,
+                },
+            }
+            with patch.object(
+                service_manager, "ensure_typedb_seeded", return_value=False,
+            ), patch.object(
+                service_manager, "typedb_driver_ready", return_value=True,
+            ):
+                self.assertTrue(
+                    service_manager.ensure_typedb_startup_seed_contract(spec)
+                )
+
+            self.assertTrue(spec["_typedbServingPreservedGeneration"])
+            self.assertIn(
+                "serving preserved active generation",
+                spec["log"].read_text(encoding="utf-8"),
+            )
+
+    def test_candidate_typedb_never_uses_active_generation_degraded_start(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "typedb-candidate.log",
+                "_typedbSeedFailure": {
+                    "preservedActiveGeneration": True,
+                },
+            }
+            with patch.object(
+                service_manager, "ensure_typedb_seeded", return_value=False,
+            ), patch.object(
+                service_manager, "typedb_driver_ready", return_value=True,
+            ) as driver_ready:
+                self.assertFalse(
+                    service_manager.ensure_typedb_startup_seed_contract(spec)
+                )
+
+            driver_ready.assert_not_called()
+            self.assertNotIn("_typedbServingPreservedGeneration", spec)
+
     def test_service_manager_restarts_only_candidate_between_seed_attempts(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

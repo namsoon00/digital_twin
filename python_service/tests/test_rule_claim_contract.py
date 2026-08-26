@@ -21,8 +21,8 @@ class RuleClaimContractTests(unittest.TestCase):
         self.assertEqual(0, coverage["orphanRuleCount"])
         self.assertEqual(0, coverage["duplicateClaimCount"])
         self.assertEqual(0, coverage["violationCount"])
-        self.assertEqual(75, coverage["predictiveClaimCount"])
-        self.assertEqual(75, coverage["structuredOutcomeContractCount"])
+        self.assertEqual(74, coverage["predictiveClaimCount"])
+        self.assertEqual(74, coverage["structuredOutcomeContractCount"])
         self.assertTrue(coverage["complete"])
 
     def test_claim_contract_round_trips_with_rulebox_payload(self):
@@ -92,11 +92,11 @@ class RuleClaimContractTests(unittest.TestCase):
         criteria = [item for item in graph.entities if item.kind == "hypothesis-outcome-criterion"]
         relation_types = [item.relation_type for item in graph.relations]
         self.assertEqual(118, len(claims))
-        self.assertEqual(75, len(outcomes))
-        self.assertEqual(150, len(criteria))
+        self.assertEqual(74, len(outcomes))
+        self.assertEqual(148, len(criteria))
         self.assertEqual(118, relation_types.count("GOVERNED_BY_CLAIM"))
-        self.assertEqual(75, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
-        self.assertEqual(150, relation_types.count("HAS_OUTCOME_CRITERION"))
+        self.assertEqual(74, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
+        self.assertEqual(148, relation_types.count("HAS_OUTCOME_CRITERION"))
 
 
 if __name__ == "__main__":

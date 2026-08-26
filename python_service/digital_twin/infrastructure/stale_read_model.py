@@ -143,3 +143,28 @@ class StaleReadModelCache:
             daemon=True,
         ).start()
         return True
+
+    def get_or_refresh(
+        self,
+        key: str,
+        loader: Callable[[], Dict[str, object]],
+        force: bool = False,
+        blocking_first_load: bool = True,
+    ) -> Dict[str, object]:
+        """Serve a usable snapshot and refresh stale data with single-flight semantics."""
+
+        if force and blocking_first_load:
+            return self.refresh(key, loader)
+        current = self.snapshot(key)
+        if not current.get("hasData"):
+            if blocking_first_load:
+                return self.refresh(key, loader)
+            refresh_started = self.refresh_async(key, loader)
+            current = self.snapshot(key)
+            current["refreshing"] = bool(current.get("refreshing") or refresh_started)
+            return current
+        refresh_started = False
+        if force or current.get("stale"):
+            refresh_started = self.refresh_async(key, loader)
+        current["refreshing"] = bool(current.get("refreshing") or refresh_started)
+        return current

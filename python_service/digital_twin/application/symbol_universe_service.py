@@ -81,6 +81,7 @@ class SymbolUniverseService:
         self.source_gateway = source_gateway
         self.settings = dict(settings or {})
         self.quote_cache = quote_cache
+        self._seed_checked = False
 
     def max_age_hours(self) -> int:
         return stale_after_hours(self.settings.get("symbolUniverseMaxAgeHours"), 24)
@@ -89,9 +90,16 @@ class SymbolUniverseService:
         return int_setting(self.settings, "marketDataMaxAgeMinutes", 240, 1, 1440 * 30)
 
     def ensure_seed(self) -> None:
-        missing = [symbol for symbol in DEFAULT_SYMBOL_SEEDS if not self.store.get(symbol)]
+        if self._seed_checked:
+            return
+        if hasattr(self.store, "existing_symbols"):
+            existing = set(self.store.existing_symbols(DEFAULT_SYMBOL_SEEDS) or [])
+            missing = [symbol for symbol in DEFAULT_SYMBOL_SEEDS if symbol not in existing]
+        else:
+            missing = [symbol for symbol in DEFAULT_SYMBOL_SEEDS if not self.store.get(symbol)]
         if missing:
             self.store.upsert_many([seed_symbol(symbol) for symbol in missing])
+        self._seed_checked = True
 
     def summary(self) -> Dict[str, object]:
         self.ensure_seed()

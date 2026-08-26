@@ -289,6 +289,47 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return [_json_loads(row.get("payload_json"), {}) for row in rows or []]
 
+    def list_run_summaries(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
+        where = []
+        params: List[object] = []
+        if account_id:
+            where.append("account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            where.append("symbol = %s")
+            params.append(str(symbol).upper())
+        params.append(max(1, min(500, int(limit or 50))))
+        sql = (
+            "SELECT run_id, question_id, account_id, symbol, status, started_at, completed_at, "
+            "changed_evidence_count, reasoning_refreshed, updated_at FROM investment_research_runs"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY started_at DESC, run_id DESC LIMIT %s"
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [{
+            "runId": str(row.get("run_id") or ""),
+            "questionId": str(row.get("question_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "symbol": str(row.get("symbol") or "").upper(),
+            "status": str(row.get("status") or ""),
+            "startedAt": str(row.get("started_at") or ""),
+            "completedAt": str(row.get("completed_at") or ""),
+            "changedEvidenceCount": int(row.get("changed_evidence_count") or 0),
+            "reasoningRefreshed": bool(row.get("reasoning_refreshed")),
+            "updatedAt": str(row.get("updated_at") or ""),
+            "detailRequired": True,
+        } for row in rows or []]
+
+    def get_run(self, run_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM investment_research_runs WHERE run_id = %s",
+                (str(run_id or ""),),
+            ).fetchone()
+        return _json_loads((row or {}).get("payload_json"), {})
+
     def save_hypothesis_proposal(self, proposal: NovelHypothesisProposal) -> NovelHypothesisProposal:
         stamp = utc_now_iso()
         payload = proposal.to_dict()

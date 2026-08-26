@@ -106,6 +106,7 @@ from ..domain.portfolio import utc_now_iso
 from ..domain.symbol_universe import symbol_search_symbol_candidates
 from ..news_intelligence.application.analyze_article import evidence_eligibility
 from ..infrastructure.event_bus import EventBus, JsonEventLog, default_event_bus
+from ..infrastructure.api_performance import ApiPerformanceRegistry
 from ..infrastructure.external_signal_utils import ExternalCircuitOpen, ExternalRateLimited, external_call_target, guarded_external_call
 from ..infrastructure.mock_market import mock_market_payload, mock_market_scenario_list
 from ..infrastructure.model_reviewer import codex_cli_arguments
@@ -193,6 +194,72 @@ INVESTMENT_MODEL_READ_MODEL = StaleReadModelCache(
     ttl_seconds=60,
     retry_cooldown_seconds=20,
 )
+DASHBOARD_READ_MODEL = StaleReadModelCache(
+    "console-dashboard",
+    ttl_seconds=20,
+    retry_cooldown_seconds=10,
+)
+OPERATIONS_HEALTH_READ_MODEL = StaleReadModelCache(
+    "operations-health",
+    ttl_seconds=30,
+    retry_cooldown_seconds=15,
+)
+EXTERNAL_DATA_STATUS_READ_MODEL = StaleReadModelCache(
+    "external-data-status",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
+RESEARCH_EVIDENCE_SUMMARY_READ_MODEL = StaleReadModelCache(
+    "research-evidence-summary",
+    ttl_seconds=90,
+    retry_cooldown_seconds=20,
+)
+RESEARCH_EVIDENCE_PAGE_READ_MODEL = StaleReadModelCache(
+    "research-evidence-page",
+    ttl_seconds=15,
+    retry_cooldown_seconds=5,
+)
+ONTOLOGY_RULEBOX_READ_MODEL = StaleReadModelCache(
+    "ontology-rulebox",
+    ttl_seconds=120,
+    retry_cooldown_seconds=30,
+)
+ONTOLOGY_CATALOG_SUMMARY_READ_MODEL = StaleReadModelCache(
+    "ontology-catalog-summary",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
+ONTOLOGY_EXPERIMENT_STATUS_READ_MODEL = StaleReadModelCache(
+    "ontology-experiment-status",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
+ONTOLOGY_EXPERIMENT_LIST_READ_MODEL = StaleReadModelCache(
+    "ontology-experiment-list",
+    ttl_seconds=30,
+    retry_cooldown_seconds=15,
+)
+HYPOTHESIS_TEMPLATE_READ_MODEL = StaleReadModelCache(
+    "hypothesis-template-list",
+    ttl_seconds=120,
+    retry_cooldown_seconds=30,
+)
+HYPOTHESIS_POLICY_VERSION_READ_MODEL = StaleReadModelCache(
+    "hypothesis-policy-version-list",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
+DECISION_LIST_READ_MODEL = StaleReadModelCache(
+    "decision-list",
+    ttl_seconds=15,
+    retry_cooldown_seconds=5,
+)
+INVESTMENT_BRAIN_LIST_READ_MODEL = StaleReadModelCache(
+    "investment-brain-list",
+    ttl_seconds=15,
+    retry_cooldown_seconds=5,
+)
+API_PERFORMANCE = ApiPerformanceRegistry()
 WATCHLIST_REFRESH_LOCK = threading.Lock()
 WATCHLIST_REFRESH_STATE: Dict[str, object] = {
     "running": False,
@@ -494,7 +561,7 @@ def realtime_status_payload() -> Dict[str, object]:
     }
 
 
-def external_data_status_payload() -> Dict[str, object]:
+def _external_data_status_source_payload() -> Dict[str, object]:
     try:
         payload = dict(build_external_data_collection_runner().status() or {})
         try:
@@ -508,6 +575,21 @@ def external_data_status_payload() -> Dict[str, object]:
             "status": "unavailable",
             "error": str(error)[:500],
         }
+
+
+def external_data_status_payload(force: bool = False) -> Dict[str, object]:
+    def load() -> Dict[str, object]:
+        payload = _external_data_status_source_payload()
+        if str(payload.get("status") or "").lower() in {"error", "unavailable"}:
+            raise RuntimeError(str(payload.get("error") or "외부 데이터 상태를 읽지 못했습니다."))
+        return payload
+
+    return cached_api_payload(
+        EXTERNAL_DATA_STATUS_READ_MODEL,
+        "all-providers",
+        load,
+        force=force,
+    )
 
 
 def new_id(prefix: str) -> str:
@@ -529,6 +611,38 @@ def request_bool(value, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def cached_api_payload(
+    cache: StaleReadModelCache,
+    key: str,
+    loader,
+    force: bool = False,
+    unavailable_status: str = "unavailable",
+    blocking_first_load: bool = True,
+) -> Dict[str, object]:
+    """Attach freshness metadata to a persistent stale-while-revalidate read model."""
+
+    snapshot = cache.get_or_refresh(
+        str(key or "default"),
+        loader,
+        force=force,
+        blocking_first_load=blocking_first_load,
+    )
+    payload = dict(snapshot.get("payload") or {})
+    if not payload:
+        payload = {
+            "status": "warming" if snapshot.get("refreshing") else unavailable_status,
+            "error": str(snapshot.get("lastError") or "읽기 모델을 준비하고 있습니다."),
+        }
+    payload["readCache"] = {
+        "stale": bool(snapshot.get("stale")),
+        "ageSeconds": int(snapshot.get("ageSeconds") or 0),
+        "refreshing": bool(snapshot.get("refreshing")),
+        "lastSuccessAt": str(snapshot.get("lastSuccessAt") or ""),
+        "lastError": str(snapshot.get("lastError") or ""),
+    }
+    return payload
 
 
 def default_store() -> Dict[str, object]:
@@ -1389,8 +1503,41 @@ def investment_reasoning_cases_payload(query: Dict[str, List[str]]) -> Dict[str,
     }
 
 
-def ontology_rulebox_payload() -> Dict[str, object]:
+def _ontology_rulebox_source_payload() -> Dict[str, object]:
     return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
+
+
+def ontology_rulebox_payload(force: bool = False, blocking_first_load: bool = False) -> Dict[str, object]:
+    return cached_api_payload(
+        ONTOLOGY_RULEBOX_READ_MODEL,
+        "active",
+        _ontology_rulebox_source_payload,
+        force=force,
+        blocking_first_load=blocking_first_load,
+    )
+
+
+def ontology_rulebox_summary_payload() -> Dict[str, object]:
+    payload = ontology_rulebox_payload(blocking_first_load=True)
+    profile = payload.get("nativeReasoningProfile") if isinstance(payload.get("nativeReasoningProfile"), dict) else {}
+    return {
+        key: payload.get(key)
+        for key in [
+            "configured", "saved", "status", "source", "graphStore", "reason", "engineVersion",
+            "ruleCount", "conditionCount", "derivationCount", "relationTypes", "versionCount",
+            "ruleboxSnapshotId", "ruleboxRulesHash", "ruleboxShortHash", "readCache",
+        ]
+        if key in payload
+    } | {
+        "nativeReasoningProfile": {
+            key: profile.get(key)
+            for key in [
+                "version", "status", "ruleCount", "readyRuleCount", "partialRuleCount",
+                "blockedRuleCount", "supportedConditionCount", "unsupportedConditionCount",
+            ]
+            if key in profile
+        }
+    }
 
 
 def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -1411,9 +1558,28 @@ def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> D
         ),
         notification_job_store=stores.notification_job_store(settings) if include_lineage else None,
         statistical_signal_store=stores.statistical_model_signal_store(settings) if section_id == "summary" else None,
+        rulebox_provider=lambda: ontology_rulebox_payload(blocking_first_load=True),
     )
     if section_id == "summary":
-        return service.summary(world_id=world_id, account_id=account_id)
+        cache_key = "|".join([world_id or "none", account_id or "none"])
+        return cached_api_payload(
+            ONTOLOGY_CATALOG_SUMMARY_READ_MODEL,
+            cache_key,
+            lambda: service.summary(world_id=world_id, account_id=account_id),
+            force=request_bool(first_query(query, "refresh"), False),
+            blocking_first_load=False,
+        )
+    if section_id == "rules" and not ONTOLOGY_RULEBOX_READ_MODEL.snapshot("active").get("hasData"):
+        warming = ontology_rulebox_payload(blocking_first_load=False)
+        return {
+            "status": "warming",
+            "section": section_id,
+            "items": [],
+            "count": 0,
+            "total": 0,
+            "nextCursor": "",
+            "readCache": warming.get("readCache") or {},
+        }
     if section_id == "lineage":
         return service.lineage(
             item_type=str(first_query(query, "type") or ""),
@@ -1499,7 +1665,7 @@ def _investment_model_source_payload() -> Dict[str, object]:
     loaders = {
         "platform": reasoning_engine_platform_status_payload,
         "timeSeries": time_series_platform_status_payload,
-        "rulebox": ontology_rulebox_payload,
+        "rulebox": ontology_rulebox_summary_payload,
         "catalog": lambda: ontology_catalog_api_payload("summary", {}),
         "experiments": ontology_experiments_status_payload,
     }
@@ -1594,7 +1760,10 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
 
 
 def save_ontology_rulebox_payload(payload: Dict[str, object]) -> Dict[str, object]:
-    return ontology_repository_from_settings(runtime_settings()).save_rulebox(payload)
+    result = ontology_repository_from_settings(runtime_settings()).save_rulebox(payload)
+    if isinstance(result, dict) and result:
+        ONTOLOGY_RULEBOX_READ_MODEL.store_success("active", result)
+    return result
 
 
 def ontology_language_payload() -> Dict[str, object]:
@@ -2700,15 +2869,50 @@ def approve_hypothesis_development_payload(case_id: str, payload: Dict[str, obje
 
 
 def list_ontology_experiments_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    return ontology_lab_service().list(
-        limit=max(1, min(100, int(first_query(query, "limit") or 8))),
-        offset=max(0, int(first_query(query, "offset") or 0)),
-        summary=not request_bool(first_query(query, "detail"), False),
+    limit = max(1, min(100, int(first_query(query, "limit") or 8)))
+    offset = max(0, int(first_query(query, "offset") or 0))
+    summary = not request_bool(first_query(query, "detail"), False)
+    return cached_api_payload(
+        ONTOLOGY_EXPERIMENT_LIST_READ_MODEL,
+        "|".join([str(limit), str(offset), "summary" if summary else "detail"]),
+        lambda: ontology_lab_service().list(limit=limit, offset=offset, summary=summary),
+        force=request_bool(first_query(query, "refresh"), False),
     )
 
 
-def ontology_experiments_status_payload() -> Dict[str, object]:
+def _ontology_experiments_status_source_payload() -> Dict[str, object]:
     return ontology_lab_service().status()
+
+
+def ontology_experiments_status_payload(force: bool = False) -> Dict[str, object]:
+    return cached_api_payload(
+        ONTOLOGY_EXPERIMENT_STATUS_READ_MODEL,
+        "status",
+        _ontology_experiments_status_source_payload,
+        force=force,
+        blocking_first_load=False,
+    )
+
+
+def hypothesis_templates_api_payload(force: bool = False) -> Dict[str, object]:
+    return cached_api_payload(
+        HYPOTHESIS_TEMPLATE_READ_MODEL,
+        "active",
+        lambda: build_investment_brain_service(operational_read_settings()).hypothesis_templates(),
+        force=force,
+    )
+
+
+def hypothesis_policy_versions_api_payload(limit: int = 40, force: bool = False) -> Dict[str, object]:
+    safe_limit_value = max(1, min(100, int(limit or 40)))
+    return cached_api_payload(
+        HYPOTHESIS_POLICY_VERSION_READ_MODEL,
+        str(safe_limit_value),
+        lambda: build_investment_brain_service(operational_read_settings()).hypothesis_policy_versions(
+            limit=safe_limit_value,
+        ),
+        force=force,
+    )
 
 
 def ontology_reasoning_status_payload() -> Dict[str, object]:
@@ -3732,6 +3936,21 @@ def replay_notification_payload(payload: Dict[str, object]) -> Dict[str, object]
     return result.to_dict()
 
 
+def _research_evidence_summary_source_payload() -> Dict[str, object]:
+    store = stores.research_evidence_store()
+    analysis_rows = list(store.latest(kind="news", limit=500) or []) if hasattr(store, "latest") else []
+    official_rows = []
+    if hasattr(store, "latest"):
+        for official_kind in ["disclosure", "filing", "sec-filing"]:
+            official_rows.extend(list(store.latest(kind=official_kind, limit=500) or []))
+    return {
+        "status": "ok",
+        "summary": store.summary(),
+        "articleAnalysis": research_evidence_article_analysis_summary(analysis_rows),
+        "officialAnalysis": research_evidence_official_analysis_summary(official_rows),
+    }
+
+
 def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     limit = max(1, min(100, int(first_query(query, "limit") or 8)))
     offset = max(0, int(first_query(query, "offset") or 0))
@@ -3739,23 +3958,46 @@ def research_evidence_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     kind = configured(first_query(query, "kind"))
     search = configured(first_query(query, "query") or first_query(query, "q"))
     store = stores.research_evidence_store()
-    items, total = store.latest_page(symbol=symbol, kind=kind, limit=limit, offset=offset, query=search)
-    analysis_rows = []
-    official_rows = []
-    if hasattr(store, "latest"):
-        try:
-            analysis_rows = list(store.latest(kind="news", limit=500) or [])
-            for official_kind in ["disclosure", "filing", "sec-filing"]:
-                official_rows.extend(list(store.latest(kind=official_kind, limit=500) or []))
-        except Exception:  # noqa: BLE001 - the evidence list is still useful when aggregate diagnostics fail.
-            analysis_rows = []
-            official_rows = []
+    page_key = "|".join([symbol or "all", kind or "all", search or "all", str(limit), str(offset)])
+
+    def load_page() -> Dict[str, object]:
+        items, total = store.latest_page(
+            symbol=symbol,
+            kind=kind,
+            limit=limit,
+            offset=offset,
+            query=search,
+        )
+        return {
+            "items": [research_evidence_list_payload(item) for item in items],
+            "claimQuality": claim_quality_summary(items),
+            "total": total,
+        }
+
+    page = cached_api_payload(
+        RESEARCH_EVIDENCE_PAGE_READ_MODEL,
+        page_key,
+        load_page,
+        force=request_bool(first_query(query, "refresh"), False),
+    )
+    items = list(page.get("items") or [])
+    total = int(page.get("total") or 0)
+    summaries = cached_api_payload(
+        RESEARCH_EVIDENCE_SUMMARY_READ_MODEL,
+        "all",
+        _research_evidence_summary_source_payload,
+        force=request_bool(first_query(query, "refreshSummary"), False),
+    )
     return {
-        "items": [research_evidence_list_payload(item) for item in items],
-        "summary": store.summary(),
-        "claimQuality": claim_quality_summary(items),
-        "articleAnalysis": research_evidence_article_analysis_summary(analysis_rows),
-        "officialAnalysis": research_evidence_official_analysis_summary(official_rows),
+        "items": items,
+        "summary": summaries.get("summary") or {"total": total},
+        "claimQuality": page.get("claimQuality") or {},
+        "articleAnalysis": summaries.get("articleAnalysis") or {},
+        "officialAnalysis": summaries.get("officialAnalysis") or {},
+        "readCache": {
+            "page": page.get("readCache") or {},
+            "summary": summaries.get("readCache") or {},
+        },
         "symbol": symbol,
         "kind": kind,
         "limit": limit,
@@ -3926,7 +4168,7 @@ def revalidate_research_evidence_payload(payload: Dict[str, object]) -> Dict[str
     return result
 
 
-def research_evidence_list_payload(item) -> Dict[str, object]:
+def research_evidence_list_payload(item, include_detail: bool = False) -> Dict[str, object]:
     item, analysis_source = projected_research_evidence(item)
     news_eligibility = evidence_eligibility(item) if str(item.kind or "").lower() == "news" else {}
     raw = item.raw_payload if isinstance(item.raw_payload, dict) else {}
@@ -3959,7 +4201,7 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
     for key in ["name", "provider", "articleType", "analysisStatus", "relevanceState", "impactLabel", "impactSummary", "koreanSummary", "priceImpact", "sourceTrustState", "materialityState", "dataState", "validationState", "articleReadStatus", "stockImpact", "stockImpactLabel", "stockImpactPolarity", "stockImpactReasonKo", "originalTitle", "translatedTitleKo", "sourceLanguage", "translationStatus", "summaryQualityState", "articleSummaryQuality", "externalFactDatasetId", "externalFactSourceRevision", "officialDocumentDatasetId", "officialDocumentFactRevision", "officialDocumentFactPayloadHash", "officialDocumentFetchedAt"]:
         if raw.get(key) not in (None, "", [], {}):
             compact_raw[key] = raw.get(key)
-    return {
+    payload = {
         "evidenceId": item.evidence_id,
         "symbol": item.symbol,
         "kind": item.kind,
@@ -4088,6 +4330,15 @@ def research_evidence_list_payload(item) -> Dict[str, object]:
         "payload": compact_raw,
         "detailPath": "/api/research-evidence/" + urllib.parse.quote(str(item.evidence_id or "")),
     }
+    if not include_detail:
+        for key in [
+            "newsEligibility", "eligibilityAudit", "reviewReasonCodes",
+            "officialDocumentPreview", "disclosureDocumentQuality", "documentLifecycle",
+            "sourceDocuments", "sourcePath", "articleVerification",
+            "sourceProvenance",
+        ]:
+            payload.pop(key, None)
+    return payload
 
 
 def projected_research_evidence(item):
@@ -4127,7 +4378,7 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         return {}
     projected, analysis_source = projected_research_evidence(item)
     payload = projected.to_dict()
-    payload.update(research_evidence_list_payload(projected))
+    payload.update(research_evidence_list_payload(projected, include_detail=True))
     payload["payload"] = dict(projected.raw_payload or {})
     payload["promptEvidenceAdmission"] = assess_prompt_evidence(
         projected.raw_payload,
@@ -5472,27 +5723,55 @@ def console_read_model_service(settings: Dict[str, object] = None) -> ConsoleRea
     return ConsoleReadModelService(symbol_repository=stores.symbol_universe_store(configured_settings))
 
 
-def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+def _console_dashboard_source_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     settings = operational_read_settings()
     account_id = first_query(query, "accountId") or "default"
-    snapshot = flow_lens_read_payload(query)
-    try:
-        lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle("portfolio:" + account_id)
-    except Exception as error:  # noqa: BLE001 - dashboard sections degrade independently.
-        lifecycle = {"status": "unavailable", "error": str(error)[:240]}
-    try:
-        cases = investment_case_api_payload({"accountId": [account_id], "limit": ["100"]})
-    except Exception as error:  # noqa: BLE001
-        cases = {"status": "unavailable", "items": [], "error": str(error)[:240]}
-    try:
+
+    def lifecycle_payload():
+        return stores.investment_domain_store(settings).latest_portfolio_lifecycle("portfolio:" + account_id)
+
+    def cases_payload():
+        return investment_case_api_payload({"accountId": [account_id], "limit": ["100"]})
+
+    def calendar_payload():
         calendar_query = {
             "from": [datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")],
             "limit": ["40"],
         }
-        calendar = investment_calendar_payload(calendar_query)
-    except Exception as error:  # noqa: BLE001
-        calendar = {"events": [], "summary": {}, "error": str(error)[:240]}
-    return console_read_model_service(settings).dashboard_summary(snapshot, lifecycle, cases, calendar)
+        return investment_calendar_payload(calendar_query)
+
+    readers = {
+        "snapshot": lambda: flow_lens_read_payload(query),
+        "lifecycle": lifecycle_payload,
+        "cases": cases_payload,
+        "calendar": calendar_payload,
+    }
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(readers), thread_name_prefix="console-dashboard") as executor:
+        futures = {key: executor.submit(reader) for key, reader in readers.items()}
+        for key, future in futures.items():
+            try:
+                results[key] = future.result()
+            except Exception as error:  # noqa: BLE001 - dashboard sections degrade independently.
+                results[key] = {"status": "unavailable", "error": str(error)[:240]}
+    return console_read_model_service(settings).dashboard_summary(
+        results.get("snapshot") or {},
+        results.get("lifecycle") or {},
+        results.get("cases") or {"items": []},
+        results.get("calendar") or {"events": []},
+    )
+
+
+def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    account_id = first_query(query, "accountId") or "default"
+    watchlist = ",".join(sorted(filter(None, first_query(query, "watchlistSymbols").upper().split(","))))
+    cache_key = account_id + "|" + watchlist
+    return cached_api_payload(
+        DASHBOARD_READ_MODEL,
+        cache_key,
+        lambda: _console_dashboard_source_payload(query),
+        force=request_bool(first_query(query, "refresh"), False),
+    )
 
 
 def console_portfolio_api_payload(query: Dict[str, List[str]], view: str) -> Dict[str, object]:
@@ -5512,18 +5791,96 @@ def console_market_instruments_api_payload(query: Dict[str, List[str]]) -> Dict[
 def console_market_evidence_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     requested_limit = safe_int(first_query(query, "limit"), 12, 1, 100)
     source_query = {key: list(value) for key, value in query.items()}
-    source_query["limit"] = [str(min(100, max(50, requested_limit * 5)))]
+    source_query["limit"] = [str(min(100, max(16, requested_limit * 2)))]
     payload = research_evidence_payload(source_query)
     return console_read_model_service().market_evidence(payload, requested_limit)
 
 
 def console_decisions_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     settings = operational_read_settings()
-    payload = investment_case_api_payload(query)
-    return console_read_model_service(settings).decision_heads(payload)
+    cache_key = "|".join([
+        str(first_query(query, "accountId") or first_query(query, "account") or "default"),
+        str(first_query(query, "symbol") or "all").upper(),
+        str(first_query(query, "limit") or "100"),
+        str(first_query(query, "audience") or first_query(query, "includeOperator") or "user"),
+    ])
+
+    def load() -> Dict[str, object]:
+        payload = investment_case_api_payload(query)
+        return console_read_model_service(settings).decision_heads(payload)
+
+    return cached_api_payload(
+        DECISION_LIST_READ_MODEL,
+        cache_key,
+        load,
+        force=request_bool(first_query(query, "refresh"), False),
+    )
 
 
-def console_operations_health_api_payload() -> Dict[str, object]:
+def investment_brain_episodes_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    limit = safe_int(first_query(query, "limit"), 50, 1, 500)
+    account_id = str(first_query(query, "accountId") or "")
+    symbol = str(first_query(query, "symbol") or "").upper()
+    view = str(first_query(query, "view") or "summary")
+    return cached_api_payload(
+        INVESTMENT_BRAIN_LIST_READ_MODEL,
+        "episodes|" + "|".join([account_id or "all", symbol or "all", str(limit), view]),
+        lambda: build_investment_brain_service().episodes(
+            account_id=account_id,
+            symbol=symbol,
+            limit=limit,
+            view=view,
+        ),
+        force=request_bool(first_query(query, "refresh"), False),
+    )
+
+
+def investment_brain_hypothesis_lifecycles_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    limit = safe_int(first_query(query, "limit"), 100, 1, 500)
+    event_limit = safe_int(first_query(query, "eventLimit"), 100, 1, 500)
+    account_id = str(first_query(query, "accountId") or "")
+    symbol = str(first_query(query, "symbol") or "").upper()
+    market_id = str(first_query(query, "marketId") or "")
+    scope = str(first_query(query, "scope") or "")
+    view = str(first_query(query, "view") or "summary")
+    return cached_api_payload(
+        INVESTMENT_BRAIN_LIST_READ_MODEL,
+        "lifecycles|" + "|".join([
+            account_id or "all", symbol or "all", market_id or "all", scope or "all",
+            str(limit), str(event_limit), view,
+        ]),
+        lambda: build_investment_brain_service().hypothesis_lifecycles(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=limit,
+            event_limit=event_limit,
+            view=view,
+        ),
+        force=request_bool(first_query(query, "refresh"), False),
+    )
+
+
+def investment_brain_research_runs_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    limit = safe_int(first_query(query, "limit"), 50, 1, 500)
+    account_id = str(first_query(query, "accountId") or "")
+    symbol = str(first_query(query, "symbol") or "").upper()
+    view = str(first_query(query, "view") or "summary")
+    return cached_api_payload(
+        INVESTMENT_BRAIN_LIST_READ_MODEL,
+        "research-runs|" + "|".join([account_id or "all", symbol or "all", str(limit), view]),
+        lambda: build_investment_brain_service().research_runs(
+            account_id=account_id,
+            symbol=symbol,
+            limit=limit,
+            view=view,
+        ),
+        force=request_bool(first_query(query, "refresh"), False),
+    )
+
+
+def _console_operations_health_source_payload() -> Dict[str, object]:
     settings = operational_read_settings()
 
     def storage_payload():
@@ -5568,6 +5925,15 @@ def console_operations_health_api_payload() -> Dict[str, object]:
             payloads[key] = {"status": "unavailable", "error": str(error)[:240]}
     executor.shutdown(wait=False, cancel_futures=True)
     return console_read_model_service().operations_health(payloads)
+
+
+def console_operations_health_api_payload(force: bool = False) -> Dict[str, object]:
+    return cached_api_payload(
+        OPERATIONS_HEALTH_READ_MODEL,
+        "all",
+        _console_operations_health_source_payload,
+        force=force,
+    )
 
 
 def category_for(value: str) -> str:
@@ -6010,6 +6376,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
             )
         )
+        raw_length = len(body)
         compressed = False
         if not no_body and len(body) >= 1024 and self.accepts_gzip() and (content_type.startswith("application/json") or content_type.startswith("text/")):
             body = gzip.compress(body, compresslevel=6)
@@ -6032,6 +6399,8 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 self.send_header("Retry-After", str(retry_after))
             if compressed:
                 self.send_header("Content-Encoding", "gzip")
+            self.send_header("X-Response-Raw-Bytes", str(raw_length))
+            self.send_header("X-Response-Wire-Bytes", str(len(body)))
             if cors:
                 self.add_cors_headers()
             self.send_header("Content-Length", str(len(body)))
@@ -6040,6 +6409,18 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             return
+        finally:
+            started_at = getattr(self, "_request_started_at", None)
+            duration_ms = (time.monotonic() - started_at) * 1000.0 if started_at is not None else 0.0
+            API_PERFORMANCE.record(
+                self.command,
+                self.path_name(),
+                status,
+                duration_ms,
+                raw_length,
+                len(body),
+                compressed,
+            )
 
     def add_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -6171,6 +6552,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 "startedAt": WEB_PROCESS_STARTED_AT,
             })
 
+        if path == "/api/operations/performance" and self.command == "GET":
+            return self.send_payload(200, API_PERFORMANCE.snapshot(), cache_control="no-store")
+
         if path == "/api/service-accounts":
             if self.command == "GET":
                 return self.send_payload(200, service_accounts_payload())
@@ -6226,7 +6610,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/ontology/rulebox":
             if self.command == "GET":
-                return self.send_payload(200, ontology_rulebox_payload())
+                return self.send_payload(200, ontology_rulebox_payload(
+                    force=request_bool(first_query(query, "refresh"), False),
+                ))
             if self.command in {"POST", "PUT"}:
                 if not self.ensure_writable("공유 모드에서는 TypeDB RuleBox를 변경할 수 없습니다."):
                     return
@@ -6301,7 +6687,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, create_ontology_experiment_payload(self.read_json_body()))
 
         if path == "/api/ontology/experiments/status" and self.command == "GET":
-            return self.send_payload(200, ontology_experiments_status_payload())
+            return self.send_payload(200, ontology_experiments_status_payload(
+                force=request_bool(first_query(query, "refresh"), False),
+            ))
 
         if path == "/api/ontology/reasoning/status" and self.command == "GET":
             return self.send_payload(200, ontology_reasoning_status_payload())
@@ -6614,7 +7002,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200 if payload.get("status") == "ok" else 404, payload, cache_control="no-store")
 
         if path == "/api/operations/health" and self.command == "GET":
-            return self.send_payload(200, console_operations_health_api_payload(), cache_control="no-store")
+            return self.send_payload(200, console_operations_health_api_payload(
+                force=request_bool(first_query(query, "refresh"), False),
+            ), cache_control="no-store")
 
         if path == "/api/investment-model" and self.command == "GET":
             return self.send_payload(200, investment_model_api_payload(
@@ -6668,7 +7058,9 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, realtime_status_payload())
 
         if path == "/api/external-data/status" and self.command == "GET":
-            return self.send_payload(200, external_data_status_payload(), cache_control="no-store")
+            return self.send_payload(200, external_data_status_payload(
+                force=request_bool(first_query(query, "refresh"), False),
+            ), cache_control="no-store")
 
         if path == "/api/profile" and self.command == "PUT":
             body = self.read_json_body()
@@ -6711,15 +7103,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, payload, cache_control="no-store")
 
         if path == "/api/investment-brain/episodes" and self.command == "GET":
-            try:
-                limit = int(first_query(query, "limit") or 50)
-            except ValueError:
-                limit = 50
-            return self.send_payload(200, build_investment_brain_service().episodes(
-                account_id=first_query(query, "accountId"),
-                symbol=first_query(query, "symbol"),
-                limit=limit,
-            ))
+            return self.send_payload(200, investment_brain_episodes_api_payload(query))
+
+        episode_detail_match = re.match(r"^/api/investment-brain/episodes/([^/]+)$", path)
+        if episode_detail_match and self.command == "GET":
+            payload = build_investment_brain_service().episode_detail(
+                urllib.parse.unquote(episode_detail_match.group(1)),
+            )
+            return self.send_payload(200 if payload.get("status") == "ok" else 404, payload)
 
         if path == "/api/portfolio-lifecycle" and self.command == "GET":
             return self.send_payload(200, portfolio_lifecycle_payload(query), cache_control="no-store")
@@ -6762,25 +7153,12 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             ))
 
         if path == "/api/investment-brain/hypothesis-templates" and self.command == "GET":
-            return self.send_payload(200, build_investment_brain_service().hypothesis_templates())
+            return self.send_payload(200, hypothesis_templates_api_payload(
+                force=request_bool(first_query(query, "refresh"), False),
+            ))
 
         if path == "/api/investment-brain/hypothesis-lifecycles" and self.command == "GET":
-            try:
-                limit = int(first_query(query, "limit") or 100)
-            except ValueError:
-                limit = 100
-            try:
-                event_limit = int(first_query(query, "eventLimit") or 100)
-            except ValueError:
-                event_limit = 100
-            return self.send_payload(200, build_investment_brain_service().hypothesis_lifecycles(
-                account_id=first_query(query, "accountId"),
-                symbol=first_query(query, "symbol"),
-                market_id=first_query(query, "marketId"),
-                scope=first_query(query, "scope"),
-                limit=limit,
-                event_limit=event_limit,
-            ))
+            return self.send_payload(200, investment_brain_hypothesis_lifecycles_api_payload(query))
 
         if path == "/api/investment-brain/hypotheses" and self.command == "GET":
             try:
@@ -6812,7 +7190,10 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 limit = int(first_query(query, "limit") or 40)
             except ValueError:
                 limit = 40
-            return self.send_payload(200, build_investment_brain_service(operational_read_settings()).hypothesis_policy_versions(limit=limit))
+            return self.send_payload(200, hypothesis_policy_versions_api_payload(
+                limit=limit,
+                force=request_bool(first_query(query, "refresh"), False),
+            ))
 
         if path == "/api/investment-brain/hypothesis-policy-versions/baseline" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 RuleBox 기준선 버전을 기록할 수 없습니다."):
@@ -6931,15 +7312,14 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             ))
 
         if path == "/api/investment-brain/research-runs" and self.command == "GET":
-            try:
-                limit = int(first_query(query, "limit") or 50)
-            except ValueError:
-                limit = 50
-            return self.send_payload(200, build_investment_brain_service().research_runs(
-                account_id=first_query(query, "accountId"),
-                symbol=first_query(query, "symbol"),
-                limit=limit,
-            ))
+            return self.send_payload(200, investment_brain_research_runs_api_payload(query))
+
+        research_run_detail_match = re.match(r"^/api/investment-brain/research-runs/([^/]+)$", path)
+        if research_run_detail_match and self.command == "GET":
+            payload = build_investment_brain_service().research_run_detail(
+                urllib.parse.unquote(research_run_detail_match.group(1)),
+            )
+            return self.send_payload(200 if payload.get("status") == "ok" else 404, payload)
 
         if path == "/api/investment-brain/hypothesis-proposals" and self.command == "GET":
             try:

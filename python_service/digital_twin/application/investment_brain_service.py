@@ -630,12 +630,36 @@ class InvestmentBrainService:
             and bool(verified_claims)
         )
 
-    def episodes(self, account_id: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:
-        rows = self.decision_episode_store.list(account_id, symbol, limit) if self.decision_episode_store else []
+    def episodes(self, account_id: str = "", symbol: str = "", limit: int = 50, view: str = "detail") -> Dict[str, object]:
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "head"}
+        if self.decision_episode_store and summary_view and hasattr(self.decision_episode_store, "list_summaries"):
+            rows = self.decision_episode_store.list_summaries(account_id, symbol, limit)
+        else:
+            episodes = self.decision_episode_store.list(account_id, symbol, limit) if self.decision_episode_store else []
+            rows = [item.to_dict() for item in episodes]
+            if summary_view:
+                rows = [{
+                    key: row.get(key)
+                    for key in [
+                        "episodeId", "accountId", "symbol", "subjectName", "questionId",
+                        "selectedHypothesisId", "action", "reviewLevel", "dataState", "validationState",
+                        "inferenceGenerationId", "status", "decidedAt", "source",
+                    ]
+                    if key in row
+                } | {"detailRequired": True} for row in rows]
         return {
             "engine": "ontology-investment-brain",
             "count": len(rows),
-            "episodes": [item.to_dict() for item in rows],
+            "view": "summary" if summary_view else "detail",
+            "episodes": rows,
+        }
+
+    def episode_detail(self, episode_id: str) -> Dict[str, object]:
+        episode = self.decision_episode_store.get(episode_id) if self.decision_episode_store else None
+        return {
+            "engine": "ontology-investment-brain",
+            "status": "ok" if episode else "not-found",
+            "episode": episode.to_dict() if episode else {},
         }
 
     def performance(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
@@ -704,6 +728,7 @@ class InvestmentBrainService:
         scope: str = "",
         limit: int = 100,
         event_limit: int = 100,
+        view: str = "detail",
     ) -> Dict[str, object]:
         """Read lifecycle audit records; this does not run or alter inference."""
 
@@ -714,20 +739,38 @@ class InvestmentBrainService:
                 "records": [],
                 "events": [],
             }
-        records = self.hypothesis_lifecycle_store.list_current(
-            account_id=account_id,
-            symbol=symbol,
-            market_id=market_id,
-            scope=scope,
-            limit=limit,
-        ) if hasattr(self.hypothesis_lifecycle_store, "list_current") else []
-        events = self.hypothesis_lifecycle_store.list_events(
-            account_id=account_id,
-            symbol=symbol,
-            market_id=market_id,
-            scope=scope,
-            limit=event_limit,
-        ) if hasattr(self.hypothesis_lifecycle_store, "list_events") else []
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "head"}
+        summary_reader = getattr(self.hypothesis_lifecycle_store, "list_current_summary", None)
+        if summary_view and callable(summary_reader):
+            records = summary_reader(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=limit,
+            )
+        else:
+            records = self.hypothesis_lifecycle_store.list_current(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=limit,
+            ) if hasattr(self.hypothesis_lifecycle_store, "list_current") else []
+        events = [] if summary_view else (
+            self.hypothesis_lifecycle_store.list_events(
+                account_id=account_id,
+                symbol=symbol,
+                market_id=market_id,
+                scope=scope,
+                limit=event_limit,
+            ) if hasattr(self.hypothesis_lifecycle_store, "list_events") else []
+        )
+        record_payloads = [
+            item.to_dict() if hasattr(item, "to_dict") else dict(item)
+            for item in records
+            if hasattr(item, "to_dict") or isinstance(item, dict)
+        ]
         return {
             "status": "ok",
             "engine": "ontology-investment-brain",
@@ -736,9 +779,10 @@ class InvestmentBrainService:
             "symbol": str(symbol or "").upper(),
             "marketId": market_id,
             "scope": scope,
+            "view": "summary" if summary_view else "detail",
             "count": len(records),
             "eventCount": len(events),
-            "records": [item.to_dict() for item in records if hasattr(item, "to_dict")],
+            "records": record_payloads,
             "events": [item.to_dict() for item in events if hasattr(item, "to_dict")],
         }
 
@@ -970,9 +1014,30 @@ class InvestmentBrainService:
             **self.hypothesis_outcome_replay_service.run(account_id=account_id, symbol=symbol, limit=limit),
         }
 
-    def research_runs(self, account_id: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:
-        rows = self.research_store.list_runs(account_id, symbol, limit) if self.research_store else []
-        return {"count": len(rows), "runs": rows}
+    def research_runs(self, account_id: str = "", symbol: str = "", limit: int = 50, view: str = "detail") -> Dict[str, object]:
+        summary_view = str(view or "").strip().lower() in {"summary", "list", "head"}
+        if self.research_store and summary_view and hasattr(self.research_store, "list_run_summaries"):
+            rows = self.research_store.list_run_summaries(account_id, symbol, limit)
+        else:
+            rows = self.research_store.list_runs(account_id, symbol, limit) if self.research_store else []
+            if summary_view:
+                rows = [{
+                    key: row.get(key)
+                    for key in [
+                        "runId", "questionId", "accountId", "symbol", "status", "sourceTypes",
+                        "roundCount", "changedEvidenceCount", "reasoningRefreshed", "startedAt", "completedAt",
+                    ]
+                    if key in row
+                } | {
+                    "verifiedClaimCount": len(row.get("verifiedClaims") or []),
+                    "rejectedClaimCount": len(row.get("rejectedClaims") or []),
+                    "detailRequired": True,
+                } for row in rows]
+        return {"count": len(rows), "view": "summary" if summary_view else "detail", "runs": rows}
+
+    def research_run_detail(self, run_id: str) -> Dict[str, object]:
+        row = self.research_store.get_run(run_id) if self.research_store and hasattr(self.research_store, "get_run") else {}
+        return {"status": "ok" if row else "not-found", "run": row or {}}
 
     def hypothesis_proposals(self, status: str = "", symbol: str = "", limit: int = 50) -> Dict[str, object]:
         if not self.hypothesis_proposal_service:

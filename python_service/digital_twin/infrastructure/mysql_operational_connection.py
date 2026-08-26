@@ -1620,7 +1620,8 @@ MYSQL_SCHEMA = [
         KEY idx_research_evidence_symbol_last_seen (symbol, last_seen_at, evidence_id),
         KEY idx_research_evidence_kind_time (kind, last_seen_at),
         KEY idx_research_evidence_lifecycle_kind_time (lifecycle_state, kind, published_at, evidence_id),
-        KEY idx_research_evidence_lifecycle_kind_seen (lifecycle_state, kind, last_seen_at, evidence_id)
+        KEY idx_research_evidence_lifecycle_kind_seen (lifecycle_state, kind, last_seen_at, evidence_id),
+        KEY idx_research_evidence_lifecycle_latest (lifecycle_state, last_seen_at, published_at, evidence_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
@@ -1998,6 +1999,26 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_flow_current (
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        flow_id VARCHAR(191) NOT NULL,
+        decision_episode_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        selected_hypothesis_id VARCHAR(191) NOT NULL DEFAULT '',
+        action VARCHAR(32) NOT NULL DEFAULT 'HOLD',
+        data_state VARCHAR(32) NOT NULL DEFAULT 'partial',
+        validation_state VARCHAR(32) NOT NULL DEFAULT 'conditional',
+        decided_at VARCHAR(40) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL DEFAULT '',
+        PRIMARY KEY (account_id, symbol),
+        UNIQUE KEY uq_investment_flow_current_id (flow_id),
+        KEY idx_investment_flow_current_time (updated_at, flow_id),
+        KEY idx_investment_flow_current_validation (validation_state, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     INSERT IGNORE INTO investment_flow_heads (
         flow_id, account_id, symbol, decision_episode_id,
         source_abox_snapshot_id, inference_generation_id, selected_hypothesis_id, action,
@@ -2019,6 +2040,25 @@ MYSQL_SCHEMA = [
           AND heads.symbol = UPPER(episodes.symbol)
           AND heads.decision_episode_id = episodes.episode_id
     )
+    """,
+    """
+    INSERT IGNORE INTO investment_flow_current (
+        account_id, symbol, flow_id, decision_episode_id,
+        source_abox_snapshot_id, inference_generation_id, selected_hypothesis_id,
+        action, data_state, validation_state, decided_at, updated_at
+    )
+    SELECT ranked.account_id, ranked.symbol, ranked.flow_id, ranked.decision_episode_id,
+        ranked.source_abox_snapshot_id, ranked.inference_generation_id, ranked.selected_hypothesis_id,
+        ranked.action, ranked.data_state, ranked.validation_state, ranked.decided_at, ranked.updated_at
+    FROM (
+        SELECT heads.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY heads.account_id, heads.symbol
+                ORDER BY heads.decided_at DESC, heads.decision_episode_id DESC
+            ) AS flow_rank
+        FROM investment_flow_heads AS heads
+    ) AS ranked
+    WHERE ranked.flow_rank = 1
     """,
     """
     CREATE TABLE IF NOT EXISTS investment_decision_follow_ups (

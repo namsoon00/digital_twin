@@ -309,6 +309,9 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
         self.assertIn("FROM investment_decision_episodes AS episodes", schema)
         self.assertIn("WHERE NOT EXISTS", schema)
         self.assertIn("heads.decision_episode_id = episodes.episode_id", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS investment_flow_current", schema)
+        self.assertIn("PRIMARY KEY (account_id, symbol)", schema)
+        self.assertIn("ROW_NUMBER() OVER", schema)
 
     def test_decision_notification_trace_survives_large_body_retention(self):
         schema = "\n".join(MYSQL_SCHEMA)

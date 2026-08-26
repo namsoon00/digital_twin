@@ -109,6 +109,41 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             )
             connection.execute(
                 """
+                INSERT INTO investment_flow_current (
+                    account_id, symbol, flow_id, decision_episode_id,
+                    source_abox_snapshot_id, inference_generation_id,
+                    selected_hypothesis_id, action, data_state,
+                    validation_state, decided_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    flow_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(flow_id), flow_id),
+                    decision_episode_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(decision_episode_id), decision_episode_id),
+                    source_abox_snapshot_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(source_abox_snapshot_id), source_abox_snapshot_id),
+                    inference_generation_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(inference_generation_id), inference_generation_id),
+                    selected_hypothesis_id = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(selected_hypothesis_id), selected_hypothesis_id),
+                    action = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(action), action),
+                    data_state = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(data_state), data_state),
+                    validation_state = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(validation_state), validation_state),
+                    updated_at = IF(VALUES(decided_at) >= investment_flow_current.decided_at, VALUES(updated_at), updated_at),
+                    decided_at = GREATEST(investment_flow_current.decided_at, VALUES(decided_at))
+                """,
+                (
+                    episode.account_id,
+                    episode.symbol,
+                    flow_id,
+                    episode.episode_id,
+                    episode.source_abox_snapshot_id,
+                    episode.inference_generation_id,
+                    episode.selected_hypothesis_id,
+                    episode.action,
+                    episode.data_state,
+                    episode.validation_state,
+                    episode.decided_at,
+                    stamp,
+                ),
+            )
+            connection.execute(
+                """
                 INSERT INTO investment_flow_heads (
                     flow_id, account_id, symbol, decision_episode_id,
                     source_abox_snapshot_id, inference_generation_id,
@@ -591,42 +626,70 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return self.hydrate_outcomes(self.episode_from_row(row) for row in rows or [])
 
+    def list_summaries(self, account_id: str = "", symbol: str = "", limit: int = 50) -> List[Dict[str, object]]:
+        where = []
+        params: List[object] = []
+        if account_id:
+            where.append("account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            where.append("symbol = %s")
+            params.append(str(symbol).upper())
+        params.append(max(1, min(500, int(limit or 50))))
+        sql = (
+            "SELECT episode_id, account_id, symbol, subject_name, question_id, selected_hypothesis_id, "
+            "action, review_level, data_state, validation_state, inference_generation_id, status, "
+            "decided_at, source, updated_at FROM investment_decision_episodes"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY decided_at DESC, episode_id DESC LIMIT %s"
+        with self.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [{
+            "episodeId": str(row.get("episode_id") or ""),
+            "accountId": str(row.get("account_id") or ""),
+            "symbol": str(row.get("symbol") or "").upper(),
+            "subjectName": str(row.get("subject_name") or row.get("symbol") or ""),
+            "questionId": str(row.get("question_id") or ""),
+            "selectedHypothesisId": str(row.get("selected_hypothesis_id") or ""),
+            "action": str(row.get("action") or "HOLD"),
+            "reviewLevel": str(row.get("review_level") or "check"),
+            "dataState": str(row.get("data_state") or "partial"),
+            "validationState": str(row.get("validation_state") or "conditional"),
+            "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
+            "status": str(row.get("status") or "active"),
+            "decidedAt": canonical_investment_timestamp(row.get("decided_at")),
+            "source": str(row.get("source") or ""),
+            "updatedAt": str(row.get("updated_at") or ""),
+            "detailRequired": True,
+        } for row in rows or []]
+
     def list_flow_heads(
         self,
         account_id: str = "",
         symbol: str = "",
         limit: int = 200,
     ) -> List[Dict[str, object]]:
-        """Return one compact latest decision payload per account instrument.
-
-        The investment-flow list does not need mutable outcomes or follow-up
-        hydration. Selecting the latest head in SQL avoids loading hundreds of
-        nested dataclasses only to discard older episodes in Python.
-        """
+        """Return one compact current decision per account instrument."""
 
         clauses = []
         params: List[object] = []
         if account_id:
-            clauses.append("account_id = %s")
+            clauses.append("current.account_id = %s")
             params.append(str(account_id))
         if symbol:
-            clauses.append("symbol = %s")
+            clauses.append("current.symbol = %s")
             params.append(str(symbol).upper())
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         params.append(max(1, min(500, int(limit or 200))))
         sql = (
-            "SELECT ranked.flow_id, ranked.account_id, ranked.symbol, ranked.updated_at AS flow_updated_at, "
+            "SELECT current.flow_id, current.account_id, current.symbol, current.updated_at AS flow_updated_at, "
             "episodes.payload_json, episodes.status, episodes.decided_at "
-            "FROM ("
-            "SELECT flow_id, account_id, symbol, decision_episode_id, updated_at, "
-            "ROW_NUMBER() OVER (PARTITION BY account_id, symbol "
-            "ORDER BY decided_at DESC, decision_episode_id DESC) AS flow_rank "
-            "FROM investment_flow_heads"
+            "FROM investment_flow_current AS current JOIN investment_decision_episodes AS episodes "
+            "ON episodes.episode_id = current.decision_episode_id "
             + where
-            + ") AS ranked JOIN investment_decision_episodes AS episodes "
-            "ON episodes.episode_id = ranked.decision_episode_id "
-            "WHERE ranked.flow_rank = 1 "
-            "ORDER BY ranked.updated_at DESC, ranked.flow_id DESC LIMIT %s"
+            + " ORDER BY current.updated_at DESC, current.flow_id DESC LIMIT %s"
         )
         with self.connect() as connection:
             rows = connection.execute(sql, tuple(params)).fetchall()

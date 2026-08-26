@@ -390,6 +390,7 @@
   var snapshotPollTimer = null;
   var scheduledRenderFrame = 0;
   var activeJsonRequests = {};
+  var jsonResponseCache = {};
   var networkActivitySequence = 0;
   var networkActivities = {};
   var networkActivityRevealTimer = null;
@@ -397,6 +398,7 @@
   var pendingNetworkControlTimer = null;
   var pendingRenderTransition = "";
   var REQUEST_TIMEOUT_MS = 12000;
+  var JSON_RESPONSE_CACHE_MS = 4000;
   var NETWORK_ACTIVITY_REVEAL_MS = 180;
   var cytoscapeLoadPromise = null;
   var realtimeSeenEventIds = {};
@@ -1050,6 +1052,11 @@
     options = options || {};
     var key = String(options.key || path);
     if (!options.force && activeJsonRequests[key]) return activeJsonRequests[key];
+    var cacheTtlMs = Math.max(0, Number(options.cacheTtlMs == null ? JSON_RESPONSE_CACHE_MS : options.cacheTtlMs));
+    var cached = jsonResponseCache[key];
+    if (!options.force && cacheTtlMs > 0 && cached && (Date.now() - cached.storedAt) <= cacheTtlMs) {
+      return Promise.resolve(cached.payload);
+    }
     var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
     var timeoutMs = Math.max(1000, Number(options.timeoutMs || REQUEST_TIMEOUT_MS));
     var timeout = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
@@ -1061,6 +1068,7 @@
     }).then(function (response) {
       return response.json().then(function (payload) {
         if (!response.ok) throw new Error(payload.error || "요청 실패");
+        if (cacheTtlMs > 0) jsonResponseCache[key] = { payload: payload, storedAt: Date.now() };
         return payload;
       });
     }).catch(function (error) {
@@ -1073,6 +1081,41 @@
     });
     activeJsonRequests[key] = request;
     return request;
+  }
+
+  var readModelPollTimers = {};
+  var readModelPollAttempts = {};
+
+  function readModelIsWarming(payload) {
+    var cache = payload && payload.readCache && typeof payload.readCache === "object" ? payload.readCache : {};
+    return String((payload || {}).status || "").toLowerCase() === "warming"
+      || (Boolean(cache.refreshing) && !String(cache.lastSuccessAt || ""));
+  }
+
+  function clearReadModelPoll(key) {
+    var id = String(key || "");
+    if (readModelPollTimers[id]) window.clearTimeout(readModelPollTimers[id]);
+    delete readModelPollTimers[id];
+    delete readModelPollAttempts[id];
+  }
+
+  function scheduleReadModelPoll(key, callback) {
+    var id = String(key || "");
+    if (!id || typeof callback !== "function" || readModelPollTimers[id]) return;
+    var attempts = Number(readModelPollAttempts[id] || 0);
+    if (attempts >= 20) return;
+    readModelPollAttempts[id] = attempts + 1;
+    readModelPollTimers[id] = window.setTimeout(function () {
+      delete readModelPollTimers[id];
+      callback();
+    }, Math.min(4000, 1000 + attempts * 250));
+  }
+
+  function invalidateJsonResponseCache(prefix) {
+    var normalized = String(prefix || "");
+    Object.keys(jsonResponseCache).forEach(function (key) {
+      if (!normalized || key.indexOf(normalized) === 0) delete jsonResponseCache[key];
+    });
   }
 
   function instrumentWorkspaceTab(symbol) {
@@ -1557,6 +1600,7 @@
     }).then(function (response) {
       return response.json().then(function (body) {
         if (!response.ok) throw new Error(body.error || "요청 실패");
+        invalidateJsonResponseCache();
         return body;
       });
     }).catch(function (error) {
@@ -1759,6 +1803,7 @@
       occurredAt: message.occurredAt,
       payload: message.payload || {}
     }, false);
+    invalidateJsonResponseCache();
     markRealtimeState(true, eventType);
     render();
     if (eventType !== "realtime.connected") queueRealtimeReload(eventType);
@@ -5820,10 +5865,20 @@
     if (state.ontologyRuleboxLoading && !force) return Promise.resolve(state.ontologyRulebox);
     state.ontologyRuleboxLoading = true;
     state.ontologyRuleboxError = "";
-    return requestJson("/api/ontology/rulebox")
+    return requestJson("/api/ontology/rulebox" + (force ? "?refresh=1" : ""), {
+      key: "ontology-rulebox",
+      force: Boolean(force),
+      cacheTtlMs: 30000,
+      timeoutMs: 30000
+    })
       .then(function (payload) {
         applyOntologyRuleboxPayload(payload);
         state.ontologyRuleboxLoaded = true;
+        if (readModelIsWarming(payload)) {
+          scheduleReadModelPoll("ontology-rulebox", function () { loadOntologyRulebox(true); });
+        } else {
+          clearReadModelPoll("ontology-rulebox");
+        }
         return payload;
       })
       .catch(function (error) {
@@ -5865,13 +5920,19 @@
     if (state.ontologyCatalogSummaryLoaded && !force) return Promise.resolve(state.ontologyCatalogSummary);
     state.ontologyCatalogSummaryLoading = true;
     state.ontologyCatalogSummaryError = "";
-    return requestJson("/api/ontology/catalog/summary?view=compact" + ontologyCatalogAccountParams(), {
+    return requestJson("/api/ontology/catalog/summary?view=compact" + ontologyCatalogAccountParams() + (force ? "&refresh=1" : ""), {
       key: "ontology-catalog-summary",
       force: Boolean(force),
+      cacheTtlMs: 30000,
       timeoutMs: 15000
     }).then(function (payload) {
       state.ontologyCatalogSummary = payload && typeof payload === "object" ? payload : {};
       state.ontologyCatalogSummaryLoaded = true;
+      if (readModelIsWarming(payload)) {
+        scheduleReadModelPoll("ontology-catalog-summary", function () { loadOntologyCatalogSummary(true); });
+      } else {
+        clearReadModelPoll("ontology-catalog-summary");
+      }
       return state.ontologyCatalogSummary;
     }).catch(function (error) {
       state.ontologyCatalogSummaryError = error.message || "온톨로지 카탈로그 요약을 읽지 못했습니다.";
@@ -5908,9 +5969,17 @@
     return requestJson(ontologyCatalogSectionPath(key, cursor), {
       key: "ontology-catalog-" + key,
       force: Boolean(force),
+      cacheTtlMs: 30000,
       timeoutMs: key === "inferences" ? 45000 : 20000
     }).then(function (payload) {
       state.ontologyCatalogPages[key] = payload && typeof payload === "object" ? payload : {};
+      if (readModelIsWarming(payload)) {
+        scheduleReadModelPoll("ontology-catalog-" + key, function () {
+          loadOntologyCatalogSection(key, true, cursor || "offset:0");
+        });
+      } else {
+        clearReadModelPoll("ontology-catalog-" + key);
+      }
       return state.ontologyCatalogPages[key];
     }).catch(function (error) {
       state.ontologyCatalogErrors[key] = error.message || "카탈로그 목록을 읽지 못했습니다.";
@@ -6773,10 +6842,20 @@
     state.ontologyExperimentsLoading = true;
     state.ontologyExperimentsError = "";
     if (state.snapshot) render();
-    return requestJson("/api/ontology/experiments/status")
+    return requestJson("/api/ontology/experiments/status" + (force ? "?refresh=1" : ""), {
+      key: "ontology-experiments-status",
+      force: Boolean(force),
+      cacheTtlMs: 30000,
+      timeoutMs: 15000
+    })
       .then(function (payload) {
         state.ontologyExperiments = payload || {};
         state.ontologyExperimentsLoaded = true;
+        if (readModelIsWarming(payload)) {
+          scheduleReadModelPoll("ontology-experiments-status", function () { loadOntologyExperiments(true); });
+        } else {
+          clearReadModelPoll("ontology-experiments-status");
+        }
         syncActiveOntologyExperimentId();
         return payload;
       })
@@ -6802,9 +6881,11 @@
     state.dashboardSummaryError = "";
     var params = new URLSearchParams();
     params.set("accountId", consoleReadModelAccountId());
+    if (force) params.set("refresh", "1");
     return requestJson("/api/dashboard/summary?" + params.toString(), {
       key: "dashboard-summary",
       force: Boolean(force),
+      cacheTtlMs: 10000,
       timeoutMs: 15000
     }).then(function (payload) {
       state.dashboardSummary = payload || {};
@@ -6922,9 +7003,10 @@
     if (state.operationsHealth && !force) return Promise.resolve(state.operationsHealth);
     state.operationsHealthLoading = true;
     state.operationsHealthError = "";
-    return requestJson("/api/operations/health", {
+    return requestJson("/api/operations/health" + (force ? "?refresh=1" : ""), {
       key: "operations-health",
       force: Boolean(force),
+      cacheTtlMs: 15000,
       timeoutMs: 15000
     }).then(function (payload) {
       state.operationsHealth = payload || {};
@@ -7456,9 +7538,10 @@
     }
     state.hypothesisWorkspaceLoading = true;
     state.hypothesisWorkspaceError = "";
-    return requestJson("/api/investment-brain/hypotheses?view=summary&limit=40", {
+    return requestJson("/api/investment-brain/hypotheses?view=summary&limit=40" + (force ? "&refresh=1" : ""), {
       key: "hypothesis-workspace",
       force: Boolean(force),
+      cacheTtlMs: 15000,
       timeoutMs: 30000
     })
       .then(function (payload) {
@@ -7488,9 +7571,10 @@
     state.hypothesisPolicyVersionsLoading = true;
     state.hypothesisPolicyVersionsError = "";
     render();
-    return requestJson("/api/investment-brain/hypothesis-policy-versions?limit=20", {
+    return requestJson("/api/investment-brain/hypothesis-policy-versions?limit=20" + (force ? "&refresh=1" : ""), {
       key: "hypothesis-policy-versions",
       force: Boolean(force),
+      cacheTtlMs: 30000,
       timeoutMs: 30000
     }).then(function (payload) {
       state.hypothesisPolicyVersions = payload && typeof payload === "object" ? payload : { versions: [] };
@@ -9444,9 +9528,16 @@
     state.researchEvidenceError = "";
     render();
 
+    var evidencePath = "/api/market/evidence" + researchEvidenceQueryString();
+    if (force) evidencePath += (evidencePath.indexOf("?") >= 0 ? "&" : "?") + "refresh=1";
     var promise = isStaticPreviewHost()
       ? Promise.resolve(staticResearchEvidencePayload("정적 미리보기"))
-      : requestJson("/api/market/evidence" + researchEvidenceQueryString());
+      : requestJson(evidencePath, {
+        key: "research-evidence-list",
+        force: Boolean(force),
+        cacheTtlMs: 15000,
+        timeoutMs: 15000
+      });
 
     return promise
       .then(function (payload) {
@@ -33845,6 +33936,7 @@
         var key = button.getAttribute("data-research-evidence-toggle") || "";
         state.expandedResearchEvidenceKey = key;
         render();
+        loadResearchEvidenceDetail(key);
       };
       button.addEventListener("click", selectResearchEvidence);
       if (String(button.tagName || "").toLowerCase() !== "button") {

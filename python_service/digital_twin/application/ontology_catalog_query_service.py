@@ -103,6 +103,7 @@ class OntologyCatalogQueryService:
         notification_job_store=None,
         statistical_signal_store=None,
         tbox_provider: Callable[[], Dict[str, object]] = ontology_tbox,
+        rulebox_provider: Callable[[], Dict[str, object]] = None,
     ):
         self.ontology_repository = ontology_repository
         self.hypothesis_lifecycle_store = hypothesis_lifecycle_store
@@ -110,6 +111,7 @@ class OntologyCatalogQueryService:
         self.notification_job_store = notification_job_store
         self.statistical_signal_store = statistical_signal_store
         self.tbox_provider = tbox_provider
+        self.rulebox_provider = rulebox_provider
 
     def source_tbox(self) -> Dict[str, object]:
         payload = self.tbox_provider()
@@ -203,10 +205,11 @@ class OntologyCatalogQueryService:
 
     def rulebox(self) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
         repository = self.ontology_repository
-        if not repository or not callable(getattr(repository, "rulebox_snapshot", None)):
+        reader = self.rulebox_provider or (getattr(repository, "rulebox_snapshot", None) if repository else None)
+        if not callable(reader):
             return ({"status": "unavailable", "reason": "TypeDB RuleBox reader is unavailable."}, [])
         try:
-            snapshot = item_dict(repository.rulebox_snapshot())
+            snapshot = item_dict(reader())
         except Exception as error:  # noqa: BLE001 - expose the unavailable runtime source.
             return ({"status": "error", "reason": str(error)[:220]}, [])
         status = lower(snapshot.get("status")) or "unknown"
@@ -584,15 +587,46 @@ class OntologyCatalogQueryService:
             if validation_status:
                 rows = [row for row in rows if text(row.get("knowledgeValidationStatus")) == validation_status]
             payload = self._paged_static(section_id, rows, query, offset, page_limit)
-            payload["items"] = [
-                {key: value for key, value in row.items() if key not in {"conditions", "derivations"}}
-                for row in payload.get("items") or []
-            ]
+            payload["items"] = [self.rule_list_item(row) for row in payload.get("items") or []]
             payload.update({"status": metadata.get("status"), "source": metadata})
             return payload
         if section_id == "hypotheses":
             return self._hypothesis_page(query, offset, page_limit, account_id, symbol, market_id, scope, state)
         return self._inference_page(query, offset, page_limit, world_id, symbol)
+
+    @staticmethod
+    def rule_list_item(row: Mapping[str, object]) -> Dict[str, object]:
+        """Keep only scan fields in the rule list; full governance stays in lineage detail."""
+
+        knowledge = item_dict(row.get("knowledgeBasis"))
+        statistical = item_dict(row.get("statisticalSignalContract"))
+        return {
+            key: row.get(key)
+            for key in [
+                "id", "type", "ruleId", "label", "version", "enabled", "sourceKind",
+                "hypothesisFamilyKey", "conditionCount", "derivationCount", "inputRelationTypes",
+                "outputRelationTypes", "relationTypes", "tboxClasses", "decisionStages", "actionGroup",
+                "actionLevel", "assessmentScope", "triggerFamilies", "lifecycleClass", "ruleKind",
+                "owner", "theoryFamily", "thesisFamily", "knowledgeValidationStatus",
+                "decisionEligibility", "requiresHypothesis",
+            ]
+            if key in row
+        } | {
+            "knowledgeBasis": {
+                key: knowledge.get(key)
+                for key in [
+                    "ruleKind", "owner", "theoryFamily", "thesisFamily", "validationStatus",
+                    "decisionEligibility", "requiresHypothesis",
+                ]
+                if key in knowledge
+            },
+            "statisticalSignalContract": {
+                key: statistical.get(key)
+                for key in ["version", "migrationState", "productionEligible"]
+                if key in statistical
+            },
+            "detailRequired": True,
+        }
 
     def _paged_static(self, section: str, rows: List[Dict[str, object]], query: str, offset: int, limit: int, bounded_context: str = "") -> Dict[str, object]:
         filtered = rows

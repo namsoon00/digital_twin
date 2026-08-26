@@ -231,6 +231,18 @@ class MySQLSymbolUniverseStore(MySQLOperationalConnection):
                 ).fetchone()
         return self.row_to_symbol(row) if row else None
 
+    def existing_symbols(self, symbols: Iterable[str]) -> List[str]:
+        normalized = sorted({normalize_symbol(symbol) for symbol in symbols or [] if normalize_symbol(symbol)})
+        if not normalized:
+            return []
+        placeholders = ",".join(["%s"] * len(normalized))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT symbol FROM symbol_universe WHERE active = 1 AND symbol IN (" + placeholders + ")",
+                tuple(normalized),
+            ).fetchall()
+        return [str(row.get("symbol") or "").upper() for row in rows or [] if row.get("symbol")]
+
     def counts_by_market(self) -> Dict[str, int]:
         with self.connect() as connection:
             rows = connection.execute(

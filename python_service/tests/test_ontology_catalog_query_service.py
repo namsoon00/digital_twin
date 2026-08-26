@@ -246,6 +246,9 @@ class OntologyCatalogQueryServiceTests(unittest.TestCase):
 
         self.assertEqual("predictive-hypothesis", rule["ruleKind"])
         self.assertTrue(rule["knowledgeBasis"]["requiresHypothesis"])
+        self.assertTrue(rule["detailRequired"])
+        self.assertNotIn("conditions", rule)
+        self.assertNotIn("references", rule["knowledgeBasis"])
         self.assertEqual(["rule.signal.v1"], [item["ruleId"] for item in filtered["items"]])
 
     def test_rulebox_defaults_are_blocked_when_typedb_is_unavailable(self):

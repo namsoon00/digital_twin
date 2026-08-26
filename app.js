@@ -31615,7 +31615,13 @@
       documentCharCount: Number(item.documentCharCount || payload.documentCharCount || quality.documentCharCount || 0),
       sourceDocuments: item.sourceDocuments && typeof item.sourceDocuments === "object" ? item.sourceDocuments : {},
       sourceRevision: String(item.sourceRevision || payload.sourceRevision || payload.receiptNo || payload.accessionNumber || ""),
-      sourceAsOf: String(item.sourceAsOf || payload.sourceAsOf || item.publishedAt || item.observedAt || "")
+      sourceAsOf: String(item.sourceAsOf || payload.sourceAsOf || item.publishedAt || item.observedAt || ""),
+      metadataDatasetId: String(item.externalFactDatasetId || payload.externalFactDatasetId || ""),
+      metadataFactRevision: String(item.externalFactSourceRevision || payload.externalFactSourceRevision || ""),
+      documentDatasetId: String(item.officialDocumentDatasetId || payload.officialDocumentDatasetId || ""),
+      documentFactRevision: String(item.officialDocumentFactRevision || payload.officialDocumentFactRevision || ""),
+      documentFetchedAt: String(item.officialDocumentFetchedAt || payload.officialDocumentFetchedAt || ""),
+      documentHash: String(item.documentHash || payload.documentHash || "")
     };
   }
 
@@ -31641,7 +31647,7 @@
       '<section class="work-detail-section primary"><strong>확인된 사실</strong>' + facts + '</section>',
       '<section class="work-detail-section"><strong>투자 영향 경로</strong><p>' + escapeHtml(analysis.impactSummary || '공식 원문 검증 후 영향 경로를 판단합니다.') + '</p></section>',
       '<section class="work-detail-section"><strong>불확실성과 다음 확인</strong><p>' + escapeHtml(analysis.uncertaintySummary || '원문 검증 상태를 확인해야 합니다.') + '</p>' + watches + '</section>',
-      '<section class="work-detail-section"><strong>수집·사용 감사</strong><p>' + escapeHtml(auditText) + '</p><small>' + escapeHtml(detail.reasonCodes.join(' · ') || '제외 사유 없음') + '</small><div class="notification-detail-tags"><span>문서 ' + escapeHtml(detail.documentState) + '</span><span>본문 ' + escapeHtml(detail.documentCharCount.toLocaleString('ko-KR')) + '자</span><span>revision ' + escapeHtml(detail.sourceRevision || '-') + '</span><span>기준 ' + escapeHtml(formatFeedTime(detail.sourceAsOf) || '-') + '</span></div></section>',
+      '<section class="work-detail-section"><strong>수집·사용 감사</strong><p>' + escapeHtml(auditText) + '</p><small>' + escapeHtml(detail.reasonCodes.join(' · ') || '제외 사유 없음') + '</small><div class="notification-detail-tags"><span>목록 ' + escapeHtml(detail.metadataDatasetId || '-') + '</span><span>원문 ' + escapeHtml(detail.documentDatasetId || '수집 대기') + '</span><span>문서 ' + escapeHtml(detail.documentState) + '</span><span>본문 ' + escapeHtml(detail.documentCharCount.toLocaleString('ko-KR')) + '자</span><span>revision ' + escapeHtml(detail.sourceRevision || '-') + '</span><span>기준 ' + escapeHtml(formatFeedTime(detail.sourceAsOf) || '-') + '</span></div>' + (detail.documentDatasetId ? '<details class="oa-reasoning-technical"><summary>원문 수집 계보</summary><div class="notification-detail-tags"><span>목록 revision ' + escapeHtml(detail.metadataFactRevision || '-') + '</span><span>원문 revision ' + escapeHtml(detail.documentFactRevision || '-') + '</span><span>원문 수집 ' + escapeHtml(formatFeedTime(detail.documentFetchedAt) || '-') + '</span><span>hash ' + escapeHtml(detail.documentHash ? detail.documentHash.slice(0, 16) : '-') + '</span></div></details>' : '') + '</section>',
       sections
     ].join('');
   }
@@ -32125,7 +32131,7 @@
         { value: "", label: "전체" },
         { value: "news", label: "뉴스" },
         { value: "disclosure", label: "공시" },
-        { value: "sec-filing", label: "SEC" },
+        { value: "filing", label: "SEC" },
         { value: "market-move", label: "가격 변동" }
       ].map(function (option) {
         return '<option value="' + escapeHtml(option.value) + '"' + (String(filters.kind || "") === option.value ? " selected" : "") + '>' + escapeHtml(option.label) + '</option>';
@@ -33026,6 +33032,7 @@
           { value: "0", label: "사용 안 함" }
         ]),
         renderSettingField("externalSecDocumentTextMaxChars", "SEC 원문 최대 글자", "number", "6000"),
+        renderSettingField("externalSecDocumentMaxPerSymbol", "종목별 SEC 원문 수", "number", "3"),
         renderSettingSelect("externalNewsEnabled", "뉴스 헤드라인 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

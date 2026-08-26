@@ -2189,6 +2189,18 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 + " GROUP BY job_status, reasoning_lane, current_stage",
                 tuple(params),
             ).fetchall()
+            terminal_where = cohort_where + (
+                " AND" if cohort_where else " WHERE"
+            ) + " job_status IN ('failed', 'completed', 'excluded', 'superseded')"
+            terminal_rows = connection.execute(
+                "SELECT job_id, scope_key, job_status, updated_at, last_error, result_json "
+                "FROM reasoning_engine_jobs" + terminal_where
+                + " ORDER BY updated_at DESC, job_id DESC LIMIT %s",
+                (
+                    *cohort_params,
+                    max(1000, min(10000, int(lookback or 200) * 10)),
+                ),
+            ).fetchall()
         count_map = {str(row.get("job_status") or ""): int(row.get("row_count") or 0) for row in counts or []}
         cohort_count_map = {
             str(row.get("job_status") or ""): int(row.get("row_count") or 0)
@@ -2289,6 +2301,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             int(row.get("duration_ms") or 0) + int(row.get("queue_wait_ms") or 0)
             for row in run_rows
         ]
+        failure_health = self.failure_health(
+            terminal_rows,
+            total_failure_count=int(cohort_count_map.get("failed") or 0),
+        )
         return {
             "deploymentId": str(deployment_id or ""),
             "releaseFingerprint": str(release_fingerprint or ""),
@@ -2317,6 +2333,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 for stage, values in sorted(stage_values.items())
             },
             "failureCount": int(cohort_count_map.get("failed") or 0),
+            **failure_health,
             "pendingCount": sum(int(count_map.get(status) or 0) for status in ["queued", "retry", "processing"]),
             "awaitingSourceCount": int(count_map.get("awaiting_source") or 0),
             "awaitingWorldProjectionCount": int(count_map.get("awaiting_world_projection") or 0),
@@ -2326,6 +2343,81 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "oldestPendingByLane": oldest_pending_by_lane,
             "processingStages": processing_stages,
             "latestCompletedAt": str(rows[0].get("completed_at") or "") if rows else "",
+        }
+
+    @staticmethod
+    def failure_health(
+        terminal_rows: Iterable[Mapping[str, object]],
+        total_failure_count: int = 0,
+        now: datetime = None,
+    ) -> Dict[str, object]:
+        """Separate immutable failure history from currently unresolved scopes."""
+
+        rows = sorted(
+            (dict(raw or {}) for raw in terminal_rows or []),
+            key=lambda row: (
+                str(row.get("updated_at") or ""),
+                str(row.get("job_id") or ""),
+            ),
+            reverse=True,
+        )
+        latest_by_scope: Dict[str, Dict[str, object]] = {}
+        recent_failure_count = 0
+        cutoff = (now or utc_now()) - timedelta(hours=24)
+        for row in rows:
+            status = str(row.get("job_status") or "").strip().lower()
+            updated_at = str(row.get("updated_at") or "").strip()
+            if status == "failed":
+                try:
+                    parsed = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    if parsed.astimezone(timezone.utc) >= cutoff:
+                        recent_failure_count += 1
+                except ValueError:
+                    pass
+            scope_key = str(row.get("scope_key") or row.get("job_id") or "").strip()
+            if scope_key and scope_key not in latest_by_scope:
+                latest_by_scope[scope_key] = row
+        unresolved = [
+            row
+            for row in latest_by_scope.values()
+            if str(row.get("job_status") or "").strip().lower() == "failed"
+        ]
+        reason_counts: Dict[str, int] = {}
+        failures = []
+        for row in unresolved[:100]:
+            result = json_value(row.get("result_json"), {})
+            reason_code = str(
+                result.get("reason_code")
+                or result.get("reasonCode")
+                or "unclassified"
+            ).strip()
+            reason_counts[reason_code] = int(reason_counts.get(reason_code) or 0) + 1
+            failures.append({
+                "jobId": str(row.get("job_id") or ""),
+                "scopeKey": str(row.get("scope_key") or ""),
+                "updatedAt": str(row.get("updated_at") or ""),
+                "reasonCode": reason_code,
+                "reason": str(
+                    result.get("reason") or row.get("last_error") or ""
+                )[:220],
+            })
+        latest_failure_at = max(
+            (str(row.get("updated_at") or "") for row in unresolved),
+            default="",
+        )
+        total = max(0, int(total_failure_count or 0))
+        unresolved_count = len(unresolved)
+        return {
+            "failureCountTotal": total,
+            "unresolvedFailureCount": unresolved_count,
+            "resolvedFailureCount": max(0, total - unresolved_count),
+            "recentFailureCount24h": recent_failure_count,
+            "latestUnresolvedFailureAt": latest_failure_at,
+            "unresolvedFailureReasonCounts": reason_counts,
+            "unresolvedFailures": failures,
+            "failureHealthWindowTerminalRowCount": len(rows),
         }
 
     @staticmethod

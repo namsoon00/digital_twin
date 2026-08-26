@@ -16,6 +16,25 @@ from digital_twin.domain.ontology_scopes import (
 
 
 class OntologyFactSlotTests(unittest.TestCase):
+    def test_company_valuation_section_routes_without_other_company_slots(self):
+        plan = build_fact_slot_projection_plan(
+            ["MSTR"],
+            ["company-valuation"],
+            requested_fact_families_by_symbol={"MSTR": ["company-valuation"]},
+            changed_fields_by_symbol={
+                "MSTR": ["external.companyKnowledge.valuation"],
+            },
+        )
+
+        self.assertEqual(["MSTR"], plan["preciseFieldRoutingSymbols"])
+        self.assertEqual(
+            ["company-valuation", "valuation"],
+            plan["slotFamiliesBySymbol"]["MSTR"],
+        )
+        self.assertNotIn("fundamental", plan["slotFamiliesBySymbol"]["MSTR"])
+        self.assertNotIn("governance", plan["slotFamiliesBySymbol"]["MSTR"])
+        self.assertNotIn("capital", plan["slotFamiliesBySymbol"]["MSTR"])
+
     def test_portfolio_risk_event_routes_only_portfolio_position_and_exposure_slots(self):
         plan = build_fact_slot_projection_plan(
             ["MSTR"],

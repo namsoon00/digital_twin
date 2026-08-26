@@ -695,6 +695,11 @@ class ReasoningEnginePlatformService:
                 }
         pending_count = int(queue.get("pendingCount") or 0)
         failure_count = int(queue.get("failureCount") or 0)
+        unresolved_failure_count = int(
+            queue.get("unresolvedFailureCount")
+            if "unresolvedFailureCount" in queue
+            else failure_count
+        )
         oldest_pending_age = int(queue.get("oldestPendingAgeSeconds") or 0)
         delivery_heartbeats = dict(delivery.get("workerHeartbeats") or {})
         delivery_heartbeat = dict(delivery_heartbeats.get("delivery") or {})
@@ -715,7 +720,7 @@ class ReasoningEnginePlatformService:
             reasons = []
             if delivery_id != active_id:
                 reasons.append("active-delivery-deployment-mismatch")
-            if failure_count:
+            if unresolved_failure_count:
                 reasons.append("reasoning-failures-present")
             if oldest_pending_age >= self.int_setting(
                 "ontologyReasoningQueueCriticalAgeMinutes", 5, 1, 1440
@@ -779,6 +784,15 @@ class ReasoningEnginePlatformService:
                     queue.get("awaitingWorldProjectionCount") or 0
                 ),
                 "failureCount": failure_count,
+                "unresolvedFailureCount": unresolved_failure_count,
+                "resolvedFailureCount": int(queue.get("resolvedFailureCount") or 0),
+                "recentFailureCount24h": int(queue.get("recentFailureCount24h") or 0),
+                "latestUnresolvedFailureAt": str(
+                    queue.get("latestUnresolvedFailureAt") or ""
+                ),
+                "unresolvedFailureReasonCounts": dict(
+                    queue.get("unresolvedFailureReasonCounts") or {}
+                ),
                 "oldestPendingAgeSeconds": oldest_pending_age,
                 "uniqueCompletedRunCount": int(
                     queue.get("uniqueCompletedRunCount")
@@ -828,6 +842,13 @@ class ReasoningEnginePlatformService:
                 values.get("awaitingWorldProjectionCount") or 0
             ),
             "failureCount": int(values.get("failureCount") or 0),
+            "unresolvedFailureCount": int(
+                values.get("unresolvedFailureCount")
+                if "unresolvedFailureCount" in values
+                else values.get("failureCount") or 0
+            ),
+            "resolvedFailureCount": int(values.get("resolvedFailureCount") or 0),
+            "recentFailureCount24h": int(values.get("recentFailureCount24h") or 0),
             "oldestPendingAgeSeconds": int(values.get("oldestPendingAgeSeconds") or 0),
             "uniqueCompletedRunCount": int(
                 values.get("uniqueCompletedRunCount")

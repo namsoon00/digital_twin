@@ -33,6 +33,25 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class OntologyChangeImpactTests(unittest.TestCase):
+    def test_company_valuation_event_does_not_reopen_unrelated_company_rule_families(self):
+        rules = default_graph_inference_rules()
+        plan = build_inference_impact_plan(
+            [{"scopeId": "symbol:MSTR:company-valuation", "generationId": "valuation-a"}],
+            [{"scopeId": "symbol:MSTR:company-valuation", "generationId": "valuation-b"}],
+            ["MSTR"],
+            explicit_target_symbols=["MSTR"],
+            rules=[rule.to_dict() for rule in rules],
+            requested_fact_families=["company-valuation"],
+            requested_fact_families_by_symbol={"MSTR": ["company-valuation"]},
+        )
+
+        candidates = plan["candidateRuleIds"]
+        self.assertGreater(len(candidates), 0)
+        self.assertLessEqual(len(candidates), 10)
+        self.assertGreater(len(plan["deferredRuleIds"]), len(candidates))
+        self.assertFalse(any("governance" in rule_id for rule_id in candidates))
+        self.assertFalse(any("capital_structure" in rule_id for rule_id in candidates))
+
     def test_portfolio_risk_fact_types_map_to_bounded_abox_families(self):
         self.assertEqual(
             ["exposure", "portfolio", "position"],

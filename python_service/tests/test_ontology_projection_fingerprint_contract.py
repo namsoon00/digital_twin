@@ -30,6 +30,54 @@ class CurrentPipelineHealthStore:
 
 class OntologyProjectionFingerprintContractTests(unittest.TestCase):
 
+    def test_runtime_context_cache_reuses_only_exact_source_target_and_tbox(self):
+        class CountingRecorder(PortfolioOntologyProjectionRecorder):
+            def __init__(self):
+                super().__init__(
+                    None,
+                    settings={
+                        "ontologyProjectionRuntimeContextCacheEnabled": "1",
+                        "ontologyProjectionRuntimeContextCacheTtlSeconds": "60",
+                        "ontologyProjectionRuntimeContextCacheMaxEntries": "4",
+                    },
+                )
+                self.decision_reads = 0
+
+            def decision_episode_projection_context(self, snapshot, target_symbols=None):
+                self.decision_reads += 1
+                return {
+                    "episodes": [],
+                    "projection": {
+                        "status": "ok",
+                        "sourceEpisodeCount": 0,
+                        "includedEpisodeCount": 0,
+                        "droppedEpisodeCount": 0,
+                    },
+                }
+
+        snapshot = AccountSnapshot(
+            "runtime-context-cache-contract",
+            "Cache Contract",
+            "test",
+            "live",
+            "ok",
+            "2026-08-26T00:00:00Z",
+            PortfolioSummary(100, 0, 100, [], [], 0),
+        )
+        recorder = CountingRecorder()
+
+        first = recorder.runtime_context(snapshot, active_tbox={"fingerprint": "tbox-a"}, target_symbols=["AAPL"])
+        second = recorder.runtime_context(snapshot, active_tbox={"fingerprint": "tbox-a"}, target_symbols=["AAPL"])
+
+        self.assertEqual(first, second)
+        self.assertEqual(1, recorder.decision_reads)
+        self.assertEqual("hit", recorder.last_runtime_context_cache_status[snapshot.account_id]["status"])
+
+        recorder.runtime_context(snapshot, active_tbox={"fingerprint": "tbox-a"}, target_symbols=["MSFT"])
+        recorder.runtime_context(snapshot, active_tbox={"fingerprint": "tbox-b"}, target_symbols=["AAPL"])
+
+        self.assertEqual(3, recorder.decision_reads)
+
     def test_projection_runtime_context_removes_derived_decision_history(self):
         position = normalize_position({
             "symbol": "005930",

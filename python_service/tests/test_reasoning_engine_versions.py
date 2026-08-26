@@ -1,5 +1,6 @@
 import unittest
 from copy import deepcopy
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from digital_twin.domain.reasoning_engine_versions import (
     promotion_blockers,
     reasoning_release_identity,
 )
+from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningEngineJobStore
 
 
 def descriptor(status="candidate"):
@@ -27,6 +29,41 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_failure_health_resolves_an_older_failure_after_newer_success(self):
+        rows = [
+            {
+                "job_id": "job:success",
+                "scope_key": "reasoning-slot:a",
+                "job_status": "completed",
+                "updated_at": "2026-08-26T01:10:00Z",
+            },
+            {
+                "job_id": "job:failed-old",
+                "scope_key": "reasoning-slot:a",
+                "job_status": "failed",
+                "updated_at": "2026-08-26T01:00:00Z",
+                "result_json": '{"reasonCode":"typedbTimeout"}',
+            },
+            {
+                "job_id": "job:failed-current",
+                "scope_key": "reasoning-slot:b",
+                "job_status": "failed",
+                "updated_at": "2026-08-26T01:05:00Z",
+                "result_json": '{"reasonCode":"typedbCandidateVerificationError"}',
+            },
+        ]
+
+        result = MySQLReasoningEngineJobStore.failure_health(
+            rows,
+            total_failure_count=61,
+            now=datetime(2026, 8, 26, 2, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(61, result["failureCountTotal"])
+        self.assertEqual(1, result["unresolvedFailureCount"])
+        self.assertEqual(60, result["resolvedFailureCount"])
+        self.assertEqual({"typedbCandidateVerificationError": 1}, result["unresolvedFailureReasonCounts"])
+
     def test_v2_release_preflight_migrates_rulebox_before_freezing_snapshot(self):
         from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
         from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
@@ -735,6 +772,53 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("v2-r24", current["queue"]["deploymentId"])
         self.assertEqual(7, current["queue"]["pendingCount"])
         self.assertEqual(42, current["queue"]["oldestPendingAgeSeconds"])
+
+    def test_current_status_keeps_historical_resolved_failures_without_degrading(self):
+        deployment = {
+            "deploymentId": "v2-active",
+            "engineVersion": "v2",
+            "status": "active",
+            "health": {"status": "ready"},
+            "releaseBundle": {"release_id": "release-v2-active"},
+        }
+
+        class Registry:
+            @staticmethod
+            def get(_deployment_id):
+                return dict(deployment)
+
+        class Jobs:
+            @staticmethod
+            def summary(_deployment_id, lookback=200, **_kwargs):
+                del lookback
+                return {
+                    "deploymentId": "v2-active",
+                    "pendingCount": 0,
+                    "failureCount": 61,
+                    "unresolvedFailureCount": 0,
+                    "resolvedFailureCount": 61,
+                }
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            independent_job_store=Jobs(),
+        )
+        state = {
+            "control": {
+                "active_deployment_id": "v2-active",
+                "delivery_deployment_id": "v2-active",
+                "candidate_deployment_id": "",
+            },
+            "deployments": [deployment],
+            "independentQueue": Jobs.summary("v2-active"),
+        }
+
+        current = platform.current_status(state)
+
+        self.assertEqual("ready", current["status"])
+        self.assertEqual([], current["reasons"])
+        self.assertEqual(61, current["queue"]["failureCount"])
+        self.assertEqual(0, current["queue"]["unresolvedFailureCount"])
 
     def test_cli_promotion_switches_control_and_active_graph_database_together(self):
         from digital_twin.infrastructure.cli import reasoning_engine_platform_command

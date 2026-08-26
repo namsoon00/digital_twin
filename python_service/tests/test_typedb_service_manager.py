@@ -1388,6 +1388,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertTrue((active / "new").exists())
             self.assertTrue((retired / "old").exists())
             self.assertTrue(marker_payload["blueGreenCutoverPending"])
+            self.assertTrue(marker_payload["graphStoreEpoch"].startswith("blue-green:"))
 
     def test_blue_green_retired_path_uses_cutover_time_for_retention(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1433,6 +1434,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertTrue((active / "previous").exists())
             self.assertTrue((failed / "candidate").exists())
             self.assertFalse(marker_payload["blueGreenCutoverPending"])
+            self.assertTrue(marker_payload["graphStoreEpoch"].startswith("rollback:"))
 
 
 if __name__ == "__main__":

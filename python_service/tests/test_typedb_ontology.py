@@ -12118,6 +12118,60 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ok", repository.with_typedb_retries(operation))
         self.assertEqual(2, calls["count"])
 
+    def test_scoped_candidate_verification_retries_exactly_one_clean_replay(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=2)
+        calls = {"count": 0}
+        timing = {}
+        verification = {}
+
+        def operation():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                verification["symbol:005930:flow"] = {
+                    "status": "incomplete",
+                    "expectedEntityCount": 4,
+                    "actualEntityCount": 3,
+                }
+                raise RuntimeError(
+                    "Scoped ABox candidate verification failed for symbol:005930:flow"
+                )
+            verification["symbol:005930:flow"] = {
+                "status": "ok",
+                "expectedEntityCount": 4,
+                "actualEntityCount": 4,
+            }
+            return "ok"
+
+        result = repository.with_scoped_abox_candidate_verification_retry(
+            operation,
+            timing=timing,
+            verification=verification,
+        )
+
+        self.assertEqual("ok", result)
+        self.assertEqual(2, calls["count"])
+        self.assertEqual(1, timing["candidateVerificationRetryCount"])
+        self.assertEqual(
+            ["symbol:005930:flow"],
+            timing["candidateVerificationFirstFailure"]["failedScopeIds"],
+        )
+        self.assertEqual("ok", verification["symbol:005930:flow"]["status"])
+
+    def test_scoped_candidate_verification_second_failure_is_not_replayed(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=2)
+        calls = {"count": 0}
+
+        def operation():
+            calls["count"] += 1
+            raise RuntimeError(
+                "Scoped ABox candidate verification failed for symbol:005930:flow"
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "candidate verification failed"):
+            repository.with_scoped_abox_candidate_verification_retry(operation)
+
+        self.assertEqual(2, calls["count"])
+
     def test_typedb_rulebox_save_failure_does_not_mark_inference_used(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         graph = PortfolioOntology("typedb-run-rulebox-save-failure")

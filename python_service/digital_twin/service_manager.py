@@ -3801,6 +3801,7 @@ def swap_typedb_blue_green_data_paths(spec: Dict[str, object], candidate: Dict[s
         raise
     marker = read_typedb_retention_marker()
     marker.update({
+        "graphStoreEpoch": "blue-green:" + uuid.uuid4().hex,
         "blueGreenCutoverPending": True,
         "blueGreenPreparedDataPath": str(active_path),
         "blueGreenRetiredDataPath": str(retired_path),
@@ -3828,6 +3829,7 @@ def rollback_typedb_blue_green_data_paths(spec: Dict[str, object], retired_path:
         raise
     marker = read_typedb_retention_marker()
     marker.update({
+        "graphStoreEpoch": "rollback:" + uuid.uuid4().hex,
         "blueGreenCutoverPending": False,
         "blueGreenRollbackAt": iso_now(),
         "blueGreenRollbackSourcePath": str(rollback_path),

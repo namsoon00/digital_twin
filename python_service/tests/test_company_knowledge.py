@@ -121,6 +121,11 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertEqual(18.0, first["valuation"]["returnOnEquityPct"])
         self.assertEqual(first["factRevision"], refreshed["factRevision"])
         self.assertEqual(first["materialRevision"], refreshed["materialRevision"])
+        self.assertEqual(
+            {"capital", "coverage", "financials", "governance", "ownership", "profile", "valuation"},
+            set(first["materialSectionRevisions"]),
+        )
+        self.assertEqual(first["materialSectionRevisions"], refreshed["materialSectionRevisions"])
 
     def test_material_revision_ignores_insignificant_multiple_rounding(self):
         first = build_company_knowledge(
@@ -139,6 +144,14 @@ class CompanyKnowledgeTests(unittest.TestCase):
         self.assertNotEqual(first["factRevision"], insignificant["factRevision"])
         self.assertEqual(first["materialRevision"], insignificant["materialRevision"])
         self.assertNotEqual(first["materialRevision"], material["materialRevision"])
+        self.assertEqual(
+            first["materialSectionRevisions"]["profile"],
+            material["materialSectionRevisions"]["profile"],
+        )
+        self.assertNotEqual(
+            first["materialSectionRevisions"]["valuation"],
+            material["materialSectionRevisions"]["valuation"],
+        )
 
     def test_dividend_yield_unit_contract_normalizes_provider_values(self):
         yahoo_overview = overview_from_yfinance("NVDA", {"info": {"dividendYield": 0.45}})

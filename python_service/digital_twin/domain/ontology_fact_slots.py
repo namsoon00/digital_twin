@@ -14,7 +14,7 @@ from typing import Dict, Iterable, Mapping, Set
 from .ontology_change_impact import scope_family, scope_symbol
 
 
-FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v1"
+FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v2-company-section-routing"
 
 # A source event can update values derived into adjacent factual families.
 # The closure keeps those derived facts coherent while excluding unrelated
@@ -168,6 +168,20 @@ def _field_slot_families(value: object) -> Set[str]:
         return {"evidence"}
     if external in {"companyoverviews", "yfinancedata"}:
         return {"evidence", "profile", "valuation"}
+    if external == "companyknowledge.profile":
+        return {"profile"}
+    if external == "companyknowledge.valuation":
+        return {"company-valuation", "valuation"}
+    if external == "companyknowledge.financials":
+        return {"fundamental"}
+    if external in {"companyknowledge.governance", "companyknowledge.ownership"}:
+        return {"governance"}
+    if external == "companyknowledge.capital":
+        return {"capital"}
+    if external == "companyknowledge.coverage":
+        return {"quality"}
+    if external == "companyknowledge":
+        return {"profile", "company-valuation", "fundamental", "governance", "capital", "quality"}
     if external in {"quality", "freshness", "provenance", "statuses"}:
         return {"quality"}
     if external in {"macro"}:

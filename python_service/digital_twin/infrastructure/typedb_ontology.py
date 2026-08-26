@@ -6052,7 +6052,11 @@ class ScopedABoxManifestMixin:
                 finally:
                     self.close_driver(driver)
 
-            self.with_typedb_retries(operation)
+            self.with_scoped_abox_candidate_verification_retry(
+                operation,
+                timing=timing,
+                verification=verification,
+            )
             active_after = self.active_abox_metadata(world_id)
             pending_after = self.pending_abox_activation(world_id)
             if (
@@ -6132,6 +6136,11 @@ class ScopedABoxManifestMixin:
                 dict(timing.get("changedScopeWritePlan") or {}),
             )
             reason_code = typedb_error_code(error)
+            failed_scope_verification = {
+                scope_id: dict(value or {})
+                for scope_id, value in verification.items()
+                if str((value or {}).get("status") or "") != "ok"
+            }
             return {
                 "configured": True,
                 "saved": False,
@@ -6155,6 +6164,14 @@ class ScopedABoxManifestMixin:
                     "typedbTimeout",
                 },
                 "scopeVerification": verification,
+                "candidateVerificationFailure": {
+                    "status": "failed" if failed_scope_verification else "not-applicable",
+                    "failedScopeIds": sorted(failed_scope_verification),
+                    "failedScopes": failed_scope_verification,
+                    "retryAttempted": bool(timing.get("candidateVerificationRetryAttempted")),
+                    "retryCount": int(timing.get("candidateVerificationRetryCount") or 0),
+                    "operationAttemptCount": operation_attempt_count,
+                },
                 "timing": timing,
                 "relationPersistence": relation_persistence,
                 "orphanCandidateCleanup": orphan_cleanup,
@@ -7995,7 +8012,49 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         self._active_scoped_abox_metadata_cache: Dict[Tuple[str, str, str, str, str], Dict[str, object]] = {}
         self._active_scoped_abox_metadata_cache_lock = threading.RLock()
 
-    def with_typedb_retries(self, operation):
+    def with_scoped_abox_candidate_verification_retry(
+        self,
+        operation,
+        timing: Dict[str, object] = None,
+        verification: Dict[str, object] = None,
+    ):
+        """Retry one exact candidate after a count verification mismatch.
+
+        The operation begins by deleting rows for the candidate Manifest only,
+        so replaying it cannot mutate the currently active generation. Other
+        TypeDB failures keep the normal repository retry policy unchanged.
+        """
+
+        telemetry = timing if isinstance(timing, dict) else {}
+        scope_verification = verification if isinstance(verification, dict) else {}
+        retry_transient = lambda error: typedb_error_code(error) in {  # noqa: E731
+            "typedbConnectionError",
+            "typedbTimeout",
+        }
+        try:
+            return self.with_typedb_retries(operation, retry_if=retry_transient)
+        except Exception as error:
+            if typedb_error_code(error) != "typedbCandidateVerificationError":
+                raise
+            telemetry["candidateVerificationRetryAttempted"] = True
+            telemetry["candidateVerificationRetryCount"] = 1
+            telemetry["candidateVerificationFirstFailure"] = {
+                "reason": str(error)[:220],
+                "failedScopeIds": sorted(
+                    scope_id
+                    for scope_id, value in scope_verification.items()
+                    if str((value or {}).get("status") or "") != "ok"
+                ),
+                "scopeVerification": {
+                    scope_id: dict(value or {})
+                    for scope_id, value in scope_verification.items()
+                    if str((value or {}).get("status") or "") != "ok"
+                },
+            }
+            scope_verification.clear()
+            return self.with_typedb_retries(operation, retry_if=retry_transient)
+
+    def with_typedb_retries(self, operation, retry_if=None):
         attempts = max(1, self.retry_count + 1)
         last_error = None
         for index in range(attempts):
@@ -8008,7 +8067,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 # same instance only repeats the stall; drop it before the
                 # next bounded attempt.
                 self.invalidate_persistent_driver()
-                if index >= attempts - 1:
+                if index >= attempts - 1 or (
+                    callable(retry_if) and not bool(retry_if(error))
+                ):
                     break
                 time.sleep(min(2.0, 0.25 * (index + 1)))
         raise last_error

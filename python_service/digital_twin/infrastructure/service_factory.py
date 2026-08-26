@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import uuid
@@ -166,6 +167,39 @@ from ..domain.statistical_signals import (
 
 
 DISABLED_SETTING_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def ontology_graph_store_epoch(settings=None) -> str:
+    """Return the durable identity of the currently mounted TypeDB store."""
+
+    configured = dict(settings or {})
+    explicit = str(configured.get("ontologyGraphStoreEpoch") or "").strip()
+    if explicit:
+        return explicit
+    marker = {}
+    try:
+        marker = json.loads(
+            (data_dir() / "typedb-retention.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        marker = {}
+    store_epoch = str(marker.get("graphStoreEpoch") or "").strip()
+    if not store_epoch:
+        timestamps = [
+            str(marker.get(key) or "").strip()
+            for key in [
+                "blueGreenCutoverActivatedAt",
+                "blueGreenCutoverAt",
+                "blueGreenRollbackAt",
+            ]
+            if str(marker.get(key) or "").strip()
+        ]
+        store_epoch = max(timestamps, default="initial-store")
+    return "|".join([
+        str(configured.get("typedbAddress") or "127.0.0.1:1729").strip(),
+        str(configured.get("typedbDatabase") or "orbit_alpha_ontology").strip(),
+        store_epoch,
+    ])
 
 
 def ontology_graph_single_writer_enabled(settings=None) -> bool:
@@ -1380,7 +1414,10 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
 def build_ontology_maintenance_runner(settings=None) -> OntologyMaintenanceRunner:
     """Build the isolated, low-priority scoped ABox retention worker."""
 
-    configured_settings = settings or runtime_settings()
+    configured_settings = dict(settings or runtime_settings())
+    configured_settings["_ontologyGraphStoreEpoch"] = ontology_graph_store_epoch(
+        configured_settings
+    )
     store_settings = dict(configured_settings)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"

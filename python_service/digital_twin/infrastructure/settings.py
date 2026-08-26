@@ -193,6 +193,9 @@ TEXT_SETTING_KEYS = [
     "ontologyProjectionGraphPersistentCacheTtlSeconds",
     "ontologyProjectionGraphPersistentCacheMaxEntries",
     "ontologyProjectionGraphPersistentCacheMaxPayloadBytes",
+    "ontologyProjectionRuntimeContextCacheEnabled",
+    "ontologyProjectionRuntimeContextCacheTtlSeconds",
+    "ontologyProjectionRuntimeContextCacheMaxEntries",
     "ontologyDecisionEpisodeContextPerSymbolLimit",
     "ontologyDecisionEpisodeContextMaxEpisodes",
     "ontologyDecisionEpisodeContextHypothesisLimit",
@@ -1961,6 +1964,21 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "ontologyProjectionGraphPersistentCacheMaxPayloadBytes",
             "ONTOLOGY_PROJECTION_GRAPH_PERSISTENT_CACHE_MAX_PAYLOAD_BYTES",
             str(8 * 1024 * 1024),
+        ),
+        "ontologyProjectionRuntimeContextCacheEnabled": value(
+            "ontologyProjectionRuntimeContextCacheEnabled",
+            "ONTOLOGY_PROJECTION_RUNTIME_CONTEXT_CACHE_ENABLED",
+            "1",
+        ),
+        "ontologyProjectionRuntimeContextCacheTtlSeconds": value(
+            "ontologyProjectionRuntimeContextCacheTtlSeconds",
+            "ONTOLOGY_PROJECTION_RUNTIME_CONTEXT_CACHE_TTL_SECONDS",
+            "120",
+        ),
+        "ontologyProjectionRuntimeContextCacheMaxEntries": value(
+            "ontologyProjectionRuntimeContextCacheMaxEntries",
+            "ONTOLOGY_PROJECTION_RUNTIME_CONTEXT_CACHE_MAX_ENTRIES",
+            "64",
         ),
         "ontologyDecisionEpisodeContextPerSymbolLimit": value(
             "ontologyDecisionEpisodeContextPerSymbolLimit",

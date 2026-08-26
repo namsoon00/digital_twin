@@ -655,6 +655,51 @@ class SharedMarketWorldProjectionCoordinator:
 SHARED_MARKET_WORLD_PROJECTION_COORDINATOR = SharedMarketWorldProjectionCoordinator()
 
 
+class SharedProjectionRuntimeContextCache:
+    """Reuse immutable runtime context for one exact source boundary briefly."""
+
+    def __init__(self):
+        self.lock = Lock()
+        self.entries: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
+
+    def get(self, key: str, ttl_seconds: float) -> Dict[str, object]:
+        if not key or ttl_seconds <= 0:
+            return {"status": "disabled"}
+        now = time.monotonic()
+        with self.lock:
+            expired = [
+                entry_key
+                for entry_key, entry in self.entries.items()
+                if now - float(entry.get("createdMonotonic") or 0) > ttl_seconds
+            ]
+            for entry_key in expired:
+                self.entries.pop(entry_key, None)
+            entry = self.entries.pop(key, None)
+            if not isinstance(entry, dict):
+                return {"status": "miss"}
+            self.entries[key] = entry
+            return {
+                "status": "hit",
+                "ageMs": int((now - float(entry.get("createdMonotonic") or now)) * 1000),
+                "context": deepcopy(entry.get("context") or {}),
+            }
+
+    def put(self, key: str, context: Dict[str, object], max_entries: int) -> None:
+        if not key or max_entries <= 0:
+            return
+        with self.lock:
+            self.entries.pop(key, None)
+            self.entries[key] = {
+                "createdMonotonic": time.monotonic(),
+                "context": deepcopy(context or {}),
+            }
+            while len(self.entries) > max_entries:
+                self.entries.popitem(last=False)
+
+
+SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE = SharedProjectionRuntimeContextCache()
+
+
 class SharedPortfolioGraphAssemblyCache:
     """Reuse one immutable source snapshot's pure ABox assembly briefly.
 
@@ -821,6 +866,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
 PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v10-model-input-routing"
+PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
 
@@ -1254,6 +1300,7 @@ class PortfolioOntologyProjectionRecorder:
             if str(account_id or "") and isinstance(context, dict)
         }
         self.last_runtime_contexts: Dict[str, Dict[str, object]] = {}
+        self.last_runtime_context_cache_status: Dict[str, Dict[str, object]] = {}
         self.investment_domain_store = investment_domain_store
         self.settings = dict(settings or {})
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
@@ -4158,6 +4205,56 @@ class PortfolioOntologyProjectionRecorder:
             return False
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
+    def runtime_context_cache_enabled(self) -> bool:
+        value = self.settings.get("ontologyProjectionRuntimeContextCacheEnabled")
+        if value is None:
+            return False
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def runtime_context_cache_ttl_seconds(self) -> float:
+        try:
+            value = float(str(self.settings.get("ontologyProjectionRuntimeContextCacheTtlSeconds") or "120"))
+        except (TypeError, ValueError):
+            value = 120.0
+        return max(1.0, min(600.0, value))
+
+    def runtime_context_cache_max_entries(self) -> int:
+        try:
+            value = int(float(str(self.settings.get("ontologyProjectionRuntimeContextCacheMaxEntries") or "64")))
+        except (TypeError, ValueError):
+            value = 64
+        return max(1, min(256, value))
+
+    def runtime_context_cache_key(
+        self,
+        snapshot: AccountSnapshot,
+        active_tbox: Dict[str, object],
+        target_symbols: Iterable[object] = None,
+    ) -> str:
+        source_snapshot = projection_source_snapshot(snapshot)
+        metadata = dict(source_snapshot.get("metadata") or {})
+        investment_brain = dict(metadata.get("investmentBrain") or {})
+        investment_brain.pop("outcomeObservation", None)
+        if investment_brain:
+            metadata["investmentBrain"] = investment_brain
+        else:
+            metadata.pop("investmentBrain", None)
+        source_snapshot["metadata"] = metadata
+        payload = {
+            "version": PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION,
+            "namespace": self.graph_assembly_cache_namespace(),
+            "sourceSnapshot": stable_value(source_snapshot),
+            "settings": stable_value(self.settings),
+            "activeTBox": stable_value(active_tbox),
+            "targetSymbols": sorted({
+                str(symbol or "").upper().strip()
+                for symbol in target_symbols or []
+                if str(symbol or "").strip()
+            }),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     def graph_assembly_cache_ttl_seconds(self) -> float:
         try:
             value = float(str(self.settings.get("ontologyProjectionGraphCacheTtlSeconds") or "45"))
@@ -4395,6 +4492,15 @@ class PortfolioOntologyProjectionRecorder:
             runtime_context_packet = {}
         stage_timings["runtimeContextMs"] = int(
             (time.perf_counter() - runtime_context_started) * 1000
+        )
+        runtime_context_cache = dict(
+            self.last_runtime_context_cache_status.get(str(snapshot.account_id or "")) or {}
+        )
+        stage_timings["runtimeContextCacheHit"] = (
+            1 if str(runtime_context_cache.get("status") or "") == "hit" else 0
+        )
+        stage_timings["runtimeContextCacheAgeMs"] = int(
+            runtime_context_cache.get("ageMs") or 0
         )
         emit("runtime_context.done", runtimeMs=stage_timings["runtimeContextMs"])
         decision_memory = (
@@ -7876,6 +7982,7 @@ class PortfolioOntologyProjectionRecorder:
         if override:
             frozen = frozen_projection_runtime_context(override)
             self.last_runtime_contexts[account_id] = frozen
+            self.last_runtime_context_cache_status[account_id] = {"status": "override"}
             return deepcopy(frozen)
 
         def emit(stage: str, **details) -> None:
@@ -7888,6 +7995,28 @@ class PortfolioOntologyProjectionRecorder:
 
         if active_tbox is None:
             active_tbox = self.active_tbox_context()
+        cache_enabled = self.runtime_context_cache_enabled()
+        cache_key = self.runtime_context_cache_key(
+            snapshot,
+            active_tbox,
+            target_symbols=target_symbols,
+        ) if cache_enabled else ""
+        cache_result = SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE.get(
+            cache_key,
+            self.runtime_context_cache_ttl_seconds(),
+        ) if cache_enabled else {"status": "disabled"}
+        self.last_runtime_context_cache_status[account_id] = {
+            "status": str(cache_result.get("status") or "miss"),
+            "ageMs": int(cache_result.get("ageMs") or 0),
+        }
+        emit(
+            "cache." + str(cache_result.get("status") or "miss"),
+            ageMs=int(cache_result.get("ageMs") or 0),
+        )
+        if str(cache_result.get("status") or "") == "hit":
+            frozen = frozen_projection_runtime_context(cache_result.get("context") or {})
+            self.last_runtime_contexts[account_id] = frozen
+            return deepcopy(frozen)
         as_of = str(snapshot.generated_at or "").strip()
         snapshot_seed = "|".join([str(snapshot.account_id or ""), as_of or "unknown"])
         selected_symbols = {
@@ -8026,6 +8155,12 @@ class PortfolioOntologyProjectionRecorder:
         # could let infrastructure wiring affect factual graph construction.
         frozen = frozen_projection_runtime_context(result)
         self.last_runtime_contexts[account_id] = frozen
+        if cache_enabled:
+            SHARED_PROJECTION_RUNTIME_CONTEXT_CACHE.put(
+                cache_key,
+                frozen,
+                self.runtime_context_cache_max_entries(),
+            )
         return deepcopy(frozen)
 
     @staticmethod

@@ -587,6 +587,7 @@ def build_company_knowledge(
     revision_source = json.dumps(revision_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     payload["factRevision"] = hashlib.sha256(revision_source.encode("utf-8")).hexdigest()[:20]
     payload["materialRevision"] = _material_revision(payload)
+    payload["materialSectionRevisions"] = _material_section_revisions(payload)
     return payload if sources or annual or quarterly else {}
 
 
@@ -594,6 +595,7 @@ def _revision_payload(payload: Mapping[str, object]) -> Dict[str, object]:
     result = dict(payload or {})
     result.pop("factRevision", None)
     result.pop("materialRevision", None)
+    result.pop("materialSectionRevisions", None)
     result["provenance"] = [
         {"provider": item.get("provider"), "scope": item.get("scope")}
         for item in result.get("provenance", [])
@@ -603,6 +605,14 @@ def _revision_payload(payload: Mapping[str, object]) -> Dict[str, object]:
 
 
 def _material_revision(payload: Mapping[str, object]) -> str:
+    result = _material_revision_payload(payload)
+    source = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
+
+
+def _material_revision_payload(payload: Mapping[str, object]) -> Dict[str, object]:
+    """Return the normalized company facts used by material-change routing."""
+
     result = _revision_payload(payload)
     profile = dict(result.get("profile") or {}) if isinstance(result.get("profile"), Mapping) else {}
     # Market capitalization follows the quote and is already represented by
@@ -618,8 +628,44 @@ def _material_revision(payload: Mapping[str, object]) -> str:
         )
         for field, value in valuation.items()
     }
-    source = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:20]
+    return result
+
+
+def _material_section_revisions(payload: Mapping[str, object]) -> Dict[str, str]:
+    """Fingerprint independently routable company-fact sections.
+
+    The aggregate material revision remains the compatibility boundary. These
+    section revisions only tell the reasoning ingress which factual families
+    changed, so a valuation refresh cannot reopen governance, financial, and
+    capital rules for the same symbol.
+    """
+
+    material = _material_revision_payload(payload)
+    sections = {
+        "profile": {
+            "companyName": material.get("companyName"),
+            "profile": material.get("profile") or {},
+        },
+        "valuation": {
+            "valuation": material.get("valuation") or {},
+            "valuationUnits": material.get("valuationUnits") or {},
+        },
+        "financials": material.get("financials") or {},
+        "governance": material.get("governance") or {},
+        "ownership": material.get("ownership") or {},
+        "capital": material.get("capital") or {},
+        "coverage": {
+            "schemaVersion": material.get("schemaVersion"),
+            "coverage": material.get("coverage") or {},
+            "provenance": material.get("provenance") or [],
+        },
+    }
+    return {
+        section: hashlib.sha256(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()[:20]
+        for section, value in sections.items()
+    }
 
 
 def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, object]:
@@ -707,6 +753,7 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
     revision_source = json.dumps(_revision_payload(result), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     result["factRevision"] = hashlib.sha256(revision_source.encode("utf-8")).hexdigest()[:20]
     result["materialRevision"] = _material_revision(result)
+    result["materialSectionRevisions"] = _material_section_revisions(result)
     return result
 
 
@@ -826,6 +873,7 @@ def company_prompt_context(
         "companyName": payload.get("companyName") or normalized_symbol,
         "factRevision": payload.get("factRevision"),
         "materialRevision": payload.get("materialRevision"),
+        "materialSectionRevisions": dict(payload.get("materialSectionRevisions") or {}),
         "judgmentUse": "active-company-rule-only",
         "profile": section("profile", (
             "companyName", "ceoName", "sector", "industry", "establishedDate",

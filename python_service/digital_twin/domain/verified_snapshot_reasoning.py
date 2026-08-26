@@ -34,7 +34,7 @@ from .reasoning_source_snapshot import reasoning_source_snapshot_id
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v3"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v4-company-section-routing"
 
 
 # Deliberately keep the source contract close to the Position domain object.
@@ -145,6 +145,16 @@ SUPPLEMENTAL_EXTERNAL_GROUPS = {
 # single state change into a queue flood.
 CONTEXT_ONLY_EXTERNAL_GROUPS = {
     "quality", "freshness", "provenance", "statuses", "macro", "fxRates",
+}
+
+COMPANY_KNOWLEDGE_SECTION_FACT_TYPES = {
+    "profile": {"CompanyProfile"},
+    "valuation": {"ValuationObservation"},
+    "financials": {"FinancialFact"},
+    "governance": {"GovernanceChange"},
+    "ownership": {"GovernanceChange"},
+    "capital": {"CapitalStructureChange"},
+    "coverage": {"DataQuality"},
 }
 
 
@@ -458,11 +468,10 @@ def _changed_external_groups(previous: Mapping[str, object], current: Mapping[st
     groups = []
     for key in sorted(set(previous) | set(current)):
         if key == "companyKnowledge":
-            before_value = _company_knowledge_material_revisions(previous.get(key))
-            after_value = _company_knowledge_material_revisions(current.get(key))
-        else:
-            before_value = previous.get(key)
-            after_value = current.get(key)
+            groups.extend(_changed_company_knowledge_groups(previous.get(key), current.get(key)))
+            continue
+        before_value = previous.get(key)
+        after_value = current.get(key)
         before = fact_signature({key: before_value}, EXTERNAL_REFRESH_FIELDS)
         after = fact_signature({key: after_value}, EXTERNAL_REFRESH_FIELDS)
         if before != after:
@@ -470,17 +479,36 @@ def _changed_external_groups(previous: Mapping[str, object], current: Mapping[st
     return groups
 
 
-def _company_knowledge_material_revisions(value: object) -> Dict[str, object]:
-    rows = value if isinstance(value, Mapping) else {}
-    return {
-        str(symbol).upper(): (
-            row.get("materialRevision")
-            or row.get("factRevision")
-            or row
-        )
-        for symbol, row in rows.items()
-        if isinstance(row, Mapping)
-    }
+def _changed_company_knowledge_groups(previous: object, current: object) -> List[str]:
+    """Return exact company sections, with a conservative legacy fallback."""
+
+    before_rows = previous if isinstance(previous, Mapping) else {}
+    after_rows = current if isinstance(current, Mapping) else {}
+    changed_sections = set()
+    legacy_change = False
+    for symbol in sorted(set(before_rows) | set(after_rows)):
+        before = before_rows.get(symbol) if isinstance(before_rows.get(symbol), Mapping) else {}
+        after = after_rows.get(symbol) if isinstance(after_rows.get(symbol), Mapping) else {}
+        before_sections = before.get("materialSectionRevisions") if isinstance(before.get("materialSectionRevisions"), Mapping) else {}
+        after_sections = after.get("materialSectionRevisions") if isinstance(after.get("materialSectionRevisions"), Mapping) else {}
+        if before_sections and after_sections:
+            changed_sections.update(
+                section
+                for section in set(before_sections) | set(after_sections)
+                if before_sections.get(section) != after_sections.get(section)
+            )
+            continue
+        before_revision = before.get("materialRevision") or before.get("factRevision") or before
+        after_revision = after.get("materialRevision") or after.get("factRevision") or after
+        if before_revision != after_revision:
+            legacy_change = True
+    if legacy_change:
+        return ["companyKnowledge"]
+    return [
+        "companyKnowledge." + section
+        for section in sorted(changed_sections)
+        if section in COMPANY_KNOWLEDGE_SECTION_FACT_TYPES
+    ]
 
 
 def _reasoning_external_groups(
@@ -532,6 +560,11 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
             "CapitalStructureChange",
             "ValuationObservation",
         })
+    for group in groups:
+        if not str(group).startswith("companyKnowledge."):
+            continue
+        section = str(group).split(".", 1)[1]
+        selected.update(COMPANY_KNOWLEDGE_SECTION_FACT_TYPES.get(section, set()))
     if groups & {"quality", "freshness", "provenance", "statuses"}:
         selected.add("DataQuality")
     return sorted(selected or {"PortfolioSnapshot"})

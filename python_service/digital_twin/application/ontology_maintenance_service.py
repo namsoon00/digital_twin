@@ -39,7 +39,7 @@ class OntologyMaintenanceRunner:
     state in MySQL so restarts continue the round-robin world order.
     """
 
-    state_contract = "ontology-maintenance-state-v10"
+    state_contract = "ontology-maintenance-state-v11"
 
     def __init__(
         self,
@@ -888,12 +888,45 @@ class OntologyMaintenanceRunner:
 
     def state(self) -> Dict[str, object]:
         if not self.state_store or not hasattr(self.state_store, "load"):
-            return {}
+            return self.reconcile_graph_store_state({})
         try:
             value = self.state_store.load()
-            return dict(value or {}) if isinstance(value, dict) else {}
+            state = dict(value or {}) if isinstance(value, dict) else {}
+            return self.reconcile_graph_store_state(state)
         except Exception:  # noqa: BLE001 - a missing operational audit store must not block cleanup.
-            return {}
+            return self.reconcile_graph_store_state({})
+
+    def graph_store_epoch(self) -> str:
+        return text(
+            self.settings.get("_ontologyGraphStoreEpoch")
+            or self.settings.get("ontologyGraphStoreEpoch")
+        )
+
+    def reconcile_graph_store_state(self, state: Dict[str, object]) -> Dict[str, object]:
+        """Discard cursors measured against a TypeDB store that is no longer mounted."""
+
+        current = self.graph_store_epoch()
+        values = dict(state or {}) if isinstance(state, dict) else {}
+        if not current:
+            return values
+        previous = text(values.get("graphStoreEpoch"))
+        if previous == current:
+            return values
+        had_durable_state = bool(values)
+        reset_count = max(0, integer(values.get("graphStoreResetCount")))
+        return {
+            "contract": self.state_contract,
+            "graphStoreEpoch": current,
+            "graphStoreEpochChangedAt": utc_now_iso(),
+            "graphStoreResetCount": reset_count + (1 if had_durable_state else 0),
+            "previousGraphStoreEpoch": previous,
+            "graphStoreStateReset": had_durable_state,
+            "graphStoreStateResetReason": (
+                "TypeDB graph store epoch changed; stale manifest inventory and maintenance cursors were discarded."
+                if had_durable_state
+                else ""
+            ),
+        }
 
     def save_state(self, payload: Dict[str, object]) -> None:
         if not self.state_store:
@@ -903,7 +936,11 @@ class OntologyMaintenanceRunner:
             writer = getattr(self.state_store, "save", None)
         if not callable(writer):
             return
-        writer(dict(payload or {}))
+        values = dict(payload or {})
+        epoch = self.graph_store_epoch()
+        if epoch:
+            values["graphStoreEpoch"] = epoch
+        writer(values)
 
     def worlds(self) -> List[Dict[str, object]]:
         reader = getattr(self.ontology_repository, "list_ontology_worlds", None)
@@ -1385,6 +1422,9 @@ class OntologyMaintenanceRunner:
             known_world_ids.add(last_world_id)
         return {
             "contract": self.state_contract,
+            "graphStoreEpoch": text(state.get("graphStoreEpoch")),
+            "graphStoreStateReset": bool(state.get("graphStoreStateReset")),
+            "graphStoreStateResetReason": text(state.get("graphStoreStateResetReason")),
             "enabled": self.enabled(),
             "worldTypes": sorted(self.configured_world_types()),
             # Status is an operational read model. Enumerating live TypeDB

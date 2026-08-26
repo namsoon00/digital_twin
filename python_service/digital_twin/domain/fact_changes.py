@@ -57,7 +57,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v4"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v5-company-section-routing"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},

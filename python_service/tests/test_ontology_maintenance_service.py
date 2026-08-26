@@ -129,6 +129,53 @@ class IntegrityAuditRepository(FakeOntologyRepository):
 
 
 class OntologyMaintenanceRunnerTests(unittest.TestCase):
+    def test_graph_store_epoch_change_discards_stale_maintenance_inventory(self):
+        store = FakeStateStore({
+            "graphStoreEpoch": "store:old",
+            "knownWorlds": [{"worldId": "portfolio:local:main", "worldType": "portfolio"}],
+            "nextWorldId": "portfolio:local:main",
+            "backlogByWorld": {
+                "portfolio:local:main": {
+                    "lastInactiveManifestCount": 455,
+                    "criticalDrainRuns": 978,
+                },
+            },
+            "scopeIntegrityAuditByWorld": {"portfolio:local:main": {"nextCursor": 120}},
+        })
+        runner = OntologyMaintenanceRunner(
+            FakeOntologyRepository(),
+            state_store=store,
+            settings={"_ontologyGraphStoreEpoch": "store:new"},
+        )
+
+        status = runner.status()
+
+        self.assertEqual("store:new", status["graphStoreEpoch"])
+        self.assertTrue(status["graphStoreStateReset"])
+        self.assertEqual({}, status["backlogByWorld"])
+        self.assertEqual([], status["knownWorldIds"])
+        self.assertEqual({}, status["scopeIntegrityAudit"]["byWorld"])
+
+    def test_queue_deferral_persists_reconciled_graph_store_epoch(self):
+        store = FakeStateStore({
+            "graphStoreEpoch": "store:old",
+            "knownWorlds": [{"worldId": "portfolio:local:main", "worldType": "portfolio"}],
+            "backlogByWorld": {"portfolio:local:main": {"lastInactiveManifestCount": 455}},
+        })
+        runner = OntologyMaintenanceRunner(
+            FakeOntologyRepository(),
+            state_store=store,
+            settings={"_ontologyGraphStoreEpoch": "store:new"},
+            reasoning_queue_probe=lambda: {"effectivePendingCount": 2},
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("deferred-reasoning-queue", result["status"])
+        self.assertEqual("store:new", store.payload["graphStoreEpoch"])
+        self.assertTrue(store.payload["graphStoreStateReset"])
+        self.assertNotIn("backlogByWorld", store.payload)
+
     def test_maintenance_rotates_read_only_scope_integrity_audit_without_full_projection(self):
         repository = IntegrityAuditRepository()
         store = FakeStateStore()

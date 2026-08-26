@@ -83,6 +83,26 @@ def json_value(value: object, fallback):
     return parsed if isinstance(parsed, type(fallback)) else fallback
 
 
+REASONING_HEALTH_LIFECYCLE_KEYS = (
+    "graphStoreProvisioning",
+    "validationStartedAt",
+)
+
+
+def merge_reasoning_deployment_health(
+    existing: Mapping[str, object],
+    incoming: Mapping[str, object],
+) -> Dict[str, object]:
+    """Preserve write-once control-plane fields across worker health writes."""
+
+    merged = dict(incoming or {})
+    current = dict(existing or {})
+    for key in REASONING_HEALTH_LIFECYCLE_KEYS:
+        if key in current and current.get(key) not in (None, "", {}):
+            merged[key] = current[key]
+    return merged
+
+
 def reasoning_worker_process_owner(worker_id: object):
     """Return the host and PID encoded in a managed reasoning worker ID."""
 
@@ -371,10 +391,20 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
         return self.control()
 
     def update_health(self, deployment_id: str, health: Mapping[str, object]) -> None:
-        with self.connect() as connection:
+        clean_deployment_id = str(deployment_id or "")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT last_health_json FROM reasoning_engine_deployments "
+                "WHERE deployment_id = %s FOR UPDATE",
+                (clean_deployment_id,),
+            ).fetchone() or {}
+            merged_health = merge_reasoning_deployment_health(
+                json_value(row.get("last_health_json"), {}),
+                health,
+            )
             connection.execute(
                 "UPDATE reasoning_engine_deployments SET last_health_json = %s, updated_at = %s WHERE deployment_id = %s",
-                (canonical_json(dict(health or {})), iso_utc(), str(deployment_id or "")),
+                (canonical_json(merged_health), iso_utc(), clean_deployment_id),
             )
 
     def update_capabilities(
@@ -2146,6 +2176,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         lookback: int = 200,
         release_fingerprint: str = "",
         validation_cohort_id: str = "",
+        completed_since: str = "",
     ) -> Dict[str, object]:
         params = []
         where = ""
@@ -2160,6 +2191,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         if str(validation_cohort_id or ""):
             cohort_conditions.append("validation_cohort_id = %s")
             cohort_params.append(str(validation_cohort_id or ""))
+        if str(completed_since or ""):
+            cohort_conditions.append("completed_at >= %s")
+            cohort_params.append(str(completed_since or ""))
         cohort_where = where
         for condition in cohort_conditions:
             cohort_where += (" AND " if cohort_where else " WHERE ") + condition

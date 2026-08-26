@@ -343,6 +343,13 @@ A V2 independent reasoning candidate cannot become active unless all of these ho
 - V2 p95 execution time, queue-wait p95, oldest pending age, and latest run
   freshness are within their configured limits.
 
+The first healthy transition from `provisioning` or `replaying` to `shadow`
+records `validationStartedAt`. Promotion samples are limited to jobs completed
+at or after that timestamp. Schema installation, initial release hydration, and
+other one-time preparation work therefore remain visible in historical
+diagnostics without contaminating the steady-state promotion SLO. Failures and
+slow runs after validation starts continue to block promotion.
+
 `candidate` and `promote` commands calculate these gates from V2's own durable
 job history. V1 outcome equality is not a requirement for an independently
 evolving engine. The legacy parity report remains diagnostic only.

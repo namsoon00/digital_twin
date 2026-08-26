@@ -144,14 +144,22 @@ class ReasoningEnginePlatformService:
     ) -> Dict[str, object]:
         lookback = self.int_setting("reasoningEnginePromotionComparisonLookback", 200, 1, 2000)
         parameters = inspect.signature(self.independent_job_store.summary).parameters
-        if "release_fingerprint" not in parameters:
-            return self.independent_job_store.summary(deployment_id, lookback=lookback)
-        return self.independent_job_store.summary(
-            deployment_id,
-            lookback=lookback,
-            release_fingerprint=str(release.get("releaseFingerprint") or ""),
-            validation_cohort_id=str(release.get("validationCohortId") or ""),
-        )
+        kwargs = {"lookback": lookback}
+        if "release_fingerprint" in parameters:
+            kwargs["release_fingerprint"] = str(
+                release.get("releaseFingerprint") or ""
+            )
+        if "validation_cohort_id" in parameters:
+            kwargs["validation_cohort_id"] = str(
+                release.get("validationCohortId") or ""
+            )
+        if "completed_since" in parameters:
+            deployment = dict(self.registry.get(deployment_id) or {})
+            health = dict(deployment.get("health") or {})
+            kwargs["completed_since"] = str(
+                health.get("validationStartedAt") or ""
+            )
+        return self.independent_job_store.summary(deployment_id, **kwargs)
 
     def descriptors(self):
         from ..domain.ontology_rulebox_release_manifest import RULEBOX_RELEASE_MANIFEST_VERSION
@@ -1279,7 +1287,20 @@ class ReasoningEnginePlatformService:
     ) -> Dict[str, object]:
         row = self.registry.get(deployment_id)
         status = str(row.get("status") or "")
-        health_status = str((row.get("health") or {}).get("status") or "").lower()
+        health = dict(row.get("health") or {})
+        health_status = str(health.get("status") or "").lower()
+        validation_window_statuses = {"provisioning", "replaying", "shadow", "candidate"}
+        if (
+            status in validation_window_statuses
+            and health_status in {"ready", "healthy"}
+            and not str(health.get("validationStartedAt") or "").strip()
+        ):
+            update_health = getattr(self.registry, "update_health", None)
+            if callable(update_health):
+                health["validationStartedAt"] = (
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                )
+                update_health(deployment_id, health)
         if status in {"provisioning", "replaying"} and health_status in {"ready", "healthy"}:
             self.registry.transition(deployment_id, "shadow")
         readiness = self.promotion_readiness(

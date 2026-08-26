@@ -13,7 +13,10 @@ from digital_twin.domain.reasoning_engine_versions import (
     promotion_blockers,
     reasoning_release_identity,
 )
-from digital_twin.infrastructure.mysql_versioned_runtime import MySQLReasoningEngineJobStore
+from digital_twin.infrastructure.mysql_versioned_runtime import (
+    MySQLReasoningEngineJobStore,
+    merge_reasoning_deployment_health,
+)
 
 
 def descriptor(status="candidate"):
@@ -29,6 +32,24 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_reasoning_health_merge_preserves_write_once_lifecycle_markers(self):
+        result = merge_reasoning_deployment_health(
+            {
+                "status": "ready",
+                "validationStartedAt": "2026-08-26T07:52:00Z",
+                "graphStoreProvisioning": {"mode": "reuse-existing"},
+            },
+            {"status": "degraded", "lastError": "temporary"},
+        )
+
+        self.assertEqual("degraded", result["status"])
+        self.assertEqual("temporary", result["lastError"])
+        self.assertEqual("2026-08-26T07:52:00Z", result["validationStartedAt"])
+        self.assertEqual(
+            {"mode": "reuse-existing"},
+            result["graphStoreProvisioning"],
+        )
+
     def test_failure_health_resolves_an_older_failure_after_newer_success(self):
         rows = [
             {
@@ -1360,12 +1381,13 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         class Registry:
             def __init__(self):
                 self.status = "provisioning"
+                self.health = {"status": "ready", "independentExecution": True}
 
             def get(self, deployment_id):
                 return {
                     "deploymentId": deployment_id,
                     "status": self.status,
-                    "health": {"status": "ready", "independentExecution": True},
+                    "health": dict(self.health),
                     "releaseBundle": {},
                 }
 
@@ -1374,9 +1396,17 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 self.status = status
                 return self.get("ontology-v2-shadow")
 
+            def update_health(self, deployment_id, health):
+                del deployment_id
+                self.health = dict(health)
+
         class Jobs:
-            def summary(self, deployment_id, lookback=200):
+            def __init__(self):
+                self.completed_since = ""
+
+            def summary(self, deployment_id, lookback=200, completed_since=""):
                 del deployment_id, lookback
+                self.completed_since = completed_since
                 return {
                     "sampleCount": 8,
                     "successfulRunCount": 8,
@@ -1393,16 +1423,71 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 }
 
         registry = Registry()
+        jobs = Jobs()
         platform = ReasoningEnginePlatformService(
             registry,
             {"reasoningEngineV2IndependentEnabled": "1"},
-            independent_job_store=Jobs(),
+            independent_job_store=jobs,
         )
 
         result = platform.mark_candidate("ontology-v2-shadow")
 
         self.assertEqual("candidate", result["status"])
         self.assertEqual("candidate", registry.status)
+        self.assertTrue(registry.health["validationStartedAt"].endswith("Z"))
+        self.assertEqual(
+            registry.health["validationStartedAt"],
+            jobs.completed_since,
+        )
+
+    def test_mark_candidate_restores_a_missing_shadow_validation_window(self):
+        class Registry:
+            def __init__(self):
+                self.health = {"status": "ready", "independentExecution": True}
+
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": dict(self.health),
+                    "releaseBundle": {},
+                }
+
+            def update_health(self, deployment_id, health):
+                del deployment_id
+                self.health = dict(health)
+
+        class Jobs:
+            def __init__(self):
+                self.completed_since = ""
+
+            def summary(self, deployment_id, lookback=200, completed_since=""):
+                del deployment_id, lookback
+                self.completed_since = completed_since
+                return {
+                    "successfulRunCount": 0,
+                    "traceCompleteRunCount": 0,
+                    "candidateEventRunCount": 0,
+                    "distinctSymbolCount": 0,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "pendingCount": 0,
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        registry = Registry()
+        jobs = Jobs()
+        platform = ReasoningEnginePlatformService(
+            registry,
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=jobs,
+        )
+
+        result = platform.mark_candidate("ontology-v2-shadow")
+
+        self.assertEqual("blocked", result["status"])
+        self.assertTrue(registry.health["validationStartedAt"].endswith("Z"))
+        self.assertEqual(registry.health["validationStartedAt"], jobs.completed_since)
 
     def test_current_status_exposes_only_active_v2_and_unique_run_metrics(self):
         platform = ReasoningEnginePlatformService(object(), {

@@ -950,6 +950,58 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             result["deployment"]["graphStoreBinding"].startswith("orbit_alpha_ontology_candidate_")
         )
 
+    def test_register_v2_release_does_not_reuse_an_existing_non_retired_candidate_database(self):
+        class Registry:
+            def __init__(self):
+                self.rows = {
+                    "v2-active": {
+                        "deploymentId": "v2-active",
+                        "engineVersion": "v2",
+                        "status": "active",
+                        "graphStoreBinding": "typedb-production",
+                    },
+                    "v2-stale-shadow": {
+                        "deploymentId": "v2-stale-shadow",
+                        "engineVersion": "v2",
+                        "status": "shadow",
+                        "graphStoreBinding": "typedb-shadow",
+                    },
+                }
+                self.control_value = EngineControlState("v2-active", "v2-active", "", 4)
+
+            def get(self, deployment_id):
+                return self.rows.get(deployment_id, {})
+
+            def list(self):
+                return list(self.rows.values())
+
+            def control(self):
+                return self.control_value
+
+            def upsert(self, descriptor):
+                self.rows[descriptor.deployment_id] = descriptor.to_dict()
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                del expected_version
+                self.control_value = EngineControlState(active, delivery, candidate, 5)
+                return self.control_value
+
+            def update_capabilities(self, deployment_id, capabilities):
+                self.rows[deployment_id]["capabilities"] = dict(capabilities)
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineShadowTypeDbDatabase": "typedb-shadow"},
+        )
+
+        result = platform.register_v2_release("v2-candidate", "release-candidate")
+
+        self.assertEqual("registered", result["status"])
+        self.assertNotEqual("typedb-shadow", result["deployment"]["graphStoreBinding"])
+        self.assertTrue(
+            result["deployment"]["graphStoreBinding"].startswith("orbit_alpha_ontology_candidate_")
+        )
+
     def test_active_v2_status_reads_the_configured_worker_queue_not_rollback_queue(self):
         class Registry:
             def __init__(self):

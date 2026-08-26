@@ -149,6 +149,64 @@ _RULEBOX_BOOTSTRAP_CATALOG: Dict[str, object] = {}
 RULE_EVALUATION_NAMESPACE_VERSION = "rule-evaluation-namespace-v3"
 
 
+def shared_premise_evaluation_plan(
+    selection_context: Mapping[str, object],
+    dynamic_preflight: Mapping[str, object],
+    shared_rule_count: int,
+) -> Dict[str, object]:
+    """Describe the work TypeDB must actually perform for this generation.
+
+    The event dependency preflight reports rules invalidated by the incoming
+    change.  A target without a complete result-slot catalog must still run the
+    full shared catalog once so deferred non-matches are proven.  Keeping both
+    counts prevents a cold-target warmup from being reported as a two-rule
+    incremental turn.
+    """
+
+    context = dict(selection_context or {})
+    preflight = dict(dynamic_preflight or {})
+    full_rule_count = max(0, int(shared_rule_count or 0))
+    direct_change_rule_count = max(
+        0,
+        int(preflight.get("candidateRuleCount") or 0),
+    )
+    incomplete_symbols = sorted({
+        str(value or "").upper().strip()
+        for value in context.get("incompleteSymbols") or []
+        if str(value or "").strip()
+    })
+    cold_target_symbols = sorted({
+        str(value or "").upper().strip()
+        for value in context.get("coldTargetSymbols") or []
+        if str(value or "").strip()
+    })
+    coverage_complete = bool(context.get("coverageComplete", True))
+    reusable = bool(context.get("reusable"))
+    reuse_eligible = bool(preflight.get("sharedReuseEligible"))
+
+    if reuse_eligible and reusable and coverage_complete:
+        mode = "reuse-complete-generation"
+        planned_rule_count = 0
+    elif not reusable or not coverage_complete or incomplete_symbols:
+        mode = "full-catalog-cold-target-warmup"
+        planned_rule_count = full_rule_count
+    else:
+        mode = "incremental-dependency-selection"
+        planned_rule_count = min(full_rule_count, direct_change_rule_count)
+
+    return {
+        "mode": mode,
+        "plannedRuleCount": planned_rule_count,
+        "fullRuleCount": full_rule_count,
+        "directChangeCandidateRuleCount": direct_change_rule_count,
+        "resultSlotReusable": reusable,
+        "resultSlotCoverageComplete": coverage_complete,
+        "incompleteSymbols": incomplete_symbols,
+        "coldTargetSymbols": cold_target_symbols,
+        "coldTargetSymbolCount": len(cold_target_symbols),
+    }
+
+
 def compact_staged_abox_activation_lifecycle(
     execution: Dict[str, object],
 ) -> Dict[str, object]:
@@ -1914,12 +1972,30 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages["dynamicPreflightMs"] = int(
             (time.perf_counter() - stage_started) * 1000
         )
+        evaluation_plan = shared_premise_evaluation_plan(
+            selection_context,
+            dynamic_preflight,
+            len(shared_rule_ids),
+        )
+        dynamic_preflight = {
+            **dynamic_preflight,
+            "evaluationPlan": evaluation_plan,
+        }
         progress(
             "preflight.done",
             route=str(dynamic_preflight.get("route") or ""),
-            candidateRuleCount=int(
-                dynamic_preflight.get("candidateRuleCount") or 0
+            candidateRuleCount=int(evaluation_plan["plannedRuleCount"]),
+            directChangeCandidateRuleCount=int(
+                evaluation_plan["directChangeCandidateRuleCount"]
             ),
+            evaluationMode=str(evaluation_plan["mode"]),
+            resultSlotCoverageComplete=bool(
+                evaluation_plan["resultSlotCoverageComplete"]
+            ),
+            coldTargetSymbolCount=int(
+                evaluation_plan["coldTargetSymbolCount"]
+            ),
+            coldTargetSymbols=list(evaluation_plan["coldTargetSymbols"]),
             runtimeMs=runtime_stages["dynamicPreflightMs"],
         )
         if bool(dynamic_preflight.get("sharedReuseEligible")):
@@ -2450,10 +2526,33 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages["totalMs"] = int(
             (time.perf_counter() - started_at) * 1000
         )
+        performance_assessment = ontology_performance_assessment(
+            runtime_stages,
+            self.settings.get("ontologyPerformanceBudgetsMs")
+            if isinstance(self.settings.get("ontologyPerformanceBudgetsMs"), dict)
+            else None,
+        )
+        actual_evaluation_mode = (
+            "incremental-dependency-selection"
+            if bool(execution.get("nativeRuleSelectionApplied"))
+            else "full-catalog-cold-target-warmup"
+            if str(evaluation_plan.get("mode") or "").startswith("full-catalog")
+            else "full-catalog-safe-fallback"
+        )
         progress(
             "done",
             matchedPremiseCount=sum(len(values) for values in premises.values()),
             totalMs=runtime_stages["totalMs"],
+            evaluationMode=actual_evaluation_mode,
+            executedRuleCount=int(
+                execution.get("nativeRuleSelectionExecutedCount") or 0
+            ),
+            fullRuleCount=int(
+                execution.get("nativeRuleSelectionFullRuleCount") or 0
+            ),
+            selectionApplied=bool(
+                execution.get("nativeRuleSelectionApplied")
+            ),
         )
         model_signal_bridge_execution = (
             dict(execution.get("modelSignalBridgeExecution") or {})
@@ -2499,6 +2598,16 @@ class PortfolioOntologyProjectionRecorder:
                 "selectionApplied": bool(
                     execution.get("nativeRuleSelectionApplied")
                 ),
+                "plannedEvaluationMode": str(
+                    evaluation_plan.get("mode") or ""
+                ),
+                "actualEvaluationMode": actual_evaluation_mode,
+                "plannedRuleCount": int(
+                    evaluation_plan.get("plannedRuleCount") or 0
+                ),
+                "directChangeCandidateRuleCount": int(
+                    evaluation_plan.get("directChangeCandidateRuleCount") or 0
+                ),
                 "generationReused": existing_reusable,
                 "reuseMode": existing_reuse_mode,
                 "candidateRuleCount": int(
@@ -2542,6 +2651,7 @@ class PortfolioOntologyProjectionRecorder:
                 ),
             },
             "runtimeStages": runtime_stages,
+            "performanceAssessment": performance_assessment,
             "releaseCatalog": {
                 "source": str(
                     catalog.get("runtimeCatalogSource")

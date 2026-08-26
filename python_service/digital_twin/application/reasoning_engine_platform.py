@@ -61,12 +61,30 @@ class ReasoningEnginePlatformService:
         protected_bindings: Iterable[str],
     ) -> str:
         protected = {str(item or "").strip() for item in protected_bindings if str(item or "").strip()}
+        occupied = set(protected)
+        list_deployments = getattr(self.registry, "list", None)
+        if callable(list_deployments):
+            for row in list_deployments() or []:
+                item = dict(row or {})
+                if str(item.get("deploymentId") or item.get("deployment_id") or "").strip() == str(
+                    deployment_id or ""
+                ).strip():
+                    continue
+                if str(item.get("status") or "").strip().lower() == "retired":
+                    continue
+                binding = str(
+                    item.get("graphStoreBinding")
+                    or item.get("graph_store_binding")
+                    or ""
+                ).strip()
+                if binding:
+                    occupied.add(binding)
         configured = str(
             self.settings.get("reasoningEngineCandidateTypeDbDatabase")
             or self.settings.get("reasoningEngineShadowTypeDbDatabase")
             or ""
         ).strip()
-        if configured and configured not in protected:
+        if configured and configured not in occupied:
             return configured
         digest = hashlib.sha256(
             (str(deployment_id or "") + "|" + str(release_id or "")).encode("utf-8")

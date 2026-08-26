@@ -945,6 +945,8 @@ class ScopedTypeDBInferenceExecutor:
                             "selectionRequested", "selectionApplied",
                             "candidateRuleCount", "executedRuleCount",
                             "deferredRuleCount", "fullRuleCount",
+                            "plannedRuleCount", "directChangeCandidateRuleCount",
+                            "plannedEvaluationMode", "actualEvaluationMode",
                             "generationReused", "reuseMode",
                             "coverageComplete", "partialCatalogProof",
                             "incompleteSymbols", "coldTargetSymbols",
@@ -983,7 +985,7 @@ class ScopedTypeDBInferenceExecutor:
                             "sharedWorkRequired", "sharedReuseEligible",
                             "candidateRuleCount", "sharedRuleCount",
                             "exactRevisionMatch", "priorResultSlotsReusable",
-                            "reasonCodes", "reuseFallbackReason",
+                            "reasonCodes", "reuseFallbackReason", "evaluationPlan",
                         }
                     },
                     "modelSignalBridgeExecution": dict(

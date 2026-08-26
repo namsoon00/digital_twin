@@ -25,6 +25,7 @@ from digital_twin.infrastructure.ontology_projection import (
     PortfolioOntologyProjectionRecorder,
     compact_staged_abox_activation_lifecycle,
     shared_inference_from_result_slot_proof,
+    shared_premise_evaluation_plan,
 )
 
 
@@ -109,6 +110,61 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_shared_premise_evaluation_plan_reports_cold_target_full_catalog(self):
+        plan = shared_premise_evaluation_plan(
+            {
+                "reusable": True,
+                "coverageComplete": False,
+                "incompleteSymbols": ["005930"],
+                "coldTargetSymbols": ["005930"],
+            },
+            {
+                "route": "RUN_SHARED",
+                "candidateRuleCount": 2,
+            },
+            104,
+        )
+
+        self.assertEqual("full-catalog-cold-target-warmup", plan["mode"])
+        self.assertEqual(104, plan["plannedRuleCount"])
+        self.assertEqual(2, plan["directChangeCandidateRuleCount"])
+        self.assertEqual(["005930"], plan["coldTargetSymbols"])
+
+    def test_shared_premise_evaluation_plan_reports_incremental_selection(self):
+        plan = shared_premise_evaluation_plan(
+            {
+                "reusable": True,
+                "coverageComplete": True,
+                "incompleteSymbols": [],
+                "coldTargetSymbols": [],
+            },
+            {
+                "route": "RUN_SHARED",
+                "candidateRuleCount": 2,
+            },
+            104,
+        )
+
+        self.assertEqual("incremental-dependency-selection", plan["mode"])
+        self.assertEqual(2, plan["plannedRuleCount"])
+
+    def test_shared_premise_evaluation_plan_reports_complete_reuse(self):
+        plan = shared_premise_evaluation_plan(
+            {
+                "reusable": True,
+                "coverageComplete": True,
+            },
+            {
+                "route": "REUSE_SHARED",
+                "candidateRuleCount": 0,
+                "sharedReuseEligible": True,
+            },
+            104,
+        )
+
+        self.assertEqual("reuse-complete-generation", plan["mode"])
+        self.assertEqual(0, plan["plannedRuleCount"])
+
     def test_shared_premise_preflight_skips_graph_for_account_only_change(self):
         shared_rule_id = "shared.premise.graph.market.price.v1"
 

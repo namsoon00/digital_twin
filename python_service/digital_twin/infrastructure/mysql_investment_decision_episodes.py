@@ -268,7 +268,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         """
 
         maximum = max(1, min(50000, int(limit or 5000)))
-        quarantine_status = "invalid-legacy-operational-outcome"
+        quarantine_status = "invalid-legacy-outcome"
         stamp = utc_now_iso()
         with self.transaction() as connection:
             rows = connection.execute(
@@ -331,7 +331,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "AND action IN ('BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'AVOID', 'WATCH') "
                     "AND selected_hypothesis_id <> '' "
                     "AND status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', "
-                    "'reference-only', 'invalid-legacy-operational-outcome') "
+                    "'reference-only', 'invalid-legacy-outcome') "
                     "AND validation_state NOT IN ('blocked', 'invalid', 'failed', 'error') "
                     "ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
                     (account_id, symbol),
@@ -381,7 +381,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             follow_ups = max(0, int(getattr(cursor, "rowcount", 0) or 0))
             cursor = connection.execute(
                 "UPDATE investment_decision_outcome_targets SET status = 'excluded', "
-                "exclusion_reason = 'invalid-legacy-operational-outcome', updated_at = %s "
+                "exclusion_reason = 'invalid-legacy-outcome', updated_at = %s "
                 "WHERE episode_id IN (" + placeholders + ") AND status <> 'observed'",
                 (stamp, *episode_ids),
             )
@@ -975,7 +975,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             "symbol = %s",
             "action IN ('BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'AVOID', 'WATCH')",
             "selected_hypothesis_id <> ''",
-            "status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', 'reference-only', 'invalid-legacy-operational-outcome')",
+            "status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', 'reference-only', 'invalid-legacy-outcome')",
             "validation_state NOT IN ('blocked', 'invalid', 'failed', 'error')",
         ]
         params: List[object] = [str(account_id or ""), str(symbol or "").upper()]

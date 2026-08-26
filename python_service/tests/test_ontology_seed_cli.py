@@ -21,7 +21,8 @@ class OntologySeedCliTests(unittest.TestCase):
         )
 
         with patch("digital_twin.infrastructure.cli.runtime_settings", return_value={}), \
-                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository):
+                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository), \
+                patch("digital_twin.infrastructure.cli.run_local_graph_write", side_effect=lambda _settings, _role, operation: operation()):
             result = ontology_command(args)
 
         self.assertEqual(0, result)
@@ -47,7 +48,8 @@ class OntologySeedCliTests(unittest.TestCase):
         )
 
         with patch("digital_twin.infrastructure.cli.runtime_settings", return_value={}), \
-                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository):
+                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository), \
+                patch("digital_twin.infrastructure.cli.run_local_graph_write", side_effect=lambda _settings, _role, operation: operation()):
             result = ontology_command(args)
 
         self.assertEqual(0, result)
@@ -64,7 +66,8 @@ class OntologySeedCliTests(unittest.TestCase):
         args = SimpleNamespace(ontology_action="recover-scoped-write-lease")
 
         with patch("digital_twin.infrastructure.cli.runtime_settings", return_value={}), \
-                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository):
+                patch("digital_twin.infrastructure.cli.ontology_repository_from_settings", return_value=repository), \
+                patch("digital_twin.infrastructure.cli.run_local_graph_write", side_effect=lambda _settings, _role, operation: operation()):
             result = ontology_command(args)
 
         self.assertEqual(0, result)

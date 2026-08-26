@@ -2538,7 +2538,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertTrue(any(item.kind == "factor" for item in graph.entities))
         self.assertTrue(any(item.kind == "research-evidence" for item in graph.entities))
         self.assertTrue(any(item.kind == "news-article" for item in graph.entities))
-        self.assertTrue(any(item.kind == "disclosure-filing" for item in graph.entities))
+        self.assertFalse(any(item.kind == "disclosure-filing" for item in graph.entities))
         self.assertTrue(any(item.kind == "volume-profile" for item in graph.entities))
         self.assertTrue(any(item.kind == "missing-data" for item in graph.entities))
         self.assertTrue(any(item.kind == "valuation-assumption" for item in graph.entities))

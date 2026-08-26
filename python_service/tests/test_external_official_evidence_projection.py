@@ -8,7 +8,10 @@ from digital_twin.application.external_data.research_evidence_projection_service
     ExternalOfficialEvidenceProjectionService,
 )
 from digital_twin.domain.disclosure_analysis import DisclosureAnalysisResult
+from digital_twin.domain.disclosure_quality import disclosure_reasoning_eligibility
 from digital_twin.domain.events import EXTERNAL_FACT_CHANGED, RESEARCH_EVIDENCE_COLLECTED, DomainEvent
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology, entity_id
+from digital_twin.domain.ontology_external_abox import add_symbol_external_signal_concepts
 from digital_twin.infrastructure.mysql_research_evidence import merge_derived_evidence_payload
 
 
@@ -205,6 +208,9 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertTrue(evidence.raw_payload["documentVerified"])
         self.assertTrue(evidence.raw_payload["analysisReady"])
         self.assertTrue(evidence.raw_payload["documentHash"])
+        self.assertTrue(
+            disclosure_reasoning_eligibility(evidence.raw_payload)["reasoningEligible"]
+        )
         self.assertTrue(evidence.raw_payload["disclosureAnalysis"]["confirmedFacts"])
         self.assertEqual("202608250001", evidence.raw_payload["sourceRevision"])
         self.assertEqual("20260825", evidence.raw_payload["sourceAsOf"])
@@ -294,6 +300,73 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertFalse(admission["promptEligible"])
         collected = self.publisher.events[-1]
         self.assertEqual(0, collected.payload["alertEligibleCount"])
+
+    def test_metadata_only_disclosure_cannot_materialize_reasoning_filing_or_action(self):
+        stock_id = entity_id("stock", "005930")
+        graph = PortfolioOntology(
+            "account:1",
+            entities=[OntologyEntity(stock_id, "삼성전자", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "source": "holding",
+            })],
+        )
+        metadata = {
+            "provider": "OpenDART",
+            "reportName": "유상증자 결정",
+            "receiptNo": "202608250002",
+            "receiptDate": "20260825",
+            "documentVerified": False,
+            "analysisReady": False,
+            "officialDocumentState": "metadata-only",
+            "documentHash": "",
+        }
+
+        add_symbol_external_signal_concepts(
+            graph,
+            stock_id,
+            "005930",
+            {"dartDisclosures": {"005930": metadata}},
+        )
+
+        self.assertTrue(any(item.kind == "fundamental-event" for item in graph.entities))
+        self.assertFalse(any(item.kind == "disclosure-filing" for item in graph.entities))
+        self.assertFalse(any(item.kind == "corporate-action" for item in graph.entities))
+        self.assertFalse(disclosure_reasoning_eligibility(metadata)["reasoningEligible"])
+
+    def test_verified_governed_disclosure_materializes_normalized_reasoning_contract(self):
+        self.projector.project_event(self.event())
+        evidence = self.evidence_store.items["research:005930:dart:202608250001"]
+        stock_id = entity_id("stock", "005930")
+        graph = PortfolioOntology(
+            "account:1",
+            entities=[OntologyEntity(stock_id, "삼성전자", "stock", {
+                "ontologyBox": "ABox",
+                "symbol": "005930",
+                "source": "holding",
+            })],
+        )
+
+        add_symbol_external_signal_concepts(
+            graph,
+            stock_id,
+            "005930",
+            {"dartDisclosures": {"005930": evidence.raw_payload}},
+        )
+
+        filing = next(item for item in graph.entities if item.kind == "disclosure-filing")
+        self.assertEqual("verified", filing.properties["documentVerificationState"])
+        self.assertEqual("ready", filing.properties["documentAnalysisState"])
+        self.assertEqual("eligible", filing.properties["evidenceEligibilityState"])
+        filing_relations = [
+            item for item in graph.relations
+            if item.target == filing.entity_id and item.relation_type == "HAS_EXTERNAL_SIGNAL"
+        ]
+        self.assertEqual(1, len(filing_relations))
+        self.assertEqual(
+            "eligible",
+            filing_relations[0].properties["evidenceEligibilityState"],
+        )
 
     def test_projects_verified_sec_filing_with_accession_provenance(self):
         row = sec_fact()

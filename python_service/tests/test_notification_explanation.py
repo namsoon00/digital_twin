@@ -209,6 +209,94 @@ class NotificationExplanationTests(unittest.TestCase):
         self.assertIn("TypeDB 참고 규칙: 가격 관계 변화 관찰", message)
         self.assertNotIn("AI 안전 보류", message)
         self.assertNotIn("AI 설명 비교", message)
+        self.assertNotIn("공시의 실제 변경 내용", message)
+
+    def test_verified_disclosure_observation_names_the_filing_and_never_claims_hold(self):
+        rule_id = "graph.disclosure.event_risk.v1"
+        rule = {
+            "ruleId": rule_id,
+            "label": "보유 종목 + 검증된 공시 원문 -> 공시 내용 점검",
+            "knowledgeBasis": {
+                "ruleKind": "context-observation",
+                "decisionEligibility": "reference-only",
+                "requiresHypothesis": False,
+            },
+        }
+        job = NotificationJob.create(
+            "legacy disclosure observation",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "messageType": "investmentInsight",
+                "title": "삼성물산",
+                "displayTarget": "삼성물산 / 028260",
+                "rawLines": ["현재가: 380,500원", "수익률: +0.53%"],
+                "ontologyRelationContext": {
+                    "subject": {"symbol": "028260", "name": "삼성물산", "market": "KR"},
+                    "facts": {"currentPrice": 380500, "currency": "KRW", "market": "KR"},
+                    "source": "typedbInferenceBox",
+                    "graphStore": "typedb",
+                    "graphStoreUsed": True,
+                    "sourceAboxSnapshotId": "abox:disclosure:1",
+                    "inferenceGenerationId": "generation:disclosure:1",
+                    "generationAligned": True,
+                    "activeRules": [rule],
+                    "matchedRules": [rule],
+                    "decision": {"selectedRuleId": rule_id, "basis": "typedbInferenceBox"},
+                    "graphStoreInference": {
+                        "graphStore": "typedb",
+                        "sourceAboxSnapshotId": "abox:disclosure:1",
+                        "inferenceGenerationId": "generation:disclosure:1",
+                        "relations": [rule],
+                        "traces": [{"id": "trace:disclosure:1", **rule}],
+                    },
+                },
+                "notificationAiDecisionBrief": {
+                    "evidence": {
+                        "researchEvidence": [{
+                            "evidenceId": "research:028260:dart:20260824800613",
+                            "kind": "disclosure",
+                            "reportName": "최대주주등소유주식변동신고서",
+                            "source": "OpenDART",
+                            "receiptDate": "20260824",
+                            "sourceRevision": "20260824800613",
+                            "url": "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260824800613",
+                            "officialDocumentState": "document-verified",
+                            "documentVerified": True,
+                            "documentHash": "sha256:samsung-ct-filing",
+                            "analysisReady": True,
+                            "investmentJudgmentEligible": True,
+                            "evidenceEligibilityState": "eligible",
+                            "disclosureAnalysis": {
+                                "summary": "최대주주 등의 보유 주식 변동 신고가 접수됐습니다.",
+                                "impactSummary": "소유 주식 변동의 주체와 수량을 확인해야 합니다.",
+                                "confirmedFacts": ["최대주주 등 소유 주식 변동 신고가 접수됐습니다."],
+                                "watchItems": ["변동 주체·수량과 정정 공시 여부를 확인합니다."],
+                            },
+                        }],
+                    },
+                },
+            },
+        )
+        renderer = NotificationRenderingService(
+            template_renderer=lambda target: target.context["telegramMessage"],
+            now_provider=lambda: datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc),
+        )
+
+        message = renderer.render(job)
+
+        self.assertIn("중요 자료 확인", message)
+        self.assertIn("공시 자료 해석", message)
+        self.assertIn("TypeDB 확인 관계", message)
+        self.assertIn("최대주주등소유주식변동신고서", message)
+        self.assertIn("최대주주 등 소유 주식 변동 신고가 접수", message)
+        self.assertIn("변동 주체·수량과 정정 공시 여부", message)
+        self.assertIn("매수·매도 판단이 아닙니다", message)
+        self.assertNotIn("[AI]", message)
+        self.assertNotIn("AI 해석", message)
+        self.assertNotIn("TypeDB 검토 가설", message)
+        self.assertNotIn("보유 유지", message)
+        self.assertNotIn("같은 설명에는 반대 역할", message)
 
     def test_concise_notification_keeps_foreign_and_institution_flow(self):
         context = {

@@ -30,8 +30,8 @@ from .market_world_projection import (
 from .ontology_worlds import world_metadata
 
 
-WORLD_PARTITIONED_REASONING_VERSION = "world-partitioned-reasoning-v2"
-ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION = "account-overlay-projection-v3"
+WORLD_PARTITIONED_REASONING_VERSION = "world-partitioned-reasoning-v3"
+ACCOUNT_OVERLAY_PROJECTION_CONTRACT_VERSION = "account-overlay-projection-v4"
 SHARED_PREMISE_RULE_PREFIX = "shared.premise."
 SHARED_PREMISE_RELATION = "HAS_SHARED_MARKET_PREMISE"
 SHARED_PREMISE_KIND = "shared-market-premise"
@@ -729,7 +729,37 @@ def add_shared_premise_references(
     premises_by_symbol: Mapping[str, Iterable[str]],
     shared_generation_id: str = "",
     source_abox_snapshot_id: str = "",
+    premise_proofs_by_symbol: Mapping[str, Mapping[str, object]] = None,
 ) -> PortfolioOntology:
+    def premise_lineage(symbol: str, original_rule_id: str) -> Dict[str, object]:
+        symbol_proof = dict((premise_proofs_by_symbol or {}).get(symbol) or {})
+        expected_rule_ids = {
+            SHARED_PREMISE_RULE_PREFIX + original_rule_id,
+            "shared.premise.any." + original_rule_id,
+        }
+        trace = next((
+            dict(row)
+            for row in symbol_proof.get("traces") or []
+            if isinstance(row, Mapping)
+            and _text(row.get("ruleId") or row.get("sourceRuleId")) in expected_rule_ids
+        ), {})
+        proof_id = _text(trace.get("traceId") or trace.get("id"))
+        evidence_ids = sorted({
+            _text(value)
+            for value in (
+                trace.get("evidenceRelationIds")
+                or trace.get("evidenceIds")
+                or []
+            )
+            if _text(value)
+        })
+        return {
+            "premiseProofId": proof_id,
+            "originalRuleId": original_rule_id,
+            "sharedPremiseEvidenceIds": evidence_ids,
+            "premiseLineageStatus": "available" if proof_id else "legacy-unavailable",
+        }
+
     known_entities = {item.entity_id for item in graph.entities}
     for symbol, rule_ids in dict(premises_by_symbol or {}).items():
         clean_symbol = _text(symbol).upper()
@@ -744,6 +774,7 @@ def add_shared_premise_references(
         if not subject_id:
             continue
         for rule_id in sorted({_text(value) for value in rule_ids or [] if _text(value)}):
+            lineage = premise_lineage(clean_symbol, rule_id)
             premise_id = entity_id(SHARED_PREMISE_KIND, clean_symbol + ":" + rule_id)
             if premise_id not in known_entities:
                 graph.entities.append(OntologyEntity(
@@ -759,6 +790,7 @@ def add_shared_premise_references(
                         "sharedInferenceGenerationId": _text(shared_generation_id),
                         "sharedSourceAboxSnapshotId": _text(source_abox_snapshot_id),
                         "readScope": "shared-premise-reference",
+                        **lineage,
                     },
                 ))
                 known_entities.add(premise_id)
@@ -773,6 +805,7 @@ def add_shared_premise_references(
                     "evidenceRole": "context",
                     "dataState": "sufficient",
                     "source": "typedb-market-world-premise",
+                    **lineage,
                 },
             ))
     graph.worldview.update({
@@ -791,6 +824,7 @@ def account_overlay_graph(
     premises_by_symbol: Mapping[str, Iterable[str]],
     shared_generation_id: str = "",
     source_abox_snapshot_id: str = "",
+    premise_proofs_by_symbol: Mapping[str, Mapping[str, object]] = None,
 ) -> PortfolioOntology:
     """Keep private decision inputs and compact shared premise references.
 
@@ -916,4 +950,5 @@ def account_overlay_graph(
         premises_by_symbol,
         shared_generation_id=shared_generation_id,
         source_abox_snapshot_id=source_abox_snapshot_id,
+        premise_proofs_by_symbol=premise_proofs_by_symbol,
     )

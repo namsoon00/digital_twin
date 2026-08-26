@@ -183,8 +183,14 @@ def assess_prompt_evidence(
     elif kind_group == "official":
         document_verified = _explicit_bool(row.get("documentVerified")) is True
         analysis_ready = _explicit_bool(row.get("analysisReady")) is True
+        document_hash = _text(row.get("documentHash"))
         document_state = _text(row.get("officialDocumentState")).lower()
-        metadata_only = document_state == "metadata-only" or not document_verified or not analysis_ready
+        metadata_only = (
+            document_state != "document-verified"
+            or not document_verified
+            or not analysis_ready
+            or not document_hash
+        )
         alert_eligible = bool(active and fresh and _text(row.get("title") or row.get("reportName")))
         if metadata_only:
             reasons.append("official-document-not-verified")

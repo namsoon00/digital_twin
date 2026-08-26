@@ -284,6 +284,15 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
             {"NVDA": ["graph.test.mixed.v1"]},
             shared_generation_id="generation:market:1",
             source_abox_snapshot_id="abox:market:1",
+            premise_proofs_by_symbol={
+                "NVDA": {
+                    "traces": [{
+                        "traceId": "inference-trace:shared:nvda:mixed",
+                        "ruleId": "shared.premise.graph.test.mixed.v1",
+                        "evidenceRelationIds": ["relation:price:nvda"],
+                    }],
+                },
+            },
         )
 
         stock = next(item for item in overlay.entities if item.entity_id == stock_id)
@@ -293,6 +302,23 @@ class WorldPartitionedReasoningTests(unittest.TestCase):
         self.assertNotIn("HAS_PRICE_PATH", [item.relation_type for item in overlay.relations])
         self.assertIn(SHARED_PREMISE_RELATION, [item.relation_type for item in overlay.relations])
         self.assertEqual(0, len(overlay.evidence))
+        premise = next(
+            item for item in overlay.entities
+            if item.kind == "shared-market-premise"
+        )
+        self.assertEqual(
+            "inference-trace:shared:nvda:mixed",
+            premise.properties["premiseProofId"],
+        )
+        self.assertEqual(
+            ["relation:price:nvda"],
+            premise.properties["sharedPremiseEvidenceIds"],
+        )
+        premise_relation = next(
+            item for item in overlay.relations
+            if item.relation_type == SHARED_PREMISE_RELATION
+        )
+        self.assertEqual("available", premise_relation.properties["premiseLineageStatus"])
 
     def test_account_overlay_binds_pure_shared_crypto_premise_to_crypto_asset(self):
         crypto_rule = next(

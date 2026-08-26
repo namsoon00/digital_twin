@@ -392,6 +392,59 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("HOLD", envelope["preferredAction"])
         self.assertEqual(["graph.entry.wait.v1"], envelope["deferRuleIds"])
 
+    def test_disclosure_context_observation_does_not_fabricate_hold_decision(self):
+        facts = {"symbol": "028260", "source": "holding", "isHolding": True}
+        rule_id = "graph.disclosure.event_risk.v1"
+        relation = {
+            "type": "REQUIRES_NEXT_CHECK",
+            "derivationIndex": 0,
+            "ruleId": rule_id,
+            "targetLabel": "삼성물산 공시 이벤트 원문 점검",
+            "polarity": "context",
+            "evidenceRole": "context",
+            "decisionStage": "DISCLOSURE_REVIEW",
+            "decisionLabel": "중요 자료 확인",
+            "decisionTone": "watch",
+            "actionGroup": "alertReview",
+            "actionLevel": "review",
+            "decisionEffect": "defer",
+            "candidateAction": "",
+            "knowledgeBasis": {
+                "ruleKind": "context-observation",
+                "decisionEligibility": "reference-only",
+                "requiresHypothesis": False,
+            },
+        }
+        traces = [{
+            "id": "trace:disclosure:028260",
+            "ruleId": rule_id,
+            "dataState": "sufficient",
+            "freshnessStatus": "fresh",
+            "evidenceUsableForJudgement": True,
+            "evidenceRelationIds": ["research:028260:dart:20260824800613"],
+            "matchedConditions": [{
+                "conditionId": "symbol-disclosure-signal",
+                "relationType": "HAS_EXTERNAL_SIGNAL",
+                "targetKind": "disclosure-filing",
+                "relationId": "relation:disclosure:028260",
+            }],
+        }]
+
+        matches = matches_from_inference([relation], traces, facts)
+        envelope = action_envelope_from_inference(facts, matches, [relation])
+        decision = decision_from_inference(facts, matches, [relation], traces)
+
+        self.assertEqual("CONTEXT_OBSERVATION", envelope["status"])
+        self.assertEqual("NO_ACTION", envelope["executionAction"])
+        self.assertEqual([], envelope["aiAllowedActions"])
+        self.assertFalse(envelope["investmentJudgementAvailable"])
+        self.assertFalse(envelope["comparisonAvailable"])
+        self.assertFalse(envelope["judgementBlocked"])
+        self.assertEqual(rule_id, envelope["selectedRuleId"])
+        self.assertEqual("", decision["candidateAction"])
+        self.assertEqual("context-observation-reference-only", decision["selectionRole"])
+        self.assertFalse(decision["investmentJudgementAvailable"])
+
     def test_missing_data_driver_preserves_stale_value_reason(self):
         drivers = decision_drivers_from_relation_context(
             {

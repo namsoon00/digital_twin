@@ -199,11 +199,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
 
         self.assertEqual([], rulebox_semantic_violations(rules))
         self.assertEqual(116, sum(item.enabled for item in executable))
-        self.assertEqual(75, sum(
+        self.assertEqual(74, sum(
             item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
             and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"
             for item in executable
         ))
+        disclosure = rules_by_id["graph.disclosure.event_risk.v1"]
+        self.assertEqual("context-observation", disclosure.resolved_knowledge_basis.rule_kind)
+        self.assertEqual("reference-only", disclosure.resolved_knowledge_basis.decision_eligibility)
+        self.assertTrue(all(
+            not derivation.candidate_action
+            for derivation in disclosure.derivations
+        ))
+        self.assertEqual(
+            {
+                "group": ["dartDisclosures", "secFilings"],
+                "documentVerificationState": "verified",
+                "documentAnalysisState": "ready",
+                "evidenceEligibilityState": "eligible",
+            },
+            disclosure.conditions[1].target_property_filters,
+        )
         self.assertTrue(rules_by_id["graph.benchmark.beta.context.v1"].enabled)
         self.assertFalse(rules_by_id["graph.data_quality.action_block.v1"].enabled)
         self.assertFalse(rules_by_id["graph.holding.trend_transition.risk.v1"].enabled)

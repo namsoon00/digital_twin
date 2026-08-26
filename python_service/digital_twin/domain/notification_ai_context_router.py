@@ -486,6 +486,8 @@ def _external_evidence(
                     "alertEligible", "reasoningEligible", "officialDocumentState",
                     "documentVerified", "analysisReady", "reportName", "receiptDate",
                     "sourceAsOf", "sourceRevision", "documentHash", "disclosureAnalysis",
+                    "documentVerificationState", "documentAnalysisState",
+                    "evidenceEligibilityState",
                 ),
             ),
             directly_linked,

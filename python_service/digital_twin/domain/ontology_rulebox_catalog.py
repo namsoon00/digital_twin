@@ -177,9 +177,8 @@ RULEBOX_EXECUTION_GUIDANCE_BY_STAGE: Dict[str, Dict[str, object]] = {
         "decisionLabel": "공시 원문 점검",
         "primaryAction": "EVENT_RISK_REVIEW",
         "primaryActionLabel": "공시 원문과 가격 반응 확인",
-        "candidateAction": "HOLD",
         "blockedActionLabels": ["공시 성격 확인 전 비중 확대"],
-        "nextChecks": ["발행 조건, 자금 용도, 기존 주주 영향과 후속 정정을 확인"],
+        "nextChecks": ["공시에서 확인된 변경 내용, 가격·수급 반응과 후속 정정 여부를 확인"],
     },
     "DISTRIBUTION_REVIEW": {
         "decisionLabel": "수급 분산 가능성 점검",
@@ -3803,10 +3802,10 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
         ),
         GraphInferenceRule(
             rule_id="graph.disclosure.event_risk.v1",
-            label="보유 종목 + 공시/신고 이벤트 -> 공시 이벤트 리스크 추론",
-            version="v1",
+            label="보유 종목 + 검증된 공시 원문 -> 공시 내용 점검",
+            version="v2",
             source_kind="stock",
-            action_group="eventRisk",
+            action_group="alertReview",
             action_level="review",
             prompt_hint="공시나 신고는 제목만 반복하지 않고 이벤트 유형, 기존 보유 논리와의 충돌, 다음 확인 자료를 분리해 설명합니다.",
             conditions=[
@@ -3821,10 +3820,15 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                 GraphRuleCondition(
                     "symbol-disclosure-signal",
                     "relation",
-                    "종목 단위 공시/신고 신호가 갱신됐습니다.",
+                    "검증과 분석을 마친 종목 단위 공시 원문이 갱신됐습니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
                     target_kind="disclosure-filing",
-                    target_property_filters={"group": ["dartDisclosures", "secFilings"]},
+                    target_property_filters={
+                        "group": ["dartDisclosures", "secFilings"],
+                        "documentVerificationState": "verified",
+                        "documentAnalysisState": "ready",
+                        "evidenceEligibilityState": "eligible",
+                    },
                 ),
             ],
             derivations=[
@@ -3836,9 +3840,9 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     tbox_class="NextCheck",
                     tbox_classes=["NextCheck", "DisclosureEvent", "DisclosureFiling"],
                     polarity="context",
-                    belief_label="보유 종목에 공시/신고 이벤트가 갱신되어 원문 성격과 가격 반응을 확인해야 합니다.",
+                    belief_label="보유 종목에 검증된 공시 원문이 갱신되어 실제 변경 내용과 가격 반응을 확인해야 합니다.",
                     ai_influence_label="공시 이벤트 원문 점검",
-                    action_group="eventRisk",
+                    action_group="alertReview",
                     action_level="review",
                     decision_stage="DISCLOSURE_REVIEW",
                 )

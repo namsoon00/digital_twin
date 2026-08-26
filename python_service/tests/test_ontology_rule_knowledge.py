@@ -41,7 +41,23 @@ class OntologyRuleKnowledgeTests(unittest.TestCase):
         ownership = validate_rule_ownership(rule.rule_id for rule in rules)
         self.assertTrue(ownership["valid"])
         self.assertEqual(118, ownership["ownedRuleCount"])
-        self.assertEqual(75, ownership["ownerCounts"]["statistical-model"])
+        self.assertEqual(74, ownership["ownerCounts"]["statistical-model"])
+        disclosure = next(
+            rule for rule in rules
+            if rule.rule_id == "graph.disclosure.event_risk.v1"
+        )
+        self.assertEqual(
+            "ontology-semantic",
+            rule_ownership_contract(disclosure.rule_id).owner,
+        )
+        self.assertEqual(
+            "context-observation",
+            disclosure.resolved_knowledge_basis.rule_kind,
+        )
+        self.assertEqual(
+            "reference-only",
+            disclosure.resolved_knowledge_basis.decision_eligibility,
+        )
 
     def test_mixed_rule_ownership_is_explicit_instead_of_name_inferred(self):
         self.assertEqual(

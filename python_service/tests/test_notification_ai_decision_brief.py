@@ -602,7 +602,14 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
             "investmentJudgmentEligible": True,
             "officialDocumentState": "document-verified",
             "documentVerified": True,
+            "documentHash": "sha256:verified-disclosure",
             "analysisReady": True,
+            "evidenceGovernance": {"investmentJudgmentEligible": True},
+            "promptEvidenceAdmission": {
+                "usage": "decision",
+                "promptEligible": True,
+                "decisionEligible": True,
+            },
         }]
 
         core, audit = route_notification_ai_decision_context(brief)
@@ -646,7 +653,11 @@ class NotificationAIDecisionBriefTests(unittest.TestCase):
                     "watchItems": ["계약 이행 여부"],
                     "sourceSections": [{"text": "원문 전체", "start": 0, "end": 5}],
                 },
-                "promptEvidenceAdmission": {"usage": "reference", "promptEligible": True},
+                "promptEvidenceAdmission": {
+                    "usage": "reference",
+                    "promptEligible": True,
+                    "decisionEligible": True,
+                },
             },
         )
         compact = compact_research_evidence_for_ai([evidence.to_dict()])[0]

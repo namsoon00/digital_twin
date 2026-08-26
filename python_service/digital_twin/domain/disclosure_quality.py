@@ -5,6 +5,7 @@ from typing import Dict, List
 
 
 DISCLOSURE_DOCUMENT_QUALITY_VERSION = "disclosure-document-quality-v2"
+DISCLOSURE_REASONING_ELIGIBILITY_VERSION = "disclosure-reasoning-eligibility-v1"
 ERROR_PATTERNS = (
     re.compile(r"\b014\s*파일이\s*존재하지\s*않습니다", re.IGNORECASE),
     re.compile(r"(?:status|error)\s*[:=]\s*(?:013|014|error)", re.IGNORECASE),
@@ -125,3 +126,64 @@ def apply_disclosure_document_quality(
     result["dataState"] = assessment.data_state
     result["validationState"] = assessment.validation_state
     return result
+
+
+def disclosure_reasoning_eligibility(payload: object) -> Dict[str, object]:
+    """Return the single fail-closed contract for disclosure reasoning.
+
+    Official-feed metadata is useful for collection and display, but it is not
+    a parsed filing.  TypeDB may only receive a decision-eligible filing after
+    the exact document, its analysis, governance, and prompt admission agree.
+    """
+
+    row = dict(payload or {}) if isinstance(payload, dict) else {}
+    governance = (
+        row.get("evidenceGovernance")
+        if isinstance(row.get("evidenceGovernance"), dict)
+        else {}
+    )
+    admission = (
+        row.get("promptEvidenceAdmission")
+        if isinstance(row.get("promptEvidenceAdmission"), dict)
+        else {}
+    )
+    document_hash = str(row.get("documentHash") or "").strip()
+    document_verified = bool(
+        row.get("documentVerified") is True
+        and document_hash
+        and str(row.get("officialDocumentState") or "").strip().lower()
+        == "document-verified"
+    )
+    analysis_ready = bool(row.get("analysisReady") is True)
+    governance_eligible = bool(
+        governance.get("investmentJudgmentEligible") is True
+        or row.get("investmentJudgmentEligible") is True
+    )
+    admission_eligible = bool(
+        admission.get("decisionEligible") is True
+        if admission
+        else row.get("reasoningEligible") is True
+    )
+    eligible = bool(
+        document_verified
+        and analysis_ready
+        and governance_eligible
+        and admission_eligible
+    )
+    reasons = []
+    if not document_verified:
+        reasons.append("official-document-not-verified")
+    if not analysis_ready:
+        reasons.append("official-document-analysis-not-ready")
+    if not governance_eligible:
+        reasons.append("official-document-governance-not-eligible")
+    if not admission_eligible:
+        reasons.append("official-document-prompt-admission-not-eligible")
+    return {
+        "version": DISCLOSURE_REASONING_ELIGIBILITY_VERSION,
+        "documentVerificationState": "verified" if document_verified else "unverified",
+        "documentAnalysisState": "ready" if analysis_ready else "pending",
+        "evidenceEligibilityState": "eligible" if eligible else "reference-only",
+        "reasoningEligible": eligible,
+        "reasons": reasons,
+    }

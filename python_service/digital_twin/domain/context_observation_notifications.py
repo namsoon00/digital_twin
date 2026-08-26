@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Mapping
+from typing import Dict, Iterable, List, Mapping
 
 from .notification_ai_context import is_graph_backed_relation_context
 
@@ -149,3 +149,98 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
 
 def is_typedb_context_observation_notification(value: object) -> bool:
     return bool(typedb_context_observation_contract(value))
+
+
+def context_observation_evidence_presentation(value: object) -> Dict[str, object]:
+    """Build concrete customer facts for the selected reference-only rule."""
+
+    payload = _mapping(value)
+    contract = typedb_context_observation_contract(payload)
+    if not contract:
+        return {}
+    selected_rule_id = _text(contract.get("selectedRuleId"))
+    if "disclosure" not in selected_rule_id.lower():
+        return {}
+    brief = _mapping(payload.get("notificationAiDecisionBrief"))
+    if not brief:
+        audit = _mapping(payload.get("notificationAiExecutionAudit"))
+        brief = _mapping(audit.get("decisionBrief"))
+    evidence = _mapping(brief.get("evidence"))
+    candidates: List[Dict[str, object]] = []
+    disclosure = _mapping(evidence.get("disclosure"))
+    if disclosure:
+        candidates.append(disclosure)
+    for item in evidence.get("researchEvidence") or []:
+        if isinstance(item, Mapping):
+            candidates.append(dict(item))
+    for item in payload.get("researchEvidence") or []:
+        if isinstance(item, Mapping):
+            candidates.append(dict(item))
+
+    def eligible(item: Mapping[str, object]) -> bool:
+        kind = _text(item.get("kind") or item.get("eventType")).lower()
+        is_disclosure = bool(
+            "disclosure" in kind
+            or "filing" in kind
+            or _text(item.get("officialDocumentState")).lower()
+            == "document-verified"
+        )
+        decision_eligible = bool(
+            item.get("investmentJudgmentEligible") is True
+            or _text(item.get("evidenceEligibilityState")).lower() == "eligible"
+        )
+        return bool(
+            is_disclosure
+            and item.get("documentVerified") is True
+            and item.get("analysisReady") is True
+            and _text(item.get("documentHash"))
+            and decision_eligible
+        )
+
+    rows = [item for item in candidates if eligible(item)]
+    if not rows:
+        return {}
+    rows.sort(
+        key=lambda item: _text(
+            item.get("sourceAsOf")
+            or item.get("publishedAt")
+            or item.get("receiptDate")
+            or item.get("observedAt")
+        ),
+        reverse=True,
+    )
+    item = rows[0]
+    analysis = _mapping(item.get("disclosureAnalysis"))
+    confirmed_facts = [
+        _text(entry)
+        for entry in analysis.get("confirmedFacts") or []
+        if _text(entry)
+    ][:3]
+    watch_items = [
+        _text(entry)
+        for entry in analysis.get("watchItems") or []
+        if _text(entry)
+    ][:3]
+    summary = _text(
+        analysis.get("impactSummary")
+        or analysis.get("summary")
+        or item.get("summary")
+    )
+    return {
+        "kind": "disclosure",
+        "evidenceId": _text(item.get("evidenceId") or item.get("id")),
+        "title": _text(item.get("reportName") or item.get("title") or "공시 원문"),
+        "source": _text(item.get("sourcePublisher") or item.get("source") or "공시 원문"),
+        "receiptDate": _text(
+            item.get("receiptDate")
+            or item.get("publishedAt")
+            or item.get("sourceAsOf")
+        ),
+        "sourceRevision": _text(item.get("sourceRevision")),
+        "url": _text(item.get("url") or item.get("sourceUrl")),
+        "summary": summary,
+        "confirmedFacts": confirmed_facts,
+        "watchItems": watch_items,
+        "documentVerified": True,
+        "analysisReady": True,
+    }

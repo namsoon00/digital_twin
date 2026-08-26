@@ -11,6 +11,7 @@ from ..domain.accounts import investment_strategy_profile, message_delivery_prof
 from ..domain.alert_formatting import compact_number, price_money, signed_pct, trade_strength_label
 from ..domain.company_knowledge import active_company_valuation_rule_ids
 from ..domain.context_observation_notifications import (
+    context_observation_evidence_presentation,
     is_typedb_context_observation_notification,
     typedb_context_observation_contract,
 )
@@ -2223,6 +2224,19 @@ def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: in
 
 
 def customer_reason_rows(context: Dict[str, object], level: str) -> List[str]:
+    observation = typedb_context_observation_contract(context or {})
+    if observation:
+        presentation = context_observation_evidence_presentation(context)
+        title = str(presentation.get("title") or "").strip()
+        source = str(presentation.get("source") or "").strip()
+        if title:
+            row = "검증된 공시 원문 '" + title + "'의 분석이 완료되어 확인 자료로 전달합니다."
+            if source:
+                row += " 출처는 " + source + "입니다."
+        else:
+            label = str(observation.get("selectedRuleLabel") or "참고 관계").strip()
+            row = "TypeDB가 '" + label + "' 관계를 투자 행동이 아닌 확인 자료로 연결했습니다."
+        return [_html_bullet(row, level)]
     return [_html_bullet(item, level) for item in customer_alert_reason_lines(context) if str(item or "").strip()]
 
 
@@ -3070,7 +3084,18 @@ def _investment_view_row(
         2,
     )
     if is_typedb_context_observation_notification(context or {}):
-        detail = detail or "이 알림 자체는 매수·매도 판단이 아닙니다."
+        presentation = context_observation_evidence_presentation(context)
+        title = str(presentation.get("title") or "").strip()
+        summary = compact_sentence_count(presentation.get("summary"), 1)
+        detail = ""
+        if title:
+            detail = "검증된 공시 '" + title + "'의 원문 분석이 완료됐습니다."
+        if summary:
+            detail = " ".join(part for part in [detail, summary] if part)
+        detail = " ".join(part for part in [
+            detail,
+            "이 자료만으로 매수·매도 행동을 정하지는 않습니다.",
+        ] if part)
     elif compact_reason_is_internal(detail):
         detail = ""
     # investmentView explains the selected TypeDB hypothesis.  It must not
@@ -3227,6 +3252,10 @@ def execution_telegram_message_progressive(
     transition = compact_sentence_count(compact_decision_transition(context, response), 1)
     evidence = full_decision_evidence_rows(context, response)
     next_checks = list(response.next_checks or [])
+    observation_presentation = context_observation_evidence_presentation(context)
+    context_observation = is_typedb_context_observation_notification(context or {})
+    if observation_presentation:
+        next_checks = list(observation_presentation.get("watchItems") or []) or next_checks
     warnings = customer_data_note_rows(list(response.missing_data_impact))
     unsupported = compact_provider_unsupported_line(context)
     if unsupported:
@@ -3252,7 +3281,14 @@ def execution_telegram_message_progressive(
         parts.extend(["", "<b>알림이 온 이유</b>", *reason_rows])
     investment_view = _investment_view_row(context, response)
     if investment_view:
-        parts.extend(["", "<b>AI 해석</b>", _html_bullet(investment_view, level)])
+        interpretation_label = (
+            "공시 자료 해석"
+            if observation_presentation
+            else "자료 해석"
+            if context_observation
+            else "AI 해석"
+        )
+        parts.extend(["", "<b>" + interpretation_label + "</b>", _html_bullet(investment_view, level)])
     parts.extend([
         "",
         "<b>지금 행동</b>",
@@ -3273,7 +3309,8 @@ def execution_telegram_message_progressive(
     if packet.counter_evidence:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
     if packet.inference:
-        parts.extend(["", "<b>TypeDB 검토 가설</b>", *[_html_bullet(row, level) for row in packet.inference]])
+        inference_label = "TypeDB 확인 관계" if context_observation else "TypeDB 검토 가설"
+        parts.extend(["", "<b>" + inference_label + "</b>", *[_html_bullet(row, level) for row in packet.inference]])
     if packet.company_value:
         parts.extend(["", "<b>회사 가치</b>", *[_html_bullet(row, level) for row in packet.company_value]])
     if packet.next_checks:
@@ -3307,6 +3344,8 @@ def execution_telegram_message_compact_beginner(
     target = str(context.get("displayTarget") or context.get("target") or "").strip()
     sent = str(context.get("sentTime") or "").strip()
     reference = response.reference_date or reference_date(context)
+    context_observation = is_typedb_context_observation_notification(context or {})
+    observation_presentation = context_observation_evidence_presentation(context)
     parts = [
         "<b>" + html.escape(headline, quote=False) + "</b>",
         ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
@@ -3316,7 +3355,14 @@ def execution_telegram_message_compact_beginner(
         parts.extend(["", "<b>알림이 온 이유</b>", *reason_rows])
     investment_view = _investment_view_row(context, response)
     if investment_view:
-        parts.extend(["", "<b>AI 해석</b>", _html_bullet(investment_view, level)])
+        interpretation_label = (
+            "공시 자료 해석"
+            if observation_presentation
+            else "자료 해석"
+            if context_observation
+            else "AI 해석"
+        )
+        parts.extend(["", "<b>" + interpretation_label + "</b>", _html_bullet(investment_view, level)])
     parts.extend([
         "",
         "<b>지금 행동</b>",
@@ -3344,14 +3390,16 @@ def execution_telegram_message_compact_beginner(
     if counter_rows:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
     typedb_rows = full_typedb_competing_inference_rows(context, response)
-    parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in typedb_rows]])
+    typedb_label = "TypeDB 확인 관계" if context_observation else "TypeDB 경쟁 추론"
+    parts.extend(["", "<b>" + typedb_label + "</b>", *[_html_bullet(row, level) for row in typedb_rows]])
     assessment_rows = typedb_decision_assessment_rows(context)
     parts.extend(["", "<b>온톨로지 판단 영역</b>", *[_html_bullet(row, level) for row in assessment_rows]])
-    option_rows = holding_strategy_option_rows(context, response, level)
+    option_rows = [] if context_observation else holding_strategy_option_rows(context, response, level)
     if option_rows:
         parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])
-    causal_rows = ai_causal_validation_rows(response)
-    parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
+    causal_rows = [] if context_observation else ai_causal_validation_rows(response)
+    if causal_rows:
+        parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
     company_valuation = company_valuation_presentation(context)
     company_valuation_display_rows = company_valuation_rows(context, level, compact=True)
     if company_valuation_display_rows:
@@ -3407,7 +3455,7 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
     else:
         marker = "[시스템 요약]"
     if is_typedb_context_observation_notification(context or {}):
-        return marker + " 매수·매도 판단이 아니라, 종목과 연결된 중요 자료를 확인하라는 알림입니다."
+        return marker + " 이 알림은 매수·매도 판단이 아닙니다. 종목과 연결된 중요 자료를 확인하세요."
     relation = relation_context_value(context or {})
     envelope = relation.get("actionEnvelope") if isinstance(relation.get("actionEnvelope"), dict) else {}
     if str(envelope.get("status") or "").strip().upper() == "JUDGEMENT_BLOCKED" or bool(envelope.get("judgementBlocked")):
@@ -4188,6 +4236,26 @@ def full_decision_evidence_rows(
     counter: bool = False,
     limit: int = 5,
 ) -> List[str]:
+    if not counter and is_typedb_context_observation_notification(context or {}):
+        presentation = context_observation_evidence_presentation(context)
+        rows = []
+        title = str(presentation.get("title") or "").strip()
+        stamp = str(presentation.get("receiptDate") or "").strip()
+        source = str(presentation.get("source") or "").strip()
+        if title:
+            append_unique_text(
+                rows,
+                "공시 원문: " + title
+                + ((" · " + source) if source else "")
+                + ((" · 접수 " + stamp) if stamp else ""),
+                360,
+            )
+        for item in presentation.get("confirmedFacts") or []:
+            append_unique_text(rows, "원문에서 확인: " + str(item), 360)
+        summary = str(presentation.get("summary") or "").strip()
+        if summary:
+            append_unique_text(rows, "원문 분석: " + summary, 360)
+        return rows[:limit]
     values = response.counter_evidence if counter else response.evidence
     rows: List[str] = []
     for item in values or []:

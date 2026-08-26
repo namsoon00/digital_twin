@@ -121,6 +121,7 @@ ACTION_ENVELOPE_STATUS_LABELS = {
     "ENTRY_BLOCKED": "진입 판단 보류",
     "HOLDING_REVIEW": "보유 판단 재확인",
     "JUDGEMENT_BLOCKED": "판단 보류",
+    "CONTEXT_OBSERVATION": "중요 자료 확인",
 }
 
 # ``blocked`` describes unavailable judgement, not a stronger investment

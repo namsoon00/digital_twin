@@ -12,7 +12,7 @@ from .ontology_decision_state import decision_effect_from_relation, semantic_rel
 from .ontology_rule_manifest import ASSESSMENT_SCOPES, rule_assessment_scope
 
 
-DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v2"
+DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v3"
 
 
 def _text(value: object) -> str:
@@ -66,6 +66,7 @@ def relation_assessment_scope(relation: Mapping[str, object], match: object = No
         "execution-gate": "execution-readiness",
         "policy-constraint": "portfolio-fit",
         "predictive-hypothesis": "investment-opinion",
+        "context-observation": "market-context",
     }.get(_text(knowledge_basis.get("ruleKind") or knowledge_basis.get("rule_kind")))
     if governed_scope:
         return governed_scope
@@ -223,11 +224,18 @@ def _recommended_plan(assessments: Mapping[str, Mapping[str, object]]) -> Dict[s
     opinion = assessments["investment-opinion"]
     portfolio = assessments["portfolio-fit"]
     execution = assessments["execution-readiness"]
+    market_context = assessments.get("market-context") or {}
     opinion_action = _text(opinion.get("candidateAction")).upper()
     if opinion.get("actionConflict"):
         status = "judgement-conflicted"
         option = "resolve-opinion-conflict"
-    elif quality.get("judgementBlocked") or not opinion_action:
+    elif quality.get("judgementBlocked"):
+        status = "judgement-blocked"
+        option = "wait-for-usable-evidence"
+    elif not opinion_action and market_context.get("ruleIds"):
+        status = "observe-context"
+        option = "review-material-context"
+    elif not opinion_action:
         status = "judgement-blocked"
         option = "wait-for-usable-evidence"
     elif execution.get("status") == "blocked":
@@ -252,6 +260,7 @@ def _recommended_plan(assessments: Mapping[str, Mapping[str, object]]) -> Dict[s
         "planOption": option,
         "portfolioConstraintRuleIds": list(portfolio.get("ruleIds") or []),
         "executionConstraintRuleIds": list(execution.get("ruleIds") or []),
+        "marketContextRuleIds": list(market_context.get("ruleIds") or []),
         "meaningPreserved": True,
         "compositionRule": (
             "TypeDB investment opinion remains unchanged; evidence, portfolio, and execution "
@@ -300,6 +309,8 @@ def decision_assessment_bundle(
         "investmentOpinion": assessments["investment-opinion"],
         "portfolioFit": assessments["portfolio-fit"],
         "executionReadiness": assessments["execution-readiness"],
+        "marketContext": assessments["market-context"],
+        "notificationDelivery": assessments["notification-delivery"],
         "recommendedPlan": _recommended_plan(assessments),
         "monitoringPlan": _monitoring_plan(assessments),
     }
@@ -316,6 +327,8 @@ def without_portfolio_assessment(bundle: Mapping[str, object]) -> Dict[str, obje
         "investment-opinion": _mapping(scoped.get("investmentOpinion")),
         "portfolio-fit": empty_portfolio,
         "execution-readiness": _mapping(scoped.get("executionReadiness")),
+        "market-context": _mapping(scoped.get("marketContext")),
+        "notification-delivery": _mapping(scoped.get("notificationDelivery")),
     }
     scoped["recommendedPlan"] = _recommended_plan(assessments)
     scoped["policyScope"] = "instrument-market"

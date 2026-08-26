@@ -288,6 +288,7 @@ CONTEXT_ONLY_RULE_TOKENS = (
     "materiality.alert_candidate",
     "portfolio.reentry.review",
     "portfolio.decision_action.divergence",
+    "disclosure.event_risk",
 )
 
 POLICY_RULE_TOKENS = (

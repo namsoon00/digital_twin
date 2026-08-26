@@ -545,7 +545,9 @@ ACTION_ENVELOPE_FIELDS = (
     "portfolioConstraintRuleIds", "executionConstraintRuleIds", "dataQualityRuleIds",
     "assessmentBundleVersion",
     "invalidationConditions", "strengthenConditions", "nextChecks", "targetRole",
-    "dataReadiness", "coreInferenceSelection",
+    "dataReadiness", "coreInferenceSelection", "contextObservationSelection",
+    "decisionDisposition", "investmentJudgementAvailable",
+    "comparisonAvailable", "singleCandidateAction",
 )
 
 RULE_DECISION_FIELDS = (
@@ -565,6 +567,8 @@ EVIDENCE_DECISION_FIELDS = (
     "decisionInlineEligible", "displayEligible", "alertEligible", "reasoningEligible",
     "officialDocumentState", "documentVerified", "analysisReady", "promptEvidenceAdmission",
     "sourceAsOf", "sourceRevision", "documentHash", "disclosureAnalysis",
+    "reportName", "receiptDate", "documentVerificationState",
+    "documentAnalysisState", "evidenceEligibilityState",
 )
 
 ACCOUNT_STRATEGY_FIELDS = (

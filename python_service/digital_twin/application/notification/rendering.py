@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from ...domain.context_observation_notifications import (
+    context_observation_evidence_presentation,
     is_typedb_context_observation_notification,
     typedb_context_observation_contract,
 )
@@ -143,12 +144,36 @@ class NotificationRenderingService:
             )
             if observation:
                 label = str(observation.get("selectedRuleLabel") or "참고 관계").strip()
-                response.investment_view = (
-                    "TypeDB가 '" + label
-                    + "' 관계를 참고 신호로 확인했습니다. 이 알림 자체는 매수·매도 판단이 아닙니다."
-                )
-                response.summary = "TypeDB 참고 관계가 새로 확인됐습니다. 투자 행동은 변경하지 않습니다."
-                response.current_action_plan = "현재 주문 행동은 변경하지 않고 관계의 다음 변화를 관찰합니다."
+                presentation = context_observation_evidence_presentation(context)
+                title = str(presentation.get("title") or "").strip()
+                summary = str(presentation.get("summary") or "").strip()
+                if presentation:
+                    response.investment_view = (
+                        (("검증된 공시 '" + title + "'의 원문 분석이 완료됐습니다. ") if title else "")
+                        + (summary + " " if summary else "")
+                        + "이 자료만으로 매수·매도 행동을 정하지는 않습니다."
+                    )
+                    response.summary = title + " 공시 원문을 확인할 자료가 새로 준비됐습니다. 투자 행동은 정하지 않습니다."
+                    response.current_action_plan = "현재 주문 판단은 보류하고 공시의 실제 변경 내용과 후속 시장 반응을 확인합니다."
+                    response.evidence = list(presentation.get("confirmedFacts") or [])
+                    if not response.evidence and title:
+                        stamp = str(presentation.get("receiptDate") or "").strip()
+                        response.evidence = [
+                            title + ((" · 접수 " + stamp) if stamp else "")
+                        ]
+                    response.next_checks = list(presentation.get("watchItems") or []) or [
+                        "공시에서 확인된 변경 내용과 가격·수급 반응, 후속 정정 여부를 확인합니다."
+                    ]
+                else:
+                    response.investment_view = (
+                        "TypeDB가 '" + label
+                        + "' 관계를 참고 신호로 확인했습니다. 이 알림은 매수·매도 판단이 아닙니다."
+                    )
+                    response.summary = "TypeDB 참고 관계가 새로 확인됐습니다. 투자 행동은 정하지 않습니다."
+                    response.current_action_plan = "현재 주문 판단은 하지 않고 관계의 다음 변화를 관찰합니다."
+                    response.next_checks = response.next_checks or [
+                        "같은 참고 관계가 다음 데이터 갱신에서도 유지되는지 확인합니다."
+                    ]
                 response.execution_decision = response.current_action_plan
                 response.hypotheses = []
                 response.selected_hypothesis_id = ""

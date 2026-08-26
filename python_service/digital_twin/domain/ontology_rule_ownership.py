@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping, Tuple
 
 
-RULE_OWNERSHIP_CONTRACT_VERSION = "ontology-rule-ownership-v1"
+RULE_OWNERSHIP_CONTRACT_VERSION = "ontology-rule-ownership-v2"
 RULE_OWNERS = frozenset({
     "statistical-model",
     "market-observation",
@@ -61,7 +61,6 @@ STATISTICAL_MODEL_RULE_IDS = frozenset({
     "graph.cross_listing.adr_discount_risk.v1",
     "graph.cross_listing.adr_premium_risk.v1",
     "graph.crypto.exposure.volatility_risk.v1",
-    "graph.disclosure.event_risk.v1",
     "graph.disclosure.financing_or_dilution.risk.v1",
     "graph.earnings.surprise.risk.v1",
     "graph.earnings.surprise.support.v1",
@@ -135,6 +134,7 @@ ONTOLOGY_SEMANTIC_RULE_IDS = frozenset({
     "graph.crypto.market.7d.down.watch.v1",
     "graph.crypto.market.7d.up.major.v1",
     "graph.crypto.market.7d.up.watch.v1",
+    "graph.disclosure.event_risk.v1",
     "graph.market_proxy.observation.risk_context.v1",
     "graph.market_proxy.observation.support_context.v1",
     "graph.news.direct_material_context.v1",

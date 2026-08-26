@@ -2,6 +2,7 @@ from typing import Dict, List
 
 from .investment_research import research_evidence_from_external_signals, research_evidence_from_facts
 from . import news_analysis as news_domain
+from .disclosure_quality import disclosure_reasoning_eligibility
 from .ontology_contracts import OntologyEvidence, PortfolioOntology
 from .ontology_schema import add_entity, add_relation
 
@@ -37,10 +38,17 @@ def event_relation_properties(item: object) -> Dict[str, object]:
     raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
     collection_admission = raw_payload.get("collectionAdmission") if isinstance(raw_payload.get("collectionAdmission"), dict) else {}
     state = research_evidence_state(item, raw_payload)
+    kind = str(getattr(item, "kind", "") or "").lower()
+    disclosure_state = (
+        disclosure_reasoning_eligibility({**raw_payload, **state})
+        if "disclosure" in kind or "filing" in kind
+        else {}
+    )
     props = {
         "source": "research-evidence",
         "polarity": polarity,
         **state,
+        **disclosure_state,
         "collectionAdmissionVersion": collection_admission.get("version"),
         "collectionAdmissionDecision": collection_admission.get("decision"),
         "collectionQualityPassed": bool(collection_admission.get("passed")),
@@ -100,6 +108,13 @@ def research_evidence_state(item: object, raw_payload: Dict[str, object]) -> Dic
     prompt_admission = raw_payload.get("promptEvidenceAdmission") if isinstance(raw_payload.get("promptEvidenceAdmission"), dict) else {}
     if prompt_admission:
         eligible = eligible and bool(prompt_admission.get("decisionEligible"))
+    kind = str(getattr(item, "kind", "") or "").lower()
+    if "disclosure" in kind or "filing" in kind:
+        disclosure_state = disclosure_reasoning_eligibility({
+            **raw_payload,
+            "investmentJudgmentEligible": bool(eligible),
+        })
+        eligible = bool(disclosure_state.get("reasoningEligible"))
     relation_scope = str(raw_payload.get("relationScope") or "").strip().lower()
     analysis = raw_payload.get("aiAnalysis") if isinstance(raw_payload.get("aiAnalysis"), dict) else {}
     read_scope = str(
@@ -292,6 +307,9 @@ def evidence_document_shape(item: object) -> Dict[str, object]:
     url = str(getattr(item, "url", "") or "").lower()
     disclosure_terms = ["disclosure", "filing", "dart", "opendart", "edgar", "sec", "공시", "보고서"]
     if any(token in value for token in disclosure_terms for value in [kind, source, title, url]):
+        raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+        if not disclosure_reasoning_eligibility(raw_payload).get("reasoningEligible"):
+            return {}
         return {
             "kind": "disclosure-filing",
             "tboxClass": "DisclosureFiling",
@@ -322,6 +340,11 @@ def add_research_document_concept(
     if not shape:
         return
     raw_payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
+    disclosure_state = (
+        disclosure_reasoning_eligibility(raw_payload)
+        if shape.get("kind") == "disclosure-filing"
+        else {}
+    )
     collection_admission = raw_payload.get("collectionAdmission") if isinstance(raw_payload.get("collectionAdmission"), dict) else {}
     provenance = raw_payload.get("sourceProvenance") if isinstance(raw_payload.get("sourceProvenance"), dict) else {}
     source_identity = raw_payload.get("sourceIdentity") if isinstance(raw_payload.get("sourceIdentity"), dict) else {}
@@ -340,6 +363,7 @@ def add_research_document_concept(
         "observedAt": str(getattr(item, "observed_at", "") or ""),
         "documentType": str(shape["documentType"]),
         **research_evidence_state(item, raw_payload),
+        **disclosure_state,
         "eventType": raw_payload.get("eventType"),
         "collectionAdmissionVersion": collection_admission.get("version"),
         "collectionAdmissionDecision": collection_admission.get("decision"),
@@ -594,6 +618,12 @@ def add_research_evidence_concepts(
             "documentVerified": bool(raw_payload.get("documentVerified")),
             "analysisReady": bool(raw_payload.get("analysisReady")),
             "documentHash": raw_payload.get("documentHash"),
+            **(
+                disclosure_reasoning_eligibility({**raw_payload, **evidence_state})
+                if "disclosure" in str(item.kind or "").lower()
+                or "filing" in str(item.kind or "").lower()
+                else {}
+            ),
             "sourceRevision": raw_payload.get("sourceRevision"),
             "sourceAsOf": raw_payload.get("sourceAsOf") or item.published_at or item.observed_at,
             "disclosureAnalysis": {

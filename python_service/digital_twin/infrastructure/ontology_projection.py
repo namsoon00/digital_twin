@@ -5057,6 +5057,7 @@ class PortfolioOntologyProjectionRecorder:
                 proof.get("premisesBySymbol") or {},
                 shared_generation_id=shared_generation_id,
                 source_abox_snapshot_id=shared_source_abox_id,
+                premise_proofs_by_symbol=proof.get("symbols") or {},
             )
         runtime_stages = dict(graph_assembly.get("runtimeStages") or {})
         runtime_stages["graphAssemblyCacheHit"] = (

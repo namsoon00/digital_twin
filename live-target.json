@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://marion-inf-ons-tvs.trycloudflare.com",
-  "revision": "bff299210564",
-  "updatedAt": "2026-08-26T12:54:30.102Z"
+  "baseUrl": "https://migration-push-approaches-cycles.trycloudflare.com",
+  "revision": "949db36e6469",
+  "updatedAt": "2026-08-26T15:51:32.958Z"
 }

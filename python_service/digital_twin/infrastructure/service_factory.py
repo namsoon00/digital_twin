@@ -2215,6 +2215,14 @@ def build_v2_reasoning_engine(
                 or "unknown"
             )[:220]
         )
+    projection_recorder.catalog_for_rules(
+        runtime_rulebox_catalog,
+        runtime_world_partition.get("sharedRules") or [],
+    )
+    projection_recorder.catalog_for_rules(
+        runtime_rulebox_catalog,
+        runtime_world_partition.get("overlayRules") or [],
+    )
     shared_inference_store = stores.shared_instrument_inference_store(store_settings)
     shared_inference_service = SharedInstrumentInferenceService(
         shared_inference_store,

@@ -958,6 +958,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("ready", second["status"])
         self.assertTrue(second["sharedRuleIds"])
 
+    def test_v2_projection_recorder_compiles_frozen_phase_catalog_once(self):
+        rules = rulebox_rules_to_payload(default_graph_inference_rules())
+        recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            frozen_rulebox_catalog={
+                "configured": True,
+                "status": "ok",
+                "rules": rules,
+                "ruleCount": len(rules),
+            },
+        )
+        catalog = recorder.ensure_rulebox_ready()
+        partition = recorder.world_rule_partition(catalog)
+        shared_rules = partition["sharedRules"]
+
+        with patch(
+            "digital_twin.infrastructure.ontology_projection.rulebox_rules_to_payload",
+            wraps=rulebox_rules_to_payload,
+        ) as serializer:
+            first = recorder.catalog_for_rules(catalog, shared_rules)
+            first["rules"].clear()
+            second = recorder.catalog_for_rules(catalog, shared_rules)
+
+        self.assertEqual(1, serializer.call_count)
+        self.assertTrue(second["rules"])
+        self.assertTrue(second["compiledRuleboxRulesHash"])
+
     def test_typedb_schema_defines_nodes_assertions_and_storage_keys(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 

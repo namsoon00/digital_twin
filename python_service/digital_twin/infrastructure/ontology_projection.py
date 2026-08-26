@@ -1326,6 +1326,7 @@ class PortfolioOntologyProjectionRecorder:
         )
         self._frozen_rulebox_readiness = None
         self._frozen_world_rule_partition = None
+        self._frozen_compiled_rule_catalogs: Dict[str, Dict[str, object]] = {}
         self.outcome_observation_service = outcome_observation_service or InvestmentOutcomeObservationService(
             decision_episode_store=decision_episode_store,
             market_time_series_store=market_time_series_store,
@@ -1475,12 +1476,24 @@ class PortfolioOntologyProjectionRecorder:
         copied["rules"] = deepcopy(copied.get("rules") or [])
         return copied
 
-    @staticmethod
     def catalog_for_rules(
+        self,
         rule_catalog: Dict[str, object],
         rules,
     ) -> Dict[str, object]:
-        payloads = rulebox_rules_to_payload(rules or [])
+        rule_values = list(rules or [])
+        cache_key = hashlib.sha256("|".join(
+            str(getattr(rule, "rule_id", "") or "")
+            for rule in rule_values
+        ).encode("utf-8")).hexdigest()
+        if (
+            self._frozen_rulebox_catalog is not None
+            and cache_key in self._frozen_compiled_rule_catalogs
+        ):
+            return self.copy_compiled_rule_catalog(
+                self._frozen_compiled_rule_catalogs[cache_key]
+            )
+        payloads = rulebox_rules_to_payload(rule_values)
         relation_types = sorted({
             str(condition.get("relation_type") or condition.get("relationType") or "").upper().strip()
             for rule in payloads
@@ -1489,13 +1502,31 @@ class PortfolioOntologyProjectionRecorder:
             and str(condition.get("kind") or "") == "relation"
             and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
         })
-        return {
+        compiled = {
             **dict(rule_catalog or {}),
             "rules": payloads,
             "inputRelationTypes": relation_types,
             "ruleCount": len(payloads),
+            "compiledRuleboxRulesHash": compute_rulebox_rules_hash(payloads),
             "worldPartitionedReasoningVersion": WORLD_PARTITIONED_REASONING_VERSION,
         }
+        if self._frozen_rulebox_catalog is not None:
+            self._frozen_compiled_rule_catalogs[cache_key] = (
+                self.copy_compiled_rule_catalog(compiled)
+            )
+        return compiled
+
+    @staticmethod
+    def copy_compiled_rule_catalog(catalog: Dict[str, object]) -> Dict[str, object]:
+        copied = dict(catalog or {})
+        copied["rules"] = [
+            dict(item) for item in copied.get("rules") or []
+            if isinstance(item, dict)
+        ]
+        copied["inputRelationTypes"] = list(
+            copied.get("inputRelationTypes") or []
+        )
+        return copied
 
     def prepare_shared_premises(
         self,
@@ -1552,14 +1583,15 @@ class PortfolioOntologyProjectionRecorder:
             }
         shared_rules = list(partition.get("sharedRules") or [])
         shared_rule_ids = list(partition.get("sharedRuleIds") or [])
-        shared_rulebox_hash = compute_rulebox_rules_hash(
-            rulebox_rules_to_payload(shared_rules)
+        shared_rule_catalog = self.catalog_for_rules(catalog, shared_rules)
+        shared_rulebox_hash = str(
+            shared_rule_catalog.get("compiledRuleboxRulesHash") or ""
         )
         progress("graph.start", sharedRuleCount=int(partition.get("sharedRuleCount") or 0))
         stage_started = time.perf_counter()
         graph, _persistence_graph, assembly = self.build_graph_assembly(
             snapshot,
-            self.catalog_for_rules(catalog, shared_rules),
+            shared_rule_catalog,
             target_symbols=target_symbols,
             target_scoped_input=bool(target_symbols),
         )

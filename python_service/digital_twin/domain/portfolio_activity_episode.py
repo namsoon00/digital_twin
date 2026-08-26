@@ -20,12 +20,17 @@ from .portfolio_ledger import (
     PortfolioLedgerEntry,
     decimal_value,
 )
-from .snapshot_portfolio_activity import activity_payload, observed_positions, snapshot_balance_fingerprint
+from .snapshot_portfolio_activity import (
+    activity_payload,
+    cash_balance_components,
+    observed_positions,
+    snapshot_balance_fingerprint,
+)
 
 
-PORTFOLIO_ACTIVITY_EPISODE_VERSION = "portfolio-activity-episode-v1"
+PORTFOLIO_ACTIVITY_EPISODE_VERSION = "portfolio-activity-episode-v2-native-cash-components"
 PORTFOLIO_STATE_VERSION = "portfolio-state-snapshot-v1"
-SNAPSHOT_CHECKPOINT_VERSION = "portfolio-snapshot-checkpoint-v1"
+SNAPSHOT_CHECKPOINT_VERSION = "portfolio-snapshot-checkpoint-v2-native-cash-components"
 DECISION_ACTION_OBSERVATION_VERSION = "decision-action-observation-v1"
 
 
@@ -74,6 +79,7 @@ class PortfolioSnapshotCheckpoint:
     total_quantity: Decimal
     cash_balance: Decimal
     portfolio_total: Decimal
+    cash_balance_components: Dict[str, Decimal] = field(default_factory=dict)
     valuation_snapshot_id: str = ""
     valuation_basis: str = ""
     broker_comparable_total: Decimal = Decimal("0")
@@ -97,6 +103,7 @@ class PortfolioSnapshotCheckpoint:
             total_quantity=sum((decimal_value(item.get("quantity")) for item in positions.values()), Decimal("0")),
             cash_balance=decimal_value(getattr(getattr(snapshot, "portfolio", None), "cash", 0)),
             portfolio_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "total", 0)),
+            cash_balance_components=cash_balance_components(snapshot),
             valuation_snapshot_id=str(getattr(getattr(snapshot, "portfolio", None), "valuation_snapshot_id", "") or ""),
             valuation_basis=str(getattr(getattr(snapshot, "portfolio", None), "valuation_basis", "") or ""),
             broker_comparable_total=decimal_value(getattr(getattr(snapshot, "portfolio", None), "broker_comparable_total", 0)),
@@ -119,6 +126,13 @@ class PortfolioSnapshotCheckpoint:
             total_quantity=decimal_value(row.get("totalQuantity") or row.get("total_quantity")),
             cash_balance=decimal_value(row.get("cashBalance") or row.get("cash_balance")),
             portfolio_total=decimal_value(row.get("portfolioTotal") or row.get("portfolio_total")),
+            cash_balance_components={
+                str(currency or "").upper(): decimal_value(amount)
+                for currency, amount in dict(
+                    row.get("cashBalanceComponents") or row.get("cash_balance_components") or {}
+                ).items()
+                if str(currency or "").strip()
+            },
             valuation_snapshot_id=str(row.get("valuationSnapshotId") or row.get("valuation_snapshot_id") or ""),
             valuation_basis=str(row.get("valuationBasis") or row.get("valuation_basis") or ""),
             broker_comparable_total=decimal_value(row.get("brokerComparableTotal") or row.get("broker_comparable_total")),
@@ -141,6 +155,10 @@ class PortfolioSnapshotCheckpoint:
             "positionCount": self.position_count,
             "totalQuantity": str(self.total_quantity),
             "cashBalance": str(self.cash_balance),
+            "cashBalanceComponents": {
+                currency: str(amount)
+                for currency, amount in sorted(self.cash_balance_components.items())
+            },
             "portfolioTotal": str(self.portfolio_total),
             "valuationSnapshotId": self.valuation_snapshot_id,
             "valuationBasis": self.valuation_basis,
@@ -171,6 +189,12 @@ def checkpoint_acceptance(
             return "duplicate", "snapshot-already-checkpointed"
         return "quarantined", "same-timestamp-different-balance"
     if previous.balance_fingerprint == current.balance_fingerprint:
+        if (
+            previous.cash_balance_components
+            and previous.cash_balance_components == current.cash_balance_components
+            and previous.cash_balance != current.cash_balance
+        ):
+            return "unchanged", "cash-valuation-only-change"
         return "unchanged", "balance-fingerprint-unchanged"
     if (
         previous.position_count > 0
@@ -217,7 +241,11 @@ class PortfolioActivityEpisode:
         position_rows = [item for item in rows if item.symbol]
         cash_row = next((item for item in rows if item.entry_type == SNAPSHOT_CASH_ADJUSTMENT), None)
         types = {item.entry_type for item in position_rows}
-        cash_delta = cash_row.amount if cash_row else Decimal("0")
+        cash_delta = (
+            decimal_value((cash_row.payload or {}).get("cashDelta"))
+            if cash_row
+            else Decimal("0")
+        )
         estimated_notional = sum(
             (
                 item.quantity

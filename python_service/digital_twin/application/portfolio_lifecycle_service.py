@@ -269,7 +269,13 @@ class PortfolioAccountingService:
             # A pre-existing ledger without a checkpoint becomes the first
             # trusted comparison baseline; it is never retroactively rewritten.
             inferred_entries = (
-                infer_snapshot_ledger_entries(snapshot, portfolio_id, current_state, entries)
+                infer_snapshot_ledger_entries(
+                    snapshot,
+                    portfolio_id,
+                    current_state,
+                    entries,
+                    previous_checkpoint=previous,
+                )
                 if previous and had_prior_ledger
                 else []
             )

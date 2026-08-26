@@ -18,7 +18,7 @@ from .portfolio_ledger import (
 )
 
 
-SNAPSHOT_ACTIVITY_VERSION = "snapshot-portfolio-activity-v1"
+SNAPSHOT_ACTIVITY_VERSION = "snapshot-portfolio-activity-v2-native-cash-components"
 QUANTITY_TOLERANCE = Decimal("0.000001")
 CASH_TOLERANCE = Decimal("1")
 
@@ -81,8 +81,33 @@ def observed_positions(snapshot) -> Dict[str, Dict[str, object]]:
     return rows
 
 
+def cash_balance_components(snapshot) -> Dict[str, Decimal]:
+    """Return provider-native cash balances without FX conversion noise."""
+
+    metadata = getattr(snapshot, "metadata", {})
+    if not isinstance(metadata, dict):
+        return {}
+    rows = metadata.get("cashBalanceComponents")
+    if not isinstance(rows, dict):
+        toss = metadata.get("toss") if isinstance(metadata.get("toss"), dict) else {}
+        rows = toss.get("cashBalances")
+    if not isinstance(rows, dict):
+        return {}
+    components: Dict[str, Decimal] = {}
+    for raw_currency, raw_value in rows.items():
+        currency = str(raw_currency or "").upper().strip()
+        if not currency:
+            continue
+        amount = raw_value.get("amount") if isinstance(raw_value, dict) else raw_value
+        if amount in (None, ""):
+            continue
+        components[currency] = decimal_value(amount)
+    return components
+
+
 def snapshot_balance_fingerprint(snapshot) -> str:
     positions = observed_positions(snapshot)
+    cash_components = cash_balance_components(snapshot)
     canonical = {
         "accountId": str(getattr(snapshot, "account_id", "") or ""),
         "provider": str(getattr(snapshot, "provider", "") or "").lower(),
@@ -94,7 +119,11 @@ def snapshot_balance_fingerprint(snapshot) -> str:
             }
             for symbol, row in sorted(positions.items())
         },
-        "cash": str(decimal_value(getattr(getattr(snapshot, "portfolio", None), "cash", 0))),
+        "cash": (
+            {"components": {currency: str(amount) for currency, amount in sorted(cash_components.items())}}
+            if cash_components
+            else {"convertedKrw": str(decimal_value(getattr(getattr(snapshot, "portfolio", None), "cash", 0)))}
+        ),
     }
     encoded = json.dumps(canonical, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
@@ -146,6 +175,7 @@ def infer_snapshot_ledger_entries(
     portfolio_id: str,
     ledger_state: PortfolioLedgerState,
     prior_entries: Iterable[PortfolioLedgerEntry],
+    previous_checkpoint=None,
 ) -> List[PortfolioLedgerEntry]:
     """Return idempotent correction facts without claiming unknown trades."""
     stamp = str(getattr(snapshot, "generated_at", "") or utc_now_iso())
@@ -237,8 +267,19 @@ def infer_snapshot_ledger_entries(
 
     observed_cash = decimal_value(getattr(getattr(snapshot, "portfolio", None), "cash", 0))
     ledger_cash = ledger_state.cash.get("KRW", Decimal("0"))
-    cash_delta = observed_cash - ledger_cash
-    if abs(cash_delta) > CASH_TOLERANCE:
+    ledger_adjustment = observed_cash - ledger_cash
+    current_components = cash_balance_components(snapshot)
+    previous_components = dict(getattr(previous_checkpoint, "cash_balance_components", {}) or {})
+    components_unchanged = bool(current_components and previous_components) and current_components == previous_components
+    establishing_component_baseline = bool(current_components) and not previous_components and not entries
+    cash_delta = ledger_adjustment
+    if current_components and previous_checkpoint is not None:
+        cash_delta = observed_cash - decimal_value(getattr(previous_checkpoint, "cash_balance", 0))
+    if (
+        abs(ledger_adjustment) > CASH_TOLERANCE
+        and not components_unchanged
+        and not establishing_component_baseline
+    ):
         source_reference = observation_id + ":cash:KRW"
         entries.append(PortfolioLedgerEntry.create(
             portfolio_id,
@@ -248,7 +289,7 @@ def infer_snapshot_ledger_entries(
             entry_id=stable_id("snapshot-ledger-entry", portfolio_id, source_reference),
             source_reference=source_reference,
             currency="KRW",
-            amount=cash_delta,
+            amount=ledger_adjustment,
             payload={
                 "version": SNAPSHOT_ACTIVITY_VERSION,
                 "source": "complete-account-snapshot-difference",
@@ -257,6 +298,16 @@ def infer_snapshot_ledger_entries(
                 "previousCash": str(ledger_cash),
                 "observedCash": str(observed_cash),
                 "cashDelta": str(cash_delta),
+                "ledgerAdjustmentAmount": str(ledger_adjustment),
+                "cashChangeBasis": "native-currency-components" if current_components else "converted-cash-fallback",
+                "previousCashBalanceComponents": {
+                    currency: str(amount)
+                    for currency, amount in sorted(previous_components.items())
+                },
+                "observedCashBalanceComponents": {
+                    currency: str(amount)
+                    for currency, amount in sorted(current_components.items())
+                },
                 "previousSnapshotAt": previous_at,
                 "currentSnapshotAt": stamp,
                 "observationFingerprint": fingerprint,

@@ -360,6 +360,7 @@ def live_snapshot(
     complete=True,
     include_position=True,
     extra_positions=None,
+    cash_components=None,
 ):
     value = quantity * price
     positions = []
@@ -381,6 +382,18 @@ def live_snapshot(
     positions.extend(list(extra_positions or []))
     invested = sum(item.market_value_krw for item in positions)
     total = invested + cash
+    metadata = {
+        "accountSnapshotCompleteness": {
+            "holdings": "complete" if complete else "incomplete",
+            "cash": "complete" if complete else "incomplete",
+            "source": "test-account-provider",
+        },
+    }
+    if cash_components is not None:
+        metadata["cashBalanceComponents"] = {
+            currency: {"amount": amount, "currency": currency, "source": "test-provider"}
+            for currency, amount in cash_components.items()
+        }
     return AccountSnapshot(
         account_id="main",
         account_label="Main",
@@ -397,13 +410,7 @@ def live_snapshot(
             concentration=invested / total * 100 if total else 0,
         ),
         positions=positions,
-        metadata={
-            "accountSnapshotCompleteness": {
-                "holdings": "complete" if complete else "incomplete",
-                "cash": "complete" if complete else "incomplete",
-                "source": "test-account-provider",
-            },
-        },
+        metadata=metadata,
     )
 
 
@@ -1560,6 +1567,52 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual("stale", stale["status"])
         self.assertEqual("snapshot-older-than-checkpoint", stale["reason"])
         self.assertEqual(2, len(repository.entries))
+
+    def test_fx_only_cash_valuation_change_does_not_create_activity_or_notification(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, EventBus()),
+        )
+        native_cash = {"KRW": "774340", "USD": "17.21"}
+        service.observe_snapshot(live_snapshot(cash=798206.828, cash_components=native_cash))
+        entry_count = len(repository.entries)
+
+        result = service.observe_snapshot(live_snapshot(
+            cash=798209.4095,
+            cash_components=native_cash,
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        self.assertEqual("unchanged", result["status"])
+        self.assertEqual("cash-valuation-only-change", result["reason"])
+        self.assertEqual(0, result["inferredEntryCount"])
+        self.assertEqual(entry_count, len(repository.entries))
+        self.assertEqual([], repository.activity_episodes)
+        self.assertEqual([], repository.notification_jobs)
+        self.assertEqual(Decimal("798209.4095"), repository.checkpoint.cash_balance)
+
+    def test_native_cash_balance_change_still_creates_factual_notification(self):
+        repository = MemoryInvestmentRepository()
+        service = PortfolioAccountingService(
+            repository,
+            investment_domain_service=InvestmentDomainService(repository, EventBus()),
+        )
+        service.observe_snapshot(live_snapshot(
+            cash=798206.828,
+            cash_components={"KRW": "774340", "USD": "17.21"},
+        ))
+
+        result = service.observe_snapshot(live_snapshot(
+            cash=799206.828,
+            cash_components={"KRW": "775340", "USD": "17.21"},
+            generated_at="2026-08-12T06:10:00Z",
+        ))
+
+        self.assertEqual("cash-balance-change", result["activityEpisode"]["classification"])
+        self.assertEqual("1000.000", result["activityEpisode"]["cashDelta"])
+        self.assertTrue(result["factualNotificationQueued"])
+        self.assertEqual(1, len(repository.notification_jobs))
 
     def test_sudden_empty_account_without_cash_offset_is_quarantined(self):
         repository = MemoryInvestmentRepository()

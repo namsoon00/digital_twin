@@ -1502,6 +1502,15 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
         require_inference_context=True,
     )
     metadata = provider.diagnostics_payload()
+    metadata["cashBalanceComponents"] = {
+        currency: {
+            "amount": item.get("amount"),
+            "currency": currency,
+            "source": item.get("source") or "Toss /api/v1/buying-power",
+        }
+        for currency, item in sorted(provider.cash_balances.items())
+        if isinstance(item, dict) and item.get("amount") not in (None, "")
+    }
     metadata.update(kis_provider.diagnostics_payload())
     metadata["accountSourceFingerprint"] = provider.account_source_fingerprint or hashlib.sha256(
         "|".join([

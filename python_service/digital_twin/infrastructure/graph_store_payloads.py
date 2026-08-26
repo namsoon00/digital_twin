@@ -284,6 +284,8 @@ PROMOTED_NUMERIC_ENTITY_FIELDS = [
     "probabilityLower",
     "probabilityUpper",
     "sourceAgeSeconds",
+    "eventAgeMinutes",
+    "eventMaxAgeMinutes",
 ]
 
 PROMOTED_TEXT_ENTITY_FIELDS = [
@@ -324,6 +326,16 @@ PROMOTED_TEXT_ENTITY_FIELDS = [
     "documentHash",
     "reportName",
     "receiptDate",
+    "effectiveAt",
+    "retrievedAt",
+    "evaluatedAt",
+    "validFrom",
+    "validUntil",
+    "eventLifecycleState",
+    "eventFreshnessClass",
+    "eventDecisionEligible",
+    "eventDecisionReason",
+    "eventTimeContractVersion",
     "sourceRevision",
     "valuationMethod",
     "formula",

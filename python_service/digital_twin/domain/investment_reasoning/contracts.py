@@ -18,7 +18,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v1"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v1"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v2"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v3"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -271,6 +271,7 @@ class ActionAlternative:
     supporting_rule_ids: Tuple[str, ...] = ()
     supporting_evidence_ids: Tuple[str, ...] = ()
     counter_evidence_ids: Tuple[str, ...] = ()
+    evidence_conflict_ids: Tuple[str, ...] = ()
     invalidation_conditions: Tuple[str, ...] = ()
     decision_eligible: bool = False
 
@@ -283,6 +284,7 @@ class ActionAlternative:
             supporting_rule_ids=_texts(payload.get("supporting_rule_ids") or payload.get("supportingRuleIds")),
             supporting_evidence_ids=_texts(payload.get("supporting_evidence_ids") or payload.get("supportingEvidenceIds")),
             counter_evidence_ids=_texts(payload.get("counter_evidence_ids") or payload.get("counterEvidenceIds")),
+            evidence_conflict_ids=_texts(payload.get("evidence_conflict_ids") or payload.get("evidenceConflictIds")),
             invalidation_conditions=_texts(payload.get("invalidation_conditions") or payload.get("invalidationConditions")),
             decision_eligible=bool(payload.get("decision_eligible") or payload.get("decisionEligible")),
         )
@@ -291,7 +293,7 @@ class ActionAlternative:
         payload = asdict(self)
         for key in [
             "hypothesis_ids", "supporting_rule_ids", "supporting_evidence_ids",
-            "counter_evidence_ids", "invalidation_conditions",
+            "counter_evidence_ids", "evidence_conflict_ids", "invalidation_conditions",
         ]:
             payload[key] = list(payload[key])
         return payload
@@ -328,6 +330,10 @@ class DecisionSynthesis:
     reversal_conditions: Tuple[str, ...] = ()
     judgement_blocked: bool = False
     graph_trace_complete: bool = False
+    evidence_state: str = ""
+    hypothesis_state: str = ""
+    action_state: str = ""
+    ai_state: str = ""
     version: str = DECISION_SYNTHESIS_VERSION
 
     @classmethod
@@ -365,6 +371,10 @@ class DecisionSynthesis:
             reversal_conditions=_texts(payload.get("reversal_conditions") or payload.get("reversalConditions")),
             judgement_blocked=bool(payload.get("judgement_blocked") or payload.get("judgementBlocked")),
             graph_trace_complete=bool(payload.get("graph_trace_complete") or payload.get("graphTraceComplete")),
+            evidence_state=str(payload.get("evidence_state") or payload.get("evidenceState") or ""),
+            hypothesis_state=str(payload.get("hypothesis_state") or payload.get("hypothesisState") or ""),
+            action_state=str(payload.get("action_state") or payload.get("actionState") or ""),
+            ai_state=str(payload.get("ai_state") or payload.get("aiState") or ""),
             version=str(payload.get("version") or DECISION_SYNTHESIS_VERSION),
         )
 

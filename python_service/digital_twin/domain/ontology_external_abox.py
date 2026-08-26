@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List
 
 from .crypto_market_signals import crypto_market_observation_events
 from .disclosure_quality import disclosure_reasoning_eligibility
+from .evidence_time import configured_event_max_age_minutes, event_time_contract
 from .market_data import number
 from .instrument_profiles import instrument_profile_for_position
 from .ontology_contracts import PortfolioOntology, entity_id
@@ -139,6 +140,43 @@ def unique_list(values: Iterable[str]) -> List[str]:
         seen.add(text)
         rows.append(text)
     return rows
+
+
+def add_event_validity_concept(
+    graph: PortfolioOntology,
+    event_id: str,
+    symbol: str,
+    event_kind: str,
+    contract: Dict[str, object],
+) -> str:
+    state = str(contract.get("eventLifecycleState") or "invalid")
+    validity_id = add_entity(
+        graph,
+        "event-validity-assessment",
+        symbol + ":" + event_kind + ":" + str(contract.get("effectiveAt") or "unknown"),
+        symbol + " " + event_kind + " 사건 유효성 " + state,
+        {
+            "tboxClass": "EventValidityAssessment",
+            "tboxClasses": ["DataQuality", "DataFreshness", "EvidenceTimeContract", "EventValidityAssessment"],
+            "symbol": symbol,
+            "eventKind": event_kind,
+            **contract,
+        },
+    )
+    add_relation(
+        graph,
+        event_id,
+        validity_id,
+        "HAS_EVENT_VALIDITY",
+        weight=1.0,
+        properties={
+            "source": "event-time-contract",
+            "dataState": "sufficient" if contract.get("eventDecisionEligible") else "partial",
+            "reviewLevel": "normal" if contract.get("eventDecisionEligible") else "observe",
+            "aiInfluenceLabel": str(contract.get("eventDecisionReason") or "사건 유효성"),
+        },
+    )
+    return validity_id
 
 
 def position_weight(position: Position, portfolio: PortfolioSummary) -> float:
@@ -940,7 +978,15 @@ def external_signal_relation_properties(group: str, value: object) -> Dict[str, 
     )
 
 
-def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, external_signals: Dict[str, object]) -> None:
+def add_symbol_external_signal_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    external_signals: Dict[str, object],
+    evaluated_at: str = "",
+    event_time_settings: Dict[str, object] = None,
+) -> None:
+    event_time_settings = event_time_settings if isinstance(event_time_settings, dict) else {}
     for row in symbol_external_signal_items(external_signals, symbol):
         group = str(row.get("group") or "")
         if group == "companyKnowledge":
@@ -969,12 +1015,20 @@ def add_symbol_external_signal_concepts(graph: PortfolioOntology, stock_id: str,
             weight=1.0,
             properties=external_signal_relation_properties(group, row.get("value")),
         )
-        add_symbol_fundamental_event_concepts(graph, stock_id, symbol, group, row.get("value"))
+        add_symbol_fundamental_event_concepts(graph, stock_id, symbol, group, row.get("value"), evaluated_at, event_time_settings)
         add_symbol_company_overview_concepts(graph, stock_id, symbol, group, row.get("value"))
-        add_symbol_earnings_report_concepts(graph, stock_id, symbol, group, row.get("value"))
+        add_symbol_earnings_report_concepts(graph, stock_id, symbol, group, row.get("value"), evaluated_at, event_time_settings)
 
 
-def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, group: str, value: object) -> None:
+def add_symbol_fundamental_event_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    group: str,
+    value: object,
+    evaluated_at: str = "",
+    event_time_settings: Dict[str, object] = None,
+) -> None:
     if not isinstance(value, dict) or group not in {"secFilings", "dartDisclosures"}:
         return
     latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
@@ -996,6 +1050,15 @@ def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: st
     add_relation(graph, stock_id, event_id, "HAS_OBSERVATION", weight=1.0, properties={"source": group, "aiInfluenceLabel": label})
     add_relation(graph, stock_id, event_id, "HAS_VALUATION", weight=0.7, properties={"source": group, "polarity": "context", "aiInfluenceLabel": label})
     disclosure_state = disclosure_reasoning_eligibility(value)
+    effective_at = str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or "")
+    retrieved_at = str(value.get("fetchedAt") or value.get("sourceFetchedAt") or "")
+    disclosure_time = event_time_contract(
+        event_kind="disclosure",
+        effective_at=effective_at,
+        retrieved_at=retrieved_at,
+        evaluated_at=evaluated_at,
+        max_age_minutes=configured_event_max_age_minutes(event_time_settings or {}, "disclosure"),
+    )
     filing_id = ""
     if disclosure_state.get("reasoningEligible"):
         filing_id = add_entity(graph, "disclosure-filing", symbol + ":" + group, label, {
@@ -1009,16 +1072,18 @@ def add_symbol_fundamental_event_concepts(graph: PortfolioOntology, stock_id: st
             "receiptDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or ""),
             "latestFiling": latest,
             **disclosure_state,
+            **disclosure_time,
         })
     props = {"source": group, "polarity": "context", "aiInfluenceLabel": label}
     if filing_id:
+        add_event_validity_concept(graph, filing_id, symbol, "disclosure", disclosure_time)
         add_relation(graph, stock_id, filing_id, "HAS_OBSERVATION", weight=1.0, properties={**props, **disclosure_state})
         add_relation(graph, stock_id, filing_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties={**props, **disclosure_state})
         add_relation(graph, filing_id, stock_id, "MENTIONS_INSTRUMENT", weight=0.78, properties={**props, **disclosure_state})
         add_relation(graph, event_id, filing_id, "HAS_PROVENANCE", weight=1.0, properties={**props, **disclosure_state})
-    add_symbol_corporate_action_concept(graph, stock_id, event_id, symbol, group, value, label)
-    add_symbol_regulatory_event_concept(graph, stock_id, event_id, symbol, group, value, label)
-    add_symbol_earnings_event_from_filing(graph, stock_id, event_id, symbol, group, value, label)
+    add_symbol_corporate_action_concept(graph, stock_id, event_id, symbol, group, value, label, evaluated_at, event_time_settings)
+    add_symbol_regulatory_event_concept(graph, stock_id, event_id, symbol, group, value, label, evaluated_at, event_time_settings)
+    add_symbol_earnings_event_from_filing(graph, stock_id, event_id, symbol, group, value, label, evaluated_at, event_time_settings)
     add_symbol_revenue_exposure_from_facts(graph, stock_id, symbol, group, value, label)
 
 
@@ -1041,6 +1106,8 @@ def add_symbol_corporate_action_concept(
     group: str,
     value: Dict[str, object],
     label: str,
+    evaluated_at: str = "",
+    event_time_settings: Dict[str, object] = None,
 ) -> None:
     if not disclosure_reasoning_eligibility(value).get("reasoningEligible"):
         return
@@ -1048,6 +1115,14 @@ def add_symbol_corporate_action_concept(
     if not action_type:
         return
     latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    effective_at = str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or "")
+    time_contract = event_time_contract(
+        event_kind="corporate-action",
+        effective_at=effective_at,
+        retrieved_at=value.get("fetchedAt"),
+        evaluated_at=evaluated_at,
+        max_age_minutes=configured_event_max_age_minutes(event_time_settings or {}, "corporate-action"),
+    )
     action_id = add_entity(graph, "corporate-action", symbol + ":" + group + ":" + action_type, label, {
         "tboxClass": "CorporateAction",
         "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "CorporateAction"],
@@ -1057,8 +1132,10 @@ def add_symbol_corporate_action_concept(
         "provider": str(value.get("provider") or ""),
         "reportName": str(value.get("reportName") or value.get("report_name") or latest.get("form") or label),
         "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
-        "eventDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or ""),
+        "eventDate": effective_at,
+        **time_contract,
     })
+    add_event_validity_concept(graph, action_id, symbol, "corporate-action", time_contract)
     props = {"source": group, "polarity": "context", "aiInfluenceLabel": "기업 액션: " + label, "actionType": action_type}
     add_relation(graph, stock_id, action_id, "HAS_OBSERVATION", weight=1.0, properties=props)
     add_relation(graph, stock_id, action_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
@@ -1074,6 +1151,8 @@ def add_symbol_regulatory_event_concept(
     group: str,
     value: Dict[str, object],
     label: str,
+    evaluated_at: str = "",
+    event_time_settings: Dict[str, object] = None,
 ) -> None:
     if not disclosure_reasoning_eligibility(value).get("reasoningEligible"):
         return
@@ -1081,6 +1160,14 @@ def add_symbol_regulatory_event_concept(
     if not event_type:
         return
     latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
+    effective_at = str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or "")
+    time_contract = event_time_contract(
+        event_kind="regulatory",
+        effective_at=effective_at,
+        retrieved_at=value.get("fetchedAt"),
+        evaluated_at=evaluated_at,
+        max_age_minutes=configured_event_max_age_minutes(event_time_settings or {}, "regulatory"),
+    )
     regulatory_id = add_entity(graph, "regulatory-event", symbol + ":" + group + ":" + event_type, label, {
         "tboxClass": "RegulatoryEvent",
         "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "RegulatoryEvent"],
@@ -1090,8 +1177,10 @@ def add_symbol_regulatory_event_concept(
         "provider": str(value.get("provider") or ""),
         "reportName": str(value.get("reportName") or value.get("report_name") or latest.get("form") or label),
         "receiptNo": str(value.get("receiptNo") or value.get("receipt_no") or latest.get("accessionNumber") or ""),
-        "eventDate": str(value.get("receiptDate") or value.get("receipt_date") or latest.get("filingDate") or latest.get("reportDate") or ""),
+        "eventDate": effective_at,
+        **time_contract,
     })
+    add_event_validity_concept(graph, regulatory_id, symbol, "regulatory", time_contract)
     props = external_evidence_properties(
         source=group,
         label="규제 이벤트: " + label,
@@ -1111,6 +1200,8 @@ def add_symbol_earnings_event_from_filing(
     group: str,
     value: Dict[str, object],
     label: str,
+    evaluated_at: str = "",
+    event_time_settings: Dict[str, object] = None,
 ) -> None:
     latest = value.get("latestFiling") if isinstance(value.get("latestFiling"), dict) else {}
     facts = value.get("facts") if isinstance(value.get("facts"), dict) else {}
@@ -1120,6 +1211,13 @@ def add_symbol_earnings_event_from_filing(
         return
     period_end = str(revenue.get("end") or latest.get("reportDate") or "")
     reported_at = str(revenue.get("filed") or latest.get("filingDate") or value.get("receiptDate") or value.get("receipt_date") or "")
+    time_contract = event_time_contract(
+        event_kind="earnings",
+        effective_at=reported_at,
+        retrieved_at=value.get("fetchedAt"),
+        evaluated_at=evaluated_at,
+        max_age_minutes=configured_event_max_age_minutes(event_time_settings or {}, "earnings"),
+    )
     earnings_id = add_entity(graph, "earnings-calendar-event", symbol + ":" + (period_end or reported_at or group), label, {
         "tboxClass": "EarningsCalendarEvent",
         "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FundamentalObservation", "EarningsEvent", "EarningsCalendarEvent", "ValuationSignal"],
@@ -1129,10 +1227,12 @@ def add_symbol_earnings_event_from_filing(
         "eventStatus": "reported",
         "periodEnd": period_end,
         "reportedAt": reported_at,
+        **time_contract,
         "form": str(latest.get("form") or ""),
         "revenue": number((facts.get("revenue") if isinstance(facts.get("revenue"), dict) else {}).get("value")),
         "netIncome": number((facts.get("netIncome") if isinstance(facts.get("netIncome"), dict) else {}).get("value")),
     })
+    add_event_validity_concept(graph, earnings_id, symbol, "earnings", time_contract)
     props = {"source": group, "polarity": "context", "aiInfluenceLabel": "실적 이벤트: " + label}
     add_relation(graph, stock_id, earnings_id, "HAS_OBSERVATION", weight=1.0, properties=props)
     add_relation(graph, stock_id, earnings_id, "HAS_EXTERNAL_SIGNAL", weight=1.0, properties=props)
@@ -1261,13 +1361,29 @@ def add_symbol_company_overview_concepts(graph: PortfolioOntology, stock_id: str
         add_relation(graph, stock_id, industry_id, "BELONGS_TO", weight=1.0, properties={"source": group, "aiInfluenceLabel": "산업 분류"})
 
 
-def add_symbol_earnings_report_concepts(graph: PortfolioOntology, stock_id: str, symbol: str, group: str, value: object) -> None:
+def add_symbol_earnings_report_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    symbol: str,
+    group: str,
+    value: object,
+    evaluated_at: str = "",
+    event_time_settings: Dict[str, object] = None,
+) -> None:
     if not isinstance(value, dict) or group != "earningsReports":
         return
     latest = value.get("latestQuarter") if isinstance(value.get("latestQuarter"), dict) else {}
     if not latest:
         return
     label = symbol + " 실적 발표"
+    reported_at = str(latest.get("reportedDate") or latest.get("fiscalDateEnding") or "")
+    time_contract = event_time_contract(
+        event_kind="earnings",
+        effective_at=reported_at,
+        retrieved_at=value.get("fetchedAt"),
+        evaluated_at=evaluated_at,
+        max_age_minutes=configured_event_max_age_minutes(event_time_settings or {}, "earnings"),
+    )
     earnings_id = add_entity(graph, "earnings-calendar-event", symbol + ":alpha:" + str(latest.get("fiscalDateEnding") or latest.get("reportedDate") or "latest"), label, {
         "tboxClass": "EarningsCalendarEvent",
         "tboxClasses": ["Observation", "ExternalObservation", "ExternalSignal", "FundamentalObservation", "EarningsEvent", "EarningsCalendarEvent", "ValuationSignal"],
@@ -1280,7 +1396,9 @@ def add_symbol_earnings_report_concepts(graph: PortfolioOntology, stock_id: str,
         "estimatedEPS": number(latest.get("estimatedEPS")),
         "surprise": number(latest.get("surprise")),
         "surprisePercentage": number(latest.get("surprisePercentage")),
+        **time_contract,
     })
+    add_event_validity_concept(graph, earnings_id, symbol, "earnings", time_contract)
     props = external_evidence_properties(
         source=group,
         label=label,

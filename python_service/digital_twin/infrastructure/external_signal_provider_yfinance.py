@@ -148,6 +148,16 @@ def frame_rows(frame, limit: int = 40) -> List[Dict[str, object]]:
         return []
 
 
+def earnings_date_rows(frame, limit: int = 40) -> List[Dict[str, object]]:
+    """Return earnings rows newest first regardless of provider frame order."""
+    rows = frame_rows(frame, 0)
+    rows.sort(
+        key=lambda item: str(item.get("Earnings Date") or item.get("index") or item.get("Date") or ""),
+        reverse=True,
+    )
+    return rows[:max(1, int(limit or 1))]
+
+
 def normalized_yfinance_earnings_estimates(payload: Dict[str, object], fetched_at: str) -> List[Dict[str, object]]:
     estimates = payload.get("earningsEstimate") if isinstance(payload.get("earningsEstimate"), list) else []
     trends = {
@@ -350,10 +360,26 @@ def overview_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str,
 
 def earnings_report_from_yfinance(symbol: str, payload: Dict[str, object]) -> Dict[str, object]:
     earnings_rows = payload.get("earningsDates") if isinstance(payload.get("earningsDates"), list) else []
-    latest = earnings_rows[-1] if earnings_rows else {}
+    fetched_at = str(payload.get("collectedAt") or utc_now_iso())
+    cutoff = parse_iso_datetime(fetched_at)
+    completed = [
+        item for item in earnings_rows
+        if isinstance(item, dict)
+        and str(item.get("Earnings Date") or item.get("index") or item.get("Date") or "").strip()
+        and any(item.get(key) not in (None, "") for key in ["Reported EPS", "Surprise(%)"])
+        and (
+            cutoff is None
+            or parse_iso_datetime(item.get("Earnings Date") or item.get("index") or item.get("Date")) is None
+            or parse_iso_datetime(item.get("Earnings Date") or item.get("index") or item.get("Date")) <= cutoff
+        )
+    ]
+    completed.sort(
+        key=lambda item: str(item.get("Earnings Date") or item.get("index") or item.get("Date") or ""),
+        reverse=True,
+    )
+    latest = completed[0] if completed else {}
     if not isinstance(latest, dict):
         latest = {}
-    fetched_at = str(payload.get("collectedAt") or utc_now_iso())
     estimates = normalized_yfinance_earnings_estimates(payload, fetched_at)
     fy1 = next((item for item in estimates if item.get("period") == "fy1"), {})
     return {
@@ -572,7 +598,7 @@ class ExternalSignalYFinanceMixin:
             "quarterlyBalanceSheet": lambda: statement_rows(getattr(ticker, "quarterly_balance_sheet", None), statement_periods),
             "cashFlow": lambda: statement_rows(getattr(ticker, "cashflow", None), statement_periods),
             "quarterlyCashFlow": lambda: statement_rows(getattr(ticker, "quarterly_cashflow", None), statement_periods),
-            "earningsDates": lambda: frame_rows(ticker.get_earnings_dates(limit=earnings_limit), earnings_limit) if hasattr(ticker, "get_earnings_dates") else [],
+            "earningsDates": lambda: earnings_date_rows(ticker.get_earnings_dates(limit=earnings_limit), earnings_limit) if hasattr(ticker, "get_earnings_dates") else [],
             "earningsEstimate": lambda: frame_rows(getattr(ticker, "earnings_estimate", None), table_rows_limit),
             "revenueEstimate": lambda: frame_rows(getattr(ticker, "revenue_estimate", None), table_rows_limit),
             "epsTrend": lambda: frame_rows(getattr(ticker, "eps_trend", None), table_rows_limit),
@@ -658,6 +684,11 @@ class ExternalSignalYFinanceMixin:
         collected_at = str(payload.get("collectedAt") or "")
         if module == "news":
             return first_news_timestamp(payload.get("news")) or collected_at, "publishedAt"
+        if module == "earningsDates":
+            rows = payload.get("earningsDates") if isinstance(payload.get("earningsDates"), list) else []
+            latest = rows[0] if rows and isinstance(rows[0], dict) else {}
+            effective_at = str(latest.get("Earnings Date") or latest.get("index") or latest.get("Date") or "")
+            return effective_at, "effectiveAt"
         return collected_at, "collectedAt"
 
     def yfinance_module_freshness_record(self, module: str, payload: Dict[str, object]) -> Dict[str, object]:

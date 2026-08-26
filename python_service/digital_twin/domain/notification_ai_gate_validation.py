@@ -313,8 +313,12 @@ def local_action_envelope_summary(context: Dict[str, object], action: str) -> st
             return "매수로 바꿀 만큼의 진입 근거가 아직 확인되지 않아, 지금은 관심을 유지합니다."
         if status in {"ENTRY_BLOCKED", "JUDGEMENT_BLOCKED"}:
             return "필수 자료나 반대 조건 때문에 지금은 신규 진입 판단을 보류합니다."
+        if status == "NO_ELIGIBLE_THESIS":
+            return "현재 확인된 사실만으로 성립한 진입 가설이 없어 주문 없이 관찰을 이어갑니다."
     if status == "HOLDING_REVIEW":
         return "보유 판단을 바꿀 만큼의 근거가 있는지 다시 확인하는 단계입니다."
+    if status == "NO_ELIGIBLE_THESIS":
+        return "현재 확인된 사실만으로 행동을 바꿀 투자 가설이 성립하지 않았습니다."
     label = ACTION_ENVELOPE_STATUS_LABELS.get(status, "")
     return (label + " 상태입니다.") if label else ""
 

@@ -370,8 +370,18 @@ def normalized_data_quality(row: Dict[str, object]) -> str:
     return "unknown"
 
 
-def observation_is_valid(row: Dict[str, object]) -> bool:
-    return normalized_data_quality(row) not in {"stale", "reference"}
+def observation_is_valid(
+    row: Dict[str, object],
+    definition: TemporalWindowDefinition = None,
+) -> bool:
+    quality = normalized_data_quality(row)
+    if quality == "stale":
+        return False
+    if quality == "reference":
+        # A verified closing price is invalid evidence for a live intraday
+        # move, but it is the canonical observation for daily history.
+        return bool(definition is not None and not definition.is_intraday)
+    return True
 
 
 def market_session_phase(
@@ -509,8 +519,12 @@ def event_counts(symbol: str, rows: List[Dict[str, object]]) -> Dict[str, object
 
 def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWindowDefinition) -> Dict[str, object]:
     priced_rows = [row for row in rows if row_number(row, "currentPrice", "current_price") > 0]
+    valid_rows = [row for row in priced_rows if observation_is_valid(row, definition)]
+    # Keep the raw price path visible for diagnostics, while validity counts
+    # decide whether a rule may use that path as judgement evidence.
     first = priced_rows[0] if priced_rows else {}
     last = priced_rows[-1] if priced_rows else {}
+    latest_raw = priced_rows[-1] if priced_rows else {}
     first_time = parse_timestamp(row_timestamp(first))
     last_time = parse_timestamp(row_timestamp(last))
     prices = [row_number(row, "currentPrice", "current_price") for row in priced_rows]
@@ -523,9 +537,8 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     start_price = prices[0] if prices else 0.0
     end_price = prices[-1] if prices else 0.0
     smart_money_rows = [
-        row for row in priced_rows
+        row for row in valid_rows
         if has_smart_money_flow_observation(row)
-        and observation_is_valid(row)
     ]
     smart_money_first = smart_money_rows[0] if smart_money_rows else {}
     smart_money_last = smart_money_rows[-1] if smart_money_rows else {}
@@ -549,12 +562,11 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
             or row.get("updatedAt")
             or ""
         )[:10]
-        for row in rows
+        for row in valid_rows
         if row
     }
     session_dates.discard("")
     required_sessions = definition.required_sessions
-    valid_rows = [row for row in priced_rows if observation_is_valid(row)]
     sample_coverage = len(valid_rows) / max(1.0, definition.min_samples)
     session_coverage = len(session_dates) / max(1.0, required_sessions)
     stale_count = len(priced_rows) - len(valid_rows)
@@ -592,7 +604,7 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "invalidObservationCount": max(0, len(rows) - len(valid_rows)),
         "staleObservationCount": stale_count,
         "validObservationRatio": round(len(valid_rows) / max(1, len(rows)), 3),
-        "latestObservationQuality": normalized_data_quality(last),
+        "latestObservationQuality": normalized_data_quality(latest_raw),
         "requiredSessionCount": required_sessions,
         "coveredSessionCount": len(session_dates),
         "hasSufficientHistory": sufficient,

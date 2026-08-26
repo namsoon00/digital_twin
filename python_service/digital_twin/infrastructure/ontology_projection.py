@@ -5350,6 +5350,19 @@ class PortfolioOntologyProjectionRecorder:
             include_derived_decision_items=False,
             reference_positions=observation_input.get("referencePositions") or [],
         )
+        event_validity_rows = [
+            item for item in graph.entities
+            if item.kind == "event-validity-assessment"
+        ]
+        stage_timings["eventValidityAssessmentCount"] = len(event_validity_rows)
+        stage_timings["eventDecisionEligibleCount"] = sum(
+            1 for item in event_validity_rows
+            if bool((item.properties or {}).get("eventDecisionEligible"))
+        )
+        stage_timings["eventExpiredCount"] = sum(
+            1 for item in event_validity_rows
+            if str((item.properties or {}).get("eventLifecycleState") or "") == "expired"
+        )
         statistical_scoring_required = bool(
             self.statistical_signal_service
             and rule_catalog_requires_statistical_signal_scoring(rule_catalog)

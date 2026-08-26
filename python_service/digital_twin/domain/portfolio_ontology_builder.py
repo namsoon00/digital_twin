@@ -384,7 +384,18 @@ def build_portfolio_ontology(
         add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_statistical_signal_concepts(graph, stock_id, symbol, runtime_context)
-        add_symbol_external_signal_concepts(graph, stock_id, symbol, external_signals)
+        add_symbol_external_signal_concepts(
+            graph,
+            stock_id,
+            symbol,
+            external_signals,
+            evaluated_at=str(runtime_context.get("asOf") or ""),
+            event_time_settings=(
+                runtime_context.get("settings")
+                if isinstance(runtime_context.get("settings"), dict)
+                else {}
+            ),
+        )
         add_company_knowledge_concepts(graph, stock_id, symbol, external_signals)
         add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)

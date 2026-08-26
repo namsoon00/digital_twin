@@ -857,6 +857,44 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual("action-envelope-conflict", synthesis.conflict_state)
         self.assertTrue(synthesis.judgement_blocked)
 
+    def test_unselected_action_constraint_does_not_block_selected_hold(self):
+        relation = hypothesis_candidate()["metadata"]["ontologyRelationContext"]
+        relation["assessmentBundle"]["investmentOpinion"].update({
+            "candidateAction": "HOLD",
+        })
+        relation["assessmentBundle"]["recommendedPlan"].update({
+            "investmentAction": "HOLD",
+        })
+        relation["investmentBrain"]["hypothesisSet"]["hypotheses"][0]["candidateAction"] = "HOLD"
+        relation.update({
+            "sourceAboxSnapshotId": "abox:constraint:1",
+            "inferenceGenerationId": "generation:constraint:1",
+            "generationAligned": True,
+            "allowedActions": ["HOLD", "BUY"],
+            "blockedActions": ["BUY"],
+            "decision": {
+                "candidateAction": "HOLD",
+                "selectedRuleId": "graph.price.recovery.v1",
+            },
+            "graphStoreInference": {
+                "sourceAboxSnapshotId": "abox:constraint:1",
+                "inferenceGenerationId": "generation:constraint:1",
+                "relations": [{
+                    "ruleId": "graph.price.recovery.v1",
+                    "candidateAction": "HOLD",
+                }],
+                "traces": [{"id": "trace:hold"}],
+            },
+        })
+
+        synthesis = decision_synthesis_from_relation_context("account:1", relation)
+
+        self.assertEqual("HOLD", synthesis.investment_view_action)
+        self.assertEqual(("HOLD",), synthesis.allowed_actions)
+        self.assertEqual("action-constraints-applied", synthesis.conflict_state)
+        self.assertFalse(synthesis.judgement_blocked)
+        self.assertEqual("JUDGEMENT_READY", synthesis.ai_state)
+
     def test_reasoning_case_persists_decision_synthesis_before_ai(self):
         repository = InMemoryReasoningCaseRepository()
         orchestrator = InvestmentReasoningOrchestrator(repository)

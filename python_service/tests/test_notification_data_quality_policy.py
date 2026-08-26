@@ -417,6 +417,46 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("validation_blocked", decision.suppression_reason)
 
+    def test_no_eligible_thesis_can_reach_ai_as_non_action_interpretation(self):
+        context = self._typedb_relation_context({
+            "messageType": INVESTMENT_INSIGHT,
+            "ontologyInsight": {
+                "subject": "TSLA",
+                "reviewLevel": "blocked",
+                "dataState": "partial",
+                "changeState": "new-condition",
+                "validationState": "blocked",
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "hypothesisState": "NO_ELIGIBLE_THESIS",
+                    "aiInterpretationEligible": True,
+                    "judgementBlocked": False,
+                },
+                "actionEnvelope": {
+                    "status": "NO_ELIGIBLE_THESIS",
+                    "judgementBlocked": False,
+                },
+            },
+        })
+        job = NotificationJob.create(
+            "Tesla 가설 미성립 상태 해석",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(job, default_notification_rule(INVESTMENT_INSIGHT))
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("conditional", decision.gate_state)
+        self.assertIn("행동을 만들지 않고", decision.gate_reason)
+
     @staticmethod
     def _typedb_relation_context(context):
         """Give cooldown tests the same TypeDB-backed contract as production."""

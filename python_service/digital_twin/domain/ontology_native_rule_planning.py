@@ -70,6 +70,7 @@ NATIVE_RULE_PLANNER_RELATION_TARGET_PROPERTY_FIELDS = {
     "documentAnalysisState",
     "documentVerificationState",
     "evidenceEligibilityState",
+    "eventDecisionEligible",
     "eventType",
     "factor",
     "field",

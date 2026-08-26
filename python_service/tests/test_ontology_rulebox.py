@@ -125,6 +125,26 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("reference", values["latestObservationQuality"])
         self.assertEqual(0, values["validObservationCount"])
 
+    def test_completed_close_is_valid_for_multi_day_history(self):
+        definition = parse_temporal_windows("3D=3d:3")[0]
+        rows = [
+            {
+                "bucketAt": "2026-07-" + str(20 + index).zfill(2) + "T07:00:00Z",
+                "marketSessionDate": "2026-07-" + str(20 + index).zfill(2),
+                "currentPrice": 100 + index,
+                "dataQuality": "last-close",
+                "marketSession": "market-closed",
+            }
+            for index in range(3)
+        ]
+
+        values = temporal_window_values(rows, definition)
+
+        self.assertTrue(values["hasSufficientHistory"])
+        self.assertEqual(3, values["validObservationCount"])
+        self.assertEqual(0, values["staleObservationCount"])
+        self.assertEqual(2.0, values["priceChangePct"])
+
     def test_external_raw_fact_rules_compile_to_native_typedb_queries(self):
         rules_by_id = {item.rule_id: item for item in governed_graph_inference_rules()}
         expected_rule_ids = {
@@ -217,6 +237,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
                 "documentVerificationState": "verified",
                 "documentAnalysisState": "ready",
                 "evidenceEligibilityState": "eligible",
+                "eventDecisionEligible": True,
             },
             disclosure.conditions[1].target_property_filters,
         )

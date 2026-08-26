@@ -488,7 +488,11 @@ def _compact_company_overview(value: object) -> Dict[str, object]:
 
 def _compact_earnings_report(value: object) -> Dict[str, object]:
     source = value if isinstance(value, Mapping) else {}
-    result = _selected(source, ["symbol", "provider", "fetchedAt"], text_limit=240, depth=2)
+    result = _selected(source, [
+        "symbol", "provider", "fetchedAt", "retrievedAt", "effectiveAt", "validFrom", "validUntil",
+        "eventLifecycleState", "eventFreshnessClass", "eventDecisionEligible", "eventDecisionReason",
+        "eventTimeContractVersion", "eventAgeMinutes", "eventMaxAgeMinutes",
+    ], text_limit=240, depth=2)
     latest = _selected(
         source.get("latestQuarter"),
         ["fiscalDateEnding", "reportedDate", "reportedEPS", "estimatedEPS", "surprise", "surprisePercentage"],
@@ -518,6 +522,9 @@ def _compact_filing(value: object) -> Dict[str, object]:
             "symbol", "provider", "companyName", "entityName", "cik", "reportName", "report_name",
             "receiptNo", "receipt_no", "receiptDate", "receipt_date", "fetchedAt",
             "documentTextQuality", "documentTextPreview", "documentText", "sourceAsOf",
+            "retrievedAt", "effectiveAt", "validFrom", "validUntil", "eventLifecycleState",
+            "eventFreshnessClass", "eventDecisionEligible", "eventDecisionReason",
+            "eventTimeContractVersion", "eventAgeMinutes", "eventMaxAgeMinutes",
         ],
         text_limit=4000,
         list_limit=8,

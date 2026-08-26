@@ -108,7 +108,7 @@ def decision_synthesis_from_relation_context(
             actions_by_rule.setdefault(rule_id, [])
             if candidate_action not in actions_by_rule[rule_id]:
                 actions_by_rule[rule_id].append(candidate_action)
-    grouped: Dict[str, list] = {}
+    hypothesis_paths = []
     eligible_ids = []
     reference_ids = []
     for hypothesis in hypotheses:
@@ -130,38 +130,33 @@ def decision_synthesis_from_relation_context(
             actions.append("UNSPECIFIED")
         assessment = hypothesis_decision_eligibility(hypothesis)
         for action in actions:
-            grouped.setdefault(action, []).append((hypothesis, bool(assessment.get("eligible"))))
+            hypothesis_paths.append((action, hypothesis, bool(assessment.get("eligible"))))
         (eligible_ids if assessment.get("eligible") else reference_ids).append(hypothesis_id)
 
     alternatives = []
-    for action in sorted(grouped):
-        rows = grouped[action]
+    for action, hypothesis, eligible in sorted(
+        hypothesis_paths,
+        key=lambda item: (str(item[0]), str(item[1].get("hypothesisId") or item[1].get("hypothesis_id") or "")),
+    ):
+        supporting_evidence_ids = _texts(
+            hypothesis.get("supportingEvidenceIds") or hypothesis.get("supporting_evidence_ids")
+        )
+        counter_evidence_ids = _texts(
+            hypothesis.get("counterEvidenceIds") or hypothesis.get("counter_evidence_ids")
+        )
+        evidence_conflicts = tuple(
+            evidence_id for evidence_id in supporting_evidence_ids
+            if evidence_id in set(counter_evidence_ids)
+        )
         alternatives.append(ActionAlternative(
             action=action,
-            hypothesis_ids=_texts(
-                row.get("hypothesisId") or row.get("hypothesis_id") for row, _eligible in rows
-            ),
-            supporting_rule_ids=_texts(
-                value
-                for row, _eligible in rows
-                for value in row.get("supportingRuleIds") or row.get("supporting_rule_ids") or []
-            ),
-            supporting_evidence_ids=_texts(
-                value
-                for row, _eligible in rows
-                for value in row.get("supportingEvidenceIds") or row.get("supporting_evidence_ids") or []
-            ),
-            counter_evidence_ids=_texts(
-                value
-                for row, _eligible in rows
-                for value in row.get("counterEvidenceIds") or row.get("counter_evidence_ids") or []
-            ),
-            invalidation_conditions=_texts(
-                value
-                for row, _eligible in rows
-                for value in row.get("invalidationConditions") or row.get("invalidation_conditions") or []
-            ),
-            decision_eligible=any(eligible for _row, eligible in rows),
+            hypothesis_ids=_texts([hypothesis.get("hypothesisId") or hypothesis.get("hypothesis_id")]),
+            supporting_rule_ids=_texts(hypothesis.get("supportingRuleIds") or hypothesis.get("supporting_rule_ids")),
+            supporting_evidence_ids=supporting_evidence_ids,
+            counter_evidence_ids=counter_evidence_ids,
+            evidence_conflict_ids=evidence_conflicts,
+            invalidation_conditions=_texts(hypothesis.get("invalidationConditions") or hypothesis.get("invalidation_conditions")),
+            decision_eligible=eligible and not evidence_conflicts,
         ))
 
     symbol = str(subject.get("symbol") or relation.get("symbol") or "").upper().strip()
@@ -193,6 +188,22 @@ def decision_synthesis_from_relation_context(
             or (allowed_actions and investment_view_action not in set(allowed_actions))
         )
     )
+    graph_trace_complete = bool(
+        source_abox_snapshot_id
+        and inference_generation_id
+        and relation.get("generationAligned")
+        and traces
+    )
+    quality_blocked = bool(quality_assessment.get("judgementBlocked"))
+    no_eligible_thesis = not eligible_ids and not investment_view_action and not quality_blocked
+    selected_action_conflict = candidate_contract_conflict
+    judgement_blocked = bool(
+        envelope.get("judgementBlocked")
+        or quality_blocked
+        or selected_action_conflict
+    )
+    if no_eligible_thesis and not quality_blocked:
+        judgement_blocked = False
     return DecisionSynthesis(
         synthesis_id=_stable_id(
             account_id,
@@ -233,7 +244,9 @@ def decision_synthesis_from_relation_context(
         change_state=str(relation.get("changeState") or ""),
         conflict_state=(
             "action-envelope-conflict"
-            if overlap or candidate_contract_conflict
+            if candidate_contract_conflict
+            else "action-constraints-applied"
+            if overlap
             else str(relation.get("conflictState") or "")
         ),
         missing_data=_texts(relation.get("missingData")),
@@ -241,19 +254,12 @@ def decision_synthesis_from_relation_context(
         reversal_conditions=_texts(
             decision.get("weakenConditions") or envelope.get("invalidationConditions")
         ),
-        judgement_blocked=bool(
-            envelope.get("judgementBlocked")
-            or quality_assessment.get("judgementBlocked")
-            or not investment_view_action
-            or overlap
-            or candidate_contract_conflict
-        ),
-        graph_trace_complete=bool(
-            source_abox_snapshot_id
-            and inference_generation_id
-            and relation.get("generationAligned")
-            and traces
-        ),
+        judgement_blocked=judgement_blocked,
+        graph_trace_complete=graph_trace_complete,
+        evidence_state="INVALID" if quality_blocked else ("VERIFIED" if graph_trace_complete else "PARTIAL"),
+        hypothesis_state="NO_ELIGIBLE_THESIS" if no_eligible_thesis else ("ELIGIBLE" if eligible_ids else "REFERENCE_ONLY"),
+        action_state="CONFLICTED" if selected_action_conflict else ("SELECTED" if investment_view_action else "NOT_APPLICABLE"),
+        ai_state="BLOCKED" if judgement_blocked else ("INTERPRETATION_READY" if no_eligible_thesis else "JUDGEMENT_READY"),
     )
 
 

@@ -3828,6 +3828,7 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                         "documentVerificationState": "verified",
                         "documentAnalysisState": "ready",
                         "evidenceEligibilityState": "eligible",
+                        "eventDecisionEligible": True,
                     },
                 ),
             ],
@@ -3863,7 +3864,10 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     "보고 실적의 컨센서스 대비 서프라이즈가 RuleBox 하회 기준 이하입니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
                     target_kind="earnings-calendar-event",
-                    target_property_filters={"surprisePercentage": {"operator": "<=", "value": -5}},
+                    target_property_filters={
+                        "surprisePercentage": {"operator": "<=", "value": -5},
+                        "eventDecisionEligible": True,
+                    },
                 ),
             ],
             derivations=[
@@ -3898,7 +3902,10 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     "보고 실적의 컨센서스 대비 서프라이즈가 RuleBox 상회 기준 이상입니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
                     target_kind="earnings-calendar-event",
-                    target_property_filters={"surprisePercentage": {"operator": ">=", "value": 5}},
+                    target_property_filters={
+                        "surprisePercentage": {"operator": ">=", "value": 5},
+                        "eventDecisionEligible": True,
+                    },
                 ),
             ],
             derivations=[
@@ -3933,6 +3940,7 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     "종목에 소송, 제재, 조사 등 규제 이벤트 관측이 연결되어 있습니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
                     target_kind="regulatory-event",
+                    target_property_filters={"eventDecisionEligible": True},
                 ),
             ],
             derivations=[
@@ -4134,6 +4142,7 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     "자금조달, 지분 희석, 자기주식 처분 등 기업 액션 공시가 있습니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
                     target_kind="corporate-action",
+                    target_property_filters={"eventDecisionEligible": True},
                 ),
             ],
             derivations=[

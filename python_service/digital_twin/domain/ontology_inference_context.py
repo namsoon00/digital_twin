@@ -991,6 +991,7 @@ def inference_evidence_state(
 def aggregate_evidence_state(matches: List[OntologyRuleMatch]) -> Dict[str, object]:
     rows = [item.evidence_state for item in matches or [] if isinstance(item.evidence_state, dict)]
     if not rows:
+        no_eligible_thesis = not missing_effect_rule_ids and not missing_stage
         return {
             "dataState": "insufficient",
             "dataStateLabel": DATA_STATE_LABELS["insufficient"],
@@ -1388,6 +1389,8 @@ def action_envelope_from_inference(
 
     if not investment_view_action and selected_context_entry is not None and not quality_blocked:
         status = "CONTEXT_OBSERVATION"
+    elif not investment_view_action and not quality_blocked and not blocked_policy_entries:
+        status = "NO_ELIGIBLE_THESIS"
     elif not investment_view_action or quality_blocked or candidate_contract_conflict:
         status = "JUDGEMENT_BLOCKED"
     elif target_role == WATCHLIST_TARGET_ROLE and investment_view_action == "BUY" and execution_action == "BUY":
@@ -1435,12 +1438,22 @@ def action_envelope_from_inference(
         if str(item["match"].data_state or "").lower() == "partial"
     ]
     decision_entries = opinion_entries or context_entries
-    data_state = "unavailable" if not decision_entries else (
-        "partial" if partial or context_partial else "sufficient"
+    factual_observation_available = bool(
+        str(facts.get("symbol") or "").strip()
+        and number(facts.get("currentPrice")) > 0
+    )
+    data_state = (
+        "unavailable"
+        if not decision_entries and (quality_blocked or not factual_observation_available)
+        else "partial"
+        if partial or context_partial or not decision_entries
+        else "sufficient"
     )
     data_readiness = {
         "state": (
             "blocked"
+            if not decision_entries and data_state == "unavailable"
+            else "no-eligible-thesis"
             if not decision_entries
             else ("partial" if partial or context_partial else "ready")
         ),
@@ -1486,7 +1499,7 @@ def action_envelope_from_inference(
     )
     decision_disposition = (
         "observe"
-        if status == "CONTEXT_OBSERVATION"
+        if status in {"CONTEXT_OBSERVATION", "NO_ELIGIBLE_THESIS"}
         else "blocked"
         if status == "JUDGEMENT_BLOCKED"
         else "defer"
@@ -1516,16 +1529,16 @@ def action_envelope_from_inference(
         "comparisonAvailable": len(candidate_actions) > 1,
         "singleCandidateAction": len(candidate_actions) == 1,
         "judgementBlocked": bool(
-            (not investment_view_action and status != "CONTEXT_OBSERVATION")
+            (not investment_view_action and status not in {"CONTEXT_OBSERVATION", "NO_ELIGIBLE_THESIS"})
             or quality_blocked
             or candidate_contract_conflict
-            or action_envelope_conflicts
             or investment_opinion.get("actionConflict")
         ),
         "opinionActionConflict": bool(investment_opinion.get("actionConflict")),
         "opinionCandidateActions": list(investment_opinion.get("candidateActions") or []),
         "opinionConflictReason": str(investment_opinion.get("conflictReason") or ""),
         "actionEnvelopeConflicts": action_envelope_conflicts,
+        "constrainedActionConflicts": action_envelope_conflicts,
         "candidateContractConflict": candidate_contract_conflict,
         "dataReadiness": data_readiness,
         "missingDecisionEffectRuleIds": missing_effect_rule_ids,
@@ -1722,6 +1735,7 @@ def decision_from_inference(
             for item in matches
             if item.matched
         )
+        no_eligible_thesis = not missing_effect_rule_ids and not missing_stage
         return {
             "label": (
                 "TypeDB 판단 효과 누락"
@@ -1733,7 +1747,7 @@ def decision_from_inference(
             "selectionRole": (
                 "blocked-missing-typedb-decision-effect"
                 if missing_effect_rule_ids
-                else "blocked-no-predictive-hypothesis"
+                else "no-eligible-predictive-hypothesis"
             ),
             "finalDecisionOwner": "typedb-direct-typeql-rules",
             "candidateRuleIds": unique_texts([item.rule_id for item in matches if item.matched])[:12],
@@ -1744,20 +1758,26 @@ def decision_from_inference(
             "decisionStage": "",
             "actionGroup": "dataQuality",
             "actionLevel": "reference",
-            "reviewLevel": "blocked",
-            "reviewLevelLabel": REVIEW_LEVEL_LABELS["blocked"],
-            "dataState": "unavailable",
-            "dataStateLabel": DATA_STATE_LABELS["unavailable"],
-            "evidenceRole": "blocking",
+            "reviewLevel": "observe" if no_eligible_thesis else "blocked",
+            "reviewLevelLabel": REVIEW_LEVEL_LABELS["observe" if no_eligible_thesis else "blocked"],
+            "dataState": str((action_envelope.get("dataReadiness") or {}).get("dataState") or ("partial" if no_eligible_thesis else "unavailable")),
+            "dataStateLabel": DATA_STATE_LABELS.get(
+                str((action_envelope.get("dataReadiness") or {}).get("dataState") or ("partial" if no_eligible_thesis else "unavailable")),
+                DATA_STATE_LABELS["partial" if no_eligible_thesis else "unavailable"],
+            ),
+            "evidenceRole": "context" if no_eligible_thesis else "blocking",
             "sourceRelationType": "",
             "stagePolicySource": (
                 "missingTypeDbDecisionEffect"
                 if missing_effect_rule_ids
-                else ("missingTypeDbDecisionStage" if missing_stage else "typedbPredictiveHypothesisRequired")
+                else ("missingTypeDbDecisionStage" if missing_stage else "typedbNoEligibleHypothesis")
             ),
-            "judgementBlocked": True,
+            "judgementBlocked": not no_eligible_thesis,
+            "investmentJudgementAvailable": False,
+            "hypothesisState": "NO_ELIGIBLE_THESIS" if no_eligible_thesis else "INVALID_RULE_CONTRACT",
+            "aiInterpretationEligible": no_eligible_thesis,
             "actionPolicyApplied": False,
-            "nativeTypeDbReasoned": False,
+            "nativeTypeDbReasoned": no_eligible_thesis,
             "primaryAction": "",
             "primaryActionLabel": "",
             "candidateAction": "",

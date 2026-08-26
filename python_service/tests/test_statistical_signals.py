@@ -655,7 +655,7 @@ class StatisticalSignalTests(unittest.TestCase):
                 "earnings:risk",
                 "earnings-calendar-event",
                 "HAS_EXTERNAL_SIGNAL",
-                {"surprisePercentage": -8},
+                {"surprisePercentage": -8, "eventDecisionEligible": True},
             ),
             (
                 "valuation:risk",

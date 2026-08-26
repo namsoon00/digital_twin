@@ -188,6 +188,29 @@ def graph_backed_notification(context: Dict[str, object]) -> bool:
     return is_graph_backed_relation_context(relation_context_from_notification_context(context or {}))
 
 
+def typedb_interpretation_eligible(context: Dict[str, object]) -> bool:
+    relation = relation_context_from_notification_context(context or {})
+    decision = nested_dict(relation.get("decision"))
+    envelope = nested_dict(relation.get("actionEnvelope")) or nested_dict(decision.get("actionEnvelope"))
+    synthesis = nested_dict(context.get("v2DecisionSynthesis"))
+    metadata = nested_dict(context.get("metadata"))
+    if not synthesis:
+        synthesis = nested_dict(metadata.get("v2DecisionSynthesis"))
+    hypothesis_state = str(
+        decision.get("hypothesisState")
+        or synthesis.get("hypothesis_state")
+        or synthesis.get("hypothesisState")
+        or ""
+    ).strip().upper()
+    ai_state = str(synthesis.get("ai_state") or synthesis.get("aiState") or "").strip().upper()
+    return bool(
+        decision.get("aiInterpretationEligible")
+        or envelope.get("status") == "NO_ELIGIBLE_THESIS"
+        or hypothesis_state == "NO_ELIGIBLE_THESIS"
+        or ai_state == "INTERPRETATION_READY"
+    )
+
+
 def material_evidence_present(context: Dict[str, object]) -> bool:
     context = context or {}
     insight = nested_dict(context.get("ontologyInsight"))
@@ -949,11 +972,21 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
                 "매수·매도 결론 없이 확인된 변화와 자료 한계만 전달합니다."
             )
             return decision
+        if typedb_interpretation_eligible(job.context or {}):
+            decision.gate_state = "conditional"
+            decision.gate_reason = (
+                "사용 가능한 사실은 확인됐지만 현재 성립한 투자 가설은 없습니다. "
+                "AI는 행동을 만들지 않고 확인된 상태와 다음 검증 조건만 해석합니다."
+            )
+            return decision
         if state["dataState"] in {"insufficient", "unavailable"}:
             decision.mark_suppressed("insufficient_data", "핵심 자료가 부족하거나 사용할 수 없어 투자 판단 알림을 보내지 않습니다.")
             return decision
         if state["validationState"] == "blocked" or state["reviewLevel"] == "blocked":
-            decision.mark_suppressed("validation_blocked", "AI 검증 또는 관계 판단이 보류 상태라 투자 판단 알림을 보내지 않습니다.")
+            decision.mark_suppressed(
+                "validation_blocked",
+                "TypeDB 판단 계약 또는 근거 검증이 차단 상태라 투자 판단 알림을 보내지 않습니다.",
+            )
             return decision
         observation_followup = verified_observation_followup(job.context or {})
         if (

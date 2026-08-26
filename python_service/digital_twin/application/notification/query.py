@@ -360,12 +360,21 @@ class NotificationTraceQueryService:
                 "decision-synthesis",
                 "DecisionSynthesis 생성",
                 "blocked" if synthesis.get("judgement_blocked") or synthesis.get("judgementBlocked") else "completed" if synthesis else "missing",
-                "TypeDB 행동 후보, 허용 행동, 차단 행동과 적격 가설을 하나의 계약으로 고정했습니다.",
+                (
+                    "사실 " + str(synthesis.get("evidence_state") or synthesis.get("evidenceState") or "미기록")
+                    + " · 가설 " + str(synthesis.get("hypothesis_state") or synthesis.get("hypothesisState") or "미기록")
+                    + " · 행동 " + str(synthesis.get("action_state") or synthesis.get("actionState") or "미기록")
+                    + " · AI " + str(synthesis.get("ai_state") or synthesis.get("aiState") or "미기록")
+                ) if synthesis else "DecisionSynthesis가 생성되지 않았습니다.",
                 started_at=inference_completed,
                 completed_at=inference_completed,
                 identifiers={
                     "synthesisId": synthesis.get("synthesis_id") or synthesis.get("synthesisId"),
                     "selectedRuleId": synthesis.get("selected_rule_id") or synthesis.get("selectedRuleId"),
+                    "evidenceState": synthesis.get("evidence_state") or synthesis.get("evidenceState"),
+                    "hypothesisState": synthesis.get("hypothesis_state") or synthesis.get("hypothesisState"),
+                    "actionState": synthesis.get("action_state") or synthesis.get("actionState"),
+                    "aiState": synthesis.get("ai_state") or synthesis.get("aiState"),
                 },
                 details=stage_details({
                     "decisionSynthesis": synthesis,

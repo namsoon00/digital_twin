@@ -871,6 +871,12 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
         properties.get("sourceAsOf")
         or properties.get("observedAt")
         or properties.get("publishedAt")
+        or properties.get("effectiveAt")
+        or properties.get("reportedAt")
+        or properties.get("reportedDate")
+        or properties.get("eventDate")
+        or properties.get("receiptDate")
+        or properties.get("filedAt")
         or ""
     ).strip()
     source_fetched_at = str(properties.get("sourceFetchedAt") or properties.get("fetchedAt") or "").strip()
@@ -904,7 +910,10 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
         freshness = "not-applicable"
     source_timestamp_present = bool(source_as_of)
     explicit_usable = properties.get("judgementEvidenceUsable")
-    if not freshness_required:
+    event_eligible = properties.get("eventDecisionEligible")
+    if event_eligible not in (None, ""):
+        judgement_usable = bool_value(event_eligible) and source_timestamp_present and freshness == "fresh"
+    elif not freshness_required:
         judgement_usable = True
     elif explicit_usable not in (None, ""):
         judgement_usable = bool_value(explicit_usable) and source_timestamp_present and freshness == "fresh"
@@ -983,7 +992,7 @@ def inferred_time_sensitive_observation(properties: Dict[str, object]) -> bool:
     ]).strip().lower().replace("_", "-")
     time_sensitive_tokens = {
         "article", "corporate-action", "coverage-gap", "cross-market", "data-quality",
-        "disclosure", "event-impact", "execution-capacity", "execution-metric", "external-signal",
+        "disclosure", "earnings", "event-impact", "execution-capacity", "execution-metric", "external-signal",
         "fact-change", "flow", "freshness", "interest-rate", "investor", "key-level",
         "loss-defense", "macro", "margin-of-safety", "market-proxy-observation", "relative-performance", "missing-data",
         "news", "price", "quote", "recovery", "research-evidence", "smart-money", "technical",

@@ -932,6 +932,31 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("missingTypeDbDecisionStage", decision["stagePolicySource"])
         self.assertEqual("", decision["decisionStage"])
 
+    def test_no_eligible_hypothesis_is_not_mislabeled_as_missing_data(self):
+        facts = {
+            "symbol": "TSLA",
+            "source": "watchlist",
+            "isWatchlist": True,
+            "currentPrice": 332.85,
+        }
+
+        envelope = action_envelope_from_inference(facts, [], [])
+        decision = decision_from_inference(
+            facts,
+            [],
+            [],
+            [],
+            source_name="typedbInferenceBox",
+        )
+
+        self.assertEqual("NO_ELIGIBLE_THESIS", envelope["status"])
+        self.assertEqual("partial", envelope["dataReadiness"]["dataState"])
+        self.assertFalse(envelope["judgementBlocked"])
+        self.assertEqual("typedbNoEligibleHypothesis", decision["stagePolicySource"])
+        self.assertEqual("NO_ELIGIBLE_THESIS", decision["hypothesisState"])
+        self.assertTrue(decision["aiInterpretationEligible"])
+        self.assertFalse(decision["judgementBlocked"])
+
     def test_missing_typedb_decision_effect_blocks_action_envelope(self):
         relations = [{
             "type": "HAS_INFERRED_RISK",

@@ -429,6 +429,7 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
                 "Unknown reasoning engine deployment: " + str(deployment_id or "")
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-deployment-retirement")
     def retire_unselected(self, engine_version: str, keep_deployment_ids: Iterable[str]) -> Dict[str, object]:
         """Retire obsolete logical deployments and terminalize their work."""
 

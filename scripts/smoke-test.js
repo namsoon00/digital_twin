@@ -352,6 +352,7 @@ function checkWorkflowConsoleContract() {
   assertOk(
     shareLifecycle.indexOf('rotationStatus: "confirming"') >= 0
       && shareLifecycle.indexOf("waitForPublishedTarget(candidateTunnel)") >= 0
+      && shareLifecycle.indexOf("dns.resolve4(hostname") >= 0
       && shareLifecycle.indexOf('rotateTunnel("proactive-renewal")') >= 0
       && shareLifecycle.indexOf("consumeRotationRequest()") >= 0
       && fixedEntry.indexOf("retryTimer = window.setTimeout(loadTarget, 10000)") >= 0

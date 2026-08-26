@@ -1,5 +1,6 @@
 const childProcess = require("child_process");
 const crypto = require("crypto");
+const dns = require("dns");
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
@@ -364,6 +365,18 @@ function requestTunnel(url, headers) {
   return new Promise(function (resolve, reject) {
     const request = https.get(url, {
       timeout: 8000,
+      lookup: function (hostname, options, callback) {
+        dns.resolve4(hostname, function (error, addresses) {
+          if (error) return callback(error);
+          const resolved = (addresses || []).filter(Boolean);
+          if (!resolved.length) return callback(new Error("IPv4 주소를 확인하지 못했습니다: " + hostname));
+          if (options && options.all) {
+            callback(null, resolved.map(function (address) { return { address, family: 4 }; }));
+            return;
+          }
+          callback(null, resolved[0], 4);
+        });
+      },
       headers: Object.assign({ Accept: "application/json", "User-Agent": "orbit-alpha-share-health/1" }, headers || {})
     }, function (response) {
       let body = "";

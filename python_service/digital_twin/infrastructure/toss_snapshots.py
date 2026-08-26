@@ -26,6 +26,7 @@ from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.position_identity import position_with_symbol_identity
 from ..domain.portfolio import AccountSnapshot, Position, utc_now_iso
 from ..domain.portfolio_calculations import (
+    LIVE_MARKET_FX_SOURCE_TYPE,
     apply_position_base_currency_values,
     fx_rates_with_external_signals,
     portfolio_summary,
@@ -343,6 +344,18 @@ def normalize_holdings(payload: Dict[str, object]) -> List[Dict[str, object]]:
     return []
 
 
+def normalize_holdings_overview(payload: Dict[str, object]) -> Dict[str, object]:
+    data = payload.get("data") or payload.get("result") or payload
+    if not isinstance(data, dict):
+        return {}
+    overview = data.get("overview") if isinstance(data.get("overview"), dict) else data
+    return {
+        key: value
+        for key, value in overview.items()
+        if key not in {"items", "holdings", "positions"}
+    }
+
+
 def normalize_candles(payload: Dict[str, object]) -> List[Dict[str, object]]:
     data = payload.get("data") or payload.get("result") or payload
     candles = data.get("candles") if isinstance(data, dict) else data
@@ -571,6 +584,9 @@ class TossProvider:
         self.account_source_fingerprint = ""
         self.cash_balances: Dict[str, Dict[str, object]] = {}
         self.cash_balance_failures: List[str] = []
+        self.holdings_overview: Dict[str, object] = {}
+        self.exchange_rates: Dict[str, Dict[str, object]] = {}
+        self.exchange_rate_failures: List[str] = []
 
     def cash_balances_complete(self) -> bool:
         return not self.cash_balance_failures and {"KRW", "USD"}.issubset(self.cash_balances)
@@ -590,6 +606,12 @@ class TossProvider:
                     for currency, payload in self.cash_balances.items()
                 },
                 "cashBalanceFailures": list(self.cash_balance_failures),
+                "holdingsOverview": dict(self.holdings_overview),
+                "exchangeRates": {
+                    pair: dict(payload)
+                    for pair, payload in self.exchange_rates.items()
+                },
+                "exchangeRateFailures": list(self.exchange_rate_failures),
             }
         }
 
@@ -751,10 +773,19 @@ class TossProvider:
                 {"X-Tossinvest-Account": account_seq},
             )
             holdings_fetched_at = utc_now_iso()
+            self.holdings_overview = normalize_holdings_overview(holdings_payload)
             positions = [
                 replace(normalize_position(item), broker_source_as_of=holdings_fetched_at)
                 for item in normalize_holdings(holdings_payload)
             ]
+            token = self.fetch_exchange_rates(
+                token,
+                sorted({
+                    str(position.currency or "").upper().strip()
+                    for position in positions
+                    if str(position.currency or "").upper().strip() not in {"", "KRW"}
+                }),
+            )
             position_prices, token = self.safe_fetch_prices(token, [position.symbol for position in positions if position.symbol and not position.is_cash()])
             positions, token = self.enrich_positions_with_candles(token, positions, position_prices)
             watchlist, token = self.fetch_watchlist_quotes(token, positions)
@@ -833,6 +864,70 @@ class TossProvider:
             }
             total += amount * rates.get(currency, 1.0)
         return total, token
+
+    def fetch_exchange_rates(self, token: str, currencies: List[str]) -> str:
+        self.exchange_rates = {}
+        self.exchange_rate_failures = []
+        for currency in currencies or []:
+            base = str(currency or "").upper().strip()
+            if not base or base == "KRW":
+                continue
+            query = urllib.parse.urlencode({
+                "baseCurrency": base,
+                "quoteCurrency": "KRW",
+            })
+            try:
+                payload, token = self.token_request(
+                    "exchange-rate",
+                    "GET",
+                    self.base_url + "/api/v1/exchange-rate?" + query,
+                    token,
+                )
+                data = payload.get("data") or payload.get("result") or payload
+                rate = number(data.get("rate") if isinstance(data, dict) else 0)
+                if rate <= 0:
+                    raise ValueError("empty exchange rate")
+                pair = base + "KRW"
+                fetched_at = utc_now_iso()
+                self.exchange_rates[pair] = {
+                    "provider": "Toss Securities",
+                    "base": base,
+                    "quote": "KRW",
+                    "rate": rate,
+                    "value": rate,
+                    "midRate": number(data.get("midRate")),
+                    "basisPoint": number(data.get("basisPoint")),
+                    "rateChangeType": str(data.get("rateChangeType") or ""),
+                    "validFrom": str(data.get("validFrom") or ""),
+                    "validUntil": str(data.get("validUntil") or ""),
+                    "lastUpdated": str(data.get("validFrom") or ""),
+                    "fetchedAt": fetched_at,
+                    "sourceType": LIVE_MARKET_FX_SOURCE_TYPE,
+                    "evidenceStrength": "broker_reference",
+                    "valuationRate": rate,
+                    "valuationProvider": "Toss Securities",
+                    "valuationSourceType": LIVE_MARKET_FX_SOURCE_TYPE,
+                }
+            except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError, OSError):
+                self.exchange_rate_failures.append(base)
+        return token
+
+    def attach_exchange_rates(self, signals: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(signals, dict) or not self.exchange_rates:
+            return signals
+        rates = signals.setdefault("fxRates", {})
+        if not isinstance(rates, dict):
+            rates = {}
+            signals["fxRates"] = rates
+        for pair, payload in self.exchange_rates.items():
+            existing = rates.get(pair) if isinstance(rates.get(pair), dict) else {}
+            row = dict(existing)
+            if existing:
+                row.setdefault("fallbackRate", number(existing.get("rate") or existing.get("value")))
+                row.setdefault("fallbackProvider", str(existing.get("provider") or ""))
+            row.update(payload)
+            rates[pair] = row
+        return signals
 
     def safe_fetch_prices(self, token: str, symbols: List[str]) -> Tuple[Dict[str, Dict[str, object]], str]:
         try:
@@ -1349,7 +1444,7 @@ class TossProvider:
 
 def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str, str]] = None) -> AccountSnapshot:
     settings = external_settings or runtime_settings()
-    provider = TossProvider(account)
+    provider = TossProvider(account, settings=settings)
     mode, status, positions, cash, currency, watchlist = provider.fetch_positions()
     positions, watchlist = enrich_snapshot_position_identities(positions, watchlist)
     kis_provider = KISMarketSignalProvider()
@@ -1358,6 +1453,7 @@ def build_snapshot(account: AccountConfig, external_settings: Optional[Dict[str,
         positions + watchlist,
         cache_scope="account-snapshot",
     )
+    external_signals = provider.attach_exchange_rates(external_signals)
     external_signals = kis_provider.attach_fundamentals_to_external_signals(external_signals, positions + watchlist)
     account_context = account.ontology_account_context()
     fx_rates = currency_rates_from_external_signals(settings, external_signals)

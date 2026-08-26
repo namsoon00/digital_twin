@@ -14652,11 +14652,11 @@
     var urgent = tasks.filter(function (task) { return task.priority <= 2; }).length;
     var upcoming = Array.isArray(dashboard.upcomingEvents) && dashboard.upcomingEvents.length ? dashboard.upcomingEvents : investmentCalendarUpcomingEvents();
     var blockers = Array.isArray(dashboard.blockerGroups) ? dashboard.blockerGroups : [];
-    var totalValue = hasNumericValue(dashboardPortfolio.total) ? numeric(dashboardPortfolio.total) : portfolio.total;
+    var totalValue = hasNumericValue(dashboardPortfolio.invested) ? numeric(dashboardPortfolio.invested) : portfolio.invested;
     var positionCount = hasNumericValue(dashboardPortfolio.positionCount) ? numeric(dashboardPortfolio.positionCount) : portfolio.holdingCount;
     var valuationBasis = String(dashboardPortfolio.valuationBasis || portfolio.valuationBasis || "legacy-unknown");
     var metrics = [
-      { label: portfolioValuationMetricLabel(valuationBasis), value: formatMoney(totalValue), detail: portfolioValuationBasisLabel(valuationBasis) + " · " + positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
+      { label: portfolioInvestedMetricLabel(valuationBasis), value: formatMoney(totalValue), detail: portfolioValuationBasisLabel(valuationBasis) + " · 현금 제외 · " + positionCount + "개 보유", target: { type: "tab", value: "portfolio" } },
       { label: "현금", value: hasNumericValue(dashboardPortfolio.cash) ? formatMoney(dashboardPortfolio.cash) : formatMoney(portfolio.cash), detail: "포트폴리오 원장", target: { type: "tab", value: "portfolio" } },
       { label: "긴급 작업", value: urgent + "건", detail: "우선순위 1·2", tone: urgent ? "danger" : "watch", target: { type: "detail", value: "today-work-queue" } },
       { label: "예정 일정", value: upcoming.length + "건", detail: upcoming[0] ? formatClock(upcoming[0].startsAt) : "일정 없음", target: upcoming[0] ? { type: "detail", value: "investment-calendar-event", key: upcoming[0].eventId || upcoming[0].id || upcoming[0].title || "" } : { type: "tab", value: "calendar" } },
@@ -29000,6 +29000,13 @@
     if (basis === "mark-to-market") return "분석 시가 총 평가";
     if (basis === "legacy-unknown") return "총 평가";
     return "토스 기준 총 평가";
+  }
+
+  function portfolioInvestedMetricLabel(value) {
+    var basis = String(value || "").toLowerCase();
+    if (basis === "mark-to-market") return "분석 투자 평가";
+    if (basis === "legacy-unknown") return "투자 평가";
+    return "토스 내 투자";
   }
 
   function portfolioValuationFxText(portfolio) {

@@ -5,11 +5,12 @@ from digital_twin.domain.portfolio import account_snapshot_from_monitor_state
 from digital_twin.domain.portfolio_calculations import (
     apply_position_base_currency_values,
     portfolio_summary,
+    runtime_fx_currencies_from_external_signals,
 )
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.portfolio_ontology_exposure_concepts import position_weight
 from digital_twin.domain.portfolio_valuation import BROKER_NET_BASIS
-from digital_twin.infrastructure.toss_snapshots import TossProvider
+from digital_twin.infrastructure.toss_snapshots import TossProvider, currency_rates_from_external_signals
 
 
 OBSERVED_AT = "2026-08-26T01:02:03Z"
@@ -156,6 +157,65 @@ class PortfolioValuationContractTests(unittest.TestCase):
         self.assertEqual(24094, total)
         self.assertTrue(provider.cash_balances_complete())
         self.assertEqual(17.21, provider.cash_balances["USD"]["amount"])
+
+    def test_toss_exchange_rate_drives_broker_net_investment_value(self):
+        provider = TossProvider.__new__(TossProvider)
+        provider.base_url = "https://example.test"
+        provider.exchange_rates = {}
+        provider.exchange_rate_failures = []
+
+        def token_request(stage, method, url, token):
+            self.assertEqual("exchange-rate", stage)
+            self.assertEqual("GET", method)
+            self.assertIn("baseCurrency=USD", url)
+            return {
+                "result": {
+                    "baseCurrency": "USD",
+                    "quoteCurrency": "KRW",
+                    "rate": "1380.4",
+                    "midRate": "1379.9",
+                    "validFrom": "2026-08-26T08:44:35.000+09:00",
+                    "validUntil": "2026-08-26T08:49:32.000+09:00",
+                }
+            }, token
+
+        provider.token_request = token_request
+        provider.fetch_exchange_rates("token", ["USD"])
+        signals = provider.attach_exchange_rates({
+            "fxRates": {
+                "USDKRW": {
+                    "provider": "RuntimeSettings",
+                    "base": "USD",
+                    "quote": "KRW",
+                    "rate": 1400,
+                }
+            }
+        })
+        rates = currency_rates_from_external_signals({"fxRates": "KRW=1\nUSD=1400"}, signals)
+        positions = apply_position_base_currency_values(
+            self.sample_positions(),
+            rates,
+            runtime_fx_currencies_from_external_signals(signals),
+            external_signals=signals,
+            valuation_basis=BROKER_NET_BASIS,
+        )
+        summary = portfolio_summary(
+            positions,
+            account_cash=17.21 * rates["USD"],
+            account_currency="KRW",
+            fx_rates=rates,
+            runtime_fx_currencies=runtime_fx_currencies_from_external_signals(signals),
+            valuation_basis=BROKER_NET_BASIS,
+            external_signals=signals,
+        )
+
+        expected_invested = 743294 + 17111651 + (27909.17 * 1380.4)
+        self.assertAlmostEqual(1380.4, rates["USD"])
+        self.assertEqual({"USD"}, runtime_fx_currencies_from_external_signals(signals))
+        self.assertAlmostEqual(expected_invested, summary.invested)
+        self.assertAlmostEqual(expected_invested + (17.21 * 1380.4), summary.account_equity_total)
+        self.assertEqual("Toss Securities", summary.valuation["fxContext"]["USD"]["source"])
+        self.assertEqual("live", summary.valuation["fxContext"]["USD"]["state"])
 
     def test_legacy_snapshot_is_not_misrepresented_as_broker_net(self):
         snapshot = account_snapshot_from_monitor_state({

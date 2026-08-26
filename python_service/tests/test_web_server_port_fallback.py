@@ -109,6 +109,39 @@ class WebServerPortFallbackTests(unittest.TestCase):
         self.assertTrue(completed.called)
         self.assertTrue(model.read(mock=True).snapshot)
 
+    def test_flow_lens_read_model_reloads_persisted_snapshot_after_ttl(self):
+        clock = [0.0]
+        persisted = [{"generatedAt": "first", "portfolio": {"invested": 1}}]
+        live_calls = []
+        model = FlowLensReadModel(
+            snapshot_provider=lambda _mock, _symbols: live_calls.append(True) or {},
+            persisted_provider=lambda _symbols: dict(persisted[0]),
+            cache_ttl_seconds=30,
+            now_fn=lambda: clock[0],
+        )
+
+        model.read()
+        for _ in range(40):
+            first = model.read()
+            if first.snapshot:
+                break
+            sleep(0.01)
+        self.assertEqual("first", first.snapshot["generatedAt"])
+
+        persisted[0] = {"generatedAt": "second", "portfolio": {"invested": 2}}
+        clock[0] = 31.0
+        expired = model.read()
+        self.assertTrue(expired.refreshing)
+        for _ in range(40):
+            refreshed = model.read()
+            if refreshed.snapshot and refreshed.snapshot.get("generatedAt") == "second":
+                break
+            sleep(0.01)
+
+        self.assertEqual("second", refreshed.snapshot["generatedAt"])
+        self.assertEqual(2, refreshed.snapshot["portfolio"]["invested"])
+        self.assertEqual([], live_calls)
+
 
 if __name__ == "__main__":
     unittest.main()

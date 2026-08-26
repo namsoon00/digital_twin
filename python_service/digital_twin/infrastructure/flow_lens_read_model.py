@@ -9,6 +9,7 @@ for each view key.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Dict, Optional, Tuple
@@ -51,11 +52,15 @@ class FlowLensReadModel:
         snapshot_provider: Callable[[bool, str], Dict[str, object]],
         persisted_provider: Callable[[str], Optional[Dict[str, object]]],
         on_refresh: Callable[[Dict[str, object]], None] = None,
+        cache_ttl_seconds: float = 30.0,
+        now_fn: Callable[[], float] = None,
     ):
         self.snapshot_provider = snapshot_provider
         self.persisted_provider = persisted_provider
         self.on_refresh = on_refresh
-        self._cache: Dict[str, Tuple[Dict[str, object], str, str]] = {}
+        self.cache_ttl_seconds = max(0.0, float(cache_ttl_seconds or 0.0))
+        self.now_fn = now_fn or time.monotonic
+        self._cache: Dict[str, Tuple[Dict[str, object], str, str, float]] = {}
         self._refreshing = set()
         self._errors: Dict[str, str] = {}
         self._lock = threading.Lock()
@@ -71,9 +76,18 @@ class FlowLensReadModel:
             refreshing = key in self._refreshing
             error = self._errors.get(key, "")
         if cached:
-            snapshot, source, refreshed_at = cached
-            if refresh and not refreshing:
-                self._start_refresh(key, mock, watchlist_symbols, prefer_persisted=False)
+            snapshot, source, refreshed_at, cached_at = cached
+            expired = bool(
+                self.cache_ttl_seconds
+                and self.now_fn() - cached_at >= self.cache_ttl_seconds
+            )
+            if (refresh or expired) and not refreshing:
+                self._start_refresh(
+                    key,
+                    mock,
+                    watchlist_symbols,
+                    prefer_persisted=expired and not refresh and not mock,
+                )
                 refreshing = True
             return FlowLensReadResult(snapshot, "ready", refreshing, source, refreshed_at, error)
 
@@ -85,7 +99,7 @@ class FlowLensReadModel:
 
     def _remember(self, key: str, snapshot: Dict[str, object], source: str, refreshed_at: str = "") -> None:
         with self._lock:
-            self._cache[key] = (dict(snapshot), source, refreshed_at or utc_now_iso())
+            self._cache[key] = (dict(snapshot), source, refreshed_at or utc_now_iso(), self.now_fn())
             self._errors.pop(key, None)
 
     def _start_refresh(self, key: str, mock: bool, watchlist_symbols: str, prefer_persisted: bool) -> None:

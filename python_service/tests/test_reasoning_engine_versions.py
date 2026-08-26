@@ -112,6 +112,46 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             snapshot["rules"][0]["knowledge_basis"]["ownershipContractVersion"],
         )
 
+    def test_v2_release_preflight_prepares_empty_candidate_schema_before_rulebox_read(self):
+        from digital_twin.domain.ontology_schema import default_tbox_metadata
+        from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
+        from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
+
+        rules = deepcopy(bootstrap_rule_catalog()["rules"])
+
+        class Repository:
+            def __init__(self):
+                self.schema_ready = False
+                self.calls = []
+
+            def sync_base_schema_contract(self):
+                self.calls.append("schema")
+                self.schema_ready = True
+                return {"saved": True, "status": "ok"}
+
+            def rulebox_snapshot(self):
+                self.calls.append("snapshot")
+                if not self.schema_ready:
+                    raise RuntimeError("Type label 'ontology-node' not found")
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": deepcopy(rules),
+                    "ruleCount": len(rules),
+                }
+
+            def active_tbox_metadata(self):
+                self.calls.append("tbox")
+                return {**default_tbox_metadata(), "status": "ok", "source": "test"}
+
+        repository = Repository()
+
+        _snapshot, readiness = prepare_v2_rulebox_release(repository, {})
+
+        self.assertEqual("ready", readiness["status"])
+        self.assertEqual("ok", readiness["storageSchemaPreflight"]["status"])
+        self.assertEqual(["schema", "snapshot", "snapshot", "tbox"], repository.calls)
+
     def test_v2_release_preflight_reuses_exact_immutable_release_without_migration(self):
         from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
         from digital_twin.domain.ontology_schema import default_tbox_metadata
@@ -172,6 +212,59 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(snapshot["frozenReleaseVerified"])
         self.assertEqual("immutable-release-reused", readiness["ruleCatalogMigration"]["status"])
         self.assertEqual("ready", recorder.ensure_rulebox_ready()["status"])
+
+    def test_v2_release_preflight_bootstraps_an_isolated_empty_database(self):
+        from digital_twin.domain.ontology_schema import default_tbox_metadata
+        from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog
+        from digital_twin.infrastructure.service_factory import prepare_v2_rulebox_release
+
+        rules = deepcopy(bootstrap_rule_catalog()["rules"])
+        expected_tbox = default_tbox_metadata()
+
+        class Repository:
+            def __init__(self):
+                self.seeded = False
+                self.calls = []
+
+            def rulebox_snapshot(self):
+                self.calls.append("snapshot")
+                if not self.seeded:
+                    raise RuntimeError("[INF2] Type label 'ontology-node' not found.")
+                return {
+                    "configured": True,
+                    "status": "ok",
+                    "rules": deepcopy(rules),
+                    "ruleCount": len(rules),
+                }
+
+            def seed_ontology(self, payload):
+                self.calls.append("seed")
+                self.seeded = True
+                self.assert_seed_payload = deepcopy(payload)
+                return {
+                    "configured": True,
+                    "saved": True,
+                    "seeded": True,
+                    "status": "ok",
+                    "ruleCount": len(rules),
+                }
+
+            def active_tbox_metadata(self):
+                self.calls.append("tbox")
+                return {**expected_tbox, "status": "ok", "source": "test"}
+
+        repository = Repository()
+
+        snapshot, readiness = prepare_v2_rulebox_release(repository, {})
+
+        self.assertEqual("ready", readiness["status"])
+        self.assertEqual("ok", readiness["releaseBootstrap"]["status"])
+        self.assertTrue(repository.assert_seed_payload["replaceRuleBox"])
+        self.assertEqual(len(rules), snapshot["ruleCount"])
+        self.assertEqual(
+            ["snapshot", "seed", "snapshot", "snapshot", "tbox"],
+            repository.calls,
+        )
 
     def test_v2_release_preflight_rejects_immutable_fingerprint_mismatch_without_write(self):
         from digital_twin.infrastructure.ontology_projection import bootstrap_rule_catalog

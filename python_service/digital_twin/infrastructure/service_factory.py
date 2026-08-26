@@ -388,11 +388,68 @@ def prepare_v2_rulebox_release(repository, settings=None, release_guard=None):
             },
         }
 
-    readiness = PortfolioOntologyProjectionRecorder(
+    schema_release_preflight = {}
+    synchronize_schema = getattr(repository, "sync_base_schema_contract", None)
+    if callable(synchronize_schema):
+        try:
+            schema_release_preflight = dict(synchronize_schema() or {})
+        except Exception as error:
+            raise RuntimeError(
+                "The independent V2 TypeDB storage schema preflight failed: "
+                + str(error)[:220]
+            ) from error
+        if not bool(schema_release_preflight.get("saved")):
+            raise RuntimeError(
+                "The independent V2 TypeDB storage schema preflight failed: "
+                + str(
+                    schema_release_preflight.get("reason")
+                    or schema_release_preflight.get("status")
+                    or "unknown"
+                )[:220]
+            )
+
+    projection_recorder = PortfolioOntologyProjectionRecorder(
         repository,
         settings=dict(settings or {}),
         source="reasoning-engine-v2-release-preflight",
-    ).ensure_rulebox_ready()
+    )
+    readiness = projection_recorder.ensure_rulebox_ready()
+    readiness_reason = str(readiness.get("reason") or "")
+    missing_base_schema = (
+        str(readiness.get("status") or "") == "error"
+        and "type label 'ontology-node' not found" in readiness_reason.lower()
+    )
+    if missing_base_schema and hasattr(repository, "seed_ontology"):
+        try:
+            seed_result = dict(repository.seed_ontology({
+                "replaceRuleBox": True,
+                "clearInference": False,
+                "changeReason": "Bootstrap isolated V2 reasoning release",
+                "author": "reasoning-engine-v2-release-preflight",
+            }) or {})
+        except Exception as error:
+            raise RuntimeError(
+                "The independent V2 TypeDB release bootstrap failed: "
+                + str(error)[:220]
+            ) from error
+        if not bool(seed_result.get("saved") or seed_result.get("seeded")):
+            raise RuntimeError(
+                "The independent V2 TypeDB release bootstrap failed: "
+                + str(
+                    seed_result.get("reason")
+                    or seed_result.get("status")
+                    or "unknown"
+                )[:220]
+            )
+        readiness = projection_recorder.ensure_rulebox_ready()
+        readiness = {
+            **dict(readiness or {}),
+            "releaseBootstrap": {
+                "status": str(seed_result.get("status") or "seeded"),
+                "saved": True,
+                "seeded": bool(seed_result.get("seeded", True)),
+            },
+        }
     if str(readiness.get("status") or "") not in {"ready", "seeded"}:
         raise RuntimeError(
             "The independent V2 RuleBox release preflight failed: "
@@ -438,6 +495,7 @@ def prepare_v2_rulebox_release(repository, settings=None, release_guard=None):
         )
     readiness = {
         **dict(readiness or {}),
+        "storageSchemaPreflight": schema_release_preflight,
         "modelSignalReleasePreflight": model_signal_contract,
         "tboxReleasePreflight": {
             "status": "matched",

@@ -12881,8 +12881,9 @@
 
   function inferenceLedgerTone(value) {
     var text = String(value || "").toLowerCase();
-    if (["complete", "ok", "matched", "materialized", "linked"].indexOf(text) >= 0) return "watch";
-    if (["review", "not-returned", "error"].indexOf(text) >= 0) return "danger";
+    if (["complete", "ok", "matched", "materialized", "linked", "within-budget"].indexOf(text) >= 0) return "watch";
+    if (["review", "not-returned", "error", "critical"].indexOf(text) >= 0) return "danger";
+    if (["degraded"].indexOf(text) >= 0) return "caution";
     if (["empty", "none", "not-used"].indexOf(text) >= 0) return "hold";
     return "caution";
   }
@@ -12944,6 +12945,13 @@
       });
     } else if (key === "rulebox-selection") {
       labels.push("후보 " + formatInteger(detail.candidateRuleCount || 0) + " · 실행 " + formatInteger(detail.executedRuleCount || 0) + " · 유예 " + formatInteger(detail.deferredRuleCount || 0));
+    } else if (key.indexOf("runtime:") === 0 && detail.budgetMs != null) {
+      labels.push("관측 " + formatInteger(stage.durationMs || 0) + "ms · 예산 " + formatInteger(detail.budgetMs || 0) + "ms · " + Number(detail.ratio || 0).toFixed(2) + "배");
+    } else if (key === "performance-contract") {
+      labels.push("병목 " + (detail.bottleneckStage || "미확인") + " · 예산 대비 " + Number(detail.bottleneckRatio || 0).toFixed(2) + "배");
+      (Array.isArray(detail.violations) ? detail.violations : []).slice(0, 6).forEach(function (item) {
+        labels.push((item.stage || "단계") + " " + formatInteger(item.durationMs || 0) + "ms / " + formatInteger(item.budgetMs || 0) + "ms");
+      });
     }
     if (!labels.length) return "";
     return '<div class="inference-ledger-relation-strip">' + labels.map(function (label) {
@@ -12963,6 +12971,7 @@
     var auditStages = audit.executionStageCounts && typeof audit.executionStageCounts === "object" ? audit.executionStageCounts : {};
     var auditScopes = audit.assessmentScopeCounts && typeof audit.assessmentScopeCounts === "object" ? audit.assessmentScopeCounts : {};
     var auditLifecycles = audit.lifecycleClassCounts && typeof audit.lifecycleClassCounts === "object" ? audit.lifecycleClassCounts : {};
+    var auditGrains = audit.evaluationGrainCounts && typeof audit.evaluationGrainCounts === "object" ? audit.evaluationGrainCounts : {};
     if (!runs.length && !slowRules.length && !auditRules.length) {
       return history.status === "error" ? '<p class="form-error">' + escapeHtml(history.reason || "실행 이력을 읽지 못했습니다.") + '</p>' : '';
     }
@@ -12985,11 +12994,19 @@
         "사건형 " + formatInteger(auditLifecycles["event-driven"] || 0),
         "저빈도 " + formatInteger(auditLifecycles.cold || 0)
       ].map(function (label) { return '<span class="chip">' + escapeHtml(label) + '</span>'; }).join("") + '</div>' : '',
+      audit.ruleCount ? '<div class="inference-ledger-relation-strip">' + [
+        "종목 단위 " + formatInteger(auditGrains.instrument || 0),
+        "계좌 단위 " + formatInteger(auditGrains.account || 0),
+        "거시 단위 " + formatInteger(auditGrains.macro || 0),
+        "월드 단위 " + formatInteger(auditGrains.world || 0)
+      ].map(function (label) { return '<span class="chip">' + escapeHtml(label) + '</span>'; }).join("") + '</div>' : '',
       auditRules.length ? '<div class="inference-ledger-relation-strip">' + auditRules.map(function (rule) {
         var profile = rule.executionProfile && typeof rule.executionProfile === "object" ? rule.executionProfile : {};
         return '<span class="chip">' + escapeHtml([
           rule.ruleId,
           rule.assessmentScope,
+          rule.evaluationGrain,
+          rule.ownerWorld,
           rule.lifecycleClass,
           profile.executionStage,
           rule.status,
@@ -13454,6 +13471,10 @@
     return { classes: "class", relations: "relation", rules: "rule", hypotheses: "hypothesis", inferences: "inference" }[section] || section;
   }
 
+  function ontologyExecutionGrainLabel(value) {
+    return { instrument: "종목 단위", account: "계좌 단위", macro: "거시 단위", world: "월드 단위" }[String(value || "")] || String(value || "실행 단위 미지정");
+  }
+
   function ontologyCatalogRowPresentation(section, row) {
     if (section === "classes") return {
       title: row.label || row.name,
@@ -13476,6 +13497,8 @@
         row.owner || "소유자 미지정",
         row.theoryFamily || "이론 미지정",
         row.assessmentScope || "판단 영역 미지정",
+        ontologyExecutionGrainLabel(row.evaluationGrain),
+        row.ownerWorld || "소유 월드 미지정",
         row.lifecycleClass || "실행군 미지정",
         "조건 " + Number(row.conditionCount || 0),
         "파생 " + Number(row.derivationCount || 0),
@@ -13551,6 +13574,7 @@
     var selectedItem = (payload.selection || {}).item || {};
     var knowledge = selectedItem.knowledgeBasis || {};
     var statisticalContract = selectedItem.statisticalSignalContract || {};
+    var executionUnit = selectedItem.executionUnit && typeof selectedItem.executionUnit === "object" ? selectedItem.executionUnit : {};
     var references = Array.isArray(knowledge.references) ? knowledge.references : [];
     var knowledgeDetail = knowledge.ruleKind ? [
       '<section class="ontology-rule-knowledge">',
@@ -13590,6 +13614,20 @@
       '<p class="subtle">승격 조건: ' + escapeHtml((statisticalContract.promotionGates || []).join(" / ") || "해당 없음") + '</p>',
       '</section>'
     ].join("") : "";
+    var executionUnitDetail = selectedItem.evaluationGrain ? [
+      '<section class="ontology-rule-knowledge">',
+      '<header><strong>규칙 실행 경계</strong><span>' + escapeHtml(ontologyExecutionGrainLabel(selectedItem.evaluationGrain)) + '</span></header>',
+      '<div class="ontology-rule-knowledge-grid">',
+      '<p><span>평가 단위</span><strong>' + escapeHtml(ontologyExecutionGrainLabel(selectedItem.evaluationGrain)) + '</strong></p>',
+      '<p><span>소유 월드</span><strong>' + escapeHtml(selectedItem.ownerWorld || "-") + '</strong></p>',
+      '<p><span>실행 주기</span><strong>' + escapeHtml(selectedItem.executionCadence || "-") + '</strong></p>',
+      '<p><span>증분 실행</span><strong>' + escapeHtml(selectedItem.incrementalEligible ? "가능" : "전체 평가 필요") + '</strong></p>',
+      '<p><span>키 필드</span><strong>' + escapeHtml((executionUnit.keyFields || []).join(", ") || "-") + '</strong></p>',
+      '<p><span>종목 fan-out</span><strong>' + escapeHtml(executionUnit.subjectFanoutAllowed ? "허용" : "금지") + '</strong></p>',
+      '</div>',
+      '<p class="ontology-rule-knowledge-explanation">트리거 사건: ' + escapeHtml((selectedItem.triggerEventClasses || []).join(", ") || "명시된 사건 없음") + '</p>',
+      '</section>'
+    ].join("") : "";
     var groups = [
       ["classes", "TBox 개념"], ["relations", "TBox 관계"], ["rules", "실행 규칙"],
       ["hypotheses", "가설"], ["inferences", "추론"], ["decisions", "판단"], ["notifications", "알림"]
@@ -13603,6 +13641,7 @@
         return '<section><b>' + escapeHtml(String(index + 1).padStart(2, "0")) + '</b><span>' + escapeHtml(group[1]) + '</span><strong>' + escapeHtml(rows.length) + '</strong><div>' + (rows.length ? rows.slice(0, 3).map(function (item) { return '<em>' + escapeHtml(ontologyCatalogLineageItemLabel(group[0], item) || item.id || "-") + '</em>'; }).join("") : '<em>연결 없음</em>') + '</div></section>';
       }).join(""),
       '</div>',
+      executionUnitDetail,
       knowledgeDetail,
       statisticalDetail,
       (payload.gaps || []).length ? '<div class="ontology-catalog-gaps"><strong>확인이 필요한 연결</strong>' + payload.gaps.map(function (gap) { return '<p><b>' + escapeHtml(gap.code || "gap") + '</b><span>' + escapeHtml(gap.detail || "-") + '</span></p>'; }).join("") + '</div>' : '<div class="ontology-catalog-lineage-ok">현재 조회 범위에서 누락 연결이 발견되지 않았습니다.</div>',

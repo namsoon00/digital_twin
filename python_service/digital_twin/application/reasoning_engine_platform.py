@@ -576,6 +576,9 @@ class ReasoningEnginePlatformService:
         health = dict(values.get("health") or {})
         last_result = dict(health.get("lastResult") or {})
         rule_execution = dict(health.get("ruleExecutionReadiness") or {})
+        runtime_ontology_release = dict(
+            health.get("runtimeOntologyRelease") or {}
+        )
         return {
             "deploymentId": str(values.get("deploymentId") or ""),
             "engineVersion": str(values.get("engineVersion") or ""),
@@ -593,6 +596,23 @@ class ReasoningEnginePlatformService:
             "ruleExecutionReadiness": {
                 "status": str(rule_execution.get("status") or "ready"),
                 "mode": str(rule_execution.get("mode") or "typedb-direct-typeql"),
+            },
+            "runtimeOntologyRelease": {
+                "status": str(runtime_ontology_release.get("status") or ""),
+                "catalogSource": str(
+                    runtime_ontology_release.get("catalogSource") or ""
+                ),
+                "ruleCount": int(runtime_ontology_release.get("ruleCount") or 0),
+                "sharedRuleCount": int(
+                    runtime_ontology_release.get("sharedRuleCount") or 0
+                ),
+                "overlayRuleCount": int(
+                    runtime_ontology_release.get("overlayRuleCount") or 0
+                ),
+                "tboxSource": str(
+                    runtime_ontology_release.get("tboxSource") or ""
+                ),
+                "warmed": bool(runtime_ontology_release.get("warmed")),
             },
             "graphWriter": dict(health.get("graphWriter") or {}),
             "workerHeartbeats": dict(health.get("workerHeartbeats") or {}),

@@ -1227,6 +1227,15 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                             "functionsReady": False,
                             "directTypeqlFallbackReady": True,
                         },
+                        "runtimeOntologyRelease": {
+                            "status": "ready",
+                            "catalogSource": "frozen-v2-release",
+                            "ruleCount": 118,
+                            "sharedRuleCount": 104,
+                            "overlayRuleCount": 116,
+                            "tboxSource": "frozen-v2-release",
+                            "warmed": True,
+                        },
                         "lastResult": {
                             "status": "ok",
                             "request_id": "request-1",
@@ -1263,6 +1272,18 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual(
             "typedb-direct-typeql",
             result["activeDeployment"]["ruleExecutionReadiness"]["mode"],
+        )
+        self.assertEqual(
+            {
+                "status": "ready",
+                "catalogSource": "frozen-v2-release",
+                "ruleCount": 118,
+                "sharedRuleCount": 104,
+                "overlayRuleCount": 116,
+                "tboxSource": "frozen-v2-release",
+                "warmed": True,
+            },
+            result["activeDeployment"]["runtimeOntologyRelease"],
         )
         self.assertEqual("single-process", result["writerTopology"]["mode"])
         self.assertEqual(1234, result["writerTopology"]["owner"]["processId"])

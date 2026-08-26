@@ -2354,7 +2354,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "150",
         ),
         "typedbStartupWaitSeconds": value("typedbStartupWaitSeconds", "TYPEDB_STARTUP_WAIT_SECONDS", "1800"),
-        "typedbSeedOnStart": value("typedbSeedOnStart", "TYPEDB_SEED_ON_START", "1"),
+        "typedbSeedOnStart": value("typedbSeedOnStart", "TYPEDB_SEED_ON_START", "0"),
         "typedbSeedReplaceRuleBox": value("typedbSeedReplaceRuleBox", "TYPEDB_SEED_REPLACE_RULEBOX", "1"),
         "typedbSeedKeepInference": value("typedbSeedKeepInference", "TYPEDB_SEED_KEEP_INFERENCE", "1"),
         "typedbSeedTimeoutSeconds": value("typedbSeedTimeoutSeconds", "TYPEDB_SEED_TIMEOUT_SECONDS", "900"),

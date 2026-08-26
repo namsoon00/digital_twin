@@ -10,6 +10,21 @@ from digital_twin import service_manager
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_active_store_startup_does_not_reseed_an_immutable_release_by_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "0",
+            }
+
+            with patch.object(service_manager.subprocess, "run") as run:
+                self.assertTrue(service_manager.ensure_typedb_seeded(spec))
+
+            run.assert_not_called()
+            self.assertIn("seed skipped", spec["log"].read_text(encoding="utf-8"))
+
     def test_maintenance_lock_fences_seed_and_rotation_with_one_token(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "typedb-maintenance.lock"

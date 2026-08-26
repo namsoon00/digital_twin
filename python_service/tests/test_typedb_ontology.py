@@ -10325,7 +10325,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
         self.assertEqual("1800", workers["typedb"]["startupWaitSeconds"])
-        self.assertEqual("1", workers["typedb"]["seedOnStart"])
+        self.assertEqual("0", workers["typedb"]["seedOnStart"])
         self.assertEqual("1", workers["typedb"]["seedReplaceRuleBox"])
         self.assertEqual("1", workers["typedb"]["seedKeepInference"])
         self.assertEqual("900", workers["typedb"]["seedTimeoutSeconds"])

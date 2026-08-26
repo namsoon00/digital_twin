@@ -368,7 +368,11 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # normal recovery as a 60-second failure leaves every dependent worker
         # down and turns a recoverable restart into a reasoning backlog.
         "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "1800"),
-        "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "1"),
+        # Active reasoning deployments are immutable release bundles. Startup
+        # may serve their existing graph, but must not rewrite TBox/RuleBox to
+        # match the current checkout. Isolated blue-green candidates override
+        # this setting and still require a complete static seed.
+        "seedOnStart": str((settings or {}).get("typedbSeedOnStart") or os.environ.get("TYPEDB_SEED_ON_START") or "0"),
         "seedReplaceRuleBox": str((settings or {}).get("typedbSeedReplaceRuleBox") or os.environ.get("TYPEDB_SEED_REPLACE_RULEBOX") or "1"),
         "seedKeepInference": str((settings or {}).get("typedbSeedKeepInference") or os.environ.get("TYPEDB_SEED_KEEP_INFERENCE") or "1"),
         # A fresh TypeDB needs to persist the complete static TBox, RuleBox,

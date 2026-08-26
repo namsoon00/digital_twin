@@ -1560,6 +1560,69 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_subject_decision_cases (
+        subject_case_id VARCHAR(191) PRIMARY KEY,
+        batch_case_id VARCHAR(191) NOT NULL,
+        request_id VARCHAR(191) NOT NULL,
+        deployment_id VARCHAR(191) NOT NULL,
+        release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        synthesis_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_set_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        stage VARCHAR(32) NOT NULL DEFAULT 'CREATED',
+        outcome_kind VARCHAR(32) NOT NULL DEFAULT '',
+        ai_request_id VARCHAR(191) NOT NULL DEFAULT '',
+        notification_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        case_version INT NOT NULL DEFAULT 1,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        KEY idx_subject_decision_batch_stage (batch_case_id, stage, updated_at),
+        KEY idx_subject_decision_scope_time (account_id, symbol, updated_at),
+        KEY idx_subject_decision_ai_request (ai_request_id),
+        KEY idx_subject_decision_notification (notification_job_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS decision_candidate_snapshots (
+        candidate_set_id VARCHAR(191) PRIMARY KEY,
+        subject_case_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        synthesis_id VARCHAR(191) NOT NULL DEFAULT '',
+        fingerprint VARCHAR(64) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_candidate_snapshot_subject (subject_case_id),
+        UNIQUE KEY uq_candidate_snapshot_fingerprint (fingerprint),
+        KEY idx_candidate_snapshot_scope (account_id, symbol, inference_generation_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS decision_publications (
+        publication_id VARCHAR(191) PRIMARY KEY,
+        subject_case_id VARCHAR(191) NOT NULL,
+        outcome_kind VARCHAR(32) NOT NULL,
+        publication_fingerprint VARCHAR(64) NOT NULL,
+        decision_episode_id VARCHAR(191) NOT NULL DEFAULT '',
+        notification_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        delivered_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_decision_publication_subject (subject_case_id),
+        UNIQUE KEY uq_decision_publication_fingerprint (publication_fingerprint),
+        KEY idx_decision_publication_notification (notification_job_id),
+        KEY idx_decision_publication_episode (decision_episode_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS symbol_universe (
         market VARCHAR(64) NOT NULL,
         symbol VARCHAR(64) NOT NULL,

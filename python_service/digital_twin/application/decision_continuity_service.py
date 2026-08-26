@@ -60,20 +60,7 @@ class DecisionContinuityService:
         if self.decision_episode_store and account_key and symbol_key:
             try:
                 previous_id = str(previous_memory.get("episodeId") or "")
-                if previous_id and hasattr(self.decision_episode_store, "get"):
-                    episode = self.decision_episode_store.get(previous_id)
-                if episode is None and hasattr(self.decision_episode_store, "list"):
-                    rows = self.decision_episode_store.list(
-                        account_id=account_key,
-                        symbol=symbol_key,
-                        limit=3,
-                    )
-                    episode = next((
-                        item for item in rows or []
-                        if str(_mapping(item).get("episodeId") or getattr(item, "episode_id", "") or "").strip()
-                        != excluded
-                    ), None)
-                if episode is None and not previous_memory and hasattr(
+                if not previous_id and hasattr(
                     self.decision_episode_store,
                     "latest_decision_memory",
                 ):
@@ -84,6 +71,24 @@ class DecisionContinuityService:
                             exclude_episode_id=excluded,
                         )
                     )
+                    previous_id = str(previous_memory.get("episodeId") or "")
+                if previous_id and hasattr(self.decision_episode_store, "get"):
+                    episode = self.decision_episode_store.get(previous_id)
+                if (
+                    episode is None
+                    and not previous_memory
+                    and hasattr(self.decision_episode_store, "list")
+                ):
+                    rows = self.decision_episode_store.list(
+                        account_id=account_key,
+                        symbol=symbol_key,
+                        limit=3,
+                    )
+                    episode = next((
+                        item for item in rows or []
+                        if str(_mapping(item).get("episodeId") or getattr(item, "episode_id", "") or "").strip()
+                        != excluded
+                    ), None)
                 source_status["decisionEpisode"] = "available" if episode or previous_memory else "not-found"
             except Exception:  # noqa: BLE001 - continuity is advisory and must not block a live alert.
                 source_status["decisionEpisode"] = "error"

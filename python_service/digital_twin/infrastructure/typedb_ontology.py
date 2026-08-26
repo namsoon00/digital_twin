@@ -4380,6 +4380,7 @@ class ScopedABoxManifestMixin:
         node_rows: Iterable[Dict[str, object]],
         relation_rows: Iterable[Dict[str, object]],
         telemetry: Dict[str, object] = None,
+        assume_missing_storage: bool = False,
     ) -> Dict[str, object]:
         """Write pre-resolved rows without requiring every endpoint in a slice."""
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -4390,7 +4391,7 @@ class ScopedABoxManifestMixin:
         reuse_plan = self.scoped_abox_storage_reuse_plan(
             node_rows,
             relation_rows,
-            assume_missing_storage=self._fresh_candidate_rebuild,
+            assume_missing_storage=bool(assume_missing_storage),
         )
         trace["storageReusePlanMs"] = round(
             (time.monotonic() - reuse_started) * 1000,
@@ -5750,12 +5751,15 @@ class ScopedABoxManifestMixin:
                 return {"status": "error", "reason": str(error)[:180]}
 
         try:
+            fresh_world_bootstrap = self.fresh_candidate_world_bootstrap_required(
+                world_id
+            )
             pending_before = (
                 {
                     "status": "skipped-fresh-candidate",
                     "reason": "A newly created blue-green candidate has no pending PortfolioWorld ABox.",
                 }
-                if self._fresh_candidate_rebuild
+                if fresh_world_bootstrap
                 else self.pending_abox_activation(world_id)
             )
         except Exception as error:  # noqa: BLE001 - do not overlap two uncertain generations.
@@ -5795,7 +5799,7 @@ class ScopedABoxManifestMixin:
         try:
             active_before = (
                 {}
-                if self._fresh_candidate_rebuild
+                if fresh_world_bootstrap
                 else self.active_abox_metadata(world_id)
             )
         except Exception:
@@ -5954,7 +5958,7 @@ class ScopedABoxManifestMixin:
                             "deletedBatchCount": 0,
                             "reason": "The manager created this candidate database before the replay process started.",
                         }
-                        if self._fresh_candidate_rebuild and operation_attempt_count == 1
+                        if fresh_world_bootstrap and operation_attempt_count == 1
                         else self.delete_box_manifest_rows_in_batches(
                             driver,
                             imported,
@@ -5977,6 +5981,7 @@ class ScopedABoxManifestMixin:
                         node_rows,
                         relation_rows,
                         telemetry=write_progress,
+                        assume_missing_storage=fresh_world_bootstrap,
                     )
                     timing["changedScopeWritePlan"] = write_plan
                     timing["changedScopeWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
@@ -6096,6 +6101,11 @@ class ScopedABoxManifestMixin:
             relation_persistence = self.scoped_abox_relation_persistence_summary(
                 dict(timing.get("changedScopeWritePlan") or {}),
             )
+            # ``typedbFreshCandidateRebuild`` is a provisioning hint, not a
+            # permanent runtime mode. Once any scoped Manifest has been
+            # staged, later target patches must merge with the active
+            # topology and physical evidence index.
+            self._fresh_candidate_rebuild = False
             return {
                 "configured": True,
                 "saved": True,
@@ -8724,6 +8734,29 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             self._database_created_in_process = False
             if "already" not in str(error).lower() and "exist" not in str(error).lower():
                 raise
+
+    def fresh_candidate_world_bootstrap_required(self, world_id: str = "") -> bool:
+        """Return whether this world still has no durable candidate Manifest.
+
+        The blue-green control plane sets the fresh-candidate flag while a
+        database is provisioned. A long-lived worker can process many later
+        target patches, so the flag must stop bypassing active metadata after
+        the first successful Manifest write.
+        """
+        if not self._fresh_candidate_rebuild:
+            return False
+        try:
+            active = dict(self.active_abox_metadata(str(world_id or "")) or {})
+        except Exception:
+            return True
+        return not bool(
+            str(active.get("status") or "") == "ok"
+            and str(
+                active.get("worldviewManifestId")
+                or active.get("aboxSnapshotId")
+                or ""
+            ).strip()
+        )
 
     def process_base_schema_cache_key(self, schema_fingerprint: str) -> Tuple[str, str, bool, str]:
         return (

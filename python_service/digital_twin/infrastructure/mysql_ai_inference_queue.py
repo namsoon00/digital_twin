@@ -56,8 +56,15 @@ def _compact_notification_payload(job: NotificationJob) -> Dict[str, object]:
     return payload
 
 
-def _reasoning_case_id_from_context(value: object) -> str:
+def _decision_case_id_from_context(value: object) -> str:
     context = _json_loads(value, {})
+    subject = context.get("investmentSubjectDecisionCase")
+    subject = subject if isinstance(subject, dict) else {}
+    subject_case_id = _clean(
+        context.get("investmentSubjectDecisionCaseId") or subject.get("subjectCaseId")
+    )
+    if subject_case_id:
+        return subject_case_id
     embedded = context.get("investmentReasoningCase")
     embedded = embedded if isinstance(embedded, dict) else {}
     return _clean(context.get("investmentReasoningCaseId") or embedded.get("caseId"))
@@ -88,6 +95,9 @@ def compact_ai_queue_context(context: Mapping[str, object]) -> Dict[str, object]
             "rawSymbol",
             "symbol",
             "investmentReasoningCaseId",
+            "investmentReasoningBatchRunId",
+            "investmentSubjectDecisionCaseId",
+            "decisionCandidateFingerprint",
             "notificationAiDecisionContractVersion",
             "notificationAiReviewMode",
             "notificationAiExecutionProfile",
@@ -104,10 +114,32 @@ def compact_ai_queue_context(context: Mapping[str, object]) -> Dict[str, object]
             if embedded_case.get(key) not in (None, "", [], {})
         }
         compact["investmentReasoningCase"].setdefault("caseId", case_id)
+    subject = (
+        dict(values.get("investmentSubjectDecisionCase") or {})
+        if isinstance(values.get("investmentSubjectDecisionCase"), Mapping)
+        else {}
+    )
+    subject_case_id = _clean(
+        values.get("investmentSubjectDecisionCaseId") or subject.get("subjectCaseId")
+    )
+    if subject_case_id:
+        compact["investmentSubjectDecisionCaseId"] = subject_case_id
+        compact["investmentSubjectDecisionCase"] = {
+            key: subject.get(key)
+            for key in [
+                "subjectCaseId", "batchCaseId", "stage", "accountId", "symbol",
+                "inferenceGenerationId", "sourceAboxSnapshotId", "candidateSetId",
+                "candidateFingerprint",
+            ]
+            if subject.get(key) not in (None, "", [], {})
+        }
+        compact["investmentSubjectDecisionCase"].setdefault("subjectCaseId", subject_case_id)
     return compact
 
 
 class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
+    supports_atomic_subject_publication = True
+
     """Atomically coordinate AI work and its source notification outbox row."""
 
     def enqueue(self, job: NotificationJob, request: AIInferenceRequest) -> Dict[str, object]:
@@ -389,7 +421,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         request_id = _clean(row.get("request_id"))
         notification_job_id = _clean(row.get("notification_job_id"))
         status = _clean(row.get("status"))
-        reasoning_case_id = _reasoning_case_id_from_context(row.get("context_json"))
+        reasoning_case_id = _decision_case_id_from_context(row.get("context_json"))
         if status in ACTIVE_STATES:
             connection.execute(
                 """
@@ -617,6 +649,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         worker_id: str,
         result: AIInferenceResult,
         notification_context: Dict[str, object],
+        before_complete=None,
     ) -> bool:
         stamp = utc_now()
         with self.transaction() as connection:
@@ -645,6 +678,9 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                         (AI_INFERENCE_SUPERSEDED, stamp, stamp, request.request_id),
                     )
                 return False
+
+            if callable(before_complete):
+                before_complete(connection)
 
             connection.execute(
                 """

@@ -9,6 +9,7 @@ from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_notification_jobs import MySQLNotificationJobStore
 from .mysql_ai_inference_queue import MySQLAIInferenceQueueStore
 from .mysql_investment_reasoning_cases import MySQLInvestmentReasoningCaseStore
+from .mysql_subject_decision_cases import MySQLSubjectDecisionCaseStore
 from .mysql_operational_core_stores import (
     MySQLAccountRegistry,
     MySQLAppStore,

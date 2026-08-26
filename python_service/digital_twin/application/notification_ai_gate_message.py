@@ -917,6 +917,18 @@ def action_headline(response: NotificationAIValidatedResponse, context: Dict[str
     return investment_action_title(response.action, is_watchlist_context(context or {})) or response.action_label or "대응 기준 점검"
 
 def execution_headline(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    outcome_kind = str(publication.get("outcomeKind") or "").upper()
+    if outcome_kind in {"REVIEW_ONLY", "ABSTAIN", "OBSERVATION"}:
+        target = target_name_for_headline(
+            context.get("displayTarget") or context.get("target") or context.get("title") or ""
+        )
+        label = {
+            "REVIEW_ONLY": "관계 변화 검토",
+            "ABSTAIN": "판단 보류",
+            "OBSERVATION": "자료 변화 관찰",
+        }[outcome_kind]
+        return " ".join(part for part in ["🔎", ((target + " · ") if target else "") + label] if part)
     observation = typedb_context_observation_contract(context or {})
     if observation:
         target = target_name_for_headline(
@@ -2224,6 +2236,15 @@ def relation_axis_summary_rows(context: Dict[str, object], level: str, limit: in
 
 
 def customer_reason_rows(context: Dict[str, object], level: str) -> List[str]:
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    explanation = publication.get("explanationSnapshot") if isinstance(publication.get("explanationSnapshot"), dict) else {}
+    canonical_reasons = [
+        str(item or "").strip()
+        for item in explanation.get("notificationReasons") or []
+        if str(item or "").strip()
+    ]
+    if canonical_reasons:
+        return [_html_bullet(item, level) for item in canonical_reasons[:5]]
     observation = typedb_context_observation_contract(context or {})
     if observation:
         presentation = context_observation_evidence_presentation(context)
@@ -2238,6 +2259,106 @@ def customer_reason_rows(context: Dict[str, object], level: str) -> List[str]:
             row = "TypeDB가 '" + label + "' 관계를 투자 행동이 아닌 확인 자료로 연결했습니다."
         return [_html_bullet(row, level)]
     return [_html_bullet(item, level) for item in customer_alert_reason_lines(context) if str(item or "").strip()]
+
+
+def canonical_publication_evidence_rows(
+    context: Dict[str, object],
+    *,
+    limit: int = 5,
+) -> List[str]:
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    explanation = publication.get("explanationSnapshot") if isinstance(publication.get("explanationSnapshot"), dict) else {}
+    rows: List[str] = []
+    field_labels = {
+        "currentPrice": "현재가",
+        "profitLossRate": "수익률",
+        "ma5Distance": "5일선 괴리",
+        "ma20Distance": "20일선 괴리",
+        "ma60Distance": "60일선 괴리",
+        "foreignNetVolume": "외국인 순매수",
+        "institutionNetVolume": "기관 순매수",
+        "tradeStrength": "체결강도",
+        "timeAdjustedVolumeRatio": "시간 보정 거래량",
+        "btcChange24h": "비트코인 24시간 변동",
+        "btcChange7d": "비트코인 7일 변동",
+    }
+    for proof in explanation.get("selectedRuleProofs") or []:
+        if not isinstance(proof, dict):
+            continue
+        rule_label = str(proof.get("label") or "").split(" · ")[-1].strip()
+        for condition in proof.get("matchedConditions") or []:
+            if not isinstance(condition, dict):
+                continue
+            field = str(condition.get("field") or "").strip()
+            observed = condition.get("observedValue")
+            if not field or observed in (None, ""):
+                continue
+            shape = condition.get("ruleConditionShape") if isinstance(condition.get("ruleConditionShape"), dict) else {}
+            operator = str(condition.get("operator") or shape.get("operator") or "").strip()
+            expected = shape.get("value")
+            value = _rule_condition_display_value(observed)
+            suffix = "%" if field.lower().endswith(("rate", "distance", "pct", "24h", "7d")) else ""
+            text = field_labels.get(field, field) + " " + value + suffix
+            expected_text = _rule_condition_display_value(expected)
+            if expected_text and expected_text != value:
+                text += " (기준 " + operator + " " + expected_text + suffix + ")"
+            source = str(condition.get("source") or condition.get("observationSource") or "").strip()
+            as_of = str(condition.get("sourceAsOf") or condition.get("observedAt") or "").strip()
+            provenance = " · ".join(part for part in [source, as_of] if part)
+            if provenance:
+                text += " · " + provenance
+            if rule_label:
+                text = rule_label + ": " + text
+            append_unique_text(rows, text, 360)
+            if len(rows) >= limit:
+                return rows
+    label = str(explanation.get("selectedHypothesisLabel") or "").strip()
+    if label and not rows:
+        rows.append("선택 가설: " + label)
+    return rows[:limit]
+
+
+def canonical_publication_hypothesis_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> List[str]:
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    if str(publication.get("outcomeKind") or "").upper() != "FINAL_DECISION":
+        return []
+    explanation = publication.get("explanationSnapshot") if isinstance(publication.get("explanationSnapshot"), dict) else {}
+    label = customer_visible_ai_text(explanation.get("selectedHypothesisLabel") or "")
+    if not label:
+        return []
+    selected_row = "선택한 설명: " + label
+    rows = []
+    candidate = str(explanation.get("selectedHypothesisCandidateAction") or "").upper()
+    final_action = str(explanation.get("action") or response.action or "").upper()
+    rationale = compact_sentence_count(
+        customer_visible_ai_text(explanation.get("decisionRationale") or ""),
+        1,
+    )
+    if candidate and final_action and candidate != final_action:
+        selected_row += (
+            " · 가설 제안: " + action_label_for_action(candidate, context)
+            + " · 최종 판단: " + action_label_for_action(final_action, context)
+        )
+        if rationale:
+            selected_row += ": " + rationale
+    elif rationale:
+        selected_row += " · 선택 이유: " + rationale
+    rows.append(selected_row)
+    return rows[:2]
+
+
+def canonical_publication_data_warning_rows(context: Dict[str, object]) -> List[str]:
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    explanation = publication.get("explanationSnapshot") if isinstance(publication.get("explanationSnapshot"), dict) else {}
+    rows = []
+    for item in explanation.get("missingData") or []:
+        text = customer_visible_ai_text(item)
+        if text:
+            append_unique_text(rows, "확인되지 않은 자료: " + text, 360)
+    return rows[:4]
 
 
 def customer_inference_rows(context: Dict[str, object], level: str) -> List[str]:
@@ -3130,7 +3251,11 @@ def _notification_rule_proof_line(
         rule_id = str(item.get("ruleId") or item.get("sourceRuleId") or "").strip()
         return (len(decision_values), len(concrete), int(rule_id in preferred))
 
-    trace = max(traces, key=proof_score, default=None)
+    preferred_traces = [
+        item for item in traces
+        if str(item.get("ruleId") or item.get("sourceRuleId") or "").strip() in preferred
+    ]
+    trace = max(preferred_traces or traces, key=proof_score, default=None)
     if not isinstance(trace, dict):
         return ""
     field_labels = {
@@ -3200,6 +3325,9 @@ def _notification_selected_inference_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
 ) -> List[str]:
+    canonical_rows = canonical_publication_hypothesis_rows(context, response)
+    if canonical_rows:
+        return canonical_rows
     if is_typedb_context_observation_notification(context or {}):
         return full_typedb_competing_inference_rows(context, response)[:2]
     relation = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
@@ -3256,7 +3384,9 @@ def execution_telegram_message_progressive(
     context_observation = is_typedb_context_observation_notification(context or {})
     if observation_presentation:
         next_checks = list(observation_presentation.get("watchItems") or []) or next_checks
-    warnings = customer_data_note_rows(list(response.missing_data_impact))
+    warnings = canonical_publication_data_warning_rows(context)
+    for item in customer_data_note_rows(list(response.missing_data_impact)):
+        append_unique_text(warnings, item, 360)
     unsupported = compact_provider_unsupported_line(context)
     if unsupported:
         warnings.append(unsupported)
@@ -3309,7 +3439,14 @@ def execution_telegram_message_progressive(
     if packet.counter_evidence:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
     if packet.inference:
-        inference_label = "TypeDB 확인 관계" if context_observation else "TypeDB 검토 가설"
+        publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+        inference_label = (
+            "판단에 사용한 가설"
+            if str(publication.get("outcomeKind") or "").upper() == "FINAL_DECISION"
+            else "TypeDB 확인 관계"
+            if context_observation
+            else "TypeDB 검토 가설"
+        )
         parts.extend(["", "<b>" + inference_label + "</b>", *[_html_bullet(row, level) for row in packet.inference]])
     if packet.company_value:
         parts.extend(["", "<b>회사 가치</b>", *[_html_bullet(row, level) for row in packet.company_value]])
@@ -3389,8 +3526,15 @@ def execution_telegram_message_compact_beginner(
     counter_rows = full_decision_evidence_rows(context, response, counter=True)
     if counter_rows:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
-    typedb_rows = full_typedb_competing_inference_rows(context, response)
-    typedb_label = "TypeDB 확인 관계" if context_observation else "TypeDB 경쟁 추론"
+    typedb_rows = canonical_publication_hypothesis_rows(context, response) or full_typedb_competing_inference_rows(context, response)
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    typedb_label = (
+        "판단에 사용한 가설"
+        if str(publication.get("outcomeKind") or "").upper() == "FINAL_DECISION"
+        else "TypeDB 확인 관계"
+        if context_observation
+        else "TypeDB 경쟁 추론"
+    )
     parts.extend(["", "<b>" + typedb_label + "</b>", *[_html_bullet(row, level) for row in typedb_rows]])
     assessment_rows = typedb_decision_assessment_rows(context)
     parts.extend(["", "<b>온톨로지 판단 영역</b>", *[_html_bullet(row, level) for row in assessment_rows]])
@@ -3438,6 +3582,14 @@ def execution_telegram_message_compact_beginner(
 
 
 def compact_current_action_line(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
+    outcome_kind = str(publication.get("outcomeKind") or "").upper()
+    if outcome_kind == "REVIEW_ONLY":
+        return "[TypeDB 검토] 투자 행동을 새로 정하지 않았습니다. 관계 변화와 다음 확인 조건만 검토합니다."
+    if outcome_kind == "ABSTAIN":
+        return "[판단 보류] 후보 비교가 완전하지 않아 매수·매도·보유 판단을 만들지 않았습니다."
+    if outcome_kind == "OBSERVATION":
+        return "[TypeDB 참고] 이 알림은 매수·매도 판단이 아닌 자료 변화 관찰입니다."
     writer = response_writer_provenance(response, context)
     writer_kind = str(writer.get("writerKind") or "deterministic")
     comparison_incomplete = bool(
@@ -4236,6 +4388,10 @@ def full_decision_evidence_rows(
     counter: bool = False,
     limit: int = 5,
 ) -> List[str]:
+    if not counter:
+        canonical_rows = canonical_publication_evidence_rows(context, limit=limit)
+        if canonical_rows:
+            return canonical_rows
     if not counter and is_typedb_context_observation_notification(context or {}):
         presentation = context_observation_evidence_presentation(context)
         rows = []
@@ -4615,7 +4771,10 @@ def full_excluded_information_rows(
     response: NotificationAIValidatedResponse = None,
 ) -> List[str]:
     facts = relation_facts(context or {})
-    rows: List[str] = []
+    rows: List[str] = [
+        "판단 제한: " + item
+        for item in canonical_publication_data_warning_rows(context)
+    ]
     if not includes_portfolio_rebalance_policy(context):
         rows.append(
             "포트폴리오 리밸런싱: 이번 종목 시세 판단에서는 현금 하한, 목표 비중, "

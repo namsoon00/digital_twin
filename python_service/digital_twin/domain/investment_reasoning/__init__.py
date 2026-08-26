@@ -37,6 +37,18 @@ from .contracts import (
 from .hypotheses import GraphHypothesisManager
 from .synthesis import decision_synthesis_from_relation_context
 from .rule_inventory import reasoning_rule_inventory
+from .subject_case import (
+    ABSTAIN,
+    FINAL_DECISION,
+    OBSERVATION,
+    REVIEW_ONLY,
+    SUPPRESSED,
+    CandidateSetSnapshot,
+    DecisionAbstention,
+    DecisionPublication,
+    SubjectDecisionCase,
+    publication_for_subject_case,
+)
 
 __all__ = [
     "AIJudgmentResult",
@@ -72,4 +84,14 @@ __all__ = [
     "decision_synthesis_from_relation_context",
     "reasoning_rule_inventory",
     "rule_evaluation_records_from_projection_results",
+    "ABSTAIN",
+    "FINAL_DECISION",
+    "OBSERVATION",
+    "REVIEW_ONLY",
+    "SUPPRESSED",
+    "CandidateSetSnapshot",
+    "DecisionAbstention",
+    "DecisionPublication",
+    "SubjectDecisionCase",
+    "publication_for_subject_case",
 ]

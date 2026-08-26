@@ -97,6 +97,56 @@ class NotificationExplanationTests(unittest.TestCase):
         self.assertNotIn("네 번째 이후 근거", message)
         self.assertEqual(1, message.count("현재가가 20일 평균 위에 있습니다."))
 
+    def test_canonical_publication_explains_trigger_selected_hypothesis_and_missing_data(self):
+        context = {
+            "messageDeliveryLevel": "absoluteBeginner",
+            "notificationDetailLevel": "concise",
+            "title": "스트래티지 알림",
+            "displayTarget": "스트래티지 / MSTR",
+            "rawLines": ["현재가: $124.74", "수익률: +37.3%"],
+            "customerDeliveryExplanation": {
+                "lines": ["관찰 등급", "종목 지정", "본문 있음"],
+            },
+            "decisionPublication": {
+                "outcomeKind": "FINAL_DECISION",
+                "explanationSnapshot": {
+                    "action": "HOLD",
+                    "notificationReasons": [
+                        "가격 회복 가설이 새 세대에서 성립해 직전 판단과 다시 비교했습니다.",
+                    ],
+                    "selectedHypothesisLabel": "중기 가격 회복 지속",
+                    "selectedHypothesisCandidateAction": "BUY",
+                    "decisionRationale": "거래량 확인 전에는 신규 매수를 보류합니다.",
+                    "missingData": ["미국 종목의 체결 방향과 투자자별 수급"],
+                    "selectedRuleProofs": [{
+                        "ruleId": "graph.price.recovery.v1",
+                        "label": "가격 회복 확인",
+                        "matchedConditions": [{
+                            "field": "ma20Distance",
+                            "observedValue": 21.3,
+                            "source": "KIS",
+                            "sourceAsOf": "2026-08-26T22:46:00Z",
+                            "ruleConditionShape": {"operator": ">", "value": 0},
+                        }],
+                    }],
+                },
+            },
+            "ontologyRelationContext": {
+                "matchedRules": [{"label": "가격 회복 확인"}],
+            },
+        }
+
+        message = execution_telegram_message(context, self.response())
+
+        self.assertIn("가격 회복 설명이 새 세대에서 성립", message)
+        self.assertNotIn("관찰 등급", message)
+        self.assertNotIn("본문 있음", message)
+        self.assertIn("가격 회복 확인: 20일선 차이 21.3%", message)
+        self.assertIn("<b>판단에 사용한 가설</b>", message)
+        self.assertIn("선택한 설명: 중기 가격 회복 지속", message)
+        self.assertIn("설명 제안: 매수 · 최종 판단: 보유", message)
+        self.assertIn("확인되지 않은 자료: 미국 종목의 체결 방향과 투자자별 수급", message)
+
     def test_dispatch_rebuilds_legacy_investment_message_with_stable_contract(self):
         job = NotificationJob.create(
             "legacy message that must not be sent",

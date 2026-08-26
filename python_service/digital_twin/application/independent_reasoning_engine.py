@@ -1416,6 +1416,11 @@ class V2ReasoningEngine:
                     completion_reason,
                     source=completion_source,
                 )
+            else:
+                reasoning_case = self.reasoning_orchestrator.batch_handoff_completed(
+                    reasoning_case.case_id,
+                    "종목별 판단 케이스가 알림·AI 처리 경계로 전달됐습니다.",
+                )
         source_ids = tuple(
             value["sourceAboxSnapshotId"] for value in identities.values()
             if value["sourceAboxSnapshotId"]

@@ -2717,10 +2717,20 @@ class PortfolioOntologyProjectionRecorder:
             if isinstance(reasoning_context, dict)
             else {}
         )
-        fresh_candidate_rebuild = str(
+        fresh_candidate_configured = str(
             self.settings.get("typedbFreshCandidateRebuild") or "0"
         ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
         portfolio_world_context = world_from_snapshot(snapshot, self.settings)
+        candidate_bootstrap_check = getattr(
+            self.repository,
+            "fresh_candidate_world_bootstrap_required",
+            None,
+        )
+        fresh_candidate_rebuild = bool(fresh_candidate_configured)
+        if fresh_candidate_rebuild and callable(candidate_bootstrap_check):
+            fresh_candidate_rebuild = bool(
+                candidate_bootstrap_check(portfolio_world_context.world_id)
+            )
         market_world_context = market_world(
             portfolio_world_context.market_id,
             self.settings.get("ontologySharedMarketTenantId") or "shared",

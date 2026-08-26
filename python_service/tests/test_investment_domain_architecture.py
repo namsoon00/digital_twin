@@ -302,6 +302,13 @@ class InvestmentDomainArchitectureTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS investment_performance_attributions", schema)
         self.assertEqual(4.75, attribution.active_return_pct)
 
+    def test_subject_decision_scope_uses_its_deterministic_primary_key(self):
+        schema = "\n".join(MYSQL_SCHEMA)
+
+        self.assertIn("CREATE TABLE IF NOT EXISTS investment_subject_decision_cases", schema)
+        self.assertIn("subject_case_id VARCHAR(191) PRIMARY KEY", schema)
+        self.assertNotIn("UNIQUE KEY uq_subject_decision_scope", schema)
+
     def test_investment_flow_backfill_only_reads_missing_episodes(self):
         schema = "\n".join(MYSQL_SCHEMA)
 

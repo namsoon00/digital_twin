@@ -17,7 +17,7 @@ INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v2"
 FACT_DELTA_VERSION = "investment-fact-delta-v1"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
-AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v1"
+AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v2"
 DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v3"
 
 REASONING_LANE_REALTIME = "REALTIME"
@@ -312,6 +312,9 @@ class DecisionSynthesis:
     investment_view_action: str = ""
     execution_action: str = "NO_ACTION"
     execution_disposition: str = "judgement-blocked"
+    decision_effect: str = ""
+    decision_disposition: str = ""
+    action_authority: str = "observe"
     allowed_actions: Tuple[str, ...] = ()
     blocked_actions: Tuple[str, ...] = ()
     alternatives: Tuple[ActionAlternative, ...] = ()
@@ -349,6 +352,9 @@ class DecisionSynthesis:
             investment_view_action=str(payload.get("investment_view_action") or payload.get("investmentViewAction") or "").upper(),
             execution_action=str(payload.get("execution_action") or payload.get("executionAction") or "NO_ACTION").upper(),
             execution_disposition=str(payload.get("execution_disposition") or payload.get("executionDisposition") or "judgement-blocked"),
+            decision_effect=str(payload.get("decision_effect") or payload.get("decisionEffect") or "").lower(),
+            decision_disposition=str(payload.get("decision_disposition") or payload.get("decisionDisposition") or "").lower(),
+            action_authority=str(payload.get("action_authority") or payload.get("actionAuthority") or "observe").lower(),
             allowed_actions=_texts(payload.get("allowed_actions") or payload.get("allowedActions"), uppercase=True),
             blocked_actions=_texts(payload.get("blocked_actions") or payload.get("blockedActions"), uppercase=True),
             alternatives=tuple(
@@ -690,6 +696,9 @@ class AIJudgmentResult:
     rejected_candidate_reason: str = ""
     next_observations: Tuple[str, ...] = ()
     reversal_conditions: Tuple[str, ...] = ()
+    reviewed_hypothesis_ids: Tuple[str, ...] = ()
+    hypothesis_reviews: Tuple[Dict[str, object], ...] = ()
+    comparison_state: str = ""
     model: str = ""
     reasoning_effort: str = ""
     latency_ms: int = 0
@@ -718,6 +727,11 @@ class AIJudgmentResult:
             item for item in reviews
             if str(item.get("hypothesisId") or "") == selected_id
         ), {})
+        reviewed_hypothesis_ids = _texts(
+            item.get("hypothesisId")
+            for item in reviews
+            if item.get("hypothesisId")
+        )
         confidence = payload.get("confidence") or payload.get("judgmentStrength") or 0
         try:
             confidence_value = float(confidence or 0)
@@ -758,6 +772,14 @@ class AIJudgmentResult:
                 payload.get("reversalConditions")
                 or ([payload.get("invalidationCondition")] if payload.get("invalidationCondition") else [])
             ),
+            reviewed_hypothesis_ids=reviewed_hypothesis_ids,
+            hypothesis_reviews=tuple(reviews),
+            comparison_state=str(
+                comparison.get("hypothesisComparisonState")
+                or comparison.get("status")
+                or payload.get("hypothesisComparisonState")
+                or ""
+            ),
             model=str(getattr(result, "model", "") or ""),
             reasoning_effort=str(getattr(result, "reasoning_effort", "") or ""),
             latency_ms=max(0, int(getattr(result, "latency_ms", 0) or 0)),
@@ -767,9 +789,10 @@ class AIJudgmentResult:
         payload = asdict(self)
         for key in [
             "supporting_evidence_ids", "opposing_evidence_ids",
-            "next_observations", "reversal_conditions",
+            "next_observations", "reversal_conditions", "reviewed_hypothesis_ids",
         ]:
             payload[key] = list(payload[key])
+        payload["hypothesis_reviews"] = [dict(item) for item in self.hypothesis_reviews]
         return payload
 
     @classmethod
@@ -792,6 +815,15 @@ class AIJudgmentResult:
             rejected_candidate_reason=str(payload.get("rejected_candidate_reason") or payload.get("rejectedCandidateReason") or ""),
             next_observations=_texts(payload.get("next_observations") or payload.get("nextObservations")),
             reversal_conditions=_texts(payload.get("reversal_conditions") or payload.get("reversalConditions")),
+            reviewed_hypothesis_ids=_texts(
+                payload.get("reviewed_hypothesis_ids") or payload.get("reviewedHypothesisIds")
+            ),
+            hypothesis_reviews=tuple(
+                dict(item)
+                for item in payload.get("hypothesis_reviews") or payload.get("hypothesisReviews") or []
+                if isinstance(item, Mapping)
+            ),
+            comparison_state=str(payload.get("comparison_state") or payload.get("comparisonState") or ""),
             model=str(payload.get("model") or ""),
             reasoning_effort=str(payload.get("reasoning_effort") or payload.get("reasoningEffort") or ""),
             latency_ms=max(0, int(payload.get("latency_ms") or payload.get("latencyMs") or 0)),

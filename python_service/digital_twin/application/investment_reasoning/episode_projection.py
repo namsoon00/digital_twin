@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from ...domain.investment_brain import (
@@ -29,6 +30,7 @@ from ...domain.investment_reasoning import (
     CASE_SUPERSEDED,
     CASE_VALIDATED,
     ReasoningCase,
+    SubjectDecisionCase,
 )
 
 
@@ -286,19 +288,7 @@ def decision_episode_from_reasoning_case(
     counter_ids = list(selected.counter_evidence_ids) if selected else []
     reviews = []
     if judgment and selected_id:
-        reviews = [{
-            "hypothesisId": item.hypothesis_id,
-            "verdict": "supported" if item.hypothesis_id == selected_id else "unreviewed",
-            "reasoning": judgment.rationale if item.hypothesis_id == selected_id else "",
-            "reviewedSupportingEvidenceIds": (
-                list(judgment.supporting_evidence_ids)
-                if item.hypothesis_id == selected_id else []
-            ),
-            "reviewedCounterEvidenceIds": (
-                list(judgment.opposing_evidence_ids)
-                if item.hypothesis_id == selected_id else []
-            ),
-        } for item in reasoning_case.hypotheses]
+        reviews = [dict(item) for item in judgment.hypothesis_reviews]
     payload = {
         "episodeId": episode_id,
         "accountId": account_id,
@@ -384,6 +374,33 @@ def decision_episode_from_reasoning_case(
         "engineVersion": "independent-reasoning-v2",
     }
     return DecisionEpisode.from_dict(payload)
+
+
+def decision_episode_from_subject_case(
+    reasoning_case: ReasoningCase,
+    subject_case: SubjectDecisionCase,
+) -> DecisionEpisode:
+    """Build one episode from one immutable account/subject candidate set."""
+
+    scoped_batch = deepcopy(reasoning_case)
+    scoped_batch.hypotheses = tuple(subject_case.candidate_set.hypotheses)
+    scoped_batch.decision_syntheses = (subject_case.synthesis,)
+    scoped_batch.ai_judgment = subject_case.ai_judgment
+    scoped_batch.final_decision = subject_case.final_decision
+    episode = decision_episode_from_reasoning_case(
+        scoped_batch,
+        subject_case.account_id,
+        subject_case.symbol,
+        subject_case.synthesis,
+    )
+    episode.facts_at_decision.update({
+        "investmentReasoningBatchCaseId": reasoning_case.case_id,
+        "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
+        "candidateSetId": subject_case.candidate_set.candidate_set_id,
+        "candidateFingerprint": subject_case.candidate_set.fingerprint,
+        "candidateSetSnapshot": subject_case.candidate_set.to_dict(),
+    })
+    return episode
 
 
 class V2DecisionEpisodeProjector:
@@ -519,6 +536,14 @@ class V2DecisionEpisodeProjector:
             or reasoning_case.stage not in PROJECTABLE_STAGES
         ):
             return []
+        final = reasoning_case.final_decision
+        if (
+            not final
+            or str(final.action or "").upper() == "NO_ACTION"
+            or not str(final.selected_hypothesis_id or "").strip()
+            or str(final.source or "") != "ai-judgment"
+        ):
+            return []
         saved = []
         for account_id, symbol, synthesis in _targets(reasoning_case):
             episode = decision_episode_from_reasoning_case(
@@ -542,3 +567,18 @@ class V2DecisionEpisodeProjector:
             if callable(enqueue) and gap_request:
                 enqueue(gap_request)
         return saved
+
+
+def hypothesis_gap_request_from_subject_case(
+    reasoning_case: ReasoningCase,
+    subject_case: SubjectDecisionCase,
+    episode: DecisionEpisode,
+) -> Dict[str, object]:
+    scoped_batch = deepcopy(reasoning_case)
+    scoped_batch.hypotheses = tuple(subject_case.candidate_set.hypotheses)
+    scoped_batch.decision_syntheses = (subject_case.synthesis,)
+    return V2DecisionEpisodeProjector.hypothesis_gap_request(
+        scoped_batch,
+        episode,
+        subject_case.synthesis,
+    )

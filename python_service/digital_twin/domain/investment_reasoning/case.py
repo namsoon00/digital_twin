@@ -90,6 +90,7 @@ class ReasoningCase:
     input_fingerprint: str = ""
     hypotheses: Tuple[HypothesisRecord, ...] = ()
     decision_syntheses: Tuple[DecisionSynthesis, ...] = ()
+    subject_case_ids: Tuple[str, ...] = ()
     inference_result: Optional[InferenceResult] = None
     ai_judgment: Optional[AIJudgmentResult] = None
     final_decision: Optional[FinalDecision] = None
@@ -171,6 +172,7 @@ class ReasoningCase:
             "inputFingerprint": self.input_fingerprint,
             "hypotheses": [item.to_dict() for item in self.hypotheses],
             "decisionSyntheses": [item.to_dict() for item in self.decision_syntheses],
+            "subjectCaseIds": list(self.subject_case_ids),
             "inferenceResult": self.inference_result.to_dict() if self.inference_result else {},
             "aiJudgment": self.ai_judgment.to_dict() if self.ai_judgment else {},
             "finalDecision": self.final_decision.to_dict() if self.final_decision else {},
@@ -210,6 +212,13 @@ class ReasoningCase:
                 DecisionSynthesis.from_dict(item)
                 for item in payload.get("decisionSyntheses") or payload.get("decision_syntheses") or []
                 if isinstance(item, Mapping) and (item.get("synthesisId") or item.get("synthesis_id"))
+            ),
+            subject_case_ids=tuple(
+                sorted({
+                    str(item or "").strip()
+                    for item in payload.get("subjectCaseIds") or payload.get("subject_case_ids") or []
+                    if str(item or "").strip()
+                })
             ),
             inference_result=InferenceResult.from_dict(inference) if inference else None,
             ai_judgment=AIJudgmentResult.from_dict(judgment) if judgment else None,

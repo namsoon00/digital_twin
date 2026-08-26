@@ -1481,12 +1481,25 @@ def reasoning_engine_comparisons_payload(query: Dict[str, List[str]]) -> Dict[st
 def investment_reasoning_cases_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     settings = runtime_settings()
     store = stores.investment_reasoning_case_store(settings)
+    subject_store = stores.subject_decision_case_store(settings)
+    subject_case_id = str(first_query(query, "subjectCaseId") or "").strip()
+    if subject_case_id:
+        subject_case = subject_store.get(subject_case_id)
+        batch_case = store.get(subject_case.batch_case_id) if subject_case else None
+        return {
+            "status": "ok" if subject_case else "not-found",
+            "subjectCase": subject_case.to_dict() if subject_case else {},
+            "batchCase": batch_case.to_dict() if batch_case else {},
+        }
     case_id = str(first_query(query, "caseId") or "").strip()
     if case_id:
         reasoning_case = store.get(case_id)
         return {
             "status": "ok" if reasoning_case else "not-found",
             "case": reasoning_case.to_dict() if reasoning_case else {},
+            "subjectCases": [
+                item.to_dict() for item in subject_store.for_batch(case_id)
+            ] if reasoning_case else [],
         }
     deployment_id = str(first_query(query, "deploymentId") or "").strip()
     symbol = str(first_query(query, "symbol") or "").upper().strip()
@@ -3852,12 +3865,30 @@ def notification_job_detail_payload(
             or ""
         ).strip()
         reasoning_case = {}
+        subject_case_context = context.get("investmentSubjectDecisionCase")
+        subject_case_context = dict(subject_case_context or {}) if isinstance(subject_case_context, dict) else {}
+        subject_case_id = str(
+            context.get("investmentSubjectDecisionCaseId")
+            or subject_case_context.get("subjectCaseId")
+            or ""
+        ).strip()
+        subject_case = {}
         if case_id and normalized_section == "reasoning":
             try:
                 case = stores.investment_reasoning_case_store(configured).get(case_id)
                 reasoning_case = case.to_dict() if case else case_context
             except Exception as error:  # noqa: BLE001 - compact immutable context remains usable.
                 reasoning_case = {**case_context, "caseId": case_id, "lookupError": str(error)}
+        if subject_case_id and normalized_section == "reasoning":
+            try:
+                item = stores.subject_decision_case_store(configured).get(subject_case_id)
+                subject_case = item.to_dict() if item else subject_case_context
+            except Exception as error:  # noqa: BLE001 - compact immutable context remains usable.
+                subject_case = {
+                    **subject_case_context,
+                    "subjectCaseId": subject_case_id,
+                    "lookupError": str(error),
+                }
         ai_trace = {}
         if normalized_section == "ai-review":
             try:
@@ -3878,6 +3909,8 @@ def notification_job_detail_payload(
             payload["aiRuntime"] = ai_trace
         if reasoning_case and isinstance(payload.get("reasoningTrace"), dict):
             payload["reasoningTrace"]["reasoningCase"] = reasoning_case
+        if subject_case and isinstance(payload.get("reasoningTrace"), dict):
+            payload["reasoningTrace"]["subjectDecisionCase"] = subject_case
     except Exception as error:  # noqa: BLE001 - the saved notification remains readable without its timeline.
         payload["notificationTrace"] = {
             "contractVersion": "notification-trace-v2",

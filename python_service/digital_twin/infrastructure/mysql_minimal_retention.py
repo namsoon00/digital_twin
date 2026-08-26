@@ -235,6 +235,28 @@ class MySQLMinimalRetentionRepository:
                 "OR (stage = 'VALIDATED' AND updated_at < " + _cutoff_sql() + "))",
                 (cutoffs["investmentReasoningCases"], cutoffs["investmentReasoningCases"]),
             ),
+            "subjectDecisionCases": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
+                "FROM `investment_subject_decision_cases` WHERE completed_at <> '' "
+                "AND completed_at < " + _cutoff_sql(),
+                (cutoffs["investmentReasoningCases"],),
+            ),
+            "decisionCandidateSnapshots": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(candidate.payload_json)), 0) AS candidate_bytes "
+                "FROM `decision_candidate_snapshots` candidate "
+                "JOIN `investment_subject_decision_cases` subject "
+                "ON subject.subject_case_id = candidate.subject_case_id "
+                "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql(),
+                (cutoffs["investmentReasoningCases"],),
+            ),
+            "decisionPublications": self._summary(
+                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(publication.payload_json)), 0) AS candidate_bytes "
+                "FROM `decision_publications` publication "
+                "JOIN `investment_subject_decision_cases` subject "
+                "ON subject.subject_case_id = publication.subject_case_id "
+                "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql(),
+                (cutoffs["investmentReasoningCases"],),
+            ),
             "reasoningComparisons": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `reasoning_engine_comparisons` WHERE created_at < " + _cutoff_sql(),
@@ -336,6 +358,21 @@ class MySQLMinimalRetentionRepository:
                     "reasoningSourceSnapshots:terminal",
                     self._delete_reasoning_source_snapshots,
                     (cutoffs["reasoningEngineJobs"],),
+                ),
+                (
+                    "decisionPublications:terminal",
+                    self._delete_decision_publications,
+                    (cutoffs["investmentReasoningCases"],),
+                ),
+                (
+                    "decisionCandidateSnapshots:terminal",
+                    self._delete_decision_candidate_snapshots,
+                    (cutoffs["investmentReasoningCases"],),
+                ),
+                (
+                    "subjectDecisionCases:terminal",
+                    self._delete_subject_decision_cases,
+                    (cutoffs["investmentReasoningCases"],),
                 ),
                 (
                     "investmentReasoningCases:terminal",
@@ -683,6 +720,73 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("investment_reasoning_cases", deleted, bytes_deleted)
+
+    def _delete_decision_publications(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT publication.publication_id, OCTET_LENGTH(publication.payload_json) AS payload_bytes "
+            "FROM `decision_publications` publication "
+            "JOIN `investment_subject_decision_cases` subject "
+            "ON subject.subject_case_id = publication.subject_case_id "
+            "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql()
+            + " ORDER BY subject.completed_at, publication.publication_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "publication_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "decision_publications",
+            "publication_id",
+            candidates,
+            "1 = 1",
+            (),
+            budget,
+        )
+        return self._result("decision_publications", deleted, bytes_deleted)
+
+    def _delete_decision_candidate_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT candidate.candidate_set_id, OCTET_LENGTH(candidate.payload_json) AS payload_bytes "
+            "FROM `decision_candidate_snapshots` candidate "
+            "JOIN `investment_subject_decision_cases` subject "
+            "ON subject.subject_case_id = candidate.subject_case_id "
+            "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql()
+            + " ORDER BY subject.completed_at, candidate.candidate_set_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "candidate_set_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "decision_candidate_snapshots",
+            "candidate_set_id",
+            candidates,
+            "1 = 1",
+            (),
+            budget,
+        )
+        return self._result("decision_candidate_snapshots", deleted, bytes_deleted)
+
+    def _delete_subject_decision_cases(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT subject_case_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `investment_subject_decision_cases` WHERE completed_at <> '' "
+            "AND completed_at < " + _cutoff_sql()
+            + " ORDER BY completed_at, subject_case_id LIMIT %s",
+            (cutoff_iso, policy.batch_size),
+            "subject_case_id",
+            policy,
+            budget,
+        )
+        deleted, bytes_deleted = self._delete_candidates(
+            "investment_subject_decision_cases",
+            "subject_case_id",
+            candidates,
+            "completed_at <> '' AND completed_at < " + _cutoff_sql(),
+            (cutoff_iso,),
+            budget,
+        )
+        return self._result("investment_subject_decision_cases", deleted, bytes_deleted)
 
     def _compact_failed_world_projection_payloads(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

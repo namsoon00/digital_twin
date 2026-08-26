@@ -8,12 +8,13 @@ from digital_twin.application.ai_inference_queue_service import (
     ai_response_contract_error,
 )
 from digital_twin.application.notification_service import NotificationQueueRunner
-from digital_twin.domain.ai_inference_queue import AIInferenceRequest
+from digital_twin.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notifications import NotificationJob
 from mysql_fixtures import (
     TestAIInferenceQueueStore,
     TestNotificationJobStore,
+    mysql_execute,
     mysql_fetchone,
     reset_mysql_test_database,
     test_store_seed,
@@ -181,15 +182,28 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertTrue(lease_state.lost)
         self.assertTrue(reviewer.stopped)
 
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.seed = test_store_seed(cls.temp.name)
+        reset_mysql_test_database(cls.seed)
+        TestNotificationJobStore(cls.seed)
+        TestAIInferenceQueueStore(cls.seed)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.seed = test_store_seed(self.temp.name)
-        reset_mysql_test_database(self.seed)
+        for table in (
+            "ai_inference_results",
+            "ai_inference_requests",
+            "notification_jobs",
+            "app_store",
+        ):
+            mysql_execute(self.seed, "DELETE FROM " + table)
         self.notifications = TestNotificationJobStore(self.seed)
         self.queue = TestAIInferenceQueueStore(self.seed)
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def create_job(self, price=100, generation="generation-1"):
         job = NotificationJob.create(
@@ -332,6 +346,56 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
+
+    def test_ai_queue_rolls_back_subject_publication_callback_with_completion(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context)
+        self.queue.enqueue(job, request)
+        claimed = self.queue.claim("worker-atomic", 1, 60)[0]
+        result = AIInferenceResult.create(
+            claimed,
+            {"action": "HOLD"},
+            source="test",
+            validation_state="verified",
+            latency_ms=1,
+            prompt_bytes=10,
+        )
+
+        def fail_after_subject_write(connection):
+            connection.execute(
+                "INSERT INTO app_store (store_id, payload_json, updated_at) VALUES (%s, '{}', %s)",
+                ("atomic-subject-publication", datetime.now(timezone.utc).isoformat()),
+            )
+            raise RuntimeError("rollback canonical subject publication")
+
+        with self.assertRaisesRegex(RuntimeError, "rollback canonical"):
+            self.queue.complete(
+                claimed,
+                "worker-atomic",
+                result,
+                claimed.context,
+                before_complete=fail_after_subject_write,
+            )
+
+        self.assertIsNone(mysql_fetchone(
+            self.seed,
+            "SELECT store_id FROM app_store WHERE store_id = %s",
+            ("atomic-subject-publication",),
+        ))
+        request_row = mysql_fetchone(
+            self.seed,
+            "SELECT status, lease_owner FROM ai_inference_requests WHERE request_id = %s",
+            (claimed.request_id,),
+        )
+        self.assertEqual("processing", request_row[0])
+        self.assertEqual("worker-atomic", request_row[1])
+        result_count = mysql_fetchone(
+            self.seed,
+            "SELECT COUNT(*) FROM ai_inference_results WHERE request_id = %s",
+            (claimed.request_id,),
+        )
+        self.assertEqual(0, int(result_count[0]))
+        self.assertEqual("awaiting_ai", self.notifications.get(job.job_id).status)
 
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()

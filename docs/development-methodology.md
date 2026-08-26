@@ -47,6 +47,15 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   conditions. Python may normalize this contract but must not score, rank, or
   invent an investment action. AI publication must reject reference-only
   hypotheses and actions outside the TypeDB action envelope.
+- Treat a batched `ReasoningCase` as execution audit only. Create one immutable
+  `SubjectDecisionCase` and `CandidateSetSnapshot` per account, symbol, ABox
+  snapshot, inference generation, and synthesis before AI is queued. AI must
+  review exactly that candidate fingerprint; hypotheses from another subject,
+  account, or generation are a contract failure. Only a validated subject case
+  may create one canonical `DecisionPublication` and one `DecisionEpisode`.
+  Observations, suppressions, AI failures, and incomplete comparisons persist
+  abstention or review-only outcomes and must never manufacture `HOLD`,
+  `WATCH`, or `NO_ACTION` decision history.
 - A reasoning request bound to `verifiedSourceSnapshot.generatedAt` must read
   that exact MySQL snapshot-history row. Never substitute a newer snapshot.
   If the point-in-time row is unavailable, defer or reject the request with an

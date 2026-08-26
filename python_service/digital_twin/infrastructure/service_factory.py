@@ -817,6 +817,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         reasoning_orchestrator = InvestmentReasoningOrchestrator(
             stores.investment_reasoning_case_store(settings),
             decision_episode_store=decision_episode_store,
+            subject_case_repository=stores.subject_decision_case_store(settings),
         )
         ai_request_enqueuer = NotificationAIRequestEnqueuer(
             stores.ai_inference_queue_store(settings),
@@ -897,6 +898,8 @@ def build_ai_inference_queue_runner(worker_id: str = "") -> AIInferenceQueueRunn
         reasoning_orchestrator=InvestmentReasoningOrchestrator(
             stores.investment_reasoning_case_store(settings),
             decision_episode_store=decision_episode_store,
+            hypothesis_proposal_request_store=stores.investment_research_store(settings),
+            subject_case_repository=stores.subject_decision_case_store(settings),
         ),
         worker_id=worker_id,
     )
@@ -2543,6 +2546,7 @@ def build_v2_reasoning_engine(
             stores.investment_reasoning_case_store(store_settings),
             decision_episode_store=stores.investment_decision_episode_store(store_settings),
             hypothesis_proposal_request_store=stores.investment_research_store(store_settings),
+            subject_case_repository=stores.subject_decision_case_store(store_settings),
         ),
         shared_inference_service=shared_inference_service,
     )

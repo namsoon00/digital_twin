@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from datetime import timedelta, timezone
 from typing import Dict, Iterable, List, Optional
 
@@ -33,7 +34,12 @@ from .operational_common import json_dumps
 
 
 class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
-    def save(self, episode: DecisionEpisode) -> DecisionEpisode:
+    def save(self, episode: DecisionEpisode, connection=None) -> DecisionEpisode:
+        action = str(episode.action or "").upper()
+        if action == "NO_ACTION":
+            raise ValueError("NO_ACTION is an operational disposition and cannot be a DecisionEpisode.")
+        if episode.source == "v2-reasoning-case" and not str(episode.selected_hypothesis_id or "").strip():
+            raise ValueError("V2 DecisionEpisode requires a selected subject-scoped hypothesis.")
         episode.decided_at = canonical_investment_timestamp(episode.decided_at) or utc_now_iso()
         episode.status = str(episode.status or "active")
         episode.follow_up_conditions = scoped_decision_follow_ups(
@@ -44,21 +50,26 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             episode.episode_id,
             episode.unsupported_follow_ups,
         )
-        plan = ActionPlan.create(
-            portfolio_id=episode.portfolio_id or "portfolio:" + str(episode.account_id or "default"),
-            decision_episode_id=episode.episode_id,
-            action=episode.action,
-            policy_version=episode.mandate_version,
-            inference_generation_id=episode.inference_generation_id,
-            created_at=episode.decided_at,
-        )
-        episode.portfolio_id = plan.portfolio_id
-        episode.action_plan_id = plan.plan_id
+        episode.portfolio_id = episode.portfolio_id or "portfolio:" + str(episode.account_id or "default")
+        plan = None
+        if action in {"BUY", "ADD", "TRIM", "SELL"}:
+            plan = ActionPlan.create(
+                portfolio_id=episode.portfolio_id,
+                decision_episode_id=episode.episode_id,
+                action=episode.action,
+                policy_version=episode.mandate_version,
+                inference_generation_id=episode.inference_generation_id,
+                created_at=episode.decided_at,
+            )
+            episode.action_plan_id = plan.plan_id
+        else:
+            episode.action_plan_id = ""
         stamp = utc_now_iso()
         payload = episode.to_dict()
         flow_id = investment_flow_id(episode.account_id, episode.symbol, episode.episode_id)
         payload["flowId"] = flow_id
-        with self.transaction() as connection:
+        transaction = self.transaction() if connection is None else nullcontext(connection)
+        with transaction as connection:
             current_row = connection.execute(
                 "SELECT payload_json FROM investment_decision_episodes WHERE episode_id = %s",
                 (episode.episode_id,),
@@ -173,28 +184,29 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     stamp,
                 ),
             )
-            connection.execute(
-                """
-                INSERT INTO investment_action_plans (
-                    plan_id, portfolio_id, decision_episode_id, policy_version,
-                    inference_generation_id, action, status, payload_json, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE status = VALUES(status),
-                    payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
-                """,
-                (
-                    plan.plan_id,
-                    plan.portfolio_id,
-                    plan.decision_episode_id,
-                    plan.policy_version,
-                    plan.inference_generation_id,
-                    plan.action,
-                    plan.status,
-                    json_dumps(plan.to_dict()),
-                    plan.created_at or stamp,
-                    stamp,
-                ),
-            )
+            if plan is not None:
+                connection.execute(
+                    """
+                    INSERT INTO investment_action_plans (
+                        plan_id, portfolio_id, decision_episode_id, policy_version,
+                        inference_generation_id, action, status, payload_json, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE status = VALUES(status),
+                        payload_json = VALUES(payload_json), updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        plan.plan_id,
+                        plan.portfolio_id,
+                        plan.decision_episode_id,
+                        plan.policy_version,
+                        plan.inference_generation_id,
+                        plan.action,
+                        plan.status,
+                        json_dumps(plan.to_dict()),
+                        plan.created_at or stamp,
+                        stamp,
+                    ),
+                )
             self.sync_outcome_targets(connection, episode, stamp)
             for condition in list(episode.follow_up_conditions or []) + list(episode.unsupported_follow_ups or []):
                 if not isinstance(condition, dict) or not str(condition.get("conditionId") or "").strip():
@@ -247,6 +259,151 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     investment_validation_changed_event(previous_payload, payload),
                 )
         return episode
+
+    def quarantine_invalid_legacy_outcomes(self, limit: int = 5000) -> Dict[str, object]:
+        """Remove operational observations from active decision continuity.
+
+        Rows are retained for audit, but they can no longer become the current
+        investment decision, produce follow-up work, or open an action plan.
+        """
+
+        maximum = max(1, min(50000, int(limit or 5000)))
+        quarantine_status = "invalid-legacy-operational-outcome"
+        stamp = utc_now_iso()
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT episode_id, account_id, symbol, payload_json FROM investment_decision_episodes "
+                "WHERE status <> %s AND (action = 'NO_ACTION' OR "
+                "(source = 'v2-reasoning-case' AND selected_hypothesis_id = '')) "
+                "ORDER BY decided_at, episode_id LIMIT %s",
+                (quarantine_status, maximum),
+            ).fetchall()
+            episode_ids = []
+            affected_scopes = set()
+            for row in rows or []:
+                episode_id = str(row.get("episode_id") or "")
+                if not episode_id:
+                    continue
+                affected_scopes.add((
+                    str(row.get("account_id") or ""),
+                    str(row.get("symbol") or "").upper(),
+                ))
+                payload = _json_loads(row.get("payload_json"), {})
+                payload["status"] = quarantine_status
+                payload["validationState"] = "invalid"
+                facts = payload.get("factsAtDecision")
+                facts = dict(facts or {}) if isinstance(facts, dict) else {}
+                facts["legacyOutcomeQuarantine"] = {
+                    "reason": "Operational observation is not a final investment decision.",
+                    "quarantinedAt": stamp,
+                }
+                payload["factsAtDecision"] = facts
+                connection.execute(
+                    "UPDATE investment_decision_episodes SET status = %s, "
+                    "validation_state = 'invalid', payload_json = %s, updated_at = %s "
+                    "WHERE episode_id = %s",
+                    (quarantine_status, json_dumps(payload), stamp, episode_id),
+                )
+                episode_ids.append(episode_id)
+            if not episode_ids:
+                return {
+                    "status": "unchanged",
+                    "quarantinedCount": 0,
+                    "currentPointersRemoved": 0,
+                    "currentPointersRepaired": 0,
+                    "followUpsCanceled": 0,
+                    "outcomeTargetsExcluded": 0,
+                    "actionPlansCanceled": 0,
+                }
+            placeholders = ", ".join(["%s"] * len(episode_ids))
+            cursor = connection.execute(
+                "DELETE FROM investment_flow_current WHERE decision_episode_id IN ("
+                + placeholders + ")",
+                tuple(episode_ids),
+            )
+            current_removed = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+            current_repaired = 0
+            for account_id, symbol in sorted(affected_scopes):
+                replacement = connection.execute(
+                    "SELECT episode_id, selected_hypothesis_id, action, data_state, "
+                    "validation_state, inference_generation_id, decided_at, payload_json, updated_at "
+                    "FROM investment_decision_episodes WHERE account_id = %s AND symbol = %s "
+                    "AND action IN ('BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'AVOID', 'WATCH') "
+                    "AND selected_hypothesis_id <> '' "
+                    "AND status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', "
+                    "'reference-only', 'invalid-legacy-operational-outcome') "
+                    "AND validation_state NOT IN ('blocked', 'invalid', 'failed', 'error') "
+                    "ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
+                    (account_id, symbol),
+                ).fetchone()
+                if not replacement:
+                    continue
+                replacement_payload = _json_loads(replacement.get("payload_json"), {})
+                replacement_id = str(replacement.get("episode_id") or "")
+                connection.execute(
+                    """
+                    INSERT INTO investment_flow_current (
+                        account_id, symbol, flow_id, decision_episode_id,
+                        source_abox_snapshot_id, inference_generation_id,
+                        selected_hypothesis_id, action, data_state,
+                        validation_state, decided_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        flow_id = VALUES(flow_id), decision_episode_id = VALUES(decision_episode_id),
+                        source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
+                        inference_generation_id = VALUES(inference_generation_id),
+                        selected_hypothesis_id = VALUES(selected_hypothesis_id), action = VALUES(action),
+                        data_state = VALUES(data_state), validation_state = VALUES(validation_state),
+                        decided_at = VALUES(decided_at), updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        account_id,
+                        symbol,
+                        investment_flow_id(account_id, symbol, replacement_id),
+                        replacement_id,
+                        str(replacement_payload.get("sourceAboxSnapshotId") or ""),
+                        str(replacement.get("inference_generation_id") or ""),
+                        str(replacement.get("selected_hypothesis_id") or ""),
+                        str(replacement.get("action") or ""),
+                        str(replacement.get("data_state") or ""),
+                        str(replacement.get("validation_state") or ""),
+                        str(replacement.get("decided_at") or ""),
+                        str(replacement.get("updated_at") or stamp),
+                    ),
+                )
+                current_repaired += 1
+            cursor = connection.execute(
+                "UPDATE investment_decision_follow_ups SET status = 'canceled', "
+                "updated_at = %s, transitioned_at = %s WHERE episode_id IN ("
+                + placeholders + ") AND status IN ('pending', 'ready')",
+                (stamp, stamp, *episode_ids),
+            )
+            follow_ups = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+            cursor = connection.execute(
+                "UPDATE investment_decision_outcome_targets SET status = 'excluded', "
+                "exclusion_reason = 'invalid-legacy-operational-outcome', updated_at = %s "
+                "WHERE episode_id IN (" + placeholders + ") AND status <> 'observed'",
+                (stamp, *episode_ids),
+            )
+            targets = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+            cursor = connection.execute(
+                "UPDATE investment_action_plans SET status = 'canceled', updated_at = %s "
+                "WHERE decision_episode_id IN (" + placeholders + ") "
+                "AND NOT EXISTS (SELECT 1 FROM trade_execution_episodes execution "
+                "WHERE execution.action_plan_id = investment_action_plans.plan_id)",
+                (stamp, *episode_ids),
+            )
+            plans = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        return {
+            "status": "quarantined",
+            "quarantinedCount": len(episode_ids),
+            "currentPointersRemoved": current_removed,
+            "currentPointersRepaired": current_repaired,
+            "followUpsCanceled": follow_ups,
+            "outcomeTargetsExcluded": targets,
+            "actionPlansCanceled": plans,
+            "episodeIds": episode_ids,
+        }
 
     def sync_outcome_targets(self, connection, episode: DecisionEpisode, stamp: str = "") -> Dict[str, object]:
         """Persist the immutable observation schedule in the decision transaction."""
@@ -813,7 +970,14 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         learning model.
         """
 
-        where = ["account_id = %s", "symbol = %s"]
+        where = [
+            "account_id = %s",
+            "symbol = %s",
+            "action IN ('BUY', 'ADD', 'HOLD', 'TRIM', 'SELL', 'AVOID', 'WATCH')",
+            "selected_hypothesis_id <> ''",
+            "status NOT IN ('blocked', 'failed', 'expired', 'suppressed', 'superseded', 'reference-only', 'invalid-legacy-operational-outcome')",
+            "validation_state NOT IN ('blocked', 'invalid', 'failed', 'error')",
+        ]
         params: List[object] = [str(account_id or ""), str(symbol or "").upper()]
         if str(exclude_episode_id or "").strip():
             where.append("episode_id <> %s")

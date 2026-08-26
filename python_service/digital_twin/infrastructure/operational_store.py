@@ -18,6 +18,7 @@ from .mysql_operational import (
     MySQLInvestmentStrategyProposalStore,
     MySQLInvestmentDecisionEpisodeStore,
     MySQLInvestmentReasoningCaseStore,
+    MySQLSubjectDecisionCaseStore,
     MySQLInvestmentDomainStore,
     MySQLHypothesisLifecycleStore,
     MySQLHypothesisDevelopmentStore,
@@ -251,6 +252,10 @@ def shared_instrument_inference_store(settings: Dict[str, str] = None):
 
 def investment_reasoning_case_store(settings: Dict[str, str] = None):
     return MySQLInvestmentReasoningCaseStore(configured_settings(settings))
+
+
+def subject_decision_case_store(settings: Dict[str, str] = None):
+    return MySQLSubjectDecisionCaseStore(configured_settings(settings))
 
 
 def reasoning_shadow_job_store(settings: Dict[str, str] = None):

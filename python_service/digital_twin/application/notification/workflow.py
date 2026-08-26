@@ -287,7 +287,11 @@ class NotificationAIValidatedGateEnricher:
             response = local_validated_ai_response(context, source="TypeDB inference fallback")
             response.validation_warnings.append("AI 검증 실패로 TypeDB 해석을 사용했습니다: " + str(error)[:140])
         apply_ontology_quality_gate_to_response(response, quality_gate)
-        if self.decision_episode_store and job.message_type == INVESTMENT_INSIGHT:
+        if (
+            self.decision_episode_store
+            and job.message_type == INVESTMENT_INSIGHT
+            and not context.get("investmentSubjectDecisionCaseId")
+        ):
             try:
                 relation_context = context.get("ontologyRelationContext") if isinstance(context.get("ontologyRelationContext"), dict) else {}
                 subject = relation_context.get("subject") if isinstance(relation_context.get("subject"), dict) else {}

@@ -25963,12 +25963,34 @@
     if (stateMessage) return stateMessage;
     var reasoning = section.reasoning || {};
     var evaluations = Array.isArray(reasoning.ruleEvaluations) ? reasoning.ruleEvaluations : [];
+    var subjectCase = reasoning.subjectDecisionCase && typeof reasoning.subjectDecisionCase === "object"
+      ? reasoning.subjectDecisionCase
+      : {};
+    var candidateSet = subjectCase.candidateSet && typeof subjectCase.candidateSet === "object"
+      ? subjectCase.candidateSet
+      : {};
+    var publication = subjectCase.publication && typeof subjectCase.publication === "object"
+      ? subjectCase.publication
+      : {};
+    var subjectScope = subjectCase.subjectCaseId ? [
+      '<section class="notification-rule-proof-section">',
+      '<header><div><strong>종목별 판단 경계</strong><span>이 알림에 사용된 계좌·종목·ABox 세대와 후보 집합을 고정한 기록입니다.</span></div><span class="tone-chip watch">' + escapeHtml(subjectCase.stage || "기록됨") + '</span></header>',
+      '<dl class="notification-ai-review-summary">',
+      '<div><dt>대상</dt><dd>' + escapeHtml([subjectCase.accountId, subjectCase.symbol].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
+      '<div><dt>ABox·세대</dt><dd>' + escapeHtml([subjectCase.sourceAboxSnapshotId, subjectCase.inferenceGenerationId].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
+      '<div><dt>후보 가설</dt><dd>' + escapeHtml((candidateSet.eligibleHypothesisIds || []).join(" · ") || "행동 후보 없음") + '</dd></div>',
+      '<div><dt>발행 결과</dt><dd>' + escapeHtml([publication.outcomeKind, publication.decisionEpisodeId].filter(Boolean).join(" · ") || "아직 발행되지 않음") + '</dd></div>',
+      '</dl>',
+      '<div class="notification-reasoning-provenance"><code>' + escapeHtml(subjectCase.subjectCaseId) + '</code>' + (candidateSet.fingerprint ? '<code>' + escapeHtml("candidate " + candidateSet.fingerprint) + '</code>' : '') + '</div>',
+      '<details class="notification-ai-prompt-audit"><summary>종목 판단 케이스 전체 데이터</summary><pre>' + escapeHtml(JSON.stringify(subjectCase, null, 2)) + '</pre></details>',
+      '</section>'
+    ].join("") : "";
     var reasoningJob = Object.assign({}, job, { reasoningTrace: reasoning });
     var executionTrace = renderNotificationReverseReasoning(reasoningJob);
     if (!evaluations.length) {
-      return renderNotificationStateMessage("muted", "규칙 증명 기록 없음", "이전 형식의 알림이거나 당시 규칙별 관측값이 저장되지 않았습니다. 현재 그래프로 과거 판단을 재해석하지 않습니다.") + executionTrace;
+      return subjectScope + renderNotificationStateMessage("muted", "규칙 증명 기록 없음", "이전 형식의 알림이거나 당시 규칙별 관측값이 저장되지 않았습니다. 현재 그래프로 과거 판단을 재해석하지 않습니다.") + executionTrace;
     }
-    return '<section class="notification-rule-proof-section"><header><div><strong>규칙 성립 증명</strong><span>추론 당시 저장된 기대값과 실제 관측값만 표시합니다.</span></div><span class="tone-chip watch">' + escapeHtml(evaluations.length + "개") + '</span></header><div class="notification-rule-proof-list">' + evaluations.map(function (evaluation) {
+    return subjectScope + '<section class="notification-rule-proof-section"><header><div><strong>규칙 성립 증명</strong><span>추론 당시 저장된 기대값과 실제 관측값만 표시합니다.</span></div><span class="tone-chip watch">' + escapeHtml(evaluations.length + "개") + '</span></header><div class="notification-rule-proof-list">' + evaluations.map(function (evaluation) {
       var proof = evaluation.proof || {};
       var conditions = Array.isArray(proof.conditions) ? proof.conditions : [];
       var lineage = proof.premise_lineage || proof.premiseLineage || {};

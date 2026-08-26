@@ -3,6 +3,7 @@
 from typing import Dict, Iterable, Mapping, Optional, Protocol
 
 from .case import ReasoningCase
+from .subject_case import SubjectDecisionCase
 
 
 class ReasoningCaseRepository(Protocol):
@@ -16,6 +17,30 @@ class ReasoningCaseRepository(Protocol):
         ...
 
     def latest(self, deployment_id: str = "", symbol: str = "", limit: int = 20):
+        ...
+
+
+class SubjectDecisionCaseRepository(Protocol):
+    def save(self, subject_case: SubjectDecisionCase) -> SubjectDecisionCase:
+        ...
+
+    def get(self, subject_case_id: str) -> Optional[SubjectDecisionCase]:
+        ...
+
+    def for_batch(self, batch_case_id: str):
+        ...
+
+    def get_by_scope(
+        self,
+        batch_case_id: str,
+        account_id: str,
+        symbol: str,
+        inference_generation_id: str,
+        synthesis_id: str = "",
+    ) -> Optional[SubjectDecisionCase]:
+        ...
+
+    def latest(self, account_id: str = "", symbol: str = "", limit: int = 20):
         ...
 
 

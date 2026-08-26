@@ -92,6 +92,9 @@ class InMemoryDecisionEpisodeStore:
         self.episodes[episode.episode_id] = episode
         return episode
 
+    def get(self, episode_id):
+        return self.episodes.get(episode_id)
+
 
 class InMemoryHypothesisProposalRequestStore:
     def __init__(self):
@@ -156,7 +159,7 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
         restored = type(completed.inference_result).from_dict(completed.inference_result.to_dict())
         self.assertEqual(evaluations[0].proof.proof_id, restored.rule_evaluations[0].proof.proof_id)
 
-    def test_stale_case_expiry_is_terminal_and_projected_to_decision_history(self):
+    def test_stale_batch_expiry_does_not_create_a_decision_episode(self):
         repository = InMemoryReasoningCaseRepository()
         decision_store = InMemoryDecisionEpisodeStore()
         orchestrator = InvestmentReasoningOrchestrator(
@@ -170,9 +173,7 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
         self.assertEqual("expired", result["status"])
         self.assertEqual(1, result["expiredCount"])
         self.assertEqual(CASE_EXPIRED, repository.get(reasoning_case.case_id).stage)
-        self.assertEqual(1, len(decision_store.episodes))
-        episode = next(iter(decision_store.episodes.values()))
-        self.assertEqual("EXPIRED", episode.facts_at_decision["reasoningCaseStage"])
+        self.assertEqual(0, len(decision_store.episodes))
 
     def test_suppressed_and_superseded_are_terminal_explained_outcomes(self):
         repository = InMemoryReasoningCaseRepository()
@@ -213,6 +214,11 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
             reasoning_case.case_id,
             [hypothesis_candidate()],
         )
+        orchestrator.decisions_synthesized(
+            reasoning_case.case_id,
+            [recovery_synthesis()],
+        )
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
         unexplained = AIJudgmentResult.from_dict({
             "action": "HOLD",
             "selectedHypothesisId": "hypothesis:recovery",
@@ -230,15 +236,19 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
                 "validationState": "verified",
                 "disagreementReason": "거래 확인이 부족해 실행을 보류합니다.",
                 "summary": "가격 회복 근거는 있지만 거래 확인 전까지 보류합니다.",
-                "supportingEvidenceIds": ["evidence:price-window"],
+                "hypothesisComparison": {
+                    "hypotheses": [hypothesis_review()],
+                    "selectedHypothesisId": "hypothesis:recovery",
+                    "hypothesisComparisonState": "completed",
+                },
             },
         )
 
-        valid, reason = orchestrator.validate_judgment(reasoning_case, unexplained)
+        valid, reason = orchestrator.validate_judgment(subject_case, unexplained)
         self.assertFalse(valid)
-        self.assertIn("without an explicit disagreement reason", reason)
+        self.assertIn("exact eligible", reason)
         self.assertTrue(explained.rejected_candidate_reason)
-        self.assertEqual((True, ""), orchestrator.validate_judgment(reasoning_case, explained))
+        self.assertEqual((True, ""), orchestrator.validate_judgment(subject_case, explained))
 
     def test_validated_context_observation_completes_when_delivery_is_suppressed(self):
         repository = InMemoryReasoningCaseRepository()
@@ -283,19 +293,11 @@ class ReasoningCaseDispositionTests(unittest.TestCase):
 
         self.assertEqual("COMPLETED", completed.stage)
         self.assertTrue(completed.completed_at)
-        self.assertEqual("typedb-delivery-suppressed", completed.final_decision.source)
-        self.assertEqual(1, len(decision_store.episodes))
-        episode = next(iter(decision_store.episodes.values()))
-        self.assertEqual("independent-reasoning-v2", episode.engine_version)
-        self.assertEqual("v2-reasoning-case", episode.source)
-        self.assertEqual(completed.case_id, episode.facts_at_decision["investmentReasoningCaseId"])
-        self.assertEqual("generation:1", episode.inference_generation_id)
-        self.assertEqual("abox:1", episode.source_abox_snapshot_id)
-        self.assertEqual("COMPLETED", episode.facts_at_decision["reasoningCaseStage"])
-        self.assertFalse(episode.facts_at_decision["calibrationPolicy"]["eligible"])
-        self.assertEqual({}, episode.decision_abstention)
-        self.assertEqual("not-run", episode.ai_execution["state"])
-        self.assertFalse(episode.ai_execution["attempted"])
+        self.assertIsNone(completed.final_decision)
+        self.assertEqual(0, len(decision_store.episodes))
+        subject_case = orchestrator.subject_cases.for_batch(completed.case_id)[0]
+        self.assertEqual("OBSERVATION", subject_case.stage)
+        self.assertEqual("OBSERVATION", subject_case.publication.outcome_kind)
 
 
 def reasoning_request(fact_types=None):
@@ -308,6 +310,23 @@ def reasoning_request(fact_types=None):
             "accountIds": ["account:1"],
             "affectedSymbols": ["NVDA"],
             "factTypes": list(fact_types or ["PRICE_OBSERVATION"]),
+            "sourceObservedAt": "2026-08-16T00:00:00Z",
+            "workClass": "MARKET",
+        },
+    )
+    return independent_reasoning_request("ontology-v2-shadow", [event])
+
+
+def reasoning_request_for_subjects(symbols):
+    event = DomainEvent(
+        name=ONTOLOGY_REASONING_REQUESTED,
+        aggregate_id="market-observation:" + ":".join(symbols),
+        event_id="event:investment-reasoning:multi-subject",
+        occurred_at="2026-08-16T00:00:00Z",
+        payload={
+            "accountIds": ["account:1"],
+            "affectedSymbols": list(symbols),
+            "factTypes": ["PRICE_OBSERVATION"],
             "sourceObservedAt": "2026-08-16T00:00:00Z",
             "workClass": "MARKET",
         },
@@ -383,6 +402,85 @@ def hypothesis_candidate(hypothesis_id="hypothesis:recovery"):
             },
         },
     }
+
+
+def scoped_hypothesis_candidate(
+    hypothesis_id,
+    symbol,
+    generation_id,
+    account_id="account:1",
+):
+    candidate = hypothesis_candidate(hypothesis_id)
+    relation = candidate["metadata"]["ontologyRelationContext"]
+    relation["subject"] = {"symbol": symbol, "name": symbol}
+    relation["accountId"] = account_id
+    relation["inferenceGenerationId"] = generation_id
+    return candidate
+
+
+def recovery_synthesis(
+    hypothesis_id="hypothesis:recovery",
+    action="BUY",
+    *,
+    account_id="account:1",
+    symbol="NVDA",
+    generation_id="generation:1",
+    source_abox_snapshot_id="abox:1",
+):
+    return DecisionSynthesis(
+        synthesis_id="synthesis:" + symbol.lower() + ":" + hypothesis_id.split(":")[-1],
+        account_id=account_id,
+        symbol=symbol,
+        source_abox_snapshot_id=source_abox_snapshot_id,
+        inference_generation_id=generation_id,
+        graph_candidate_action=action,
+        investment_view_action=action,
+        decision_effect="support",
+        decision_disposition="act",
+        action_authority="originate",
+        allowed_actions=("BUY", "HOLD", "WATCH"),
+        alternatives=(ActionAlternative(
+            action="BUY",
+            hypothesis_ids=(hypothesis_id,),
+            decision_eligible=True,
+        ),),
+        eligible_hypothesis_ids=(hypothesis_id,),
+        graph_trace_complete=True,
+    )
+
+
+def hypothesis_review(hypothesis_id="hypothesis:recovery"):
+    return {
+        "hypothesisId": hypothesis_id,
+        "verdict": "supported",
+        "reasoning": "TypeDB 근거와 반대 근거를 함께 검토했습니다.",
+        "reviewedSupportingEvidenceIds": ["evidence:price-window"],
+        "reviewedCounterEvidenceIds": ["evidence:weak-volume"],
+    }
+
+
+def ai_judgment(
+    selected_hypothesis_id="hypothesis:recovery",
+    reviews=None,
+    action="BUY",
+):
+    reviews = list(reviews if reviews is not None else [hypothesis_review(selected_hypothesis_id)])
+    return AIJudgmentResult(
+        request_id="ai-request:test",
+        result_id="ai-result:test",
+        action=action,
+        confidence=0.8,
+        selected_hypothesis_id=selected_hypothesis_id,
+        validation_state="verified",
+        rationale="모든 후보와 반대 근거를 검토했습니다.",
+        supporting_evidence_ids=("evidence:price-window",),
+        next_observations=("다음 가격 경로를 확인합니다.",),
+        reviewed_hypothesis_ids=tuple(
+            sorted(str(item.get("hypothesisId") or "") for item in reviews)
+        ),
+        hypothesis_reviews=tuple(reviews),
+        comparison_state="completed",
+    )
 
 
 def crypto_context_observation_relation():
@@ -693,15 +791,19 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
 
         validated = orchestrator.context_observation_validated(reasoning_case.case_id)
 
-        self.assertEqual(CASE_VALIDATED, validated.stage)
-        self.assertEqual("NO_ACTION", validated.final_decision.action)
-        self.assertEqual("typedb-context-observation", validated.final_decision.source)
-        self.assertEqual("reference-only", validated.final_decision.validation_state)
+        self.assertEqual(CASE_DECISION_SYNTHESIZED, validated.stage)
+        self.assertIsNone(validated.final_decision)
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+        self.assertEqual("OBSERVATION", subject_case.stage)
+        self.assertEqual("OBSERVATION", subject_case.publication.outcome_kind)
+        self.assertIsNone(subject_case.final_decision)
         published = orchestrator.notification_published({
             "investmentReasoningCaseId": reasoning_case.case_id,
+            "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
         })
-        self.assertEqual(CASE_PUBLISHED, published.stage)
-        self.assertTrue(published.final_decision.published)
+        self.assertEqual("PUBLISHED", published.stage)
+        self.assertIsNone(published.final_decision)
+        self.assertTrue(published.publication.delivered_at)
 
     def test_reference_only_context_observation_queues_ai_narrative_without_inline_judgement(self):
         context = {
@@ -1022,6 +1124,187 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual("completed", comparison["hypothesisComparisonState"])
         self.assertEqual("hypothesis:canonical", comparison["selectedHypothesisId"])
 
+    def test_multi_subject_batch_keeps_candidate_sets_and_prompts_isolated(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request_for_subjects(["NVDA", "MSTR"]))
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        nvda = scoped_hypothesis_candidate("hypothesis:nvda", "NVDA", "generation:1")
+        mstr = scoped_hypothesis_candidate("hypothesis:mstr", "MSTR", "generation:1")
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [nvda, mstr])
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [
+            recovery_synthesis("hypothesis:nvda", symbol="NVDA"),
+            recovery_synthesis("hypothesis:mstr", symbol="MSTR"),
+        ])
+
+        subject_cases = {
+            item.symbol: item
+            for item in orchestrator.subject_cases.for_batch(reasoning_case.case_id)
+        }
+        self.assertEqual(
+            ("hypothesis:nvda",),
+            subject_cases["NVDA"].candidate_set.eligible_hypothesis_ids,
+        )
+        self.assertEqual(
+            ("hypothesis:mstr",),
+            subject_cases["MSTR"].candidate_set.eligible_hypothesis_ids,
+        )
+        mixed_relation = nvda["metadata"]["ontologyRelationContext"]
+        mixed_relation["investmentBrain"]["hypothesisSet"]["hypotheses"].append(
+            mstr["metadata"]["ontologyRelationContext"]
+            ["investmentBrain"]["hypothesisSet"]["hypotheses"][0]
+        )
+        for symbol, expected_id in [("NVDA", "hypothesis:nvda"), ("MSTR", "hypothesis:mstr")]:
+            enriched = orchestrator.capture_ai_context(
+                subject_cases[symbol].subject_case_id,
+                {
+                    "investmentSubjectDecisionCaseId": subject_cases[symbol].subject_case_id,
+                    "ontologyRelationContext": mixed_relation,
+                },
+            )
+            prompt_ids = [
+                item["hypothesisId"]
+                for item in enriched["ontologyRelationContext"]["investmentBrain"]
+                ["hypothesisSet"]["hypotheses"]
+            ]
+            self.assertEqual([expected_id], prompt_ids)
+            self.assertEqual(
+                subject_cases[symbol].candidate_set.fingerprint,
+                enriched["decisionCandidateFingerprint"],
+            )
+
+    def test_replayed_synthesis_does_not_reset_an_ai_pending_subject_case(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [hypothesis_candidate()])
+        synthesis = recovery_synthesis()
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [synthesis])
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+        orchestrator.ai_queued(subject_case.subject_case_id, "ai-request:stable", "notification:stable")
+
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [synthesis])
+        replayed = orchestrator.subject_cases.get(subject_case.subject_case_id)
+
+        self.assertEqual("AI_PENDING", replayed.stage)
+        self.assertEqual("ai-request:stable", replayed.ai_request_id)
+        self.assertEqual(subject_case.candidate_set.fingerprint, replayed.candidate_set.fingerprint)
+
+    def test_candidate_without_explicit_account_scope_is_blocked(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        candidate = hypothesis_candidate()
+        candidate["metadata"]["ontologyRelationContext"].pop("accountId", None)
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [candidate])
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [recovery_synthesis()])
+
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+
+        self.assertEqual("BLOCKED", subject_case.stage)
+        self.assertIn("cross-scope-hypothesis", subject_case.candidate_set.validation_errors[0])
+
+    def test_ai_judgment_must_review_every_eligible_hypothesis(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [
+            hypothesis_candidate("hypothesis:recovery"),
+            hypothesis_candidate("hypothesis:alternative"),
+        ])
+        synthesis = recovery_synthesis()
+        synthesis = DecisionSynthesis.from_dict({
+            **synthesis.to_dict(),
+            "eligible_hypothesis_ids": ["hypothesis:recovery", "hypothesis:alternative"],
+            "alternatives": [{
+                "action": "BUY",
+                "hypothesis_ids": ["hypothesis:recovery", "hypothesis:alternative"],
+                "decision_eligible": True,
+            }],
+        })
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [synthesis])
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+
+        valid, reason = orchestrator.validate_judgment(
+            subject_case,
+            ai_judgment(reviews=[hypothesis_review("hypothesis:recovery")]),
+        )
+
+        self.assertFalse(valid)
+        self.assertIn("exact eligible TypeDB hypothesis set", reason)
+
+    def test_ai_judgment_must_classify_every_counter_evidence_id(self):
+        repository = InMemoryReasoningCaseRepository()
+        orchestrator = InvestmentReasoningOrchestrator(repository)
+        reasoning_case = orchestrator.start(reasoning_request())
+        orchestrator.input_ready(reasoning_case.case_id)
+        orchestrator.inference_completed(
+            reasoning_case.case_id,
+            {"account:1": {
+                "verified": True,
+                "sourceAboxSnapshotId": "abox:1",
+                "inferenceGenerationId": "generation:1",
+            }},
+            {},
+            10,
+        )
+        orchestrator.hypotheses_ready(reasoning_case.case_id, [hypothesis_candidate()])
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [recovery_synthesis()])
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+        incomplete_review = hypothesis_review()
+        incomplete_review["reviewedCounterEvidenceIds"] = []
+
+        valid, reason = orchestrator.validate_judgment(
+            subject_case,
+            ai_judgment(reviews=[incomplete_review]),
+        )
+
+        self.assertFalse(valid)
+        self.assertIn("counter-evidence", reason)
+
     def test_rule_inventory_exposes_unroutable_rules_before_release(self):
         inventory = reasoning_rule_inventory([{
             "rule_id": "graph.complete.v1",
@@ -1129,7 +1412,9 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             125,
         )
         orchestrator.hypotheses_ready(reasoning_case.case_id, [hypothesis_candidate()])
-        orchestrator.ai_queued(reasoning_case.case_id, "ai-request:1", "notification:1")
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [recovery_synthesis()])
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+        orchestrator.ai_queued(subject_case.subject_case_id, "ai-request:1", "notification:1")
         result = SimpleNamespace(
             request_id="ai-request:1",
             result_id="ai-result:1",
@@ -1144,18 +1429,24 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
                 "validationState": "verified",
                 "summary": "Recovery hypothesis is supported.",
                 "supportingEvidenceIds": ["evidence:price-window"],
+                "hypotheses": [hypothesis_review()],
+                "hypothesisComparisonState": "completed",
                 "nextChecks": ["다음 가격 경로에서 회복이 유지되는지 확인"],
             },
         )
         request_stub = SimpleNamespace(notification_job_id="notification:1")
         validated = orchestrator.ai_completed(
             request_stub,
-            {"investmentReasoningCaseId": reasoning_case.case_id},
+            {
+                "investmentReasoningCaseId": reasoning_case.case_id,
+                "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
+            },
             result,
         )
 
         self.assertEqual(CASE_VALIDATED, validated.stage)
         self.assertFalse(validated.final_decision.published)
+        self.assertIsNone(repository.get(reasoning_case.case_id).final_decision)
         self.assertEqual(1, len(decision_store.episodes))
         episode = next(iter(decision_store.episodes.values()))
         contract = episode.facts_at_decision["hypothesisOutcomeContract"]
@@ -1184,10 +1475,11 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
         self.assertEqual("trace:price-recovery", proposal_inference["traces"][0]["id"])
         published = orchestrator.notification_published({
             "investmentReasoningCaseId": reasoning_case.case_id,
+            "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
         })
         self.assertEqual(CASE_PUBLISHED, published.stage)
         self.assertTrue(published.final_decision.published)
-        self.assertTrue(published.inference_result.trace_complete)
+        self.assertTrue(repository.get(reasoning_case.case_id).inference_result.trace_complete)
 
     def test_ai_cannot_publish_without_a_typedb_hypothesis(self):
         repository = InMemoryReasoningCaseRepository()
@@ -1205,10 +1497,22 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             10,
         )
         orchestrator.hypotheses_ready(reasoning_case.case_id, [])
-        orchestrator.ai_queued(reasoning_case.case_id, "ai-request:2", "notification:2")
+        synthesis = recovery_synthesis("python:invented")
+        synthesis = DecisionSynthesis.from_dict({
+            **synthesis.to_dict(),
+            "eligible_hypothesis_ids": [],
+            "eligibleHypothesisIds": [],
+            "alternatives": [],
+        })
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [synthesis])
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+        orchestrator.ai_queued(subject_case.subject_case_id, "ai-request:2", "notification:2")
         blocked = orchestrator.ai_completed(
             SimpleNamespace(notification_job_id="notification:2"),
-            {"investmentReasoningCaseId": reasoning_case.case_id},
+            {
+                "investmentReasoningCaseId": reasoning_case.case_id,
+                "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
+            },
             SimpleNamespace(
                 request_id="ai-request:2",
                 result_id="ai-result:2",
@@ -1224,7 +1528,7 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(CASE_BLOCKED, blocked.stage)
+        self.assertEqual("ABSTAINED", blocked.stage)
         self.assertIn("hypothesis set is empty", blocked.errors[-1]["reason"])
 
     def test_ai_failure_can_publish_the_existing_typedb_inference(self):
@@ -1245,28 +1549,37 @@ class InvestmentReasoningModuleTests(unittest.TestCase):
             10,
         )
         orchestrator.hypotheses_ready(reasoning_case.case_id, [hypothesis_candidate()])
-        orchestrator.ai_queued(reasoning_case.case_id, "ai-request:fallback", "notification:fallback")
+        orchestrator.decisions_synthesized(reasoning_case.case_id, [recovery_synthesis()])
+        subject_case = orchestrator.subject_cases.for_batch(reasoning_case.case_id)[0]
+        orchestrator.ai_queued(
+            subject_case.subject_case_id,
+            "ai-request:fallback",
+            "notification:fallback",
+        )
 
         validated = orchestrator.ai_fallback_completed(
             SimpleNamespace(
                 request_id="ai-request:fallback",
                 notification_job_id="notification:fallback",
             ),
-            {"investmentReasoningCaseId": reasoning_case.case_id},
+            {
+                "investmentReasoningCaseId": reasoning_case.case_id,
+                "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
+            },
             SimpleNamespace(response={"action": "WATCH"}),
             "AI request timed out",
         )
 
-        self.assertEqual(CASE_VALIDATED, validated.stage)
-        self.assertEqual("WATCH", validated.final_decision.action)
-        self.assertEqual("typedb-inference-fallback", validated.final_decision.source)
-        self.assertEqual("reference-only", validated.final_decision.validation_state)
-        self.assertFalse(validated.final_decision.published)
+        self.assertEqual("REVIEW_ONLY", validated.stage)
+        self.assertIsNone(validated.final_decision)
+        self.assertEqual("REVIEW_ONLY", validated.publication.outcome_kind)
         published = orchestrator.notification_published({
             "investmentReasoningCaseId": reasoning_case.case_id,
+            "investmentSubjectDecisionCaseId": subject_case.subject_case_id,
         })
-        self.assertEqual(CASE_PUBLISHED, published.stage)
-        self.assertTrue(published.final_decision.published)
+        self.assertEqual("PUBLISHED", published.stage)
+        self.assertIsNone(published.final_decision)
+        self.assertTrue(published.publication.delivered_at)
 
 
 if __name__ == "__main__":

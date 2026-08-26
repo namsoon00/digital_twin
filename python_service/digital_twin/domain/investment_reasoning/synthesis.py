@@ -90,6 +90,22 @@ def decision_synthesis_from_relation_context(
         or ""
     )
     context_observation = typedb_context_observation_contract(relation)
+    selected_decision_effect = str(
+        envelope.get("selectedDecisionEffect")
+        or opinion_assessment.get("decisionEffect")
+        or decision.get("decisionEffect")
+        or ("support" if opinion_assessment.get("status") == "supported" else "")
+        or ""
+    ).lower().strip()
+    decision_disposition = str(envelope.get("decisionDisposition") or "").lower().strip()
+    action_authority = (
+        "originate"
+        if selected_decision_effect == "support"
+        and bool(envelope.get("investmentJudgementAvailable", True))
+        else "modify"
+        if selected_decision_effect in {"constrain", "defer", "block"}
+        else "observe"
+    )
     if context_observation:
         graph_candidate_action = "NO_ACTION"
         investment_view_action = ""
@@ -224,6 +240,9 @@ def decision_synthesis_from_relation_context(
             or recommended_plan.get("status")
             or "judgement-blocked"
         ),
+        decision_effect=selected_decision_effect,
+        decision_disposition=decision_disposition,
+        action_authority=action_authority,
         allowed_actions=() if context_observation else allowed_actions,
         blocked_actions=() if context_observation else blocked_actions,
         alternatives=tuple(alternatives),

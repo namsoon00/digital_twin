@@ -2054,6 +2054,37 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual([], plan["reusedNodeRows"])
         self.assertEqual([], plan["reusedRelationRows"])
 
+    def test_fresh_candidate_mode_stops_when_world_manifest_exists(self):
+        repository = TypeDBOntologyGraphRepository(
+            "typedb-fresh-candidate.test:1729",
+            database="fresh_candidate_incremental_test",
+            fresh_candidate_rebuild=True,
+        )
+        repository.active_abox_metadata = MagicMock(return_value={
+            "status": "ok",
+            "worldviewManifestId": "abox-manifest:existing",
+        })
+
+        self.assertFalse(
+            repository.fresh_candidate_world_bootstrap_required(
+                "premise:shared:global"
+            )
+        )
+
+    def test_fresh_candidate_mode_remains_for_world_without_manifest(self):
+        repository = TypeDBOntologyGraphRepository(
+            "typedb-fresh-candidate.test:1729",
+            database="fresh_candidate_empty_world_test",
+            fresh_candidate_rebuild=True,
+        )
+        repository.active_abox_metadata = MagicMock(return_value={"status": "not-found"})
+
+        self.assertTrue(
+            repository.fresh_candidate_world_bootstrap_required(
+                "portfolio:local:default"
+            )
+        )
+
     def test_scoped_abox_write_skips_reused_storage_rows(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         row = {

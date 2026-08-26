@@ -227,14 +227,26 @@ class NotificationAIRequestEnqueuer:
             or reasoning_case_context.get("caseId")
             or ""
         )
+        subject_case_context = (
+            context.get("investmentSubjectDecisionCase")
+            if isinstance(context.get("investmentSubjectDecisionCase"), dict)
+            else {}
+        )
+        subject_case_id = str(
+            context.get("investmentSubjectDecisionCaseId")
+            or subject_case_context.get("subjectCaseId")
+            or ""
+        )
         review_mode = notification_ai_review_mode(context)
         narrative_only = review_mode == "context-narrative"
         context["notificationAiReviewMode"] = review_mode
-        if reasoning_case_id and self.reasoning_orchestrator is not None and not narrative_only:
+        decision_case_id = subject_case_id or reasoning_case_id
+        if decision_case_id and self.reasoning_orchestrator is not None and not narrative_only:
             context = self.reasoning_orchestrator.capture_ai_context(
-                reasoning_case_id,
+                decision_case_id,
                 context,
             )
+            subject_case_id = str(context.get("investmentSubjectDecisionCaseId") or subject_case_id)
         quality_snapshot = build_ontology_decision_quality_snapshot(context)
         if quality_snapshot:
             context["ontologyDecisionQuality"] = quality_snapshot
@@ -256,17 +268,23 @@ class NotificationAIRequestEnqueuer:
             prompt_version=AI_DECISION_PROMPT_VERSION,
         )
         outcome = self.queue.enqueue(job, request)
-        if reasoning_case_id and self.reasoning_orchestrator is not None and not narrative_only:
+        if (subject_case_id or reasoning_case_id) and self.reasoning_orchestrator is not None and not narrative_only:
             status = str(outcome.get("status") or "")
             if status in {"awaiting-ai", "pending", "processing", "retry"}:
                 self.reasoning_orchestrator.ai_queued(
-                    reasoning_case_id,
+                    subject_case_id or reasoning_case_id,
                     str(outcome.get("requestId") or request.request_id),
                     request.notification_job_id,
                 )
-            elif status in {"coalesced-identical", "superseded"}:
+            elif status == "coalesced-identical":
+                self.reasoning_orchestrator.ai_queued(
+                    subject_case_id or reasoning_case_id,
+                    str(outcome.get("requestId") or request.request_id),
+                    request.notification_job_id,
+                )
+            elif status == "superseded":
                 self.reasoning_orchestrator.case_superseded(
-                    reasoning_case_id,
+                    subject_case_id or reasoning_case_id,
                     "A newer or identical AI request owns this subject decision.",
                 )
             for superseded_case_id in outcome.get("supersededReasoningCaseIds") or []:
@@ -390,6 +408,14 @@ class AIInferenceQueueRunner:
     def process_request(self, request: AIInferenceRequest) -> str:
         context = dict(request.context or {})
         narrative_only = request.review_mode == "context-narrative"
+        subject_case_id = str(context.get("investmentSubjectDecisionCaseId") or "")
+        canonical_subject_publication = bool(
+            subject_case_id and self.reasoning_orchestrator is not None
+        )
+        atomic_canonical_publication = bool(
+            canonical_subject_publication
+            and getattr(self.queue, "supports_atomic_subject_publication", False)
+        )
         context["notificationAiReviewMode"] = request.review_mode
         try:
             if request.message_type == INVESTMENT_INSIGHT:
@@ -530,13 +556,13 @@ class AIInferenceQueueRunner:
             quality_gate = ontology_quality_gate_context(context, self.settings)
             context["ontologyQualityGate"] = quality_gate
         apply_ontology_quality_gate_to_response(response, quality_gate)
-        episode = None if narrative_only else self.decision_episode_context(
+        episode = None if narrative_only or canonical_subject_publication else self.decision_episode_context(
             request,
             context,
             response,
             typedb_only=bool(fallback_reason),
         )
-        action_plan = None if narrative_only else self.action_plan_context(context, episode)
+        action_plan = None if narrative_only or canonical_subject_publication else self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
         continuity_packet = (
             dict(context.get("decisionContinuityPacket") or {})
@@ -647,7 +673,7 @@ class AIInferenceQueueRunner:
                 fallback_reason = str(validation_reason)
                 response = typedb_inference_fallback_response(context, validation_reason)
                 apply_ontology_quality_gate_to_response(response, quality_gate)
-                episode = self.decision_episode_context(
+                episode = None if canonical_subject_publication else self.decision_episode_context(
                     request,
                     context,
                     response,
@@ -682,6 +708,40 @@ class AIInferenceQueueRunner:
                     latency_ms=latency_ms,
                     prompt_bytes=prompt_bytes,
                 )
+        canonical_case = None
+        if canonical_subject_publication and not atomic_canonical_publication:
+            if fallback_reason:
+                canonical_case = self.storage_call_with_retry(
+                    lambda: self.reasoning_orchestrator.ai_fallback_completed(
+                        request,
+                        enriched,
+                        result,
+                        fallback_reason,
+                    )
+                )
+            else:
+                canonical_case = self.storage_call_with_retry(
+                    lambda: self.reasoning_orchestrator.ai_completed(request, enriched, result)
+                )
+            if canonical_case is None or canonical_case.publication is None:
+                failed = self.storage_call_with_retry(
+                    lambda: self.queue.fail(
+                        request,
+                        self.worker_id,
+                        "Canonical subject decision publication was not created.",
+                    )
+                )
+                return request.request_id[:8] + (
+                    " blocked-missing-publication" if failed else " lease-lost"
+                )
+            enriched["decisionPublication"] = canonical_case.publication.to_dict()
+            enriched["investmentSubjectDecisionCase"] = canonical_case.to_dict()
+            if canonical_case.publication.decision_episode_id:
+                enriched["investmentDecisionEpisodeId"] = canonical_case.publication.decision_episode_id
+                getter = getattr(self.decision_episode_store, "get", None)
+                stored_episode = getter(canonical_case.publication.decision_episode_id) if callable(getter) else None
+                if stored_episode is not None:
+                    enriched["investmentDecisionEpisode"] = stored_episode.to_dict()
         if episode is not None:
             is_current = getattr(self.queue, "is_current", None)
             if callable(is_current) and not is_current(request.request_id, self.worker_id):
@@ -700,12 +760,57 @@ class AIInferenceQueueRunner:
                     ),
                 }
                 enriched["notificationAiExecutionAudit"] = execution_audit
-        published = self.storage_call_with_retry(
-            lambda: self.queue.complete(request, self.worker_id, result, enriched)
-        )
+        if atomic_canonical_publication:
+            def publish_subject_with_queue(connection):
+                if fallback_reason:
+                    canonical_case = self.reasoning_orchestrator.ai_fallback_completed(
+                        request,
+                        enriched,
+                        result,
+                        fallback_reason,
+                        connection=connection,
+                    )
+                else:
+                    canonical_case = self.reasoning_orchestrator.ai_completed(
+                        request,
+                        enriched,
+                        result,
+                        connection=connection,
+                    )
+                if canonical_case is None or canonical_case.publication is None:
+                    raise RuntimeError("Canonical subject decision publication was not created.")
+                enriched["decisionPublication"] = canonical_case.publication.to_dict()
+                enriched["investmentSubjectDecisionCase"] = canonical_case.to_dict()
+                if canonical_case.publication.decision_episode_id:
+                    enriched["investmentDecisionEpisodeId"] = canonical_case.publication.decision_episode_id
+
+            published = self.storage_call_with_retry(
+                lambda: self.queue.complete(
+                    request,
+                    self.worker_id,
+                    result,
+                    enriched,
+                    before_complete=publish_subject_with_queue,
+                )
+            )
+        else:
+            published = self.storage_call_with_retry(
+                lambda: self.queue.complete(request, self.worker_id, result, enriched)
+            )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
-        if self.reasoning_orchestrator is not None and not narrative_only:
+        if atomic_canonical_publication:
+            try:
+                self.storage_call_with_retry(
+                    lambda: self.reasoning_orchestrator.enqueue_hypothesis_gap(subject_case_id)
+                )
+            except Exception:  # noqa: BLE001 - proposal work is an asynchronous follow-up.
+                pass
+        if (
+            self.reasoning_orchestrator is not None
+            and not narrative_only
+            and not canonical_subject_publication
+        ):
             try:
                 if fallback_reason:
                     self.storage_call_with_retry(
@@ -754,11 +859,16 @@ class AIInferenceQueueRunner:
             quality_gate = ontology_quality_gate_context(context, self.settings)
             context["ontologyQualityGate"] = quality_gate
         apply_ontology_quality_gate_to_response(response, quality_gate)
-        episode = self.decision_episode_context(
-            request,
-            context,
-            response,
-            typedb_only=True,
+        canonical_subject_publication = bool(
+            context.get("investmentSubjectDecisionCaseId")
+            and self.reasoning_orchestrator is not None
+        )
+        atomic_canonical_publication = bool(
+            canonical_subject_publication
+            and getattr(self.queue, "supports_atomic_subject_publication", False)
+        )
+        episode = None if canonical_subject_publication else self.decision_episode_context(
+            request, context, response, typedb_only=True,
         )
         enriched = context_with_validated_ai_response(context, response, self.settings)
         fallback_reason = str(reason or "AI preparation failed")
@@ -806,6 +916,28 @@ class AIInferenceQueueRunner:
             latency_ms=0,
             prompt_bytes=0,
         )
+        if canonical_subject_publication and not atomic_canonical_publication:
+            canonical_case = self.storage_call_with_retry(
+                lambda: self.reasoning_orchestrator.ai_fallback_completed(
+                    request,
+                    enriched,
+                    result,
+                    fallback_reason,
+                )
+            )
+            if canonical_case is None or canonical_case.publication is None:
+                failed = self.storage_call_with_retry(
+                    lambda: self.queue.fail(
+                        request,
+                        self.worker_id,
+                        "Canonical review-only publication was not created.",
+                    )
+                )
+                return request.request_id[:8] + (
+                    " blocked-missing-publication" if failed else " lease-lost"
+                )
+            enriched["decisionPublication"] = canonical_case.publication.to_dict()
+            enriched["investmentSubjectDecisionCase"] = canonical_case.to_dict()
         if episode is not None:
             is_current = getattr(self.queue, "is_current", None)
             if callable(is_current) and not is_current(request.request_id, self.worker_id):
@@ -821,12 +953,36 @@ class AIInferenceQueueRunner:
                     "episodeId": saved_episode.episode_id,
                     "comparisonState": "typedb-only",
                 }
-        published = self.storage_call_with_retry(
-            lambda: self.queue.complete(request, self.worker_id, result, enriched)
-        )
+        if atomic_canonical_publication:
+            def publish_review_with_queue(connection):
+                canonical_case = self.reasoning_orchestrator.ai_fallback_completed(
+                    request,
+                    enriched,
+                    result,
+                    fallback_reason,
+                    connection=connection,
+                )
+                if canonical_case is None or canonical_case.publication is None:
+                    raise RuntimeError("Canonical review-only publication was not created.")
+                enriched["decisionPublication"] = canonical_case.publication.to_dict()
+                enriched["investmentSubjectDecisionCase"] = canonical_case.to_dict()
+
+            published = self.storage_call_with_retry(
+                lambda: self.queue.complete(
+                    request,
+                    self.worker_id,
+                    result,
+                    enriched,
+                    before_complete=publish_review_with_queue,
+                )
+            )
+        else:
+            published = self.storage_call_with_retry(
+                lambda: self.queue.complete(request, self.worker_id, result, enriched)
+            )
         if not published:
             return request.request_id[:8] + " superseded-before-publish"
-        if self.reasoning_orchestrator is not None:
+        if self.reasoning_orchestrator is not None and not canonical_subject_publication:
             try:
                 self.storage_call_with_retry(
                     lambda: self.reasoning_orchestrator.ai_fallback_completed(

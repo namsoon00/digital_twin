@@ -10,7 +10,13 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore, merge_derived_evidence_payload
-from mysql_fixtures import TestResearchEvidenceStore, mysql_test_settings, reset_mysql_test_database, test_store_seed
+from mysql_fixtures import (
+    TestResearchEvidenceStore,
+    mysql_execute,
+    mysql_test_settings,
+    reset_mysql_test_database,
+    test_store_seed,
+)
 
 
 class MemoryExternalSignalCache:
@@ -31,6 +37,21 @@ class FixedCacheKeyExternalSignalProvider(ExternalSignalProvider):
 
 
 class ResearchEvidenceStoreTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.seed = test_store_seed(cls.temp.name)
+        reset_mysql_test_database(cls.seed)
+        TestResearchEvidenceStore(cls.seed)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def setUp(self):
+        mysql_execute(self.seed, "DELETE FROM news_analysis_work_items")
+        mysql_execute(self.seed, "DELETE FROM research_evidence")
+
     def test_replayed_source_payload_preserves_verified_enrichment(self):
         previous = {
             "articleText": "Apple reported audited revenue and guidance.",
@@ -163,7 +184,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_upsert_sorts_and_splits_large_evidence_writes_into_short_transactions(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             settings = mysql_test_settings(test_store_seed(temp))
             settings["researchEvidenceWriteBatchSize"] = "2"
             store = MySQLResearchEvidenceStore(settings)
@@ -196,7 +216,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_news_analysis_work_queue_round_trips_against_mysql_schema(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = MySQLResearchEvidenceStore(mysql_test_settings(test_store_seed(temp)))
 
             self.assertEqual(1, store.enqueue_news_analysis_work([{
@@ -218,7 +237,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_stale_cleanup_skips_a_row_locked_by_another_worker(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             locked = self.news_evidence("research:005930:news:locked")
             available = self.news_evidence("research:005930:news:available")
@@ -240,7 +258,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_research_evidence_store_upserts_and_summarizes(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             evidence = ResearchEvidence(
                 "research:005930:news:1",
@@ -285,7 +302,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_store_keeps_audit_rows_without_requeueing_refreshes_or_syndication(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             first = self.direct_news_evidence("research:005930:news:direct")
 
@@ -317,7 +333,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_research_evidence_store_deletes_by_id(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             evidence = ResearchEvidence(
                 "research:005930:news:delete",
@@ -341,7 +356,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_research_evidence_store_deletes_stale_news_only(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             old_news = ResearchEvidence(
                 "research:005930:news:old",
@@ -395,7 +409,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_expiration_keeps_audit_row_and_emits_an_eligible_set_revision(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             evidence = ResearchEvidence(
                 "research:005930:news:lifecycle",
@@ -421,7 +434,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def test_transaction_event_builder_receives_its_own_evidence_mutation(self):
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             evidence = ResearchEvidence(
                 "research:005930:news:atomic-event",
@@ -507,7 +519,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             "providerState": {},
         })
         with tempfile.TemporaryDirectory() as temp:
-            reset_mysql_test_database(temp)
             store = TestResearchEvidenceStore(test_store_seed(temp))
             provider = FixedCacheKeyExternalSignalProvider(
                 settings={

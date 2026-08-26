@@ -11,7 +11,7 @@ from .ontology_rule_knowledge import knowledge_basis_summary, resolved_rule_know
 from .rule_claim_contract import resolved_rule_claim_contract, rule_claim_coverage
 
 
-RULE_AUDIT_VERSION = "ontology-rule-audit-v4"
+RULE_AUDIT_VERSION = "ontology-rule-audit-v5-execution-grain"
 
 
 def _text(value: object) -> str:
@@ -151,6 +151,12 @@ def rule_audit_payload(
             "evidenceFamilies": list(manifest.get("evidenceFamilies") or []),
             "outputContract": dict(manifest.get("outputContract") or {}),
             "lifecycleClass": manifest.get("lifecycleClass"),
+            "evaluationGrain": manifest.get("evaluationGrain"),
+            "ownerWorld": manifest.get("ownerWorld"),
+            "executionCadence": manifest.get("executionCadence"),
+            "incrementalEligible": bool(manifest.get("incrementalEligible")),
+            "triggerEventClasses": list(manifest.get("triggerEventClasses") or []),
+            "executionUnit": dict(manifest.get("executionUnit") or {}),
             "scopeFamilies": scope_families,
             "conservativeDependencyCount": conservative_dependencies,
             "sampleCount": sample_count,
@@ -201,6 +207,10 @@ def rule_audit_payload(
     )
     scope_counts = Counter(str(item.get("assessmentScope") or "unknown") for item in rows)
     lifecycle_counts = Counter(str(item.get("lifecycleClass") or "unknown") for item in rows)
+    evaluation_grain_counts = Counter(
+        str(item.get("evaluationGrain") or "unknown") for item in rows
+    )
+    owner_world_counts = Counter(str(item.get("ownerWorld") or "unknown") for item in rows)
     knowledge_summary = knowledge_basis_summary([
         resolved_rule_knowledge_basis(rule)
         for rule in authored_rules
@@ -220,6 +230,8 @@ def rule_audit_payload(
         "executionStageCounts": dict(sorted(stage_counts.items())),
         "assessmentScopeCounts": dict(sorted(scope_counts.items())),
         "lifecycleClassCounts": dict(sorted(lifecycle_counts.items())),
+        "evaluationGrainCounts": dict(sorted(evaluation_grain_counts.items())),
+        "ownerWorldCounts": dict(sorted(owner_world_counts.items())),
         "knowledgeBasisSummary": knowledge_summary,
         "ruleClaimCoverage": rule_claim_coverage(authored_rules),
         "duplicateCandidateGroups": duplicate_groups,

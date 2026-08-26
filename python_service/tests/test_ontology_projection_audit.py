@@ -225,6 +225,8 @@ class OntologyProjectionAuditTests(unittest.TestCase):
     def test_shared_result_slots_rehydrate_only_the_active_inference_generation(self):
         context = {
             "reusable": True,
+            "coverageComplete": True,
+            "fullGenerationReusable": True,
             "expectedRuleCount": 2,
             "inferenceGenerationId": "generation:active",
             "sourceAboxSnapshotId": "abox:active",
@@ -1377,6 +1379,81 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertIn("graph_database = %s", connection.calls[0][0])
         self.assertNotIn("release_fingerprint = %s", connection.calls[0][0])
 
+    def test_rule_result_slots_reuse_warm_symbols_and_backfill_cold_symbols(self):
+        rows = [
+            {
+                "symbol": "AAPL",
+                "rule_id": rule_id,
+                "matched": int(rule_id.endswith("one")),
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:v2",
+                "revision_vector_json": '{"market-observation":"quote:7"}',
+            }
+            for rule_id in ["graph.rule.one", "graph.rule.two"]
+        ]
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(
+            MySQLOntologyProjectionRunStore
+        )
+        store.connect = lambda: ConnectionContext(connection)
+
+        context = store.active_rule_result_slot_context(
+            world_id="premise:shared:global",
+            account_id="",
+            symbols=["AAPL", "MSTR"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=2,
+            execution_namespace_id="namespace:v2",
+            catalog_rule_ids=["graph.rule.one", "graph.rule.two"],
+        )
+
+        self.assertTrue(context["reusable"])
+        self.assertTrue(context["selectionReusable"])
+        self.assertFalse(context["fullGenerationReusable"])
+        self.assertFalse(context["coverageComplete"])
+        self.assertTrue(context["partialCatalogProof"])
+        self.assertEqual(["AAPL"], context["reusedTargetSymbols"])
+        self.assertEqual(["MSTR"], context["coldTargetSymbols"])
+        self.assertEqual(
+            ["graph.rule.one", "graph.rule.two"],
+            context["missingRuleIdsBySymbol"]["MSTR"],
+        )
+
+    def test_partial_slot_proof_cannot_rehydrate_a_full_generation(self):
+        result = shared_inference_from_result_slot_proof(
+            world_id="premise:shared:global",
+            active_abox={"aboxSnapshotId": "abox:1"},
+            recovery_metadata={
+                "status": "ok",
+                "inferenceGenerationId": "generation:1",
+                "sourceAboxSnapshotId": "abox:1",
+                "targetSymbols": ["AAPL", "MSTR"],
+                "nativeTypeDbReasoningCompleted": True,
+            },
+            selection_context={
+                "reusable": True,
+                "coverageComplete": False,
+                "partialCatalogProof": True,
+                "fullGenerationReusable": False,
+                "expectedRuleCount": 2,
+                "inferenceGenerationId": "generation:1",
+                "sourceAboxSnapshotId": "abox:1",
+                "ruleStatesBySymbol": {
+                    "AAPL": {"graph.rule.one": "matched", "graph.rule.two": "not-matched"},
+                    "MSTR": {},
+                },
+            },
+            symbols=["AAPL", "MSTR"],
+        )
+
+        self.assertEqual({}, result)
+
     def test_rule_result_slots_return_one_coherent_revision_vector(self):
         rows = [
             {
@@ -1614,6 +1691,66 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertTrue(all(row[14] == 1 for row in inserts))
         self.assertEqual({"generation:current"}, {row[16] for row in inserts})
         self.assertEqual(1, len({row[19] for row in inserts}))
+
+    def test_incremental_slot_write_backfills_a_cold_symbol_when_all_missing_rules_execute(self):
+        _snapshot, _graph, _fingerprint, base_run = self.build_run()
+        run = replace(base_run, source_symbols=["AAPL", "MSTR"])
+        connection = RecordingConnection()
+        store = MySQLOntologyProjectionRunStore.__new__(MySQLOntologyProjectionRunStore)
+        result = {
+            "status": "ok",
+            "ruleboxExecution": {
+                "status": "ok",
+                "nativeRuleSelectionApplied": True,
+                "nativeRuleSelectionFullRuleCount": 2,
+                "nativeRuleSelectionExecutedRuleIds": ["graph.rule.one", "graph.rule.two"],
+                "typedbNativeRuleMatchedRuleIds": ["graph.rule.one"],
+            },
+            "inferenceBox": {
+                "generationAligned": True,
+                "inferenceGenerationId": "generation:current",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+            },
+            "inferenceReuseProof": {
+                "scopePlanFingerprint": run.context_payload["scopeTopology"]["inferenceReuseScopePlanFingerprint"],
+            },
+            "_ruleResultSlotCatalogRuleIds": ["graph.rule.one", "graph.rule.two"],
+            "_priorRuleStatesBySymbol": {
+                "AAPL": {"graph.rule.one": "matched", "graph.rule.two": "not-matched"},
+                "MSTR": {},
+            },
+        }
+        trace = {
+            "inferenceGenerationId": "generation:current",
+            "ruleOutcomes": [{
+                "ruleId": "graph.rule.one",
+                "matched": True,
+                "matchedTargetSymbols": ["MSTR"],
+                "matchIdentityComplete": True,
+            }, {
+                "ruleId": "graph.rule.two",
+                "matched": False,
+                "matchedTargetSymbols": [],
+                "matchIdentityComplete": True,
+            }],
+        }
+
+        store._upsert_rule_result_slots_with_connection(
+            connection,
+            run,
+            result,
+            trace,
+            "2026-08-26T00:00:00Z",
+        )
+
+        inserts = [
+            params
+            for sql, params in connection.calls
+            if "INSERT INTO ontology_reasoning_rule_result_slots" in sql
+        ]
+        self.assertEqual(4, len(inserts))
+        self.assertEqual({"AAPL", "MSTR"}, {row[7] for row in inserts})
+        self.assertEqual({"graph.rule.one", "graph.rule.two"}, {row[8] for row in inserts})
 
     def test_multi_symbol_aggregate_match_cannot_create_false_complete_slots(self):
         _snapshot, _graph, _fingerprint, base_run = self.build_run()

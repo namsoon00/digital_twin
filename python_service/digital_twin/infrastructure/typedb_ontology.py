@@ -51,6 +51,10 @@ from ..domain.ontology_rule_execution_policy import (
     RULE_EXECUTION_POLICY_VERSION,
     rule_execution_profile,
 )
+from ..domain.ontology_execution_units import (
+    rule_evaluation_grain,
+    rules_allow_subject_fanout,
+)
 from ..domain.ontology_rulebox_governance import (
     normalize_rule_change_candidate,
     rulebox_governance_candidates,
@@ -17727,6 +17731,7 @@ relation ontology-assertion,
             stable_abox_write_lease_held
             and self.native_rule_subject_fanout_enabled()
             and len(clean_symbols) > 1
+            and rules_allow_subject_fanout(rules)
         ):
             return self.match_typedb_native_rules_by_subject(
                 rules,
@@ -23700,6 +23705,7 @@ def typedb_native_rule_execution_plan(
                 retained_symbols.append(symbol)
             candidate_symbols = retained_symbols
         execution_profile = rule_execution_profile(rule)
+        evaluation_grain = rule_evaluation_grain(rule)
         entry = {
             "rule": rule,
             "ruleId": rule_id,
@@ -23712,6 +23718,7 @@ def typedb_native_rule_execution_plan(
             "subjectPropertyPreflightPrunedSymbols": subject_property_pruned_symbols,
             "manifestEvidencePreflightPrunedSymbols": manifest_evidence_pruned_symbols,
             "executionProfile": execution_profile,
+            "evaluationGrain": evaluation_grain,
             **typedb_rule_execution_profile_fields({"executionProfile": execution_profile}),
         }
         if symbol_scoped_source and clean_symbols and not candidate_symbols:
@@ -24015,6 +24022,7 @@ def typedb_native_rule_execution_plan_summary(plan: Dict[str, object]) -> Dict[s
                 "ruleId": str(item.get("ruleId") or ""),
                 "candidateSymbols": list(item.get("candidateSymbols") or []),
                 "queryComplexity": int(number_or_none(item.get("queryComplexity")) or 0),
+                "evaluationGrain": str(item.get("evaluationGrain") or ""),
                 **typedb_rule_execution_profile_fields(item),
             }
             for item in selected[:200]

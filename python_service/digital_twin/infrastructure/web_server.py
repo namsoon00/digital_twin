@@ -2049,6 +2049,21 @@ def compact_reasoning_stage_detail(stage_key: str, detail: object) -> Dict[str, 
             for field in ("candidateRuleCount", "executedRuleCount", "deferredRuleCount")
             if field in value
         }
+    if key.startswith("runtime:"):
+        return {
+            field: value.get(field)
+            for field in ("runtimeMetric", "budgetMs", "ratio", "withinBudget")
+            if field in value
+        }
+    if key == "performance-contract":
+        return {
+            field: value.get(field)
+            for field in (
+                "version", "withinBudget", "bottleneckStage", "bottleneckRatio",
+                "violations",
+            )
+            if field in value
+        }
     return {}
 
 
@@ -2097,7 +2112,9 @@ def compact_rule_audit(audit: object) -> Dict[str, object]:
             field: rule.get(field)
             for field in (
                 "ruleId", "label", "status", "enabled", "assessmentScope",
-                "lifecycleClass", "sampleCount", "matchedCount", "failureCount",
+                "lifecycleClass", "evaluationGrain", "ownerWorld", "executionCadence",
+                "incrementalEligible", "triggerEventClasses", "executionUnit",
+                "sampleCount", "matchedCount", "failureCount",
                 "averageDurationMs", "p95DurationMs", "maxDurationMs", "reviewReasons",
             )
             if field in rule

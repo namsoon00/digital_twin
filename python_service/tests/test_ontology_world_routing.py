@@ -12,10 +12,40 @@ class OntologyWorldRoutingTests(unittest.TestCase):
         self.assertFalse(route["knowledge"]["required"])
 
     def test_quote_and_flow_change_updates_market_not_durable_knowledge(self):
-        route = route_world_impact({"changedScopeFamilies": ["market", "flow"]})
+        route = route_world_impact({
+            "changedScopeFamilies": ["market", "flow"],
+            "explicitTargetSymbols": ["AAPL"],
+        })
 
         self.assertTrue(route["market"]["required"])
         self.assertFalse(route["knowledge"]["required"])
+        self.assertTrue(route["partitions"]["instrumentPremise"]["required"])
+        self.assertEqual(
+            ["premise:shared:global:instrument:AAPL"],
+            route["partitions"]["instrumentPremise"]["partitionIds"],
+        )
+        account_work = route["durableHandoff"]["workItems"][-1]
+        self.assertEqual("portfolio-overlay", account_work["owner"])
+        self.assertEqual(
+            ["project:premise:shared:global:instrument:AAPL"],
+            account_work["dependsOn"],
+        )
+
+    def test_macro_change_uses_macro_partition_before_account_overlay(self):
+        route = route_world_impact({
+            "changedScopeFamilies": ["macro-rates"],
+            "explicitTargetSymbols": ["NVDA"],
+        })
+
+        self.assertTrue(route["partitions"]["macroContext"]["required"])
+        self.assertEqual(
+            ["premise:shared:global:macro:macro-rates"],
+            route["partitions"]["macroContext"]["partitionIds"],
+        )
+        self.assertIn(
+            "project:premise:shared:global:macro:macro-rates",
+            route["durableHandoff"]["workItems"][-1]["dependsOn"],
+        )
 
     def test_exposure_change_updates_shared_knowledge_world(self):
         route = route_world_impact({"changedScopeFamilies": ["exposure"]})

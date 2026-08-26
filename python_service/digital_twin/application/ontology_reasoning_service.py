@@ -7,6 +7,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 
 from ..domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED, ontology_reasoning_completed_event
 from ..domain.ontology_change_impact import requested_scope_families_for_event_fact_types
+from ..domain.ontology_execution_units import revision_vector_for_change
 from ..domain.ontology_reasoning_batch import adaptive_reasoning_batch_plan
 from ..domain.ontology_runtime_operations import (
     native_replay_validation,
@@ -271,11 +272,11 @@ def reasoning_request_provenance(
         revision_vector = mailbox.get("revisionVector")
         if isinstance(revision_vector, Mapping):
             for symbol in event_scope_symbols:
-                revision_vectors_by_symbol[symbol] = {
+                revision_vectors_by_symbol.setdefault(symbol, {}).update({
                     str(key or "")[:40]: str(value or "")[:191]
                     for key, value in revision_vector.items()
                     if str(key or "").strip() and str(value or "").strip()
-                }
+                })
         raw_fact_types_by_symbol = payload.get("factTypesBySymbol")
         raw_fact_types_by_symbol = raw_fact_types_by_symbol if isinstance(raw_fact_types_by_symbol, Mapping) else {}
         event_families = list(fact_contract.get("scopeFamilies") or []) or requested_scope_families_for_event_fact_types(event_fact_types)
@@ -302,6 +303,21 @@ def reasoning_request_provenance(
             if not symbol_families:
                 symbol_families = event_families
             fact_families_by_symbol.setdefault(symbol, set()).update(symbol_families)
+            raw_revision = raw_revisions.get(symbol)
+            if raw_revision is None:
+                raw_revision = next((
+                    value
+                    for raw_symbol, value in raw_revisions.items()
+                    if str(raw_symbol or "").upper().strip() == symbol
+                ), "")
+            synthesized_vector = revision_vector_for_change(
+                raw_revision,
+                symbol_families,
+                raw_fields.get(symbol) or [],
+            )
+            current_vector = revision_vectors_by_symbol.setdefault(symbol, {})
+            for key, value in synthesized_vector.items():
+                current_vector.setdefault(key, value)
             symbol_dependency_keys = contract_dependency_keys_by_symbol.get(symbol)
             symbol_dependency_keys = symbol_dependency_keys if isinstance(symbol_dependency_keys, (list, tuple, set)) else fact_contract.get("dependencyKeys") or []
             dependency_keys_by_symbol.setdefault(symbol, set()).update(

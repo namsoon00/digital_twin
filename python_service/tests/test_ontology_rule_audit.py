@@ -37,6 +37,12 @@ class OntologyRuleAuditTest(unittest.TestCase):
         self.assertIn(by_id[rules[0].rule_id]["assessmentScope"], {
             "evidence-quality", "investment-opinion", "portfolio-fit", "execution-readiness",
         })
+        self.assertIn(by_id[rules[0].rule_id]["evaluationGrain"], {
+            "instrument", "account", "macro", "world",
+        })
+        self.assertTrue(by_id[rules[0].rule_id]["ownerWorld"])
+        self.assertTrue(by_id[rules[0].rule_id]["executionCadence"])
+        self.assertEqual(3, sum(audit["evaluationGrainCounts"].values()))
         self.assertFalse(audit["automaticRuleChange"])
 
     def test_time_horizon_and_event_filter_variants_are_not_false_duplicates(self):

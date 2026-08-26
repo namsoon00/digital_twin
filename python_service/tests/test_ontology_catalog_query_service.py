@@ -246,6 +246,10 @@ class OntologyCatalogQueryServiceTests(unittest.TestCase):
 
         self.assertEqual("predictive-hypothesis", rule["ruleKind"])
         self.assertTrue(rule["knowledgeBasis"]["requiresHypothesis"])
+        self.assertIn(rule["evaluationGrain"], {"instrument", "account", "macro", "world"})
+        self.assertTrue(rule["ownerWorld"])
+        self.assertTrue(rule["executionCadence"])
+        self.assertIsInstance(rule["triggerEventClasses"], list)
         self.assertTrue(rule["detailRequired"])
         self.assertNotIn("conditions", rule)
         self.assertNotIn("references", rule["knowledgeBasis"])
@@ -281,6 +285,7 @@ class OntologyCatalogQueryServiceTests(unittest.TestCase):
         self.assertEqual(["trace:1"], [item["id"] for item in lineage["inferences"]])
         self.assertEqual(["episode:1"], [item["id"] for item in lineage["decisions"]])
         self.assertEqual(["job:1"], [item["id"] for item in lineage["notifications"]])
+        self.assertTrue(payload["selection"]["item"]["executionUnit"])
         self.assertEqual([], payload["gaps"])
 
     def test_inference_listing_requires_an_explicit_portfolio_world(self):

@@ -1262,6 +1262,34 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(56, shared["eliminatedModelSignalPolicyQueryCount"])
         self.assertNotIn("rawRows", shared)
 
+    def test_persisted_projection_result_keeps_performance_contract_summary(self):
+        compact = compact_projection_result({
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "performanceAssessment": {
+                "version": "ontology-performance-contract-v1",
+                "status": "degraded",
+                "withinBudget": False,
+                "bottleneckStage": "nativeInferenceMs",
+                "bottleneckRatio": 1.5,
+                "violations": [{
+                    "stage": "nativeInferenceMs",
+                    "durationMs": 67500,
+                    "budgetMs": 45000,
+                    "ratio": 1.5,
+                    "withinBudget": False,
+                }],
+                "stages": [{"large": "payload"}],
+            },
+        })
+
+        performance = compact["performanceAssessment"]
+        self.assertEqual("degraded", performance["status"])
+        self.assertEqual("nativeInferenceMs", performance["bottleneckStage"])
+        self.assertEqual(67500, performance["violations"][0]["durationMs"])
+        self.assertNotIn("stages", performance)
+
     def test_runner_batches_compatible_source_events_into_one_engine_turn(self):
         events = [source_event("NVDA", []), source_event("TSLA", [])]
 

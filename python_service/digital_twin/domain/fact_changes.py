@@ -3,6 +3,11 @@ import json
 import math
 from typing import Dict, Iterable, List, Mapping, Optional, Set
 
+from .ontology_execution_units import (
+    EVENT_CHANGE_CLASS_VERSION,
+    event_change_classes,
+)
+
 
 
 VOLATILE_FACT_KEYS = {
@@ -57,7 +62,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v5-company-section-routing"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v6-event-class-routing"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -291,6 +296,7 @@ def fact_change_contract(
     """Build the auditable routing contract carried by a reasoning event."""
     clean_types = sorted({str(value or "").strip() for value in fact_types or [] if str(value or "").strip()})
     by_symbol = {}
+    event_classes_by_symbol = {}
     dependency_keys_by_symbol = {}
     dependency_keys_complete_by_symbol = {}
     unclassified_by_symbol = {}
@@ -308,6 +314,12 @@ def fact_change_contract(
         unknown = unclassified_fact_types(symbol_types)
         if families:
             by_symbol[symbol] = families
+        symbol_event_classes = event_change_classes(
+            families,
+            raw_changed_fields.get(symbol, []),
+        )
+        if symbol_event_classes:
+            event_classes_by_symbol[symbol] = symbol_event_classes
         symbol_contract = _symbol_dependency_contract(
             symbol_types,
             raw_changed_fields.get(symbol, []),
@@ -332,6 +344,12 @@ def fact_change_contract(
         "factTypes": clean_types,
         "scopeFamilies": scope_families_for_fact_types(clean_types),
         "scopeFamiliesBySymbol": by_symbol,
+        "eventChangeClassVersion": EVENT_CHANGE_CLASS_VERSION,
+        "eventClasses": event_change_classes(
+            scope_families_for_fact_types(clean_types),
+            [field for values in raw_changed_fields.values() for field in values],
+        ),
+        "eventClassesBySymbol": event_classes_by_symbol,
         "dependencyKeys": sorted(global_dependency_keys),
         "dependencyKeysBySymbol": dependency_keys_by_symbol,
         "dependencyKeysComplete": dependency_keys_complete,

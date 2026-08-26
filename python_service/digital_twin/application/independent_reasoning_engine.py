@@ -239,6 +239,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("worldPartitionedReasoning"), Mapping)
         else {}
     )
+    performance = (
+        values.get("performanceAssessment")
+        if isinstance(values.get("performanceAssessment"), Mapping)
+        else {}
+    )
     model_signal_bridge_execution = (
         values.get("modelSignalBridgeExecution")
         if isinstance(values.get("modelSignalBridgeExecution"), Mapping)
@@ -291,6 +296,23 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
             "runId": str(audit.get("runId") or ""),
             "activeAboxSnapshotId": str(audit.get("activeAboxSnapshotId") or ""),
         },
+        "performanceAssessment": {
+            "version": str(performance.get("version") or ""),
+            "status": str(performance.get("status") or ""),
+            "withinBudget": bool(performance.get("withinBudget", True)),
+            "bottleneckStage": str(performance.get("bottleneckStage") or ""),
+            "bottleneckRatio": float(performance.get("bottleneckRatio") or 0),
+            "violations": [
+                {
+                    "stage": str(item.get("stage") or ""),
+                    "durationMs": int(item.get("durationMs") or 0),
+                    "budgetMs": int(item.get("budgetMs") or 0),
+                    "ratio": float(item.get("ratio") or 0),
+                }
+                for item in performance.get("violations") or []
+                if isinstance(item, Mapping)
+            ][:12],
+        },
         "sharedInstrumentInference": {
             "contractVersion": str(shared.get("contractVersion") or ""),
             "executionMode": str(shared.get("executionMode") or ""),
@@ -321,6 +343,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                     "activationLifecycle", "requestedSymbols",
                     "evaluatedSymbols", "notEvaluatedSymbols",
                     "targetCoverageComplete", "existingInferenceReuseMode",
+                    "performanceAssessment",
                 ]
                 if key in shared_execution
             },
@@ -358,6 +381,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                 "recommendedRetryAfterSeconds", "worldId",
                 "projectionStatus", "executionStatus", "inferenceStatus",
                 "generationVector", "activationLifecycle", "runtimeStages",
+                "performanceAssessment",
             ]
             if key in partitioned_reasoning
         },
@@ -922,6 +946,8 @@ class ScopedTypeDBInferenceExecutor:
                             "candidateRuleCount", "executedRuleCount",
                             "deferredRuleCount", "fullRuleCount",
                             "generationReused", "reuseMode",
+                            "coverageComplete", "partialCatalogProof",
+                            "incompleteSymbols", "coldTargetSymbols",
                         ]
                         if key in premise_selection
                     },
@@ -940,6 +966,9 @@ class ScopedTypeDBInferenceExecutor:
                         ).items()
                         if isinstance(value, (int, float))
                     },
+                    "performanceAssessment": dict(
+                        premise_proof.get("performanceAssessment") or {}
+                    ),
                     "dynamicInferencePreflight": {
                         key: (
                             list(value)

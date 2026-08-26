@@ -10,6 +10,11 @@ from .ontology_change_impact import (
     rule_dependency_profile,
 )
 from .ontology_rule_execution_policy import rule_execution_profile
+from .ontology_execution_units import (
+    EXECUTION_GRAINS,
+    RULE_EXECUTION_UNIT_VERSION,
+    rule_execution_unit,
+)
 from .ontology_rule_knowledge import resolved_rule_knowledge_basis
 from .ontology_rule_ownership import validate_rule_ownership
 from .statistical_signals.rule_contracts import (
@@ -18,7 +23,7 @@ from .statistical_signals.rule_contracts import (
 )
 
 
-ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v7-model-input-routing"
+ONTOLOGY_RULE_MANIFEST_VERSION = "ontology-rule-domain-manifest-v8-execution-unit"
 RULE_DEPENDENCY_CONTRACT_VERSION = "ontology-rule-dependency-contract-v3"
 RULE_DEPENDENCY_INDEX_VERSION = "ontology-rule-dependency-index-v2"
 
@@ -350,6 +355,12 @@ def rule_domain_manifest(
     world_scope = "mixed" if any(value.startswith("macro") for value in families) else "portfolio"
     if families and all(value.startswith("macro") for value in families):
         world_scope = "market"
+    execution_unit = rule_execution_unit(
+        rule,
+        families=families,
+        module=module,
+        assessment_scope=assessment_scope,
+    )
     return {
         "version": ONTOLOGY_RULE_MANIFEST_VERSION,
         "ruleId": rule_id,
@@ -376,6 +387,13 @@ def rule_domain_manifest(
         "requiredProvenance": ["source", "observedAt"],
         "policyKeys": policy_keys,
         "worldScope": world_scope,
+        "executionUnit": execution_unit,
+        "executionUnitVersion": RULE_EXECUTION_UNIT_VERSION,
+        "evaluationGrain": execution_unit["evaluationGrain"],
+        "ownerWorld": execution_unit["ownerWorld"],
+        "triggerEventClasses": execution_unit["triggerEventClasses"],
+        "executionCadence": execution_unit["cadence"],
+        "incrementalEligible": execution_unit["incrementalEligible"],
         "decisionStages": stages,
         "decisionEffects": effects,
         "outputContract": assessment_output_contract(assessment_scope, effects),
@@ -431,6 +449,10 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         or not item.get("requiredContext")
         or not item.get("invalidationContract")
         or not item.get("derivedOutputs")
+        or item.get("executionUnitVersion") != RULE_EXECUTION_UNIT_VERSION
+        or item.get("evaluationGrain") not in EXECUTION_GRAINS
+        or not item.get("ownerWorld")
+        or not item.get("executionCadence")
         or item.get("dependencyContractVersion") != RULE_DEPENDENCY_CONTRACT_VERSION
         or not item.get("knowledgeBasis")
         or not item.get("owner")
@@ -477,6 +499,8 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
         "triggerByFamily": {},
         "invalidationByFamily": {},
         "contextByFamily": {},
+        "triggerByEventClass": {},
+        "rulesByEvaluationGrain": {},
     }
 
     def add(index_name: str, key: object, rule_id: str) -> None:
@@ -489,6 +513,9 @@ def rule_dependency_reverse_index(rules: Iterable[object]) -> Dict[str, object]:
 
     for manifest in manifests:
         rule_id = str(manifest.get("ruleId") or "").strip()
+        for event_class in manifest.get("triggerEventClasses") or []:
+            add("triggerByEventClass", event_class, rule_id)
+        add("rulesByEvaluationGrain", manifest.get("evaluationGrain"), rule_id)
         for condition in manifest.get("requiredContext") or []:
             dependency_keys = list(condition.get("dependencyKeys") or [])
             families = list(condition.get("scopeFamilies") or [])

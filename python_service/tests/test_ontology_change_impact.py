@@ -180,6 +180,27 @@ class OntologyChangeImpactTests(unittest.TestCase):
         self.assertFalse(plan["sharedReuseEligible"])
         self.assertGreater(plan["candidateRuleCount"], 0)
 
+    def test_dynamic_preflight_uses_exact_dependency_alias_when_catalog_knows_it(self):
+        partition = compile_world_partitioned_rules(
+            default_graph_inference_rules()
+        )
+
+        plan = build_dynamic_inference_preflight(
+            rules=partition["sharedRules"],
+            target_symbols=["005930"],
+            requested_fact_families=["market"],
+            requested_dependency_keys=["kind:stock:field:ma20distance"],
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertTrue(plan["exactDependencyRoutingUsed"])
+        self.assertGreater(plan["candidateRuleCount"], 0)
+        self.assertLess(
+            plan["candidateRuleCount"], plan["familyCandidateRuleCount"],
+        )
+
     def test_company_valuation_event_does_not_reopen_unrelated_company_rule_families(self):
         rules = default_graph_inference_rules()
         plan = build_inference_impact_plan(

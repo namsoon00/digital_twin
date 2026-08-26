@@ -485,22 +485,25 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         }
         stamp = utc_now()
         with self.transaction() as connection:
-            self._upsert_rule_result_slots_with_connection(
+            written_slot_count = self._upsert_rule_result_slots_with_connection(
                 connection,
                 run,
                 result,
                 trace,
                 stamp,
             )
+        expected_slot_count = len(target_symbols) * len(catalog)
+        saved = written_slot_count == expected_slot_count
         return {
-            "status": "ok",
-            "saved": True,
+            "status": "ok" if saved else "skipped-incomplete-result-slot-write",
+            "saved": saved,
             "worldId": str(world_id or ""),
             "inferenceGenerationId": generation_id,
             "sourceAboxSnapshotId": source_abox_id,
             "symbolCount": len(target_symbols),
             "catalogRuleCount": len(catalog),
-            "slotCount": len(target_symbols) * len(catalog),
+            "slotCount": written_slot_count,
+            "expectedSlotCount": expected_slot_count,
             "selectionApplied": bool(
                 execution_values.get("nativeRuleSelectionApplied")
             ),
@@ -623,7 +626,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         result: Mapping[str, object],
         trace: Mapping[str, object],
         stamp: str,
-    ) -> None:
+    ) -> int:
         """Persist one coherent full-catalog proof for every target symbol.
 
         Incremental TypeDB execution may evaluate only changed rules. The
@@ -660,7 +663,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or not slot_rulebox_rules_hash
             or not str(run.tbox_fingerprint or "").strip()
         ):
-            return
+            return 0
         catalog_rule_ids = sorted({
             str(rule_id or "").strip()
             for rule_id in result.get("_ruleResultSlotCatalogRuleIds") or []
@@ -672,13 +675,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             int(execution.get("nativeRuleSelectionFullRuleCount") or 0),
         )
         if not catalog_rule_count or reported_rule_count != catalog_rule_count:
-            return
+            return 0
         namespace_id = str(run.execution_namespace_id or "").strip()
         deployment_id = str(run.engine_deployment_id or "").strip()
         graph_database = str(run.graph_database or "").strip()
         release_fingerprint = str(run.release_fingerprint or "").strip()
         if not all([namespace_id, deployment_id, graph_database, release_fingerprint]):
-            return
+            return 0
         proof = (
             dict(result.get("inferenceReuseProof") or {})
             if isinstance(result.get("inferenceReuseProof"), Mapping)
@@ -711,14 +714,14 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or ""
         ).strip()
         if not source_abox_snapshot_id or not scope_fingerprint:
-            return
+            return 0
         targets = sorted({
             str(symbol or "").upper().strip()
             for symbol in run.source_symbols or []
             if str(symbol or "").strip()
         })
         if not targets:
-            return
+            return 0
         prior_states = (
             dict(result.get("_priorRuleStatesBySymbol") or {})
             if isinstance(result.get("_priorRuleStatesBySymbol"), Mapping)
@@ -726,15 +729,21 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         )
         inherit_prior_generation = bool(prior_states)
         states_by_symbol: Dict[str, Dict[str, bool]] = {}
+        missing_prior_rule_ids_by_symbol: Dict[str, set] = {}
         for symbol in targets:
             previous = prior_states.get(symbol)
             previous = dict(previous or {}) if isinstance(previous, Mapping) else {}
-            if inherit_prior_generation and set(previous) != set(catalog_rule_ids):
-                return
+            if inherit_prior_generation and not set(previous).issubset(catalog_rule_ids):
+                return 0
+            missing_prior_rule_ids_by_symbol[symbol] = (
+                set(catalog_rule_ids) - set(previous)
+                if inherit_prior_generation
+                else set()
+            )
             states_by_symbol[symbol] = {
                 rule_id: (
                     str(previous.get(rule_id) or "").strip().lower() == "matched"
-                    if inherit_prior_generation
+                    if inherit_prior_generation and rule_id in previous
                     else False
                 )
                 for rule_id in catalog_rule_ids
@@ -754,7 +763,14 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             if str(rule_id or "").strip() in states_by_symbol[targets[0]]
         }
         if not executed_rule_ids:
-            return
+            return 0
+        if inherit_prior_generation and any(
+            missing_rule_ids - executed_rule_ids
+            for missing_rule_ids in missing_prior_rule_ids_by_symbol.values()
+        ):
+            # Never manufacture a not-matched slot for a rule absent from both
+            # the predecessor proof and the current native TypeDB execution.
+            return 0
         for states in states_by_symbol.values():
             for rule_id in executed_rule_ids:
                 states[rule_id] = False
@@ -804,7 +820,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         )
         unresolved_match_rule_ids.difference_update(precise_matches)
         if len(targets) > 1 and unresolved_match_rule_ids:
-            return
+            return 0
         for rule_id in matched_rule_ids.difference(precise_matches):
             if any(states[rule_id] for states in states_by_symbol.values()):
                 continue
@@ -884,6 +900,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             """,
             slot_rows,
         )
+        return len(slot_rows)
 
     def active_rule_result_slot_context(
         self,
@@ -897,6 +914,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         engine_deployment_id: str = "",
         graph_database: str = "",
         release_fingerprint: str = "",
+        catalog_rule_ids: List[str] = None,
     ) -> Dict[str, object]:
         """Return prior matches only from one coherent generation per target."""
         targets = sorted({
@@ -905,6 +923,18 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             if str(symbol or "").strip()
         })
         expected = max(0, int(expected_rule_count or 0))
+        catalog = sorted({
+            str(rule_id or "").strip()
+            for rule_id in catalog_rule_ids or []
+            if str(rule_id or "").strip()
+        })
+        if catalog and len(catalog) != expected:
+            return {
+                "reusable": False,
+                "reason": "result-slot-catalog-request-mismatch",
+                "expectedRuleCount": expected,
+                "catalogRuleCount": len(catalog),
+            }
         if (
             not str(world_id or "").strip()
             or not str(execution_namespace_id or "").strip()
@@ -991,6 +1021,95 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             or catalog_counts_by_symbol[symbol] != {expected}
         ]
         if incomplete:
+            # One batch may contain a fully warmed symbol and a newly tracked
+            # symbol.  Existing per-rule outcomes are still a coherent proof;
+            # execute every missing rule for the cold symbols and reconcile a
+            # new full generation.  Without the explicit catalog identity we
+            # retain the conservative legacy response.
+            unexpected = {
+                symbol: sorted(set(states) - set(catalog))
+                for symbol, states in by_symbol.items()
+                if set(states) - set(catalog)
+            } if catalog else {}
+            present_provenance_incoherent = [
+                symbol
+                for symbol, provenance in provenance_by_symbol.items()
+                if by_symbol[symbol]
+                and (len(provenance) != 1 or not all(next(iter(provenance), ())))
+            ]
+            present_revision_incoherent = [
+                symbol
+                for symbol, revisions in revision_vectors_by_symbol.items()
+                if len(revisions) > 1
+            ]
+            if (
+                catalog
+                and not unexpected
+                and not present_provenance_incoherent
+                and not present_revision_incoherent
+            ):
+                missing_by_symbol = {
+                    symbol: sorted(set(catalog) - set(states))
+                    for symbol, states in by_symbol.items()
+                    if set(catalog) - set(states)
+                }
+                missing_rule_ids = sorted({
+                    rule_id
+                    for values in missing_by_symbol.values()
+                    for rule_id in values
+                })
+                matched_rule_ids = sorted({
+                    rule_id
+                    for states in by_symbol.values()
+                    for rule_id, matched in states.items()
+                    if matched
+                })
+                return {
+                    "reusable": True,
+                    "selectionReusable": True,
+                    "fullGenerationReusable": False,
+                    "coverageComplete": False,
+                    "partialCatalogProof": True,
+                    "proofSource": "typedb-rule-result-slots",
+                    "reason": "result-slot-catalog-coverage-partial",
+                    "expectedRuleCount": expected,
+                    "coveredRuleCountBySymbol": {
+                        symbol: len(states)
+                        for symbol, states in by_symbol.items()
+                    },
+                    "incompleteSymbols": incomplete,
+                    "missingRuleIdsBySymbol": missing_by_symbol,
+                    "candidateRuleIds": missing_rule_ids,
+                    "matchedRuleIds": matched_rule_ids,
+                    "matchedRuleCount": len(matched_rule_ids),
+                    "ruleStatesBySymbol": {
+                        symbol: {
+                            rule_id: "matched" if matched else "not-matched"
+                            for rule_id, matched in sorted(states.items())
+                        }
+                        for symbol, states in sorted(by_symbol.items())
+                    },
+                    "revisionVectorsBySymbol": {
+                        symbol: dict(_json_loads(next(iter(revisions)), {}) or {})
+                        for symbol, revisions in sorted(revision_vectors_by_symbol.items())
+                        if len(revisions) == 1
+                    },
+                    "revisionVectorCoverageCompleteBySymbol": {
+                        symbol: bool(
+                            by_symbol[symbol]
+                            and revision_vector_counts_by_symbol.get(symbol) == len(by_symbol[symbol])
+                            and len(revision_vectors_by_symbol.get(symbol) or set()) == 1
+                        )
+                        for symbol in targets
+                    },
+                    "reusedTargetSymbols": [
+                        symbol for symbol in targets if by_symbol[symbol]
+                    ],
+                    "coldTargetSymbols": [
+                        symbol for symbol in targets if not by_symbol[symbol]
+                    ],
+                    "executionNamespaceId": str(execution_namespace_id or ""),
+                }
             return {
                 "reusable": False,
                 "proofSource": "typedb-rule-result-slots",
@@ -1037,8 +1156,13 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             for rule_id, matched in states.items()
             if matched
         })
+        full_generation_reusable = len(set(provenances.values())) == 1
         return {
             "reusable": True,
+            "selectionReusable": True,
+            "fullGenerationReusable": full_generation_reusable,
+            "coverageComplete": True,
+            "partialCatalogProof": False,
             "proofSource": "typedb-rule-result-slots",
             "matchedRuleIds": matched_rule_ids,
             "matchedRuleCount": len(matched_rule_ids),

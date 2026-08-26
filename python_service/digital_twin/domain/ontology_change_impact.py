@@ -1088,12 +1088,11 @@ def build_dynamic_inference_preflight(
         and event_dependency_boundary_authoritative
         and event_dependency_keys
     )
-    # Before graph assembly, a source field can still create or change a
-    # derived ABox object whose dependency key is not present in the ingress
-    # event.  Limit early omission to family-disjoint rules.  Exact dependency
-    # selection remains available after projection, where the materialized
-    # ABox delta is known.
-    candidate_profiles = [
+    # A v6 fact-change contract declares both the source field and every ABox
+    # dependency alias it can materialize.  When that boundary is complete we
+    # may select the exact TypeDB functions before graph assembly.  Older or
+    # incomplete events retain the conservative family-level path.
+    family_candidate_profiles = [
         profile
         for profile in profiles
         if _rule_may_depend_on(
@@ -1104,6 +1103,28 @@ def build_dynamic_inference_preflight(
             capability="either",
         )
     ] if provenance_complete else list(profiles)
+    exact_candidate_profiles = [
+        profile
+        for profile in family_candidate_profiles
+        if _rule_may_depend_on(
+            profile,
+            event_families,
+            event_dependency_keys,
+            True,
+            capability="either",
+        )
+    ] if dependency_complete else []
+    # An exact key that cannot be mapped to any active manifest may come from
+    # a rolling deployment where the event producer is newer than RuleBox.
+    # Fall back to the family boundary instead of incorrectly proving a no-op.
+    dependency_routing_used = bool(
+        dependency_complete and exact_candidate_profiles
+    )
+    candidate_profiles = (
+        exact_candidate_profiles
+        if dependency_routing_used
+        else family_candidate_profiles
+    )
     candidate_rule_ids = sorted({
         _clean(profile.get("ruleId"))
         for profile in candidate_profiles
@@ -1159,6 +1180,8 @@ def build_dynamic_inference_preflight(
         "requestedDependencyKeys": sorted(event_dependency_keys),
         "candidateRuleIds": candidate_rule_ids,
         "candidateRuleCount": len(candidate_rule_ids),
+        "familyCandidateRuleCount": len(family_candidate_profiles),
+        "exactDependencyRoutingUsed": dependency_routing_used,
         "sharedRuleCount": len(profiles),
         "exactRevisionMatch": exact_revision_match,
         "priorResultSlotsReusable": bool(prior_result_slots_reusable),

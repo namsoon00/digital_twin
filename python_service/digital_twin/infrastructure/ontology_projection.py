@@ -35,6 +35,7 @@ from ..domain.ontology_change_impact import (
     compact_inference_impact_plan,
 )
 from ..domain.ontology_world_routing import route_world_impact
+from ..domain.ontology_performance_contract import ontology_performance_assessment
 from ..domain.ontology_projection_fingerprint import (
     active_material_fingerprint,
     apply_material_graph_identity,
@@ -250,6 +251,9 @@ def shared_inference_from_result_slot_proof(
     if not (
         requested
         and bool((selection_context or {}).get("reusable"))
+        and bool((selection_context or {}).get("coverageComplete", True))
+        and not bool((selection_context or {}).get("partialCatalogProof"))
+        and bool((selection_context or {}).get("fullGenerationReusable", True))
         and str((recovery_metadata or {}).get("status") or "") == "ok"
         and bool((recovery_metadata or {}).get("nativeTypeDbReasoningCompleted"))
         and active_id
@@ -258,6 +262,11 @@ def shared_inference_from_result_slot_proof(
         and generation_id == slot_generation_id
         and set(requested).issubset(evaluated)
         and all(symbol in states_by_symbol for symbol in requested)
+        and all(
+            len(states_by_symbol.get(symbol) or {})
+            == int((selection_context or {}).get("expectedRuleCount") or 0)
+            for symbol in requested
+        )
     ):
         return {}
     traces = []
@@ -1496,6 +1505,12 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages["totalMs"] = int(
             (time.perf_counter() - started_at) * 1000
         )
+        performance_assessment = ontology_performance_assessment(
+            runtime_stages,
+            self.settings.get("ontologyPerformanceBudgetsMs")
+            if isinstance(self.settings.get("ontologyPerformanceBudgetsMs"), dict)
+            else None,
+        )
         full_rule_count = int(
             selection_context.get("expectedRuleCount")
             or len(shared_rule_ids)
@@ -1576,6 +1591,7 @@ class PortfolioOntologyProjectionRecorder:
                 ),
             },
             "runtimeStages": runtime_stages,
+            "performanceAssessment": performance_assessment,
             "releaseCatalog": {
                 "source": str(
                     catalog.get("runtimeCatalogSource")
@@ -1838,6 +1854,7 @@ class PortfolioOntologyProjectionRecorder:
                         namespace.get("engineDeploymentId") or ""
                     ),
                     graph_database=str(namespace.get("graphDatabase") or ""),
+                    catalog_rule_ids=shared_rule_ids,
                 ) or {})
             except Exception as error:
                 selection_context = {
@@ -1890,6 +1907,8 @@ class PortfolioOntologyProjectionRecorder:
             ),
             prior_result_slots_reusable=bool(
                 selection_context.get("reusable")
+                and selection_context.get("coverageComplete", True)
+                and selection_context.get("fullGenerationReusable", True)
             ),
         )
         runtime_stages["dynamicPreflightMs"] = int(
@@ -2131,6 +2150,44 @@ class PortfolioOntologyProjectionRecorder:
                 "shared-premise",
             )
         )
+        missing_slot_rule_ids = {
+            str(rule_id or "").strip()
+            for rule_id in selection_context.get("candidateRuleIds") or []
+            if str(rule_id or "").strip()
+        }
+        if bool(selection_context.get("reusable")) and missing_slot_rule_ids:
+            enabled_ids = [
+                str(rule_id or "").strip()
+                for rule_id in shared_rule_ids
+                if str(rule_id or "").strip()
+            ]
+            candidates = {
+                str(rule_id or "").strip()
+                for rule_id in shared_impact_plan.get("candidateRuleIds") or []
+                if str(rule_id or "").strip()
+            } | missing_slot_rule_ids
+            candidates.intersection_update(enabled_ids)
+            shared_impact_plan.update({
+                "candidateRuleIds": [
+                    rule_id for rule_id in enabled_ids if rule_id in candidates
+                ],
+                "deferredRuleIds": [
+                    rule_id for rule_id in enabled_ids if rule_id not in candidates
+                ],
+                "candidateRuleCount": len(candidates),
+                "enabledRuleCount": len(enabled_ids),
+                "nativeRuleSelectionEligible": True,
+                "nativeRuleSelectionEligibilityReason": (
+                    "partial-result-slot-catalog-reconciliation"
+                ),
+                "partialResultSlotReconciliation": {
+                    "enabled": True,
+                    "missingRuleCount": len(missing_slot_rule_ids),
+                    "incompleteSymbols": list(
+                        selection_context.get("incompleteSymbols") or []
+                    ),
+                },
+            })
         runtime_stages["impactPlanningMs"] = int(
             (time.perf_counter() - stage_started) * 1000
         )
@@ -2455,6 +2512,18 @@ class PortfolioOntologyProjectionRecorder:
                 ),
                 "fullRuleCount": int(
                     execution.get("nativeRuleSelectionFullRuleCount") or 0
+                ),
+                "coverageComplete": bool(
+                    selection_context.get("coverageComplete", True)
+                ),
+                "partialCatalogProof": bool(
+                    selection_context.get("partialCatalogProof")
+                ),
+                "incompleteSymbols": list(
+                    selection_context.get("incompleteSymbols") or []
+                ),
+                "coldTargetSymbols": list(
+                    selection_context.get("coldTargetSymbols") or []
                 ),
             },
             "resultSlotWrite": result_slot_write,
@@ -3427,7 +3496,14 @@ class PortfolioOntologyProjectionRecorder:
             )
             compact_impact_plan = compact_inference_impact_plan(inference_impact_plan)
             world_impact_route = route_world_impact(
-                compact_impact_plan,
+                {
+                    **compact_impact_plan,
+                    "portfolioWorldId": portfolio_world_context.world_id,
+                    "sharedPremiseWorldId": shared_premise_world(
+                        portfolio_world_context.market_id,
+                        self.settings.get("ontologySharedMarketTenantId") or "shared",
+                    ).world_id,
+                },
                 initial_projection=not bool(active_abox.get("aboxSnapshotId")),
             )
             explicit_inference_symbols = (
@@ -3451,6 +3527,18 @@ class PortfolioOntologyProjectionRecorder:
                 "impact_planning.done",
                 targetSymbolCount=len(inference_symbols or []),
                 runtimeMs=runtime_stages["impactPlanningMs"],
+                worldPartitions={
+                    key: value
+                    for key, value in dict(
+                        world_impact_route.get("partitions") or {}
+                    ).items()
+                    if key != "version"
+                },
+                durableHandoffWorkItemCount=len(
+                    (world_impact_route.get("durableHandoff") or {}).get(
+                        "workItems", []
+                    )
+                ),
             )
             persistence_graph.worldview["scopeDelta"] = dict(compact_impact_plan.get("scopeDelta") or {})
             persistence_graph.worldview["inferenceImpactPlan"] = compact_impact_plan
@@ -3823,6 +3911,17 @@ class PortfolioOntologyProjectionRecorder:
             emit_progress("error", status="error", reason=str(error)[:180])
         runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
         result.setdefault("runtimeStages", runtime_stages)
+        result.setdefault(
+            "performanceAssessment",
+            ontology_performance_assessment(
+                runtime_stages,
+                self.settings.get("ontologyPerformanceBudgetsMs")
+                if isinstance(
+                    self.settings.get("ontologyPerformanceBudgetsMs"), dict
+                )
+                else None,
+            ),
+        )
         self.store_projection_result(snapshot, result, projection_run)
         emit_progress(
             "completed",

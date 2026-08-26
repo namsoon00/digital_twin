@@ -12,7 +12,7 @@ import json
 from typing import Dict, Iterable, List, Mapping
 
 
-ONTOLOGY_EXECUTION_TRACE_VERSION = "ontology-execution-trace-v2"
+ONTOLOGY_EXECUTION_TRACE_VERSION = "ontology-execution-trace-v3-performance-contract"
 TRACE_RETENTION_DAYS = 30
 ALERT_READ_SET_RETENTION_DAYS = 180
 
@@ -102,6 +102,12 @@ def reasoning_stage_records(
     completed_at = _text(_run_value(run, "completed_at"))
     source_symbols = _symbols(_run_value(run, "source_symbols", []))
     runtime_stages = _mapping(values.get("runtimeStages"))
+    performance = _mapping(values.get("performanceAssessment"))
+    performance_stages = {
+        _text(item.get("stage")): dict(item)
+        for item in performance.get("stages") or []
+        if isinstance(item, Mapping) and _text(item.get("stage"))
+    }
     inference_generation_id = _text(
         _mapping(values.get("inferenceBox")).get("inferenceGenerationId")
         or _run_value(run, "inference_generation_id")
@@ -203,7 +209,34 @@ def reasoning_stage_records(
             "runtime:" + stage_key,
             _semantic_stage_status(stage_key, values),
             raw_duration,
-            {"runtimeMetric": stage_key},
+            {
+                "runtimeMetric": stage_key,
+                **(
+                    {
+                        "budgetMs": _integer(performance_stages[stage_key].get("budgetMs")),
+                        "ratio": float(performance_stages[stage_key].get("ratio") or 0),
+                        "withinBudget": bool(performance_stages[stage_key].get("withinBudget")),
+                    }
+                    if stage_key in performance_stages
+                    else {}
+                ),
+            },
+        )
+    if performance:
+        add(
+            "performance-contract",
+            _text(performance.get("status")) or "unknown",
+            detail={
+                "version": _text(performance.get("version")),
+                "withinBudget": bool(performance.get("withinBudget")),
+                "bottleneckStage": _text(performance.get("bottleneckStage")),
+                "bottleneckRatio": float(performance.get("bottleneckRatio") or 0),
+                "violations": [
+                    dict(item)
+                    for item in performance.get("violations") or []
+                    if isinstance(item, Mapping)
+                ][:12],
+            },
         )
 
     execution = _mapping(values.get("ruleboxExecution"))

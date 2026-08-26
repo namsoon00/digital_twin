@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
+from .ontology_execution_units import revision_vector_for_change
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
@@ -569,11 +570,27 @@ def independent_reasoning_request(
         for symbol, vector in dict(payload.get("revisionVectorsBySymbol") or {}).items():
             clean_symbol = str(symbol or "").upper().strip()
             if clean_symbol and isinstance(vector, Mapping):
-                revision_vectors_by_symbol[clean_symbol] = {
+                revision_vectors_by_symbol.setdefault(clean_symbol, {}).update({
                     str(key or "").strip(): str(value or "").strip()
                     for key, value in vector.items()
                     if str(key or "").strip() and str(value or "").strip()
-                }
+                })
+        raw_event_revisions = {
+            str(symbol or "").upper().strip(): str(revision or "").strip()
+            for symbol, revision in dict(
+                payload.get("factRevisionsBySymbol") or {}
+            ).items()
+            if str(symbol or "").strip() and str(revision or "").strip()
+        }
+        for symbol in event_symbols:
+            synthesized_vector = revision_vector_for_change(
+                raw_event_revisions.get(symbol),
+                contract_by_symbol.get(symbol) or families,
+                (payload.get("changedFieldsBySymbol") or {}).get(symbol) or [],
+            )
+            current_vector = revision_vectors_by_symbol.setdefault(symbol, {})
+            for key, value in synthesized_vector.items():
+                current_vector.setdefault(key, value)
         fact_change_contracts.append({
             "requestEventId": str(event.event_id or ""),
             "version": str(contract.get("version") or ""),

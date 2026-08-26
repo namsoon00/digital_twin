@@ -26,6 +26,7 @@ from typing import Dict, Mapping
 
 
 ONTOLOGY_WORLD_VERSION = "ontology-world-v1"
+ONTOLOGY_WORLD_PARTITION_VERSION = "ontology-world-partition-v1"
 DEFAULT_TENANT_ID = "local"
 SHARED_MARKET_TENANT_ID = "shared"
 MARKET_WORLD_TYPE = "market"
@@ -65,6 +66,26 @@ def knowledge_world_id(market_id: object = "global", tenant_id: object = SHARED_
 
 def shared_premise_world_id(market_id: object = "global", tenant_id: object = SHARED_MARKET_TENANT_ID) -> str:
     return "premise:" + normalize_tenant_id(tenant_id or SHARED_MARKET_TENANT_ID) + ":" + normalize_market_id(market_id)
+
+
+def instrument_premise_partition_id(world_id: object, symbol: object) -> str:
+    return ":".join([
+        str(world_id or "premise:shared:global").strip(),
+        "instrument",
+        _clean(symbol, "unknown").upper(),
+    ])
+
+
+def macro_context_partition_id(world_id: object, family: object = "macro") -> str:
+    return ":".join([
+        str(world_id or "premise:shared:global").strip(),
+        "macro",
+        _clean(family, "macro"),
+    ])
+
+
+def account_overlay_partition_id(world_id: object) -> str:
+    return str(world_id or "portfolio:local:default").strip() + ":account-overlay"
 
 
 def world_type_from_id(world_id: object) -> str:

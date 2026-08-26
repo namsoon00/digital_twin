@@ -134,6 +134,27 @@ class OntologyExecutionTraceTests(unittest.TestCase):
         result = {
             "status": "ok",
             "runtimeStages": {"graphAssemblyMs": 1200, "nativeInferenceMs": 9500},
+            "performanceAssessment": {
+                "version": "ontology-performance-contract-v1",
+                "status": "degraded",
+                "withinBudget": False,
+                "bottleneckStage": "nativeInferenceMs",
+                "bottleneckRatio": 1.2,
+                "stages": [{
+                    "stage": "nativeInferenceMs",
+                    "durationMs": 9500,
+                    "budgetMs": 8000,
+                    "ratio": 1.1875,
+                    "withinBudget": False,
+                }],
+                "violations": [{
+                    "stage": "nativeInferenceMs",
+                    "durationMs": 9500,
+                    "budgetMs": 8000,
+                    "ratio": 1.1875,
+                    "withinBudget": False,
+                }],
+            },
             "projectionScope": {
                 "targetScopedManifestPatch": {
                     "status": "applied",
@@ -238,6 +259,18 @@ class OntologyExecutionTraceTests(unittest.TestCase):
             if item["stageKey"] == "abox-scope-selection"
         )
         self.assertEqual("applied", scope_stage["status"])
+        runtime_stage = next(
+            item for item in trace["stages"]
+            if item["stageKey"] == "runtime:nativeInferenceMs"
+        )
+        self.assertEqual(8000, runtime_stage["detail"]["budgetMs"])
+        self.assertFalse(runtime_stage["detail"]["withinBudget"])
+        performance_stage = next(
+            item for item in trace["stages"]
+            if item["stageKey"] == "performance-contract"
+        )
+        self.assertEqual("degraded", performance_stage["status"])
+        self.assertEqual("nativeInferenceMs", performance_stage["detail"]["bottleneckStage"])
         self.assertEqual(1, scope_stage["detail"]["selectedScopeCount"])
         self.assertEqual(
             "symbol:035420:market",

@@ -2355,6 +2355,9 @@ def build_v2_reasoning_job_runner(
             role=role,
             deployment_id=selected_deployment_id,
             lock_directory=data_dir() / "graph-writer-locks",
+            graph_address=str(
+                configured.get("typedbAddress") or "127.0.0.1:1729"
+            ).strip(),
         )
         if single_writer
         else None

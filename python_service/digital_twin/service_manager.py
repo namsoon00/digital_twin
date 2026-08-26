@@ -1485,6 +1485,7 @@ def record_typedb_auto_rotation_incident(
     spec: Dict[str, object],
     decision: Dict[str, object],
     alert_kind: str = "typedb-auto-rotation",
+    failure_reason: str = "",
 ) -> Dict[str, object]:
     """Page the operator once before a supervisor-owned graph rebuild.
 
@@ -1499,6 +1500,8 @@ def record_typedb_auto_rotation_incident(
 
         settings = runtime_settings(fast_operational_read=True)
         snapshot = operational_storage_inventory(settings)
+        if str(failure_reason or "").strip():
+            snapshot["maintenanceFailureReason"] = str(failure_reason).strip()[:300]
         health = observe_operational_storage_capacity(
             settings,
             snapshot=snapshot,
@@ -1563,7 +1566,7 @@ def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str,
         "validatedReleaseContracts": dict(source.get("validatedReleaseContracts") or {}),
         "validatedSeedContracts": seed_contracts,
     }
-    for key in ("seedContract", "releaseContract", "inferenceReadiness"):
+    for key in ("seedContract", "releaseContract", "inferenceReadiness", "seedFailure"):
         if isinstance(source.get(key), dict):
             summary[key] = dict(source.get(key) or {})
     return summary
@@ -2274,6 +2277,7 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
         command = typedb_seed_command(spec)
         timeout_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1)
         attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
+        spec.pop("_typedbSeedFailure", None)
         for attempt in range(1, attempts + 1):
             append_log(spec["log"], "seed start attempt=" + str(attempt))
             print(str(spec["label"]) + " seeding ontology RuleBox. attempt=" + str(attempt))
@@ -2289,6 +2293,10 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
                 )
             except subprocess.TimeoutExpired as error:
                 output = (error.stdout or "") + ("\n" if error.stdout and error.stderr else "") + (error.stderr or "")
+                spec["_typedbSeedFailure"] = {
+                    "reasonCode": "candidate-seed-timeout",
+                    "reason": "후보 RuleBox 생성이 " + str(timeout_seconds) + "초 안에 끝나지 않았습니다.",
+                }
                 append_log_text(spec["log"], "seed timeout attempt=" + str(attempt), output)
                 print(str(spec["label"]) + " RuleBox seed timed out after " + str(timeout_seconds) + "s.")
             else:
@@ -2306,9 +2314,30 @@ def ensure_typedb_seeded(spec: Dict[str, object]) -> bool:
                         seed_attestation = {}
                     if isinstance(seed_attestation, dict):
                         spec["_typedbSeedAttestation"] = seed_attestation
+                    spec.pop("_typedbSeedFailure", None)
                     append_log_text(spec["log"], "seed ok attempt=" + str(attempt), output)
                     print(str(spec["label"]) + " RuleBox seed ok.")
                     return True
+                try:
+                    seed_failure = json.loads(
+                        next(
+                            line
+                            for line in reversed(str(result.stdout or "").splitlines())
+                            if str(line or "").strip().startswith("{")
+                        )
+                    )
+                except (StopIteration, TypeError, ValueError, json.JSONDecodeError):
+                    seed_failure = {}
+                if not isinstance(seed_failure, dict):
+                    seed_failure = {}
+                spec["_typedbSeedFailure"] = {
+                    **seed_failure,
+                    "reasonCode": str(seed_failure.get("reasonCode") or "candidate-seed-command-failed"),
+                    "reason": str(
+                        seed_failure.get("reason")
+                        or "후보 RuleBox 생성 명령이 종료 코드 " + str(result.returncode) + "로 실패했습니다."
+                    )[:300],
+                }
                 append_log_text(
                     spec["log"],
                     "seed failed attempt=" + str(attempt) + " exit=" + str(result.returncode),
@@ -3660,9 +3689,15 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
         for database_spec in typedb_blue_green_database_specs(candidate):
             database_name = str(database_spec.get("typedbDatabase") or "")
             if not ensure_typedb_seeded(database_spec):
+                seed_failure = dict(database_spec.get("_typedbSeedFailure") or {})
+                failure_reason = str(seed_failure.get("reason") or "").strip()
+                if str(seed_failure.get("reasonCode") or "") == "typedb-graph-writer-owned":
+                    failure_reason = "후보 TypeDB 작성자 잠금이 다른 인스턴스와 충돌했습니다."
                 return {
                     "status": "candidate-seed-failed",
+                    "reason": failure_reason or "후보 RuleBox 생성에 실패했습니다.",
                     "database": database_name,
+                    "seedFailure": seed_failure,
                     "candidate": candidate,
                 }
             seed_contract = validate_typedb_candidate_seed_contract(database_spec)
@@ -3952,6 +3987,7 @@ def typedb_rotate(
                     spec,
                     decision,
                     alert_kind="typedb-auto-rotation-failed",
+                    failure_reason=str(result.get("reason") or "candidate validation failed"),
                 )
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
@@ -4015,6 +4051,7 @@ def typedb_rotate(
                 spec,
                 decision,
                 alert_kind="typedb-auto-rotation-failed",
+                failure_reason=str(result.get("reason") or result.get("status") or "reset failed"),
             )
             if candidate_validation:
                 result["audit"] = record_typedb_rulebox_deployment_event(
@@ -4069,6 +4106,7 @@ def typedb_rotate(
                 spec,
                 decision,
                 alert_kind="typedb-auto-rotation-failed",
+                failure_reason=str(result.get("reason") or "TypeDB restart failed"),
             )
             if candidate_validation:
                 result["audit"] = record_typedb_rulebox_deployment_event(

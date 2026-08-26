@@ -109,8 +109,13 @@ class OperationalStorageCapacityService:
                 health["maintenanceState"] = "running"
                 health["maintenanceReason"] = "TypeDB 안전 재구축 후보를 준비하고 있습니다."
             elif forced_kind == "typedb-auto-rotation-failed":
+                failure_reason = str(snapshot.get("maintenanceFailureReason") or "").strip()
                 health["maintenanceState"] = "failed"
-                health["maintenanceReason"] = "후보 검증에 실패해 활성 TypeDB는 그대로 유지했습니다."
+                health["maintenanceReason"] = (
+                    "후보 검증 실패: " + failure_reason
+                    if failure_reason
+                    else "후보 검증에 실패해 활성 TypeDB는 그대로 유지했습니다."
+                )
                 health["activeStorePreserved"] = True
                 if str(health.get("state") or "healthy") == "healthy":
                     health["state"] = "warning"
@@ -212,9 +217,7 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "• MySQL 실제 점유: " + str(values.get("mysqlSizeMb") or 0) + "MB / 운영 한도 "
             + str(values.get("mysqlLimitMb") or 0) + "MB ("
             + str(values.get("mysqlUsagePercent") or 0) + "%)",
-            "• MySQL 내부 사용: 데이터·인덱스 " + str(values.get("mysqlLiveDataMb") or 0)
-            + "MB · 회수 가능 " + str(values.get("mysqlReclaimableMb") or 0)
-            + "MB · 메타데이터 " + str(values.get("mysqlMetadataStatus") or "unavailable"),
+            self._mysql_metadata_line(values),
             "• MySQL 단계: " + {
                 "normal": "정상",
                 "maintenance": "예방 정리",
@@ -304,3 +307,15 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "notificationSignals": ["operations", "storageCapacity", signal],
             "criteria": ["공용 디스크 여유", "TypeDB 저장·WAL·checkpoint 크기", "MySQL·로그 저장공간 한도"],
         }
+
+    @staticmethod
+    def _mysql_metadata_line(values: Mapping[str, object]) -> str:
+        status = str(values.get("mysqlMetadataStatus") or "unavailable")
+        if status != "available":
+            reason = str(values.get("mysqlMetadataReason") or "일시적으로 조회하지 못함")[:180]
+            return "• MySQL 내부 사용: 메타데이터 조회 실패 · 사유 " + reason
+        return (
+            "• MySQL 내부 사용: 데이터·인덱스 " + str(values.get("mysqlLiveDataMb") or 0)
+            + "MB · 회수 가능 " + str(values.get("mysqlReclaimableMb") or 0)
+            + "MB · 메타데이터 조회 정상"
+        )

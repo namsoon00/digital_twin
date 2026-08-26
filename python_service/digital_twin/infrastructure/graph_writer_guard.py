@@ -16,8 +16,20 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _normalized_graph_address(value: str) -> str:
+    address = str(value or "127.0.0.1:1729").strip().lower()
+    if address.startswith("http://"):
+        address = address[len("http://"):]
+    elif address.startswith("https://"):
+        address = address[len("https://"):]
+    address = address.rstrip("/")
+    if address.startswith("localhost:"):
+        address = "127.0.0.1:" + address.split(":", 1)[1]
+    return address or "127.0.0.1:1729"
+
+
 class LocalGraphWriterGuard:
-    """Hold one OS-released writer ownership lock per TypeDB database.
+    """Hold one OS-released writer lock per TypeDB instance and database.
 
     The lock is intentionally process-local infrastructure, not an ontology
     fact.  The operating system releases it when the process exits, so a crash
@@ -25,7 +37,7 @@ class LocalGraphWriterGuard:
     generation manifests still remain short-lived and independently audited.
     """
 
-    contract_version = "local-typedb-single-writer-v1"
+    contract_version = "local-typedb-single-writer-v2"
 
     def __init__(
         self,
@@ -33,11 +45,14 @@ class LocalGraphWriterGuard:
         role: str,
         lock_directory: Path,
         deployment_id: str = "",
+        graph_address: str = "127.0.0.1:1729",
     ):
         self.graph_database = str(graph_database or "").strip()
+        self.graph_address = _normalized_graph_address(graph_address)
         self.role = str(role or "graph-writer").strip()
         self.deployment_id = str(deployment_id or "").strip()
-        digest = hashlib.sha256(self.graph_database.encode("utf-8")).hexdigest()[:20]
+        scope = self.graph_address + "\0" + self.graph_database
+        digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:20]
         self.path = Path(lock_directory) / ("typedb-writer-" + digest + ".lock")
         self._handle = None
         self._depth = 0
@@ -73,6 +88,7 @@ class LocalGraphWriterGuard:
                 "acquired": False,
                 "status": "held-by-other-process",
                 "contractVersion": self.contract_version,
+                "graphAddress": self.graph_address,
                 "graphDatabase": self.graph_database,
                 "requestedRole": self.role,
                 "requestedDeploymentId": self.deployment_id,
@@ -84,6 +100,7 @@ class LocalGraphWriterGuard:
         self._acquired_at = _utc_now_iso()
         payload = {
             "contractVersion": self.contract_version,
+            "graphAddress": self.graph_address,
             "graphDatabase": self.graph_database,
             "role": self.role,
             "deploymentId": self.deployment_id,
@@ -109,6 +126,7 @@ class LocalGraphWriterGuard:
         try:
             payload = {
                 "contractVersion": self.contract_version,
+                "graphAddress": self.graph_address,
                 "graphDatabase": self.graph_database,
                 "role": self.role,
                 "deploymentId": self.deployment_id,
@@ -128,6 +146,7 @@ class LocalGraphWriterGuard:
     def status(self) -> Dict[str, object]:
         return {
             "contractVersion": self.contract_version,
+            "graphAddress": self.graph_address,
             "graphDatabase": self.graph_database,
             "role": self.role,
             "deploymentId": self.deployment_id,

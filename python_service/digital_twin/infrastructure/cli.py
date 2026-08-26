@@ -130,6 +130,10 @@ def run_local_graph_write(settings, role: str, operation):
         ).strip(),
         role=role,
         lock_directory=data_dir() / "graph-writer-locks",
+        graph_address=str(
+            dict(settings or {}).get("typedbAddress")
+            or "127.0.0.1:1729"
+        ).strip(),
     )
     ownership = guard.acquire()
     if not bool(ownership.get("acquired")):

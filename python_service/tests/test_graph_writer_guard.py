@@ -49,6 +49,47 @@ class LocalGraphWriterGuardTests(unittest.TestCase):
             self.assertEqual("released", guard.release()["status"])
             self.assertFalse(guard.status()["acquired"])
 
+    def test_same_database_on_isolated_typedb_instances_has_separate_writer_locks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            active = LocalGraphWriterGuard(
+                "typedb-production",
+                "delivery",
+                Path(directory),
+                graph_address="127.0.0.1:1729",
+            )
+            candidate = LocalGraphWriterGuard(
+                "typedb-production",
+                "candidate-seed",
+                Path(directory),
+                graph_address="127.0.0.1:1730",
+            )
+
+            self.assertTrue(active.acquire()["acquired"])
+            candidate_result = candidate.acquire()
+            self.assertTrue(candidate_result["acquired"])
+            self.assertEqual("127.0.0.1:1730", candidate_result["graphAddress"])
+            candidate.release()
+            active.release()
+
+    def test_localhost_and_loopback_share_one_writer_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = LocalGraphWriterGuard(
+                "typedb-production",
+                "delivery",
+                Path(directory),
+                graph_address="localhost:1729",
+            )
+            second = LocalGraphWriterGuard(
+                "typedb-production",
+                "maintenance",
+                Path(directory),
+                graph_address="127.0.0.1:1729",
+            )
+
+            self.assertTrue(first.acquire()["acquired"])
+            self.assertFalse(second.acquire()["acquired"])
+            first.release()
+
     def test_admin_graph_write_fails_closed_while_delivery_owns_database(self):
         with tempfile.TemporaryDirectory() as directory:
             lock_directory = Path(directory) / "graph-writer-locks"

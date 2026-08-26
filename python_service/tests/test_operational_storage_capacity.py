@@ -196,6 +196,26 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertTrue(failed["activeStorePreserved"])
         self.assertIsNotNone(event)
 
+    def test_failed_rotation_keeps_the_concrete_validation_reason(self):
+        service = OperationalStorageCapacityService(
+            store=StateStore(),
+            now_provider=lambda: datetime(2026, 8, 25, 22, 15, tzinfo=timezone.utc),
+        )
+        snapshot = {
+            **self.healthy_snapshot(),
+            "maintenanceFailureReason": "후보 작성자 잠금 범위 충돌",
+        }
+
+        failed, event = service.record(
+            snapshot,
+            force_alert=True,
+            force_alert_kind="typedb-auto-rotation-failed",
+        )
+
+        self.assertEqual("후보 검증 실패: 후보 작성자 잠금 범위 충돌", failed["maintenanceReason"])
+        self.assertEqual("후보 작성자 잠금 범위 충돌", failed["maintenanceFailureReason"])
+        self.assertIsNotNone(event)
+
     def test_internal_cleanup_warning_does_not_page_until_the_human_threshold(self):
         current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
         service = OperationalStorageCapacityService(
@@ -355,6 +375,9 @@ class OperationalStorageCapacityTests(unittest.TestCase):
             "mysqlLimitMb": 8192,
             "mysqlUsagePercent": 90.0,
             "mysqlCapacityStage": "restricted",
+            "mysqlMetadataStatus": "available",
+            "mysqlLiveDataMb": 2100.0,
+            "mysqlReclaimableMb": 5273.0,
             "limitingComponents": [{"component": "mysql"}],
             "suggestedAction": "MySQL 이력 정리를 가속하세요.",
         }
@@ -366,8 +389,31 @@ class OperationalStorageCapacityTests(unittest.TestCase):
 
         self.assertEqual("MySQL 저장공간 쓰기 제한", context["title"])
         self.assertIn("8192MB (90.0%)", context["readableMessage"])
+        self.assertIn("데이터·인덱스 2100.0MB", context["readableMessage"])
+        self.assertIn("회수 가능 5273.0MB", context["readableMessage"])
         self.assertIn("비필수 쓰기 제한", context["readableMessage"])
         self.assertIn("핵심 이력 보호", context["readableMessage"])
+
+    def test_mysql_metadata_failure_does_not_report_false_zero_sizes(self):
+        payload = {
+            **self.healthy_snapshot(),
+            "state": "warning",
+            "previousState": "warning",
+            "alertRequired": True,
+            "alertKind": "typedb-auto-rotation-failed",
+            "checkedAt": "2026-08-25T22:15:28Z",
+            "mysqlMetadataStatus": "unavailable",
+            "mysqlMetadataReason": "MySQL connection refused during restart",
+        }
+
+        context = OperationalStorageCapacityNotificationEnqueuer(Queue()).context(
+            payload,
+            operational_storage_capacity_changed_event(payload),
+        )
+
+        self.assertIn("메타데이터 조회 실패", context["readableMessage"])
+        self.assertIn("MySQL connection refused during restart", context["readableMessage"])
+        self.assertNotIn("데이터·인덱스 0MB", context["readableMessage"])
 
     def test_storage_capacity_uses_the_operations_delivery_channel_and_presentation(self):
         self.assertTrue(is_operations_delivery_message_type(OPERATIONAL_STORAGE_CAPACITY))

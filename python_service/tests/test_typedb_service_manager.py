@@ -109,6 +109,37 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
             self.assertEqual(attestation, spec["_typedbSeedAttestation"])
 
+    def test_candidate_seed_captures_structured_failure_reason(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB candidate",
+                "role": "typedb-stage",
+                "log": Path(temp) / "typedb.log",
+                "seedOnStart": "1",
+                "seedRetryCount": "0",
+                "_typedbMaintenanceLock": {"token": "rotation-token"},
+            }
+            failure = {
+                "status": "blocked",
+                "reasonCode": "typedb-graph-writer-owned",
+                "reason": "Another local process owns the TypeDB graph writer boundary.",
+            }
+            command_result = SimpleNamespace(
+                returncode=1,
+                stdout=json.dumps(failure) + "\n",
+                stderr="",
+            )
+            with patch.object(service_manager, "typedb_maintenance_lock_owned", return_value=True), \
+                    patch.object(service_manager, "typedb_seed_command", return_value=["seed"]), \
+                    patch.object(service_manager.subprocess, "run", return_value=command_result):
+                self.assertFalse(service_manager.ensure_typedb_seeded(spec))
+
+            self.assertEqual(
+                "typedb-graph-writer-owned",
+                spec["_typedbSeedFailure"]["reasonCode"],
+            )
+            self.assertEqual(failure["reason"], spec["_typedbSeedFailure"]["reason"])
+
     def test_mysql_schema_bootstrap_uses_recovery_timeout_floor(self):
         spec = {
             "label": "MySQL operational store",
@@ -980,6 +1011,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             spec,
             {"needed": True, "reason": "size"},
             alert_kind="typedb-auto-rotation-failed",
+            failure_reason="reset-failed",
         )
         self.assertEqual("reset-failed", record_state.call_args_list[-1].kwargs["lastAutoRotationStatus"])
 

@@ -23,6 +23,7 @@ from .fact_changes import scope_families_for_fact_types
 # scheduling rules whose actual inputs did not change for this event.
 CHANGE_IMPACT_VERSION = "abox-change-impact-v15-model-input-routing"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
+DYNAMIC_INFERENCE_PREFLIGHT_VERSION = "dynamic-inference-preflight-v1"
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -993,6 +994,176 @@ def _expanded_family_values(values: Iterable[object]) -> Set[str]:
     elif "macro" in expanded:
         expanded.update({"macro-market", "macro-fx", "macro-rates", "macro-crypto"})
     return expanded
+
+
+def _revision_vectors(
+    values: Mapping[str, object],
+    symbols: Iterable[object],
+) -> Dict[str, Dict[str, str]]:
+    source = dict(values or {}) if isinstance(values, Mapping) else {}
+    result: Dict[str, Dict[str, str]] = {}
+    for raw_symbol in symbols or []:
+        symbol = _clean(raw_symbol).upper()
+        vector = source.get(symbol)
+        vector = dict(vector or {}) if isinstance(vector, Mapping) else {}
+        normalized = {
+            _clean(key): _clean(value)
+            for key, value in sorted(vector.items(), key=lambda item: _clean(item[0]))
+            if _clean(key) and _clean(value)
+        }
+        if symbol and normalized:
+            result[symbol] = normalized
+    return result
+
+
+def build_dynamic_inference_preflight(
+    *,
+    rules: Iterable[object],
+    target_symbols: Iterable[object],
+    requested_fact_families: Iterable[object] = None,
+    requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
+    requested_dependency_keys: Iterable[object] = None,
+    requested_dependency_keys_by_symbol: Mapping[str, Iterable[object]] = None,
+    event_fact_boundary_authoritative: bool = False,
+    event_dependency_boundary_authoritative: bool = False,
+    revision_vectors_by_symbol: Mapping[str, object] = None,
+    prior_revision_vectors_by_symbol: Mapping[str, object] = None,
+    prior_result_slots_reusable: bool = False,
+) -> Dict[str, object]:
+    """Plan SharedPremiseWorld work before assembling a candidate ABox.
+
+    This is an operational routing contract only. It may prove that the
+    current event cannot alter any shared rule, or that the exact source
+    revision was already evaluated. It never evaluates a rule or derives an
+    investment conclusion. Missing provenance fails closed to the normal
+    projection and native TypeDB path.
+    """
+
+    symbols = sorted({
+        _clean(symbol).upper()
+        for symbol in target_symbols or []
+        if _clean(symbol)
+    })
+    global_families = _expanded_family_values(requested_fact_families)
+    families_by_symbol = {
+        _clean(symbol).upper(): _expanded_family_values(families)
+        for symbol, families in dict(
+            requested_fact_families_by_symbol or {}
+        ).items()
+        if _clean(symbol) and _expanded_family_values(families)
+    }
+    global_dependency_keys = {
+        _lower(value)
+        for value in requested_dependency_keys or []
+        if _clean(value)
+    }
+    dependency_keys_by_symbol = {
+        _clean(symbol).upper(): {
+            _lower(value) for value in values or [] if _clean(value)
+        }
+        for symbol, values in dict(
+            requested_dependency_keys_by_symbol or {}
+        ).items()
+        if _clean(symbol)
+    }
+    profiles = [
+        profile
+        for profile in rule_dependency_profiles(rules or [])
+        if profile.get("enabled")
+    ]
+    event_families = set(global_families)
+    event_dependency_keys = set(global_dependency_keys)
+    for symbol in symbols:
+        event_families.update(families_by_symbol.get(symbol) or set())
+        event_dependency_keys.update(
+            dependency_keys_by_symbol.get(symbol) or set()
+        )
+    provenance_complete = bool(
+        event_fact_boundary_authoritative
+        and symbols
+        and event_families
+    )
+    dependency_complete = bool(
+        provenance_complete
+        and event_dependency_boundary_authoritative
+        and event_dependency_keys
+    )
+    # Before graph assembly, a source field can still create or change a
+    # derived ABox object whose dependency key is not present in the ingress
+    # event.  Limit early omission to family-disjoint rules.  Exact dependency
+    # selection remains available after projection, where the materialized
+    # ABox delta is known.
+    candidate_profiles = [
+        profile
+        for profile in profiles
+        if _rule_may_depend_on(
+            profile,
+            event_families,
+            set(),
+            False,
+            capability="either",
+        )
+    ] if provenance_complete else list(profiles)
+    candidate_rule_ids = sorted({
+        _clean(profile.get("ruleId"))
+        for profile in candidate_profiles
+        if _clean(profile.get("ruleId"))
+    })
+    current_vectors = _revision_vectors(
+        revision_vectors_by_symbol or {}, symbols,
+    )
+    prior_vectors = _revision_vectors(
+        prior_revision_vectors_by_symbol or {}, symbols,
+    )
+    exact_revision_match = bool(
+        symbols
+        and len(current_vectors) == len(symbols)
+        and current_vectors == prior_vectors
+    )
+
+    reason_codes: List[str] = []
+    route = "RUN_SHARED"
+    reuse_eligible = False
+    if not prior_result_slots_reusable:
+        reason_codes.append("complete-prior-result-slot-proof-unavailable")
+    elif exact_revision_match and provenance_complete:
+        route = "REUSE_SHARED"
+        reuse_eligible = True
+        reason_codes.append("exact-source-revision-already-evaluated")
+    elif provenance_complete and not candidate_rule_ids:
+        route = "REUSE_SHARED"
+        reuse_eligible = True
+        reason_codes.append("event-cannot-affect-shared-rule-catalog")
+    elif not provenance_complete:
+        route = "FULL_SAFE"
+        reason_codes.append("authoritative-event-boundary-unavailable")
+    else:
+        reason_codes.append("shared-rule-input-may-have-changed")
+    if not dependency_complete:
+        reason_codes.append("exact-dependency-boundary-unavailable")
+
+    return {
+        "version": DYNAMIC_INFERENCE_PREFLIGHT_VERSION,
+        "status": "ready",
+        "route": route,
+        "sharedWorkRequired": not reuse_eligible,
+        "sharedReuseEligible": reuse_eligible,
+        "targetSymbols": symbols,
+        "eventFactBoundaryAuthoritative": bool(
+            event_fact_boundary_authoritative
+        ),
+        "eventDependencyBoundaryAuthoritative": bool(
+            event_dependency_boundary_authoritative
+        ),
+        "requestedFactFamilies": sorted(event_families),
+        "requestedDependencyKeys": sorted(event_dependency_keys),
+        "candidateRuleIds": candidate_rule_ids,
+        "candidateRuleCount": len(candidate_rule_ids),
+        "sharedRuleCount": len(profiles),
+        "exactRevisionMatch": exact_revision_match,
+        "priorResultSlotsReusable": bool(prior_result_slots_reusable),
+        "reasonCodes": reason_codes,
+    }
 
 
 def global_scope_impact_partition(

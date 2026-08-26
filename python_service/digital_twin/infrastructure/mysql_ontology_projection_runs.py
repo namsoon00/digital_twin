@@ -941,13 +941,18 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             rows = connection.execute(
                 "SELECT symbol, rule_id, matched, catalog_rule_count, inference_generation_id, "
                 "source_abox_snapshot_id, source_run_id, scope_plan_fingerprint, "
-                "input_fingerprint, execution_namespace_id FROM ontology_reasoning_rule_result_slots "
+                "input_fingerprint, execution_namespace_id, revision_vector_json "
+                "FROM ontology_reasoning_rule_result_slots "
                 "WHERE " + " AND ".join(clauses) + " AND symbol IN (" + placeholders + ")",
                 tuple(params),
             ).fetchall()
         by_symbol = {symbol: {} for symbol in targets}
         provenance_by_symbol = {symbol: set() for symbol in targets}
         catalog_counts_by_symbol = {symbol: set() for symbol in targets}
+        revision_vectors_by_symbol = {symbol: set() for symbol in targets}
+        revision_vector_counts_by_symbol = {
+            symbol: 0 for symbol in targets
+        }
         for row in rows or []:
             symbol = str(row.get("symbol") or "").upper().strip()
             rule_id = str(row.get("rule_id") or "").strip()
@@ -963,6 +968,23 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 ]
             )
             provenance_by_symbol[symbol].add(provenance)
+            revision_vector = _json_loads(
+                row.get("revision_vector_json"), {}
+            )
+            revision_vector = (
+                {
+                    str(key or "").strip(): str(value or "").strip()
+                    for key, value in revision_vector.items()
+                    if str(key or "").strip() and str(value or "").strip()
+                }
+                if isinstance(revision_vector, Mapping)
+                else {}
+            )
+            if revision_vector:
+                revision_vectors_by_symbol[symbol].add(
+                    json_dumps(revision_vector)
+                )
+                revision_vector_counts_by_symbol[symbol] += 1
         incomplete = [
             symbol for symbol, states in by_symbol.items()
             if len(states) != expected
@@ -992,6 +1014,19 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 "expectedRuleCount": expected,
                 "incoherentSymbols": incoherent,
             }
+        revision_incoherent = [
+            symbol
+            for symbol, revisions in revision_vectors_by_symbol.items()
+            if len(revisions) > 1
+        ]
+        if revision_incoherent:
+            return {
+                "reusable": False,
+                "proofSource": "typedb-rule-result-slots",
+                "reason": "result-slot-revision-vector-incoherent",
+                "expectedRuleCount": expected,
+                "incoherentSymbols": revision_incoherent,
+            }
         provenances = {
             symbol: next(iter(values))
             for symbol, values in provenance_by_symbol.items()
@@ -1017,6 +1052,25 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     for rule_id, matched in sorted(states.items())
                 }
                 for symbol, states in sorted(by_symbol.items())
+            },
+            "revisionVectorsBySymbol": {
+                symbol: dict(
+                    _json_loads(next(iter(revisions)), {}) or {}
+                )
+                for symbol, revisions in sorted(
+                    revision_vectors_by_symbol.items()
+                )
+                if (
+                    len(revisions) == 1
+                    and revision_vector_counts_by_symbol.get(symbol) == expected
+                )
+            },
+            "revisionVectorCoverageCompleteBySymbol": {
+                symbol: bool(
+                    revision_vector_counts_by_symbol.get(symbol) == expected
+                    and len(revision_vectors_by_symbol.get(symbol) or set()) == 1
+                )
+                for symbol in targets
             },
             "reusedTargetSymbols": targets,
             "executionNamespaceId": str(execution_namespace_id or ""),

@@ -109,6 +109,119 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_shared_premise_preflight_skips_graph_for_account_only_change(self):
+        shared_rule_id = "shared.premise.graph.market.price.v1"
+
+        class Repository:
+            store_key = "typedb"
+
+            @staticmethod
+            def active_abox_metadata(world_id=""):
+                return {
+                    "status": "ok",
+                    "worldId": world_id,
+                    "aboxSnapshotId": "abox:active",
+                    "scopePlan": [],
+                }
+
+            @staticmethod
+            def inferencebox_recovery_metadata(world_id=""):
+                return {
+                    "status": "ok",
+                    "worldId": world_id,
+                    "inferenceGenerationId": "generation:active",
+                    "sourceAboxSnapshotId": "abox:active",
+                    "targetSymbols": ["005930"],
+                    "nativeTypeDbReasoningCompleted": True,
+                }
+
+        slot_store = SimpleNamespace(
+            active_rule_result_slot_context=lambda **_kwargs: {
+                "reusable": True,
+                "proofSource": "typedb-rule-result-slots",
+                "expectedRuleCount": 1,
+                "matchedRuleIds": [shared_rule_id],
+                "ruleStatesBySymbol": {
+                    "005930": {shared_rule_id: "matched"},
+                },
+                "revisionVectorsBySymbol": {
+                    "005930": {"fact": "quote:6"},
+                },
+                "inferenceGenerationId": "generation:active",
+                "sourceAboxSnapshotId": "abox:active",
+                "proofRunId": "run:active",
+            },
+        )
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            projection_run_store=slot_store,
+            settings={
+                "_reasoningEngineVersion": "v2",
+                "_reasoningEngineDeploymentId": "ontology-v2-production",
+                "typedbDatabase": "ontology-v2",
+            },
+            frozen_tbox_metadata={
+                "version": "tbox-v1",
+                "fingerprint": "tbox:1",
+            },
+        )
+        shared_rule = {
+            "ruleId": shared_rule_id,
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "price",
+                "kind": "subject_property",
+                "field": "currentPrice",
+            }],
+        }
+        recorder.ensure_rulebox_ready = lambda: {
+            "status": "ready",
+            "ruleCount": 1,
+            "ruleboxRulesHash": "all-rules:1",
+            "runtimeCatalogSource": "frozen-v2-release",
+        }
+        recorder.world_rule_partition = lambda _catalog: {
+            "status": "ready",
+            "sharedRules": [shared_rule],
+            "sharedRuleIds": [shared_rule_id],
+            "sharedRuleCount": 1,
+            "overlayRules": [],
+            "overlayRuleIds": [],
+        }
+        recorder.catalog_for_rules = lambda _catalog, _rules: {
+            "compiledRuleboxRulesHash": "shared-rules:1",
+        }
+        recorder.build_graph_assembly = lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(
+                AssertionError("preflight reuse must skip graph assembly")
+            )
+        )
+
+        result = recorder.prepare_shared_premises(
+            source_snapshot(),
+            target_symbols=["005930"],
+            reasoning_context={
+                "eventFactBoundaryAuthoritative": True,
+                "eventDependencyBoundaryAuthoritative": True,
+                "requestedScopeFamilies": ["position", "portfolio"],
+                "requestedScopeFamiliesBySymbol": {
+                    "005930": ["position", "portfolio"],
+                },
+            },
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(
+            "reused-pre-projection-generation", result["projectionStatus"],
+        )
+        self.assertEqual(
+            "REUSE_SHARED", result["dynamicInferencePreflight"]["route"],
+        )
+        self.assertEqual(
+            ["graph.market.price.v1"],
+            result["premisesBySymbol"]["005930"],
+        )
+
     def test_shared_result_slots_rehydrate_only_the_active_inference_generation(self):
         context = {
             "reusable": True,
@@ -1263,6 +1376,139 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertIn("engine_deployment_id = %s", connection.calls[0][0])
         self.assertIn("graph_database = %s", connection.calls[0][0])
         self.assertNotIn("release_fingerprint = %s", connection.calls[0][0])
+
+    def test_rule_result_slots_return_one_coherent_revision_vector(self):
+        rows = [
+            {
+                "symbol": "005930",
+                "rule_id": "graph.rule.one",
+                "matched": 1,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:v2",
+                "revision_vector_json": '{"fact":"quote:7","source":"clock:1"}',
+            },
+            {
+                "symbol": "005930",
+                "rule_id": "graph.rule.two",
+                "matched": 0,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:v2",
+                "revision_vector_json": '{"source":"clock:1","fact":"quote:7"}',
+            },
+        ]
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(
+            MySQLOntologyProjectionRunStore
+        )
+        store.connect = lambda: ConnectionContext(connection)
+
+        context = store.active_rule_result_slot_context(
+            world_id="shared-premise:kr",
+            account_id="",
+            symbols=["005930"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=2,
+            execution_namespace_id="namespace:v2",
+        )
+
+        self.assertTrue(context["reusable"])
+        self.assertEqual(
+            {"005930": {"fact": "quote:7", "source": "clock:1"}},
+            context["revisionVectorsBySymbol"],
+        )
+        self.assertIn("revision_vector_json", connection.calls[0][0])
+
+    def test_rule_result_slots_reject_mixed_revision_vectors(self):
+        rows = []
+        for rule_id, revision in [
+            ("graph.rule.one", "quote:7"),
+            ("graph.rule.two", "quote:8"),
+        ]:
+            rows.append({
+                "symbol": "005930",
+                "rule_id": rule_id,
+                "matched": int(rule_id.endswith("one")),
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:v2",
+                "revision_vector_json": '{"fact":"' + revision + '"}',
+            })
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(
+            MySQLOntologyProjectionRunStore
+        )
+        store.connect = lambda: ConnectionContext(connection)
+
+        context = store.active_rule_result_slot_context(
+            world_id="shared-premise:kr",
+            account_id="",
+            symbols=["005930"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=2,
+            execution_namespace_id="namespace:v2",
+        )
+
+        self.assertFalse(context["reusable"])
+        self.assertEqual(
+            "result-slot-revision-vector-incoherent", context["reason"],
+        )
+
+    def test_rule_result_slots_do_not_prove_partial_revision_coverage(self):
+        rows = []
+        for rule_id, revision_json in [
+            ("graph.rule.one", '{"fact":"quote:7"}'),
+            ("graph.rule.two", ""),
+        ]:
+            rows.append({
+                "symbol": "005930",
+                "rule_id": rule_id,
+                "matched": 0,
+                "catalog_rule_count": 2,
+                "inference_generation_id": "generation:1",
+                "source_abox_snapshot_id": "abox:1",
+                "source_run_id": "run:1",
+                "scope_plan_fingerprint": "scope:1",
+                "input_fingerprint": "input:1",
+                "execution_namespace_id": "namespace:v2",
+                "revision_vector_json": revision_json,
+            })
+        connection = RecordingConnection(rows=rows)
+        store = MySQLOntologyProjectionRunStore.__new__(
+            MySQLOntologyProjectionRunStore
+        )
+        store.connect = lambda: ConnectionContext(connection)
+
+        context = store.active_rule_result_slot_context(
+            world_id="shared-premise:kr",
+            account_id="",
+            symbols=["005930"],
+            rulebox_rules_hash="rules:1",
+            tbox_fingerprint="tbox:1",
+            expected_rule_count=2,
+            execution_namespace_id="namespace:v2",
+        )
+
+        self.assertTrue(context["reusable"])
+        self.assertEqual({}, context["revisionVectorsBySymbol"])
+        self.assertFalse(
+            context["revisionVectorCoverageCompleteBySymbol"]["005930"]
+        )
 
     def test_rule_result_slot_summary_keeps_shared_and_portfolio_catalogues_separate(self):
         rows = []

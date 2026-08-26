@@ -30,6 +30,7 @@ from ..domain.rule_claim_contract import (
     resolved_rule_claim_contract,
 )
 from ..domain.ontology_change_impact import (
+    build_dynamic_inference_preflight,
     build_inference_impact_plan,
     compact_inference_impact_plan,
 )
@@ -1430,6 +1431,176 @@ class PortfolioOntologyProjectionRecorder:
             ),
         }, "compact-result-slot-proof-unavailable"
 
+    def reused_shared_premise_result(
+        self,
+        *,
+        inference: Dict[str, object],
+        active_abox: Dict[str, object],
+        selection_context: Dict[str, object],
+        shared_world,
+        shared_rule_ids: List[str],
+        overlay_rule_ids: List[str],
+        shared_rulebox_hash: str,
+        shared_tbox_fingerprint: str,
+        requested_symbols: List[str],
+        evaluated_symbols: List[str],
+        not_evaluated_symbols: List[str],
+        catalog: Dict[str, object],
+        preflight: Dict[str, object],
+        runtime_stages: Dict[str, int],
+        started_at: float,
+        reuse_mode: str,
+    ) -> Dict[str, object]:
+        """Return one exact prior SharedPremiseWorld generation.
+
+        The caller may use this before graph assembly only after the durable
+        result-slot ledger, active ABox pointer, and published InferenceBox
+        generation have all aligned. No Python investment rule is evaluated
+        here; matched states are rehydrated from the TypeDB-authored ledger.
+        """
+
+        if not (
+            self.inference_result_is_reusable(
+                inference, active_abox, evaluated_symbols,
+            )
+            and str(inference.get("ruleExecutionPhase") or "")
+            == "shared-premise"
+            and str(inference.get("worldPartitionedReasoningVersion") or "")
+            == WORLD_PARTITIONED_REASONING_VERSION
+        ):
+            return {}
+        premises = shared_premise_matches(inference)
+        generation_id = str(inference.get("inferenceGenerationId") or "")
+        source_abox_snapshot_id = str(
+            inference.get("sourceAboxSnapshotId") or ""
+        )
+        target_scope_proof = target_scope_manifest_fingerprint(
+            list((active_abox or {}).get("scopePlan") or []),
+            evaluated_symbols,
+        )
+        symbol_rows = {}
+        for symbol in evaluated_symbols:
+            symbol_rows[symbol] = {
+                "snapshotId": generation_id,
+                "relations": [
+                    dict(row) for row in inference.get("relations") or []
+                    if isinstance(row, dict)
+                    and str(row.get("symbol") or "").upper().strip() == symbol
+                ],
+                "traces": [
+                    dict(row) for row in inference.get("traces") or []
+                    if isinstance(row, dict)
+                    and str(row.get("symbol") or "").upper().strip() == symbol
+                ],
+            }
+        runtime_stages["totalMs"] = int(
+            (time.perf_counter() - started_at) * 1000
+        )
+        full_rule_count = int(
+            selection_context.get("expectedRuleCount")
+            or len(shared_rule_ids)
+        )
+        return {
+            "contractVersion": WORLD_PARTITIONED_REASONING_VERSION,
+            "status": "ready",
+            "ready": True,
+            "worldId": shared_world.world_id,
+            "projectionStatus": "reused-pre-projection-generation",
+            "executionStatus": "reused-shared-premise-generation",
+            "premisesBySymbol": premises,
+            "sharedRuleIds": list(shared_rule_ids),
+            "overlayRuleIds": list(overlay_rule_ids),
+            "inferenceGenerationId": generation_id,
+            "sourceAboxSnapshotId": source_abox_snapshot_id,
+            "relations": list(inference.get("relations") or [])[:480],
+            "traces": list(inference.get("traces") or [])[:480],
+            "symbols": symbol_rows,
+            "requestedSymbols": list(requested_symbols),
+            "evaluatedSymbols": list(evaluated_symbols),
+            "notEvaluatedSymbols": list(not_evaluated_symbols),
+            "targetCoverageComplete": not not_evaluated_symbols,
+            "dynamicInferencePreflight": dict(preflight or {}),
+            "inferenceImpactPlan": {
+                "version": str((preflight or {}).get("version") or ""),
+                "impactScope": "REUSED_SHARED_GENERATION",
+                "candidateRuleIds": list(
+                    (preflight or {}).get("candidateRuleIds") or []
+                ),
+                "candidateRuleCount": int(
+                    (preflight or {}).get("candidateRuleCount") or 0
+                ),
+                "contextRetention": {
+                    "aboxReadMode": "complete-active-world",
+                    "unchangedFactsRetained": True,
+                    "priorValidInferencesRetained": True,
+                },
+            },
+            "ruleSelectionProof": {
+                "reusable": True,
+                "proofSource": str(
+                    selection_context.get("proofSource") or ""
+                ),
+                "reason": ",".join(
+                    (preflight or {}).get("reasonCodes") or []
+                ),
+                "selectionRequested": False,
+                "selectionApplied": False,
+                "generationReused": True,
+                "reuseMode": reuse_mode,
+                "candidateRuleCount": 0,
+                "executedRuleCount": 0,
+                "deferredRuleCount": full_rule_count,
+                "fullRuleCount": full_rule_count,
+            },
+            "resultSlotWrite": {
+                "status": "reused-existing-result-slots",
+                "saved": True,
+                "reused": True,
+                "worldId": shared_world.world_id,
+                "symbolCount": len(evaluated_symbols),
+                "catalogRuleCount": full_rule_count,
+                "slotCount": len(evaluated_symbols) * full_rule_count,
+            },
+            "existingInferenceReuseMode": reuse_mode,
+            "generationVector": {
+                "worldId": shared_world.world_id,
+                "sourceAboxSnapshotId": source_abox_snapshot_id,
+                "inferenceGenerationId": generation_id,
+                "ruleboxRulesHash": shared_rulebox_hash,
+                "tboxFingerprint": shared_tbox_fingerprint,
+                "scopePlanFingerprint": str(
+                    target_scope_proof.get("fingerprint") or ""
+                ),
+                "targetScopeCount": int(
+                    target_scope_proof.get("scopeCount") or 0
+                ),
+            },
+            "runtimeStages": runtime_stages,
+            "releaseCatalog": {
+                "source": str(
+                    catalog.get("runtimeCatalogSource")
+                    or catalog.get("ruleCatalogStore")
+                    or "typedb-runtime"
+                ),
+                "ruleCount": int(catalog.get("ruleCount") or 0),
+                "ruleboxRulesHash": str(
+                    catalog.get("ruleboxRulesHash") or ""
+                ),
+                "ruleboxReused": bool(catalog.get("releaseCatalogReused")),
+                "tboxSource": (
+                    "frozen-v2-release"
+                    if self._frozen_tbox_metadata is not None
+                    else "typedb-runtime"
+                ),
+            },
+            "modelSignalBridgeExecution": {},
+            "activationLifecycle": {},
+            "assembly": {
+                "inputMode": "preflight-reuse",
+                "targetSymbols": list(evaluated_symbols),
+            },
+        }
+
     def world_partitioned_reasoning_enabled(self) -> bool:
         value = self.settings.get("ontologyWorldPartitionedReasoningEnabled")
         if value is None:
@@ -1587,32 +1758,6 @@ class PortfolioOntologyProjectionRecorder:
         shared_rulebox_hash = str(
             shared_rule_catalog.get("compiledRuleboxRulesHash") or ""
         )
-        progress("graph.start", sharedRuleCount=int(partition.get("sharedRuleCount") or 0))
-        stage_started = time.perf_counter()
-        graph, _persistence_graph, assembly = self.build_graph_assembly(
-            snapshot,
-            shared_rule_catalog,
-            target_symbols=target_symbols,
-            target_scoped_input=bool(target_symbols),
-        )
-        runtime_stages["graphAssemblyMs"] = int(
-            (time.perf_counter() - stage_started) * 1000
-        )
-        portfolio_context = world_from_snapshot(snapshot, self.settings)
-        shared_world = shared_premise_world(
-            portfolio_context.market_id,
-            self.settings.get("ontologySharedMarketTenantId") or "shared",
-        )
-        graph.worldview.update({
-            **world_metadata(portfolio_context),
-            "sharedPremiseWorldId": shared_world.world_id,
-            "asOf": str(snapshot.generated_at or ""),
-        })
-        update = shared_premise_world_graph(
-            graph,
-            shared_rules,
-            shared_world,
-        )
         symbols = self.inference_symbols(snapshot, target_symbols)
         requested_symbols = sorted({
             str(symbol or "").upper().strip()
@@ -1634,13 +1779,23 @@ class PortfolioOntologyProjectionRecorder:
                     "SharedPremiseWorld subject."
                 ),
             }
-        if target_symbols:
-            update.worldview["targetScopedManifestPatch"] = {
-                "status": "applied",
-                "mode": "shared-premise-target-scoped-input",
-                "targetSymbols": symbols,
-            }
-        prior_active_abox = {}
+        portfolio_context = world_from_snapshot(snapshot, self.settings)
+        shared_world = shared_premise_world(
+            portfolio_context.market_id,
+            self.settings.get("ontologySharedMarketTenantId") or "shared",
+        )
+        if self._frozen_tbox_metadata is not None:
+            active_tbox = dict(self._frozen_tbox_metadata)
+            runtime_stages["preflightTboxReadMs"] = 0
+        else:
+            stage_started = time.perf_counter()
+            active_tbox = self.active_tbox_context()
+            runtime_stages["preflightTboxReadMs"] = int(
+                (time.perf_counter() - stage_started) * 1000
+            )
+        shared_tbox_fingerprint = str(
+            (active_tbox or {}).get("fingerprint") or tbox_fingerprint()
+        )
         stage_started = time.perf_counter()
         try:
             prior_active_abox = self.repository_world_call(
@@ -1652,6 +1807,186 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages["priorAboxMetadataMs"] = int(
             (time.perf_counter() - stage_started) * 1000
         )
+        namespace = self.execution_namespace()
+        selection_context = {
+            "reusable": False,
+            "proofSource": "",
+            "matchedRuleIds": [],
+            "ruleStatesBySymbol": {},
+            "revisionVectorsBySymbol": {},
+            "reason": "shared-premise-result-slot-store-unavailable",
+        }
+        slot_reader = getattr(
+            self.projection_run_store,
+            "active_rule_result_slot_context",
+            None,
+        ) if self.projection_run_store else None
+        stage_started = time.perf_counter()
+        if callable(slot_reader):
+            try:
+                selection_context = dict(slot_reader(
+                    world_id=shared_world.world_id,
+                    account_id="",
+                    symbols=symbols,
+                    rulebox_rules_hash=shared_rulebox_hash,
+                    tbox_fingerprint=shared_tbox_fingerprint,
+                    expected_rule_count=len(shared_rule_ids),
+                    execution_namespace_id=str(
+                        namespace.get("executionNamespaceId") or ""
+                    ),
+                    engine_deployment_id=str(
+                        namespace.get("engineDeploymentId") or ""
+                    ),
+                    graph_database=str(namespace.get("graphDatabase") or ""),
+                ) or {})
+            except Exception as error:
+                selection_context = {
+                    "reusable": False,
+                    "proofSource": "typedb-rule-result-slots",
+                    "matchedRuleIds": [],
+                    "ruleStatesBySymbol": {},
+                    "revisionVectorsBySymbol": {},
+                    "reason": "shared-premise-result-slot-read-failed",
+                    "detail": str(error)[:180],
+                }
+        runtime_stages["resultSlotReadMs"] = int(
+            (time.perf_counter() - stage_started) * 1000
+        )
+        stage_started = time.perf_counter()
+        dynamic_preflight = build_dynamic_inference_preflight(
+            rules=shared_rules,
+            target_symbols=symbols,
+            requested_fact_families=(
+                (reasoning_context or {}).get("requestedScopeFamilies") or []
+            ),
+            requested_fact_families_by_symbol=(
+                (reasoning_context or {}).get(
+                    "requestedScopeFamiliesBySymbol"
+                ) or {}
+            ),
+            requested_dependency_keys=(
+                (reasoning_context or {}).get("requestedDependencyKeys") or []
+            ),
+            requested_dependency_keys_by_symbol=(
+                (reasoning_context or {}).get(
+                    "requestedDependencyKeysBySymbol"
+                ) or {}
+            ),
+            event_fact_boundary_authoritative=bool(
+                (reasoning_context or {}).get(
+                    "eventFactBoundaryAuthoritative"
+                )
+            ),
+            event_dependency_boundary_authoritative=bool(
+                (reasoning_context or {}).get(
+                    "eventDependencyBoundaryAuthoritative"
+                )
+            ),
+            revision_vectors_by_symbol=(
+                (reasoning_context or {}).get("revisionVectorsBySymbol") or {}
+            ),
+            prior_revision_vectors_by_symbol=(
+                selection_context.get("revisionVectorsBySymbol") or {}
+            ),
+            prior_result_slots_reusable=bool(
+                selection_context.get("reusable")
+            ),
+        )
+        runtime_stages["dynamicPreflightMs"] = int(
+            (time.perf_counter() - stage_started) * 1000
+        )
+        progress(
+            "preflight.done",
+            route=str(dynamic_preflight.get("route") or ""),
+            candidateRuleCount=int(
+                dynamic_preflight.get("candidateRuleCount") or 0
+            ),
+            runtimeMs=runtime_stages["dynamicPreflightMs"],
+        )
+        if bool(dynamic_preflight.get("sharedReuseEligible")):
+            stage_started = time.perf_counter()
+            reused_inference, reuse_mode = self.compact_shared_inference_reuse(
+                prior_active_abox,
+                selection_context,
+                symbols,
+                shared_world.world_id,
+            )
+            runtime_stages["preflightReuseReadMs"] = int(
+                (time.perf_counter() - stage_started) * 1000
+            )
+            reused_result = self.reused_shared_premise_result(
+                inference=reused_inference,
+                active_abox=prior_active_abox,
+                selection_context=selection_context,
+                shared_world=shared_world,
+                shared_rule_ids=shared_rule_ids,
+                overlay_rule_ids=list(partition.get("overlayRuleIds") or []),
+                shared_rulebox_hash=shared_rulebox_hash,
+                shared_tbox_fingerprint=shared_tbox_fingerprint,
+                requested_symbols=requested_symbols,
+                evaluated_symbols=symbols,
+                not_evaluated_symbols=not_evaluated_symbols,
+                catalog=catalog,
+                preflight=dynamic_preflight,
+                runtime_stages=runtime_stages,
+                started_at=started_at,
+                reuse_mode=reuse_mode,
+            )
+            if reused_result:
+                progress(
+                    "done",
+                    matchedPremiseCount=sum(
+                        len(values)
+                        for values in reused_result.get(
+                            "premisesBySymbol", {}
+                        ).values()
+                    ),
+                    totalMs=runtime_stages.get("totalMs", 0),
+                    preflightReused=True,
+                )
+                return reused_result
+            dynamic_preflight = {
+                **dynamic_preflight,
+                "route": "FULL_SAFE",
+                "sharedReuseEligible": False,
+                "sharedWorkRequired": True,
+                "reuseFallbackReason": str(
+                    reused_inference.get("reason")
+                    or reused_inference.get("status")
+                    or "active-shared-generation-not-aligned"
+                )[:180],
+                "reasonCodes": [
+                    *list(dynamic_preflight.get("reasonCodes") or []),
+                    "preflight-reuse-proof-not-aligned",
+                ],
+            }
+        progress("graph.start", sharedRuleCount=int(partition.get("sharedRuleCount") or 0))
+        stage_started = time.perf_counter()
+        graph, _persistence_graph, assembly = self.build_graph_assembly(
+            snapshot,
+            shared_rule_catalog,
+            target_symbols=target_symbols,
+            target_scoped_input=bool(target_symbols),
+        )
+        runtime_stages["graphAssemblyMs"] = int(
+            (time.perf_counter() - stage_started) * 1000
+        )
+        graph.worldview.update({
+            **world_metadata(portfolio_context),
+            "sharedPremiseWorldId": shared_world.world_id,
+            "asOf": str(snapshot.generated_at or ""),
+        })
+        update = shared_premise_world_graph(
+            graph,
+            shared_rules,
+            shared_world,
+        )
+        if target_symbols:
+            update.worldview["targetScopedManifestPatch"] = {
+                "status": "applied",
+                "mode": "shared-premise-target-scoped-input",
+                "targetSymbols": symbols,
+            }
         progress("projection.start", worldId=shared_world.world_id)
         stage_started = time.perf_counter()
         projection = self.project_shared_world_update(update, shared_world, projection_kind="premise")
@@ -1731,10 +2066,30 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages["activeAboxMetadataMs"] = int(
             (time.perf_counter() - stage_started) * 1000
         )
-        shared_tbox_fingerprint = str(
+        projected_shared_tbox_fingerprint = str(
             ((update.worldview or {}).get("activeTBox") or {}).get("fingerprint")
             or tbox_fingerprint()
         )
+        if projected_shared_tbox_fingerprint != shared_tbox_fingerprint:
+            selection_context = {
+                "reusable": False,
+                "proofSource": "typedb-rule-result-slots",
+                "matchedRuleIds": [],
+                "ruleStatesBySymbol": {},
+                "revisionVectorsBySymbol": {},
+                "reason": "preflight-projected-tbox-fingerprint-mismatch",
+            }
+            dynamic_preflight = {
+                **dynamic_preflight,
+                "route": "FULL_SAFE",
+                "sharedReuseEligible": False,
+                "sharedWorkRequired": True,
+                "reasonCodes": [
+                    *list(dynamic_preflight.get("reasonCodes") or []),
+                    "projected-tbox-fingerprint-changed",
+                ],
+            }
+        shared_tbox_fingerprint = projected_shared_tbox_fingerprint
         stage_started = time.perf_counter()
         impact_prior_abox = dict(prior_active_abox or {})
         if projection_status == "staged-scoped-manifest":
@@ -1779,51 +2134,12 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages["impactPlanningMs"] = int(
             (time.perf_counter() - stage_started) * 1000
         )
-        namespace = self.execution_namespace()
         target_scope_proof = target_scope_manifest_fingerprint(
             list((active_abox or {}).get("scopePlan") or (update.worldview or {}).get("scopePlan") or []),
             symbols,
         )
         scope_plan_fingerprint = str(
             target_scope_proof.get("fingerprint") or ""
-        )
-        selection_context = {
-            "reusable": False,
-            "proofSource": "",
-            "matchedRuleIds": [],
-            "ruleStatesBySymbol": {},
-            "reason": "shared-premise-result-slot-store-unavailable",
-        }
-        slot_reader = getattr(
-            self.projection_run_store,
-            "active_rule_result_slot_context",
-            None,
-        ) if self.projection_run_store else None
-        stage_started = time.perf_counter()
-        if callable(slot_reader):
-            try:
-                selection_context = dict(slot_reader(
-                    world_id=shared_world.world_id,
-                    account_id="",
-                    symbols=symbols,
-                    rulebox_rules_hash=shared_rulebox_hash,
-                    tbox_fingerprint=shared_tbox_fingerprint,
-                    expected_rule_count=len(shared_rule_ids),
-                    execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
-                    engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
-                    graph_database=str(namespace.get("graphDatabase") or ""),
-                ) or {})
-            except Exception as error:
-                selection_context = {
-                    "reusable": False,
-                    "proofSource": "typedb-rule-result-slots",
-                    "matchedRuleIds": [],
-                    "ruleStatesBySymbol": {},
-                    "reason": "shared-premise-result-slot-read-failed",
-                    "detail": str(error)[:180],
-                }
-        runtime_stages["resultSlotReadMs"] = int(
-            (time.perf_counter() - stage_started) * 1000
         )
         selection_enabled = bool(
             shared_impact_plan.get("nativeRuleSelectionEligible")
@@ -2112,6 +2428,7 @@ class PortfolioOntologyProjectionRecorder:
             "evaluatedSymbols": symbols,
             "notEvaluatedSymbols": not_evaluated_symbols,
             "targetCoverageComplete": not not_evaluated_symbols,
+            "dynamicInferencePreflight": dynamic_preflight,
             "inferenceImpactPlan": shared_impact_plan,
             "ruleSelectionProof": {
                 "reusable": bool(selection_context.get("reusable")),

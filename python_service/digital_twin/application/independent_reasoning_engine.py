@@ -940,6 +940,23 @@ class ScopedTypeDBInferenceExecutor:
                         ).items()
                         if isinstance(value, (int, float))
                     },
+                    "dynamicInferencePreflight": {
+                        key: (
+                            list(value)
+                            if isinstance(value, (list, tuple, set))
+                            else value
+                        )
+                        for key, value in dict(
+                            premise_proof.get("dynamicInferencePreflight") or {}
+                        ).items()
+                        if key in {
+                            "version", "status", "route",
+                            "sharedWorkRequired", "sharedReuseEligible",
+                            "candidateRuleCount", "sharedRuleCount",
+                            "exactRevisionMatch", "priorResultSlotsReusable",
+                            "reasonCodes", "reuseFallbackReason",
+                        }
+                    },
                     "modelSignalBridgeExecution": dict(
                         premise_proof.get("modelSignalBridgeExecution") or {}
                     ),

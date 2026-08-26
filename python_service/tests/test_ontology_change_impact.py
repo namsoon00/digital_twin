@@ -3,6 +3,7 @@ import unittest
 from digital_twin.domain.ontology_change_impact import (
     CHANGE_IMPACT_VERSION,
     DEPENDENCY_FINGERPRINT_VERSION,
+    build_dynamic_inference_preflight,
     build_inference_impact_plan,
     compact_inference_impact_plan,
     family_for_relation,
@@ -26,6 +27,9 @@ from digital_twin.domain.ontology_scopes import (
 from digital_twin.domain.ontology_tbox import tbox_class_def, tbox_relation_def
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.world_partitioned_reasoning import (
+    compile_world_partitioned_rules,
+)
 from digital_twin.infrastructure.typedb_ontology import (
     typedb_inferencebox_graph,
     typedb_native_rule_execution_selection,
@@ -33,6 +37,149 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class OntologyChangeImpactTests(unittest.TestCase):
+    def test_dynamic_preflight_reuses_shared_generation_for_account_only_change(self):
+        rules = [{
+            "ruleId": "shared.market.price.v1",
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "price",
+                "kind": "subject_property",
+                "field": "currentPrice",
+            }],
+        }]
+
+        plan = build_dynamic_inference_preflight(
+            rules=rules,
+            target_symbols=["005930"],
+            requested_fact_families=["position", "portfolio"],
+            requested_fact_families_by_symbol={
+                "005930": ["position", "portfolio"],
+            },
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertEqual("REUSE_SHARED", plan["route"])
+        self.assertTrue(plan["sharedReuseEligible"])
+        self.assertEqual([], plan["candidateRuleIds"])
+
+    def test_dynamic_preflight_runs_shared_generation_for_market_change(self):
+        rules = [{
+            "ruleId": "shared.market.price.v1",
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "price",
+                "kind": "subject_property",
+                "field": "currentPrice",
+            }],
+        }]
+
+        plan = build_dynamic_inference_preflight(
+            rules=rules,
+            target_symbols=["005930"],
+            requested_fact_families=["market"],
+            requested_fact_families_by_symbol={"005930": ["market"]},
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertEqual("RUN_SHARED", plan["route"])
+        self.assertFalse(plan["sharedReuseEligible"])
+        self.assertEqual(
+            ["shared.market.price.v1"], plan["candidateRuleIds"],
+        )
+
+    def test_dynamic_preflight_reuses_an_exact_evaluated_revision(self):
+        rules = [{
+            "ruleId": "shared.market.price.v1",
+            "enabled": True,
+            "conditions": [{
+                "conditionId": "price",
+                "kind": "subject_property",
+                "field": "currentPrice",
+            }],
+        }]
+        revision = {"fact": "quote:7", "source": "2026-08-26T01:00:00Z"}
+
+        plan = build_dynamic_inference_preflight(
+            rules=rules,
+            target_symbols=["005930"],
+            requested_fact_families=["market"],
+            event_fact_boundary_authoritative=True,
+            revision_vectors_by_symbol={"005930": revision},
+            prior_revision_vectors_by_symbol={"005930": revision},
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertEqual("REUSE_SHARED", plan["route"])
+        self.assertTrue(plan["exactRevisionMatch"])
+
+    def test_dynamic_preflight_fails_closed_without_authoritative_provenance(self):
+        plan = build_dynamic_inference_preflight(
+            rules=[{
+                "ruleId": "shared.market.price.v1",
+                "enabled": True,
+                "conditions": [{
+                    "conditionId": "price",
+                    "kind": "subject_property",
+                    "field": "currentPrice",
+                }],
+            }],
+            target_symbols=["005930"],
+            requested_fact_families=["position"],
+            event_fact_boundary_authoritative=False,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertEqual("FULL_SAFE", plan["route"])
+        self.assertFalse(plan["sharedReuseEligible"])
+
+    def test_dynamic_preflight_does_not_trust_revision_without_fact_boundary(self):
+        revision = {"fact": "quote:7"}
+
+        plan = build_dynamic_inference_preflight(
+            rules=[{
+                "ruleId": "shared.market.price.v1",
+                "enabled": True,
+                "conditions": [{
+                    "conditionId": "price",
+                    "kind": "subject_property",
+                    "field": "currentPrice",
+                }],
+            }],
+            target_symbols=["005930"],
+            requested_fact_families=["market"],
+            event_fact_boundary_authoritative=False,
+            revision_vectors_by_symbol={"005930": revision},
+            prior_revision_vectors_by_symbol={"005930": revision},
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertTrue(plan["exactRevisionMatch"])
+        self.assertEqual("FULL_SAFE", plan["route"])
+        self.assertFalse(plan["sharedReuseEligible"])
+
+    def test_dynamic_preflight_never_skips_real_shared_rules_for_market_change(self):
+        partition = compile_world_partitioned_rules(
+            default_graph_inference_rules()
+        )
+
+        plan = build_dynamic_inference_preflight(
+            rules=partition["sharedRules"],
+            target_symbols=["005930"],
+            requested_fact_families=["market"],
+            requested_dependency_keys=["kind:stock:field:currentprice"],
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertEqual("RUN_SHARED", plan["route"])
+        self.assertFalse(plan["sharedReuseEligible"])
+        self.assertGreater(plan["candidateRuleCount"], 0)
+
     def test_company_valuation_event_does_not_reopen_unrelated_company_rule_families(self):
         rules = default_graph_inference_rules()
         plan = build_inference_impact_plan(

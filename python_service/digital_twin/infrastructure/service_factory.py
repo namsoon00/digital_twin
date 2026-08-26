@@ -2286,6 +2286,8 @@ def build_v2_reasoning_engine(
     candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
     candidate_settings["ontologyInferenceDetailOutboxEnabled"] = "1"
     candidate_settings["ontologyAsyncQualityRecordEnabled"] = "0"
+    if str(descriptor.status or "").strip().lower() == "provisioning":
+        candidate_settings["typedbFreshCandidateRebuild"] = "1"
     candidate_settings["_reasoningEngineDeploymentId"] = descriptor.deployment_id
     candidate_settings["_reasoningEngineVersion"] = descriptor.engine_version
     candidate_settings["_reasoningTimeSeriesBackendId"] = descriptor.time_series_backend_id

@@ -9438,6 +9438,27 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 schema_text,
                 flags=re.MULTILINE,
             ))
+            # A registered candidate database can exist before its first
+            # worker process opens it. It is still a fresh isolated store even
+            # though ensure_database() did not create it in this process.
+            if self._fresh_candidate_rebuild and not schema_type_names:
+                if self.http_address:
+                    self.synchronize_base_schema_batches_http(
+                        schema_text,
+                        batch_size=self._fresh_schema_bootstrap_batch_size,
+                        operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
+                    )
+                else:
+                    self.synchronize_base_schema_batches(
+                        driver,
+                        imported,
+                        schema_text,
+                        batch_size=self._fresh_schema_bootstrap_batch_size,
+                        operation_timeout_seconds=self._fresh_schema_bootstrap_timeout_seconds,
+                    )
+                self._base_schema_ready_fingerprint = schema_fingerprint
+                self.mark_process_base_schema_ready(schema_fingerprint)
+                return
             # A new database has no ontology types yet. Reading the static
             # manifest first issues a query against those missing types and
             # can invalidate the driver's connection before this schema write.

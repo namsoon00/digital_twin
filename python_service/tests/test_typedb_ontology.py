@@ -1374,6 +1374,32 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         grpc_sync.assert_not_called()
         repository.invalidate_process_base_schema_readiness()
 
+    def test_existing_empty_candidate_uses_bounded_http_schema_bootstrap(self):
+        repository = TypeDBOntologyGraphRepository(
+            "fresh-http.test:1730",
+            database="existing_empty_candidate_test",
+            fresh_candidate_rebuild=True,
+            http_address="fresh-http.test:8001",
+        )
+        repository.invalidate_process_base_schema_readiness()
+        imported = (object, object, object, object, SimpleNamespace(SCHEMA="schema"))
+
+        with patch.object(repository, "typedb_schema_text", return_value="") as inspect_schema, \
+                patch.object(repository, "synchronize_base_schema_batches_http") as http_sync, \
+                patch.object(repository, "synchronize_base_schema_batches") as grpc_sync, \
+                patch.object(repository, "mark_process_base_schema_ready") as mark_ready:
+            repository.ensure_schema(object(), imported)
+
+        inspect_schema.assert_called_once()
+        http_sync.assert_called_once_with(
+            "",
+            batch_size=512,
+            operation_timeout_seconds=900.0,
+        )
+        grpc_sync.assert_not_called()
+        mark_ready.assert_called_once()
+        repository.invalidate_process_base_schema_readiness()
+
     def test_typedb_schema_readiness_is_reused_by_fresh_repository_instances(self):
         address = "typedb-schema-cache.test:1729"
         database_name = "schema_cache_test"

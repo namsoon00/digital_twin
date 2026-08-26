@@ -2201,7 +2201,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbNativeRuleParallelism": value(
             "typedbNativeRuleParallelism",
             "TYPEDB_NATIVE_RULE_PARALLELISM",
-            "2",
+            "4",
         ),
         "typedbNativeRuleAnyConditionParallelism": value(
             "typedbNativeRuleAnyConditionParallelism",

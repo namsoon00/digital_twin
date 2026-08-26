@@ -77,6 +77,16 @@ class RuntimeIdentityTests(unittest.TestCase):
             settings["statisticalPriceSignalReleaseId"],
         )
 
+    def test_native_rule_parallelism_default_matches_repository_capacity(self):
+        with patch.object(runtime_settings_module, "load_local_env"), patch.object(
+            runtime_settings_module,
+            "read_settings_store",
+            return_value={},
+        ), patch.dict(os.environ, {}, clear=True):
+            settings = runtime_settings_module.runtime_settings()
+
+        self.assertEqual("4", settings["typedbNativeRuleParallelism"])
+
     def test_projection_writer_replaces_stale_cached_runtime_identity(self):
         current = {
             "contract": "orbit-runtime-identity-v1",

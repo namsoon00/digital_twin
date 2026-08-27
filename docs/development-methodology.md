@@ -106,7 +106,7 @@ Required flow for new investment behavior:
    Legacy message types such as `modelBuy`, `modelSell`, `monitorPnlChange`, `monitorTrendChange`, `externalCryptoMove`, and `externalDartDisclosure` must not be generated, enabled by default, or registered as standalone investment dispatch inputs. `holdingTiming` and `watchlistOntologySignal` may exist only as graph-backed evidence signals inside an `investmentInsight`. New investment notifications must be `investmentInsight` events derived from graph-backed InferenceBox relation context from the active graph store.
 
 7. Separate investment meaning from delivery priority.
-   Ontology relations describe review level, data state, evidence role, change state, conflict state, validation state, and decision stage. Delivery priority only decides whether a message is sent after cooldown, similarity, market-hours, and freshness gates. Do not present delivery ordering as an investment judgement or as a probability.
+   Ontology relations describe review level, data state, evidence role, change state, conflict state, validation state, and decision stage. Delivery priority only decides whether a message is sent after cooldown and similarity gates. Market-hours and freshness checks are advisory metadata and must not block delivery. Do not present delivery ordering as an investment judgement or as a probability.
 
 8. Send AI the graph context, not loose facts only.
    AI investment opinions should receive the relevant TBox vocabulary, ABox facts, InferenceBox relations, matched TypeDB direct TypeQL rule traces, evidence subgraph, missing data, freshness, provenance, and guardrails. Prompt builders should not invent facts that are absent from the graph; missing data should be explicit.
@@ -142,7 +142,7 @@ Acceptable non-ontology code:
 
 - Operational alerts such as process heartbeat, API connection failure, worker status, handoff notifications, and data-ingestion errors.
 - Data adapters, normalization, schema migrations, runtime wiring, and repository implementations.
-- Notification delivery gates such as cooldown, similarity suppression, market-hours policy, and Telegram/console transport.
+- Notification delivery gates such as cooldown and similarity suppression, advisory market-hours and freshness checks, and Telegram/console transport.
 - Backward-compatible wrappers and test/sample helpers, as long as they do not become the primary investment-decision path.
 
 ## TypeDB Direct TypeQL Rule Contract
@@ -160,7 +160,7 @@ Runtime investment reasoning has one primary path:
 9. New verified evidence refreshes only the affected logical world and creates a new TypeDB InferenceBox generation for impacted subjects. Unchanged or rejected evidence does not create a false new fact, and an account projection must not copy the complete public market world.
 10. AI compares support, counter-evidence, assumptions, invalidation conditions, provenance, freshness, research verification, and missing data before selecting a hypothesis and action.
 11. The final opinion is stored as a `DecisionEpisode`; later observations become `ObservedOutcome` ABox facts and may create review-only learning or novel-hypothesis proposals.
-12. Notification delivery applies cooldown, novelty, market-hours, and channel policy after investment meaning is already decided.
+12. Notification delivery applies cooldown, novelty, and channel policy after investment meaning is already decided. Market-hours and freshness checks remain visible advisories and never defer delivery.
 
 Implementation notes:
 

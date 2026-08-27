@@ -32,7 +32,7 @@ from ...domain.sent_article_filter import (
 )
 
 
-POST_DECISION_DELIVERY_REASONS = {
+NON_BLOCKING_DELIVERY_REASONS = {
     "market_closed",
     "market_hours",
 }
@@ -252,6 +252,17 @@ class NotificationAdmissionPolicy:
         decision,
         settings: Mapping[str, object] = None,
     ) -> NotificationAdmissionOutcome:
+        if (
+            not decision.should_send
+            and str(decision.suppression_reason or "") in NON_BLOCKING_DELIVERY_REASONS
+            and not decision.state_suppressed
+            and not decision.similarity_suppressed
+        ):
+            decision.should_send = True
+            decision.delivery_state = "eligible"
+            decision.gate_state = "eligible"
+            decision.gate_reason = ""
+            decision.suppression_reason = ""
         context = dict(job.context or {})
         context.update(decision.to_context())
         state_group_key = notification_state_group_key(job)
@@ -259,22 +270,19 @@ class NotificationAdmissionPolicy:
             context["deliveryStateGroupKey"] = state_group_key
         freshness = evaluate_notification_data_freshness(context, dict(settings or {}))
         context.update(freshness.to_context())
+        if not freshness.should_send:
+            context["dataFreshnessDecision"] = "advisory"
+            context["notificationFreshnessAdvisory"] = {
+                "version": "notification-freshness-advisory-v1",
+                "blockingDisabled": True,
+                "stage": "admission",
+                "status": str(freshness.status or ""),
+                "reason": str(freshness.reason or ""),
+                "ageMinutes": freshness.age_minutes,
+                "maxAgeMinutes": freshness.max_age_minutes,
+                "staleSources": list(freshness.stale_sources or []),
+            }
         job.context = sanitize_notification_context_for_freshness(context, freshness)
-        if decision.should_send and not freshness.should_send:
-            if str(job.message_type or "") == INVESTMENT_INSIGHT:
-                context = dict(job.context or {})
-                context["freshnessDeferredToDispatch"] = True
-                context["freshnessDeferredReason"] = str(freshness.reason or "")
-                job.context = context
-                return NotificationAdmissionOutcome(True, True, job.status, str(freshness.reason or ""))
-            job.status = "suppressed"
-            job.last_error = "데이터 신선도 기준 미통과로 발송하지 않았습니다. " + str(freshness.reason or "")
-            job.context["deliverySuppressionReason"] = "stale_data"
-            return NotificationAdmissionOutcome(False, True, job.status, job.last_error)
-        relation_diff = context.get("ontologyRelationDiff")
-        relation_diff = relation_diff if isinstance(relation_diff, dict) else {}
-        relation_material_known = "material" in relation_diff
-        relation_material = bool(relation_diff.get("material"))
         state_reason_codes = {
             "baseline": "initial_graph_baseline",
             "unchanged-inference": "unchanged_graph_inference",
@@ -290,51 +298,12 @@ class NotificationAdmissionPolicy:
             decision.gate_reason = str(decision.similarity_reason or decision.gate_reason or "")
         context = dict(job.context or {})
         context.update(decision.to_context())
-        job.context = context
-        if (
-            not decision.should_send
-            and str(job.message_type or "") == INVESTMENT_INSIGHT
-            and str(decision.suppression_reason or "") in POST_DECISION_DELIVERY_REASONS
-            and (not relation_material_known or relation_material)
-        ):
-            context = dict(job.context or {})
-            reason_codes = [str(decision.suppression_reason or "")]
-            if decision.state_suppressed and decision.state_decision == "cooldown":
-                reason_codes.append("state_cooldown")
-            if decision.similarity_suppressed:
-                reason_codes.append("similar_repeat")
-            reason_codes = list(dict.fromkeys(item for item in reason_codes if item))
-            context["preDecisionDeliveryGate"] = {
-                "version": "pre-decision-delivery-gate-v1",
-                "status": "deferred",
-                "reasonCode": str(decision.suppression_reason or ""),
-                "reasonCodes": reason_codes,
-                "reasonDetails": {
-                    "state_cooldown": str(decision.state_reason or ""),
-                    "similar_repeat": str(decision.similarity_reason or ""),
-                    "market_closed": str(decision.market_hours_reason or ""),
-                },
-                "reason": str(decision.gate_reason or decision.state_reason or decision.market_hours_reason or ""),
-                "evaluatedBeforeAi": True,
-            }
-            context["deliveryDecision"] = "decision_pending"
-            context["deliveryGateState"] = "deferred_until_decision"
-            context["deliveryGateReason"] = "투자 판단을 먼저 완료한 뒤 발송 정책을 다시 적용합니다."
+        if decision.should_send and not str(context.get("deliverySuppressionReason") or "").strip():
             context.pop("deliverySuppressionReason", None)
-            job.context = context
-            job.status = "pending"
-            job.last_error = ""
-            return NotificationAdmissionOutcome(
-                True,
-                True,
-                job.status,
-                "투자 판단 완료 후 발송 정책 재검사",
-            )
+        job.context = context
         if not decision.should_send:
             job.status = "suppressed"
-            if decision.suppression_reason == "market_closed":
-                job.last_error = "장 시간 외라 발송하지 않았습니다. " + str(decision.market_hours_reason or "")
-            elif decision.suppression_reason == "state_cooldown":
+            if decision.suppression_reason == "state_cooldown":
                 job.last_error = decision.state_reason or "같은 임계값 상태가 지속되어 발송하지 않았습니다."
             else:
                 job.last_error = decision.gate_reason or "발송 조건을 충족하지 않아 보내지 않았습니다."

@@ -450,7 +450,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("stale", decision.status)
 
-    def test_notification_runner_suppresses_stale_investment_insight_and_requests_refresh(self):
+    def test_notification_runner_allows_stale_investment_insight_and_requests_refresh(self):
         job = NotificationJob.create(
             "오래된 투자 알림",
             account_id="main",
@@ -487,14 +487,11 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
                 target.status = "done"
                 target.last_error = ""
 
-        sent = []
         rechecks = []
         runner = NotificationQueueRunner(
             Queue(),
             SimpleNamespace(load_all=lambda: []),
-            lambda _account: SimpleNamespace(
-                send=lambda message: sent.append(message) or SimpleNamespace(delivered=True, label="test")
-            ),
+            lambda _account: None,
             settings={"dataFreshnessEnabled": "1"},
             now_provider=lambda: datetime(2026, 7, 20, 0, 4, tzinfo=timezone.utc),
             fresh_data_recheck_requester=lambda account_id, symbol, job_id: rechecks.append(
@@ -502,11 +499,12 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             ) or {"requested": True, "scheduledAt": "2026-07-20T00:04:00Z"},
         )
 
-        self.assertEqual(1, runner.run_once())
-        self.assertEqual([], sent)
-        self.assertEqual("suppressed", job.status)
+        self.assertTrue(runner.apply_dispatch_freshness_gate(job, "발송 직전"))
+        self.assertEqual("pending", job.status)
         self.assertEqual([("main", "005930", job.job_id)], rechecks)
-        self.assertEqual("stale_data_recheck_requested", job.context["deliverySuppressionReason"])
+        self.assertEqual("advisory", job.context["dataFreshnessDecision"])
+        self.assertTrue(job.context["notificationFreshnessAdvisory"]["blockingDisabled"])
+        self.assertNotIn("deliverySuppressionReason", job.context)
         self.assertEqual("stale", job.context["dataFreshnessStatus"])
 
     def test_threshold_summary_keeps_full_detected_and_configured_values(self):

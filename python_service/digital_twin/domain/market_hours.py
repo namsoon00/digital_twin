@@ -3,9 +3,6 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .notification_ai_context import is_graph_backed_relation_context
-
-
 OFF_HOURS_IMPORTANT_ONLY = "important_only"
 OFF_HOURS_SEND_ALL = "send_all"
 OFF_HOURS_DEFER_UNTIL_OPEN = "defer_until_open"
@@ -66,7 +63,7 @@ class MarketHoursDecision:
             "marketHoursMarket": self.market,
             "marketHoursLabel": self.label,
             "marketHoursStatus": self.status,
-            "marketHoursDecision": "send" if self.should_send else "suppressed",
+            "marketHoursDecision": "send" if self.status != "closed" else "advisory",
             "marketHoursReason": self.reason,
             "marketHoursLocalTime": self.local_time,
             "marketHoursOpenTime": self.open_time,
@@ -166,132 +163,6 @@ def infer_market_from_context(message_type: str, context: Dict[str, object]) -> 
     return ""
 
 
-def _mapping(value: object) -> Dict[str, object]:
-    return value if isinstance(value, dict) else {}
-
-
-def _normalized_values(*values: object) -> set:
-    return {
-        str(value or "").strip().replace("-", "_").replace(" ", "_").upper()
-        for value in values
-        if str(value or "").strip()
-    }
-
-
-def _structured_disclosure_changed_decision(context: Dict[str, object]) -> bool:
-    source_types = context.get("sourceSignalTypes")
-    source_types = source_types if isinstance(source_types, list) else []
-    if "externalDartDisclosure" not in {str(item or "").strip() for item in source_types}:
-        return False
-    insight = _mapping(context.get("ontologyInsight"))
-    semantic = _mapping(insight.get("semanticComponents"))
-    event_keys = semantic.get("materialSourceEventKeys") or insight.get("materialSourceEventKeys") or []
-    relation = _mapping(context.get("ontologyRelationContext"))
-    return bool(
-        event_keys
-        and _mapping(context.get("ontologyRelationDiff")).get("material")
-        and is_graph_backed_relation_context(relation)
-    )
-
-
-def _structured_urgent_investment_transition(context: Dict[str, object]) -> bool:
-    relation_diff = _mapping(context.get("ontologyRelationDiff"))
-    relation = _mapping(context.get("ontologyRelationContext"))
-    if not relation_diff.get("material") or not is_graph_backed_relation_context(relation):
-        return False
-
-    decision = _mapping(relation.get("decision"))
-    state = _mapping(relation.get("decisionState"))
-    envelope = _mapping(relation.get("actionEnvelope"))
-    transition = _mapping(relation_diff.get("decisionTransition"))
-    review_level = str(
-        state.get("reviewLevel")
-        or relation.get("reviewLevel")
-        or decision.get("reviewLevel")
-        or ""
-    ).strip().lower()
-    if review_level not in {"act", "immediate"}:
-        return False
-
-    action_values = _normalized_values(
-        envelope.get("preferredAction"),
-        decision.get("primaryAction"),
-        relation.get("primaryAction"),
-        transition.get("currentAction"),
-    )
-    urgent_actions = {
-        "TRIM",
-        "SELL",
-        "REDUCE",
-        "EXIT",
-        "STOP_LOSS",
-        "TRIM_REVIEW",
-        "SELL_REVIEW",
-        "LOSS_CONTROL",
-        "LOSS_CONTROL_WATCH",
-    }
-    action_groups = _normalized_values(
-        decision.get("actionGroup"),
-        relation.get("actionGroup"),
-    )
-    decision_stages = _normalized_values(
-        decision.get("decisionStage"),
-        relation.get("decisionStage"),
-    )
-    return bool(
-        action_values & urgent_actions
-        or action_groups & {"LOSSCONTROL", "RISKMANAGEMENT", "EVENTRISK"}
-        or decision_stages & {"RISK_REVIEW", "LOSS_REDUCE", "LOSS_CONTROL", "EXIT_REVIEW"}
-    )
-
-
-def _structured_material_external_event_reason(context: Dict[str, object]) -> str:
-    relation_diff = _mapping(context.get("ontologyRelationDiff"))
-    relation = _mapping(context.get("ontologyRelationContext"))
-    if not relation_diff.get("material") or not is_graph_backed_relation_context(relation):
-        return ""
-    source_types = {
-        str(item or "").strip()
-        for item in context.get("sourceSignalTypes") or []
-        if str(item or "").strip()
-    }
-    insight = _mapping(context.get("ontologyInsight"))
-    semantic = _mapping(insight.get("semanticComponents"))
-    event_keys = [
-        str(item or "").strip().lower()
-        for item in semantic.get("materialSourceEventKeys") or insight.get("materialSourceEventKeys") or []
-        if str(item or "").strip()
-    ]
-    if "externalCryptoMove" in source_types:
-        return "크립토 급변이 TypeDB 투자 판단을 바꾼 중요 사건이라 장 시간 외에도 발송"
-    if "externalMacroShift" in source_types:
-        return "금리·환율 등 거시 변화가 TypeDB 투자 판단을 바꾼 중요 사건이라 장 시간 외에도 발송"
-    if "newsDigest" in source_types or any(
-        marker in key
-        for key in event_keys
-        for marker in (":news:", ":article:", ":rss:", ":filing:", ":sec:")
-    ):
-        return "새 뉴스·공시가 TypeDB 투자 판단을 바꾼 중요 사건이라 장 시간 외에도 발송"
-    return ""
-
-
-def market_hours_important_exception_reason(message_type: str, context: Dict[str, object]) -> str:
-    key = str(message_type or (context or {}).get("messageType") or "").strip()
-    context = context or {}
-    if key == "externalDartDisclosure":
-        return "공시는 장 시간 외에도 확인이 필요한 이벤트라 발송"
-    if key != "investmentInsight":
-        return ""
-    if _structured_disclosure_changed_decision(context):
-        return "새 공시가 TypeDB 판단을 실제로 바꾼 중요 이벤트라 장 시간 외에도 발송"
-    if _structured_urgent_investment_transition(context):
-        return "TypeDB 관계가 즉시 손실·위험 대응 단계로 바뀌어 장 시간 외에도 발송"
-    material_event_reason = _structured_material_external_event_reason(context)
-    if material_event_reason:
-        return material_event_reason
-    return ""
-
-
 def parse_hhmm(value: object):
     parts = str(value or "").strip().split(":")
     if len(parts) < 2:
@@ -353,7 +224,7 @@ def evaluate_market_hours(
         return MarketHoursDecision(
             False,
             status="bypass",
-            reason="장 시간 필터 꺼짐",
+            reason="장 상태 기록 꺼짐",
             off_hours_mode=normalized_off_hours_mode,
         )
     market = infer_market_from_context(message_type, context)
@@ -407,21 +278,12 @@ def evaluate_market_hours(
     else:
         reason = market_label + " 닫힘 (" + session_summary(sessions) + ")"
         status = "closed"
-        if normalized_off_hours_mode == OFF_HOURS_SEND_ALL:
-            exception_reason = "모든 장외 투자 알림을 받도록 설정되어 발송"
-        elif normalized_off_hours_mode == OFF_HOURS_IMPORTANT_ONLY:
-            exception_reason = market_hours_important_exception_reason(message_type, context)
-        else:
-            exception_reason = ""
-        if exception_reason:
-            reason = reason + " · " + exception_reason
-            status = "closed_exception"
     return MarketHoursDecision(
         True,
         market=market,
         label=label,
         status=status,
-        should_send=bool(matched_session) or status == "closed_exception",
+        should_send=True,
         reason=reason,
         local_time=local_time,
         open_time=open_time,

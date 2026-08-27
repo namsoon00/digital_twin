@@ -162,20 +162,29 @@ class NotificationDispatchEligibilityService:
         )
         context.update(decision.to_context())
         context["dispatchMarketHoursGate"] = {
-            "version": "dispatch-market-hours-v1",
+            "version": "dispatch-market-hours-v2",
             "stage": stage,
             "status": decision.status,
-            "decision": "send" if decision.should_send else "defer",
+            "decision": "send",
+            "blockingDisabled": True,
             "reason": decision.reason,
             "checkedAt": decision.local_time,
             "offHoursDeliveryMode": decision.off_hours_mode,
         }
+        context["marketHoursDecision"] = "advisory" if decision.status == "closed" else "send"
         if decision.status in {"closed", "closed_exception"}:
             context["marketHoursPriceBasis"] = {
                 "version": "market-hours-price-basis-v1",
                 "status": "closed-market-reference",
                 "reason": "장 마감 상태의 표시 가격은 실시간 체결가격이 아닐 수 있어 주문 전에 다시 확인해야 합니다.",
             }
+        if str(context.get("deliverySuppressionReason") or "") in {
+            "market_closed",
+            "market_hours",
+            "market_closed_at_dispatch",
+        }:
+            context.pop("deliverySuppressionReason", None)
+        context.pop("marketHoursDeferral", None)
         job.context = context
         if str(job.message_type or "") == INVESTMENT_INSIGHT and stage == "AI 판단 전":
             context["preAiMarketHoursAssessment"] = {
@@ -188,18 +197,7 @@ class NotificationDispatchEligibilityService:
             }
             job.context = context
             return True
-        if decision.should_send:
-            return True
-        reason = stage + " 장 운영 상태 재검증: " + str(decision.reason or "장 운영 시간 외")
-        context["deliverySuppressionReason"] = "market_closed_at_dispatch"
-        context["marketHoursDeferral"] = {
-            "version": "market-hours-deferral-v1",
-            "status": "deferred-to-next-material-observation",
-            "reason": "닫힌 장의 이전 작업은 폐기하고 다음 유효한 자료 변화에서 다시 판단합니다.",
-        }
-        job.context = context
-        self.suppress(job, reason)
-        return False
+        return True
 
     def apply_dispatch_freshness_gate(self, job: NotificationJob, stage: str) -> bool:
         if not self.freshness_enabled:
@@ -213,32 +211,29 @@ class NotificationDispatchEligibilityService:
         job.context = sanitize_notification_context_for_freshness(context, decision, now=now)
         if decision.should_send:
             return True
-        stale_investment_blocking = str(
-            self.settings.get("notificationInvestmentInsightStaleBlockingEnabled", "1")
-        ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
-        if str(job.message_type or "") == INVESTMENT_INSIGHT and not stale_investment_blocking:
-            context = dict(job.context or {})
-            context["dataFreshnessDecision"] = "advisory"
-            context["investmentInsightFreshnessAdvisory"] = {
-                "version": "investment-insight-freshness-advisory-v1",
-                "blockingDisabled": True,
-                "stage": stage,
-                "status": str(decision.status or ""),
-                "reason": str(decision.reason or ""),
-                "ageMinutes": decision.age_minutes,
-                "maxAgeMinutes": decision.max_age_minutes,
-                "staleSources": list(decision.stale_sources or []),
-            }
-            context.pop("deliverySuppressionReason", None)
-            job.context = context
-            return True
         reason = stage + " 데이터 신선도 기준 미통과: " + str(decision.reason or decision.status)
         recheck = self.request_fresh_data_recheck(job, stage, reason)
-        job.context["deliverySuppressionReason"] = (
-            "stale_data_recheck_requested" if recheck.get("requested") else "stale_data_at_dispatch"
-        )
-        self.suppress(job, reason)
-        return False
+        context = dict(job.context or {})
+        context["dataFreshnessDecision"] = "advisory"
+        context["notificationFreshnessAdvisory"] = {
+            "version": "notification-freshness-advisory-v1",
+            "blockingDisabled": True,
+            "stage": stage,
+            "status": str(decision.status or ""),
+            "reason": str(decision.reason or ""),
+            "ageMinutes": decision.age_minutes,
+            "maxAgeMinutes": decision.max_age_minutes,
+            "staleSources": list(decision.stale_sources or []),
+            "recheckRequested": bool(recheck.get("requested")),
+        }
+        if str(context.get("deliverySuppressionReason") or "") in {
+            "stale_data",
+            "stale_data_at_dispatch",
+            "stale_data_recheck_requested",
+        }:
+            context.pop("deliverySuppressionReason", None)
+        job.context = context
+        return True
 
     def apply_ai_freshness_headroom_gate(self, job: NotificationJob) -> bool:
         if not self.freshness_enabled or not bool_setting(
@@ -253,25 +248,13 @@ class NotificationDispatchEligibilityService:
                 "blockingDisabled": True,
                 "reason": "데이터 신선도 검증이 비활성화되어 AI 처리시간 여유를 차단 조건으로 사용하지 않습니다.",
             }
-            context.pop("deliverySuppressionReason", None)
+            if str(context.get("deliverySuppressionReason") or "") == "ai_freshness_headroom_recheck":
+                context.pop("deliverySuppressionReason", None)
             job.context = context
             return True
         if not self.ai_defer_predicate(job):
             return True
         context = dict(job.context or {})
-        stale_investment_blocking = str(
-            self.settings.get("notificationInvestmentInsightStaleBlockingEnabled", "1")
-        ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
-        if str(job.message_type or "") == INVESTMENT_INSIGHT and not stale_investment_blocking:
-            context["aiFreshnessHeadroomGate"] = {
-                "version": "ai-freshness-headroom-v1",
-                "decision": "advisory",
-                "blockingDisabled": True,
-                "reason": "투자 인사이트는 AI 처리시간 여유 부족만으로 차단하지 않습니다.",
-            }
-            context.pop("deliverySuppressionReason", None)
-            job.context = context
-            return True
         try:
             age = float(context.get("dataFreshnessAgeMinutes"))
             maximum = float(context.get("dataFreshnessMaxAgeMinutes"))
@@ -288,17 +271,19 @@ class NotificationDispatchEligibilityService:
         recheck = self.request_fresh_data_recheck(job, "AI 큐 등록 전", reason)
         context = dict(job.context or {})
         context["aiFreshnessHeadroomGate"] = {
-            "version": "ai-freshness-headroom-v1",
-            "decision": "refresh",
+            "version": "ai-freshness-headroom-v2",
+            "decision": "advisory",
+            "blockingDisabled": True,
             "ageMinutes": age,
             "maxAgeMinutes": maximum,
             "reserveMinutes": reserve,
             "recheckRequested": bool(recheck.get("requested")),
+            "reason": reason,
         }
-        context["deliverySuppressionReason"] = "ai_freshness_headroom_recheck"
+        if str(context.get("deliverySuppressionReason") or "") == "ai_freshness_headroom_recheck":
+            context.pop("deliverySuppressionReason", None)
         job.context = context
-        self.suppress(job, reason)
-        return False
+        return True
 
     def request_fresh_data_recheck(self, job: NotificationJob, stage: str, reason: str) -> Dict[str, object]:
         if str(job.message_type or "") != INVESTMENT_INSIGHT or not callable(self.fresh_data_recheck_requester):

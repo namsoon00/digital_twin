@@ -557,7 +557,7 @@ class NotificationRuleDecision:
             "marketHoursMarket": self.market_hours_market,
             "marketHoursLabel": self.market_hours_label,
             "marketHoursStatus": self.market_hours_status,
-            "marketHoursDecision": "send" if self.market_hours_status != "closed" else "suppressed",
+            "marketHoursDecision": "advisory" if self.market_hours_status == "closed" else "send",
             "marketHoursReason": self.market_hours_reason,
             "marketHoursLocalTime": self.market_hours_local_time,
             "marketHoursOpenTime": self.market_hours_open_time,

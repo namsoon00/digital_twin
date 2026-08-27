@@ -11611,7 +11611,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual(["important"], migrated.terms)
         self.assertEqual(17, migrated.score)
 
-    def test_market_hours_rule_suppresses_stock_alerts_after_close(self):
+    def test_market_hours_rule_keeps_stock_alerts_deliverable_after_close(self):
         rule = default_notification_rule("holdingTiming")
         job = NotificationJob.create(
             "보유 타이밍",
@@ -11621,11 +11621,14 @@ class PythonServiceTests(unittest.TestCase):
             context={"symbol": "005930", "title": "삼성전자"},
         )
         decision = evaluate_notification_rule(job, rule)
+        delivery_before_market_check = decision.should_send
+        suppression_before_market_check = decision.suppression_reason
 
         decision = apply_market_hours_rule(decision, rule, job, datetime(2026, 7, 3, 11, 30, tzinfo=timezone.utc))
 
-        self.assertFalse(decision.should_send)
-        self.assertEqual("market_closed", decision.suppression_reason)
+        self.assertEqual(delivery_before_market_check, decision.should_send)
+        self.assertEqual(suppression_before_market_check, decision.suppression_reason)
+        self.assertNotEqual("market_closed", decision.suppression_reason)
         self.assertEqual("KR", decision.market_hours_market)
         self.assertEqual("closed", decision.market_hours_status)
         self.assertIn("국장", decision.market_hours_reason)
@@ -11640,10 +11643,11 @@ class PythonServiceTests(unittest.TestCase):
             context={"symbol": "AAPL", "title": "Apple"},
         )
         decision = evaluate_notification_rule(job, rule)
+        delivery_before_market_check = decision.should_send
 
         decision = apply_market_hours_rule(decision, rule, job, datetime(2026, 7, 2, 15, 0, tzinfo=timezone.utc))
 
-        self.assertTrue(decision.should_send)
+        self.assertEqual(delivery_before_market_check, decision.should_send)
         self.assertEqual("US", decision.market_hours_market)
         self.assertEqual("open", decision.market_hours_status)
         self.assertIn("미장", decision.market_hours_reason)
@@ -11665,23 +11669,27 @@ class PythonServiceTests(unittest.TestCase):
             context={"symbol": "AAPL", "title": "Apple"},
         )
 
+        kr_before = evaluate_notification_rule(kr_job, rule)
+        us_before = evaluate_notification_rule(us_job, rule)
+        kr_delivery_before_market_check = kr_before.should_send
+        us_delivery_before_market_check = us_before.should_send
         kr_decision = apply_market_hours_rule(
-            evaluate_notification_rule(kr_job, rule),
+            kr_before,
             rule,
             kr_job,
             datetime(2026, 7, 2, 23, 30, tzinfo=timezone.utc),
         )
         us_decision = apply_market_hours_rule(
-            evaluate_notification_rule(us_job, rule),
+            us_before,
             rule,
             us_job,
             datetime(2026, 7, 2, 21, 0, tzinfo=timezone.utc),
         )
 
-        self.assertTrue(kr_decision.should_send)
+        self.assertEqual(kr_delivery_before_market_check, kr_decision.should_send)
         self.assertEqual("open", kr_decision.market_hours_status)
         self.assertIn("프리마켓", kr_decision.market_hours_reason)
-        self.assertTrue(us_decision.should_send)
+        self.assertEqual(us_delivery_before_market_check, us_decision.should_send)
         self.assertEqual("open", us_decision.market_hours_status)
         self.assertIn("애프터마켓", us_decision.market_hours_reason)
 
@@ -11729,7 +11737,7 @@ class PythonServiceTests(unittest.TestCase):
         self.assertEqual("손익률 개선", profit_improved.label)
         self.assertEqual(1, profit_improved.value)
 
-    def test_notification_queue_suppresses_stale_data_freshness(self):
+    def test_notification_queue_keeps_stale_data_freshness_as_advisory(self):
         queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         stale_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
         job = NotificationJob.create(
@@ -11754,15 +11762,15 @@ class PythonServiceTests(unittest.TestCase):
             },
         )
 
-        self.assertFalse(queue.enqueue(job))
+        self.assertTrue(queue.enqueue(job))
         saved = queue.jobs()[0]
 
-        self.assertEqual("suppressed", saved.status)
-        self.assertIn("데이터 신선도 기준 미통과", saved.last_error)
-        self.assertEqual("stale_data", saved.context["honeySuppressionReason"])
-        self.assertEqual("suppressed", saved.context["dataFreshnessDecision"])
+        self.assertEqual("pending", saved.status)
+        self.assertEqual("", saved.last_error)
+        self.assertEqual("advisory", saved.context["dataFreshnessDecision"])
+        self.assertTrue(saved.context["notificationFreshnessAdvisory"]["blockingDisabled"])
 
-    def test_notification_queue_suppresses_missing_required_data_freshness(self):
+    def test_notification_queue_keeps_missing_data_freshness_as_advisory(self):
         queue = TestNotificationJobStore(test_store_seed(self.temp.name))
         job = NotificationJob.create(
             "크립토 변동",
@@ -11778,13 +11786,14 @@ class PythonServiceTests(unittest.TestCase):
             },
         )
 
-        self.assertFalse(queue.enqueue(job))
+        self.assertTrue(queue.enqueue(job))
         saved = queue.jobs()[0]
 
-        self.assertEqual("suppressed", saved.status)
+        self.assertEqual("pending", saved.status)
         self.assertEqual("missing", saved.context["dataFreshnessStatus"])
         self.assertEqual(["unknown"], saved.context["dataFreshnessStaleSources"])
-        self.assertIn("신선도 메타데이터 없음", saved.last_error)
+        self.assertEqual("advisory", saved.context["dataFreshnessDecision"])
+        self.assertIn("신선도 메타데이터 없음", saved.context["notificationFreshnessAdvisory"]["reason"])
 
     def test_investment_insight_state_cooldown_suppresses_score_only_relation_noise(self):
         db_path = test_store_seed(self.temp.name)

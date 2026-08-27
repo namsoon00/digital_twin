@@ -84,7 +84,7 @@ def graph_risk_context(material=True):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
-    def test_closed_market_admission_is_deferred_until_after_ai(self):
+    def test_closed_market_admission_remains_deliverable(self):
         policy = NotificationAdmissionPolicy()
         job = NotificationJob.create(
             "test",
@@ -109,7 +109,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertTrue(outcome.accepted)
         self.assertEqual("pending", job.status)
-        self.assertEqual("market_closed", job.context["preDecisionDeliveryGate"]["reasonCode"])
+        self.assertEqual("eligible", job.context["deliveryDecision"])
+        self.assertEqual("advisory", job.context["marketHoursDecision"])
+        self.assertNotIn("preDecisionDeliveryGate", job.context)
         self.assertNotIn("deliverySuppressionReason", job.context)
 
     def test_typedb_fallback_is_sent_even_when_final_action_is_unchanged(self):
@@ -174,7 +176,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("suppress", decision["decision"])
         self.assertEqual("graph_candidate_only_change", decision["suppressionReason"])
 
-    def test_nearly_expired_investment_snapshot_is_refreshed_before_ai_queue(self):
+    def test_nearly_expired_investment_snapshot_requests_refresh_without_blocking_ai(self):
         queue = SuppressionQueue()
         requested = []
         runner = NotificationQueueRunner(
@@ -202,13 +204,14 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         allowed = runner.apply_ai_freshness_headroom_gate(job)
 
-        self.assertFalse(allowed)
+        self.assertTrue(allowed)
         self.assertEqual(["005930"], requested)
-        self.assertEqual("refresh", job.context["aiFreshnessHeadroomGate"]["decision"])
-        self.assertEqual("ai_freshness_headroom_recheck", job.context["deliverySuppressionReason"])
-        self.assertIn("데이터 유효시간", queue.reason)
+        self.assertEqual("advisory", job.context["aiFreshnessHeadroomGate"]["decision"])
+        self.assertTrue(job.context["aiFreshnessHeadroomGate"]["blockingDisabled"])
+        self.assertNotIn("deliverySuppressionReason", job.context)
+        self.assertEqual("", queue.reason)
 
-    def test_closed_market_is_advisory_before_ai_and_blocks_at_dispatch(self):
+    def test_closed_market_is_advisory_before_ai_and_at_dispatch(self):
         queue = SuppressionQueue()
         runner = NotificationQueueRunner(
             queue,
@@ -230,10 +233,14 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("closed", job.context["marketHoursStatus"])
         self.assertFalse(job.context["preAiMarketHoursAssessment"]["blocking"])
 
-        self.assertFalse(runner.apply_market_hours_gate(job, "발송 직전"))
-        self.assertEqual("market_closed_at_dispatch", job.context["deliverySuppressionReason"])
+        self.assertTrue(runner.apply_market_hours_gate(job, "발송 직전"))
+        self.assertEqual("send", job.context["dispatchMarketHoursGate"]["decision"])
+        self.assertTrue(job.context["dispatchMarketHoursGate"]["blockingDisabled"])
+        self.assertEqual("advisory", job.context["marketHoursDecision"])
+        self.assertNotIn("deliverySuppressionReason", job.context)
+        self.assertEqual("", queue.reason)
 
-    def test_material_typedb_risk_transition_bypasses_closed_market(self):
+    def test_material_typedb_risk_transition_records_closed_market_without_special_case(self):
         queue = SuppressionQueue()
         runner = NotificationQueueRunner(
             queue,
@@ -249,8 +256,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
         )
 
         self.assertTrue(runner.apply_market_hours_gate(job, "발송 직전"))
-        self.assertEqual("closed_exception", job.context["marketHoursStatus"])
-        self.assertIn("TypeDB 관계", job.context["marketHoursReason"])
+        self.assertEqual("closed", job.context["marketHoursStatus"])
+        self.assertEqual("advisory", job.context["marketHoursDecision"])
+        self.assertNotIn("TypeDB 관계", job.context["marketHoursReason"])
 
 
 if __name__ == "__main__":

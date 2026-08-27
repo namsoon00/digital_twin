@@ -37,11 +37,11 @@ The domain package imports neither MySQL nor Telegram.
 `application/notification/` owns use cases:
 
 - `intake.py`: converts alerts or text into the stable request and durable job.
-- `admission.py`: evaluates cooldown, similarity, market-hours, and initial
-  freshness policy from repository-supplied history facts. For graph-backed
-  investment insights, delivery-only failures are retained as deferred policy
-  facts so they cannot prevent the AI decision from being completed.
-- `eligibility.py`: rechecks live operational state and freshness at dispatch.
+- `admission.py`: evaluates cooldown and similarity, and records market-hours
+  and initial freshness advisories from repository-supplied facts. Market-hours
+  and freshness findings do not defer or suppress delivery.
+- `eligibility.py`: rechecks live operational state and records non-blocking
+  market-hours and freshness advisories at dispatch.
 - `rendering.py`: creates the exact send-time artifact and content hash.
 - `dispatch.py`: selects the account or operations audience and records the
   concrete delivery attempt.
@@ -71,14 +71,14 @@ The old `application/notification_service.py` and
    the source event and reasoning identities into `NotificationSourceTrace`.
 3. The MySQL adapter evaluates admission policy and atomically stores the job
    plus `received` and `eligibility_checked` events.
-4. The worker claims the job. A closed market, cooldown, or similar-message
-   result does not block an otherwise material investment insight before AI.
-   AI-gated jobs enter `awaiting_decision`, persist the final DecisionEpisode,
-   and keep the earlier delivery assessment for the post-decision gate.
+4. The worker claims the job. Cooldown or similar-message results may suppress
+   delivery, while closed-market and stale-data findings are recorded without
+   blocking AI or delivery. AI-gated jobs enter `awaiting_decision` and persist
+   the final DecisionEpisode.
 5. Dispatch eligibility is checked after the decision is stored. Market-hours
-   policy may send all off-hours decisions, send only TypeDB-backed material
-   events and urgent transitions, or defer delivery until a later observation.
-   The worker then freezes and validates one `CustomerDeliveryExplanation`.
+   and freshness are rechecked as advisories; stale investment data may request
+   an asynchronous refresh while the current notification continues. The
+   worker then freezes and validates one `CustomerDeliveryExplanation`.
    A contradictory investment explanation is suppressed and reported to the
    operations channel. The final text is rendered once and hashed only after
    that contract passes.

@@ -1210,7 +1210,6 @@ def apply_market_hours_rule(
     decision.off_hours_delivery_mode = market_decision.off_hours_mode
     if config.enabled and config.market_hours_enabled and market_decision.status in {"open", "closed", "closed_exception"}:
         decision.reasons.append("장 시간 " + market_decision.reason)
-    if config.enabled and config.market_hours_enabled and not market_decision.should_send:
-        reason_code = "market_closed" if market_decision.status == "closed" else "market_hours"
-        decision.mark_suppressed(reason_code, market_decision.reason or "장 운영 시간 정책으로 발송을 보류합니다.")
+    # Market hours describe the price basis, but do not decide notification delivery.
+    # Users may intentionally receive review alerts while a market is closed.
     return decision

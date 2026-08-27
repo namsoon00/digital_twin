@@ -10355,7 +10355,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("16384", workers["typedb"]["maxSizeMb"])
         self.assertEqual("0", workers["typedb"]["ageResetEnabled"])
         self.assertEqual("127.0.0.1:1729", workers["typedb"]["healthAddress"])
-        self.assertEqual("1800", workers["typedb"]["startupWaitSeconds"])
+        self.assertEqual("3600", workers["typedb"]["startupWaitSeconds"])
         self.assertEqual("0", workers["typedb"]["seedOnStart"])
         self.assertEqual("1", workers["typedb"]["seedReplaceRuleBox"])
         self.assertEqual("1", workers["typedb"]["seedKeepInference"])
@@ -10535,7 +10535,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "ontology-reasoning": {"label": "Python ontology reasoning worker"},
         }
 
-        def fake_start_worker(spec):
+        def fake_start_worker(spec, wait_for_ready=True):
             calls.append(spec["label"])
             return 1 if spec.get("role") == "typedb" else 0
 

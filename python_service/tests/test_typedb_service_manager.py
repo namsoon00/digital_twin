@@ -257,6 +257,14 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             ],
         )
 
+    def test_typedb_worker_does_not_accept_a_restart_loop_prone_startup_wait(self):
+        spec = service_manager.typedb_worker_spec({
+            "typedbPassword": "test-strong-password",
+            "typedbStartupWaitSeconds": "1800",
+        })
+
+        self.assertEqual("3600", spec["startupWaitSeconds"])
+
     def test_typedb_rotation_resource_guard_blocks_saturated_host(self):
         result = service_manager.typedb_rotation_resource_preflight(
             {
@@ -1197,13 +1205,13 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
     def test_typedb_restart_maintenance_window_covers_full_bounded_startup(self):
         window = service_manager.typedb_restart_maintenance_window_seconds({
-            "startupWaitSeconds": "600",
+            "startupWaitSeconds": "3600",
             "seedTimeoutSeconds": "360",
             "seedRetryCount": "2",
             "sharedWorldProjectionRebuildTimeoutSeconds": "900",
         })
 
-        self.assertEqual(2640, window)
+        self.assertEqual(5880, window)
 
     def test_supervisor_honors_explicit_maintenance_deadline_while_owner_runs(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -294,6 +294,14 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "--logging.directory",
         str(log_dir),
     ] if executable else []
+    # The production graph can spend more than 30 minutes replaying WAL and
+    # rebuilding its type cache. A shorter legacy setting must not turn that
+    # healthy recovery into a restart loop. This is an upper wait boundary;
+    # readiness still returns immediately on small or already-warm stores.
+    startup_wait_seconds = max(
+        3600,
+        int_value((settings or {}).get("typedbStartupWaitSeconds"), 3600, 0),
+    )
     return {
         "label": "TypeDB ontology graph store",
         "pid": data_dir() / "typedb.pid",
@@ -363,11 +371,9 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "typedbDatabase": primary_database,
         "managedTypeDbDatabases": managed_databases,
         "typedbTlsEnabled": str((settings or {}).get("typedbTlsEnabled") or os.environ.get("TYPEDB_TLS_ENABLED") or "0"),
-        # A durable TypeDB may need several minutes to replay its WAL and
-        # rebuild the type cache after a clean server restart.  Treating that
-        # normal recovery as a 60-second failure leaves every dependent worker
-        # down and turns a recoverable restart into a reasoning backlog.
-        "startupWaitSeconds": str((settings or {}).get("typedbStartupWaitSeconds") or "1800"),
+        # A durable TypeDB may need tens of minutes to replay its WAL and
+        # rebuild the type cache after a clean server restart.
+        "startupWaitSeconds": str(startup_wait_seconds),
         # Active reasoning deployments are immutable release bundles. Startup
         # may serve their existing graph, but must not rewrite TBox/RuleBox to
         # match the current checkout. Isolated blue-green candidates override
@@ -3257,8 +3263,13 @@ def typedb_restart_maintenance_window_seconds(spec: Dict[str, object]) -> int:
     seed_attempts = int_value(spec.get("seedRetryCount"), 2, 0) + 1
     seed_seconds = int_value(spec.get("seedTimeoutSeconds"), 180, 1) * seed_attempts
     rebuild_seconds = int_value(spec.get("sharedWorldProjectionRebuildTimeoutSeconds"), 900, 0)
-    # Keep the fallback recovery bounded even if a local setting is malformed.
-    return min(3600, max(300, startup_seconds + seed_seconds + rebuild_seconds + 60))
+    # The maintenance lease must outlive every bounded recovery stage. If it
+    # expires during WAL replay or a schema seed, the supervisor can start a
+    # competing recovery and repeatedly discard valid progress.
+    return min(10800, max(
+        600,
+        startup_seconds + seed_seconds + rebuild_seconds + 300,
+    ))
 
 
 def begin_supervisor_maintenance(reason: str, max_age_seconds: int = 300) -> str:

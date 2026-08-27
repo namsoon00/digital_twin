@@ -178,7 +178,27 @@
     return { healthy: "정상", warning: "확인", critical: "장애", unknown: "미확인" }[String(state || "")] || state || "미확인";
   }
 
-  function operationsHealth(payload) {
+  function performanceSummary(payload, name) {
+    var rows = payload && Array.isArray(payload.summary) ? payload.summary : [];
+    return rows.filter(function (item) { return item.name === name; })[0] || {};
+  }
+
+  function operationsWebPerformance(performance) {
+    var render = performanceSummary(performance, "render");
+    var api = performanceSummary(performance, "api-request");
+    var cache = performanceSummary(performance, "api-cache-hit");
+    var hasSamples = number(render.sampleCount) + number(api.sampleCount) > 0;
+    if (!hasSamples) return "";
+    return '<section class="cws-section cws-web-performance"><header><div><span>브라우저 응답성</span><h2>현재 세션 화면 성능</h2></div><strong>최근 ' + escapeHtml((performance.samples || []).length) + '회</strong></header><div class="cws-metrics">' +
+      metric("화면 렌더 p95", number(render.p95Ms).toFixed(1) + "ms", "최대 " + number(render.maxMs).toFixed(1) + "ms", number(render.p95Ms) <= 200 ? "positive" : "warning") +
+      metric("API p95", number(api.p95Ms).toFixed(0) + "ms", "최대 " + number(api.maxMs).toFixed(0) + "ms", number(api.p95Ms) <= 1000 ? "positive" : "warning") +
+      metric("렌더 표본", number(render.sampleCount) + "회", "현재 브라우저 세션") +
+      metric("API 표본", number(api.sampleCount) + "회", "실제 네트워크 요청") +
+      metric("캐시 적중", number(cache.sampleCount) + "회", "중복 읽기 절감", "positive") +
+      '</div><footer class="cws-section-note">렌더 p95 200ms, API p95 1,000ms를 화면 반응성 기준으로 사용합니다.</footer></section>';
+  }
+
+  function operationsHealth(payload, performance) {
     var items = Array.isArray(payload.components) ? payload.components : [];
     var storage = payload.storage || {};
     var retention = storage.retentionPolicy || {};
@@ -194,7 +214,7 @@
       '<div><dt>추론 사례</dt><dd>' + escapeHtml(retention.reasoningCaseDays || 90) + '일</dd></div>' +
       '<div><dt>시계열</dt><dd>3분 ' + escapeHtml((retention.timeSeriesDays || {})["3m"] || 7) + '일 · 일봉 ' + escapeHtml((retention.timeSeriesDays || {})["1d"] || 1825) + '일</dd></div>' +
       '</dl></section>';
-    return storageSummary + retentionSummary + '<section class="cws-section cws-section-table"><header><div><span>실행 상태</span><h2>핵심 구성요소</h2></div><strong>' + items.length + '개</strong></header><div class="cws-health-list">' + items.map(function (item) {
+    return storageSummary + operationsWebPerformance(performance) + retentionSummary + '<section class="cws-section cws-section-table"><header><div><span>실행 상태</span><h2>핵심 구성요소</h2></div><strong>' + items.length + '개</strong></header><div class="cws-health-list">' + items.map(function (item) {
       return '<article class="' + escapeHtml(item.state || "unknown") + '"><span class="cws-health-dot" aria-hidden="true"></span><div><strong>' + escapeHtml(item.label) + '</strong><em>' + escapeHtml(item.detail) + '</em></div><span><b>' + escapeHtml(healthLabel(item.state)) + '</b><time>' + escapeHtml(item.updatedAt ? clock(item.updatedAt) : "") + '</time></span></article>';
     }).join("") + '</div></section>';
   }
@@ -266,7 +286,7 @@
           : view === "reasoning" ? operationsReasoning(payload)
             : view === "delivery" ? operationsDelivery(payload)
               : view === "governance" ? operationsGovernance()
-                : operationsHealth(payload);
+                : operationsHealth(payload, options.webPerformance);
     return [
       '<div class="cws-page cws-operations">',
       '<div class="cws-metrics">',

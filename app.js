@@ -1052,33 +1052,44 @@
   function requestJson(path, options) {
     options = options || {};
     var key = String(options.key || path);
-    if (!options.force && activeJsonRequests[key]) return activeJsonRequests[key];
+    var runtimePerformance = window.OrbitWebRuntime;
+    if (!options.force && activeJsonRequests[key]) {
+      if (runtimePerformance) runtimePerformance.record("api-deduplicated", 0, { path: path, key: key });
+      return activeJsonRequests[key];
+    }
     var cacheTtlMs = Math.max(0, Number(options.cacheTtlMs == null ? JSON_RESPONSE_CACHE_MS : options.cacheTtlMs));
     var cached = jsonResponseCache[key];
     if (!options.force && cacheTtlMs > 0 && cached && (Date.now() - cached.storedAt) <= cacheTtlMs) {
+      if (runtimePerformance) runtimePerformance.record("api-cache-hit", 0, { path: path, key: key });
       return Promise.resolve(cached.payload);
     }
     var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
     var timeoutMs = Math.max(1000, Number(options.timeoutMs || REQUEST_TIMEOUT_MS));
     var timeout = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
     var activityId = options.silent ? "" : beginNetworkActivity(path, "GET");
+    var requestMetric = runtimePerformance ? runtimePerformance.begin("api-request", { path: path, key: key }) : "";
+    var responseStatus = 0;
+    var requestOutcome = "ok";
     var request = fetch(path, {
       headers: { "Accept": "application/json" },
       cache: "no-store",
       signal: controller ? controller.signal : undefined
     }).then(function (response) {
+      responseStatus = Number(response.status || 0);
       return response.json().then(function (payload) {
         if (!response.ok) throw new Error(payload.error || "요청 실패");
         if (cacheTtlMs > 0) jsonResponseCache[key] = { payload: payload, storedAt: Date.now() };
         return payload;
       });
     }).catch(function (error) {
+      requestOutcome = error && error.name === "AbortError" ? "timeout" : "error";
       if (error && error.name === "AbortError") throw new Error("응답 시간이 초과되었습니다. 마지막 데이터를 유지합니다.");
       throw error;
     }).finally(function () {
       if (timeout) clearTimeout(timeout);
       if (activeJsonRequests[key] === request) delete activeJsonRequests[key];
       if (activityId) endNetworkActivity(activityId);
+      if (requestMetric) runtimePerformance.end(requestMetric, { status: responseStatus, outcome: requestOutcome });
     });
     activeJsonRequests[key] = request;
     return request;
@@ -1375,8 +1386,28 @@
 
   function initInstrumentTimelineChart() {
     var container = app.querySelector("[data-instrument-candle-chart]");
-    if (!container || !window.LightweightCharts) {
+    if (!container) {
       if (instrumentTimelineChart) destroyInstrumentTimelineChart();
+      return;
+    }
+    if (!window.LightweightCharts) {
+      var runtime = window.OrbitWebRuntime;
+      if (runtime && typeof runtime.loadScriptOnce === "function") {
+        container.setAttribute("aria-busy", "true");
+        runtime.loadScriptOnce("vendor/lightweight-charts.standalone.production.js?v=5.2.1", "LightweightCharts")
+          .then(function () {
+            if (container.isConnected) {
+              container.removeAttribute("aria-busy");
+              initInstrumentTimelineChart();
+            }
+          })
+          .catch(function () {
+            if (container.isConnected) {
+              container.removeAttribute("aria-busy");
+              container.innerHTML = '<span class="empty-copy">차트 엔진을 불러오지 못했습니다.</span>';
+            }
+          });
+      }
       return;
     }
     var payloadKey = container.getAttribute("data-instrument-candle-chart") || "";
@@ -2034,7 +2065,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260828-dark-theme-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260828-performance-v2", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -6916,6 +6947,11 @@
       timeoutMs: 12000
     }).then(function (payload) {
       state.marketReadModel = payload || {};
+      if (readModelIsWarming(payload)) {
+        scheduleReadModelPoll("market-instruments", function () { loadMarketReadModel(true); });
+      } else {
+        clearReadModelPoll("market-instruments");
+      }
       return state.marketReadModel;
     }).catch(function (error) {
       state.marketReadModelError = error.message || "시장 종목 요약을 읽지 못했습니다.";
@@ -6977,6 +7013,11 @@
       timeoutMs: 15000
     }).then(function (payload) {
       state.portfolioReadModels[normalized] = payload || {};
+      if (readModelIsWarming(payload)) {
+        scheduleReadModelPoll("portfolio-read-model:" + normalized, function () { loadPortfolioReadModel(normalized, true); });
+      } else {
+        clearReadModelPoll("portfolio-read-model:" + normalized);
+      }
       return state.portfolioReadModels[normalized];
     }).catch(function (error) {
       state.portfolioReadModelError = error.message || "포트폴리오 원장을 읽지 못했습니다.";
@@ -7548,6 +7589,11 @@
       .then(function (payload) {
         state.hypothesisWorkspace = payload && typeof payload === "object" ? payload : {};
         state.hypothesisWorkspaceLoaded = true;
+        if (readModelIsWarming(payload)) {
+          scheduleReadModelPoll("hypothesis-workspace", function () { loadHypothesisWorkspace(true); });
+        } else {
+          clearReadModelPoll("hypothesis-workspace");
+        }
         syncActiveHypothesisLifecycleKey();
         return state.hypothesisWorkspace;
       })
@@ -9542,9 +9588,17 @@
 
     return promise
       .then(function (payload) {
-        state.researchEvidence = payload;
+        var warming = readModelIsWarming(payload);
+        state.researchEvidence = warming && cached && Array.isArray(cached.items)
+          ? cached
+          : payload;
         state.researchEvidenceError = "";
-        writeCachedResearchEvidence(payload);
+        if (!warming) writeCachedResearchEvidence(payload);
+        if (warming) {
+          scheduleReadModelPoll("research-evidence-list", function () { loadResearchEvidence(true); });
+        } else {
+          clearReadModelPoll("research-evidence-list");
+        }
       })
       .catch(function (error) {
         state.researchEvidenceError = error.message || "저장된 근거를 불러오지 못했습니다.";
@@ -12005,8 +12059,14 @@
   }
 
   function renderNow() {
+    var runtimePerformance = window.OrbitWebRuntime;
+    var renderMetric = runtimePerformance ? runtimePerformance.begin("render", {
+      tab: state.activeTab || "overview",
+      detail: String((state.workDetailLayer || {}).type || "")
+    }) : "";
     if (renderSuppressionDepth > 0) {
       renderQueuedDuringSuppression = true;
+      if (renderMetric) runtimePerformance.end(renderMetric, { suppressed: true });
       return;
     }
     applyAppTheme();
@@ -12027,6 +12087,7 @@
       destroyOntologyCytoscapeGraphs();
       app.innerHTML = renderLoading();
       syncNetworkActivityDom();
+      if (renderMetric) runtimePerformance.end(renderMetric, { mode: "loading" });
       return;
     }
     if (!state.snapshot) {
@@ -12037,10 +12098,15 @@
       bindActions();
       syncNetworkActivityDom();
       decorateRenderedBusyControls();
+      if (renderMetric) runtimePerformance.end(renderMetric, { mode: "error" });
       return;
     }
+    var markupMetric = runtimePerformance ? runtimePerformance.begin("render-markup", { tab: state.activeTab || "overview" }) : "";
     var dashboardMarkup = renderDashboard(state.snapshot);
+    if (markupMetric) runtimePerformance.end(markupMetric, { bytes: dashboardMarkup.length });
+    var patchMetric = runtimePerformance ? runtimePerformance.begin("render-dom-patch", { tab: state.activeTab || "overview" }) : "";
     var patchedDashboard = patchStableDashboardMarkup(dashboardMarkup);
+    if (patchMetric) runtimePerformance.end(patchMetric, { patched: patchedDashboard });
     if (!patchedDashboard) {
       destroyOntologyCytoscapeGraphs();
       app.innerHTML = dashboardMarkup;
@@ -12177,6 +12243,11 @@
         loadInvestmentFlowDetail(state.workDetailLayer.key, false);
       }
     }
+    if (renderMetric) runtimePerformance.end(renderMetric, {
+      mode: patchedDashboard ? "stable-patch" : "full",
+      regionReplacement: Boolean(dashboardRegionReplacementOccurred),
+      nodeCount: app.querySelectorAll("*").length
+    });
   }
 
   function renderLoading() {
@@ -15815,10 +15886,14 @@
   function renderOperationsHealthConsole() {
     var workspace = window.OrbitAlphaConsoleWorkspaces;
     var view = normalizeOperationsView(state.activeOperationsView);
+    var webPerformance = window.OrbitWebRuntime && typeof window.OrbitWebRuntime.snapshot === "function"
+      ? window.OrbitWebRuntime.snapshot()
+      : {};
     var body = workspace && typeof workspace.renderOperations === "function"
       ? workspace.renderOperations(state.operationsHealth || {}, view, {
           loading: state.operationsHealthLoading,
-          error: state.operationsHealthError
+          error: state.operationsHealthError,
+          webPerformance: webPerformance
         })
       : renderConsoleEmpty("운영 화면을 준비하지 못했습니다", "웹 자산을 새로고침하세요.");
     return '<div class="managed-page oa-console-page oa-console-page-operations" data-console-workspace="operations">' + body + '</div>';
@@ -28175,6 +28250,11 @@
   function ensureCytoscape() {
     if (window.cytoscape) return Promise.resolve(window.cytoscape);
     if (cytoscapeLoadPromise) return cytoscapeLoadPromise;
+    var runtime = window.OrbitWebRuntime;
+    if (runtime && typeof runtime.loadScriptOnce === "function") {
+      cytoscapeLoadPromise = runtime.loadScriptOnce("vendor/cytoscape.min.js?v=20260707-ontology-graph", "cytoscape");
+      return cytoscapeLoadPromise;
+    }
     cytoscapeLoadPromise = new Promise(function (resolve, reject) {
       var script = document.createElement("script");
       script.src = "vendor/cytoscape.min.js?v=20260707-ontology-graph";

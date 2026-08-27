@@ -10,6 +10,91 @@ from digital_twin import service_manager
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_failed_typedb_candidate_is_retired_and_delivery_settings_are_restored(self):
+        class FakeRegistry:
+            def __init__(self):
+                self.control_state = SimpleNamespace(
+                    active_deployment_id="v2-active",
+                    delivery_deployment_id="v2-active",
+                    candidate_deployment_id="v2-failed",
+                    version=7,
+                )
+                self.set_control_args = None
+                self.retire_args = None
+
+            def control(self):
+                return self.control_state
+
+            def get(self, deployment_id):
+                return {
+                    "v2-active": {
+                        "deploymentId": "v2-active",
+                        "graphStoreBinding": "ontology-active",
+                    },
+                    "v2-failed": {
+                        "deploymentId": "v2-failed",
+                        "graphStoreBinding": "ontology-candidate",
+                    },
+                }.get(deployment_id, {})
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                self.set_control_args = (active, delivery, candidate, expected_version)
+                return SimpleNamespace(
+                    active_deployment_id=active,
+                    delivery_deployment_id=delivery,
+                )
+
+            def retire_unselected(self, engine_version, keep):
+                self.retire_args = (engine_version, list(keep))
+                return {
+                    "retiredDeploymentIds": ["v2-failed"],
+                    "supersededJobCount": 52,
+                }
+
+        registry = FakeRegistry()
+        saved = []
+        result = service_manager.retire_failed_typedb_reasoning_candidate(
+            "ontology-candidate",
+            settings_provider=lambda **kwargs: {},
+            registry_factory=lambda settings: registry,
+            settings_saver=lambda values: saved.append(values),
+        )
+
+        self.assertEqual("retired-failed-candidate", result["status"])
+        self.assertEqual(("v2-active", "v2-active", "", 7), registry.set_control_args)
+        self.assertEqual(("v2", ["v2-active", "v2-active"]), registry.retire_args)
+        self.assertEqual("v2-active", saved[0]["reasoningEngineV2DeploymentId"])
+        self.assertEqual("", saved[0]["reasoningEngineCandidateDeploymentId"])
+        self.assertEqual("ontology-active", saved[0]["reasoningEngineV2TypeDbDatabase"])
+
+    def test_failed_typedb_candidate_cleanup_does_not_retire_unrelated_candidate(self):
+        class FakeRegistry:
+            def control(self):
+                return SimpleNamespace(
+                    active_deployment_id="v2-active",
+                    delivery_deployment_id="v2-active",
+                    candidate_deployment_id="v2-other",
+                    version=3,
+                )
+
+            def get(self, deployment_id):
+                return {"graphStoreBinding": "ontology-other"}
+
+            def set_control(self, *args, **kwargs):
+                raise AssertionError("unrelated candidate control must stay unchanged")
+
+            def retire_unselected(self, *args, **kwargs):
+                raise AssertionError("unrelated candidate must not be retired")
+
+        result = service_manager.retire_failed_typedb_reasoning_candidate(
+            "ontology-failed",
+            settings_provider=lambda **kwargs: {},
+            registry_factory=lambda settings: FakeRegistry(),
+            settings_saver=lambda values: None,
+        )
+
+        self.assertEqual("candidate-not-owned-by-failed-store", result["status"])
+
     def test_log_tail_reads_recent_lines_from_a_large_file(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "worker.log"

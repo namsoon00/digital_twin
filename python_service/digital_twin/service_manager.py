@@ -3918,6 +3918,101 @@ def cleanup_typedb_candidate(candidate: Dict[str, object], remove_data: bool = T
                 shutil.rmtree(path)
 
 
+def retire_failed_typedb_reasoning_candidate(
+    failed_database: str,
+    settings_provider=None,
+    registry_factory=None,
+    settings_saver=None,
+) -> Dict[str, object]:
+    """Remove a failed blue-green candidate from the live control plane.
+
+    Candidate registration deliberately redirects new shadow work before the
+    physical TypeDB store is validated. If validation fails, deleting only the
+    staged files leaves the logical candidate selected and its durable queue
+    grows forever without a worker. Restore delivery ownership and terminalize
+    that candidate's jobs as part of the same failure path.
+    """
+
+    if settings_provider is None:
+        settings_provider = runtime_settings
+    if registry_factory is None:
+        from .infrastructure.operational_store import reasoning_engine_registry_store
+        registry_factory = reasoning_engine_registry_store
+    if settings_saver is None:
+        from .infrastructure.settings import save_runtime_settings
+        settings_saver = save_runtime_settings
+
+    try:
+        try:
+            configured = dict(settings_provider(fast_operational_read=True) or {})
+        except TypeError:
+            configured = dict(settings_provider() or {})
+        registry = registry_factory(configured)
+        control = registry.control()
+        active_id = str(getattr(control, "active_deployment_id", "") or "").strip()
+        delivery_id = str(
+            getattr(control, "delivery_deployment_id", "") or active_id
+        ).strip()
+        candidate_id = str(getattr(control, "candidate_deployment_id", "") or "").strip()
+        if not candidate_id:
+            return {"status": "no-candidate", "retiredDeploymentIds": []}
+
+        candidate = dict(registry.get(candidate_id) or {})
+        candidate_database = str(candidate.get("graphStoreBinding") or "").strip()
+        clean_failed_database = str(failed_database or "").strip()
+        if (
+            not candidate
+            or candidate_id in {active_id, delivery_id}
+            or not clean_failed_database
+            or candidate_database != clean_failed_database
+        ):
+            return {
+                "status": "candidate-not-owned-by-failed-store",
+                "candidateDeploymentId": candidate_id,
+                "candidateDatabase": candidate_database,
+                "failedDatabase": clean_failed_database,
+                "retiredDeploymentIds": [],
+            }
+
+        restored_control = registry.set_control(
+            active_id,
+            delivery_id,
+            "",
+            expected_version=int(getattr(control, "version", 0) or 0),
+        )
+        delivery = dict(registry.get(delivery_id) or {})
+        delivery_database = str(delivery.get("graphStoreBinding") or "").strip()
+        settings_saver({
+            "reasoningEngineV2DeploymentId": delivery_id,
+            "reasoningEngineActiveDeploymentId": active_id,
+            "reasoningEngineDeliveryDeploymentId": delivery_id,
+            "reasoningEngineCandidateDeploymentId": "",
+            "reasoningEngineCandidateReleaseId": "",
+            "reasoningEngineV2TypeDbDatabase": delivery_database,
+        })
+        retirement = dict(
+            registry.retire_unselected("v2", [active_id, delivery_id]) or {}
+        )
+        return {
+            "status": "retired-failed-candidate",
+            "candidateDeploymentId": candidate_id,
+            "candidateDatabase": candidate_database,
+            "activeDeploymentId": str(
+                getattr(restored_control, "active_deployment_id", "") or active_id
+            ),
+            "deliveryDeploymentId": str(
+                getattr(restored_control, "delivery_deployment_id", "") or delivery_id
+            ),
+            **retirement,
+        }
+    except Exception as error:  # noqa: BLE001 - active delivery remains authoritative.
+        return {
+            "status": "candidate-retirement-failed",
+            "reason": str(error)[:300],
+            "retiredDeploymentIds": [],
+        }
+
+
 def swap_typedb_blue_green_data_paths(spec: Dict[str, object], candidate: Dict[str, object]) -> Dict[str, object]:
     active_path = Path(spec.get("dataPath") or data_dir() / "typedb-data")
     candidate_path = Path(candidate.get("dataPath") or "")
@@ -4103,12 +4198,20 @@ def typedb_rotate(
             candidate_validation = typedb_candidate_validation_summary(prepared)
             if prepared.get("status") != "prepared":
                 cleanup_typedb_candidate(candidate, remove_data=True)
+                candidate_retirement = retire_failed_typedb_reasoning_candidate(
+                    str(
+                        prepared.get("database")
+                        or candidate.get("typedbDatabase")
+                        or ""
+                    )
+                )
                 result = {
                     "status": "candidate-failed-active-preserved",
                     "operationId": operation_id,
                     "reason": str(prepared.get("reason") or prepared.get("status") or "candidate validation failed"),
                     "database": str(prepared.get("database") or ""),
                     "candidateValidation": candidate_validation,
+                    "candidateRetirement": candidate_retirement,
                     "activeStorePreserved": True,
                 }
                 record_typedb_auto_rotation_state(

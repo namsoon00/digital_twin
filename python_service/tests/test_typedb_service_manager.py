@@ -202,6 +202,24 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertLess(names.index("typedb"), names.index("reasoning-engine-delivery"))
         self.assertLess(names.index("typedb"), names.index("ontology-world-projection"))
 
+    def test_supervisor_start_defers_graph_workers_while_typedb_recovers(self):
+        specs = {
+            "web": {"label": "web", "role": "web"},
+            "typedb": {"label": "typedb", "role": "typedb"},
+            "reasoning-engine-delivery": {"label": "delivery", "role": "delivery"},
+        }
+        with patch.object(service_manager, "worker_specs", return_value=specs), patch.object(
+            service_manager,
+            "start_worker",
+            return_value=0,
+        ) as start_worker:
+            self.assertEqual(0, service_manager.start(supervisor_async=True))
+
+        started = [call.args[0]["label"] for call in start_worker.call_args_list]
+        self.assertEqual(["web", "typedb"], started)
+        self.assertTrue(start_worker.call_args_list[0].kwargs["wait_for_ready"])
+        self.assertFalse(start_worker.call_args_list[1].kwargs["wait_for_ready"])
+
     def test_managed_executable_finds_explicit_binary_outside_process_path(self):
         with tempfile.TemporaryDirectory() as temp:
             executable = Path(temp) / "node"
@@ -695,7 +713,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 self.assertTrue(service_manager.wait_for_typedb_ready(spec))
 
         bootstrap.assert_called_once_with(spec)
-        clear.assert_called_once_with()
+        # Successful credential bootstrap owns and clears the pending marker.
+        clear.assert_not_called()
 
     def test_reset_marker_requires_one_time_credential_bootstrap(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1202,6 +1221,30 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertEqual(0, service_manager.start_worker(spec))
 
         bootstrap.assert_called_once_with(spec)
+
+    def test_running_typedb_recovery_does_not_block_the_supervisor(self):
+        spec = {
+            "label": "TypeDB ontology graph store",
+            "role": "typedb",
+            "pid": Path("/tmp/orbit-alpha-running-typedb.pid"),
+            "log": Path("/tmp/orbit-alpha-running-typedb.log"),
+            "command": ["typedb", "server"],
+        }
+        with patch.object(service_manager, "read_pid", return_value=123), patch.object(
+            service_manager,
+            "is_running",
+            return_value=True,
+        ), patch.object(
+            service_manager,
+            "typedb_service_ready",
+            return_value=False,
+        ), patch.object(service_manager, "append_log"), patch.object(
+            service_manager,
+            "wait_for_typedb_ready",
+        ) as blocking_wait:
+            self.assertEqual(0, service_manager.start_worker(spec, wait_for_ready=False))
+
+        blocking_wait.assert_not_called()
 
     def test_typedb_restart_maintenance_window_covers_full_bounded_startup(self):
         window = service_manager.typedb_restart_maintenance_window_seconds({

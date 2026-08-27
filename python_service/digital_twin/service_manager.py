@@ -1918,6 +1918,19 @@ def typedb_driver_ready(spec: Dict[str, object]) -> bool:
             pass
 
 
+def typedb_service_ready(spec: Dict[str, object]) -> bool:
+    """Probe a managed TypeDB without blocking the runtime supervisor."""
+    address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
+    if not tcp_ready(address):
+        return False
+    if typedb_driver_ready(spec):
+        clear_typedb_credentials_bootstrap_pending()
+        return True
+    if typedb_credentials_bootstrap_pending():
+        return bootstrap_typedb_credentials_after_reset(spec)
+    return False
+
+
 def typedb_credentials_bootstrap_pending() -> bool:
     return bool(read_typedb_retention_marker().get("credentialsBootstrapPending"))
 
@@ -2001,23 +2014,16 @@ def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
     if wait_seconds <= 0:
         return True
     deadline = time.monotonic() + wait_seconds
-    bootstrap_attempted = False
     while time.monotonic() <= deadline:
         pid = read_pid(spec["pid"])
         if pid and not pid_exists(pid):
             append_log(spec["log"], "not-ready process-exited")
             print(str(spec["label"]) + " did not become ready because the process exited.")
             return False
-        if tcp_ready(address):
-            if typedb_driver_ready(spec):
-                clear_typedb_credentials_bootstrap_pending()
-                append_log(spec["log"], "ready " + str(address))
-                print(str(spec["label"]) + " ready. address=" + str(address))
-                return True
-            if not bootstrap_attempted and typedb_credentials_bootstrap_pending():
-                bootstrap_attempted = True
-                if bootstrap_typedb_credentials_after_reset(spec):
-                    continue
+        if typedb_service_ready(spec):
+            append_log(spec["log"], "ready " + str(address))
+            print(str(spec["label"]) + " ready. address=" + str(address))
+            return True
         time.sleep(0.5)
     append_log(spec["log"], "not-ready timeout " + str(address))
     print(str(spec["label"]) + " not ready after " + str(wait_seconds) + "s. address=" + str(address))
@@ -2957,7 +2963,7 @@ def recover_typedb_scoped_write_lease_after_worker_restart(spec: Dict[str, objec
     return True
 
 
-def start_worker(spec: Dict[str, object]) -> int:
+def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
     if spec.get("missingReason") or not spec.get("command"):
         print(str(spec["label"]) + " not started. " + str(spec.get("missingReason") or "Command is not configured."))
         return 1 if str(spec.get("role") or "") in {"mysql", "typedb", "questdb", "web"} else 0
@@ -2968,6 +2974,12 @@ def start_worker(spec: Dict[str, object]) -> int:
     if is_running(existing, spec):
         print(str(spec["label"]) + " already running.")
         if role == "typedb":
+            if not wait_for_ready:
+                if typedb_service_ready(spec):
+                    return status_worker(spec)
+                append_log(log_path, "recovery in progress")
+                print(str(spec["label"]) + " recovery is still in progress.")
+                return 0
             if not wait_for_typedb_ready(spec):
                 return 1
             # A healthy TypeDB server may be serving an ABox staging write.
@@ -3045,6 +3057,10 @@ def start_worker(spec: Dict[str, object]) -> int:
     print(str(spec["label"]) + " started. pid=" + str(process.pid))
     print("Log: " + str(log_path))
     if str(spec.get("role") or "") == "typedb":
+        if not wait_for_ready:
+            append_log(log_path, "recovery started asynchronously")
+            print(str(spec["label"]) + " recovery continues under supervisor monitoring.")
+            return 0
         if not wait_for_typedb_ready(spec):
             return 1
         if not ensure_typedb_startup_seed_contract(spec):
@@ -3140,12 +3156,20 @@ def status() -> int:
     return 0
 
 
-def start(excluded_roles=None) -> int:
+def start(excluded_roles=None, supervisor_async: bool = False) -> int:
     excluded = {str(role or "").strip() for role in (excluded_roles or set())}
-    for _name, spec in ordered_worker_specs(worker_specs()):
+    for name, spec in ordered_worker_specs(worker_specs()):
         if str(spec.get("role") or "").strip() in excluded:
             continue
-        result = start_worker(spec)
+        if supervisor_async and name in GRAPH_DEPENDENT_WORKERS:
+            print(str(spec.get("label") or name) + " deferred until TypeDB startup is finalized.")
+            continue
+        result = start_worker(
+            spec,
+            wait_for_ready=not (
+                supervisor_async and str(spec.get("role") or "").strip() == "typedb"
+            ),
+        )
         if result != 0:
             if str(spec.get("role") or "").strip() == "web":
                 # A user-managed web process may own the canonical port while
@@ -3458,18 +3482,53 @@ def supervise() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     try:
-        if start() != 0:
+        if start(supervisor_async=True) != 0:
             return 1
         last_maintenance_at = 0.0
         last_typedb_capacity_notice = ""
         last_typedb_auto_rotation_notice = ""
         unavailable_optional_workers = {}
+        initialized_typedb_pid = 0
+        typedb_initialization_retry_at = 0.0
         while not stopping["value"]:
             if supervisor_maintenance_active():
                 acknowledge_supervisor_maintenance()
                 time.sleep(1)
                 continue
             specs = worker_specs()
+            typedb_spec = specs.get("typedb")
+            typedb_pid = read_pid(typedb_spec["pid"]) if typedb_spec else 0
+            typedb_running = bool(
+                typedb_spec and is_running(typedb_pid, typedb_spec)
+            )
+            if not typedb_running:
+                initialized_typedb_pid = 0
+            elif initialized_typedb_pid != typedb_pid and time.monotonic() >= typedb_initialization_retry_at:
+                if typedb_service_ready(typedb_spec):
+                    seed_ready = ensure_typedb_startup_seed_contract(typedb_spec)
+                    shared_world_ready = bool(
+                        seed_ready
+                        and (
+                            bool(typedb_spec.get("_typedbServingPreservedGeneration"))
+                            or ensure_typedb_shared_world_projection_rebuilt(typedb_spec)
+                        )
+                    )
+                    if seed_ready and shared_world_ready:
+                        initialized_typedb_pid = typedb_pid
+                        append_log(
+                            supervisor_log_path(),
+                            "typedb startup finalized pid=" + str(typedb_pid),
+                        )
+                    else:
+                        typedb_initialization_retry_at = time.monotonic() + 30.0
+            graph_store_ready = bool(
+                typedb_spec is None
+                or (
+                    typedb_running
+                    and typedb_pid > 0
+                    and initialized_typedb_pid == typedb_pid
+                )
+            )
             for spec in disabled_notification_ai_worker_specs(specs).values():
                 stop_worker(spec)
             for spec in disabled_reasoning_worker_specs(specs).values():
@@ -3491,9 +3550,16 @@ def supervise() -> int:
                     continue
                 unavailable_optional_workers.pop(name, None)
                 pid = read_pid(spec["pid"])
+                if name in GRAPH_DEPENDENT_WORKERS and not graph_store_ready:
+                    if is_running(pid, spec):
+                        stop_worker(spec)
+                    continue
                 if not is_running(pid, spec):
                     append_log(supervisor_log_path(), "restart " + str(spec.get("label") or "unknown"))
-                    start_worker(spec)
+                    start_worker(
+                        spec,
+                        wait_for_ready=str(spec.get("role") or "").strip() != "typedb",
+                    )
             if time.monotonic() - last_maintenance_at >= 60:
                 typedb_spec = specs.get("typedb")
                 decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}

@@ -2076,6 +2076,11 @@ class PortfolioOntologyProjectionRecorder:
             shared_rules,
             shared_world,
         )
+        # Shared-world projection assigns its own worldview metadata. Rebind
+        # the immutable deployment TBox after that transformation as well, so
+        # the persisted generation and rule-result slots keep the same release
+        # identity that preflight used for selection.
+        update.worldview["activeTBox"] = deepcopy(active_tbox)
         if target_symbols:
             update.worldview["targetScopedManifestPatch"] = {
                 "status": "applied",

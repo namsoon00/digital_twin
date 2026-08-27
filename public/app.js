@@ -600,6 +600,7 @@
     notificationJobDetails: {},
     notificationJobDetailSections: {},
     notificationJobDetailTabs: {},
+    notificationJobDetailTabScrollPositions: {},
     notificationDetailDisclosureOpen: {},
     notificationJobsTotal: 0,
     notificationJobsOffset: 0,
@@ -25917,14 +25918,30 @@
   function renderNotificationDetailTabs(jobId, active) {
     var tabs = [
       ["summary", "요약"],
-      ["reasoning", "규칙 증명"],
-      ["ai-review", "AI 실행·검증"],
-      ["delivery", "발행·전달"]
+      ["reasoning", "규칙"],
+      ["ai-review", "AI 검증"],
+      ["delivery", "발송"]
     ];
     return '<nav class="notification-detail-tabs" role="tablist" aria-label="알림 상세 보기">' + tabs.map(function (item) {
       var selected = active === item[0];
       return '<button type="button" role="tab" data-notification-detail-tab="' + item[0] + '" data-notification-job-id="' + escapeHtml(jobId) + '" aria-selected="' + (selected ? "true" : "false") + '"' + (selected ? ' class="active"' : '') + '>' + escapeHtml(item[1]) + '</button>';
     }).join("") + '</nav>';
+  }
+
+  function renderNotificationDetailTabIntro(active) {
+    var intro = {
+      summary: ["Summary", "현재 판단과 이번 변화", "지금 무엇을 해야 하는지와 판단이 달라진 이유를 먼저 확인합니다."],
+      reasoning: ["Rule proof", "성립 규칙과 관측값", "판단 당시 저장된 사실, 조건값, 반대 근거를 추적합니다."],
+      "ai-review": ["AI review", "AI 실행과 최종 채택 비교", "모델이 만든 설명과 실제 투자 판단에 반영된 범위를 분리합니다."],
+      delivery: ["Delivery", "발송 조건과 전달 이력", "발송 가능 여부, 반복 방지 정책, 채널 처리 결과를 확인합니다."]
+    }[active] || ["Detail", "상세 정보", "선택한 단계의 저장 기록을 확인합니다."];
+    return [
+      '<header class="notification-detail-tab-head">',
+      '<p class="label">' + escapeHtml(intro[0]) + '</p>',
+      '<h4>' + escapeHtml(intro[1]) + '</h4>',
+      '<span>' + escapeHtml(intro[2]) + '</span>',
+      '</header>'
+    ].join("");
   }
 
   function renderNotificationAIStatusBar(job) {
@@ -26086,6 +26103,39 @@
     return deliveryAudit + renderNotificationUnifiedPipeline(deliveryJob) + renderNotificationLifecycleTrace(deliveryJob);
   }
 
+  function renderNotificationDeliveryDecisionOverview(job, decisionFactors, compact) {
+    var payload = notificationJobDetailPayload(job);
+    return [
+      '<section class="notification-detail-section notification-delivery-section">',
+      '<strong>발송 판단과 근거</strong>',
+      renderNotificationDecisionRoute(job),
+      decisionFactors.length ? '<div class="notification-detail-tags notification-delivery-tags">' + (compact ? decisionFactors.slice(0, 3) : decisionFactors).map(function (factor) {
+        return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, payload.resolvedSymbol, job)) + '</span>';
+      }).join("") + '</div>' : '<p>발송 판단 근거가 아직 기록되지 않았습니다.</p>',
+      '</section>'
+    ].join("");
+  }
+
+  function renderNotificationSummaryTab(job, context) {
+    context = context || {};
+    return [
+      '<div class="notification-detail-metrics notification-summary-metrics">',
+      renderNotificationDetailMetric("지금 행동", context.currentAction, context.actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold"),
+      renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted"),
+      renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone),
+      renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
+      '</div>',
+      '<section class="notification-detail-section primary">',
+      '<strong>판단 요약</strong>',
+      '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || context.payload.fullText || context.payload.preview) + '</p>',
+      '</section>',
+      renderNotificationActionFlow(job),
+      context.relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([context.relatedDecision.name || context.relatedDecision.symbol, context.relatedDecision.actionLabel, context.relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", context.relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
+      renderNotificationDetailDisclosure("전체 메시지와 식별 정보", "원문 메시지와 중복 판단 키", context.messageDetails, "notification-summary-disclosure", "notification-job:" + context.jobId + ":summary:message"),
+      renderNotificationDetailDisclosure("연결된 원문과 출처", "종목에 연결된 최신 뉴스·공시 근거", context.researchDetails, "notification-summary-disclosure", "notification-job:" + context.jobId + ":summary:research")
+    ].join("");
+  }
+
   function renderNotificationDecisionDetail(job, options) {
     if (!job) {
       return renderEmptyState({
@@ -26111,51 +26161,82 @@
       fingerprint ? '<section class="notification-detail-section"><strong>중복 판단 키</strong><code class="notification-fingerprint">' + escapeHtml(fingerprint) + '</code></section>' : ''
     ].join("") : "";
     var researchDetails = !compact ? renderNotificationJobResearchEvidence(job) : "";
+    var deliveryOverview = renderNotificationDeliveryDecisionOverview(job, decisionFactors, compact);
     var detailTabBody = "";
     if (!compact) {
       if (activeDetailTab === "reasoning") detailTabBody = renderNotificationRuleProofSection(job, jobId);
-      else if (activeDetailTab === "ai-review") detailTabBody = renderNotificationAIReviewSection(jobId);
-      else if (activeDetailTab === "delivery") detailTabBody = renderNotificationDeliverySection(job, jobId);
-      else detailTabBody = messageDetails + researchDetails;
+      else if (activeDetailTab === "ai-review") detailTabBody = renderNotificationAIStatusBar(job) + renderNotificationAIReviewSection(jobId);
+      else if (activeDetailTab === "delivery") detailTabBody = deliveryOverview + renderNotificationDeliverySection(job, jobId);
+      else detailTabBody = renderNotificationSummaryTab(job, {
+        actionFlow: actionFlow,
+        currentAction: currentAction,
+        jobId: jobId,
+        messageDetails: messageDetails,
+        payload: payload,
+        relatedDecision: relatedDecision,
+        researchDetails: researchDetails
+      });
+      detailTabBody = renderNotificationDetailTabIntro(activeDetailTab) + detailTabBody;
     }
     var receiptActions = '<div class="notification-detail-actions"><button class="text-button compact" type="button" data-notification-receipt="important" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.important ? "false" : "true") + '">' + escapeHtml(job.important ? "중요 해제" : "중요 표시") + '</button><button class="text-button compact" type="button" data-notification-receipt="acknowledged" data-notification-job-id="' + escapeHtml(notificationJobKey(job)) + '" data-notification-receipt-value="' + escapeHtml(job.acknowledgedAt ? "false" : "true") + '">' + escapeHtml(job.acknowledgedAt ? "확인 취소" : "확인 완료") + '</button></div>';
     return [
-      '<aside class="notification-decision-detail" aria-label="선택 알림 판단 상세">',
-      '<div class="notification-detail-head">',
-      '<div>',
-      '<p class="label">Decision Report</p>',
-      '<h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3>',
-      '<span>' + escapeHtml([payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span>',
-      '</div>',
-      '<span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>',
-      '</div>',
-      receiptActions,
+      '<aside class="notification-decision-detail" data-notification-detail-mode="' + (compact ? "compact" : "full") + '" data-notification-detail-job-id="' + escapeHtml(jobId) + '" data-notification-active-tab="' + escapeHtml(activeDetailTab) + '" aria-label="선택 알림 판단 상세">',
+      compact ? '<div class="notification-detail-head"><div><p class="label">Decision Report</p><h3>' + escapeHtml(payload.title || payload.displaySymbol || job.messageTypeLabel || job.messageType || "알림 판단") + '</h3><span>' + escapeHtml([payload.displaySymbol, labelWithNotificationIcon(job.messageType, job.messageTypeLabel || job.messageType), formatClock(job.createdAt)].filter(Boolean).join(" · ")) + '</span></div><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span></div>' : '',
+      compact ? receiptActions : '<div class="notification-detail-toolbar"><span class="tone-chip ' + escapeHtml(notificationJobToneClass(job.status)) + '">' + escapeHtml(notificationJobStatusLabel(job.status)) + '</span>' + receiptActions + '</div>',
       compact ? '' : renderNotificationDetailTabs(jobId, activeDetailTab),
-      compact ? '' : renderNotificationAIStatusBar(job),
-      '<div class="notification-detail-metrics">',
-      renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone),
-      renderNotificationDetailMetric("지금 행동", currentAction, actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold"),
-      renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted"),
-      renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)),
-      '</div>',
-      '<section class="notification-detail-section primary">',
-      '<strong>판단 요약</strong>',
-      '<p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p>',
-      '</section>',
-      renderNotificationActionFlow(job),
-      relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([relatedDecision.name || relatedDecision.symbol, relatedDecision.actionLabel, relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
-      '<section class="notification-detail-section notification-delivery-section">',
-      '<strong>발송 판단과 근거</strong>',
-      renderNotificationDecisionRoute(job),
-      decisionFactors.length ? '<div class="notification-detail-tags notification-delivery-tags">' + (compact ? decisionFactors.slice(0, 3) : decisionFactors).map(function (factor) {
-        return '<span class="' + escapeHtml(factor.tone || "hold") + '">' + escapeHtml(textWithKnownDisplaySymbols(factor.label, payload.resolvedSymbol, job)) + '</span>';
-      }).join("") + '</div>' : '<p>발송 판단 근거가 아직 기록되지 않았습니다.</p>',
-      '</section>',
+      compact ? '<div class="notification-detail-metrics">' + renderNotificationDetailMetric("발송 판단", notificationDeliveryStateLabel(job.deliveryDecision), notificationJobDecisionRoute(job).tone) + renderNotificationDetailMetric("지금 행동", currentAction, actionFlow.status === "ENTRY_ELIGIBLE" ? "watch" : "hold") + renderNotificationDetailMetric("이번 변화", notificationChangeStateLabel(job.deliveryChangeState), "muted") + renderNotificationDetailMetric("상태", notificationJobStatusLabel(job.status), notificationJobToneClass(job.status)) + '</div>' : '',
+      compact ? '<section class="notification-detail-section primary"><strong>판단 요약</strong><p>' + escapeHtml((((job.reasoningTrace || {}).finalDecision || {}).summary) || payload.fullText || payload.preview) + '</p></section>' : '',
+      compact ? renderNotificationActionFlow(job) : '',
+      compact && relatedDecision ? '<section class="notification-detail-section"><strong>관련 현재 판단</strong><p>' + escapeHtml([relatedDecision.name || relatedDecision.symbol, relatedDecision.actionLabel, relatedDecision.reason].filter(Boolean).join(" · ")) + '</p>' + renderWorkDetailButton("investment-action", relatedDecision.key, "현재 판단 보기", "text-button compact") + '</section>' : '',
+      compact ? deliveryOverview : '',
       compact ? '<p class="data-refresh-status">전체 메시지, 전체 근거, 중복 키는 상세 리포트에서 확인합니다.</p>' : '',
       detailButton,
-      compact ? '' : '<div class="notification-detail-tab-panel" role="tabpanel">' + detailTabBody + '</div>',
+      compact ? '' : '<div class="notification-detail-tab-panel" role="tabpanel" tabindex="-1">' + detailTabBody + '</div>',
       '</aside>'
     ].join("");
+  }
+
+  function notificationDetailTabScrollKey(jobId, tabId) {
+    return String(jobId || "") + ":" + String(tabId || "summary");
+  }
+
+  function notificationDetailRoot(jobId) {
+    return Array.prototype.slice.call(app.querySelectorAll("[data-notification-detail-job-id]")).filter(function (element) {
+      return element.getAttribute("data-notification-detail-job-id") === String(jobId || "")
+        && element.getAttribute("data-notification-detail-mode") === "full";
+    })[0] || null;
+  }
+
+  function rememberNotificationDetailTabScroll(detailRoot, jobId) {
+    if (!detailRoot) return;
+    var tabId = detailRoot.getAttribute("data-notification-active-tab") || "summary";
+    var scroller = detailRoot.closest && detailRoot.closest(".work-detail-backdrop");
+    if (!scroller) return;
+    state.notificationJobDetailTabScrollPositions[notificationDetailTabScrollKey(jobId, tabId)] = scrollTopNumber(scroller.scrollTop);
+  }
+
+  function restoreNotificationDetailTabViewport(jobId, tabId) {
+    var restore = function () {
+      var detailRoot = notificationDetailRoot(jobId);
+      if (!detailRoot) return;
+      var scroller = detailRoot.closest && detailRoot.closest(".work-detail-backdrop");
+      var panel = detailRoot.querySelector(".notification-detail-tab-panel");
+      var tabs = detailRoot.querySelector(".notification-detail-tabs");
+      if (!scroller || !panel || !tabs) return;
+      var scrollKey = notificationDetailTabScrollKey(jobId, tabId);
+      var saved = state.notificationJobDetailTabScrollPositions;
+      var max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      if (Object.prototype.hasOwnProperty.call(saved, scrollKey)) {
+        scroller.scrollTop = clampScrollTop(saved[scrollKey], max);
+        return;
+      }
+      var scrollerRect = scroller.getBoundingClientRect();
+      var panelRect = panel.getBoundingClientRect();
+      var target = scroller.scrollTop + panelRect.top - scrollerRect.top - tabs.offsetHeight - 8;
+      scroller.scrollTop = clampScrollTop(target, max);
+    };
+    var schedule = window.requestAnimationFrame || function (callback) { return window.setTimeout(callback, 0); };
+    schedule(function () { schedule(restore); });
   }
 
   function notificationJobKey(job) {
@@ -33710,9 +33791,11 @@
         var notificationJobId = String(notificationDetailTab.getAttribute("data-notification-job-id") || "");
         var notificationTabId = String(notificationDetailTab.getAttribute("data-notification-detail-tab") || "summary");
         if (!notificationJobId) return;
+        rememberNotificationDetailTabScroll(notificationDetailTab.closest(".notification-decision-detail"), notificationJobId);
         state.notificationJobDetailTabs[notificationJobId] = notificationTabId;
         render({ transition: "section" });
         loadNotificationJobDetailSection(notificationJobId, notificationTabId, false);
+        restoreNotificationDetailTabViewport(notificationJobId, notificationTabId);
         return;
       }
       var caseTab = event.target.closest && event.target.closest("[data-investment-case-tab]");

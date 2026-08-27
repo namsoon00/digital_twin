@@ -2446,6 +2446,19 @@ function checkFrontendAdminRender() {
         styles.indexOf(".notification-reasoning-step-detail") >= 0,
       "최근 알림 판단 전체 fingerprint가 상세 리포트 레이어로 분리되지 않았습니다.",
     );
+    assertOk(
+      code.indexOf("function renderNotificationSummaryTab") >= 0 &&
+        code.indexOf('activeDetailTab === "ai-review"') >= 0 &&
+        code.indexOf("renderNotificationAIStatusBar(job) + renderNotificationAIReviewSection(jobId)") >= 0 &&
+        code.indexOf("deliveryOverview + renderNotificationDeliverySection(job, jobId)") >= 0 &&
+        code.indexOf('data-notification-detail-mode="') >= 0 &&
+        code.indexOf("rememberNotificationDetailTabScroll") >= 0 &&
+        code.indexOf("restoreNotificationDetailTabViewport") >= 0 &&
+        styles.indexOf('.notification-decision-detail[data-notification-detail-mode="full"]') >= 0 &&
+        styles.indexOf(".notification-detail-tab-head") >= 0 &&
+        /\.notification-decision-detail\[data-notification-detail-mode="full"\] \.notification-detail-tabs\s*\{[\s\S]*?position: sticky;/.test(styles),
+      "알림 상세의 공통 정보가 탭별 콘텐츠로 분리되지 않았거나 모바일 탭 스크롤 계약이 없습니다."
+    );
     assertOk(notificationHtml.indexOf('data-action="refresh-notification-jobs"') >= 0, "최근 알림 판단 새로고침 버튼이 없습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-manager-panel") >= 0, "템플릿 섹션이 렌더링되지 않았습니다.");
     assertOk(notificationTemplateHtml.indexOf("notification-template-workbench") >= 0, "템플릿 섹션이 선택형 워크벤치로 렌더링되지 않았습니다.");

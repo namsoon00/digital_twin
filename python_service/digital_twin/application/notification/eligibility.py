@@ -5,6 +5,7 @@ from typing import Callable, Dict, Mapping
 from zoneinfo import ZoneInfo
 
 from ...domain.data_freshness import (
+    bool_setting,
     evaluate_notification_data_freshness,
     sanitize_notification_context_for_freshness,
 )
@@ -240,6 +241,21 @@ class NotificationDispatchEligibilityService:
         return False
 
     def apply_ai_freshness_headroom_gate(self, job: NotificationJob) -> bool:
+        if not self.freshness_enabled or not bool_setting(
+            self.settings,
+            "dataFreshnessEnabled",
+            True,
+        ):
+            context = dict(job.context or {})
+            context["aiFreshnessHeadroomGate"] = {
+                "version": "ai-freshness-headroom-v1",
+                "decision": "bypass",
+                "blockingDisabled": True,
+                "reason": "데이터 신선도 검증이 비활성화되어 AI 처리시간 여유를 차단 조건으로 사용하지 않습니다.",
+            }
+            context.pop("deliverySuppressionReason", None)
+            job.context = context
+            return True
         if not self.ai_defer_predicate(job):
             return True
         context = dict(job.context or {})

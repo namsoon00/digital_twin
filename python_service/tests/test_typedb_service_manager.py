@@ -10,6 +10,18 @@ from digital_twin import service_manager
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_log_tail_reads_recent_lines_from_a_large_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "worker.log"
+            with path.open("wb") as handle:
+                handle.seek(2 * 1024 * 1024)
+                handle.write(b"old\nrecent-1\nrecent-2\n")
+
+            self.assertEqual(
+                ["recent-1", "recent-2"],
+                service_manager.tail(path, count=2),
+            )
+
     def test_active_store_startup_does_not_reseed_an_immutable_release_by_default(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

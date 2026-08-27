@@ -1660,9 +1660,26 @@ def run_typedb_data_retention(spec: Dict[str, object], force: bool = False) -> D
 
 
 def tail(path: Path, count: int = 8) -> List[str]:
+    requested = max(0, int(count or 0))
+    if requested == 0:
+        return []
     try:
-        lines = path.read_text(encoding="utf-8").strip().splitlines()
-        return lines[-count:]
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            cursor = handle.tell()
+            remaining = min(cursor, 1024 * 1024)
+            chunks = []
+            newline_count = 0
+            while remaining > 0 and newline_count <= requested:
+                chunk_size = min(8192, remaining)
+                cursor -= chunk_size
+                remaining -= chunk_size
+                handle.seek(cursor)
+                chunk = handle.read(chunk_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+        lines = b"".join(reversed(chunks)).decode("utf-8", errors="replace").strip().splitlines()
+        return lines[-requested:]
     except OSError:
         return []
 

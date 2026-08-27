@@ -22,6 +22,7 @@
     {"file": "test_notification_ai_inference_packet.py", "tier": "unit", "core": true},
     {"file": "test_notification_identity.py", "tier": "unit", "core": true},
     {"file": "test_notification_decision_quality.py", "tier": "unit", "core": true},
+    {"file": "test_customer_notification_explanation.py", "tier": "unit", "core": true},
     {"file": "test_notification_icon_policy.py", "tier": "unit", "core": true},
     {"file": "test_disclosure_taxonomy.py", "tier": "unit", "core": true},
     {"file": "test_investor_flow_contract.py", "tier": "unit", "core": true},

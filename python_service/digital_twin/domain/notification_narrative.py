@@ -15,6 +15,7 @@ import re
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .context_observation_notifications import typedb_context_observation_contract
+from .customer_evidence_explanation import build_customer_evidence_explanations
 from .notification_ai_context import relation_context_value
 
 
@@ -266,6 +267,7 @@ class InvestmentNarrativeBrief:
     claims: Tuple[Dict[str, object], ...]
     validations: Tuple[Dict[str, object], ...]
     publication: NarrativePublicationResult
+    customer_evidence: Tuple[Dict[str, object], ...] = ()
     hard_blocked: bool = False
     hard_block_reasons: Tuple[str, ...] = ()
     metrics: Dict[str, object] = field(default_factory=dict)
@@ -280,6 +282,7 @@ class InvestmentNarrativeBrief:
             "claims": [dict(item) for item in self.claims],
             "validations": [dict(item) for item in self.validations],
             "publication": self.publication.to_dict(),
+            "customerEvidence": [dict(item) for item in self.customer_evidence],
             "hardBlocked": self.hard_blocked,
             "hardBlockReasons": list(self.hard_block_reasons),
             "metrics": dict(self.metrics),
@@ -1078,6 +1081,7 @@ def build_investment_narrative_brief(
         claims=tuple(verified_claims),
         validations=tuple(validations),
         publication=publication,
+        customer_evidence=tuple(build_customer_evidence_explanations(context, ledger)),
         metrics=metrics,
     )
 

@@ -10,6 +10,13 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility guard.
 from ..domain.accounts import investment_strategy_profile, message_delivery_profile
 from ..domain.alert_formatting import compact_number, price_money, signed_pct, trade_strength_label
 from ..domain.company_knowledge import active_company_valuation_rule_ids
+from ..domain.customer_evidence_explanation import (
+    customer_evidence_rows,
+    enforce_customer_message_quality,
+    is_non_final_publication,
+    non_final_publication_summary,
+    publication_outcome_kind,
+)
 from ..domain.context_observation_notifications import (
     context_observation_evidence_presentation,
     is_typedb_context_observation_notification,
@@ -2243,6 +2250,17 @@ def customer_reason_rows(context: Dict[str, object], level: str) -> List[str]:
         for item in explanation.get("notificationReasons") or []
         if str(item or "").strip()
     ]
+    if is_non_final_publication(context):
+        synthesis = context.get("v2DecisionSynthesis") if isinstance(context.get("v2DecisionSynthesis"), dict) else {}
+        change_state = str(synthesis.get("change_state") or synthesis.get("changeState") or "").lower()
+        conflict = str(synthesis.get("conflict_state") or synthesis.get("conflictState") or "").lower()
+        if conflict in {"mixed", "conflicted"}:
+            reason = "가격 회복 가능성과 위험 가능성이 동시에 성립해 서로 충돌하는지 다시 확인하기 위해 알림을 보냈습니다."
+        elif change_state in {"new-condition", "new_condition"}:
+            reason = "이전에는 없던 검토 조건이 새로 성립해 관계 변화를 확인하기 위해 알림을 보냈습니다."
+        else:
+            reason = "투자 행동으로 확정할 수 없는 관계 변화가 생겨 검토 정보로 알림을 보냈습니다."
+        return [_html_bullet(reason, level)]
     if canonical_reasons:
         return [_html_bullet(item, level) for item in canonical_reasons[:5]]
     observation = typedb_context_observation_contract(context or {})
@@ -3048,8 +3066,10 @@ def market_hours_message_rows(context: Dict[str, object]) -> List[str]:
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     detail_level = notification_detail_level_from_context(context)
     if detail_level in {"concise", "standard"}:
-        return execution_telegram_message_progressive(context, response, detail_level)
-    return execution_telegram_message_full(context, response)
+        rendered = execution_telegram_message_progressive(context, response, detail_level)
+    else:
+        rendered = execution_telegram_message_full(context, response)
+    return enforce_customer_message_quality(rendered)
 
 
 def execution_telegram_message_full(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
@@ -3204,7 +3224,9 @@ def _investment_view_row(
         customer_visible_ai_text(response.investment_view or response.summary),
         2,
     )
-    if is_typedb_context_observation_notification(context or {}):
+    if is_non_final_publication(context):
+        detail = non_final_publication_summary(context)
+    elif is_typedb_context_observation_notification(context or {}):
         presentation = context_observation_evidence_presentation(context)
         title = str(presentation.get("title") or "").strip()
         summary = compact_sentence_count(presentation.get("summary"), 1)
@@ -3325,6 +3347,8 @@ def _notification_selected_inference_rows(
     context: Dict[str, object],
     response: NotificationAIValidatedResponse,
 ) -> List[str]:
+    if is_non_final_publication(context):
+        return [non_final_publication_summary(context)]
     canonical_rows = canonical_publication_hypothesis_rows(context, response)
     if canonical_rows:
         return canonical_rows
@@ -3397,7 +3421,7 @@ def execution_telegram_message_progressive(
         current_flow=compact_current_flow_rows(context),
         evidence=evidence,
         counter_evidence=response.counter_evidence,
-        inference=_notification_selected_inference_rows(context, response),
+        inference=([] if is_non_final_publication(context) else _notification_selected_inference_rows(context, response)),
         company_value=_notification_company_value_summary(context),
         next_checks=next_checks,
         data_warnings=warnings,
@@ -3412,6 +3436,9 @@ def execution_telegram_message_progressive(
     investment_view = _investment_view_row(context, response)
     if investment_view:
         interpretation_label = (
+            "검토 결과"
+            if is_non_final_publication(context)
+            else
             "공시 자료 해석"
             if observation_presentation
             else "자료 해석"
@@ -3435,7 +3462,8 @@ def execution_telegram_message_progressive(
     if packet.current_flow:
         parts.extend(["", "<b>현재 흐름</b>", *[_html_bullet(row, level) for row in packet.current_flow]])
     if packet.evidence:
-        parts.extend(["", "<b>핵심 근거</b>", *[_html_bullet(row, level) for row in packet.evidence]])
+        evidence_label = "서로 다른 근거" if is_non_final_publication(context) else "핵심 근거"
+        parts.extend(["", "<b>" + evidence_label + "</b>", *[_html_bullet(row, level) for row in packet.evidence]])
     if packet.counter_evidence:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in packet.counter_evidence]])
     if packet.inference:
@@ -3443,6 +3471,8 @@ def execution_telegram_message_progressive(
         inference_label = (
             "판단에 사용한 가설"
             if str(publication.get("outcomeKind") or "").upper() == "FINAL_DECISION"
+            else "검토 결론"
+            if is_non_final_publication(context)
             else "TypeDB 확인 관계"
             if context_observation
             else "TypeDB 검토 가설"
@@ -3585,7 +3615,7 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
     publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
     outcome_kind = str(publication.get("outcomeKind") or "").upper()
     if outcome_kind == "REVIEW_ONLY":
-        return "[TypeDB 검토] 투자 행동을 새로 정하지 않았습니다. 관계 변화와 다음 확인 조건만 검토합니다."
+        return "[관계 검토] 매수·매도·보유 판단을 새로 만들지 않았습니다. 관계 변화와 다음 확인 조건만 제공합니다."
     if outcome_kind == "ABSTAIN":
         return "[판단 보류] 후보 비교가 완전하지 않아 매수·매도·보유 판단을 만들지 않았습니다."
     if outcome_kind == "OBSERVATION":
@@ -3675,6 +3705,13 @@ def compact_decision_section_labels(
 
 
 def compact_decision_transition(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
+    outcome_kind = publication_outcome_kind(context)
+    if outcome_kind == "REVIEW_ONLY":
+        return "[판단 보류] 이번 결과는 최종 투자 판단이 아니므로 이전 매수·매도·보유 판단과 비교하지 않습니다."
+    if outcome_kind == "ABSTAIN":
+        return "[판단 보류] 후보 비교가 끝나지 않아 이전 투자 판단과 비교할 새 판단을 만들지 않았습니다."
+    if outcome_kind == "OBSERVATION":
+        return "[자료 관찰] 투자 행동의 변화가 아니라 확인 자료의 변화입니다."
     ai_transition = ai_decision_transition_from_context(context)
     if ai_transition.get("historyAvailable"):
         analysis = _dedupe_compact_sentences(
@@ -4392,6 +4429,13 @@ def full_decision_evidence_rows(
         canonical_rows = canonical_publication_evidence_rows(context, limit=limit)
         if canonical_rows:
             return canonical_rows
+        projected_rows = customer_evidence_rows(
+            context,
+            include_limitations=is_non_final_publication(context),
+            limit=limit,
+        )
+        if projected_rows:
+            return projected_rows
     if not counter and is_typedb_context_observation_notification(context or {}):
         presentation = context_observation_evidence_presentation(context)
         rows = []

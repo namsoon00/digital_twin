@@ -135,6 +135,14 @@ def customer_visible_ai_text(value: object) -> str:
             flags=re.IGNORECASE,
         )
     result = INTERNAL_METADATA_TAIL_PATTERN.sub("", result).strip(" ·,;/: ")
+    if any(field in result for field in ("expectedEPS", "fairValue", "targetPER")):
+        from .customer_evidence_explanation import customer_data_limitation_text
+
+        result = customer_data_limitation_text(result)
+    if re.search(r"\b(?:HAS|MATCHES|BLOCKS|MITIGATES)_[A-Z0-9_]+\b", result):
+        from .customer_evidence_explanation import customer_safe_text
+
+        result = customer_safe_text(result)
     if INTERNAL_IDENTIFIER_ONLY_PATTERN.match(result):
         return ""
     for status, label in INTERNAL_ACTION_STATUS_LABELS.items():

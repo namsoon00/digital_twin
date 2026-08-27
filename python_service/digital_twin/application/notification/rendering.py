@@ -13,6 +13,10 @@ from ...domain.context_observation_notifications import (
     is_typedb_context_observation_notification,
     typedb_context_observation_contract,
 )
+from ...domain.customer_evidence_explanation import (
+    customer_text_quality_issues,
+    enforce_customer_message_quality,
+)
 from ...domain.message_types import INVESTMENT_INSIGHT
 from ...domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ...domain.notification_ai_gate_validation import local_validated_ai_response
@@ -66,9 +70,12 @@ class NotificationRenderingService:
             else job.text.strip()
         )
         if rendered:
-            job.text = rendered
             context = dict(job.context or {})
             is_investment = str(job.message_type or "") == INVESTMENT_INSIGHT
+            if is_investment:
+                rendered = enforce_customer_message_quality(rendered)
+            quality_issues = customer_text_quality_issues(rendered) if is_investment else []
+            job.text = rendered
             context["notificationPresentationAudit"] = {
                 "version": (
                     INVESTMENT_NOTIFICATION_PRESENTATION_VERSION
@@ -99,6 +106,11 @@ class NotificationRenderingService:
                 "narrativeFingerprint": str(
                     (context.get("notificationNarrativeBrief") or {}).get("fingerprint") or ""
                 ),
+                "customerLanguageQuality": {
+                    "version": "customer-message-quality-v1",
+                    "status": "passed" if not quality_issues else "failed",
+                    "issues": quality_issues,
+                },
             }
             job.context = context
         return rendered

@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import copy
+import json
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.events import DomainEvent
@@ -14,6 +16,14 @@ from ..domain.evidence_delta import (
     inference_eligible,
 )
 from ..domain.investment_research import ResearchEvidence
+from ..domain import news_analysis as news_domain
+from ..news_intelligence.domain.article import (
+    apply_enrichment_snapshot,
+    article_enrichment_revision,
+    article_source_revision,
+    authoritative_enrichment,
+    enrichment_payload_snapshot,
+)
 from .operational_common import (
     json_dumps,
     research_evidence_from_row,
@@ -64,6 +74,13 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "officialDocumentFetchedAt",
 }
 
+SOURCE_EVIDENCE_PAYLOAD_KEYS = {
+    "articleSourceSummary",
+    "articleText",
+    "articleTextPreview",
+    "sourceLanguage",
+}
+
 AUTHORITATIVE_EVIDENCE_STATE_KEYS = {
     "sourceTrustState",
     "materialityState",
@@ -95,9 +112,29 @@ def merge_derived_evidence_payload(
         return incoming
     previous_text = _payload_source_text(previous)
     incoming_text = _payload_source_text(incoming)
-    if previous_text and incoming_text and previous_text != incoming_text:
+    previous_analysis = previous.get("aiAnalysis") if isinstance(previous.get("aiAnalysis"), dict) else {}
+    incoming_analysis = incoming.get("aiAnalysis") if isinstance(incoming.get("aiAnalysis"), dict) else {}
+    same_analysis_source = bool(
+        str(previous_analysis.get("sourceTextHash") or "").strip()
+        and str(previous_analysis.get("sourceTextHash") or "").strip()
+        == str(incoming_analysis.get("sourceTextHash") or "").strip()
+    )
+    if previous_text and incoming_text and previous_text != incoming_text and not same_analysis_source:
         return incoming
+    preserve_authoritative_enrichment = bool(
+        authoritative_enrichment(previous)
+        and not authoritative_enrichment(incoming)
+        and (
+            not str(previous.get("articleSourceRevision") or "").strip()
+            or not str(incoming.get("articleSourceRevision") or "").strip()
+            or str(previous.get("articleSourceRevision") or "").strip()
+            == str(incoming.get("articleSourceRevision") or "").strip()
+        )
+    )
     merged = dict(incoming)
+    for key in SOURCE_EVIDENCE_PAYLOAD_KEYS:
+        if merged.get(key) in (None, "", [], {}) and previous.get(key) not in (None, "", [], {}):
+            merged[key] = previous.get(key)
     for key in DERIVED_EVIDENCE_PAYLOAD_KEYS:
         if merged.get(key) in (None, "", [], {}) and previous.get(key) not in (None, "", [], {}):
             merged[key] = previous.get(key)
@@ -161,10 +198,233 @@ def merge_derived_evidence_payload(
         ]:
             if key in previous:
                 merged[key] = previous.get(key)
+    if preserve_authoritative_enrichment:
+        merged = apply_enrichment_snapshot(merged, enrichment_payload_snapshot(previous))
     return merged
 
 
 class MySQLResearchEvidenceStore(MySQLOperationalConnection):
+    @staticmethod
+    def _news_analysis_release(payload: Dict[str, object]) -> str:
+        values = dict(payload or {})
+        analysis = values.get("aiAnalysis") if isinstance(values.get("aiAnalysis"), dict) else {}
+        return str(values.get("articleAiAnalysisVersion") or analysis.get("version") or "unknown").strip()[:191]
+
+    def _news_enrichment_snapshot_with_connection(
+        self,
+        connection,
+        evidence_id: str,
+        source_revision: str,
+        analyzer_release: str = "",
+        enrichment_revision: str = "",
+    ) -> Dict[str, object]:
+        clauses = ["evidence_id = %s", "source_revision = %s"]
+        params: List[object] = [evidence_id, source_revision]
+        if analyzer_release:
+            clauses.append("analyzer_release = %s")
+            params.append(analyzer_release)
+        if enrichment_revision:
+            clauses.append("enrichment_revision = %s")
+            params.append(enrichment_revision)
+        row = connection.execute(
+            "SELECT enrichment_revision, payload_json FROM news_article_enrichment_revisions WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY updated_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+        if not row:
+            return {}
+        try:
+            payload = json.loads(str(row.get("payload_json") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        payload["articleEnrichmentRevision"] = str(row.get("enrichment_revision") or "")
+        return payload
+
+    def get_news_evidence_revision(
+        self,
+        evidence_id: str,
+        source_revision: str,
+        enrichment_revision: str,
+    ) -> Optional[ResearchEvidence]:
+        current = self.get(str(evidence_id or "").strip())
+        if not current or current.kind != "news":
+            return None
+        current_source_revision = str(
+            (current.raw_payload or {}).get("articleSourceRevision")
+            or article_source_revision(current)
+        ).strip()
+        if current_source_revision != str(source_revision or "").strip():
+            return None
+        with self.connect() as connection:
+            snapshot = self._news_enrichment_snapshot_with_connection(
+                connection,
+                current.evidence_id,
+                current_source_revision,
+                enrichment_revision=str(enrichment_revision or "").strip(),
+            )
+        if not snapshot:
+            return None
+        result = copy.deepcopy(current)
+        result.raw_payload = apply_enrichment_snapshot(dict(result.raw_payload or {}), snapshot)
+        states = news_domain.news_state_payload(result.raw_payload)
+        result.source_trust_state = states["sourceTrustState"]
+        result.materiality_state = states["materialityState"]
+        result.data_state = states["dataState"]
+        result.validation_state = states["validationState"]
+        return result
+
+    def news_enrichment_status(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count,
+                       SUM(CASE WHEN analysis_status IN ('ok', 'complete', 'success', 'verified') THEN 1 ELSE 0 END) AS authoritative_count,
+                       MAX(updated_at) AS latest_updated_at
+                FROM news_article_enrichment_revisions
+                """
+            ).fetchone() or {}
+        return {
+            "revisionCount": int(row.get("count") or 0),
+            "authoritativeCount": int(row.get("authoritative_count") or 0),
+            "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
+        }
+
+    def repair_news_enrichment_revisions(self, limit: int = 5000, dry_run: bool = True) -> Dict[str, object]:
+        row_limit = max(1, min(10000, int(limit or 5000)))
+        stamp = utc_now()
+
+        def operation(connection):
+            rows = connection.execute(
+                """
+                SELECT * FROM research_evidence
+                WHERE kind = 'news' AND lifecycle_state = 'active'
+                ORDER BY last_seen_at DESC, evidence_id DESC
+                LIMIT %s
+                """,
+                (row_limit,),
+            ).fetchall()
+            result = {
+                "scannedCount": len(rows or []),
+                "sourceRevisionUpdatedCount": 0,
+                "authoritativePersistedCount": 0,
+                "authoritativeRestoredCount": 0,
+                "provisionalCount": 0,
+                "changedCount": 0,
+            }
+            for row in rows or []:
+                item = research_evidence_from_row(row)
+                payload = dict(item.raw_payload or {})
+                original_payload = dict(payload)
+                source_revision = article_source_revision(item)
+                if str(payload.get("articleSourceRevision") or "") != source_revision:
+                    payload["articleSourceRevision"] = source_revision
+                    result["sourceRevisionUpdatedCount"] += 1
+                item.raw_payload = payload
+                if authoritative_enrichment(payload):
+                    result["authoritativePersistedCount"] += 1
+                    enrichment_revision = article_enrichment_revision(item)
+                    existing_snapshot = self._news_enrichment_snapshot_with_connection(
+                        connection,
+                        item.evidence_id,
+                        source_revision,
+                        enrichment_revision=enrichment_revision,
+                    )
+                    if existing_snapshot:
+                        payload = apply_enrichment_snapshot(payload, existing_snapshot)
+                        item.raw_payload = payload
+                    elif not dry_run:
+                        self._persist_news_enrichment_with_connection(connection, item, stamp)
+                        payload = dict(item.raw_payload or {})
+                else:
+                    result["provisionalCount"] += 1
+                    snapshot = self._news_enrichment_snapshot_with_connection(
+                        connection,
+                        item.evidence_id,
+                        source_revision,
+                        self._news_analysis_release(payload),
+                    )
+                    if snapshot:
+                        payload = apply_enrichment_snapshot(payload, snapshot)
+                        item.raw_payload = payload
+                        result["authoritativeRestoredCount"] += 1
+                if payload != original_payload:
+                    result["changedCount"] += 1
+                    if not dry_run:
+                        states = news_domain.news_state_payload(payload)
+                        connection.execute(
+                            """
+                            UPDATE research_evidence
+                            SET source_trust_state = %s, materiality_state = %s,
+                                data_state = %s, validation_state = %s,
+                                payload_json = %s
+                            WHERE evidence_id = %s AND payload_json = %s
+                            """,
+                            (
+                                states["sourceTrustState"],
+                                states["materialityState"],
+                                states["dataState"],
+                                states["validationState"],
+                                json_dumps(payload),
+                                item.evidence_id,
+                                str(row.get("payload_json") or ""),
+                            ),
+                        )
+            result["dryRun"] = bool(dry_run)
+            return result
+
+        return dict(self.transaction_with_deadlock_retry("news-enrichment-repair", operation) or {})
+
+    def _persist_news_enrichment_with_connection(
+        self,
+        connection,
+        item: ResearchEvidence,
+        stamp: str,
+    ) -> str:
+        payload = dict(item.raw_payload or {})
+        if item.kind != "news" or not authoritative_enrichment(payload):
+            return ""
+        source_revision = str(payload.get("articleSourceRevision") or article_source_revision(item)).strip()
+        payload["articleSourceRevision"] = source_revision
+        enrichment_revision = article_enrichment_revision(item)
+        payload["articleEnrichmentRevision"] = enrichment_revision
+        item.raw_payload = payload
+        analyzer_release = self._news_analysis_release(payload)
+        snapshot = enrichment_payload_snapshot(payload)
+        snapshot["articleSourceRevision"] = source_revision
+        snapshot["articleEnrichmentRevision"] = enrichment_revision
+        connection.execute(
+            """
+            INSERT INTO news_article_enrichment_revisions (
+                enrichment_revision, evidence_id, source_revision, analyzer_release,
+                analysis_status, translation_status, summary_quality_state,
+                payload_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                enrichment_revision = VALUES(enrichment_revision),
+                analysis_status = VALUES(analysis_status),
+                translation_status = VALUES(translation_status),
+                summary_quality_state = VALUES(summary_quality_state),
+                payload_json = VALUES(payload_json),
+                updated_at = VALUES(updated_at)
+            """,
+            (
+                enrichment_revision,
+                item.evidence_id,
+                source_revision,
+                analyzer_release,
+                str((payload.get("aiAnalysis") or {}).get("status") or "")[:32],
+                str(payload.get("translationStatus") or "")[:32],
+                str(payload.get("summaryQualityState") or "")[:32],
+                json_dumps(snapshot),
+                stamp,
+                stamp,
+            ),
+        )
+        return enrichment_revision
+
     def enqueue_news_analysis_work(self, jobs: Iterable[Dict[str, object]]) -> int:
         """Upsert latest-wins durable work without copying article payloads."""
         rows = []
@@ -191,17 +451,17 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     priority, last_error, created_at, updated_at
                 ) VALUES (%s, %s, %s, 'pending', %s, '', %s, %s)
                 ON DUPLICATE KEY UPDATE
+                    lease_owner = IF(subject_revision <> VALUES(subject_revision) OR work_state = 'completed', '', lease_owner),
+                    lease_until = IF(subject_revision <> VALUES(subject_revision) OR work_state = 'completed', '', lease_until),
+                    not_before_at = IF(subject_revision <> VALUES(subject_revision) OR work_state = 'completed', '', not_before_at),
+                    attempt_count = IF(subject_revision <> VALUES(subject_revision), 0, attempt_count),
+                    last_error = IF(subject_revision <> VALUES(subject_revision) OR work_state = 'completed', '', last_error),
+                    completed_at = IF(subject_revision <> VALUES(subject_revision) OR work_state = 'completed', '', completed_at),
                     work_state = IF(
-                        subject_revision <> VALUES(subject_revision),
+                        subject_revision <> VALUES(subject_revision) OR work_state = 'completed',
                         'pending',
                         work_state
                     ),
-                    lease_owner = IF(subject_revision <> VALUES(subject_revision), '', lease_owner),
-                    lease_until = IF(subject_revision <> VALUES(subject_revision), '', lease_until),
-                    not_before_at = IF(subject_revision <> VALUES(subject_revision), '', not_before_at),
-                    attempt_count = IF(subject_revision <> VALUES(subject_revision), 0, attempt_count),
-                    last_error = IF(subject_revision <> VALUES(subject_revision), '', last_error),
-                    completed_at = IF(subject_revision <> VALUES(subject_revision), '', completed_at),
                     subject_revision = VALUES(subject_revision),
                     work_class = VALUES(work_class),
                     priority = VALUES(priority),
@@ -377,6 +637,36 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             "highestReadyPriority": int(ready.get("highest_priority") or 0),
         }
 
+    def news_analysis_work_items(self, evidence_ids: Iterable[str]) -> Dict[str, Dict[str, object]]:
+        ids = sorted({str(value or "").strip() for value in evidence_ids or [] if str(value or "").strip()})
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT evidence_id, subject_revision, work_class, work_state,
+                       attempt_count, not_before_at, lease_until, last_error, updated_at
+                FROM news_analysis_work_items
+                WHERE evidence_id IN (""" + placeholders + ")",
+                ids,
+            ).fetchall()
+        return {
+            str(row.get("evidence_id") or ""): {
+                "evidenceId": str(row.get("evidence_id") or ""),
+                "subjectRevision": str(row.get("subject_revision") or ""),
+                "workClass": str(row.get("work_class") or ""),
+                "workState": str(row.get("work_state") or ""),
+                "attemptCount": int(row.get("attempt_count") or 0),
+                "notBeforeAt": str(row.get("not_before_at") or ""),
+                "leaseUntil": str(row.get("lease_until") or ""),
+                "lastError": str(row.get("last_error") or ""),
+                "updatedAt": str(row.get("updated_at") or ""),
+            }
+            for row in rows or []
+            if str(row.get("evidence_id") or "")
+        }
+
     def write_batch_size(self) -> int:
         try:
             configured = int(float(str(self.runtime_settings.get("researchEvidenceWriteBatchSize") or "50").strip()))
@@ -529,7 +819,28 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             previous = research_evidence_from_row(previous_row) if previous_row else None
             if previous:
                 payload = merge_derived_evidence_payload(previous.raw_payload, payload)
+            item.raw_payload = payload
+            source_revision = article_source_revision(item) if kind == "news" else ""
+            if source_revision:
+                payload["articleSourceRevision"] = source_revision
+                analyzer_release = self._news_analysis_release(payload)
+                if not authoritative_enrichment(payload):
+                    authoritative = self._news_enrichment_snapshot_with_connection(
+                        connection,
+                        evidence_id,
+                        source_revision,
+                        analyzer_release,
+                    )
+                    if authoritative:
+                        payload = apply_enrichment_snapshot(payload, authoritative)
                 item.raw_payload = payload
+                self._persist_news_enrichment_with_connection(connection, item, stamp)
+                payload = dict(item.raw_payload or {})
+            merged_states = news_domain.news_state_payload(payload)
+            item.source_trust_state = merged_states["sourceTrustState"]
+            item.materiality_state = merged_states["materialityState"]
+            item.data_state = merged_states["dataState"]
+            item.validation_state = merged_states["validationState"]
             states = item.state_payload()
             previous_lifecycle_state = self._row_lifecycle_state(previous_row) if previous_row else ""
             lifecycle_changed_at = stamp if not previous_row or previous_lifecycle_state != "active" else self._row_lifecycle_changed_at(previous_row)

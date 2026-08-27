@@ -67,6 +67,7 @@ from ..application.model_review_service import ModelReviewRunner
 from ..application.news_collection_service import NewsCollectionRunner
 from ..application.news_ai_analysis_service import NewsAiAnalysisService
 from ..application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
+from ..application.news_pipeline_repair_service import NewsPipelineRepairService
 from ..application.news_digest_service import NewsDigestEnqueuer, NewsDigestEventReconciler
 from ..application.notification_ai_decision_context import NotificationAIDecisionContextEnricher
 from ..application.monitoring_service import MonitorRunner
@@ -1171,6 +1172,14 @@ def build_news_analysis_enrichment_runner(settings=None, event_publisher=None) -
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
         storage_guard=lambda: operational_storage_inventory(configured_settings),
+    )
+
+
+def build_news_pipeline_repair_service(settings=None) -> NewsPipelineRepairService:
+    configured_settings = settings or runtime_settings()
+    return NewsPipelineRepairService(
+        evidence_store=stores.research_evidence_store(configured_settings),
+        notification_store=stores.notification_job_store(configured_settings),
     )
 
 

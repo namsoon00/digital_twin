@@ -1227,6 +1227,27 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS news_notification_admissions (
+        admission_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        evidence_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_revision VARCHAR(191) NOT NULL DEFAULT '',
+        enrichment_revision VARCHAR(191) NOT NULL DEFAULT '',
+        policy_version VARCHAR(191) NOT NULL DEFAULT '',
+        decision VARCHAR(32) NOT NULL DEFAULT 'suppressed',
+        reason_code VARCHAR(96) NOT NULL DEFAULT '',
+        matched_identity_keys_json LONGTEXT NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        notification_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_news_admission_account_time (account_id, updated_at, admission_id),
+        KEY idx_news_admission_evidence_time (evidence_id, updated_at, admission_id),
+        KEY idx_news_admission_decision_time (decision, updated_at, admission_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS model_review_jobs (
         job_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL DEFAULT '',
@@ -1685,6 +1706,23 @@ MYSQL_SCHEMA = [
         KEY idx_research_evidence_lifecycle_kind_time (lifecycle_state, kind, published_at, evidence_id),
         KEY idx_research_evidence_lifecycle_kind_seen (lifecycle_state, kind, last_seen_at, evidence_id),
         KEY idx_research_evidence_lifecycle_latest (lifecycle_state, last_seen_at, published_at, evidence_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_article_enrichment_revisions (
+        enrichment_revision VARCHAR(191) PRIMARY KEY,
+        evidence_id VARCHAR(191) NOT NULL,
+        source_revision VARCHAR(191) NOT NULL,
+        analyzer_release VARCHAR(191) NOT NULL,
+        analysis_status VARCHAR(32) NOT NULL DEFAULT '',
+        translation_status VARCHAR(32) NOT NULL DEFAULT '',
+        summary_quality_state VARCHAR(32) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY idx_news_enrichment_subject (evidence_id, source_revision, analyzer_release),
+        KEY idx_news_enrichment_status_time (analysis_status, updated_at),
+        KEY idx_news_enrichment_source (source_revision, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

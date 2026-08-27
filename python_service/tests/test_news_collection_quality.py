@@ -10,13 +10,20 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.news_ai_analysis_service import NewsAiAnalysisService
+from digital_twin.application.news_analysis_enrichment_service import NewsAnalysisEnrichmentRunner
 from digital_twin.application.news_collection_service import NewsCollectionRunner, parse_news_timestamp
+from digital_twin.application.news_digest_service import NewsDigestEnqueuer
 from digital_twin.domain.data_pipeline_health import evaluate_news_collection_health
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.news_ai_analysis import article_text_parts, local_news_ai_analysis
 from digital_twin.domain.news_analysis import article_analysis_facts, article_quality_gate
 from digital_twin.domain.news_collection_quality import assess_news_collection_admission
+from digital_twin.domain.sent_article_filter import (
+    article_identity_keys,
+    article_weak_identity_keys,
+    collect_article_identity_keys_from_context,
+)
 from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen
 from digital_twin.infrastructure import news_sources
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text, news_article_identity_token
@@ -45,6 +52,163 @@ class NewsCollectionQualityTests(unittest.TestCase):
                 "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
             },
         )
+
+    def test_generic_takeaway_is_diagnostic_and_cannot_suppress_another_article(self):
+        generic_takeaway = "실적과 이익 전망 변화가 핵심"
+        first = {
+            "kind": "news",
+            "evidenceId": "research:AAPL:news:first",
+            "title": "Apple raises annual services revenue guidance",
+            "url": "https://example.test/apple-guidance",
+            "articleFacts": {"eventTakeaway": generic_takeaway},
+        }
+        second = {
+            "kind": "news",
+            "evidenceId": "research:TSLA:news:second",
+            "title": "Tesla reports quarterly vehicle deliveries",
+            "url": "https://example.test/tesla-deliveries",
+            "articleFacts": {"eventTakeaway": generic_takeaway},
+        }
+
+        self.assertFalse(article_identity_keys(first).intersection(article_identity_keys(second)))
+        self.assertTrue(article_weak_identity_keys(first).intersection(article_weak_identity_keys(second)))
+
+    def test_exact_url_still_suppresses_a_syndicated_duplicate(self):
+        first = {
+            "kind": "news",
+            "evidenceId": "research:AAPL:news:first",
+            "title": "Apple raises annual services revenue guidance",
+            "url": "https://example.test/apple-guidance?utm_source=feed",
+        }
+        second = {
+            "kind": "news",
+            "evidenceId": "research:AAPL:news:second",
+            "title": "Apple lifts its annual services outlook",
+            "url": "https://example.test/apple-guidance",
+        }
+
+        self.assertTrue(article_identity_keys(first).intersection(article_identity_keys(second)))
+
+    def test_same_symbol_earnings_articles_share_a_bounded_event_identity(self):
+        first = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-26T21:00:00Z",
+            "evidenceId": "research:NVDA:news:first",
+            "title": "Nvidia quarterly earnings beat expectations",
+            "url": "https://example.test/nvidia-earnings",
+        }
+        follow_up = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-27T09:00:00Z",
+            "evidenceId": "research:NVDA:news:follow-up",
+            "title": "Wall Street reviews Nvidia revenue outlook",
+            "url": "https://example.test/nvidia-outlook",
+        }
+        unrelated = {
+            **follow_up,
+            "symbol": "AMD",
+            "evidenceId": "research:AMD:news:earnings",
+            "url": "https://example.test/amd-earnings",
+        }
+
+        self.assertTrue(article_identity_keys(first).intersection(article_identity_keys(follow_up)))
+        self.assertFalse(article_identity_keys(first).intersection(article_identity_keys(unrelated)))
+
+    def test_earnings_event_identity_does_not_span_an_unbounded_date_range(self):
+        first = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-20T21:00:00Z",
+            "evidenceId": "research:NVDA:news:first",
+            "title": "Nvidia quarterly earnings beat expectations",
+            "url": "https://example.test/nvidia-earnings",
+        }
+        later = {
+            **first,
+            "publishedAt": "2026-08-24T09:00:00Z",
+            "evidenceId": "research:NVDA:news:later",
+            "title": "Nvidia updates its quarterly earnings outlook",
+            "url": "https://example.test/nvidia-later",
+        }
+
+        self.assertFalse(article_identity_keys(first).intersection(article_identity_keys(later)))
+
+    def test_legacy_weak_precomputed_keys_are_ignored_when_rebuilding_delivery_history(self):
+        context = {
+            "newsDigest": {
+                "eventKind": "news",
+                "primaryEvidenceId": "research:AAPL:news:first",
+                "primaryUrl": "https://example.test/apple-guidance",
+                "primaryTitle": "Apple raises annual services revenue guidance",
+                "articleKeys": [
+                    "takeaway:757b07881d88148b00bb",
+                    "title:0123456789abcdef0123",
+                    "url:abcdef0123456789abcd",
+                ],
+            }
+        }
+
+        keys = collect_article_identity_keys_from_context(context)
+
+        self.assertNotIn("takeaway:757b07881d88148b00bb", keys)
+        self.assertNotIn("title:0123456789abcdef0123", keys)
+        self.assertIn("url:abcdef0123456789abcd", keys)
+
+    def test_analysis_work_revision_depends_on_source_not_provisional_ai_state(self):
+        initial = self.evidence({
+            "relationScope": "direct",
+            "articleText": "Apple raised annual services revenue guidance. " * 8,
+            "aiAnalysis": {"status": "deferred"},
+        })
+        replayed = self.evidence({
+            "relationScope": "direct",
+            "articleText": "Apple raised annual services revenue guidance. " * 8,
+            "aiAnalysis": {"status": "local", "lastExternalAttemptAt": "2026-08-28T00:00:00Z"},
+        })
+
+        self.assertEqual(
+            NewsAnalysisEnrichmentRunner.work_revision(initial, "model"),
+            NewsAnalysisEnrichmentRunner.work_revision(replayed, "model"),
+        )
+
+    def test_digest_replay_rejects_a_different_current_source_revision(self):
+        current = self.evidence({
+            "articleSourceRevision": "news-source:current",
+            "articleText": "Apple published corrected annual guidance. " * 8,
+        })
+        repository = SimpleNamespace(get=lambda _evidence_id: current)
+        enqueuer = NewsDigestEnqueuer(None, None, None, evidence_repository=repository)
+
+        hydrated = enqueuer.hydrate_canonical_items([{
+            "kind": "news",
+            "evidenceId": current.evidence_id,
+            "articleSourceRevision": "news-source:previous",
+        }])
+
+        self.assertEqual([], hydrated)
+
+    def test_digest_replay_requires_an_exact_enrichment_snapshot_when_revision_bound(self):
+        current = self.evidence({
+            "articleSourceRevision": "news-source:current",
+            "articleEnrichmentRevision": "news-enrichment:current",
+            "articleText": "Apple published corrected annual guidance. " * 8,
+        })
+        repository = SimpleNamespace(get=lambda _evidence_id: current)
+        enqueuer = NewsDigestEnqueuer(None, None, None, evidence_repository=repository)
+
+        hydrated = enqueuer.hydrate_canonical_items([{
+            "kind": "news",
+            "evidenceId": current.evidence_id,
+            "articleSourceRevision": "news-source:current",
+            "articleEnrichmentRevision": "news-enrichment:previous",
+        }])
+
+        self.assertEqual([], hydrated)
 
     def test_article_body_cache_reuses_content_without_spending_run_budget(self):
         calls = []

@@ -15,10 +15,11 @@ import uuid
 
 from ..domain.data_freshness import age_minutes, parse_datetime
 from ..domain.events import news_article_analyzed_event, ontology_reasoning_requested_event, research_evidence_collected_event
-from ..domain.evidence_delta import evidence_content_signature, evidence_story_key
+from ..domain.evidence_delta import evidence_story_key
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.materiality import evidence_materiality
 from ..domain.news_ai_analysis import (
+    NEWS_AI_ANALYSIS_VERSION,
     article_body_quality_needs_refresh,
     article_summary_quality_needs_refresh,
     article_text_parts,
@@ -28,6 +29,7 @@ from ..domain.news_ai_analysis import (
     source_language,
     summary_quality_payload,
 )
+from ..news_intelligence.domain.article import article_source_revision
 from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain import news_analysis as news_domain
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
@@ -147,6 +149,11 @@ class NewsAnalysisEnrichmentRunner:
         needs_summary_review = str(refreshed_quality.get("state") or "") in {"blocked", "needs-review"}
         summary_quality_refresh = article_summary_quality_needs_refresh(item)
         analysis_status = str(analysis.get("status") or "").lower()
+        completed_analysis = bool(
+            analysis_status in {"complete", "ok", "success", "verified"}
+            and news_ai_analysis_is_current(item)
+            and not needs_translation
+        )
         retryable_analysis = (
             analysis_status in {"fallback", "error", ""}
             or analysis_status in {"local", "deferred"}
@@ -156,7 +163,7 @@ class NewsAnalysisEnrichmentRunner:
         body_quality_repair = article_body_quality_needs_refresh(item)
         if not (
             needs_translation
-            or needs_summary_review
+            or (needs_summary_review and not completed_analysis)
             or summary_quality_refresh
             or retryable_analysis
             or analysis_outdated
@@ -273,7 +280,13 @@ class NewsAnalysisEnrichmentRunner:
 
     @staticmethod
     def work_revision(item: ResearchEvidence, work_class: str) -> str:
-        revision_source = evidence_content_signature(item) + ":" + str(work_class or "model")
+        payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+        source_revision = str(payload.get("articleSourceRevision") or article_source_revision(item)).strip()
+        revision_source = ":".join([
+            source_revision,
+            NEWS_AI_ANALYSIS_VERSION,
+            str(work_class or "model"),
+        ])
         return "news-analysis:" + hashlib.sha256(
             revision_source.encode("utf-8")
         ).hexdigest()[:32]
@@ -304,6 +317,47 @@ class NewsAnalysisEnrichmentRunner:
                 result["durableQueue"] = dict(status_loader() or {})
             except Exception as error:  # noqa: BLE001 - status remains available from evidence scan.
                 result["durableQueue"] = {"durable": True, "status": "error", "reason": str(error)[:180]}
+        work_loader = getattr(self.evidence_store, "news_analysis_work_items", None)
+        if callable(work_loader):
+            try:
+                work_items = dict(work_loader([item.evidence_id for item in candidates]) or {})
+                missing = 0
+                completed_retryable = 0
+                revision_mismatch = 0
+                represented = 0
+                for item in candidates:
+                    job = work_items.get(item.evidence_id) or {}
+                    if not job:
+                        missing += 1
+                        continue
+                    if str(job.get("subjectRevision") or "") != self.work_revision(
+                        item,
+                        str(job.get("workClass") or "model"),
+                    ):
+                        revision_mismatch += 1
+                        continue
+                    if str(job.get("workState") or "") == "completed":
+                        completed_retryable += 1
+                        continue
+                    represented += 1
+                inconsistent = missing + completed_retryable + revision_mismatch
+                result["queueIntegrity"] = {
+                    "status": "degraded" if inconsistent else "healthy",
+                    "candidateCount": len(candidates),
+                    "representedCandidateCount": represented,
+                    "missingWorkCount": missing,
+                    "completedButRetryableCount": completed_retryable,
+                    "revisionMismatchCount": revision_mismatch,
+                    "inconsistentCount": inconsistent,
+                }
+            except Exception as error:  # noqa: BLE001 - diagnostics must not block status.
+                result["queueIntegrity"] = {"status": "error", "reason": str(error)[:180]}
+        enrichment_loader = getattr(self.evidence_store, "news_enrichment_status", None)
+        if callable(enrichment_loader):
+            try:
+                result["enrichmentRevisions"] = dict(enrichment_loader() or {})
+            except Exception as error:  # noqa: BLE001 - diagnostics must not block status.
+                result["enrichmentRevisions"] = {"status": "error", "reason": str(error)[:180]}
         return result
 
     def storage_state(self) -> Dict[str, object]:

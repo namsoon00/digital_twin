@@ -63,6 +63,7 @@ from .service_factory import (
     build_monitor_runner,
     build_news_analysis_enrichment_runner,
     build_news_collection_runner,
+    build_news_pipeline_repair_service,
     build_notification_queue_runner,
     build_official_calendar_sync_service,
     observe_operational_storage_capacity,
@@ -1847,6 +1848,15 @@ def research_evidence_command(args) -> int:
 
 def news_analysis_command(args) -> int:
     settings = runtime_settings()
+    if args.news_analysis_action == "repair":
+        print(json.dumps(
+            build_news_pipeline_repair_service(settings).run(
+                limit=int(args.limit or 5000),
+                dry_run=not bool(args.apply),
+            ),
+            ensure_ascii=False,
+        ))
+        return 0
     runner = build_news_analysis_enrichment_runner(settings)
     if args.news_analysis_action == "status":
         print(json.dumps(runner.status(), ensure_ascii=False))
@@ -2429,6 +2439,9 @@ def build_parser() -> argparse.ArgumentParser:
     news_analysis_actions = news_analysis.add_subparsers(dest="news_analysis_action", required=True)
     analysis_once = news_analysis_actions.add_parser("once")
     analysis_once.add_argument("--limit", default="")
+    analysis_repair = news_analysis_actions.add_parser("repair")
+    analysis_repair.add_argument("--limit", default="5000")
+    analysis_repair.add_argument("--apply", action="store_true")
     news_analysis_actions.add_parser("watch")
     news_analysis_actions.add_parser("status")
     news_analysis.set_defaults(func=news_analysis_command)

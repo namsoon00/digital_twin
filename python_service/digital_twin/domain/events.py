@@ -505,6 +505,8 @@ def compact_research_item_for_event_storage(value: object) -> Dict[str, object]:
         "lifecycleChangedAt": 40,
         "validationState": 64,
         "articleReadStatus": 64,
+        "articleSourceRevision": 191,
+        "articleEnrichmentRevision": 191,
     }.items():
         text = _event_text(pick(key), limit)
         if text:

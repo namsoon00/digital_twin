@@ -1,3 +1,4 @@
+import copy
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from digital_twin.domain.market_data import normalize_position
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore, merge_derived_evidence_payload
+from digital_twin.news_intelligence.domain.article import article_source_revision
 from mysql_fixtures import (
     TestResearchEvidenceStore,
     mysql_execute,
@@ -50,6 +52,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def setUp(self):
         mysql_execute(self.seed, "DELETE FROM news_analysis_work_items")
+        mysql_execute(self.seed, "DELETE FROM news_article_enrichment_revisions")
         mysql_execute(self.seed, "DELETE FROM research_evidence")
 
     def test_replayed_source_payload_preserves_verified_enrichment(self):
@@ -131,6 +134,52 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
         self.assertEqual("conditional", authoritative["validationState"])
         self.assertEqual("revalidation-v1", authoritative["evidenceQualityAuthority"])
+
+    def test_replayed_provisional_analysis_cannot_downgrade_completed_enrichment(self):
+        previous = {
+            "articleText": "Apple reported revenue and raised guidance.",
+            "sourceLanguage": "en",
+            "translationStatus": "complete",
+            "translatedTitleKo": "애플, 매출 발표와 가이던스 상향",
+            "articleSummaryKo": "애플이 매출을 발표하고 연간 가이던스를 상향했습니다.",
+            "summaryQualityState": "ready",
+            "aiAnalysis": {
+                "status": "ok",
+                "version": "news-ai-analysis-test",
+                "sourceTextHash": "same-source-hash",
+            },
+            "articleFacts": {
+                "bodyAvailable": True,
+                "eventTakeaway": "애플의 가이던스 상향이 핵심",
+            },
+        }
+        replayed = {
+            "articleText": "Apple reported revenue and raised guidance.",
+            "sourceLanguage": "en",
+            "translationStatus": "pending",
+            "articleSummaryKo": "Apple reported revenue and raised guidance.",
+            "aiAnalysis": {
+                "status": "deferred",
+                "version": "news-ai-analysis-test",
+                "sourceTextHash": "same-source-hash",
+            },
+            "articleFacts": {
+                "bodyAvailable": True,
+                "eventTakeaway": "실적과 이익 전망 변화가 핵심",
+            },
+        }
+
+        merged = merge_derived_evidence_payload(previous, replayed)
+        changed = merge_derived_evidence_payload(
+            previous,
+            {**replayed, "articleText": "Apple withdrew its previous guidance.", "aiAnalysis": {**replayed["aiAnalysis"], "sourceTextHash": "changed"}},
+        )
+
+        self.assertEqual("ok", merged["aiAnalysis"]["status"])
+        self.assertEqual("complete", merged["translationStatus"])
+        self.assertEqual("애플, 매출 발표와 가이던스 상향", merged["translatedTitleKo"])
+        self.assertEqual("애플의 가이던스 상향이 핵심", merged["articleFacts"]["eventTakeaway"])
+        self.assertEqual("deferred", changed["aiAnalysis"]["status"])
 
     @staticmethod
     def news_evidence(evidence_id: str, published_at: str = "2026-07-08T01:00:00Z") -> ResearchEvidence:
@@ -234,6 +283,63 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
                 if row["state"] == "completed" and row["workClass"] == "model"
             ]
             self.assertEqual(1, completed[0]["count"])
+
+            self.assertEqual(1, store.enqueue_news_analysis_work([{
+                "evidenceId": "research:005930:news:queue",
+                "subjectRevision": "news-analysis:0123456789abcdef0123456789abcdef",
+                "workClass": "model",
+                "priority": 90,
+            }]))
+            reclaimed = store.claim_news_analysis_work("test-worker-2", "model", 1, lease_seconds=60)
+            self.assertEqual(1, len(reclaimed))
+            self.assertEqual(2, reclaimed[0]["attemptCount"])
+
+    def test_authoritative_news_enrichment_survives_a_collector_replay(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = MySQLResearchEvidenceStore(mysql_test_settings(test_store_seed(temp)))
+            original = self.direct_news_evidence("research:005930:news:enrichment")
+            original.raw_payload.update({
+                "articleText": "Samsung reported HBM demand and raised its annual guidance. " * 8,
+                "sourceLanguage": "en",
+                "translationStatus": "complete",
+                "translatedTitleKo": "삼성전자, HBM 수요와 연간 전망 발표",
+                "articleSummaryKo": "삼성전자가 HBM 수요와 연간 전망을 발표했습니다.",
+                "summaryQualityState": "ready",
+                "articleAiAnalysisVersion": "news-ai-analysis-test",
+                "aiAnalysis": {
+                    "status": "ok",
+                    "version": "news-ai-analysis-test",
+                    "sourceTextHash": "stable-source-hash",
+                },
+            })
+
+            self.assertEqual(1, store.upsert_many([original]))
+            persisted = store.get(original.evidence_id)
+            source_revision = persisted.raw_payload["articleSourceRevision"]
+            enrichment_revision = persisted.raw_payload["articleEnrichmentRevision"]
+            self.assertEqual(source_revision, article_source_revision(persisted))
+            self.assertEqual(1, store.news_enrichment_status()["authoritativeCount"])
+
+            replayed = copy.deepcopy(original)
+            replayed.raw_payload["translationStatus"] = "pending"
+            replayed.raw_payload["translatedTitleKo"] = ""
+            replayed.raw_payload["aiAnalysis"] = {
+                "status": "deferred",
+                "version": "news-ai-analysis-test",
+                "sourceTextHash": "stable-source-hash",
+            }
+            store.upsert_many([replayed])
+
+            after = store.get(original.evidence_id)
+            exact = store.get_news_evidence_revision(
+                original.evidence_id,
+                source_revision,
+                enrichment_revision,
+            )
+            self.assertEqual("ok", after.raw_payload["aiAnalysis"]["status"])
+            self.assertEqual("complete", after.raw_payload["translationStatus"])
+            self.assertIsNotNone(exact)
+            self.assertEqual("ok", exact.raw_payload["aiAnalysis"]["status"])
 
     def test_stale_cleanup_skips_a_row_locked_by_another_worker(self):
         with tempfile.TemporaryDirectory() as temp:

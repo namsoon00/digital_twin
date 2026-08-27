@@ -307,6 +307,8 @@ class ResearchEvidence:
             "stockImpactReasonKo": str(payload.get("stockImpactReasonKo") or ""),
             "aiAnalysis": dict(payload.get("aiAnalysis") or {}),
             "articleAiAnalysisVersion": str(payload.get("articleAiAnalysisVersion") or ""),
+            "articleSourceRevision": str(payload.get("articleSourceRevision") or ""),
+            "articleEnrichmentRevision": str(payload.get("articleEnrichmentRevision") or ""),
             "analysisConflict": bool(payload.get("analysisConflict")),
             "analysisConflictSource": str(payload.get("analysisConflictSource") or ""),
             "analysisConflictExistingPolarity": str(payload.get("analysisConflictExistingPolarity") or ""),

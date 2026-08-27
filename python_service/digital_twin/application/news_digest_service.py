@@ -31,6 +31,7 @@ from ..domain.sent_article_filter import (
     article_digest_context_item,
     article_has_new_story_fact,
     article_identity_keys,
+    article_weak_identity_keys,
     article_story_cluster_id,
     collect_article_identity_keys_from_context,
 )
@@ -53,6 +54,7 @@ MAX_SOURCES_PER_EVENT = 3
 DEFAULT_RECONCILIATION_INITIAL_LOOKBACK_MINUTES = 1
 DEFAULT_RECONCILIATION_MAX_REPLAY_AGE_MINUTES = 180
 DEFAULT_RECONCILIATION_BATCH_SIZE = 100
+NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION = "news-notification-admission-v3-bounded-event-family"
 
 
 def clean_text(value: object, fallback: str = "") -> str:
@@ -988,7 +990,7 @@ class NewsDigestEnqueuer:
         queued = 0
         accounts = [account for account in (self.account_repository.load() or []) if isinstance(account, AccountConfig) and account.enabled]
         for account in accounts:
-            scoped_items = self.items_for_account(account, items)
+            scoped_items = self.items_for_account(account, items, event)
             if scoped_items:
                 queued += self.enqueue_account_digest(account, scoped_items, event)
         self.last_audit = {
@@ -1028,19 +1030,66 @@ class NewsDigestEnqueuer:
             keys.update(collect_article_identity_keys_from_context(getattr(job, "context", {}) or {}))
         return keys
 
-    def exclude_previously_sent_articles(self, account: AccountConfig, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    def record_admission(
+        self,
+        account: AccountConfig,
+        item: Dict[str, object],
+        event: DomainEvent,
+        decision: str,
+        reason_code: str,
+        matched_identity_keys: Iterable[str] = (),
+        notification_job_id: str = "",
+    ) -> None:
+        recorder = getattr(self.queue, "record_news_notification_admission", None)
+        if not callable(recorder):
+            return
+        payload = item_payload(item)
+        try:
+            recorder({
+                "accountId": account.account_id,
+                "evidenceId": item_evidence_id(item),
+                "symbol": normalized_symbol(item.get("symbol")),
+                "sourceRevision": clean_text(item.get("articleSourceRevision") or payload.get("articleSourceRevision")),
+                "enrichmentRevision": clean_text(item.get("articleEnrichmentRevision") or payload.get("articleEnrichmentRevision")),
+                "policyVersion": NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION,
+                "decision": decision,
+                "reasonCode": reason_code,
+                "matchedIdentityKeys": sorted({clean_text(key) for key in matched_identity_keys if clean_text(key)}),
+                "sourceEventId": event.event_id,
+                "notificationJobId": notification_job_id,
+            })
+        except Exception:  # noqa: BLE001 - admission audit must not block delivery.
+            return
+
+    def exclude_previously_sent_articles(
+        self,
+        account: AccountConfig,
+        items: List[Dict[str, object]],
+        event: DomainEvent = None,
+    ) -> List[Dict[str, object]]:
         sent_keys = self.previously_sent_article_keys(account)
         if not sent_keys:
             return items
         allowed = []
         for item in items:
-            if not article_identity_keys(item).intersection(sent_keys):
+            matched_keys = article_identity_keys(item).intersection(sent_keys)
+            if not matched_keys:
                 allowed.append(item)
                 continue
             if article_has_new_story_fact(item, sent_keys):
                 follow_up = dict(item)
                 follow_up["storyUpdate"] = True
                 allowed.append(follow_up)
+                continue
+            if event is not None:
+                self.record_admission(
+                    account,
+                    item,
+                    event,
+                    "suppressed",
+                    "strong-article-or-story-duplicate",
+                    matched_keys,
+                )
         return allowed
 
     def event_items(self, event: DomainEvent) -> List[Dict[str, object]]:
@@ -1080,6 +1129,7 @@ class NewsDigestEnqueuer:
         quality failure.
         """
         getter = getattr(self.evidence_repository, "get", None)
+        revision_getter = getattr(self.evidence_repository, "get_news_evidence_revision", None)
         if not callable(getter):
             return items
         hydrated = []
@@ -1088,10 +1138,27 @@ class NewsDigestEnqueuer:
             canonical = None
             if evidence_id:
                 try:
-                    canonical = getter(evidence_id)
+                    source_revision = clean_text(compact.get("articleSourceRevision"))
+                    enrichment_revision = clean_text(compact.get("articleEnrichmentRevision"))
+                    if source_revision and enrichment_revision:
+                        canonical = (
+                            revision_getter(evidence_id, source_revision, enrichment_revision)
+                            if callable(revision_getter)
+                            else None
+                        )
+                    else:
+                        canonical = getter(evidence_id)
+                        if source_revision and canonical is not None and callable(getattr(canonical, "to_dict", None)):
+                            current_revision = clean_text(canonical.to_dict().get("articleSourceRevision"))
+                            if current_revision != source_revision:
+                                canonical = None
                 except Exception:  # noqa: BLE001 - compact fallback remains replayable.
                     canonical = None
             if canonical is None or not callable(getattr(canonical, "to_dict", None)):
+                if clean_text(compact.get("articleSourceRevision")) or clean_text(compact.get("articleEnrichmentRevision")):
+                    # A version-bound event must never be re-evaluated from a
+                    # different mutable article revision.
+                    continue
                 hydrated.append(compact)
                 continue
             current = canonical.to_dict()
@@ -1129,11 +1196,16 @@ class NewsDigestEnqueuer:
                 watchlist.setdefault(normalized, normalized)
         return holdings, watchlist
 
-    def items_for_account(self, account: AccountConfig, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    def items_for_account(
+        self,
+        account: AccountConfig,
+        items: List[Dict[str, object]],
+        event: DomainEvent = None,
+    ) -> List[Dict[str, object]]:
         holdings, watchlist = self.account_symbols(account)
         known_symbols = set(holdings) | set(watchlist)
         if not known_symbols:
-            return self.exclude_previously_sent_articles(account, items)
+            return self.exclude_previously_sent_articles(account, items, event)
         scoped = []
         for item in items:
             symbol = normalized_symbol(item.get("symbol"))
@@ -1142,7 +1214,7 @@ class NewsDigestEnqueuer:
                 item["portfolioBucket"] = "보유" if symbol in holdings else "관심"
                 item["displayName"] = holdings.get(symbol) or watchlist.get(symbol) or symbol
                 scoped.append(item)
-        return self.exclude_previously_sent_articles(account, scoped)
+        return self.exclude_previously_sent_articles(account, scoped, event)
 
     def enqueue_account_digest(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> int:
         queued = 0
@@ -1176,7 +1248,17 @@ class NewsDigestEnqueuer:
         context["body"] = text
         job.text = text
         job.context = context
-        return 1 if self.queue.enqueue(job) else 0
+        queued = bool(self.queue.enqueue(job))
+        for item in items:
+            self.record_admission(
+                account,
+                item,
+                event,
+                "queued" if queued else "suppressed",
+                "notification-job-created" if queued else "notification-job-duplicate",
+                notification_job_id=job.job_id if queued else "",
+            )
+        return 1 if queued else 0
 
     def context(self, account: AccountConfig, items: List[Dict[str, object]], event: DomainEvent) -> Dict[str, object]:
         primary = items[0]
@@ -1190,6 +1272,7 @@ class NewsDigestEnqueuer:
         severity = "ALERT" if "material" in materiality_states or impact_label(primary) == "위험" else "WATCH"
         article_items = [article_digest_context_item(item) for item in items]
         article_keys = sorted({key for item in items for key in article_identity_keys(item)})
+        weak_article_keys = sorted({key for item in items for key in article_weak_identity_keys(item)})
         payload = item_payload(primary)
         report_name = item_original_title(primary)
         receipt_no = clean_text(primary.get("receiptNo") or payload.get("receiptNo") or payload.get("receipt_no"))
@@ -1233,6 +1316,7 @@ class NewsDigestEnqueuer:
             "analysisReady": bool(payload.get("analysisReady")) if event_kind == "disclosure" else False,
             "rawLines": raw_lines,
             "newsDigest": {
+                "admissionPolicyVersion": NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION,
                 "eventKind": event_kind,
                 "eventIcon": icon,
                 "eventClusterId": event_group_key(primary),
@@ -1243,6 +1327,7 @@ class NewsDigestEnqueuer:
                 "symbols": symbols,
                 "items": article_items,
                 "articleKeys": article_keys,
+                "weakIdentityKeys": weak_article_keys,
                 "primaryEvidenceId": item_evidence_id(primary),
                 "primaryUrl": clean_text(primary.get("url")),
                 "primaryTitle": clean_text(primary.get("title")),

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 from threading import Lock
 from typing import Dict, Iterable, List, Optional, Tuple
 import uuid
@@ -30,12 +31,14 @@ from ..domain.notifications import NotificationJob
 from ..domain.notification.lifecycle import NotificationLifecycleEvent
 from ..domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from ..domain.sent_article_filter import (
+    article_event_family_keys,
     article_filter_context_summary,
     collect_article_identity_keys_from_context,
     filter_sent_articles_from_context,
     news_story_changes_decision,
     news_story_is_decision_driver,
     news_story_impact_from_context,
+    suppressible_identity_key,
 )
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_retention import sent_article_delivery_ledger_cutoff
@@ -1005,7 +1008,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         return {
             str(row["identity_key"] or "").strip()
             for row in rows
-            if str(row["identity_key"] or "").strip()
+            if suppressible_identity_key(row["identity_key"])
         }
 
     def record_article_delivery_context_with_connection(
@@ -1111,6 +1114,145 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         )
         with self.transaction() as connection:
             return self.sent_article_history_keys_with_connection(connection, probe)
+
+    def remove_weak_article_delivery_identities(self, dry_run: bool = True) -> Dict[str, object]:
+        with self.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM notification_article_delivery_ledger
+                WHERE identity_key LIKE 'takeaway:%%' OR identity_key LIKE 'title:%%'
+                """
+            ).fetchone() or {}
+            count = int(row.get("count") or 0)
+            deleted = 0
+            if count and not dry_run:
+                cursor = connection.execute(
+                    """
+                    DELETE FROM notification_article_delivery_ledger
+                    WHERE identity_key LIKE 'takeaway:%%' OR identity_key LIKE 'title:%%'
+                    """
+                )
+                deleted = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        return {
+            "dryRun": bool(dry_run),
+            "weakIdentityCount": count,
+            "deletedCount": deleted,
+        }
+
+    def backfill_news_event_family_delivery_identities(
+        self,
+        evidence_store,
+        limit: int = 300,
+        dry_run: bool = True,
+    ) -> Dict[str, object]:
+        jobs = self.recent(
+            limit=max(1, min(500, int(limit or 300))),
+            message_type=NEWS_DIGEST,
+            status="done",
+        )
+        candidates = []
+        for job in jobs or []:
+            context = job.context if isinstance(job.context, dict) else {}
+            digest = context.get("newsDigest") if isinstance(context.get("newsDigest"), dict) else {}
+            evidence_id = str(digest.get("primaryEvidenceId") or "").strip()
+            item = evidence_store.get(evidence_id) if evidence_id else None
+            if not item or not callable(getattr(item, "to_dict", None)):
+                continue
+            for identity_key in sorted(article_event_family_keys(item.to_dict())):
+                candidates.append((job, identity_key))
+
+        inserted = 0
+        if candidates and not dry_run:
+            with self.transaction() as connection:
+                for job, identity_key in candidates:
+                    stamp = str(job.updated_at or job.created_at or utc_now()).strip() or utc_now()
+                    cursor = connection.execute(
+                        """
+                        INSERT IGNORE INTO notification_article_delivery_ledger (
+                            account_id, identity_key, delivered_at, updated_at, source_job_id, message_type
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            str(job.account_id or "")[:191],
+                            identity_key[:191],
+                            stamp,
+                            stamp,
+                            str(job.job_id or "")[:191],
+                            NEWS_DIGEST,
+                        ),
+                    )
+                    inserted += max(0, int(getattr(cursor, "rowcount", 0) or 0))
+        return {
+            "dryRun": bool(dry_run),
+            "scannedJobCount": len(jobs or []),
+            "candidateKeyCount": len(candidates),
+            "insertedKeyCount": inserted,
+        }
+
+    def record_news_notification_admission(self, payload: Dict[str, object]) -> str:
+        values = dict(payload or {})
+        identity = "|".join([
+            str(values.get("accountId") or ""),
+            str(values.get("evidenceId") or ""),
+            str(values.get("sourceRevision") or ""),
+            str(values.get("enrichmentRevision") or ""),
+            str(values.get("policyVersion") or ""),
+            str(values.get("sourceEventId") or ""),
+            str(values.get("decision") or ""),
+            str(values.get("reasonCode") or ""),
+        ])
+        admission_id = "news-admission:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        stamp = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT IGNORE INTO news_notification_admissions (
+                    admission_id, account_id, evidence_id, symbol,
+                    source_revision, enrichment_revision, policy_version,
+                    decision, reason_code, matched_identity_keys_json,
+                    source_event_id, notification_job_id, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    admission_id,
+                    str(values.get("accountId") or "")[:191],
+                    str(values.get("evidenceId") or "")[:191],
+                    str(values.get("symbol") or "")[:64],
+                    str(values.get("sourceRevision") or "")[:191],
+                    str(values.get("enrichmentRevision") or "")[:191],
+                    str(values.get("policyVersion") or "")[:191],
+                    str(values.get("decision") or "suppressed")[:32],
+                    str(values.get("reasonCode") or "")[:96],
+                    json_dumps(sorted({str(key or "") for key in values.get("matchedIdentityKeys") or [] if str(key or "")})),
+                    str(values.get("sourceEventId") or "")[:191],
+                    str(values.get("notificationJobId") or "")[:191],
+                    stamp,
+                    stamp,
+                ),
+            )
+        return admission_id
+
+    def news_notification_admission_status(self) -> Dict[str, object]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT decision, reason_code, COUNT(*) AS count, MAX(updated_at) AS latest_updated_at
+                FROM news_notification_admissions
+                GROUP BY decision, reason_code
+                """
+            ).fetchall()
+        return {
+            "decisions": [
+                {
+                    "decision": str(row.get("decision") or ""),
+                    "reasonCode": str(row.get("reason_code") or ""),
+                    "count": int(row.get("count") or 0),
+                    "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
+                }
+                for row in rows or []
+            ]
+        }
 
     def sent_article_history_keys_with_connection(self, connection, job: NotificationJob):
         if not self.sent_article_filter_enabled():

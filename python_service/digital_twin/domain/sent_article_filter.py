@@ -2,6 +2,7 @@ import hashlib
 import html
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Dict, Iterable, List, Set, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -68,6 +69,11 @@ SOURCE_URL_LIST_KEYS = {"sourceUrls", "source_urls"}
 DEFAULT_CONTEXT_SCAN_MAX_DEPTH = 8
 DEFAULT_CONTEXT_SCAN_MAX_NODES = 1200
 DEFAULT_CONTEXT_SCAN_MAX_KEYS = 800
+SUPPRESSIBLE_IDENTITY_PREFIXES = {"event", "evidence", "story", "url"}
+EVENT_FAMILY_WINDOW_DAYS = {
+    "capital_policy": 0,
+    "earnings": 1,
+}
 NEWS_DECISION_DRIVER_CATEGORIES = {
     "news",
     "article",
@@ -98,6 +104,24 @@ class SentArticleFilterResult:
     @property
     def removed_count(self) -> int:
         return len(self.removed_items)
+
+
+@dataclass(frozen=True)
+class ArticleIdentitySet:
+    exact_keys: Set[str] = field(default_factory=set)
+    story_keys: Set[str] = field(default_factory=set)
+    fact_keys: Set[str] = field(default_factory=set)
+    weak_keys: Set[str] = field(default_factory=set)
+
+    def suppressible_keys(self) -> Set[str]:
+        return set(self.exact_keys) | set(self.story_keys) | set(self.fact_keys)
+
+
+def suppressible_identity_key(value: object) -> bool:
+    text = _text(value)
+    if not text or ":" not in text:
+        return False
+    return text.split(":", 1)[0] in SUPPRESSIBLE_IDENTITY_PREFIXES
 
 
 def _text(value: object) -> str:
@@ -223,6 +247,35 @@ def article_story_cluster_id(item: Dict[str, object]) -> str:
     return story_identity(item)
 
 
+def _article_event_date(item: Dict[str, object]):
+    raw = _first_nested_value(item, ["publishedAt", "published_at", "observedAt", "observed_at", "seenDate"])
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.strptime(raw[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return parsed.date()
+
+
+def article_event_family_keys(item: Dict[str, object]) -> Set[str]:
+    """Group only event classes with a reliably bounded corporate episode."""
+
+    symbol = _first_nested_value(item, ["symbol", "ticker", "relatedSymbol"]).upper()
+    event_type = _first_nested_value(item, ["eventType", "event_type", "newsType"]).lower()
+    event_date = _article_event_date(item)
+    if not symbol or not event_date or event_type not in EVENT_FAMILY_WINDOW_DAYS:
+        return set()
+    window = EVENT_FAMILY_WINDOW_DAYS[event_type]
+    return {
+        _hash_key("event", "|".join([symbol, event_type, (event_date + timedelta(days=offset)).isoformat()]))
+        for offset in range(-window, window + 1)
+    }
+
+
 def article_story_fact_keys(item: Dict[str, object]) -> Set[str]:
     """Return fact-level identities that may justify a story follow-up."""
 
@@ -245,28 +298,46 @@ def article_story_fact_keys(item: Dict[str, object]) -> Set[str]:
     return keys
 
 
-def article_identity_keys(item: Dict[str, object]) -> Set[str]:
+def article_identity_set(item: Dict[str, object]) -> ArticleIdentitySet:
     if not isinstance(item, dict):
-        return set()
-    keys: Set[str] = set()
+        return ArticleIdentitySet()
+    exact_keys: Set[str] = set()
+    story_keys: Set[str] = set()
+    weak_keys: Set[str] = set()
     evidence_id = _first_nested_value(item, ["evidenceId", "evidence_id", "id"])
     if evidence_id:
-        keys.add(_hash_key("evidence", evidence_id))
+        exact_keys.add(_hash_key("evidence", evidence_id))
     url = _first_nested_value(item, URL_KEYS)
     normalized_url = normalize_article_url(url)
     if normalized_url:
-        keys.add(_hash_key("url", normalized_url))
+        exact_keys.add(_hash_key("url", normalized_url))
     title = normalize_article_title_for_identity(_first_nested_value(item, ["title", "headline", "name"]))
     if len(title) >= 12:
-        keys.add(_hash_key("title", title))
+        weak_keys.add(_hash_key("title", title))
     takeaway = normalize_article_title_for_identity(_first_nested_value(item, ["eventTakeaway", "takeaway"]))
     if len(takeaway) >= 16:
-        keys.add(_hash_key("takeaway", takeaway))
+        weak_keys.add(_hash_key("takeaway", takeaway))
     cluster = article_story_cluster_id(item)
     if cluster:
-        keys.add(cluster)
-        keys.update(article_story_fact_keys(item))
-    return {key for key in keys if key}
+        story_keys.add(cluster)
+    story_keys.update(article_event_family_keys(item))
+    fact_keys = article_story_fact_keys(item)
+    return ArticleIdentitySet(
+        exact_keys={key for key in exact_keys if key},
+        story_keys={key for key in story_keys if key},
+        fact_keys={key for key in fact_keys if key},
+        weak_keys={key for key in weak_keys if key},
+    )
+
+
+def article_identity_keys(item: Dict[str, object]) -> Set[str]:
+    """Return only identities strong enough to suppress a notification."""
+
+    return article_identity_set(item).suppressible_keys()
+
+
+def article_weak_identity_keys(item: Dict[str, object]) -> Set[str]:
+    return set(article_identity_set(item).weak_keys)
 
 
 def article_has_new_story_fact(item: Dict[str, object], sent_keys: Set[str]) -> bool:
@@ -307,13 +378,13 @@ def _add_precomputed_article_identity_keys(value: object, keys: Set[str]) -> Non
     if isinstance(raw_keys, list):
         for raw_key in raw_keys:
             text = _text(raw_key)
-            if text:
+            if suppressible_identity_key(text):
                 keys.add(text)
     digest = value.get("newsDigest") if isinstance(value.get("newsDigest"), dict) else {}
     digest_keys = digest.get("articleKeys") if isinstance(digest.get("articleKeys"), list) else []
     for raw_key in digest_keys:
         text = _text(raw_key)
-        if text:
+        if suppressible_identity_key(text):
             keys.add(text)
 
 
@@ -391,9 +462,14 @@ def article_digest_context_item(item: Dict[str, object]) -> Dict[str, object]:
             or _text(payload.get("articleReadStatus") or payload.get("readStatus"))
         ),
         "storyClusterId": article_story_cluster_id(item),
+        "eventType": _first_nested_value(item, ["eventType", "event_type", "newsType"]),
+        "relationScope": _first_nested_value(item, ["relationScope"]),
         "storyFactKeys": sorted(article_story_fact_keys(item)),
         "storyUpdate": _truthy(item.get("storyUpdate")),
         "identityKeys": sorted(article_identity_keys(item)),
+        "weakIdentityKeys": sorted(article_weak_identity_keys(item)),
+        "articleSourceRevision": _first_nested_value(item, ["articleSourceRevision"]),
+        "articleEnrichmentRevision": _first_nested_value(item, ["articleEnrichmentRevision"]),
     }
 
 

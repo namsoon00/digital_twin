@@ -183,6 +183,219 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(1, result["completedCount"])
         self.assertEqual(["job:survivor"], result["reasoningJobIds"])
 
+    def test_market_anchor_reconciliation_uses_later_verified_snapshot_when_source_job_expired(self):
+        pending_event_id = "event:expired-market"
+
+        class Connection:
+            def execute(self, sql, _params=()):
+                if "FROM market_observation_reasoning_anchors" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "MSTR",
+                        "pending_event_id": pending_event_id,
+                        "pending_at": "2026-08-27T00:00:00Z",
+                    }])
+                if "SELECT scope_key, created_at" in sql:
+                    return SimpleNamespace(fetchone=lambda: {})
+                if "JSON_EXTRACT(result_json" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "job_id": "job:later-verified",
+                        "source_snapshot_at": "2026-08-27T01:00:00Z",
+                        "evaluated_symbols_json": json.dumps(["MSTR"]),
+                        "account_ids_json": json.dumps(["acct"]),
+                    }])
+                if "job_status IN" in sql:
+                    return SimpleNamespace(fetchall=lambda: [])
+                raise AssertionError(sql)
+
+        class Store(MySQLMarketObservationReasoningAnchorStore):
+            def __init__(self):
+                self.completed = []
+
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+            def complete(self, event_ids, account_ids=None, symbols=None):
+                del account_ids, symbols
+                self.completed = list(event_ids)
+                return {"status": "completed", "completedCount": len(self.completed)}
+
+            def release_pending(self, event_ids):
+                return {"status": "released", "releasedCount": 0, "eventIds": list(event_ids)}
+
+        store = Store()
+
+        result = store.reconcile_completed_reasoning_jobs("ontology-v2-production-r75")
+
+        self.assertEqual([pending_event_id], store.completed)
+        self.assertEqual(1, result["completedCount"])
+        self.assertEqual(["job:later-verified"], result["reasoningJobIds"])
+        self.assertEqual(
+            ["job:later-verified"],
+            result["boundaryVerifiedReasoningJobIds"],
+        )
+
+    def test_market_anchor_reconciliation_rejects_older_or_wrong_account_snapshot(self):
+        pending_event_id = "event:pending-market"
+
+        class Connection:
+            def execute(self, sql, _params=()):
+                if "FROM market_observation_reasoning_anchors" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "MSTR",
+                        "pending_event_id": pending_event_id,
+                        "pending_at": "2026-08-27T02:00:00Z",
+                    }])
+                if "SELECT scope_key, created_at" in sql:
+                    return SimpleNamespace(fetchone=lambda: {})
+                if "JSON_EXTRACT(result_json" in sql:
+                    return SimpleNamespace(fetchall=lambda: [
+                        {
+                            "job_id": "job:older",
+                            "source_snapshot_at": "2026-08-27T01:00:00Z",
+                            "evaluated_symbols_json": json.dumps(["MSTR"]),
+                            "account_ids_json": json.dumps(["acct"]),
+                        },
+                        {
+                            "job_id": "job:wrong-account",
+                            "source_snapshot_at": "2026-08-27T03:00:00Z",
+                            "evaluated_symbols_json": json.dumps(["MSTR"]),
+                        "account_ids_json": json.dumps(["other"]),
+                        },
+                    ])
+                if "job_status IN" in sql:
+                    return SimpleNamespace(fetchall=lambda: [])
+                raise AssertionError(sql)
+
+        class Store(MySQLMarketObservationReasoningAnchorStore):
+            def __init__(self):
+                self.completed = []
+
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+            def complete(self, event_ids, account_ids=None, symbols=None):
+                del account_ids, symbols
+                self.completed = list(event_ids)
+                return {"status": "completed", "completedCount": len(self.completed)}
+
+            def release_pending(self, event_ids):
+                return {"status": "released", "releasedCount": 0, "eventIds": list(event_ids)}
+
+        store = Store()
+
+        result = store.reconcile_completed_reasoning_jobs("ontology-v2-production-r75")
+
+        self.assertEqual([], store.completed)
+        self.assertEqual(0, result["completedCount"])
+        self.assertEqual([], result["boundaryVerifiedReasoningJobIds"])
+
+    def test_market_anchor_reconciliation_releases_stale_orphan_for_retry(self):
+        pending_event_id = "event:orphan-market"
+
+        class Connection:
+            def execute(self, sql, _params=()):
+                if "FROM market_observation_reasoning_anchors" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "SKHY",
+                        "pending_event_id": pending_event_id,
+                        "pending_at": "2026-08-20T00:00:00Z",
+                    }])
+                if "SELECT scope_key, created_at" in sql:
+                    return SimpleNamespace(fetchone=lambda: {})
+                if "JSON_EXTRACT(result_json" in sql or "job_status IN" in sql:
+                    return SimpleNamespace(fetchall=lambda: [])
+                raise AssertionError(sql)
+
+        class Store(MySQLMarketObservationReasoningAnchorStore):
+            def __init__(self):
+                self.runtime_settings = {
+                    "marketObservationReasoningPendingTimeoutSeconds": 3600,
+                }
+                self.released = []
+
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+            def complete(self, event_ids, account_ids=None, symbols=None):
+                del account_ids, symbols
+                return {"status": "completed", "completedCount": len(list(event_ids))}
+
+            def release_pending(self, event_ids):
+                self.released = list(event_ids)
+                return {"status": "released", "releasedCount": len(self.released)}
+
+        store = Store()
+
+        result = store.reconcile_completed_reasoning_jobs("ontology-v2-production-r75")
+
+        self.assertEqual([pending_event_id], store.released)
+        self.assertEqual(1, result["releasedCount"])
+        self.assertEqual([pending_event_id], result["releasedEventIds"])
+
+    def test_market_anchor_reconciliation_keeps_stale_orphan_with_active_coalesced_job(self):
+        pending_event_id = "event:active-market"
+
+        class Connection:
+            def execute(self, sql, _params=()):
+                if "FROM market_observation_reasoning_anchors" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "SKHY",
+                        "pending_event_id": pending_event_id,
+                        "pending_at": "2026-08-20T00:00:00Z",
+                    }])
+                if "SELECT scope_key, created_at" in sql:
+                    return SimpleNamespace(fetchone=lambda: {})
+                if "JSON_EXTRACT(result_json" in sql:
+                    return SimpleNamespace(fetchall=lambda: [])
+                if "job_status IN" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "source_event_id": "event:survivor",
+                        "request_json": json.dumps({
+                            "sourceEvent": {
+                                "eventId": "event:survivor",
+                                "payload": {
+                                    "coalescedReasoningChanges": {
+                                        "sourceEventIds": [pending_event_id],
+                                    },
+                                },
+                            },
+                        }),
+                    }])
+                raise AssertionError(sql)
+
+        class Store(MySQLMarketObservationReasoningAnchorStore):
+            def __init__(self):
+                self.runtime_settings = {
+                    "marketObservationReasoningPendingTimeoutSeconds": 3600,
+                }
+                self.released = []
+
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+            def complete(self, event_ids, account_ids=None, symbols=None):
+                del account_ids, symbols
+                return {"status": "completed", "completedCount": len(list(event_ids))}
+
+            def release_pending(self, event_ids):
+                self.released = list(event_ids)
+                return {"status": "released", "releasedCount": len(self.released)}
+
+        store = Store()
+
+        result = store.reconcile_completed_reasoning_jobs("ontology-v2-production-r75")
+
+        self.assertEqual([], store.released)
+        self.assertEqual(0, result["releasedCount"])
+
     def test_v2_executor_observes_lifecycle_after_projection_is_attached(self):
         class Recorder:
             @staticmethod

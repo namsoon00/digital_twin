@@ -293,6 +293,33 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
             "eventIds": events,
         }
 
+    def release_pending(self, event_ids: Iterable[str]) -> Dict[str, object]:
+        """Release orphaned reservations without advancing their price anchor."""
+
+        events = sorted({
+            str(value or "").strip()
+            for value in event_ids or []
+            if str(value or "").strip()
+        })
+        if not events:
+            return {"status": "not-required", "releasedCount": 0, "eventIds": []}
+        stamp = utc_now()
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE market_observation_reasoning_anchors
+                SET pending_price = 0, pending_event_id = '', pending_at = '', updated_at = %s
+                WHERE pending_event_id IN ("""
+                + ", ".join(["%s"] * len(events))
+                + ")",
+                tuple([stamp] + events),
+            )
+        return {
+            "status": "released",
+            "releasedCount": int(getattr(cursor, "rowcount", 0) or 0),
+            "eventIds": events,
+        }
+
     def reconcile_completed_reasoning_jobs(
         self,
         deployment_id: str,
@@ -326,6 +353,8 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
 
         completed_event_ids = set()
         completed_job_ids = set()
+        boundary_verified_job_ids = set()
+        active_event_ids = set()
         with self.connect() as connection:
             for anchor in pending:
                 pending_event_id = str(anchor.get("pending_event_id") or "").strip()
@@ -386,13 +415,142 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
                         completed_event_ids.add(pending_event_id)
                         completed_job_ids.add(str(survivor.get("job_id") or ""))
                         break
+
+            unresolved = [
+                anchor
+                for anchor in pending
+                if str(anchor.get("pending_event_id") or "").strip() not in completed_event_ids
+            ]
+            pending_boundaries = [
+                str(anchor.get("pending_at") or "")
+                for anchor in unresolved
+                if str(anchor.get("pending_at") or "")
+            ]
+            if pending_boundaries:
+                oldest_pending_at = min(
+                    pending_boundaries
+                )
+                verified_rows = connection.execute(
+                    """
+                    SELECT job_id, source_snapshot_at,
+                           JSON_EXTRACT(result_json, '$.evaluated_symbols') AS evaluated_symbols_json,
+                           JSON_EXTRACT(result_json, '$.account_ids') AS account_ids_json
+                    FROM reasoning_engine_jobs
+                    WHERE deployment_id = %s
+                      AND job_status = 'completed'
+                      AND source_snapshot_at >= %s
+                    ORDER BY completed_at DESC
+                    LIMIT 1000
+                    """,
+                    (deployment, oldest_pending_at),
+                ).fetchall()
+                verified_completions = []
+                for row in verified_rows or []:
+                    try:
+                        evaluated_symbols = {
+                            str(value or "").upper().strip()
+                            for value in json.loads(
+                                str(row.get("evaluated_symbols_json") or "[]")
+                            )
+                        }
+                        account_ids = {
+                            str(value or "").strip()
+                            for value in json.loads(str(row.get("account_ids_json") or "[]"))
+                        }
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    source_snapshot_at = str(row.get("source_snapshot_at") or "")
+                    if not source_snapshot_at or not evaluated_symbols or not account_ids:
+                        continue
+                    verified_completions.append((row, evaluated_symbols, account_ids))
+
+                for anchor in unresolved:
+                    pending_event_id = str(anchor.get("pending_event_id") or "").strip()
+                    pending_at = str(anchor.get("pending_at") or "")
+                    symbol = str(anchor.get("symbol") or "").upper().strip()
+                    account_id = str(anchor.get("account_id") or "").strip()
+                    for row, evaluated_symbols, account_ids in verified_completions:
+                        if (
+                            str(row.get("source_snapshot_at") or "") >= pending_at
+                            and symbol in evaluated_symbols
+                            and account_id in account_ids
+                        ):
+                            completed_event_ids.add(pending_event_id)
+                            job_id = str(row.get("job_id") or "")
+                            completed_job_ids.add(job_id)
+                            boundary_verified_job_ids.add(job_id)
+                            break
+
+            active_rows = connection.execute(
+                """
+                SELECT source_event_id, request_json
+                FROM reasoning_engine_jobs
+                WHERE deployment_id = %s
+                  AND job_status IN (
+                      'queued', 'retry', 'processing',
+                      'awaiting_source', 'awaiting_world_projection'
+                  )
+                """,
+                (deployment,),
+            ).fetchall()
+            for row in active_rows or []:
+                source_event_id = str(row.get("source_event_id") or "").strip()
+                if source_event_id:
+                    active_event_ids.add(source_event_id)
+                try:
+                    request = json.loads(str(row.get("request_json") or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                source_event = dict(request.get("sourceEvent") or {})
+                payload = dict(source_event.get("payload") or {})
+                coalesced = dict(payload.get("coalescedReasoningChanges") or {})
+                active_event_ids.update({
+                    str(value or "").strip()
+                    for value in [
+                        source_event.get("eventId") or source_event.get("event_id"),
+                        *(coalesced.get("sourceEventIds") or []),
+                    ]
+                    if str(value or "").strip()
+                })
+
+        try:
+            pending_timeout_seconds = int(
+                getattr(self, "runtime_settings", {}).get(
+                    "marketObservationReasoningPendingTimeoutSeconds"
+                )
+                or 3600
+            )
+        except (TypeError, ValueError):
+            pending_timeout_seconds = 3600
+        pending_timeout_seconds = max(600, min(pending_timeout_seconds, 86400))
+        stale_before = datetime.now(timezone.utc) - timedelta(seconds=pending_timeout_seconds)
+        orphan_event_ids = set()
+        for anchor in pending:
+            pending_event_id = str(anchor.get("pending_event_id") or "").strip()
+            if pending_event_id in completed_event_ids or pending_event_id in active_event_ids:
+                continue
+            pending_at = str(anchor.get("pending_at") or "").strip()
+            try:
+                pending_datetime = datetime.fromisoformat(pending_at.replace("Z", "+00:00"))
+                if pending_datetime.tzinfo is None:
+                    pending_datetime = pending_datetime.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if pending_datetime <= stale_before:
+                orphan_event_ids.add(pending_event_id)
+
         completion = self.complete(sorted(completed_event_ids))
         count = int(completion.get("completedCount") or 0)
+        release = self.release_pending(sorted(orphan_event_ids))
+        released_count = int(release.get("releasedCount") or 0)
         return {
-            "status": "reconciled" if count else "unchanged",
+            "status": "reconciled" if count or released_count else "unchanged",
             "completedCount": count,
+            "releasedCount": released_count,
             "eventIds": sorted(completed_event_ids),
+            "releasedEventIds": sorted(orphan_event_ids),
             "reasoningJobIds": sorted(completed_job_ids),
+            "boundaryVerifiedReasoningJobIds": sorted(boundary_verified_job_ids),
         }
 
 

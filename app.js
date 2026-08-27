@@ -13214,8 +13214,8 @@
     var rule = activeNotificationRule();
     return editorWorkDetailPayload(
       "Diagnostics Rule",
-      "반복·시간 조건 상세",
-      rule.label + " · 유사 메시지, 장 시간, 조건 변화",
+      "반복·장 상태 상세",
+      rule.label + " · 유사 메시지, 장 상태 참고, 조건 변화",
       renderNotificationAdvancedRulePanel()
     );
   }
@@ -24134,8 +24134,8 @@
       {
         tone: staleCount || suppressed ? "caution" : "watch",
         value: suppressed + "건",
-        title: "반복·시간 조건",
-        description: rule.label + " 기준으로 유사 메시지, 장 시간, 보류 조건을 진단합니다.",
+        title: "반복·장 상태",
+        description: rule.label + " 기준으로 유사 메시지와 장 상태 참고 정보를 진단합니다.",
         type: "notification-rule-diagnostics",
         button: "조건 진단"
       },
@@ -26449,25 +26449,16 @@
     var sessions = state.notificationMarketHoursSessions.length ? state.notificationMarketHoursSessions : defaultMarketHoursSessions();
     var selected = Array.isArray(rule.marketHoursMarkets) ? rule.marketHoursMarkets : defaultNotificationRuleMarketHoursMarkets(messageType);
     selected = selected.map(function (market) { return String(market || "").trim().toUpperCase(); });
-    var offHoursLabel = {
-      important_only: "중요 판단만 장외 발송",
-      send_all: "모든 판단 장외 발송",
-      defer_until_open: "장 시작 후 재확인"
-    }[rule.offHoursDeliveryMode] || "중요 판단만 장외 발송";
     var summary = rule.marketHoursEnabled === false
-      ? "장 시간 필터 꺼짐"
-      : (selected.length ? selected.join(", ") : "시장 미선택") + " · " + offHoursLabel;
+      ? "장 상태 기록 꺼짐"
+      : (selected.length ? selected.join(", ") : "시장 미선택") + " · 장 마감에도 발송";
     return [
       '<div class="notification-rule-market-hours">',
       '<div class="notification-rule-head notification-rule-subhead">',
-      '<div><strong>장 시간 필터</strong><span>' + escapeHtml(summary) + '</span></div>',
-      '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-market-hours-enabled="' + escapeHtml(messageType) + '"' + (rule.marketHoursEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
+      '<div><strong>장 상태 참고</strong><span>' + escapeHtml(summary) + '</span></div>',
+      '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-market-hours-enabled="' + escapeHtml(messageType) + '"' + (rule.marketHoursEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 기록</label>',
       '</div>',
-      '<label class="notification-rule-fields"><span>장외 발송 방식</span><select data-notification-rule-off-hours-mode="' + escapeHtml(messageType) + '"' + (disabled ? " disabled" : "") + '>',
-      '<option value="important_only"' + (rule.offHoursDeliveryMode === "important_only" ? " selected" : "") + '>중요 판단만 즉시 발송</option>',
-      '<option value="send_all"' + (rule.offHoursDeliveryMode === "send_all" ? " selected" : "") + '>모든 판단 즉시 발송</option>',
-      '<option value="defer_until_open"' + (rule.offHoursDeliveryMode === "defer_until_open" ? " selected" : "") + '>장 시작 후 다시 확인</option>',
-      '</select></label>',
+      '<p class="subtle">장 운영 상태와 표시 가격의 기준만 기록하며 알림 발송을 보류하지 않습니다.</p>',
       '<div class="notification-rule-market-list">',
       sessions.map(function (session) {
         var market = String(session.market || "").toUpperCase();
@@ -26502,7 +26493,7 @@
       '<label><span>자료 확인</span><input type="text" value="충분 · 일부 · 부족 · 사용 불가" disabled /></label>',
       '<label><span>AI 검증</span><input type="text" value="검증 완료 · 조건부 · 판단 보류" disabled /></label>',
       '</div>',
-      compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 시간 필터, 세부 조건은 진단 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
+      compact ? '<p class="subtle">유사 메시지, 상태 지속 억제, 장 상태 참고, 세부 조건은 진단 탭에서 조정합니다.</p>' : renderNotificationSimilarityEditor(messageType, rule, disabled),
       compact ? '' : renderNotificationStateCooldownEditor(messageType, rule, disabled),
       compact ? '' : renderNotificationMarketHoursEditor(messageType, rule, disabled),
       compact ? '' : '<div class="notification-rule-condition-list">',
@@ -26631,8 +26622,8 @@
       '<div class="panel-head">',
       '<div>',
       '<p class="label">Diagnostics Rule</p>',
-      '<h2>반복·시간 조건</h2>',
-      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 시간, 조건 변화를 진단합니다.</p>',
+      '<h2>반복·장 상태</h2>',
+      '<p class="subtle">정책 탭에서 선택한 타입의 유사 메시지, 장 상태 참고, 조건 변화를 진단합니다.</p>',
       '</div>',
       '<span class="tone-chip hold">' + escapeHtml(rule.label) + '</span>',
       '</div>',

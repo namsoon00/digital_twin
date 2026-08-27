@@ -2020,7 +2020,7 @@
 
 .oa-reasoning-item > p {
   margin: 0;
-  color: var(--text);
+  color: var(--ink);
   font-size: 10px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -10014,7 +10014,7 @@ h3 {
 
 .investment-decision-summary-cell.danger,
 .investment-decision-cell.danger {
-  border-color: color-mix(in srgb, var(--danger) 34%, var(--line));
+  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
 }
 
 .investment-playbook-list {
@@ -25387,9 +25387,9 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .ontology-experiment-recommendation.selected {
-  border-color: color-mix(in srgb, var(--ds-card-status-positive) 55%, var(--ds-card-border));
-  border-left-color: var(--ds-card-status-positive);
-  background: color-mix(in srgb, var(--ds-card-status-positive) 8%, var(--ds-card-row-bg));
+  border-color: color-mix(in srgb, var(--green) 55%, var(--ds-card-border));
+  border-left-color: var(--green);
+  background: color-mix(in srgb, var(--green) 8%, var(--ds-card-row-bg));
 }
 
 .ontology-experiment-recommendation-check {
@@ -25407,7 +25407,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   inline-size: 18px;
   block-size: 18px;
   margin: 0;
-  accent-color: var(--ds-card-status-positive);
+  accent-color: var(--green);
 }
 
 .ontology-experiment-recommendation strong,
@@ -29287,8 +29287,8 @@ button.instrument-timeline-event:focus-visible {
   border-left: 3px solid var(--blue);
   border-radius: var(--ds-radius-control);
   background: color-mix(in srgb, var(--blue) 6%, transparent);
-  color: var(--ds-text-muted);
-  font-size: var(--ds-text-sm);
+  color: var(--muted);
+  font-size: 12px;
   font-weight: 700;
   line-height: 1.45;
 }
@@ -29724,7 +29724,7 @@ button.instrument-timeline-event:focus-visible {
   display: grid;
   gap: 5px;
   padding: 12px;
-  border-left: 3px solid var(--teal);
+  border-left: 3px solid var(--green);
   background: var(--green-soft);
 }
 
@@ -32465,7 +32465,7 @@ button.instrument-timeline-event:focus-visible {
   margin: 0 var(--ds-panel-pad-x) var(--ds-space-4);
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--ds-card-border));
-  border-radius: var(--ds-radius-card);
+  border-radius: var(--ds-radius-panel);
   background: color-mix(in srgb, var(--blue-soft) 18%, var(--panel));
 }
 
@@ -37566,8 +37566,8 @@ html[data-theme="dark"] :where(
 }
 
 .notification-detail-tabs button.active {
-  background: var(--surface-strong, #f4f6f8);
-  color: var(--ink, #20252b);
+  background: var(--panel-soft);
+  color: var(--ink);
   font-weight: 700;
 }
 

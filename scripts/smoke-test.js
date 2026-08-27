@@ -249,6 +249,7 @@ function checkWorkflowConsoleContract() {
   const appDefaultsCode = fs.readFileSync(path.join(rootDir, "public", "app-default-settings.js"), "utf8");
   const code = appDefaultsCode + "\n" + fs.readFileSync(path.join(rootDir, "public", "app.js"), "utf8");
   const styles = fs.readFileSync(path.join(rootDir, "public", "styles.css"), "utf8");
+  const consoleStyles = fs.readFileSync(path.join(rootDir, "public", "console-workspaces.css"), "utf8");
   const indexHtml = fs.readFileSync(path.join(rootDir, "public", "index.html"), "utf8");
   const consoleWorkspacesCode = fs.readFileSync(path.join(rootDir, "public", "console-workspaces.js"), "utf8");
   const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "public", "manifest.webmanifest"), "utf8"));
@@ -522,6 +523,18 @@ function checkWorkflowConsoleContract() {
       /\.oa-filter-bar :is\(input, select\),[\s\S]*?background: var\(--input\);/.test(styles) &&
       /\.oa-detail-queue\s*\{[\s\S]*?background: var\(--panel\);/.test(styles),
     "다크 모드 문서 여백 또는 공통 콘솔 표면에 라이트 고정색이 남아 있습니다."
+  );
+  const combinedStyles = styles + "\n" + consoleStyles;
+  const definedCustomProperties = new Set(Array.from(combinedStyles.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g), function (match) { return match[1]; }));
+  const scopedCustomProperties = new Set(["--request-busy-min-width", "--tab-count", "--weight"]);
+  const unresolvedCustomProperties = Array.from(new Set(Array.from(combinedStyles.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g), function (match) { return match[1]; })
+    .filter(function (name) { return !definedCustomProperties.has(name) && !scopedCustomProperties.has(name); })));
+  const lightBackgroundFallbacks = combinedStyles.match(/background(?:-color)?\s*:[^;{}]*var\([^;{}]*,\s*(?:#fff(?:fff)?|#f4f6f8|#f7f9fb|#f8fafc|white)\s*\)/gi) || [];
+  assertOk(
+    unresolvedCustomProperties.length === 0 &&
+      lightBackgroundFallbacks.length === 0 &&
+      /\.notification-detail-tabs button\.active\s*\{[\s\S]*?background: var\(--panel-soft\);[\s\S]*?color: var\(--ink\);/.test(styles),
+    "다크 모드 토큰이 정의되지 않았거나 밝은 배경 폴백이 남아 있습니다: " + unresolvedCustomProperties.concat(lightBackgroundFallbacks).join(", ")
   );
   assertOk(code.indexOf('data-console-workspace="') >= 0 && code.indexOf("renderConsoleMetricStrip") >= 0 && code.indexOf("renderConsoleSurface") >= 0, "공통 콘솔 화면 계약이 없습니다.");
   assertOk(

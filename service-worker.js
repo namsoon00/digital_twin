@@ -1,14 +1,14 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260826-share-renewal-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260828-dark-theme-v1";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=20260826-share-renewal-v1",
-  "./console-workspaces.css?v=20260826-share-renewal-v1",
+  "./styles.css?v=20260828-dark-theme-v1",
+  "./console-workspaces.css?v=20260828-dark-theme-v1",
   "./app-default-settings.js?v=20260821-stable-share-v1",
-  "./console-workspaces.js?v=20260826-share-renewal-v1",
-  "./app.js?v=20260826-share-renewal-v1",
+  "./console-workspaces.js?v=20260828-dark-theme-v1",
+  "./app.js?v=20260828-dark-theme-v1",
   "./vendor/lightweight-charts.standalone.production.js",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",

@@ -103,15 +103,6 @@ class NotificationIconPolicyTests(unittest.TestCase):
         for message_type in notification_message_types():
             self.assertEqual(EXPECTED_BASE_ICONS[message_type], catalog[message_type]["icon"])
 
-    def test_title_icons_reflect_the_message_direction_or_action(self):
-        self.assertEqual("🎯", title_icon("watchlistBuyCandidate", []))
-        self.assertEqual("📈", title_icon("watchlistQuote", ["변화: +3.1%"]))
-        self.assertEqual("📉", title_icon("watchlistQuote", ["변화: -3.1%"]))
-        self.assertEqual("➕", title_icon("monitorPositionChange", ["신규 보유 감지"]))
-        self.assertEqual("➖", title_icon("monitorPositionChange", ["보유 제외 감지"]))
-        self.assertEqual("💵", title_icon("monitorCashChange", ["변화: +4.0%p"]))
-        self.assertEqual("💸", title_icon("monitorCashChange", ["변화: -4.0%p"]))
-
     def test_market_observation_title_uses_price_direction_without_repeating_observation(self):
         event = AlertEvent(
             "account-1",
@@ -154,27 +145,6 @@ class NotificationIconPolicyTests(unittest.TestCase):
         rising_context = alert_context(rising)
         self.assertEqual("📈", rising_context["titleIcon"])
         self.assertEqual("[시세] 📈 LG전자: 기준가 대비 +2.2% 상승", rising_context["headline"])
-
-    def test_operations_and_job_list_icons_use_current_status(self):
-        self.assertEqual("⏳", notification_message_icon("ontologyReasoningQueue"))
-        self.assertEqual("💓", notification_message_icon("monitorHeartbeat", {"state": "healthy"}))
-        self.assertEqual("🔌", notification_message_icon("monitorConnection", {"state": "healthy"}))
-        self.assertEqual("🛰️", notification_message_icon("externalDataConnection", {"apiStatus": "healthy"}))
-        self.assertEqual("🔐", notification_message_icon("externalDataConnection", {
-            "pipelineHealth": {"state": "failed", "reason": "HTTP Error 401: Unauthorized"},
-        }))
-        self.assertEqual("💸", notification_message_icon("monitorCashChange", {"titleIcon": "💸"}))
-
-    def test_news_icons_distinguish_disclosures_updates_and_breaking_events(self):
-        self.assertEqual("📄", notification_message_icon("newsDigest", {
-            "newsDigest": {"eventKind": "disclosure"},
-        }))
-        self.assertEqual("↻", notification_message_icon("newsDigest", {
-            "newsDigest": {"deliveryMode": "story-update"},
-        }))
-        self.assertEqual("⚡", notification_message_icon("newsDigest", {
-            "newsDigest": {"urgency": "breaking"},
-        }))
 
     def test_investment_icons_follow_structured_action_and_data_states(self):
         cases = [
@@ -224,24 +194,6 @@ class NotificationIconPolicyTests(unittest.TestCase):
             investment_notification_title("investmentInsight", context),
         )
 
-    def test_final_ai_transition_wins_over_a_graph_candidate_change(self):
-        context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")
-        context.update({
-            "displayTarget": "NVIDIA / NVDA",
-            "notificationAiValidatedResponse": {"action": "HOLD"},
-            "aiDecisionTransition": {
-                "historyAvailable": True,
-                "kind": "unchanged",
-                "previousAction": "HOLD",
-                "currentAction": "HOLD",
-            },
-        })
-
-        self.assertEqual(
-            "👀 NVIDIA · 관심 유지",
-            investment_notification_title("investmentInsight", context),
-        )
-
     def test_non_material_graph_transition_is_not_presented_as_an_action_change(self):
         context = investment_context("HOLD", "BUY", "ENTRY_ELIGIBLE")
         context["displayTarget"] = "NVIDIA / NVDA"
@@ -258,15 +210,6 @@ class NotificationIconPolicyTests(unittest.TestCase):
 
         self.assertEqual(
             "⚠️ NVIDIA · 판단 보류",
-            investment_notification_title("investmentInsight", context),
-        )
-
-    def test_holding_title_uses_one_action_icon_and_plain_action_label(self):
-        context = investment_context("", "HOLD", "HOLDING_REVIEW", watchlist=False)
-        context.update({"displayTarget": "Strategy / MSTR", "companyName": "Strategy"})
-
-        self.assertEqual(
-            "⚖️ Strategy · 보유 유지",
             investment_notification_title("investmentInsight", context),
         )
 

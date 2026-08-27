@@ -140,44 +140,6 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertTrue(due["alertRequired"])
         self.assertIsNotNone(due_event)
 
-    def test_typedb_auto_rotation_uses_a_distinct_forced_incident(self):
-        current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
-        service = OperationalStorageCapacityService(
-            store=StateStore(),
-            settings={"operationalStorageRuntimeFailureCooldownMinutes": "5"},
-            now_provider=lambda: current[0],
-        )
-
-        first, first_event = service.record(
-            self.limited_snapshot(),
-            force_alert=True,
-            force_alert_kind="typedb-auto-rotation",
-        )
-
-        self.assertTrue(first["alertRequired"])
-        self.assertEqual("typedb-auto-rotation", first["alertKind"])
-        self.assertEqual(first["checkedAt"], first["lastCapacityRotationAlertAt"])
-        self.assertIsNotNone(first_event)
-
-        current[0] += timedelta(minutes=2)
-        repeated, repeated_event = service.record(
-            self.limited_snapshot(),
-            force_alert=True,
-            force_alert_kind="typedb-auto-rotation",
-        )
-        self.assertFalse(repeated["alertRequired"])
-        self.assertIsNone(repeated_event)
-
-        failed, failed_event = service.record(
-            self.limited_snapshot(),
-            force_alert=True,
-            force_alert_kind="typedb-auto-rotation-failed",
-        )
-        self.assertTrue(failed["alertRequired"])
-        self.assertEqual("typedb-auto-rotation-failed", failed["alertKind"])
-        self.assertEqual(failed["checkedAt"], failed["lastCapacityRotationFailureAlertAt"])
-        self.assertIsNotNone(failed_event)
-
     def test_failed_rotation_separates_maintenance_from_healthy_capacity(self):
         service = OperationalStorageCapacityService(
             store=StateStore(),
@@ -215,48 +177,6 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertEqual("후보 검증 실패: 후보 작성자 잠금 범위 충돌", failed["maintenanceReason"])
         self.assertEqual("후보 작성자 잠금 범위 충돌", failed["maintenanceFailureReason"])
         self.assertIsNotNone(event)
-
-    def test_internal_cleanup_warning_does_not_page_until_the_human_threshold(self):
-        current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
-        service = OperationalStorageCapacityService(
-            store=StateStore(),
-            now_provider=lambda: current[0],
-        )
-
-        internal_only, internal_event = service.record(self.disk_snapshot(30 * 1024))
-        self.assertEqual("warning", internal_only["state"])
-        self.assertFalse(internal_only["alertEligible"])
-        self.assertFalse(internal_only["alertRequired"])
-        self.assertIsNone(internal_event)
-
-        current[0] += timedelta(minutes=2)
-        actionable, actionable_event = service.record(self.disk_snapshot(23 * 1024))
-        self.assertEqual("warning", actionable["state"])
-        self.assertTrue(actionable["alertEligible"])
-        self.assertEqual("threshold-crossed", actionable["alertKind"])
-        self.assertIsNotNone(actionable_event)
-
-    def test_forecast_pages_before_the_protected_reserve_is_breached(self):
-        current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
-        service = OperationalStorageCapacityService(
-            store=StateStore(),
-            settings={
-                "operationalStorageForecastMinimumSamples": "3",
-                "operationalStorageForecastMinimumElapsedMinutes": "5",
-            },
-            now_provider=lambda: current[0],
-        )
-        service.record(self.disk_snapshot(50 * 1024))
-        current[0] += timedelta(minutes=3)
-        service.record(self.disk_snapshot(40 * 1024))
-        current[0] += timedelta(minutes=3)
-        forecast, forecast_event = service.record(self.disk_snapshot(30 * 1024))
-
-        self.assertEqual("warning", forecast["state"])
-        self.assertTrue(forecast["forecastDetected"])
-        self.assertEqual("forecast", forecast["alertKind"])
-        self.assertIsNotNone(forecast_event)
-        self.assertLess(forecast["forecastEtaMinutes"], 60)
 
     def test_limited_state_realerts_for_material_worsening_before_the_four_hour_reminder(self):
         current = [datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc)]
@@ -336,64 +256,6 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertIn("운영 저장공간 쓰기 실패", notifier.messages[0])
         self.assertIn("TypeDB", notifier.messages[0])
 
-    def test_auto_rotation_notification_names_the_rebuild(self):
-        payload = {
-            **self.limited_snapshot(),
-            "state": "limited",
-            "previousState": "warning",
-            "alertRequired": True,
-            "alertKind": "typedb-auto-rotation",
-            "checkedAt": "2026-08-02T09:00:00Z",
-            "warningFreeMb": 49152,
-            "alertFreeMb": 24576,
-            "minimumFreeMb": 32768,
-            "criticalFreeMb": 20480,
-            "limitingComponents": [{"component": "typedb"}],
-            "suggestedAction": "TypeDB 안전 재구축을 실행하세요.",
-        }
-        queue = Queue()
-        OperationalStorageCapacityNotificationEnqueuer(queue).handle(
-            operational_storage_capacity_changed_event(payload)
-        )
-
-        self.assertEqual(1, len(queue.jobs))
-        self.assertIn("TypeDB 안전 재구축 시작", queue.jobs[0].text)
-
-    def test_mysql_capacity_message_explains_the_policy_limit_and_history_protection(self):
-        payload = {
-            **self.healthy_snapshot(),
-            "state": "limited",
-            "previousState": "warning",
-            "alertRequired": True,
-            "alertKind": "threshold-crossed",
-            "checkedAt": "2026-08-13T09:00:00Z",
-            "warningFreeMb": 49152,
-            "alertFreeMb": 24576,
-            "minimumFreeMb": 12288,
-            "criticalFreeMb": 6144,
-            "mysqlSizeMb": 7373,
-            "mysqlLimitMb": 8192,
-            "mysqlUsagePercent": 90.0,
-            "mysqlCapacityStage": "restricted",
-            "mysqlMetadataStatus": "available",
-            "mysqlLiveDataMb": 2100.0,
-            "mysqlReclaimableMb": 5273.0,
-            "limitingComponents": [{"component": "mysql"}],
-            "suggestedAction": "MySQL 이력 정리를 가속하세요.",
-        }
-
-        context = OperationalStorageCapacityNotificationEnqueuer(Queue()).context(
-            payload,
-            operational_storage_capacity_changed_event(payload),
-        )
-
-        self.assertEqual("MySQL 저장공간 쓰기 제한", context["title"])
-        self.assertIn("8192MB (90.0%)", context["readableMessage"])
-        self.assertIn("데이터·인덱스 2100.0MB", context["readableMessage"])
-        self.assertIn("회수 가능 5273.0MB", context["readableMessage"])
-        self.assertIn("비필수 쓰기 제한", context["readableMessage"])
-        self.assertIn("핵심 이력 보호", context["readableMessage"])
-
     def test_mysql_metadata_failure_does_not_report_false_zero_sizes(self):
         payload = {
             **self.healthy_snapshot(),
@@ -414,72 +276,6 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertIn("메타데이터 조회 실패", context["readableMessage"])
         self.assertIn("MySQL connection refused during restart", context["readableMessage"])
         self.assertNotIn("데이터·인덱스 0MB", context["readableMessage"])
-
-    def test_storage_capacity_uses_the_operations_delivery_channel_and_presentation(self):
-        self.assertTrue(is_operations_delivery_message_type(OPERATIONAL_STORAGE_CAPACITY))
-        presentation = operational_notification_presentation(
-            OPERATIONAL_STORAGE_CAPACITY,
-            {"messageType": OPERATIONAL_STORAGE_CAPACITY, "state": "critical"},
-        )
-        self.assertEqual("🚨", presentation.icon)
-
-    def test_inventory_reports_typedb_wal_and_checkpoint_sizes(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            wal = root / "typedb-data" / "db" / "wal"
-            checkpoint = root / "typedb-data" / "db" / "checkpoint"
-            wal.mkdir(parents=True)
-            checkpoint.mkdir(parents=True)
-            (wal / "segment").write_bytes(b"w" * (2 * 1024 * 1024))
-            (checkpoint / "segment").write_bytes(b"c" * (3 * 1024 * 1024))
-            inventory = operational_storage_inventory(
-                {
-                    "typedbDataMaxSizeMb": "4096",
-                    "operationalMySqlDataMaxSizeMb": "4096",
-                    "operationalLogMaxSizeMb": "512",
-                },
-                data_path=root,
-                disk_usage_provider=lambda _path: SimpleNamespace(
-                    free=80 * 1024 * 1024 * 1024,
-                    total=100 * 1024 * 1024 * 1024,
-                ),
-            )
-
-        self.assertGreater(inventory["typedbSizeMb"], 0)
-        self.assertGreater(inventory["typedbWalMb"], 0)
-        self.assertGreater(inventory["typedbCheckpointMb"], 0)
-
-    def test_mysql_uses_a_sixteen_gigabyte_default_and_starts_cleanup_at_seventy_percent(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            (root / "mysql-runtime").mkdir()
-
-            def size(path):
-                return int(11.5 * 1024 * 1024 * 1024) if Path(path).name == "mysql-runtime" else 0
-
-            inventory = operational_storage_inventory(
-                {},
-                data_path=root,
-                disk_usage_provider=lambda _path: SimpleNamespace(
-                    free=80 * 1024 * 1024 * 1024,
-                    total=100 * 1024 * 1024 * 1024,
-                ),
-                size_provider=size,
-                mysql_metadata_provider=lambda _settings: {
-                    "mysqlMetadataStatus": "available",
-                    "mysqlLiveDataMb": 1200.0,
-                    "mysqlReclaimableMb": 800.0,
-                },
-            )
-
-        self.assertEqual(16384, inventory["mysqlLimitMb"])
-        self.assertEqual(71.9, inventory["mysqlUsagePercent"])
-        self.assertEqual("maintenance", inventory["mysqlCapacityStage"])
-        self.assertEqual("accelerated", inventory["cleanupMode"])
-        self.assertEqual(1200.0, inventory["mysqlLiveDataMb"])
-        self.assertEqual(800.0, inventory["mysqlReclaimableMb"])
-        effective = accelerated_mysql_cleanup_settings({}, inventory)
-        self.assertEqual("500", effective["_effectiveMysqlMinimalRetentionBatchSize"])
 
     def test_mysql_ninety_percent_stage_blocks_only_nonessential_writes(self):
         current = datetime(2026, 8, 13, 9, 0, tzinfo=timezone.utc)

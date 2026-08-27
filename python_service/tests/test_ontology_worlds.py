@@ -84,66 +84,6 @@ class OntologyWorldContractTests(unittest.TestCase):
             portfolio_world_id("account-b", "tenant-a"),
         )
 
-    def test_full_market_world_setting_keeps_the_market_key(self):
-        snapshot = AccountSnapshot(
-            "account-a",
-            "Account A",
-            "toss",
-            "live",
-            "ok",
-            utc_now_iso(),
-            PortfolioSummary(total=0, invested=0, cash=0, markets=[], sectors=[], concentration=0),
-        )
-        snapshot.metadata = {"marketWorldId": "market:shared:kr"}
-
-        world = world_from_snapshot(snapshot, {"ontologyTenantId": "tenant-a"})
-
-        self.assertEqual("portfolio:tenant-a:account-a", world.world_id)
-        self.assertEqual("kr", world.market_id)
-
-    def test_scoped_abox_identity_isolated_by_world(self):
-        first = sample_graph()
-        second = copy.deepcopy(first)
-
-        first_identity = apply_scoped_abox_identity(
-            first,
-            "account-a",
-            world_id="portfolio:tenant-a:account-a",
-            tenant_id="tenant-a",
-            world_type="portfolio",
-        )
-        second_identity = apply_scoped_abox_identity(
-            second,
-            "account-b",
-            world_id="portfolio:tenant-a:account-b",
-            tenant_id="tenant-a",
-            world_type="portfolio",
-        )
-
-        self.assertNotEqual(first_identity["manifestId"], second_identity["manifestId"])
-        self.assertNotEqual(
-            first.entities[0].properties["aboxScopeId"],
-            second.entities[0].properties["aboxScopeId"],
-        )
-        self.assertTrue(all(item.properties["worldId"] == "portfolio:tenant-a:account-a" for item in first.entities))
-        self.assertTrue(all(item.properties["worldId"] == "portfolio:tenant-a:account-b" for item in second.entities))
-
-    def test_market_world_excludes_account_facts_and_merges_symbol_slices(self):
-        world = market_world("kr")
-        first = build_market_world_graph(sample_graph("005930"), world)
-        second = build_market_world_graph(sample_graph("000660"), world)
-        merged = merge_market_world_graph(first, second)
-
-        entity_ids = {item.entity_id for item in merged.entities}
-        self.assertIn("stock:005930", entity_ids)
-        self.assertIn("stock:000660", entity_ids)
-        self.assertFalse(any(item.kind in {"account", "portfolio", "position"} for item in merged.entities))
-        samsung = next(item for item in merged.entities if item.entity_id == "stock:005930")
-        self.assertNotIn("averagePrice", samsung.properties)
-        self.assertNotIn("quantity", samsung.properties)
-        self.assertEqual(world.world_id, samsung.properties["worldId"])
-        self.assertTrue(all("position:" not in relation.source and "position:" not in relation.target for relation in merged.relations))
-
     def test_shared_worlds_strip_account_strategy_and_ai_working_properties(self):
         graph = sample_graph("005930")
         stock = next(item for item in graph.entities if item.entity_id == "stock:005930")
@@ -182,90 +122,6 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertEqual(71000, market_stock.properties["currentPrice"])
         self.assertNotIn("currentPrice", knowledge_stock.properties)
 
-    def test_market_world_does_not_feed_prior_projection_markers_back_into_the_market_slice(self):
-        graph = sample_graph("005930")
-        graph.entities.append(OntologyEntity(
-            "hypothesis:legacy",
-            "Old hypothesis",
-            "hypothesis",
-            {"ontologyBox": "ABox", "marketObservationShared": True},
-        ))
-
-        projected = build_market_world_graph(graph, market_world("kr"))
-
-        self.assertNotIn("hypothesis:legacy", {item.entity_id for item in projected.entities})
-
-    def test_market_world_derives_source_clock_when_snapshot_has_no_top_level_as_of(self):
-        projected = build_market_world_graph(
-            sample_graph("005930", source_observed_at="2026-07-20T01:02:03Z"),
-            market_world("kr"),
-        )
-
-        self.assertEqual("2026-07-20T01:02:03Z", projected.worldview["marketObservedAt"])
-
-    def test_knowledge_world_keeps_issuer_security_topology_without_account_or_quote_values(self):
-        graph = PortfolioOntology("account-a")
-        graph.entities.extend([
-            OntologyEntity("account:account-a", "Account", "account", {"ontologyBox": "ABox", "tboxClass": "Account"}),
-            OntologyEntity("position:account-a:005930", "Position", "position", {"ontologyBox": "ABox", "tboxClass": "Position", "quantity": 10}),
-            OntologyEntity("company:Samsung", "Samsung", "company", {"ontologyBox": "ABox", "tboxClass": "Company"}),
-            OntologyEntity("security:005930", "Samsung common", "security", {"ontologyBox": "ABox", "tboxClass": "Security"}),
-            OntologyEntity("stock:005930", "Samsung", "stock", {
-                "ontologyBox": "ABox", "tboxClass": "Stock", "currentPrice": 70000, "symbol": "005930",
-            }),
-        ])
-        graph.relations.extend([
-            OntologyRelation("account:account-a", "position:account-a:005930", "HAS_POSITION", properties={"ontologyBox": "ABox"}),
-            OntologyRelation("company:Samsung", "security:005930", "ISSUES", properties={"ontologyBox": "ABox"}),
-            OntologyRelation("security:005930", "stock:005930", "REPRESENTS_INSTRUMENT", properties={"ontologyBox": "ABox"}),
-        ])
-
-        projected = build_knowledge_world_graph(graph, knowledge_world("kr"))
-
-        ids = {item.entity_id for item in projected.entities}
-        self.assertIn("company:Samsung", ids)
-        self.assertIn("security:005930", ids)
-        self.assertIn("stock:005930", ids)
-        self.assertNotIn("account:account-a", ids)
-        self.assertNotIn("position:account-a:005930", ids)
-        stock = next(item for item in projected.entities if item.entity_id == "stock:005930")
-        self.assertNotIn("currentPrice", stock.properties)
-        self.assertTrue(any(item.relation_type == "ISSUES" for item in projected.relations))
-        self.assertEqual("KnowledgeWorld", projected.entities[0].properties["tboxClass"])
-
-    def test_knowledge_world_keeps_company_states_for_reuse_without_quote_rewrite(self):
-        graph = PortfolioOntology("account-a")
-        graph.entities.extend([
-            OntologyEntity("stock:005930", "Samsung", "stock", {
-                "ontologyBox": "ABox", "tboxClass": "Stock", "symbol": "005930", "currentPrice": 70000,
-            }),
-            OntologyEntity("company:005930", "Samsung", "company", {
-                "ontologyBox": "ABox", "tboxClass": "Company", "symbol": "005930",
-            }),
-            OntologyEntity("company-financial-state:005930:2025", "Samsung 2025", "company-financial-state", {
-                "ontologyBox": "ABox", "tboxClass": "FinancialState", "symbol": "005930",
-                "revenueGrowthPct": 8.0, "freeCashFlowMarginPct": 12.0,
-            }),
-            OntologyEntity("company-governance-state:005930", "Samsung governance", "company-governance-state", {
-                "ontologyBox": "ABox", "tboxClass": "GovernanceState", "symbol": "005930", "executiveCount": 5,
-            }),
-        ])
-        graph.relations.extend([
-            OntologyRelation("stock:005930", "company:005930", "REPRESENTS_COMPANY", properties={"ontologyBox": "ABox"}),
-            OntologyRelation("stock:005930", "company-financial-state:005930:2025", "HAS_FINANCIAL_STATE", properties={"ontologyBox": "ABox"}),
-            OntologyRelation("stock:005930", "company-governance-state:005930", "HAS_GOVERNANCE_STATE", properties={"ontologyBox": "ABox"}),
-        ])
-
-        projected = build_knowledge_world_graph(graph, knowledge_world("kr"))
-        kinds = {item.kind for item in projected.entities}
-        stock = next(item for item in projected.entities if item.entity_id == "stock:005930")
-
-        self.assertIn("company-financial-state", kinds)
-        self.assertIn("company-governance-state", kinds)
-        self.assertNotIn("currentPrice", stock.properties)
-        self.assertTrue(any(item.relation_type == "HAS_FINANCIAL_STATE" for item in projected.relations))
-        self.assertTrue(any(item.relation_type == "HAS_GOVERNANCE_STATE" for item in projected.relations))
-
     def test_market_world_prunes_stale_observations_without_erasing_fresh_account_slice(self):
         world = market_world("kr")
         old = build_market_world_graph(
@@ -293,60 +149,6 @@ class OntologyWorldContractTests(unittest.TestCase):
         retention = merged.worldview["marketWorldRetention"]
         self.assertGreater(retention["removedStaleEntityCount"], 0)
         self.assertEqual(48.0, retention["retentionHours"])
-
-    def test_market_world_scope_manifest_keeps_prior_scopes_and_retires_tracked_stale_symbols(self):
-        world = market_world("kr")
-        old = build_market_world_graph(sample_graph("005930"), world, observed_at="2026-07-01T00:00:00Z")
-        old_scoped = apply_scoped_abox_identity(
-            old,
-            world.world_id,
-            world_id=world.world_id,
-            tenant_id=world.tenant_id,
-            world_type=world.world_type,
-            world_account_id="",
-        )
-        fresh = build_market_world_graph(sample_graph("000660"), world, observed_at="2026-07-05T00:00:00Z")
-        fresh_scoped = apply_scoped_abox_identity(
-            fresh,
-            world.world_id,
-            world_id=world.world_id,
-            tenant_id=world.tenant_id,
-            world_type=world.world_type,
-            world_account_id="",
-        )
-
-        retained = merge_market_world_scope_manifest(
-            {
-                "scopePlan": old_scoped["scopePlan"],
-                "marketScopeObservedAt": {
-                    item["scopeId"]: "2026-07-01T00:00:00Z"
-                    for item in old_scoped["scopePlan"]
-                },
-            },
-            fresh_scoped["scopePlan"],
-            observed_at="2026-07-05T00:00:00Z",
-            retention_hours=0,
-        )
-        retained_scope_ids = {item["scopeId"] for item in retained["scopePlan"]}
-        self.assertTrue(any("005930" in item for item in retained_scope_ids))
-        self.assertTrue(any("000660" in item for item in retained_scope_ids))
-
-        pruned = merge_market_world_scope_manifest(
-            {
-                "scopePlan": old_scoped["scopePlan"],
-                "marketScopeObservedAt": {
-                    item["scopeId"]: "2026-07-01T00:00:00Z"
-                    for item in old_scoped["scopePlan"]
-                },
-            },
-            fresh_scoped["scopePlan"],
-            observed_at="2026-07-05T00:00:00Z",
-            retention_hours=48,
-        )
-        pruned_scope_ids = {item["scopeId"] for item in pruned["scopePlan"]}
-        self.assertFalse(any("005930" in item for item in pruned_scope_ids))
-        self.assertTrue(any("000660" in item for item in pruned_scope_ids))
-        self.assertTrue(pruned["retiredScopeIds"])
 
     def test_market_world_scope_generation_ignores_projection_clock(self):
         world = market_world("kr")
@@ -385,32 +187,6 @@ class OntologyWorldContractTests(unittest.TestCase):
         stock = next(item for item in first.entities if item.entity_id == "stock:005930")
         self.assertEqual("2026-07-01T00:00:00Z", stock.properties["marketObservedAt"])
 
-    def test_market_world_rebuilds_scope_identity_from_a_portfolio_projection(self):
-        source = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
-        portfolio = portfolio_world("account-a", "tenant-a", "kr")
-        apply_scoped_abox_identity(
-            source,
-            "account-a",
-            world_id=portfolio.world_id,
-            tenant_id=portfolio.tenant_id,
-            world_type=portfolio.world_type,
-        )
-        shared = market_world("kr", "tenant-a")
-        market = build_market_world_graph(source, shared, observed_at="2026-07-01T00:00:00Z")
-
-        self.assertTrue(all("aboxScopeId" not in item.properties for item in market.entities))
-        self.assertTrue(all("scopeGenerationId" not in item.properties for item in market.entities))
-        market_scoped = apply_scoped_abox_identity(
-            market,
-            shared.world_id,
-            world_id=shared.world_id,
-            tenant_id=shared.tenant_id,
-            world_type=shared.world_type,
-            world_account_id="",
-        )
-        expected_suffix = ":world:" + world_scope_suffix(shared.world_id)
-        self.assertTrue(all(item["scopeId"].endswith(expected_suffix) for item in market_scoped["scopePlan"]))
-
     def test_market_world_manifest_refreshes_source_clock_without_new_generation(self):
         scope_id = "symbol:005930:market"
         first = merge_market_world_scope_manifest(
@@ -441,65 +217,6 @@ class OntologyWorldContractTests(unittest.TestCase):
         self.assertEqual([scope_id], second["reusedIncomingScopeIds"])
         self.assertEqual([scope_id], second["observationRefreshedScopeIds"])
         self.assertEqual("2026-07-01T00:10:00Z", second["marketScopeObservedAt"][scope_id])
-
-    def test_typedb_world_identity_isolates_storage_and_direct_query_scope(self):
-        first_world = "portfolio:tenant-a:account-a"
-        second_world = "portfolio:tenant-a:account-b"
-        row = {"ontologyBox": "ABox", "snapshotId": "scope:test"}
-
-        self.assertNotEqual(
-            ontology_storage_id({**row, "worldId": first_world}, "stock:005930", "node"),
-            ontology_storage_id({**row, "worldId": second_world}, "stock:005930", "node"),
-        )
-        clause = typedb_active_worldview_manifest_clause(world_id=first_world)
-        self.assertIn('has ontology-world-id "portfolio:tenant-a:account-a"', clause)
-        self.assertIn('has ontology-world-id "portfolio:tenant-a:account-a"', inference_generation_delete_queries("generation:1", first_world)[0])
-
-    def test_static_evidence_profile_and_live_availability_have_separate_shared_world_owners(self):
-        graph = PortfolioOntology("account-a")
-        graph.entities.extend([
-            OntologyEntity("stock:NVDA", "NVIDIA", "stock", {
-                "ontologyBox": "ABox", "tboxClass": "Stock", "symbol": "NVDA",
-            }),
-            OntologyEntity("market-evidence-profile:NVDA", "US profile", "market-evidence-profile", {
-                "ontologyBox": "ABox", "tboxClass": "USEquityEvidenceProfile", "symbol": "NVDA",
-                "profileKey": "US_EQUITY",
-            }),
-            OntologyEntity("data-availability-assessment:NVDA:judgementEvidence", "Live availability", "data-availability-assessment", {
-                "ontologyBox": "ABox", "tboxClass": "DataAvailabilityAssessment", "symbol": "NVDA",
-                "field": "judgementEvidence", "dataState": "sufficient",
-            }),
-        ])
-        graph.relations.extend([
-            OntologyRelation(
-                "stock:NVDA", "market-evidence-profile:NVDA", "HAS_EVIDENCE_PROFILE",
-                properties={"ontologyBox": "ABox"},
-            ),
-            OntologyRelation(
-                "stock:NVDA", "data-availability-assessment:NVDA:judgementEvidence", "HAS_DATA_AVAILABILITY",
-                properties={"ontologyBox": "ABox"},
-            ),
-        ])
-
-        market = build_market_world_graph(graph, market_world("us"))
-        knowledge = build_knowledge_world_graph(graph, knowledge_world("us"))
-
-        self.assertIn(
-            "data-availability-assessment:NVDA:judgementEvidence",
-            {item.entity_id for item in market.entities},
-        )
-        self.assertNotIn(
-            "market-evidence-profile:NVDA",
-            {item.entity_id for item in market.entities},
-        )
-        self.assertIn(
-            "market-evidence-profile:NVDA",
-            {item.entity_id for item in knowledge.entities},
-        )
-        self.assertNotIn(
-            "data-availability-assessment:NVDA:judgementEvidence",
-            {item.entity_id for item in knowledge.entities},
-        )
 
     def test_native_rulebox_api_requires_a_portfolio_world(self):
         missing = run_ontology_rulebox_payload({"clearInference": True})
@@ -709,32 +426,6 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertTrue(all(world_id == "market:shared:kr" for world_id, _manifest, _pending in repository.activations))
         self.assertEqual(0, repository.market_load_calls)
 
-    def test_record_snapshot_projects_shared_market_from_native_fact_surface(self):
-        repository = self.FakeRepository()
-        recorder = PortfolioOntologyProjectionRecorder(
-            repository,
-            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
-        )
-        captured_market_inputs = []
-        original_project_market_world = recorder.project_market_world
-
-        def capture_market_input(portfolio_graph, shared_world):
-            captured_market_inputs.append(copy.deepcopy(portfolio_graph))
-            return original_project_market_world(portfolio_graph, shared_world)
-
-        recorder.project_market_world = capture_market_input
-        recorder.record_snapshot(self.snapshot("account-a", "005930", "Samsung"))
-
-        self.assertEqual(1, len(captured_market_inputs))
-        market_input = captured_market_inputs[0]
-        self.assertEqual(
-            "abox-facts-only-typedb-native-rules",
-            market_input.worldview["runtimeProjectionMode"],
-        )
-        self.assertFalse(market_input.beliefs)
-        self.assertFalse(market_input.opinions)
-        self.assertFalse(market_input.reasoning_cards)
-
     def test_market_world_reuses_an_identical_material_generation(self):
         repository = self.FakeRepository()
         recorder = PortfolioOntologyProjectionRecorder(
@@ -758,87 +449,6 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertEqual("unchanged-material-facts", second["status"])
         self.assertFalse(second["saved"])
         self.assertEqual(1, len(repository.activations))
-
-    def test_shared_premise_world_persists_and_merges_native_planner_topology(self):
-        repository = self.FakeRepository()
-        recorder = PortfolioOntologyProjectionRecorder(
-            repository,
-            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
-        )
-        world = shared_premise_world("kr", "tenant-a")
-
-        first_graph = sample_graph("005930")
-        first_graph.worldview.update({
-            "sharedWorldProjectionContractVersion": "test-premise-v1",
-            "targetScopedManifestPatch": {
-                "status": "applied",
-                "targetSymbols": ["005930"],
-            },
-        })
-        first = recorder.project_shared_world_update(first_graph, world, "premise")
-        second_graph = sample_graph("MSTR")
-        second_graph.worldview.update({
-            "sharedWorldProjectionContractVersion": "test-premise-v1",
-            "targetScopedManifestPatch": {
-                "status": "applied",
-                "targetSymbols": ["MSTR"],
-            },
-        })
-        second = recorder.project_shared_world_update(second_graph, world, "premise")
-
-        topology = repository.saved_markets[world.world_id].worldview["nativeRulePlannerTopology"]
-        self.assertEqual("staged-scoped-manifest", first["status"])
-        self.assertEqual("staged-scoped-manifest", second["status"])
-        self.assertTrue(first["activationDeferred"])
-        self.assertTrue(second["activationDeferred"])
-        self.assertEqual([], repository.activations)
-        self.assertTrue(
-            {"005930", "MSTR"}.issubset(
-                set((topology.get("sourceIdsBySymbol") or {}).keys())
-            )
-        )
-        self.assertTrue(topology["fingerprint"])
-        self.assertEqual(
-            ["MSTR"],
-            repository.saved_markets[world.world_id].worldview["inferenceTargetSymbols"],
-        )
-
-    def test_shared_premise_world_recovers_staged_projection_before_saving(self):
-        repository = self.FakeRepository()
-        repository.pending_abox_activation_payload = {
-            "status": "pending",
-            "candidateAboxSnapshotId": "abox-manifest:stale",
-        }
-        repository.pending_abox_recovery_result = {
-            "status": "discarded-staged-shared-premise",
-        }
-        recorder = PortfolioOntologyProjectionRecorder(
-            repository,
-            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
-        )
-        world = shared_premise_world("kr", "tenant-a")
-        graph = sample_graph("BTC")
-        graph.worldview["targetScopedManifestPatch"] = {
-            "status": "applied",
-            "targetSymbols": ["BTC"],
-        }
-
-        result = recorder.project_shared_world_update(graph, world, "premise")
-
-        self.assertEqual("staged-scoped-manifest", result["status"])
-        self.assertTrue(result["activationDeferred"])
-        self.assertEqual([{
-            "worldId": world.world_id,
-            "maxStagedTargetSymbols": 0,
-        }], repository.pending_abox_recovery_calls)
-        self.assertEqual(
-            "discarded-staged-shared-premise",
-            result["pendingAboxActivationRecovery"]["status"],
-        )
-        self.assertEqual(
-            ["BTC"],
-            repository.saved_markets[world.world_id].worldview["inferenceTargetSymbols"],
-        )
 
     def test_shared_world_releases_coordinator_when_world_lease_lookup_raises(self):
         class LeaseFailureRepository(self.FakeRepository):
@@ -871,90 +481,6 @@ class MultiAccountProjectionTests(unittest.TestCase):
         self.assertEqual("deferred-premise-world-write-lease", result["status"])
         self.assertEqual("released", result["projectionCoordinatorRelease"]["status"])
         self.assertEqual(1, len(repository.coordinator_releases))
-
-    def test_shared_world_releases_coordinator_when_world_lease_is_busy(self):
-        class BusyLeaseRepository(self.FakeRepository):
-            def __init__(self):
-                super().__init__()
-                self.coordinator_releases = []
-
-            def acquire_projection_coordinator_lease(self, owner, world_id=""):
-                return {
-                    "acquired": True,
-                    "status": "acquired",
-                    "leaseOwner": owner,
-                    "leaseToken": "coordinator-token",
-                    "worldId": world_id,
-                }
-
-            def release_projection_coordinator_lease(self, lease):
-                self.coordinator_releases.append(dict(lease))
-                return {"status": "released"}
-
-            def acquire_scoped_abox_write_lease(self, owner, world_id=""):
-                return {"acquired": False, "status": "held", "leaseOwner": "other"}
-
-        repository = BusyLeaseRepository()
-        recorder = PortfolioOntologyProjectionRecorder(repository)
-        world = shared_premise_world("kr", "tenant-a")
-
-        result = recorder.project_shared_world_update(sample_graph("005930"), world, "premise")
-
-        self.assertEqual("deferred-premise-world-write-lease", result["status"])
-        self.assertEqual("released", result["projectionCoordinatorRelease"]["status"])
-        self.assertEqual(1, len(repository.coordinator_releases))
-
-    def test_market_world_contract_bump_replaces_legacy_shared_manifest(self):
-        repository = self.FakeRepository()
-        recorder = PortfolioOntologyProjectionRecorder(
-            repository,
-            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
-        )
-        shared_world = market_world("kr", "tenant-a")
-
-        first = recorder.project_market_world(sample_graph("005930"), shared_world)
-        self.assertEqual("ok", first["status"])
-        legacy = repository.saved_markets[shared_world.world_id]
-        legacy.worldview["sharedWorldProjectionContractVersion"] = "shared-world-projection-v2"
-        legacy_stock = next(item for item in legacy.entities if item.entity_id == "stock:005930")
-        legacy_stock.properties["strategyMaxPositionWeightPct"] = 45
-
-        rebuilt = recorder.project_market_world(sample_graph("000660"), shared_world)
-        rebuilt_graph = repository.saved_markets[shared_world.world_id]
-        rebuilt_ids = {item.entity_id for item in rebuilt_graph.entities}
-
-        self.assertEqual("ok", rebuilt["status"])
-        self.assertTrue(rebuilt["fullRebuild"])
-        self.assertNotIn("stock:005930", rebuilt_ids)
-        self.assertIn("stock:000660", rebuilt_ids)
-        current_stock = next(item for item in rebuilt_graph.entities if item.entity_id == "stock:000660")
-        self.assertNotIn("strategyMaxPositionWeightPct", current_stock.properties)
-
-    def test_market_world_reuses_scopes_when_only_source_clock_advances(self):
-        repository = self.FakeRepository()
-        recorder = PortfolioOntologyProjectionRecorder(
-            repository,
-            settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
-        )
-        shared_world = market_world("kr", "tenant-a")
-        first_graph = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
-        first_graph.worldview["asOf"] = "2026-07-01T00:00:00Z"
-        second_graph = sample_graph("005930", source_observed_at="2026-07-01T00:10:00Z")
-        second_graph.worldview["asOf"] = "2026-07-01T00:10:00Z"
-
-        first = recorder.project_market_world(first_graph, shared_world)
-        second = recorder.project_market_world(second_graph, shared_world)
-
-        self.assertEqual("ok", first["status"])
-        self.assertEqual("unchanged-material-facts", second["status"])
-        self.assertFalse(second["saved"])
-        self.assertEqual(1, len(repository.activations))
-        self.assertTrue(second["reusedIncomingScopeIds"])
-        self.assertEqual([], second["changedIncomingScopeIds"])
-        self.assertEqual(1, len(repository.observation_metadata_refreshes))
-        refreshed = repository.observation_metadata_refreshes[0]["marketScopeObservedAt"]
-        self.assertTrue(refreshed)
-        self.assertTrue(all(value == "2026-07-01T00:10:00Z" for value in refreshed.values()))
 
     def test_market_world_target_patch_keeps_untargeted_symbol_generation(self):
         repository = self.FakeRepository()

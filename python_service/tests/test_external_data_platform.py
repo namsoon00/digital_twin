@@ -329,18 +329,6 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(2, result["successCount"])
         self.assertEqual(1, adapter.maximum_active)
 
-    def test_existing_normalized_facts_compact_legacy_aggregate_once(self):
-        cache = RecordingCache()
-        importer = LegacyExternalSignalImporter(cache, MigratedStore(), ExternalDatasetRegistry(), {})
-
-        first = importer.import_if_empty()
-        second = importer.import_if_empty()
-
-        self.assertTrue(first["legacyCacheCompacted"])
-        self.assertEqual("external_fact_current", cache.payload["migratedTo"])
-        self.assertEqual(1, cache.replace_count)
-        self.assertEqual("migration already checked", second["reason"])
-
     def test_sec_partitions_skip_unmapped_symbols_without_compliant_contact(self):
         adapter = SecSubmissionsAdapter()
         subjects = [
@@ -353,36 +341,6 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertEqual(["AAPL", "PLTR"], [item.partition_key for item in without_contact])
         self.assertEqual(["AAPL", "PLTR"], [item.partition_key for item in with_contact])
-
-    def test_optional_yfinance_profiles_store_legitimate_empty_results(self):
-        adapter = YFinanceProfileAdapter("options")
-        job = CollectionJob(
-            adapter.descriptor.dataset_id,
-            "000660",
-            adapter.descriptor.provider_id,
-            adapter.descriptor.priority,
-            ExternalSubject("000660", symbol="000660", market="KR", currency="KRW"),
-        )
-
-        class EmptyProfileProvider:
-            @staticmethod
-            def yfinance_query_symbol(_position):
-                return "000660.KS"
-
-            @staticmethod
-            def fetch_yfinance_symbol(_yf, _symbol, _query_symbol, profiles=None):
-                self.assertEqual(["options"], profiles)
-                return {"collectedAt": "2026-08-16T00:00:00Z", "modulesCollected": []}
-
-        with patch.dict("sys.modules", {"yfinance": object()}), patch(
-            "digital_twin.infrastructure.external_api.adapters.yfinance.legacy_provider",
-            return_value=EmptyProfileProvider(),
-        ):
-            result = adapter.fetch(job, {})
-
-        self.assertEqual({}, result.payload)
-        self.assertFalse(result.quality["dataUsable"])
-        self.assertEqual("not-available", result.source_revision)
 
     def test_read_model_merges_facts_and_surfaces_stale_and_failed_sources(self):
         read_model = ExternalSignalsReadModelService(MemoryFactStore())

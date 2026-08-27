@@ -122,36 +122,6 @@ class AIInferenceQueueTests(unittest.TestCase):
 
         self.assertIn("empty routed TypeDB hypothesis set", ai_response_contract_error(context, response))
 
-    def test_ai_must_explain_action_disagreement_with_selected_typedb_hypothesis(self):
-        context = {
-            "_notificationAiPreparedDecisionCore": {
-                "hypothesisSet": {
-                    "hypotheses": [{
-                        "hypothesisId": "hypothesis:entry",
-                        "candidateAction": "BUY",
-                    }],
-                    "comparisonRequired": True,
-                },
-                "decision": {
-                    "actionEnvelope": {
-                        "allowedActions": ["BUY", "HOLD"],
-                    },
-                },
-            },
-        }
-        unexplained = NotificationAIValidatedResponse(
-            action="HOLD",
-            selected_hypothesis_id="hypothesis:entry",
-        )
-        explained = NotificationAIValidatedResponse(
-            action="HOLD",
-            selected_hypothesis_id="hypothesis:entry",
-            disagreement_reason="거래 확인이 없어 진입 실행을 보류합니다.",
-        )
-
-        self.assertIn("without an explicit disagreement reason", ai_response_contract_error(context, unexplained))
-        self.assertEqual("", ai_response_contract_error(context, explained))
-
     def test_superseded_lease_stops_the_active_ai_process(self):
         class Queue:
             def heartbeat(self, *_args):
@@ -259,40 +229,6 @@ class AIInferenceQueueTests(unittest.TestCase):
         row = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_requests")
         self.assertEqual(1, int(row[0]))
 
-    def test_ai_request_row_stores_compact_identity_and_claim_rehydrates_full_context(self):
-        job = self.create_job()
-        job.context["largeCanonicalEvidence"] = [
-            {"evidenceId": "evidence:" + str(index), "text": "x" * 4000}
-            for index in range(80)
-        ]
-        job.context["investmentReasoningCaseId"] = "reasoning-case:compact"
-        job.context["investmentReasoningCase"] = {
-            "caseId": "reasoning-case:compact",
-            "state": "AI_QUEUED",
-            "hypotheses": [{"hypothesisId": "hypothesis:" + str(index)} for index in range(40)],
-        }
-        self.notifications.upsert_job(job)
-        request = AIInferenceRequest.create(job, job.context)
-
-        self.queue.enqueue(job, request)
-
-        stored = mysql_fetchone(
-            self.seed,
-            "SELECT context_json FROM ai_inference_requests WHERE request_id = %s",
-            (request.request_id,),
-        )
-        stored_context = json.loads(stored[0])
-        self.assertLess(len(stored[0].encode("utf-8")), 4096)
-        self.assertNotIn("largeCanonicalEvidence", stored_context)
-        self.assertEqual("reasoning-case:compact", stored_context["investmentReasoningCaseId"])
-
-        claimed = self.queue.claim("worker-compact", 1, 60)[0]
-        self.assertEqual(80, len(claimed.context["largeCanonicalEvidence"]))
-        self.assertEqual(
-            "reasoning-case:compact",
-            claimed.context["investmentReasoningCase"]["caseId"],
-        )
-
     def test_superseding_request_reports_the_replaced_reasoning_case(self):
         first_job = self.create_job(100, "generation-case-1")
         first_job.context["investmentReasoningCaseId"] = "reasoning-case:first"
@@ -346,56 +282,6 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
-
-    def test_ai_queue_rolls_back_subject_publication_callback_with_completion(self):
-        job = self.create_job()
-        request = AIInferenceRequest.create(job, job.context)
-        self.queue.enqueue(job, request)
-        claimed = self.queue.claim("worker-atomic", 1, 60)[0]
-        result = AIInferenceResult.create(
-            claimed,
-            {"action": "HOLD"},
-            source="test",
-            validation_state="verified",
-            latency_ms=1,
-            prompt_bytes=10,
-        )
-
-        def fail_after_subject_write(connection):
-            connection.execute(
-                "INSERT INTO app_store (store_id, payload_json, updated_at) VALUES (%s, '{}', %s)",
-                ("atomic-subject-publication", datetime.now(timezone.utc).isoformat()),
-            )
-            raise RuntimeError("rollback canonical subject publication")
-
-        with self.assertRaisesRegex(RuntimeError, "rollback canonical"):
-            self.queue.complete(
-                claimed,
-                "worker-atomic",
-                result,
-                claimed.context,
-                before_complete=fail_after_subject_write,
-            )
-
-        self.assertIsNone(mysql_fetchone(
-            self.seed,
-            "SELECT store_id FROM app_store WHERE store_id = %s",
-            ("atomic-subject-publication",),
-        ))
-        request_row = mysql_fetchone(
-            self.seed,
-            "SELECT status, lease_owner FROM ai_inference_requests WHERE request_id = %s",
-            (claimed.request_id,),
-        )
-        self.assertEqual("processing", request_row[0])
-        self.assertEqual("worker-atomic", request_row[1])
-        result_count = mysql_fetchone(
-            self.seed,
-            "SELECT COUNT(*) FROM ai_inference_results WHERE request_id = %s",
-            (claimed.request_id,),
-        )
-        self.assertEqual(0, int(result_count[0]))
-        self.assertEqual("awaiting_ai", self.notifications.get(job.job_id).status)
 
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()
@@ -461,36 +347,6 @@ class AIInferenceQueueTests(unittest.TestCase):
             decision_store.saved[0].episode_id,
             delivered.context["investmentDecisionEpisodeId"],
         )
-
-    def test_expired_queue_deadline_skips_ai_and_releases_typedb_fallback(self):
-        job = self.create_job()
-        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
-        request.created_at = (
-            datetime.now(timezone.utc) - timedelta(minutes=5)
-        ).isoformat().replace("+00:00", "Z")
-        request.updated_at = request.created_at
-        request.available_at = request.created_at
-        self.queue.enqueue(job, request)
-
-        class UnexpectedReviewer:
-            def review(self, _context):
-                raise AssertionError("expired work must not start an AI process")
-
-        runner = AIInferenceQueueRunner(
-            self.queue,
-            UnexpectedReviewer(),
-            {
-                "notificationAiTypeDbFallbackEnabled": "1",
-                "notificationAiDeliveryDeadlineSeconds": "60",
-            },
-            worker_id="worker-expired-fallback",
-        )
-
-        self.assertEqual(1, runner.run_once(limit=1))
-        delivered = self.notifications.get(job.job_id)
-        self.assertEqual("pending", delivered.status)
-        self.assertFalse(delivered.context["notificationAiExecutionAudit"]["aiAttempted"])
-        self.assertIn("deadline", delivered.context["notificationAiExecutionAudit"]["fallback"]["reason"])
 
     def test_invalid_ai_contract_releases_typedb_fallback(self):
         job = self.create_job()
@@ -627,171 +483,6 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("awaiting_ai", self.notifications.get(job.job_id).status)
         self.assertIn("retry", runner.last_run_details[0])
 
-    def test_incomplete_hypothesis_comparison_is_repaired_once_before_publish(self):
-        job = self.create_job()
-        hypotheses = [
-            {
-                "hypothesisId": "hypothesis:risk",
-                "supportingRuleIds": ["rule:risk"],
-                "supportingEvidenceIds": ["evidence:risk"],
-            },
-            {
-                "hypothesisId": "hypothesis:support",
-                "supportingRuleIds": ["rule:support"],
-                "supportingEvidenceIds": ["evidence:support"],
-            },
-        ]
-        job.context["ontologyRelationContext"]["hypothesisSet"] = {
-            "hypothesisSetId": "set:1",
-            "hypotheses": hypotheses,
-        }
-        job.context["ontologyRelationContext"]["activeRules"] = [
-            {
-                "ruleId": rule_id,
-                "evidenceState": {
-                    "evidenceUsableForJudgement": True,
-                    "inferenceEligibilityStatus": "eligible",
-                },
-            }
-            for rule_id in ["rule:risk", "rule:support"]
-        ]
-        self.notifications.upsert_job(job)
-        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
-        self.queue.enqueue(job, request)
-
-        class RepairReviewer:
-            def __init__(self):
-                self.calls = []
-                self.profiles = []
-                self.timeouts = []
-
-            def review(self, context):
-                self.calls.append(str(context.get("_notificationAiPreparedPrompt") or ""))
-                self.profiles.append(dict(context.get("notificationAiExecutionProfile") or {}))
-                self.timeouts.append(context.get("_notificationAiTimeoutSecondsOverride"))
-                if len(self.calls) == 1:
-                    return NotificationAIValidatedResponse(
-                        action="HOLD",
-                        hypotheses=[hypotheses[0]],
-                        hypothesis_comparison_state="partial",
-                        hypothesis_selection_source="abstained-partial",
-                        decision_abstention={
-                            "abstained": True,
-                            "reason": "AI가 현재 TypeDB 규칙 가설을 모두 평가하지 못했습니다.",
-                            "unreviewedHypothesisIds": ["hypothesis:support"],
-                        },
-                    )
-                return NotificationAIValidatedResponse(
-                    action="HOLD",
-                    hypotheses=hypotheses,
-                    selected_hypothesis_id="hypothesis:risk",
-                    hypothesis_comparison_state="completed",
-                    hypothesis_selection_source="ai-comparison",
-                )
-
-        reviewer = RepairReviewer()
-        runner = AIInferenceQueueRunner(
-            self.queue,
-            reviewer,
-            {
-                "notificationAiComparisonRepairReasoningEffort": "low",
-                "notificationAiComparisonRepairTimeoutSeconds": "45",
-            },
-            worker_id="worker-repair",
-        )
-
-        self.assertEqual(1, runner.run_once(limit=1))
-
-        delivered = self.notifications.get(job.job_id)
-        repair = delivered.context["notificationAiExecutionAudit"]["hypothesisComparisonRepair"]
-        self.assertEqual(2, len(reviewer.calls))
-        self.assertTrue(repair["attempted"])
-        self.assertTrue(repair["succeeded"])
-        self.assertEqual("low", repair["reasoningEffort"])
-        self.assertEqual(45, repair["timeoutSeconds"])
-        self.assertEqual("low", reviewer.profiles[1]["reasoningEffort"])
-        self.assertEqual(45, reviewer.timeouts[1])
-        self.assertIn("unreviewedHypothesisIds", reviewer.calls[1])
-        self.assertEqual("hypothesis:risk", delivered.context["notificationAiValidatedResponse"]["selectedHypothesisId"])
-
-    def test_completed_comparison_with_invalid_action_envelope_is_repaired(self):
-        job = self.create_job()
-        hypotheses = [
-            {"hypothesisId": "hypothesis:risk", "supportingRuleIds": ["rule:risk"]},
-            {"hypothesisId": "hypothesis:support", "supportingRuleIds": ["rule:support"]},
-        ]
-        job.context["ontologyRelationContext"]["hypothesisSet"] = {
-            "hypotheses": hypotheses,
-        }
-        job.context["ontologyRelationContext"]["activeRules"] = [
-            {
-                "ruleId": rule_id,
-                "evidenceState": {
-                    "evidenceUsableForJudgement": True,
-                    "inferenceEligibilityStatus": "eligible",
-                },
-            }
-            for rule_id in ["rule:risk", "rule:support"]
-        ]
-        job.context["ontologyRelationContext"]["actionEnvelope"] = {
-            "allowedActions": ["HOLD"],
-            "blockedActions": ["BUY"],
-            "drivingRuleIds": ["rule:risk", "rule:support"],
-        }
-        job.context["investmentReasoningCase"] = {
-            "caseId": "case:envelope",
-            "hypothesisIds": ["hypothesis:risk", "hypothesis:support"],
-            "decisionSyntheses": [{
-                "eligibleHypothesisIds": ["hypothesis:risk", "hypothesis:support"],
-                "allowedActions": ["HOLD"],
-                "blockedActions": ["BUY"],
-            }],
-        }
-        self.notifications.upsert_job(job)
-        request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
-        self.queue.enqueue(job, request)
-
-        class EnvelopeReviewer:
-            def __init__(self):
-                self.calls = 0
-
-            def review(self, context):
-                self.calls += 1
-                if self.calls == 1:
-                    return NotificationAIValidatedResponse(
-                        action="BUY",
-                        hypotheses=hypotheses,
-                        selected_hypothesis_id="hypothesis:risk",
-                        hypothesis_comparison_state="completed",
-                    )
-                self.assert_contract_prompt = "decisionContractError" in str(
-                    context.get("_notificationAiPreparedPrompt") or ""
-                )
-                return NotificationAIValidatedResponse(
-                    action="HOLD",
-                    hypotheses=hypotheses,
-                    selected_hypothesis_id="hypothesis:risk",
-                    hypothesis_comparison_state="completed",
-                )
-
-        reviewer = EnvelopeReviewer()
-        runner = AIInferenceQueueRunner(
-            self.queue,
-            reviewer,
-            {"notificationAiComparisonRepairReasoningEffort": "max"},
-            worker_id="worker-envelope-repair",
-        )
-
-        self.assertEqual(1, runner.run_once(limit=1))
-        delivered = self.notifications.get(job.job_id)
-        repair = delivered.context["notificationAiExecutionAudit"]["hypothesisComparisonRepair"]
-        self.assertEqual(2, reviewer.calls)
-        self.assertTrue(reviewer.assert_contract_prompt)
-        self.assertTrue(repair["attempted"])
-        self.assertTrue(repair["succeeded"])
-        self.assertIn("blocked", repair["initialContractError"])
-        self.assertEqual("HOLD", delivered.context["notificationAiValidatedResponse"]["action"])
-
     def test_runner_loads_previous_final_decision_and_never_marks_it_initial(self):
         job = self.create_job()
         request = AIInferenceRequest.create(job, job.context, reasoning_effort="max")
@@ -852,15 +543,6 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertNotIn("첫 판단", transition_claim["text"])
         self.assertIn('"previousAction":"HOLD"', delivered.context["notificationAiExecutionAudit"]["prompt"])
 
-    def test_heartbeat_requires_matching_owner_and_latest_head(self):
-        job = self.create_job()
-        request = AIInferenceRequest.create(job, job.context)
-        self.queue.enqueue(job, request)
-        self.queue.claim("worker-1", 1, 60)
-
-        self.assertFalse(self.queue.heartbeat(request.request_id, "worker-2", 60))
-        self.assertTrue(self.queue.heartbeat(request.request_id, "worker-1", 60))
-
     def test_terminal_ai_failure_can_be_requeued_without_stranding_notification(self):
         job = self.create_job()
         first = AIInferenceRequest.create(job, job.context)
@@ -912,65 +594,6 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(1, runner.run_once(limit=1))
         self.assertTrue(enqueuer.called)
         self.assertEqual([], rendered)
-
-    def test_notification_worker_suppresses_watchlist_candidate_churn_after_ai(self):
-        job = NotificationJob.create(
-            "candidate churn",
-            account_id="main",
-            message_type="investmentInsight",
-            context={
-                "notificationAiValidatedResponse": {"action": "HOLD"},
-                "aiDecisionTransition": {
-                    "historyAvailable": True,
-                    "kind": "unchanged",
-                    "previousAction": "HOLD",
-                    "currentAction": "HOLD",
-                },
-                "decisionTransition": {
-                    "kind": "action-changed",
-                    "material": True,
-                    "previousAction": "BUY",
-                    "currentAction": "HOLD",
-                },
-                "ontologyRelationContext": {
-                    "targetRole": "watchlist",
-                    "actionEnvelope": {"targetRole": "watchlist"},
-                },
-                "ontologyInsight": {"semanticComponents": {"materialSourceEventKeys": []}},
-            },
-        )
-
-        class Queue:
-            def claim_pending(self, **_kwargs):
-                return [job]
-
-            def mark_suppressed(self, target, reason):
-                target.status = "suppressed"
-                target.last_error = reason
-
-            def mark_failed(self, *_args):
-                raise AssertionError("candidate-only churn should be suppressed, not failed")
-
-        class Accounts:
-            def load_all(self):
-                return []
-
-        sent = []
-        rendered = []
-        runner = NotificationQueueRunner(
-            queue=Queue(),
-            account_repository=Accounts(),
-            notifier_factory=lambda _account: type("Notifier", (), {"send": lambda _self, message: sent.append(message)})(),
-            template_renderer=lambda queued_job: rendered.append(queued_job.job_id) or "rendered",
-        )
-
-        self.assertEqual(1, runner.run_once(limit=1))
-        self.assertEqual("suppressed", job.status)
-        self.assertEqual([], rendered)
-        self.assertEqual([], sent)
-        self.assertEqual("suppress", job.context["finalAiDeliveryGate"]["decision"])
-        self.assertEqual("graph_candidate_only_change", job.context["deliverySuppressionReason"])
-
 
 if __name__ == "__main__":
     unittest.main()

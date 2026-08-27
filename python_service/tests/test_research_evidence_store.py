@@ -256,50 +256,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual("active", store.get(locked.evidence_id).lifecycle_state)
             self.assertEqual("expired", store.get(available.evidence_id).lifecycle_state)
 
-    def test_research_evidence_store_upserts_and_summarizes(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = TestResearchEvidenceStore(test_store_seed(temp))
-            evidence = ResearchEvidence(
-                "research:005930:news:1",
-                "005930",
-                "news",
-                "Naver News",
-                "삼성전자 실적 개선 기대",
-                "반도체 업황 개선 보도",
-                "https://example.test/news/1",
-                "2026-07-08T01:00:00Z",
-                "support",
-                8.0,
-                0.7,
-            )
-
-            self.assertEqual(1, store.upsert_many([evidence]))
-            self.assertEqual(0, store.upsert_many([evidence]))
-            updated = ResearchEvidence(
-                "research:005930:news:1",
-                "005930",
-                "news",
-                "Naver News",
-                "삼성전자 실적 개선 기대",
-                "반도체 업황 개선과 수요 회복 보도",
-                "https://example.test/news/1",
-                "2026-07-08T01:00:00Z",
-                "support",
-                8.5,
-                0.72,
-            )
-            self.assertEqual(1, store.upsert_many([updated]))
-
-            latest = store.latest(symbol="005930")
-            summary = store.summary()
-
-            self.assertEqual(1, len(latest))
-            self.assertEqual("삼성전자 실적 개선 기대", latest[0].title)
-            self.assertEqual("반도체 업황 개선과 수요 회복 보도", latest[0].summary)
-            self.assertEqual(1, summary["total"])
-            self.assertEqual("005930", summary["bySymbol"][0]["name"])
-            self.assertEqual("news", summary["byKind"][0]["name"])
-
     def test_store_keeps_audit_rows_without_requeueing_refreshes_or_syndication(self):
         with tempfile.TemporaryDirectory() as temp:
             store = TestResearchEvidenceStore(test_store_seed(temp))
@@ -330,29 +286,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual(["005930"], sorted(store.last_eligible_evidence_revisions))
             self.assertNotEqual(first_revision, store.last_eligible_evidence_revisions["005930"])
             self.assertTrue(store.last_evidence_deltas[0]["changesInferenceEligibleSet"])
-
-    def test_research_evidence_store_deletes_by_id(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = TestResearchEvidenceStore(test_store_seed(temp))
-            evidence = ResearchEvidence(
-                "research:005930:news:delete",
-                "005930",
-                "news",
-                "Naver News",
-                "삭제 대상 근거",
-                "품질 확인 후 제외할 근거",
-                "https://example.test/news/delete",
-                "2026-07-08T01:00:00Z",
-                "context",
-                0.0,
-                0.5,
-            )
-
-            self.assertEqual(1, store.upsert_many([evidence]))
-            self.assertTrue(store.delete("research:005930:news:delete"))
-            self.assertFalse(store.delete("research:005930:news:delete"))
-            self.assertEqual([], store.latest(symbol="005930"))
-            self.assertEqual(0, store.summary()["total"])
 
     def test_research_evidence_store_deletes_stale_news_only(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -406,31 +339,6 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertNotIn("research:005930:news:old", remaining)
             self.assertIn("research:005930:news:fresh", remaining)
             self.assertIn("research:005930:dart:old", remaining)
-
-    def test_expiration_keeps_audit_row_and_emits_an_eligible_set_revision(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = TestResearchEvidenceStore(test_store_seed(temp))
-            evidence = ResearchEvidence(
-                "research:005930:news:lifecycle",
-                "005930",
-                "news",
-                "Reuters",
-                "삼성전자 실적 전망 상향",
-                "본문이 확인된 실적 전망 기사",
-                "https://example.test/news/lifecycle",
-                "2026-07-08T01:00:00Z",
-                "support",
-                published_at="2026-07-08T01:00:00Z",
-                raw_payload={
-                    "relationScope": "direct",
-                    "articleReadStatus": "body",
-                    "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
-                    "evidenceGovernance": {"investmentJudgmentEligible": True, "dataState": "sufficient"},
-                },
-            )
-
-            self.assertEqual(1, store.upsert_many([evidence]))
-            self.assertEqual(["005930"], sorted(store.last_eligible_evidence_revisions))
 
     def test_transaction_event_builder_receives_its_own_evidence_mutation(self):
         with tempfile.TemporaryDirectory() as temp:

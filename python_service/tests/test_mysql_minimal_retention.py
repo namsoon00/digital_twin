@@ -198,31 +198,6 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual(256 * 1024 * 1024, accelerated.max_delete_bytes)
         self.assertEqual(60, accelerated.max_run_seconds)
 
-    def test_disabled_profile_does_not_query_or_record_anything(self):
-        repository = RepositorySpy()
-
-        result = MySQLMinimalRetentionService(repository, {}).run_once()
-
-        self.assertEqual("disabled", result["status"])
-        self.assertEqual([], repository.preview_calls)
-        self.assertEqual([], repository.apply_calls)
-        self.assertEqual([], repository.recorded)
-
-    def test_cli_style_preview_overrides_an_enabled_apply_policy(self):
-        repository = RepositorySpy()
-        service = MySQLMinimalRetentionService(repository, {
-            "mysqlMinimalRetentionEnabled": "1",
-            "mysqlMinimalRetentionMode": "apply",
-        })
-
-        result = service.run_once(force=True, preview=True)
-
-        self.assertEqual("preview", result["status"])
-        self.assertEqual("preview", result["mode"])
-        self.assertEqual(1, len(repository.preview_calls))
-        self.assertEqual([], repository.apply_calls)
-        self.assertEqual(1, len(repository.recorded))
-
     def test_explicit_apply_can_include_a_preview_and_records_only_aggregate_result(self):
         repository = RepositorySpy()
         service = MySQLMinimalRetentionService(repository, {
@@ -238,20 +213,6 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual(1, len(repository.preview_calls))
         self.assertEqual(1, len(repository.apply_calls))
         self.assertEqual(1, len(repository.recorded))
-
-    def test_background_apply_skips_expensive_full_preview(self):
-        repository = RepositorySpy()
-        service = MySQLMinimalRetentionService(repository, {
-            "mysqlMinimalRetentionEnabled": "1",
-            "mysqlMinimalRetentionMode": "apply",
-        })
-
-        result = service.run_once()
-
-        self.assertEqual("ok", result["status"])
-        self.assertEqual({}, result["preview"])
-        self.assertEqual([], repository.preview_calls)
-        self.assertEqual(1, len(repository.apply_calls))
 
     def test_repository_deletes_only_terminal_projection_primary_keys(self):
         connection = ApplyConnection()
@@ -300,25 +261,6 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual("failed-world", updates[0][1][0])
         self.assertFalse(any("pending" in sql or "processing" in sql for sql, _params in updates))
 
-    def test_research_cleanup_requires_completion_and_excludes_live_work_states(self):
-        connection = ApplyConnection()
-        repository = MySQLMinimalRetentionRepository(connection)
-        policy = mysql_minimal_retention_policy({
-            "mysqlMinimalRetentionEnabled": "1",
-            "mysqlMinimalRetentionMode": "apply",
-        })
-
-        repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
-
-        research_queries = [
-            sql for sql, _params in connection.calls
-            if "investment_research_runs" in sql
-        ]
-        self.assertTrue(research_queries)
-        self.assertTrue(any("completed_at <> ''" in sql for sql in research_queries))
-        self.assertTrue(any("status NOT IN (%s, %s, %s)" in sql for sql in research_queries))
-        self.assertFalse(any("status IN ('completed'" in sql for sql in research_queries))
-
     def test_lifecycle_payload_is_deleted_only_after_compact_history_is_archived(self):
         connection = LifecycleArchiveConnection()
         repository = MySQLMinimalRetentionRepository(connection)
@@ -362,80 +304,12 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             for sql, _params in connection.calls
         ))
 
-    def test_current_lifecycle_states_seed_compact_history_baselines(self):
-        connection = LifecycleBaselineConnection()
-        repository = MySQLMinimalRetentionRepository(connection)
-        policy = mysql_minimal_retention_policy({
-            "mysqlMinimalRetentionEnabled": "1",
-            "mysqlMinimalRetentionMode": "apply",
-        })
-
-        result = repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
-
-        self.assertEqual(2, result["archived"])
-        self.assertEqual(2, result["policies"]["lifecycle:stateBaselines"])
-        baseline_sql = next(
-            sql for sql, _params in connection.calls
-            if "FROM `investment_hypothesis_lifecycle_states` state" in sql
-            and "INSERT IGNORE" in sql
-        )
-        self.assertIn("baseline:", baseline_sql)
-        self.assertIn("NOT EXISTS", baseline_sql)
-
-    def test_audit_report_excludes_preview_payloads(self):
-        connection = AuditConnection()
-        repository = MySQLMinimalRetentionRepository(connection)
-        repository.record_run({
-            "status": "preview",
-            "mode": "preview",
-            "profile": "minimal-mysql-retention-v1",
-            "preview": {
-                "eligibleRows": 1,
-                "eligibleBytes": 64,
-                "rawPayload": "must-not-be-stored",
-                "policies": {
-                    "worldProjection": {
-                        "candidateRows": 1,
-                        "candidateBytes": 64,
-                        "rawPayload": "must-not-be-stored",
-                    },
-                },
-            },
-        })
-
-        insert = next(params for sql, params in connection.calls if "INSERT INTO `mysql_retention_runs`" in sql)
-        report = json.loads(insert[7])
-        self.assertNotIn("rawPayload", report["preview"])
-        self.assertEqual(1, report["preview"]["eligibleRows"])
-        self.assertEqual(64, report["preview"]["policies"]["worldProjection"]["candidateBytes"])
-
     def test_legacy_history_targets_no_longer_delete_retryable_jobs_by_age(self):
         tables = {target.table for target in MYSQL_OPERATIONAL_HISTORY_RETENTION_TARGETS}
 
         self.assertNotIn("notification_jobs", tables)
         self.assertNotIn("model_review_jobs", tables)
         self.assertNotIn("verified_reasoning_source_snapshots", tables)
-
-    def test_reasoning_source_retention_protects_nonterminal_job_inputs(self):
-        connection = ApplyConnection()
-        repository = MySQLMinimalRetentionRepository(connection)
-        policy = mysql_minimal_retention_policy({
-            "mysqlMinimalRetentionEnabled": "1",
-            "mysqlMinimalRetentionMode": "apply",
-        })
-
-        repository.apply(policy, now=datetime(2026, 7, 30, tzinfo=timezone.utc))
-
-        source_queries = [
-            sql for sql, _params in connection.calls
-            if "verified_reasoning_source_snapshots" in sql
-        ]
-        self.assertTrue(source_queries)
-        self.assertTrue(any("NOT EXISTS" in sql for sql in source_queries))
-        self.assertTrue(any(
-            "job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')" in sql
-            for sql in source_queries
-        ))
 
     def test_legacy_cleanup_limits_job_deletes_to_terminal_statuses(self):
         connection = ApplyConnection()

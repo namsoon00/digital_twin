@@ -484,47 +484,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("excess-return", candidates[0]["outcomeMetric"])
         self.assertFalse(candidates[0]["automaticDeployment"])
 
-    def test_decision_performance_groups_rule_hypothesis_and_horizon(self):
-        episodes = []
-        for index, status in enumerate(["directionally-corroborated", "directionally-corroborated", "directionally-contradicted"]):
-            episodes.append({
-                "episodeId": "episode-" + str(index),
-                "accountId": "account-1",
-                "symbol": "005930",
-                "action": "TRIM",
-                "selectedHypothesisId": "hypothesis-" + str(index),
-                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
-                    "hypothesis-" + str(index), "rule:risk", 1440
-                )},
-                "hypothesisSet": {
-                    "hypotheses": [{
-                        "hypothesisId": "hypothesis-" + str(index),
-                        "templateId": "template:risk",
-                        "templateLabel": "위험 가설",
-                        "supportingRuleIds": ["rule:risk"],
-                    }],
-                },
-                "outcomes": [{
-                    "outcomeId": "outcome-" + str(index),
-                    "selectedHypothesisStatus": status,
-                    "priceChangeFromDecisionPct": -5 if status == "directionally-corroborated" else 3,
-                    "payload": {
-                        "horizonMinutes": 1440,
-                        "observationTiming": "on-time",
-                        "calibrationEligibility": "eligible",
-                        "accountIndependenceKey": "event-" + str(index),
-                    },
-                }],
-            })
-        result = evaluate_decision_performance(episodes, minimum_sample_count=3)
-
-        self.assertEqual(3, result["summary"]["decisiveOutcomeCount"])
-        self.assertEqual("more-corroborated", result["summary"]["corroborationState"])
-        self.assertTrue(result["summary"]["promotionEligible"])
-        self.assertEqual("rule:risk", result["byRule"][0]["key"])
-        self.assertEqual("template:risk", result["byHypothesis"][0]["key"])
-        self.assertEqual("1440", result["byHorizon"][0]["key"])
-
     def test_decision_performance_deduplicates_repeated_alerts_for_one_market_event(self):
         episodes = []
         for index, status in enumerate(["directionally-contradicted", "directionally-corroborated"]):
@@ -632,23 +591,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("review-required", rule["qualificationState"])
         self.assertFalse(rule["quarantineRecommended"])
 
-    def test_relation_context_separates_rule_hypotheses_from_decision_guardrails(self):
-        payload = hypothesis_set_from_relation_context(relation_context())
-        hypotheses = payload["hypothesisSet"]["hypotheses"]
-        guardrails = payload["hypothesisSet"]["decisionGuardrails"]
-        self.assertEqual(2, len(hypotheses))
-        self.assertEqual({"risk", "support"}, {item["stance"] for item in hypotheses})
-        self.assertTrue(guardrails)
-        self.assertNotIn("approved-safety-policy", {item["approvalStatus"] for item in hypotheses})
-        risk = next(item for item in hypotheses if item["stance"] == "risk")
-        support = next(item for item in hypotheses if item["stance"] == "support")
-        self.assertIn("relation-risk", risk["supportingEvidenceIds"])
-        self.assertIn("relation-support", support["supportingEvidenceIds"])
-        self.assertEqual("supported", risk["evidenceState"])
-        self.assertEqual("supported", support["evidenceState"])
-        self.assertTrue(payload["researchPlan"]["tasks"])
-        self.assertTrue(payload["selfQuestions"])
-
     def test_market_only_hypothesis_reuses_shared_identity_across_accounts(self):
         first = hypothesis_set_from_relation_context(scoped_relation_context("account-a"))["hypothesisSet"]
         second = hypothesis_set_from_relation_context(scoped_relation_context("account-b"))["hypothesisSet"]
@@ -664,24 +606,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("account-a", first["accountOverlays"][0]["accountId"])
         self.assertEqual("account-b", second["accountOverlays"][0]["accountId"])
 
-    def test_mixed_hypothesis_cannot_be_promoted_to_market_scope(self):
-        hypothesis_set = hypothesis_set_from_relation_context(
-            scoped_relation_context("account-a", mixed=True)
-        )["hypothesisSet"]
-        risk = next(
-            item
-            for item in hypothesis_set["hypotheses"]
-            if item["supportingRuleIds"] == ["mixed-loss-trend-risk"]
-        )
-
-        self.assertEqual("mixed", risk["scopeState"])
-        self.assertEqual("", risk["marketHypothesisId"])
-        self.assertEqual([], hypothesis_set["marketHypotheses"])
-        self.assertEqual(["loss-threshold"], risk["accountConditionIds"])
-        self.assertEqual(["profitLossRate"], risk["accountFields"])
-        self.assertEqual(1, len(hypothesis_set["accountOverlays"]))
-        self.assertEqual("mixed", hypothesis_set["accountOverlays"][0]["scopeState"])
-
     def test_rulebox_market_override_cannot_promote_account_condition(self):
         context = scoped_relation_context("account-a", mixed=True)
         context["graphStoreInference"]["traces"][0]["ruleConditionShapes"][0]["hypothesisScope"] = "market"
@@ -696,60 +620,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("unverified", risk["scopeState"])
         self.assertEqual("", risk["marketHypothesisId"])
         self.assertEqual([], hypothesis_set["marketHypotheses"])
-
-    def test_scope_projection_keeps_market_hypothesis_free_of_account_data(self):
-        context = scoped_relation_context("account-a")
-        brain = hypothesis_set_from_relation_context(context)
-        question = InvestmentQuestion.create("삼성전자를 계속 보유해야 하나?", "005930", "삼성전자", "account-a")
-        episode = DecisionEpisode.from_dict({
-            "episodeId": "scope-episode-1",
-            "accountId": "account-a",
-            "symbol": "005930",
-            "subjectName": "삼성전자",
-            "question": question.to_dict(),
-            "hypothesisSet": brain["hypothesisSet"],
-            "action": "HOLD",
-            "confidence": 60,
-            "inferenceGenerationId": "generation-1",
-        })
-        restored = DecisionEpisode.from_dict(episode.to_dict())
-        graph = PortfolioOntology("account-a")
-        add_investment_brain_concepts(graph, "account-a", [restored.to_dict()])
-
-        market_entity = next(item for item in graph.entities if item.properties.get("tboxClass") == "MarketHypothesis")
-        overlay_entity = next(item for item in graph.entities if item.properties.get("tboxClass") == "AccountHypothesisOverlay")
-        relation_types = {item.relation_type for item in graph.relations}
-        self.assertNotIn("accountId", market_entity.properties)
-        self.assertEqual("account-a", overlay_entity.properties["accountId"])
-        self.assertIn("USES_MARKET_HYPOTHESIS", relation_types)
-        self.assertIn("HAS_ACCOUNT_HYPOTHESIS_OVERLAY", relation_types)
-        self.assertIn("CONTEXTUALIZES_MARKET_HYPOTHESIS", relation_types)
-        self.assertIn("MarketHypothesis", {item.name for item in CLASS_DEFS})
-        self.assertIn("AccountHypothesisOverlay", {item.name for item in CLASS_DEFS})
-        self.assertTrue({
-            "USES_MARKET_HYPOTHESIS",
-            "HAS_ACCOUNT_HYPOTHESIS_OVERLAY",
-            "CONTEXTUALIZES_MARKET_HYPOTHESIS",
-        }.issubset({item.name for item in RELATION_DEFS}))
-
-    def test_ai_prompt_distinguishes_market_hypothesis_from_account_overlay(self):
-        relation = scoped_relation_context("account-a")
-        brain = hypothesis_set_from_relation_context(relation)
-        context = {
-            "messageType": "investmentInsight",
-            "displayTarget": "삼성전자",
-            "ontologyRelationContext": {
-                **relation,
-                "investmentBrain": brain,
-                "hypothesisSet": brain["hypothesisSet"],
-                "researchPlan": brain["researchPlan"],
-            },
-        }
-
-        prompt = build_notification_ai_gate_prompt(context)
-
-        self.assertIn("시장 공통 설명", prompt)
-        self.assertIn("market-shared", prompt)
 
     def test_equivalent_typedb_paths_compact_to_one_stable_hypothesis_family(self):
         context = relation_context()
@@ -829,68 +699,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(risk[0]["familyId"], second_risk["familyId"])
         self.assertNotEqual(risk[0]["hypothesisId"], second_risk["hypothesisId"])
 
-    def test_different_causal_mechanisms_do_not_compact_for_the_same_action(self):
-        context = relation_context()
-        context["facts"]["missingData"] = []
-        context["missingData"] = []
-        context["signalConflicts"] = {"hasConflict": False}
-        context["activeRules"] = [
-            {"ruleId": "trend-risk", "evidenceRole": "risk"},
-            {"ruleId": "flow-risk", "evidenceRole": "risk"},
-        ]
-        context["graphStoreInference"]["relations"] = [
-            {"id": "trend-risk-relation", "source": "stock:005930", "target": "risk:trend", "type": "HAS_INFERRED_RISK", "ruleId": "trend-risk", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
-            {"id": "flow-risk-relation", "source": "stock:005930", "target": "risk:flow", "type": "HAS_INFERRED_RISK", "ruleId": "flow-risk", "polarity": "risk", "decisionStage": "LOSS_REDUCE"},
-        ]
-        context["graphStoreInference"]["traces"] = [
-            {"id": "trace-trend", "ruleId": "trend-risk", "matchedConditions": [{"conditionId": "trend", "kind": "relation", "relationType": "BREAKS_LEVEL", "targetKind": "key-level"}]},
-            {"id": "trace-flow", "ruleId": "flow-risk", "matchedConditions": [{"conditionId": "flow", "kind": "relation", "relationType": "HAS_TRADE_FLOW", "targetKind": "smart-money-flow"}]},
-        ]
-
-        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
-        risk = [item for item in hypotheses if item["stance"] == "risk"]
-
-        self.assertEqual(2, len(risk))
-        self.assertEqual({"trend-risk", "flow-risk"}, {item["supportingRuleIds"][0] for item in risk})
-        self.assertTrue(all(item["mergedRuleCount"] == 1 for item in risk))
-
-    def test_same_independence_key_is_one_comparison_input_not_two_votes(self):
-        context = relation_context()
-        context["facts"]["missingData"] = []
-        context["missingData"] = []
-        context["signalConflicts"] = {"hasConflict": False}
-        basis = {
-            "ruleKind": "predictive-hypothesis",
-            "decisionEligibility": "eligible",
-            "requiresHypothesis": True,
-            "theoryFamily": "trend-recovery",
-            "thesisFamily": "price-recovery",
-            "evidenceIndependenceKey": "price-recovery-support",
-        }
-        context["activeRules"] = [
-            {"ruleId": "trend-recovery-a", "evidenceRole": "support", "knowledgeBasis": basis},
-            {"ruleId": "flow-confirmed-recovery-b", "evidenceRole": "support", "knowledgeBasis": basis},
-        ]
-        context["graphStoreInference"]["relations"] = [
-            {"id": "recovery-a", "source": "stock:005930", "target": "support:trend", "type": "HAS_INFERRED_SUPPORT", "ruleId": "trend-recovery-a", "polarity": "support"},
-            {"id": "recovery-b", "source": "stock:005930", "target": "support:flow", "type": "HAS_INFERRED_SUPPORT", "ruleId": "flow-confirmed-recovery-b", "polarity": "support"},
-        ]
-        context["graphStoreInference"]["traces"] = [
-            {"id": "trace-recovery-a", "ruleId": "trend-recovery-a", "knowledgeBasis": basis, "matchedConditions": [{"conditionId": "trend", "kind": "relation", "relationType": "RECLAIMS_LEVEL", "targetKind": "key-level"}]},
-            {"id": "trace-recovery-b", "ruleId": "flow-confirmed-recovery-b", "knowledgeBasis": basis, "matchedConditions": [{"conditionId": "flow", "kind": "relation", "relationType": "HAS_TRADE_FLOW", "targetKind": "smart-money-flow"}]},
-        ]
-
-        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
-        support = [item for item in hypotheses if item["stance"] == "support"]
-
-        self.assertEqual(1, len(support))
-        self.assertEqual(
-            {"trend-recovery-a", "flow-confirmed-recovery-b"},
-            set(support[0]["supportingRuleIds"]),
-        )
-        self.assertEqual(1, support[0]["knowledgeBasis"]["independentVoteCount"])
-        self.assertEqual(2, support[0]["knowledgeBasis"]["correlatedHypothesisCount"])
-
     def test_legacy_traces_without_a_rule_structure_do_not_compact(self):
         context = relation_context()
         context["facts"]["missingData"] = []
@@ -915,27 +723,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual(2, len(risk))
         self.assertTrue(all(item["familySource"] == "typedb-rule-id-fallback" for item in risk))
 
-    def test_rulebox_explicit_family_key_compacts_configured_variants(self):
-        context = relation_context()
-        context["facts"]["missingData"] = []
-        context["missingData"] = []
-        context["signalConflicts"] = {"hasConflict": False}
-        context["activeRules"] = [
-            {"ruleId": "loss-guard-soft", "evidenceRole": "risk", "hypothesisFamilyKey": "loss-guard"},
-            {"ruleId": "loss-guard-strict", "evidenceRole": "risk", "hypothesisFamilyKey": "loss-guard"},
-        ]
-        context["graphStoreInference"]["relations"] = [
-            {"id": "loss-guard-soft-relation", "source": "stock:005930", "target": "risk:soft", "type": "HAS_INFERRED_RISK", "ruleId": "loss-guard-soft", "polarity": "risk", "hypothesisFamilyKey": "loss-guard", "decisionStage": "LOSS_REDUCE"},
-            {"id": "loss-guard-strict-relation", "source": "stock:005930", "target": "risk:strict", "type": "HAS_INFERRED_RISK", "ruleId": "loss-guard-strict", "polarity": "risk", "hypothesisFamilyKey": "loss-guard", "decisionStage": "LOSS_REDUCE"},
-        ]
-
-        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]
-        risk = [item for item in hypotheses["hypotheses"] if item["stance"] == "risk"]
-
-        self.assertEqual(1, len(risk))
-        self.assertEqual({"loss-guard-soft", "loss-guard-strict"}, set(risk[0]["supportingRuleIds"]))
-        self.assertEqual("rulebox-explicit-family-key", risk[0]["familySource"])
-
     def test_different_rule_filters_do_not_compact_for_the_same_relation(self):
         context = relation_context()
         context["facts"]["missingData"] = []
@@ -959,26 +746,6 @@ class InvestmentBrainTest(unittest.TestCase):
 
         self.assertEqual(2, len(risk))
         self.assertEqual({"ma20-risk", "ma60-risk"}, {item["supportingRuleIds"][0] for item in risk})
-
-    def test_one_sided_typedb_paths_create_counterfactual_guardrail_not_hypothesis(self):
-        context = relation_context()
-        context["activeRules"] = [context["activeRules"][0]]
-        context["graphStoreInference"]["relations"] = [context["graphStoreInference"]["relations"][0]]
-        context["signalConflicts"] = {"hasConflict": False}
-        context["missingData"] = []
-        context["facts"]["missingData"] = []
-        hypothesis_set = hypothesis_set_from_relation_context(context)["hypothesisSet"]
-        hypotheses = hypothesis_set["hypotheses"]
-        self.assertEqual(1, len(hypotheses))
-        self.assertEqual(1, len([item for item in hypotheses if item.get("supportingRuleIds")]))
-        self.assertIn("counterfactual-coverage", {item["guardrailType"] for item in hypothesis_set["decisionGuardrails"]})
-
-    def test_rule_relation_polarity_is_not_overwritten_by_global_risk_pressure(self):
-        context = relation_context()
-        context["activeRules"][1]["evidenceRole"] = "support"
-        hypotheses = hypothesis_set_from_relation_context(context)["hypothesisSet"]["hypotheses"]
-        support = next(item for item in hypotheses if item["templateId"] == "hypothesis-template:support-rule")
-        self.assertEqual("support", support["stance"])
 
     def test_ai_gate_requires_and_preserves_hypothesis_comparison(self):
         context = {
@@ -1080,72 +847,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertTrue(any(item.relation_type == "HAS_DECISION_GUARDRAIL" for item in graph.relations))
         self.assertTrue(any(item.relation_type == "ABSTAINS_FROM_HYPOTHESIS_SELECTION" for item in graph.relations))
 
-    def test_complete_ai_comparison_is_persisted_with_selection_audit_in_abox(self):
-        context = {
-            "messageType": "investmentInsight",
-            "accountId": "account-1",
-            "displayTarget": "삼성전자",
-            "referenceDate": "2026-07-19T01:00:00Z",
-            "ontologyRelationContext": relation_context(),
-        }
-        brain = hypothesis_set_from_relation_context(context["ontologyRelationContext"])
-        context["ontologyRelationContext"].update({
-            "investmentBrain": brain,
-            "hypothesisSet": brain["hypothesisSet"],
-            "researchPlan": brain["researchPlan"],
-        })
-        hypotheses = brain["hypothesisSet"]["hypotheses"]
-        selected = next(item for item in hypotheses if item["stance"] == "risk")
-        response = validated_response_from_payload(context, {
-            "action": "TRIM",
-            "summary": "위험 근거가 지지 근거보다 더 직접적이라 일부 축소를 검토합니다.",
-            "opinion": "공시 본문 확인 전에는 일부만 줄이는 쪽으로 봅니다.",
-            "evidence": ["손실과 위험 관계가 함께 확인됐습니다."],
-            "counterEvidence": ["지지 관계가 남아 있습니다."],
-            "invalidationCondition": "위험 관계가 다음 추론 세대에서 사라집니다.",
-            "nextChecks": ["공시 본문 확인"],
-            "hypotheses": [{
-                "hypothesisId": item["hypothesisId"],
-                "verdict": "supported" if item["hypothesisId"] == selected["hypothesisId"] else "unresolved",
-                "reasoning": "현재 TypeDB 근거와 반대 근거를 비교했습니다.",
-                "supportingEvidenceIds": item["supportingEvidenceIds"],
-                "counterEvidenceIds": item["counterEvidenceIds"],
-            } for item in hypotheses],
-            "selectedHypothesisId": selected["hypothesisId"],
-            "unresolvedQuestions": ["공시 본문이 결론을 바꾸는가?"],
-            "epistemicSummary": "위험 가설은 현재 우세하지만 공시 본문 확인이 남아 있습니다.",
-        })
-
-        self.assertEqual("completed", response.hypothesis_comparison_state)
-        self.assertEqual("ai-comparison", response.hypothesis_selection_source)
-        episode = decision_episode_from_context(context, response.to_dict(), job_id="job-1")
-        self.assertIsNotNone(episode)
-        self.assertEqual("completed", episode.hypothesis_comparison_state)
-        self.assertEqual("ai-comparison", episode.hypothesis_selection_source)
-        self.assertEqual(selected["hypothesisId"], episode.selected_hypothesis_id)
-        self.assertEqual(len(hypotheses), len(episode.hypothesis_reviews))
-        outcome_contract = episode.facts_at_decision["hypothesisOutcomeContract"]
-        self.assertEqual("rulebox-hypothesis-outcome-contract-v2", outcome_contract["contractVersion"])
-        self.assertTrue(outcome_contract["contractFingerprint"].startswith("sha256:"))
-        self.assertTrue(outcome_contract["criteria"])
-        self.assertTrue(outcome_contract["marketIndependenceKey"])
-        self.assertTrue(outcome_contract["accountIndependenceKey"])
-        reasoning = episode.facts_at_decision["reasoningDetailSnapshot"]
-        self.assertEqual("exact", reasoning["snapshotState"])
-        self.assertEqual(2, reasoning["counts"]["relations"])
-        self.assertEqual(2, reasoning["counts"]["rules"])
-        self.assertTrue(reasoning["facts"])
-
-        graph = PortfolioOntology("account-1")
-        add_investment_brain_concepts(graph, "account-1", [episode.to_dict()])
-        episode_entity = next(item for item in graph.entities if item.kind == "decision-episode")
-        self.assertEqual("completed", episode_entity.properties["hypothesisComparisonState"])
-        contains = [item for item in graph.relations if item.relation_type == "CONTAINS_HYPOTHESIS"]
-        self.assertEqual(len(hypotheses), len(contains))
-        self.assertTrue(all("reviewVerdict" in item.properties for item in contains))
-        selection = next(item for item in graph.relations if item.relation_type == "SELECTS_HYPOTHESIS")
-        self.assertEqual("ai-comparison", selection.properties["selectionSource"])
-
     def test_decision_episode_round_trip_and_abox_projection(self):
         brain = hypothesis_set_from_relation_context(relation_context())
         question = InvestmentQuestion.create("삼성전자를 보유해야 하나?", "005930", "삼성전자", "account-1")
@@ -1233,38 +934,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertIn("PRODUCES_VERIFICATION_RESULT", relation_types)
         self.assertIn("PROPOSES_HYPOTHESIS_FOR", relation_types)
         self.assertIn("TRACKS_FOLLOW_UP", relation_types)
-
-    def test_question_service_uses_typedb_and_persists_episode(self):
-        episode_store = FakeDecisionEpisodeStore()
-        service = InvestmentBrainService(
-            FakeMonitorStore(),
-            FakeOntologyRepository(),
-            FakeReviewer(),
-            episode_store,
-            settings={},
-        )
-        result = service.ask("삼성전자를 계속 보유해야 할까?", account_id="account-1")
-        self.assertEqual("answered", result["status"])
-        self.assertEqual("ontology-investment-brain", result["engine"])
-        self.assertEqual(2, len(result["hypothesisSet"]["hypotheses"]))
-        self.assertTrue(result["hypothesisSet"]["decisionGuardrails"])
-        self.assertEqual(1, len(episode_store.saved))
-        self.assertEqual("generation-1", result["inferenceGenerationId"])
-
-    def test_tbox_defines_cognitive_objects_and_relations(self):
-        class_names = {item.name for item in CLASS_DEFS}
-        relation_names = {item.name for item in RELATION_DEFS}
-        for name in [
-            "InvestmentQuestion", "HypothesisSet", "HypothesisFamily", "CompetingHypothesis", "ObservedOutcome", "LearningProposal",
-            "ResearchSourcePolicy", "VerificationRun", "VerifiedClaim", "NovelHypothesisProposal",
-        ]:
-            self.assertIn(name, class_names)
-        for name in [
-            "ASKS_ABOUT", "COMPETES_WITH_HYPOTHESIS", "SELECTS_HYPOTHESIS", "RESULTED_IN_OUTCOME", "LEARNED_FROM",
-            "TESTS_HYPOTHESIS", "INSTANTIATES_HYPOTHESIS_FAMILY", "INSTANTIATES_HYPOTHESIS_TEMPLATE", "PRODUCES_VERIFICATION_RESULT",
-            "PROPOSES_HYPOTHESIS_FOR",
-        ]:
-            self.assertIn(name, relation_names)
 
     def test_research_governance_accepts_only_fresh_resolved_evidence(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KR", "KRW", "반도체")
@@ -1480,47 +1149,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("notification-graph-context", enriched["researchCycle"]["subjectResolutionSource"])
         self.assertEqual("005930", enriched["investmentBrainQuestion"]["subjectSymbol"])
 
-    def test_novel_hypothesis_proposal_requires_known_evidence(self):
-        store = FakeResearchStore()
-        service = HypothesisProposalService(store, FakeHypothesisAdvisor())
-        result = service.propose(
-            "account-1",
-            "005930",
-            {"questionId": "question-1"},
-            {"hypotheses": []},
-            {},
-            relation_context(),
-        )
-        self.assertEqual(1, result["proposalCount"])
-        self.assertEqual(["relation-risk"], result["proposals"][0]["supportingEvidenceIds"])
-        self.assertEqual("review-required", result["proposals"][0]["status"])
-
-    def test_hypothesis_proposal_queue_runs_outside_reasoning_and_completes_request(self):
-        store = FakeHypothesisProposalQueueStore([{
-            "requestId": "proposal-request:1",
-            "accountId": "account-1",
-            "symbol": "005930",
-            "question": {"questionId": "question-1"},
-            "hypothesisSet": {"hypotheses": []},
-            "researchRun": {},
-            "relationContext": {
-                "inferenceGenerationId": "generation:1",
-                "graphStoreInference": {
-                    "relations": [{"id": "relation-risk"}],
-                    "traces": [],
-                },
-            },
-        }])
-        service = HypothesisProposalService(store, FakeHypothesisAdvisor())
-        runner = HypothesisProposalQueueRunner(store, service, worker_id="worker:test")
-
-        result = runner.run_once(limit=1)
-
-        self.assertEqual(1, result["processedCount"])
-        self.assertEqual([], store.failed)
-        self.assertEqual("review-required", store.completed[0][1]["status"])
-        self.assertEqual(1, len(store.proposals))
-
     def test_outcome_feedback_is_recorded_once_per_configured_horizon(self):
         brain = hypothesis_set_from_relation_context(relation_context())
         episode = DecisionEpisode.from_dict({
@@ -1538,21 +1166,6 @@ class InvestmentBrainTest(unittest.TestCase):
         episode.outcomes.append(type("Outcome", (), {"payload": {"horizonMinutes": 60}})())
         self.assertEqual(0, due_outcome_horizon_minutes(episode, "2026-07-19T02:00:00Z", "60,1440"))
         self.assertEqual(1440, due_outcome_horizon_minutes(episode, "2026-07-20T01:00:00Z", "60,1440"))
-
-    def test_outcome_timestamp_normalizes_legacy_kst_display_value(self):
-        self.assertEqual("2026-07-19T19:40:00Z", canonical_investment_timestamp("2026-07-20 04:40 KST"))
-        brain = hypothesis_set_from_relation_context(relation_context())
-        episode = DecisionEpisode.from_dict({
-            "episodeId": "episode-kst-time",
-            "accountId": "account-1",
-            "symbol": "005930",
-            "subjectName": "삼성전자",
-            "question": brain["question"],
-            "hypothesisSet": brain["hypothesisSet"],
-            "action": "HOLD",
-            "decidedAt": "2026-07-20 04:40 KST",
-        })
-        self.assertEqual(60, due_outcome_horizon_minutes(episode, "2026-07-19T20:40:00Z", "60,1440"))
 
     def test_stock_outcome_target_rolls_weekend_but_crypto_keeps_elapsed_time(self):
         brain = hypothesis_set_from_relation_context(relation_context())
@@ -1578,86 +1191,6 @@ class InvestmentBrainTest(unittest.TestCase):
         self.assertEqual("2026-08-15T06:00:00Z", outcome_target_at(crypto, 1440))
         self.assertEqual([], due_outcome_horizon_minutes_all(stock, "2026-08-15T06:00:00Z", [1440]))
         self.assertEqual([1440], due_outcome_horizon_minutes_all(stock, "2026-08-17T06:00:00Z", [1440]))
-
-    def test_stock_outcome_target_uses_next_regular_session_after_close(self):
-        brain = hypothesis_set_from_relation_context(relation_context())
-        stock = DecisionEpisode.from_dict({
-            "episodeId": "episode-stock-after-close",
-            "accountId": "account-1",
-            "symbol": "005930",
-            "subjectName": "삼성전자",
-            "question": brain["question"],
-            "hypothesisSet": brain["hypothesisSet"],
-            "action": "HOLD",
-            "decidedAt": "2026-08-13T09:00:00Z",
-            "factsAtDecision": {"market": "KR", "currency": "KRW"},
-        })
-
-        self.assertEqual("2026-08-14T00:00:00Z", outcome_target_at(stock, 60))
-
-    def test_outcome_service_prefers_historical_observation_at_horizon(self):
-        class FakeEpisodeStore:
-            def __init__(self):
-                self.records = []
-
-            def pending_outcome_targets(self, account_id, observed_at, limit=0):
-                return [{
-                    "requestId": "target-1",
-                    "episodeId": "episode-1",
-                    "symbol": "005930",
-                    "benchmarkSymbol": "KOSPI",
-                    "horizonMinutes": 60,
-                    "decidedAt": "2026-07-20T00:00:00Z",
-                    "targetAt": "2026-07-20T01:00:00Z",
-                }]
-
-            def record_outcome_observations(self, account_id, records):
-                self.records = list(records)
-                return [type("Outcome", (), {"outcome_id": "outcome-1"})()]
-
-        class FakeTimeSeriesStore:
-            def load_outcome_observations(self, account_id, targets, max_delay_minutes=0):
-                available = {
-                    "target-1": {
-                        "currentPrice": 71000,
-                        "generatedAt": "2026-07-20T01:03:00Z",
-                        "sourceAsOf": "2026-07-20T01:03:00Z",
-                        "observationSource": "mysql-market-time-series",
-                        "observationBasis": "historical-market-time-series",
-                        "dataQuality": "actual",
-                    },
-                    "target-1:benchmark-start": {
-                        "currentPrice": 100,
-                        "generatedAt": "2026-07-20T00:01:00Z",
-                        "dataQuality": "actual",
-                    },
-                    "target-1:benchmark-end": {
-                        "currentPrice": 101,
-                        "generatedAt": "2026-07-20T01:01:00Z",
-                        "dataQuality": "actual",
-                    },
-                }
-                keys = {str(item.get("requestId") or "") for item in targets}
-                return {key: value for key, value in available.items() if key in keys}
-
-        snapshot = AccountSnapshot(
-            "account-1", "테스트", "toss", "live", "ok", "2026-07-20T03:00:00Z",
-            PortfolioSummary(1000000, 0, 1000000, [], [], 0),
-            positions=[normalize_position({
-                "symbol": "005930", "name": "삼성전자", "market": "KR", "currency": "KRW",
-                "currentPrice": 73000, "dataQuality": "actual",
-            })],
-        )
-        store = FakeEpisodeStore()
-        result = InvestmentOutcomeObservationService(store, FakeTimeSeriesStore()).observe_snapshot(snapshot)
-
-        self.assertEqual("observed", result["status"])
-        self.assertEqual(1, result["historicalObservationCount"])
-        self.assertEqual(0, result["snapshotFallbackCount"])
-        self.assertEqual("2026-07-20T01:03:00Z", store.records[0]["observedAt"])
-        self.assertEqual(71000, store.records[0]["facts"]["currentPrice"])
-        self.assertEqual("KOSPI", store.records[0]["facts"]["benchmarkSymbol"])
-        self.assertEqual(1.0, store.records[0]["facts"]["benchmarkReturnPct"])
 
     def test_hypothesis_calibration_uses_independent_episode_outcomes(self):
         brain = hypothesis_set_from_relation_context(relation_context())

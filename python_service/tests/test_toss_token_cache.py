@@ -24,8 +24,15 @@ class TossTokenCacheTests(unittest.TestCase):
             return {"access_token": "token-" + str(len(token_calls)), "expires_in": 3600}
 
         cache = {}
-        provider = TossProvider(self.account(), token_cache=cache, now_fn=lambda: clock[0])
-        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json):
+        provider = TossProvider(
+            self.account(),
+            quote_cache={},
+            settings={"externalApiRetryAttempts": "1"},
+            token_cache=cache,
+            now_fn=lambda: clock[0],
+        )
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
+                mock.patch("digital_twin.infrastructure.toss_snapshots.runtime_settings", return_value=provider.settings):
             first = provider.fetch_access_token()
             second = provider.fetch_access_token()
 
@@ -43,8 +50,15 @@ class TossTokenCacheTests(unittest.TestCase):
             token_calls.append(url)
             return {"access_token": "token-" + str(len(token_calls)), "expires_in": 100}
 
-        provider = TossProvider(self.account(), token_cache={}, now_fn=lambda: clock[0])
-        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json):
+        provider = TossProvider(
+            self.account(),
+            quote_cache={},
+            settings={"externalApiRetryAttempts": "1"},
+            token_cache={},
+            now_fn=lambda: clock[0],
+        )
+        with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
+                mock.patch("digital_twin.infrastructure.toss_snapshots.runtime_settings", return_value=provider.settings):
             self.assertEqual("token-1", provider.fetch_access_token())
             clock[0] = 1091.0
             self.assertEqual("token-2", provider.fetch_access_token())
@@ -67,9 +81,15 @@ class TossTokenCacheTests(unittest.TestCase):
                 return {"result": []}
             return {}
 
-        provider = TossProvider(self.account(), token_cache={})
+        provider = TossProvider(
+            self.account(),
+            quote_cache={},
+            settings={"externalApiRetryAttempts": "1"},
+            token_cache={},
+        )
         with mock.patch("digital_twin.infrastructure.toss_snapshots.http_json", side_effect=fake_http_json), \
-                mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None):
+                mock.patch("digital_twin.infrastructure.toss_snapshots.time.sleep", return_value=None), \
+                mock.patch("digital_twin.infrastructure.toss_snapshots.runtime_settings", return_value=provider.settings):
             token = provider.fetch_access_token()
             payload, refreshed = provider.token_request("accounts", "GET", "https://example.test/api/v1/accounts", token)
 

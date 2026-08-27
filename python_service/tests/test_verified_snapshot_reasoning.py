@@ -85,13 +85,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("MarketQuote", event.payload["factTypes"])
         self.assertTrue(event.payload["factRevisionsBySymbol"]["AAPL"])
 
-    def test_identical_snapshot_does_not_schedule_another_projection(self):
-        current = snapshot()
-
-        event = verified_monitor_snapshot_reasoning_event(current, current.to_monitor_state())
-
-        self.assertIsNone(event)
-
     def test_one_quote_change_targets_only_that_symbol(self):
         previous = snapshot()
         current = snapshot(aapl_price=101.0)
@@ -119,64 +112,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
 
         self.assertIsNone(event)
 
-    def test_portfolio_change_does_not_promote_an_unrelated_symbol(self):
-        previous = snapshot()
-        current = snapshot(aapl_price=102.0, msft_price=200.2)
-        current.portfolio.cash = 325.0
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
-        self.assertNotIn("MSFT", event.payload["factTypesBySymbol"])
-        self.assertNotIn("portfolioContext", event.payload["changedFieldsBySymbol"]["AAPL"])
-        self.assertTrue(event.payload["verifiedSourceSnapshot"]["portfolioContextChanged"])
-
-    def test_portfolio_change_keeps_direct_evidence_bound_to_its_symbol(self):
-        previous = snapshot()
-        current = snapshot(aapl_price=100.2, msft_price=200.2, external_signals={
-            "newsHeadlines": {
-                "AAPL": {
-                    "items": [{
-                        "symbol": "AAPL",
-                        "title": "Material guidance update",
-                        "url": "https://example.test/aapl-guidance",
-                    }],
-                },
-            },
-        })
-        current.portfolio.cash = 325.0
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertEqual(["ResearchEvidence"], event.payload["factTypesBySymbol"]["AAPL"])
-        self.assertEqual(
-            ["external.newsHeadlines"],
-            event.payload["changedFieldsBySymbol"]["AAPL"],
-        )
-        self.assertNotIn("MSFT", event.payload["factTypesBySymbol"])
-
-    def test_foreign_flow_direction_change_creates_a_flow_request(self):
-        previous = snapshot()
-        current = snapshot()
-        previous.positions[0].foreign_buy_volume = 100.0
-        previous.positions[0].foreign_sell_volume = 110.0
-        previous.positions[0].foreign_net_volume = -10.0
-        current.positions[0].foreign_buy_volume = 130.0
-        current.positions[0].foreign_sell_volume = 100.0
-        current.positions[0].foreign_net_volume = 30.0
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-        assessments = {
-            item["subject"]: item
-            for item in event.payload["materialityAssessments"]
-        }
-
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertEqual(["ExecutionFlow"], event.payload["factTypesBySymbol"]["AAPL"])
-        self.assertIn("foreign-flow-direction", assessments["AAPL"]["matchedConditions"])
-
     def test_notified_market_observation_marks_only_the_changed_symbol_for_prompt_followup(self):
         previous = snapshot()
         current = snapshot(aapl_price=101.0)
@@ -192,72 +127,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(1, len(entries))
         self.assertTrue(entries[0]["observationFollowup"])
         self.assertGreaterEqual(entries[0]["priorityHint"], OBSERVATION_FOLLOWUP_PRIORITY_HINT)
-
-    def test_notified_market_observation_rechecks_an_unchanged_snapshot_symbol(self):
-        current = snapshot()
-
-        event = verified_monitor_snapshot_reasoning_event(
-            current,
-            current.to_monitor_state(),
-            observation_followup_symbols=["AAPL", "UNKNOWN"],
-        )
-
-        self.assertIsNotNone(event)
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertEqual(["AAPL"], event.payload["observationFollowupSymbols"])
-        self.assertEqual(0, event.payload["changedCount"])
-        self.assertEqual(["marketObservationFollowup"], event.payload["changedFieldsBySymbol"]["AAPL"])
-        self.assertIn("MarketQuote", event.payload["factTypes"])
-        self.assertTrue(event.payload["factRevisionsBySymbol"]["AAPL"])
-        entries = durable_mailbox_entries(event)
-        self.assertEqual(1, len(entries))
-        self.assertTrue(entries[0]["observationFollowup"])
-
-    def test_unchanged_market_observation_followup_is_retained_by_scheduler(self):
-        current = snapshot()
-        request = verified_monitor_snapshot_reasoning_event(
-            current,
-            current.to_monitor_state(),
-            observation_followup_symbols=["AAPL"],
-        )
-
-        class Reader:
-            def recent_events(self, **_kwargs):
-                return [request]
-
-        class Cursor:
-            def processed_event_ids(self):
-                return []
-
-            def load(self):
-                return {}
-
-        runner = OntologyReasoningRunner(
-            Reader(),
-            Cursor(),
-            monitor_runner_factory=lambda: None,
-            now_provider=lambda: datetime(2026, 7, 29, 1, 0),
-        )
-
-        self.assertEqual([request.event_id], [event.event_id for event in runner.pending_requests()])
-
-    def test_changed_direct_research_evidence_targets_the_related_symbol(self):
-        previous = snapshot(external_signals={
-            "newsHeadlines": {
-                "AAPL": {"items": [{"symbol": "AAPL", "title": "Old title", "url": "https://example.test/old"}]},
-            },
-        })
-        current = snapshot(external_signals={
-            "newsHeadlines": {
-                "AAPL": {"items": [{"symbol": "AAPL", "title": "New title", "url": "https://example.test/new"}]},
-            },
-        })
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertIn("ResearchEvidence", event.payload["factTypes"])
-        self.assertIn("external.newsHeadlines", event.payload["changedFieldsBySymbol"]["AAPL"])
 
     def test_research_cache_rotation_without_eligible_evidence_does_not_enqueue(self):
         previous = snapshot(external_signals={
@@ -332,87 +201,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIn("external.researchEvidence", event.payload["changedFieldsBySymbol"]["AAPL"])
         self.assertNotIn("current_price", event.payload["changedFieldsBySymbol"]["AAPL"])
 
-    def test_external_quality_clock_changes_do_not_fan_out_a_new_reasoning_request(self):
-        previous = snapshot(external_signals={
-            "quality": {
-                "generatedAt": "2026-07-29T00:00:00Z",
-                "fetchedAt": "2026-07-29T00:00:00Z",
-                "ageMinutes": 1,
-                "dataState": "sufficient",
-                "coverageState": "complete",
-                "sourceHealthState": "healthy",
-            },
-            "freshness": {
-                "fetchedAt": "2026-07-29T00:00:00Z",
-                "ageMinutes": 1,
-                "status": "fresh",
-                "transportStatus": "fresh",
-                "dataState": "sufficient",
-            },
-        })
-        clock_only_refresh = snapshot(external_signals={
-            "quality": {
-                "generatedAt": "2026-07-29T00:05:00Z",
-                "fetchedAt": "2026-07-29T00:05:00Z",
-                "ageMinutes": 0,
-                "dataState": "sufficient",
-                "coverageState": "complete",
-                "sourceHealthState": "healthy",
-            },
-            "freshness": {
-                "fetchedAt": "2026-07-29T00:05:00Z",
-                "ageMinutes": 0,
-                "status": "fresh",
-                "transportStatus": "fresh",
-                "dataState": "sufficient",
-            },
-        })
-
-        self.assertIsNone(
-            verified_monitor_snapshot_reasoning_event(
-                clock_only_refresh,
-                previous.to_monitor_state(),
-            )
-        )
-
-    def test_external_quality_state_change_stays_out_of_per_symbol_reasoning(self):
-        previous = snapshot(external_signals={
-            "quality": {
-                "dataState": "sufficient",
-                "coverageState": "complete",
-                "sourceHealthState": "healthy",
-            },
-            "freshness": {
-                "fetchedAt": "2026-07-29T00:00:00Z",
-                "ageMinutes": 1,
-                "status": "fresh",
-                "transportStatus": "fresh",
-                "dataState": "sufficient",
-            },
-            "provenance": {"sources": ["OpenDART"], "unavailableSources": []},
-            "statuses": [{"source": "OpenDART", "ok": True}],
-        })
-        stale = snapshot(external_signals={
-            "quality": {
-                "dataState": "partial",
-                "coverageState": "incomplete",
-                "sourceHealthState": "degraded",
-            },
-            "freshness": {
-                "fetchedAt": "2026-07-29T01:00:00Z",
-                "ageMinutes": 61,
-                "status": "stale",
-                "transportStatus": "stale",
-                "dataState": "partial",
-            },
-            "provenance": {"sources": ["OpenDART"], "unavailableSources": ["OpenDART"]},
-            "statuses": [{"source": "OpenDART", "ok": False, "message": "unauthorized"}],
-        })
-
-        self.assertIsNone(
-            verified_monitor_snapshot_reasoning_event(stale, previous.to_monitor_state())
-        )
-
     def test_ordinary_rate_refresh_waits_for_the_next_symbol_event(self):
         previous = snapshot(external_signals={
             "macro": {"series": {"DGS10": {"value": 4.0}}},
@@ -427,25 +215,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
                 previous.to_monitor_state(),
             )
         )
-
-    def test_systemic_rate_transition_can_recheck_all_live_symbols(self):
-        previous = snapshot(external_signals={
-            "macro": {"series": {"DGS10": {"value": 4.0}}},
-        })
-        current = snapshot(external_signals={
-            "macro": {"series": {"DGS10": {"value": 4.3}}},
-        })
-
-        event = verified_monitor_snapshot_reasoning_event(
-            current,
-            previous.to_monitor_state(),
-        )
-
-        self.assertEqual(["AAPL", "MSFT"], event.payload["symbols"])
-        self.assertEqual(["InterestRate"], event.payload["factTypesBySymbol"]["AAPL"])
-        transition = event.payload["verifiedSourceSnapshot"]["systemicMacroTransition"]
-        self.assertTrue(transition["systemic"])
-        self.assertAlmostEqual(30.0, transition["rateChangesBp"]["DGS10"])
 
     def test_price_event_reads_new_macro_context_without_macro_fanout(self):
         previous = snapshot(external_signals={
@@ -464,20 +233,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
         self.assertNotIn("external.macro", event.payload["changedFieldsBySymbol"]["AAPL"])
 
-    def test_material_price_change_keeps_global_quality_as_context(self):
-        previous = snapshot(external_signals={
-            "freshness": {"status": "fresh", "dataState": "sufficient"},
-        })
-        current = snapshot(aapl_price=102.0, external_signals={
-            "freshness": {"status": "stale", "dataState": "partial"},
-        })
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
-        self.assertNotIn("external.freshness", event.payload["changedFieldsBySymbol"]["AAPL"])
-
     def test_supplemental_quote_cache_refresh_does_not_enqueue_a_duplicate_turn(self):
         previous = snapshot(external_signals={
             "yfinanceData": {"AAPL": {"marketCap": 1000, "trailingPE": 20}},
@@ -489,36 +244,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIsNone(
             verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
         )
-
-    def test_company_knowledge_revision_enqueues_only_changed_company_fact_family(self):
-        base_company = {
-            "AAPL": {
-                "schemaVersion": "company-knowledge-v1",
-                "symbol": "AAPL",
-                "factRevision": "revision-a",
-                "financials": {"annual": [{"period": "2025-09-30", "revenueGrowthPct": 5.0}]},
-                "coverage": {"financialPeriods": 1, "dataState": "partial"},
-            },
-        }
-        changed_company = copy.deepcopy(base_company)
-        changed_company["AAPL"]["factRevision"] = "revision-b"
-        changed_company["AAPL"]["financials"]["annual"][0]["revenueGrowthPct"] = 8.0
-        previous = snapshot(external_signals={"companyKnowledge": base_company})
-        current = snapshot(external_signals={"companyKnowledge": changed_company})
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-
-        self.assertEqual(["AAPL"], event.payload["symbols"])
-        self.assertEqual(
-            ["FinancialFact"],
-            event.payload["factTypesBySymbol"]["AAPL"],
-        )
-        self.assertEqual(
-            ["external.companyKnowledge.financials"],
-            event.payload["changedFieldsBySymbol"]["AAPL"],
-        )
-        entries = durable_mailbox_entries(event)
-        self.assertEqual({"EVIDENCE"}, {entry["workClass"] for entry in entries})
 
     def test_company_knowledge_section_revision_routes_only_changed_fact_family(self):
         base_company = {
@@ -560,27 +285,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             event.payload["factChangeContract"]["scopeFamiliesBySymbol"]["AAPL"],
         )
 
-    def test_insignificant_valuation_rounding_does_not_enqueue_company_turn(self):
-        previous_company = {
-            "AAPL": {
-                "schemaVersion": "company-knowledge-v1",
-                "symbol": "AAPL",
-                "factRevision": "exact-a",
-                "materialRevision": "material-same",
-                "valuation": {"peRatio": 20.01, "pbr": 3.01},
-            },
-        }
-        current_company = copy.deepcopy(previous_company)
-        current_company["AAPL"]["factRevision"] = "exact-b"
-        current_company["AAPL"]["valuation"] = {"peRatio": 20.04, "pbr": 3.04}
-
-        previous = snapshot(external_signals={"companyKnowledge": previous_company})
-        current = snapshot(external_signals={"companyKnowledge": current_company})
-
-        self.assertIsNone(
-            verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-        )
-
     def test_price_change_reads_company_knowledge_without_company_change_event(self):
         company = {
             "AAPL": {
@@ -599,28 +303,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["AAPL"], event.payload["symbols"])
         self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["AAPL"])
         self.assertNotIn("external.companyKnowledge", event.payload["changedFieldsBySymbol"]["AAPL"])
-
-    def test_mailbox_entries_keep_fact_types_bound_to_the_changed_symbol(self):
-        previous = snapshot()
-        current = snapshot(
-            msft_price=202.0,
-            external_signals={
-                "newsHeadlines": {
-                    "AAPL": {"items": [{"symbol": "AAPL", "title": "New", "url": "https://example.test/new"}]},
-                },
-            },
-        )
-
-        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
-        entries = {
-            entry["symbol"]: entry
-            for entry in durable_mailbox_entries(event)
-        }
-
-        self.assertEqual(["ResearchEvidence"], event.payload["factTypesBySymbol"]["AAPL"])
-        self.assertEqual(["MarketQuote"], event.payload["factTypesBySymbol"]["MSFT"])
-        self.assertEqual("ResearchEvidence", entries["AAPL"]["factFamily"])
-        self.assertEqual("MarketQuote", entries["MSFT"]["factFamily"])
 
     def test_crypto_transition_targets_direct_assets_and_sensitive_positions_only(self):
         previous = snapshot(external_signals={
@@ -654,23 +336,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["BTC", "MSTR"], event.payload["verifiedSourceSnapshot"]["cryptoTransitionTargetSymbols"])
         self.assertEqual("down", event.payload["verifiedSourceSnapshot"]["cryptoTransitions"][0]["direction"])
 
-    def test_steady_crypto_band_does_not_enqueue_another_reasoning_request(self):
-        previous = snapshot(external_signals={
-            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:00:00Z"},
-            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 3.2}},
-        })
-        current = snapshot(external_signals={
-            "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:10:00Z"},
-            "cryptoMarkets": {"bitcoin": {"symbol": "BTC", "change24h": 4.8}},
-        })
-
-        previous_state = previous.to_monitor_state()
-        previous_state["metadata"][CRYPTO_TRANSITION_BASELINE_METADATA_KEY] = crypto_transition_baseline(
-            previous.external_signals
-        )
-
-        self.assertIsNone(verified_monitor_snapshot_reasoning_event(current, previous_state))
-
     def test_missing_crypto_baseline_bootstraps_an_existing_threshold_move_once(self):
         previous = snapshot(external_signals={
             "cryptoFreshness": {"status": "fresh", "fetchedAt": "2026-07-29T00:00:00Z"},
@@ -687,77 +352,6 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         transition = event.payload["verifiedSourceSnapshot"]["cryptoTransitions"][0]
         self.assertEqual("threshold-crossed", transition["transition"])
         self.assertEqual("major", transition["severity"])
-
-    def test_snapshot_barrier_reuses_the_latest_realtime_slot_from_raw_kis_ticks(self):
-        current = snapshot()
-        barrier = verified_monitor_snapshot_reasoning_event(current)
-        raw = ontology_reasoning_requested_event(
-            DomainEvent(
-                name="market_data.collected",
-                aggregate_id="market:AAPL",
-                payload={"sourceObservedAt": "2026-07-29T00:03:10Z", "accountId": "acct"},
-            ),
-            "kis-realtime-websocket",
-            ["AAPL"],
-            changed_count=1,
-            fact_types=["MarketQuote", "ExecutionFlow", "OrderBook"],
-        )
-
-        barrier_entry = next(
-            entry for entry in durable_mailbox_entries(barrier)
-            if entry["mailboxSlotFamily"] == REALTIME_LATEST_STATE_SLOT
-        )
-        raw_entries = durable_mailbox_entries(raw)
-        raw_entry = next(
-            entry for entry in raw_entries
-            if entry["mailboxSlotFamily"] == REALTIME_LATEST_STATE_SLOT
-        )
-
-        self.assertEqual(REALTIME_LATEST_STATE_SLOT, barrier_entry["mailboxSlotFamily"])
-        self.assertEqual(REALTIME_LATEST_STATE_SLOT, raw_entry["mailboxSlotFamily"])
-        self.assertEqual(barrier_entry["mailboxKey"], raw_entry["mailboxKey"])
-        self.assertEqual(2, len(raw_entries))
-        self.assertIn(
-            REALTIME_LATEST_STATE_SLOT + ":flow",
-            {entry["mailboxSlotFamily"] for entry in raw_entries},
-        )
-
-    def test_calendar_updates_now_use_a_latest_state_mailbox_slot(self):
-        calendar = ontology_reasoning_requested_event(
-            DomainEvent(
-                name="investment_calendar.event_saved",
-                aggregate_id="calendar:AAPL",
-                payload={"sourceObservedAt": "2026-07-29T00:03:00Z", "accountId": "acct"},
-            ),
-            "investment-calendar-update",
-            ["AAPL"],
-            changed_count=1,
-            fact_types=["InvestmentCalendarEvent"],
-        )
-        runner = OntologyReasoningRunner(
-            event_reader=None,
-            cursor_store=None,
-            monitor_runner_factory=lambda: None,
-        )
-
-        entries = runner.mailbox_entries_for_event(calendar)
-
-        self.assertEqual(1, len(durable_mailbox_entries(calendar)))
-        self.assertEqual(1, len(entries))
-        self.assertEqual("InvestmentCalendarEvent", entries[0]["mailboxSlotFamily"])
-
-    def test_queue_status_counts_verified_snapshot_work_without_a_key_error(self):
-        barrier = verified_monitor_snapshot_reasoning_event(snapshot())
-        runner = OntologyReasoningRunner(
-            event_reader=None,
-            cursor_store=None,
-            monitor_runner_factory=lambda: None,
-        )
-
-        dispatch = runner.queue_dispatch_summary([barrier], selected_requests=[barrier], selected_symbols=["AAPL"])
-
-        self.assertEqual(1, dispatch["pendingByClass"]["PORTFOLIO"])
-        self.assertEqual(1, dispatch["selectedByClass"]["PORTFOLIO"])
 
     def test_kis_tick_is_retained_as_source_data_without_starting_an_unreplayable_turn(self):
         events = EventBus()

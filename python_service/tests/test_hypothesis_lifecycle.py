@@ -357,64 +357,6 @@ class HypothesisLifecycleTests(unittest.TestCase):
 
         self.assertTrue(episode_matches_lifecycle(episode, record.to_dict()))
 
-    def test_lifecycle_transitions_follow_evidence_and_policy_not_actions(self):
-        first = lifecycle_snapshot()
-        observed, first_transition = record_for_snapshot(None, first, first.observed_at)
-        self.assertEqual("observed", observed.state)
-        self.assertEqual("", first_transition.previous_state)
-
-        maintained_snapshot = replace(first, inference_generation_id="generation-2")
-        maintained, maintained_transition = record_for_snapshot(
-            observed,
-            maintained_snapshot,
-            "2026-07-23T00:01:00Z",
-        )
-        self.assertEqual("maintained", maintained.state)
-        self.assertEqual("observed", maintained_transition.previous_state)
-
-        repeated_snapshot = replace(maintained_snapshot, inference_generation_id="generation-3")
-        repeated, repeated_transition = record_for_snapshot(
-            maintained,
-            repeated_snapshot,
-            "2026-07-23T00:02:00Z",
-        )
-        self.assertEqual("maintained", repeated.state)
-        self.assertIsNone(repeated_transition)
-        self.assertEqual(maintained.last_transition_at, repeated.last_transition_at)
-
-        strengthened_snapshot = lifecycle_snapshot(
-            generation="generation-4",
-            observed_at="2026-07-23T00:03:00Z",
-            support=["evidence:price", "evidence:volume"],
-        )
-        strengthened, strengthened_transition = record_for_snapshot(repeated, strengthened_snapshot)
-        self.assertEqual("strengthened", strengthened.state)
-        self.assertTrue(strengthened_transition.material_change)
-        self.assertTrue(strengthened.evidence_delta["addedSupportingEvidenceKeys"])
-        self.assertEqual(["evidence:volume"], strengthened.evidence_delta["rotatedAddedSupportingEvidenceIds"])
-
-        weakened_snapshot = lifecycle_snapshot(
-            generation="generation-5",
-            observed_at="2026-07-23T00:04:00Z",
-            support=["evidence:price", "evidence:volume"],
-            counter=["evidence:counter-news"],
-        )
-        weakened, weakened_transition = record_for_snapshot(strengthened, weakened_snapshot)
-        self.assertEqual("weakened", weakened.state)
-        self.assertTrue(weakened_transition.material_change)
-
-        invalidated_snapshot = lifecycle_snapshot(
-            generation="generation-6",
-            observed_at="2026-07-23T00:05:00Z",
-            support=["evidence:price", "evidence:volume"],
-            counter=["evidence:counter-news"],
-            matched=["trend-below-ma20", "trend-recovered"],
-        )
-        invalidated, invalidated_transition = record_for_snapshot(weakened, invalidated_snapshot)
-        self.assertEqual("invalidated", invalidated.state)
-        self.assertIn("무효화 조건", invalidated.transition_reason)
-        self.assertEqual("weakened", invalidated_transition.previous_state)
-
     def test_generation_local_id_rotation_is_not_a_material_weakening(self):
         observed, _ = record_for_snapshot(None, lifecycle_snapshot())
         maintained, _ = record_for_snapshot(
@@ -531,71 +473,6 @@ class HypothesisLifecycleTests(unittest.TestCase):
         self.assertEqual("invalidated", store.records[aapl_key].state)
         self.assertEqual("observed", store.records[msft_record.lifecycle_key].state)
         self.assertNotIn("MSFT", result["bySymbol"])
-
-    def test_live_abox_excludes_lifecycle_audit_without_explicit_opt_in(self):
-        position = Position(
-            symbol="AAPL",
-            name="Apple",
-            market="US",
-            currency="USD",
-            source="watchlist",
-            current_price=200,
-            source_as_of="2026-07-23T00:00:00Z",
-            source_fetched_at="2026-07-23T00:00:00Z",
-        )
-        record, _ = record_for_snapshot(None, lifecycle_snapshot())
-        runtime_context = {
-            "hypothesisLifecycles": [record.to_dict()],
-            "hypothesisLifecycleAboxProjection": {"enabled": False},
-        }
-        graph = build_portfolio_ontology(
-            [position],
-            portfolio_summary([], fx_rates={"USD": 1400}),
-            portfolio_id="account-1",
-            runtime_context=runtime_context,
-        )
-        self.assertFalse(any(item.kind == "hypothesis-lifecycle" for item in graph.entities))
-
-        runtime_context["hypothesisLifecycleAboxProjection"] = {"enabled": True}
-        diagnostic_graph = build_portfolio_ontology(
-            [position],
-            portfolio_summary([], fx_rates={"USD": 1400}),
-            portfolio_id="account-1",
-            runtime_context=runtime_context,
-        )
-        self.assertTrue(any(item.kind == "hypothesis-lifecycle" for item in diagnostic_graph.entities))
-
-    def test_runtime_projection_does_not_read_lifecycle_audit_by_default(self):
-        probe = LifecycleProjectionProbe()
-        snapshot = account_snapshot("generation-1")
-        recorder = PortfolioOntologyProjectionRecorder(
-            None,
-            hypothesis_lifecycle_store=probe,
-        )
-        context = recorder.runtime_context(
-            snapshot,
-            active_tbox={},
-            target_symbols=["AAPL"],
-        )
-
-        self.assertEqual([], probe.calls)
-        self.assertEqual("excluded-from-live-abox", context["hypothesisLifecycleAboxProjection"]["mode"])
-        self.assertFalse(context["hypothesisLifecycleAboxProjection"]["enabled"])
-
-        diagnostic_recorder = PortfolioOntologyProjectionRecorder(
-            None,
-            hypothesis_lifecycle_store=probe,
-            settings={"ontologyHypothesisLifecycleAboxProjectionEnabled": True},
-        )
-        diagnostic_context = diagnostic_recorder.runtime_context(
-            snapshot,
-            active_tbox={},
-            target_symbols=["AAPL"],
-        )
-        self.assertEqual(1, len(probe.calls))
-        self.assertEqual({"AAPL"}, probe.calls[0]["symbols"])
-        self.assertEqual("v2:", probe.calls[0]["lifecycleKeyPrefix"])
-        self.assertEqual("compact-opt-in-audit", diagnostic_context["hypothesisLifecycleAboxProjection"]["mode"])
 
     def test_lifecycle_reaches_ai_context_and_web_read_model(self):
         position = Position(

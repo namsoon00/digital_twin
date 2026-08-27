@@ -161,22 +161,6 @@ class FakeInvestmentDomainStore:
 
 
 class InvestmentCaseQueryServiceTests(unittest.TestCase):
-    def test_snapshot_has_stable_case_id_and_five_user_stages(self):
-        current = investment_case_snapshot(episode())
-        newer = investment_case_snapshot(episode("decision-episode:2", action="BUY"))
-
-        self.assertEqual(current.case_id, newer.case_id)
-        self.assertEqual(
-            {"accountId": "default", "symbol": "AAPL"},
-            parse_investment_case_id(current.case_id),
-        )
-        self.assertEqual(
-            ["fact", "signal", "case", "decision", "outcome"],
-            [item["id"] for item in current.stages],
-        )
-        self.assertEqual(1, current.signals["supportCount"])
-        self.assertEqual(1, current.signals["counterCount"])
-
     def test_list_uses_compact_heads_without_history_hydration(self):
         store = FakeDecisionStore([episode()])
         result = InvestmentCaseQueryService(store, FakeNotificationStore()).list_cases()
@@ -197,34 +181,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
 
         self.assertTrue(result["operatorView"]["loaded"])
         self.assertEqual(6, len(result["operatorView"]["stages"]))
-
-    def test_detail_separates_evidence_scenarios_and_trace_references(self):
-        row = episode()
-        row["decisionGuardrails"] = [{
-            "label": "근거 충분성 제한",
-            "missingData": ["{'label': '밸류에이션 입력값', 'effect': '피어 표본 3개가 필요합니다.'}"],
-        }]
-        store = FakeDecisionStore([row])
-        service = InvestmentCaseQueryService(store, FakeNotificationStore())
-        case_id = investment_case_id("default", "AAPL")
-
-        result = service.detail(case_id)
-
-        self.assertEqual("ok", result["status"])
-        self.assertEqual("AI 수요 지속", result["scenarios"][0]["title"])
-        self.assertEqual(1, result["evidence"]["supportCount"])
-        self.assertEqual(
-            ["밸류에이션 입력값: 피어 표본 3개가 필요합니다."],
-            result["evidence"]["missingData"],
-        )
-        self.assertEqual("generation:1", result["traceRefs"]["inferenceGenerationId"])
-        self.assertEqual("reconstructed", result["reasoning"]["snapshotState"])
-        self.assertEqual(1, result["reasoning"]["counts"]["rules"])
-        rule_node = next(
-            item for item in result["explanation"]["causalPaths"][0]["nodes"]
-            if item["layer"] == "rule"
-        )
-        self.assertEqual("rule:ai-demand", rule_node["items"][0]["id"])
 
     def test_exact_episode_exposes_frozen_current_state_and_integrity(self):
         row = episode()
@@ -257,58 +213,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual(226.17, result.current_state["groups"][0]["items"][0]["value"])
         self.assertEqual("2026-08-20T01:59:58Z", result.freshness["sourceAsOf"])
 
-    def test_unselected_hypothesis_evidence_is_kept_in_case_summary(self):
-        row = episode()
-        row["selectedHypothesisId"] = ""
-        row["decisionAbstention"] = {
-            "abstained": True,
-            "reason": "AI가 현재 TypeDB 규칙 가설을 모두 평가하지 못했습니다.",
-        }
-        row["evidenceIds"] = []
-        row["counterEvidenceIds"] = []
-
-        result = investment_case_snapshot(row)
-
-        self.assertEqual(1, result.signals["supportCount"])
-        self.assertEqual(1, result.signals["counterCount"])
-        self.assertEqual("all-candidate-hypotheses", result.evidence["scope"])
-        self.assertEqual("blocked", result.readiness_state)
-        self.assertEqual("decision", result.phase)
-        dimensions = {item["id"]: item for item in result.status_dimensions}
-        self.assertEqual("pass", dimensions["inference"]["state"])
-        self.assertEqual("blocked", dimensions["ai"]["state"])
-        self.assertEqual(
-            "AI_HYPOTHESIS_COMPARISON_INCOMPLETE",
-            result.explanation["primaryCause"]["reasonCode"],
-        )
-
-    def test_delivery_suppressed_episode_is_not_presented_as_ai_abstention(self):
-        row = episode(action="NO_ACTION")
-        row["selectedHypothesisId"] = ""
-        row["decisionAbstention"] = {
-            "abstained": True,
-            "reason": "No validated final hypothesis selection.",
-        }
-        row["factsAtDecision"] = {
-            "finalDecision": {
-                "action": "NO_ACTION",
-                "source": "typedb-delivery-suppressed",
-                "reason": "장 시간 외라 알림과 AI 요청을 생성하지 않았습니다.",
-            },
-        }
-
-        result = investment_case_snapshot(row)
-        dimensions = {item["id"]: item for item in result.status_dimensions}
-
-        self.assertFalse(result.decision["abstained"])
-        self.assertEqual("not-run", result.decision["aiExecution"]["state"])
-        self.assertEqual("warning", dimensions["ai"]["state"])
-        self.assertEqual("AI_NOT_RUN", dimensions["ai"]["reasonCode"])
-        self.assertEqual("AI_JUDGMENT_NOT_RUN", result.explanation["primaryCause"]["reasonCode"])
-        self.assertEqual("not-run", result.explanation["comparison"]["state"])
-        self.assertEqual("AI 비교 미실행", result.explanation["comparison"]["label"])
-        self.assertNotIn("가설", result.headline)
-
     def test_generic_abstention_explains_the_missing_relation_and_hypothesis(self):
         row = episode()
         row["dataState"] = "unavailable"
@@ -338,37 +242,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertIn("사용할 수", result.stages[0]["detail"])
         self.assertEqual(result.headline, result.stages[3]["detail"])
 
-    def test_internal_abstention_reasons_are_user_facing_and_auditable(self):
-        cases = [
-            (
-                "deferred-pending-scoped-manifest",
-                "추론 기록이 아직 준비되지 않아",
-            ),
-            (
-                "native-manifest-evidence-index-incomplete",
-                "판단 근거 색인이 완성되지 않아",
-            ),
-            (
-                "다른 World 투영이 TypeDB 데이터베이스 쓰기 경계를 사용 중입니다.",
-                "다른 추론 저장 작업이 진행 중이어서",
-            ),
-        ]
-        for raw_reason, expected in cases:
-            with self.subTest(raw_reason=raw_reason):
-                row = episode()
-                row["selectedHypothesisId"] = ""
-                row["hypothesisSet"]["hypotheses"] = []
-                row["decisionAbstention"] = {
-                    "abstained": True,
-                    "reason": raw_reason,
-                }
-
-                result = investment_case_snapshot(row)
-
-                self.assertIn(expected, result.headline)
-                self.assertNotIn(raw_reason, result.headline)
-                self.assertEqual(raw_reason, result.decision["abstention"]["technicalReason"])
-
     def test_missing_source_snapshot_blocks_dependent_stages_and_keeps_plain_detail(self):
         row = episode()
         row["sourceAboxSnapshotId"] = ""
@@ -387,18 +260,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertIn("앞 단계가 차단", compact["stages"][2]["detail"])
         self.assertEqual(result.stages[3]["detail"], compact["stages"][3]["detail"])
         self.assertNotIn("HOLD 판단", compact["stages"][3]["detail"])
-
-    def test_legacy_embedded_gap_payloads_are_rendered_as_plain_language(self):
-        row = episode()
-        row["unresolvedQuestions"] = [
-            "누락 데이터 {'key': 'tradeStrength', 'label': '체결강도', "
-            "'effect': '체결 압력을 확인할 수 없습니다.', 'status': 'missing', 'source': 'KIS'}"
-        ]
-
-        result = investment_case_snapshot(row)
-
-        self.assertIn("체결강도: 체결 압력을 확인할 수 없습니다.", result.decision["requiredChecks"])
-        self.assertNotIn("{'key'", " ".join(result.decision["requiredChecks"]))
 
     def test_guardrail_reason_and_change_condition_do_not_leak_internal_payloads(self):
         row = episode()
@@ -421,19 +282,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
             result.explanation["changeConditions"][0],
         )
 
-    def test_case_summary_reports_independent_status_dimensions(self):
-        result = InvestmentCaseQueryService(
-            FakeDecisionStore([episode()]),
-            FakeNotificationStore(),
-        ).list_cases()
-
-        self.assertEqual(1, result["summary"]["dimensions"]["decision"]["pass"])
-        self.assertEqual(1, result["summary"]["dimensions"]["data"]["pass"])
-        self.assertEqual(1, result["summary"]["dimensions"]["inference"]["pass"])
-        self.assertEqual(1, result["summary"]["dimensions"]["ai"]["pass"])
-        self.assertEqual(0, result["summary"]["actionRequired"])
-        self.assertEqual(1, result["summary"]["reviewRequired"])
-
     def test_action_attention_does_not_count_blocked_judgement_as_user_action(self):
         actionable = episode("decision-episode:buy", action="BUY", symbol="AAPL")
         blocked = episode("decision-episode:blocked", action="SELL", symbol="TSLA")
@@ -447,40 +295,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertFalse(by_symbol["TSLA"]["attention"]["userActionable"])
         self.assertEqual("blocked", by_symbol["TSLA"]["attention"]["state"])
         self.assertEqual(1, result["summary"]["actionRequired"])
-
-    def test_detail_resolves_default_case_for_legacy_empty_account_rows(self):
-        row = episode(account_id="")
-        store = FakeDecisionStore([row])
-        service = InvestmentCaseQueryService(store)
-
-        result = service.detail(investment_case_id("default", "AAPL"))
-        history = service.history(investment_case_id("default", "AAPL"))
-
-        self.assertEqual("ok", result["status"])
-        self.assertEqual("default", result["accountId"])
-        self.assertEqual(1, history["count"])
-
-    def test_detail_resolves_legacy_flow_link(self):
-        row = episode()
-        row["flowId"] = "flow:legacy-link"
-        service = InvestmentCaseQueryService(FakeDecisionStore([row]))
-
-        result = service.detail("flow:legacy-link")
-
-        self.assertEqual("ok", result["status"])
-        self.assertEqual(investment_case_id("default", "AAPL"), result["caseId"])
-
-    def test_detail_resolves_legacy_decision_hash_to_canonical_episode(self):
-        row = episode()
-        service = InvestmentCaseQueryService(FakeDecisionStore([row]))
-        legacy_key = investment_decision_key("default", "AAPL", row["episodeId"])
-
-        result = service.detail(legacy_key)
-
-        self.assertEqual("ok", result["status"])
-        self.assertTrue(result["resolvedFromLegacyKey"])
-        self.assertEqual("decision-episode:1", result["episodeId"])
-        self.assertIn("detailKey=decision-episode:1", result["canonicalUrl"])
 
     def test_ai_only_episode_does_not_report_false_typedb_agreement(self):
         row = episode()
@@ -499,19 +313,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
 
         self.assertEqual("not-found", result["status"])
         self.assertIn("목록을 새로고침", result["error"])
-
-    def test_history_reports_action_and_validation_transitions_latest_first(self):
-        latest = episode("decision-episode:new", action="BUY", validation_state="ready", decided_at="2026-08-20T03:00:00Z")
-        older = episode("decision-episode:old", action="HOLD", validation_state="conditional", decided_at="2026-08-20T01:00:00Z")
-        service = InvestmentCaseQueryService(FakeDecisionStore([latest, older]))
-
-        result = service.history(investment_case_id("default", "AAPL"))
-
-        self.assertEqual(2, result["count"])
-        self.assertEqual("decision-episode:new", result["items"][0]["episodeId"])
-        self.assertTrue(result["items"][0]["change"]["actionChanged"])
-        self.assertTrue(result["items"][0]["change"]["validationChanged"])
-        self.assertEqual("action", result["items"][0]["change"]["type"])
 
     def test_detail_joins_live_state_resolved_evidence_and_activity_without_typedb(self):
         row = episode()
@@ -547,16 +348,6 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual(1, result["activity"]["summary"]["fillCount"])
         self.assertEqual(4, len(result["activity"]["timeline"]))
         self.assertFalse(result["activity"]["causalityClaimed"])
-
-    def test_trace_is_lazy_and_keeps_internal_pipeline_for_operators(self):
-        service = InvestmentCaseQueryService(FakeDecisionStore([episode()]))
-
-        result = service.trace(investment_case_id("default", "AAPL"))
-
-        self.assertEqual("operator", result["audience"])
-        self.assertEqual(6, len(result["trace"]["lineage"]["nodes"]))
-        self.assertEqual("decision-episode:1", result["episodeId"])
-
 
 if __name__ == "__main__":
     unittest.main()

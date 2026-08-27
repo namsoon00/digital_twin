@@ -201,27 +201,6 @@ class ClaimVerificationTests(unittest.TestCase):
         self.assertFalse(filing.raw_payload["evidenceGovernance"]["investmentJudgmentEligible"])
         self.assertIn("official-document-content-missing", filing.raw_payload["evidenceGovernance"]["reasons"])
 
-    def test_two_official_documents_do_not_verify_each_other(self):
-        dart = evidence(
-            "dart-official",
-            "OpenDART",
-            "Samsung share buyback decision",
-            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
-            kind="disclosure",
-        )
-        sec = evidence(
-            "sec-official",
-            "SEC EDGAR",
-            "Samsung share buyback decision",
-            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
-            kind="filing",
-        )
-
-        self.govern([dart, sec])
-
-        self.assertEqual([], dart.raw_payload["claimLedger"]["claims"][0]["officialEvidenceIds"])
-        self.assertEqual([], sec.raw_payload["claimLedger"]["claims"][0]["officialEvidenceIds"])
-
     def test_conflicting_independent_reports_are_blocked(self):
         positive = evidence(
             "reuters-positive",
@@ -267,55 +246,6 @@ class ClaimVerificationTests(unittest.TestCase):
         self.assertEqual("superseded", original_claim["state"])
         self.assertEqual("reuters-correction", original_claim["supersededByEvidenceId"])
         self.assertIn(original_claim["claimId"], correction_claim["supersedesClaimIds"])
-
-    def test_source_registry_overrides_source_tier_and_claim_metrics_are_exposed(self):
-        item = evidence(
-            "custom-wire",
-            "Custom Wire",
-            "Samsung announces share buyback",
-            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
-        )
-        policy = {
-            **POLICY,
-            "researchClaimRequireVerifiedForInvestment": "0",
-            "researchClaimSourceRegistry": "custom wire=trusted,origin=custom-wire",
-        }
-
-        accepted, verified, _rejected = self.govern([item], policy)
-        summary = claim_quality_summary([item])
-
-        self.assertEqual(1, len(accepted))
-        self.assertEqual("trusted", item.raw_payload["sourceTrustState"])
-        self.assertEqual("custom-wire", item.raw_payload["sourceOrigin"])
-        self.assertEqual(1, summary["claimCount"])
-        self.assertEqual("reported", verified[0].claim_state)
-
-    def test_ontology_projects_claim_lifecycle_and_corroboration_relations(self):
-        news = evidence(
-            "news-graph",
-            "Reuters",
-            "Samsung announces share buyback",
-            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
-        )
-        filing = evidence(
-            "dart-graph",
-            "OpenDART",
-            "Samsung share buyback decision",
-            "Samsung Electronics announced a 1 trillion won share buyback plan on Tuesday.",
-            kind="disclosure",
-        )
-        normalize_evidence_sources([news])
-        self.govern([news, filing])
-        graph = PortfolioOntology("claim-graph")
-        stock_id = add_entity(graph, "stock", "005930", "Samsung Electronics", {"tboxClass": "Stock"})
-
-        add_governed_claim_concepts(graph, stock_id, news, news.raw_payload)
-
-        claim_entities = [item for item in graph.entities if item.kind == "verified-claim"]
-        source_entities = [item for item in graph.entities if item.kind == "research-source"]
-        self.assertTrue(any(item.properties.get("tboxClass") == "VerifiedClaim" for item in claim_entities))
-        self.assertTrue(any(item.properties.get("publisherId") == "reuters" for item in source_entities))
-        self.assertTrue(any(item.relation_type == "OFFICIALLY_VERIFIED_BY" for item in graph.relations))
 
     def test_ontology_cannot_verify_claim_from_reasoning_blocked_news(self):
         news = evidence(

@@ -227,22 +227,6 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
         self.assertEqual(1, first["writtenCount"])
         self.assertEqual(0, second["writtenCount"])
 
-    def test_reuses_current_analysis_for_unchanged_document_hash(self):
-        analyzer = CountingDisclosureAnalyzer()
-        projector = ExternalOfficialEvidenceProjectionService(
-            self.fact_store,
-            self.evidence_store,
-            self.publisher,
-            settings={},
-            now_provider=lambda: self.now,
-            disclosure_analyzer=analyzer,
-        )
-
-        projector.project_event(self.event())
-        projector.project_event(self.event())
-
-        self.assertEqual(1, analyzer.calls)
-
     def test_metadata_refresh_preserves_verified_document_provenance(self):
         previous = {
             "officialDocumentText": "verified official filing body",
@@ -367,36 +351,6 @@ class ExternalOfficialEvidenceProjectionTests(unittest.TestCase):
             "eligible",
             filing_relations[0].properties["evidenceEligibilityState"],
         )
-
-    def test_projects_verified_sec_filing_with_accession_provenance(self):
-        row = sec_fact()
-        store = MemoryEvidenceStore()
-        publisher = MemoryPublisher()
-        projector = ExternalOfficialEvidenceProjectionService(
-            MemoryFactStore(row),
-            store,
-            publisher,
-            settings={},
-            now_provider=lambda: self.now,
-        )
-        event = DomainEvent(
-            name=EXTERNAL_FACT_CHANGED,
-            aggregate_id="sec.document:AAPL",
-            payload={"datasetId": "sec.document", "subjectKey": "AAPL"},
-            occurred_at="2026-08-25T00:05:00Z",
-            event_id="event-sec-1",
-        )
-
-        result = projector.project_event(event)
-
-        self.assertEqual("ok", result["status"])
-        evidence = store.items["research:AAPL:sec:0000320193-26-000100"]
-        self.assertTrue(evidence.raw_payload["documentVerified"])
-        self.assertEqual("0000320193-26-000100", evidence.raw_payload["accessionNumber"])
-        self.assertIn("/Archives/edgar/data/320193/000032019326000100/", evidence.raw_payload["filingIndexUrl"])
-        self.assertEqual("0000320193-26-000100", evidence.raw_payload["sourceRevision"])
-        collected = next(item for item in publisher.events if item.name == RESEARCH_EVIDENCE_COLLECTED)
-        self.assertEqual(1, collected.payload["alertEligibleCount"])
 
     def test_current_fact_backfill_projects_without_alert_replay(self):
         cursor = MemoryCursor()

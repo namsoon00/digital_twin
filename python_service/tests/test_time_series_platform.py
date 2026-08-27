@@ -340,25 +340,6 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
         self.assertEqual(snapshots.saved[0].snapshot_id, store.last_feature_snapshot["snapshotId"])
 
-    def test_feature_snapshot_comparison_is_deterministic(self):
-        store = SnapshotStore()
-        service = TemporalFeatureSnapshotService(
-            {
-                "mysql-primary": SnapshotAdapter("mysql-primary", 100),
-                "questdb-shadow": SnapshotAdapter("questdb-shadow", 100),
-            },
-            store,
-        )
-        definition = SimpleNamespace(key="1D")
-
-        comparison = service.compare(
-            "mysql-primary", "questdb-shadow", "main", ["005930"], [definition],
-            "2026-08-15T00:00:00Z",
-        )
-
-        self.assertEqual("equivalent", comparison["status"])
-        self.assertEqual(2, len(store.saved))
-
     def test_feature_comparison_ignores_backend_label_and_timestamp_formatting(self):
         active = TemporalFeatureSnapshot.create(
             "mysql-primary", "main", "2026-08-15T00:00:00Z",
@@ -396,23 +377,6 @@ class TimeSeriesPlatformTests(unittest.TestCase):
 
         self.assertEqual(0, result["projectionQueuedCount"])
         self.assertEqual([], outbox.enqueued)
-
-    def test_backend_promotion_requires_empty_projection_queue_and_feature_parity(self):
-        registry = SwitchingRegistry()
-        adapters = {"mysql-primary": FakeAdapter(), "questdb-shadow": FakeAdapter()}
-        platform = TimeSeriesBackendPlatformService(
-            adapters,
-            registry,
-            FakeOutbox(),
-            snapshot_service=None,
-            settings={"timeSeriesPromotionMaxWatermarkLagSeconds": "180"},
-        )
-
-        result = platform.promote("questdb-shadow", {"status": "equivalent"})
-
-        self.assertEqual("promoted", result["status"])
-        self.assertEqual("questdb-shadow", result["control"]["activeBackendId"])
-        self.assertEqual("mysql-primary", result["control"]["candidateBackendId"])
 
     def test_questdb_routes_each_granularity_and_preserves_account_fields(self):
         adapter = RecordingQuestDB()

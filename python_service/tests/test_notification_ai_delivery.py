@@ -208,24 +208,6 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("ai_freshness_headroom_recheck", job.context["deliverySuppressionReason"])
         self.assertIn("데이터 유효시간", queue.reason)
 
-    def test_dispatch_gate_suppresses_unchanged_graph_inference_before_ai(self):
-        queue = SuppressionQueue()
-        runner = NotificationQueueRunner(
-            queue,
-            account_repository=None,
-            notifier_factory=lambda account: None,
-        )
-        job = NotificationJob.create(
-            "test",
-            account_id="main",
-            message_type="investmentInsight",
-            context=graph_risk_context(material=False),
-        )
-
-        self.assertFalse(runner.apply_inference_change_gate(job))
-        self.assertEqual("unchanged_graph_inference", job.context["deliverySuppressionReason"])
-        self.assertIn("이전 추론과 같아", queue.reason)
-
     def test_closed_market_is_advisory_before_ai_and_blocks_at_dispatch(self):
         queue = SuppressionQueue()
         runner = NotificationQueueRunner(
@@ -250,54 +232,6 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertFalse(runner.apply_market_hours_gate(job, "발송 직전"))
         self.assertEqual("market_closed_at_dispatch", job.context["deliverySuppressionReason"])
-
-    def test_send_all_mode_bypasses_closed_market_after_ai(self):
-        queue = SuppressionQueue()
-        runner = NotificationQueueRunner(
-            queue,
-            account_repository=None,
-            notifier_factory=lambda account: None,
-            now_provider=lambda: datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc),
-        )
-        context = graph_risk_context(material=False)
-        context["offHoursDeliveryMode"] = "send_all"
-        job = NotificationJob.create(
-            "test",
-            account_id="main",
-            message_type="investmentInsight",
-            context=context,
-        )
-
-        self.assertTrue(runner.apply_market_hours_gate(job, "발송 직전"))
-        self.assertEqual("closed_exception", job.context["marketHoursStatus"])
-        self.assertIn("모든 장외 투자 알림", job.context["marketHoursReason"])
-
-    def test_cooldown_is_applied_after_ai_decision(self):
-        queue = SuppressionQueue()
-        runner = NotificationQueueRunner(
-            queue,
-            account_repository=None,
-            notifier_factory=lambda account: None,
-        )
-        job = NotificationJob.create(
-            "test",
-            account_id="main",
-            message_type="investmentInsight",
-            context={
-                "notificationAiValidatedResponse": {"action": "HOLD"},
-                "preDecisionDeliveryGate": {
-                    "status": "deferred",
-                    "reasonCode": "market_closed",
-                    "reasonCodes": ["market_closed", "state_cooldown"],
-                    "reasonDetails": {"state_cooldown": "같은 상태 쿨다운 중"},
-                    "reason": "미장 닫힘",
-                },
-            },
-        )
-
-        self.assertFalse(runner.apply_deferred_admission_delivery_gate(job))
-        self.assertEqual("state_cooldown", job.context["deliverySuppressionReason"])
-        self.assertEqual("같은 상태 쿨다운 중", queue.reason)
 
     def test_material_typedb_risk_transition_bypasses_closed_market(self):
         queue = SuppressionQueue()

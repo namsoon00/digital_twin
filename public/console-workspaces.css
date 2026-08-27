@@ -359,6 +359,27 @@
   padding: 10px 14px;
 }
 
+.cws-web-performance {
+  margin-bottom: 14px;
+}
+
+.cws-web-performance .cws-metrics {
+  border: 0;
+  border-radius: 0;
+}
+
+@supports (content-visibility: auto) {
+  .cws-exposure-list > *,
+  .cws-health-list > *,
+  .cws-scenario-list > *,
+  .cws-candidate-list > *,
+  .cws-timeline > *,
+  .cws-table > .cws-table-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 60px;
+  }
+}
+
 .cws-table-head {
   border-bottom: 1px solid var(--line);
   background: var(--chip);

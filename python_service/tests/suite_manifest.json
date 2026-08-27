@@ -24,6 +24,7 @@
     {"file": "test_notification_decision_quality.py", "tier": "unit", "core": true},
     {"file": "test_customer_notification_explanation.py", "tier": "unit", "core": true},
     {"file": "test_notification_icon_policy.py", "tier": "unit", "core": true},
+    {"file": "test_web_read_path_performance.py", "tier": "unit", "core": true},
     {"file": "test_disclosure_taxonomy.py", "tier": "unit", "core": true},
     {"file": "test_investor_flow_contract.py", "tier": "unit", "core": true},
     {"file": "test_toss_token_cache.py", "tier": "unit", "core": true},

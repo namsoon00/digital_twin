@@ -408,6 +408,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "data_quality", "is_mock", "status", "attempts", "created_at", "updated_at", "last_error", "text",
         )
         columns = ", ".join("notification_jobs." + name + " AS " + name for name in column_names)
+        if safe_recipient:
+            columns += (
+                ", receipt.read_at AS receipt_read_at"
+                ", receipt.acknowledged_at AS receipt_acknowledged_at"
+                ", receipt.important AS receipt_important"
+                ", receipt.updated_at AS receipt_updated_at"
+            )
         with self.connect() as connection:
             total_row = connection.execute(
                 "SELECT COUNT(*) AS count FROM notification_jobs" + join + where,
@@ -803,6 +810,21 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "dataQuality": str(row.get("data_quality") or "actual"),
             "isMock": bool(row.get("is_mock")),
         }
+        if any(
+            key in row
+            for key in (
+                "receipt_read_at",
+                "receipt_acknowledged_at",
+                "receipt_important",
+                "receipt_updated_at",
+            )
+        ):
+            context["notificationReceipt"] = {
+                "readAt": str(row.get("receipt_read_at") or ""),
+                "acknowledgedAt": str(row.get("receipt_acknowledged_at") or ""),
+                "important": bool(row.get("receipt_important")),
+                "receiptUpdatedAt": str(row.get("receipt_updated_at") or ""),
+            }
         return NotificationJob(
             job_id=str(row.get("job_id") or ""),
             account_id=str(row.get("account_id") or ""),

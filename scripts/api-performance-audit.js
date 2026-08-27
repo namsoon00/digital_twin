@@ -6,6 +6,8 @@ const baseUrl = String(process.env.API_PERFORMANCE_BASE_URL || "http://127.0.0.1
 const timeoutMs = Math.max(1000, Number(process.env.API_PERFORMANCE_TIMEOUT_MS || 20000));
 const concurrency = Math.max(1, Math.min(8, Number(process.env.API_PERFORMANCE_CONCURRENCY || 3)));
 const strict = process.env.API_PERFORMANCE_STRICT === "1";
+const slowBudgetMs = Math.max(100, Number(process.env.API_PERFORMANCE_SLOW_BUDGET_MS || 1000));
+const payloadBudgetBytes = Math.max(10000, Number(process.env.API_PERFORMANCE_PAYLOAD_BUDGET_BYTES || 100000));
 const token = String(process.env.API_PERFORMANCE_SHARE_TOKEN || "").trim();
 const defaultPaths = [
   "/api/version",
@@ -15,6 +17,7 @@ const defaultPaths = [
   "/api/market/evidence?limit=8",
   "/api/decisions?accountId=default&limit=40",
   "/api/operations/health",
+  "/api/notification-jobs?limit=20",
   "/api/external-data/status",
   "/api/investment-model",
   "/api/ontology/catalog/summary",
@@ -93,8 +96,8 @@ async function main() {
   })));
   const durations = results.filter((row) => row.status > 0).map((row) => row.durationMs);
   const failures = results.filter((row) => row.status < 200 || row.status >= 400);
-  const oversized = results.filter((row) => row.rawBytes > 100000);
-  const slow = results.filter((row) => row.durationMs > 1000);
+  const oversized = results.filter((row) => row.rawBytes > payloadBudgetBytes);
+  const slow = results.filter((row) => row.durationMs > slowBudgetMs);
   console.log(JSON.stringify({
     baseUrl,
     endpointCount: results.length,
@@ -104,9 +107,11 @@ async function main() {
     p50Ms: percentile(durations, 50),
     p95Ms: percentile(durations, 95),
     totalRawBytes: results.reduce((sum, row) => sum + row.rawBytes, 0),
-    totalWireBytes: results.reduce((sum, row) => sum + row.wireBytes, 0)
+    totalWireBytes: results.reduce((sum, row) => sum + row.wireBytes, 0),
+    slowBudgetMs,
+    payloadBudgetBytes
   }, null, 2));
-  if (strict && (failures.length || oversized.length)) process.exitCode = 1;
+  if (strict && (failures.length || oversized.length || slow.length)) process.exitCode = 1;
 }
 
 main().catch((error) => {

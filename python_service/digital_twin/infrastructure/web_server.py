@@ -199,6 +199,21 @@ DASHBOARD_READ_MODEL = StaleReadModelCache(
     ttl_seconds=20,
     retry_cooldown_seconds=10,
 )
+PORTFOLIO_CONSOLE_READ_MODEL = StaleReadModelCache(
+    "console-portfolio",
+    ttl_seconds=10,
+    retry_cooldown_seconds=5,
+)
+MARKET_INSTRUMENTS_READ_MODEL = StaleReadModelCache(
+    "console-market-instruments",
+    ttl_seconds=5,
+    retry_cooldown_seconds=3,
+)
+MARKET_EVIDENCE_READ_MODEL = StaleReadModelCache(
+    "console-market-evidence",
+    ttl_seconds=15,
+    retry_cooldown_seconds=5,
+)
 OPERATIONS_HEALTH_READ_MODEL = StaleReadModelCache(
     "operations-health",
     ttl_seconds=30,
@@ -226,6 +241,11 @@ ONTOLOGY_RULEBOX_READ_MODEL = StaleReadModelCache(
 )
 ONTOLOGY_CATALOG_SUMMARY_READ_MODEL = StaleReadModelCache(
     "ontology-catalog-summary",
+    ttl_seconds=60,
+    retry_cooldown_seconds=20,
+)
+ONTOLOGY_CATALOG_PAGE_READ_MODEL = StaleReadModelCache(
+    "ontology-catalog-page",
     ttl_seconds=60,
     retry_cooldown_seconds=20,
 )
@@ -258,6 +278,11 @@ INVESTMENT_BRAIN_LIST_READ_MODEL = StaleReadModelCache(
     "investment-brain-list",
     ttl_seconds=15,
     retry_cooldown_seconds=5,
+)
+HYPOTHESIS_WORKSPACE_READ_MODEL = StaleReadModelCache(
+    "hypothesis-workspace",
+    ttl_seconds=30,
+    retry_cooldown_seconds=10,
 )
 API_PERFORMANCE = ApiPerformanceRegistry()
 WATCHLIST_REFRESH_LOCK = threading.Lock()
@@ -720,8 +745,11 @@ def default_store() -> Dict[str, object]:
     }
 
 
-def app_store():
-    return stores.app_store()
+def app_store(settings: Dict[str, object] = None):
+    # Opening the web shell is a read path. Schema bootstrap and retention are
+    # owned by the service manager, so the first browser request must not pay
+    # their startup cost.
+    return stores.app_store(settings or operational_read_settings())
 
 
 def read_store() -> Dict[str, object]:
@@ -1556,29 +1584,32 @@ def ontology_rulebox_summary_payload() -> Dict[str, object]:
 def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> Dict[str, object]:
     """Read one ontology catalog section without mutating graph state."""
 
-    settings = operational_read_settings()
     section_id = str(section or "summary").strip().lower()
     account_id = str(first_query(query, "accountId") or first_query(query, "account") or "").strip()
     world_id = ontology_world_id_from_query(query)
-    include_lineage = section_id == "lineage"
-    service = OntologyCatalogQueryService(
-        ontology_repository=ontology_repository_from_settings(settings),
-        hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
-        decision_episode_store=(
-            stores.investment_decision_episode_store(settings)
-            if include_lineage or section_id == "summary"
-            else None
-        ),
-        notification_job_store=stores.notification_job_store(settings) if include_lineage else None,
-        statistical_signal_store=stores.statistical_model_signal_store(settings) if section_id == "summary" else None,
-        rulebox_provider=lambda: ontology_rulebox_payload(blocking_first_load=True),
-    )
+
+    def service() -> OntologyCatalogQueryService:
+        settings = operational_read_settings()
+        include_lineage = section_id == "lineage"
+        return OntologyCatalogQueryService(
+            ontology_repository=ontology_repository_from_settings(settings),
+            hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(settings),
+            decision_episode_store=(
+                stores.investment_decision_episode_store(settings)
+                if include_lineage or section_id == "summary"
+                else None
+            ),
+            notification_job_store=stores.notification_job_store(settings) if include_lineage else None,
+            statistical_signal_store=stores.statistical_model_signal_store(settings) if section_id == "summary" else None,
+            rulebox_provider=lambda: ontology_rulebox_payload(blocking_first_load=True),
+        )
+
     if section_id == "summary":
         cache_key = "|".join([world_id or "none", account_id or "none"])
         return cached_api_payload(
             ONTOLOGY_CATALOG_SUMMARY_READ_MODEL,
             cache_key,
-            lambda: service.summary(world_id=world_id, account_id=account_id),
+            lambda: service().summary(world_id=world_id, account_id=account_id),
             force=request_bool(first_query(query, "refresh"), False),
             blocking_first_load=False,
         )
@@ -1594,29 +1625,37 @@ def ontology_catalog_api_payload(section: str, query: Dict[str, List[str]]) -> D
             "readCache": warming.get("readCache") or {},
         }
     if section_id == "lineage":
-        return service.lineage(
+        return service().lineage(
             item_type=str(first_query(query, "type") or ""),
             item_id=str(first_query(query, "id") or ""),
             world_id=world_id,
             account_id=account_id,
             symbol=str(first_query(query, "symbol") or "").upper(),
         )
-    return service.list_section(
-        section=section_id,
-        query=str(first_query(query, "query") or first_query(query, "q") or ""),
-        cursor=str(first_query(query, "cursor") or ""),
-        limit=safe_int(first_query(query, "limit"), 40, 1, 100),
-        bounded_context=str(first_query(query, "boundedContext") or first_query(query, "context") or ""),
-        enabled=str(first_query(query, "enabled") or "").lower(),
-        scope=str(first_query(query, "scope") or ""),
-        state=str(first_query(query, "state") or ""),
-        symbol=str(first_query(query, "symbol") or "").upper(),
-        account_id=account_id,
-        market_id=str(first_query(query, "marketId") or first_query(query, "market") or ""),
-        world_id=world_id,
-        rule_kind=str(first_query(query, "ruleKind") or ""),
-        theory_family=str(first_query(query, "theoryFamily") or ""),
-        validation_status=str(first_query(query, "validationStatus") or ""),
+    list_args = {
+        "section": section_id,
+        "query": str(first_query(query, "query") or first_query(query, "q") or ""),
+        "cursor": str(first_query(query, "cursor") or ""),
+        "limit": safe_int(first_query(query, "limit"), 40, 1, 100),
+        "bounded_context": str(first_query(query, "boundedContext") or first_query(query, "context") or ""),
+        "enabled": str(first_query(query, "enabled") or "").lower(),
+        "scope": str(first_query(query, "scope") or ""),
+        "state": str(first_query(query, "state") or ""),
+        "symbol": str(first_query(query, "symbol") or "").upper(),
+        "account_id": account_id,
+        "market_id": str(first_query(query, "marketId") or first_query(query, "market") or ""),
+        "world_id": world_id,
+        "rule_kind": str(first_query(query, "ruleKind") or ""),
+        "theory_family": str(first_query(query, "theoryFamily") or ""),
+        "validation_status": str(first_query(query, "validationStatus") or ""),
+    }
+    cache_key = json.dumps(list_args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return cached_api_payload(
+        ONTOLOGY_CATALOG_PAGE_READ_MODEL,
+        cache_key,
+        lambda: service().list_section(**list_args),
+        force=request_bool(first_query(query, "refresh"), False),
+        blocking_first_load=False,
     )
 
 
@@ -3323,12 +3362,18 @@ def notification_suppression_summary(job: NotificationJob) -> str:
     return reason or "알림 정책으로 발송 보류"
 
 
-def notification_job_diagnostics(jobs: List[NotificationJob]) -> Dict[str, object]:
-    settings = runtime_settings()
-    try:
-        stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 2))
-    except (TypeError, ValueError):
-        stale_minutes = 2
+def notification_job_diagnostics(
+    jobs: List[NotificationJob],
+    *,
+    stale_minutes: int = None,
+    settings: Dict[str, object] = None,
+) -> Dict[str, object]:
+    if stale_minutes is None:
+        configured_settings = settings or operational_read_settings()
+        try:
+            stale_minutes = max(1, int(configured_settings.get("notificationProcessingStaleMinutes") or 2))
+        except (TypeError, ValueError):
+            stale_minutes = 2
     reason_counts: Dict[str, int] = {}
     stale_processing = 0
     for job in jobs:
@@ -3352,7 +3397,7 @@ def notification_job_public_payload(
     settings: Dict[str, object] = None,
 ) -> Dict[str, object]:
     context = job.context or {}
-    configured_settings = settings or operational_read_settings()
+    configured_settings = settings
     customer_text = notification_customer_text(job)
     reasons = context.get("deliveryReasons") if isinstance(context.get("deliveryReasons"), list) else []
     trigger_ledger = context.get("deliveryTriggerLedger") if isinstance(context.get("deliveryTriggerLedger"), list) else []
@@ -3393,6 +3438,7 @@ def notification_job_public_payload(
     is_mock = bool(context.get("isMock")) or data_quality.lower() in {"mock", "demo"} or data_mode in {"mock", "demo", "preview"}
     api_source = str(context.get("apiSource") or context.get("quoteSource") or context.get("sourceApi") or "notification_jobs")
     if stale_minutes is None:
+        configured_settings = configured_settings or operational_read_settings()
         try:
             stale_minutes = max(1, int(configured_settings.get("notificationProcessingStaleMinutes") or 2))
         except (TypeError, ValueError):
@@ -3491,6 +3537,7 @@ def notification_job_public_payload(
         "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
     if detail:
+        configured_settings = configured_settings or operational_read_settings()
         payload["fullText"] = full_notification_text(customer_text)
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
@@ -3596,12 +3643,12 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     if scope not in {"investment", "operations", "all"}:
         scope = "investment"
     try:
-        settings = runtime_settings()
+        settings = operational_read_settings()
         try:
             stale_minutes = max(1, int(settings.get("notificationProcessingStaleMinutes") or 2))
         except (TypeError, ValueError):
             stale_minutes = 2
-        store = notification_queue_store()
+        store = notification_queue_store(settings)
         if hasattr(store, "recent_list_page_with_summary"):
             jobs, total, summary = store.recent_list_page_with_summary(
                 limit=limit,
@@ -3648,9 +3695,13 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         }
         stale_minutes = 30
         store = None
-    receipts = {}
+    receipts = {
+        job.job_id: dict((job.context or {}).get("notificationReceipt") or {})
+        for job in jobs
+        if isinstance((job.context or {}).get("notificationReceipt"), dict)
+    }
     inbox_summary = {"total": total, "unread": total, "important": 0, "actionRequired": 0}
-    if store and hasattr(store, "receipt_states"):
+    if store and hasattr(store, "receipt_states") and len(receipts) < len(jobs):
         receipts = store.receipt_states(recipient_id, [job.job_id for job in jobs])
     if store and hasattr(store, "inbox_summary"):
         inbox_summary = store.inbox_summary(recipient_id, scope=scope)
@@ -3672,7 +3723,7 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         "jobs": items,
         "summary": summary,
         "inboxSummary": inbox_summary,
-        "diagnostics": notification_job_diagnostics(jobs),
+        "diagnostics": notification_job_diagnostics(jobs, stale_minutes=stale_minutes),
         "limit": limit,
         "offset": offset,
         "total": total,
@@ -5825,29 +5876,83 @@ def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, obje
 
 
 def console_portfolio_api_payload(query: Dict[str, List[str]], view: str) -> Dict[str, object]:
-    settings = operational_read_settings()
     account_id = first_query(query, "accountId") or "default"
     portfolio_id = first_query(query, "portfolioId") or "portfolio:" + account_id
-    lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle(portfolio_id)
-    snapshot = flow_lens_read_payload(query)
-    return console_read_model_service(settings).portfolio(lifecycle, view, snapshot=snapshot)
+    cache_key = "|".join([account_id, portfolio_id, str(view or "summary")])
+
+    def load() -> Dict[str, object]:
+        settings = operational_read_settings()
+        lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle(portfolio_id)
+        snapshot = flow_lens_read_payload(query)
+        return console_read_model_service(settings).portfolio(lifecycle, view, snapshot=snapshot)
+
+    payload = cached_api_payload(
+        PORTFOLIO_CONSOLE_READ_MODEL,
+        cache_key,
+        load,
+        force=request_bool(first_query(query, "refresh"), False),
+        blocking_first_load=False,
+    )
+    payload.setdefault("version", "console-read-model-v1")
+    payload.setdefault("view", str(view or "summary"))
+    payload.setdefault("summary", {})
+    if view in {"summary", "positions"}:
+        payload.setdefault("positions", [])
+    return payload
 
 
 def console_market_instruments_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    settings = operational_read_settings()
-    return console_read_model_service(settings).market_instruments(flow_lens_read_payload(query))
+    watchlist = ",".join(sorted(filter(None, first_query(query, "watchlistSymbols").upper().split(","))))
+
+    def load() -> Dict[str, object]:
+        settings = operational_read_settings()
+        snapshot = flow_lens_read_payload(query)
+        read_model = snapshot.get("readModel") if isinstance(snapshot.get("readModel"), dict) else {}
+        if str(read_model.get("status") or "").lower() == "pending" or not read_model.get("ready", True):
+            raise RuntimeError("시장 스냅샷 읽기 모델을 준비하고 있습니다.")
+        return console_read_model_service(settings).market_instruments(snapshot)
+
+    payload = cached_api_payload(
+        MARKET_INSTRUMENTS_READ_MODEL,
+        watchlist or "default",
+        load,
+        force=request_bool(first_query(query, "refresh"), False),
+        blocking_first_load=False,
+    )
+    payload.setdefault("version", "console-read-model-v1")
+    payload.setdefault("items", [])
+    payload.setdefault("summary", {})
+    return payload
 
 
 def console_market_evidence_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     requested_limit = safe_int(first_query(query, "limit"), 12, 1, 100)
     source_query = {key: list(value) for key, value in query.items()}
     source_query["limit"] = [str(min(100, max(16, requested_limit * 2)))]
-    payload = research_evidence_payload(source_query)
-    return console_read_model_service().market_evidence(payload, requested_limit)
+    cache_key = "|".join([
+        str(first_query(query, "symbol") or "all").upper(),
+        str(first_query(query, "kind") or "all"),
+        str(requested_limit),
+    ])
+
+    def load() -> Dict[str, object]:
+        payload = research_evidence_payload(source_query)
+        return console_read_model_service().market_evidence(payload, requested_limit)
+
+    payload = cached_api_payload(
+        MARKET_EVIDENCE_READ_MODEL,
+        cache_key,
+        load,
+        force=request_bool(first_query(query, "refresh"), False),
+        blocking_first_load=False,
+    )
+    payload.setdefault("version", "console-read-model-v1")
+    payload.setdefault("items", [])
+    payload.setdefault("totalEligible", 0)
+    return payload
 
 
 def console_decisions_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    settings = operational_read_settings()
     cache_key = "|".join([
         str(first_query(query, "accountId") or first_query(query, "account") or "default"),
         str(first_query(query, "symbol") or "all").upper(),
@@ -5856,6 +5961,7 @@ def console_decisions_api_payload(query: Dict[str, List[str]]) -> Dict[str, obje
     ])
 
     def load() -> Dict[str, object]:
+        settings = operational_read_settings()
         payload = investment_case_api_payload(query)
         return console_read_model_service(settings).decision_heads(payload)
 
@@ -5909,6 +6015,40 @@ def investment_brain_hypothesis_lifecycles_api_payload(query: Dict[str, List[str
             view=view,
         ),
         force=request_bool(first_query(query, "refresh"), False),
+    )
+
+
+def investment_brain_hypothesis_workspace_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    limit = safe_int(first_query(query, "limit"), 100, 1, 500)
+    event_limit = safe_int(first_query(query, "eventLimit"), 100, 1, 500)
+    account_id = str(first_query(query, "accountId") or "")
+    symbol = str(first_query(query, "symbol") or "").upper()
+    market_id = str(first_query(query, "marketId") or "")
+    scope = str(first_query(query, "scope") or "")
+    view = str(first_query(query, "view") or "summary")
+    cache_key = "|".join([
+        account_id or "all", symbol or "all", market_id or "all", scope or "all",
+        str(limit), str(event_limit), view,
+    ])
+
+    def load() -> Dict[str, object]:
+        settings = operational_read_settings()
+        return build_investment_brain_service(settings).hypothesis_workspace(
+            account_id=account_id,
+            symbol=symbol,
+            market_id=market_id,
+            scope=scope,
+            limit=limit,
+            event_limit=event_limit,
+            view=view,
+        )
+
+    return cached_api_payload(
+        HYPOTHESIS_WORKSPACE_READ_MODEL,
+        cache_key,
+        load,
+        force=request_bool(first_query(query, "refresh"), False),
+        blocking_first_load=False,
     )
 
 
@@ -7211,23 +7351,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             return self.send_payload(200, investment_brain_hypothesis_lifecycles_api_payload(query))
 
         if path == "/api/investment-brain/hypotheses" and self.command == "GET":
-            try:
-                limit = int(first_query(query, "limit") or 100)
-            except ValueError:
-                limit = 100
-            try:
-                event_limit = int(first_query(query, "eventLimit") or 100)
-            except ValueError:
-                event_limit = 100
-            return self.send_payload(200, build_investment_brain_service(operational_read_settings()).hypothesis_workspace(
-                account_id=first_query(query, "accountId"),
-                symbol=first_query(query, "symbol"),
-                market_id=first_query(query, "marketId"),
-                scope=first_query(query, "scope"),
-                limit=limit,
-                event_limit=event_limit,
-                view=first_query(query, "view"),
-            ))
+            return self.send_payload(200, investment_brain_hypothesis_workspace_api_payload(query))
 
         hypothesis_detail_match = re.match(r"^/api/investment-brain/hypotheses/([^/]+)$", path)
         if hypothesis_detail_match and self.command == "GET":
@@ -7567,6 +7691,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             "manifest.webmanifest",
             "app.js",
             "app-default-settings.js",
+            "web-runtime.js",
             "styles.css",
             "live-target.json",
         }

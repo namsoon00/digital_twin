@@ -1,15 +1,15 @@
-const SHELL_CACHE = "orbit-alpha-shell-20260828-dark-theme-v1";
+const SHELL_CACHE = "orbit-alpha-shell-20260828-performance-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=20260828-dark-theme-v1",
-  "./console-workspaces.css?v=20260828-dark-theme-v1",
+  "./styles.css?v=20260828-performance-v2",
+  "./console-workspaces.css?v=20260828-performance-v2",
   "./app-default-settings.js?v=20260821-stable-share-v1",
-  "./console-workspaces.js?v=20260828-dark-theme-v1",
-  "./app.js?v=20260828-dark-theme-v1",
-  "./vendor/lightweight-charts.standalone.production.js",
+  "./console-workspaces.js?v=20260828-performance-v2",
+  "./web-runtime.js?v=20260828-performance-v2",
+  "./app.js?v=20260828-performance-v2",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",
   "./icons/brain-circuit.svg",
@@ -75,7 +75,7 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  const isMutableAppAsset = ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css"].some(function (pathname) {
+  const isMutableAppAsset = ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css", "/web-runtime.js"].some(function (pathname) {
     return url.pathname.endsWith(pathname);
   });
   if (isMutableAppAsset) {

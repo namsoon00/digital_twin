@@ -254,6 +254,7 @@ function checkWorkflowConsoleContract() {
   const consoleWorkspacesCode = fs.readFileSync(path.join(rootDir, "public", "console-workspaces.js"), "utf8");
   const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "public", "manifest.webmanifest"), "utf8"));
   const serviceWorker = fs.readFileSync(path.join(rootDir, "public", "service-worker.js"), "utf8");
+  const webRuntime = fs.readFileSync(path.join(rootDir, "public", "web-runtime.js"), "utf8");
   const dataContract = fs.readFileSync(path.join(rootDir, "docs", "pc-console-data-contract.md"), "utf8");
   const accountDomain = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "domain", "accounts.py"), "utf8");
   const accountStore = fs.readFileSync(path.join(rootDir, "python_service", "digital_twin", "infrastructure", "mysql_operational_core_stores.py"), "utf8");
@@ -278,6 +279,13 @@ function checkWorkflowConsoleContract() {
       && code.indexOf("var managementTabIds = [];") >= 0
       && code.indexOf("var pageModeEnabledTabs = [];") >= 0,
     "모바일 핵심 5탭·더보기와 판단 내부 근거 점검 구성이 일치하지 않습니다."
+  );
+  assertOk(
+    indexHtml.indexOf("web-runtime.js?v=") >= 0 &&
+      serviceWorker.indexOf("web-runtime.js?v=") >= 0 &&
+      webRuntime.indexOf("web-runtime-performance-v1") >= 0 &&
+      code.indexOf('runtimePerformance.begin("render"') >= 0,
+    "웹 런타임 성능 계측 계약이 정적 셸과 렌더 경로에 연결되지 않았습니다."
   );
   assertOk(
     indexHtml.indexOf('viewport-fit=cover') >= 0
@@ -410,7 +418,11 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
   assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
-  assertOk(indexHtml.indexOf("lightweight-charts.standalone.production.js") >= 0, "로컬 캔들 차트 런타임이 로드되지 않았습니다.");
+  assertOk(
+    indexHtml.indexOf("lightweight-charts.standalone.production.js") < 0
+      && code.indexOf('loadScriptOnce("vendor/lightweight-charts.standalone.production.js?v=5.2.1"') >= 0,
+    "캔들 차트 런타임은 차트 상세에서만 지연 로드되어야 합니다."
+  );
   assertOk(code.indexOf("restoreRenderedDisclosureState") >= 0 && code.indexOf("disclosures: disclosures") >= 0 && code.indexOf('data-disclosure-key=') >= 0, "자동 갱신 후 상세 펼침 상태를 복원하는 계약이 없습니다.");
 
   [
@@ -957,7 +969,7 @@ function checkFrontendAdminRender() {
       /\.console-shell \.app-nav-command \.page-command-metrics\s*\{[\s\S]*display: none;/.test(styles) &&
       /\.console-shell \.app-nav-routine > span:not\(\.app-nav-routine-action-cell\)\s*\{[\s\S]*display: none;/.test(styles) &&
       /@media \(min-width: 861px\) and \(max-width: 1180px\)[\s\S]*\.console-shell \.app-nav-flow,[\s\S]*\.console-shell \.app-nav-command \.page-command-metrics,[\s\S]*\.console-shell \.app-nav-current em,[\s\S]*\.console-shell :is\([\s\S]*\.feed-section-tabs span[\s\S]*\)\s*\{[\s\S]*display: none;/.test(styles) &&
-      indexHtml.indexOf("styles.css?v=20260824-model-rule-conversion-v1") >= 0,
+      indexHtml.indexOf("styles.css?v=" + appAssetVersion) >= 0,
     "PC 상단 영역이 탭별로 여러 줄/넘침으로 깨지지 않도록 하는 안정화 레이어가 없습니다."
   );
   assertOk(
@@ -971,7 +983,7 @@ function checkFrontendAdminRender() {
       /\.loading-progress span\s*\{[\s\S]*animation: loadingProgress/.test(styles) &&
       /\.loading-skeleton-grid\s*\{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/.test(styles) &&
       /@keyframes loadingProgress/.test(styles) &&
-      indexHtml.indexOf("app.js?v=20260719-single-screen-console-v1") >= 0,
+      indexHtml.indexOf("app.js?v=" + appAssetVersion) >= 0,
     "초기 로딩 화면이 운영 정보 카드 대신 progress/skeleton 화면으로 고정되지 않았습니다."
   );
   assertOk(

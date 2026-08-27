@@ -38511,3 +38511,13 @@ html[data-theme="dark"] :where(
     min-height: 42px;
   }
 }
+/* Runtime performance: long ledgers paint only when they approach the viewport. */
+@supports (content-visibility: auto) {
+  [data-console-keyed-list] > *,
+  .oa-alert-card-list > *,
+  .ontology-audit-row-list > *,
+  .instrument-timeline-list > * {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 72px;
+  }
+}

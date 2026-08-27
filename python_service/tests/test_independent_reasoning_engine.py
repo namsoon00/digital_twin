@@ -28,6 +28,9 @@ from digital_twin.infrastructure.mysql_versioned_runtime import (
     MySQLReasoningEngineJobStore,
     reasoning_worker_process_owner,
 )
+from digital_twin.infrastructure.mysql_monitoring_stores import (
+    MySQLMarketObservationReasoningAnchorStore,
+)
 
 
 def source_event(symbol="NVDA", account_ids=None):
@@ -126,6 +129,60 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_market_anchor_reconciliation_follows_a_completed_coalesced_job(self):
+        pending_event_id = "event:old-market"
+
+        class Connection:
+            def execute(self, sql, _params=()):
+                if "FROM market_observation_reasoning_anchors" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "MSTR",
+                        "pending_event_id": pending_event_id,
+                        "pending_at": "2026-08-27T00:00:00Z",
+                    }])
+                if "SELECT scope_key, created_at" in sql:
+                    return SimpleNamespace(fetchone=lambda: {
+                        "scope_key": "reasoning-slot:mstr",
+                        "created_at": "2026-08-27T00:00:01Z",
+                    })
+                return SimpleNamespace(fetchall=lambda: [{
+                    "job_id": "job:survivor",
+                    "source_event_id": "event:new-market",
+                    "request_json": json.dumps({
+                        "sourceEvent": {
+                            "event_id": "event:new-market",
+                            "payload": {
+                                "coalescedReasoningChanges": {
+                                    "sourceEventIds": [pending_event_id, "event:new-market"],
+                                },
+                            },
+                        },
+                    }),
+                    "result_json": json.dumps({"evaluated_symbols": ["MSTR"]}),
+                }])
+
+        class Store(MySQLMarketObservationReasoningAnchorStore):
+            def __init__(self):
+                self.completed = []
+
+            @contextmanager
+            def connect(self):
+                yield Connection()
+
+            def complete(self, event_ids, account_ids=None, symbols=None):
+                del account_ids, symbols
+                self.completed = list(event_ids)
+                return {"status": "completed", "completedCount": len(self.completed)}
+
+        store = Store()
+
+        result = store.reconcile_completed_reasoning_jobs("ontology-v2-production-r75")
+
+        self.assertEqual([pending_event_id], store.completed)
+        self.assertEqual(1, result["completedCount"])
+        self.assertEqual(["job:survivor"], result["reasoningJobIds"])
+
     def test_v2_executor_observes_lifecycle_after_projection_is_attached(self):
         class Recorder:
             @staticmethod
@@ -918,6 +975,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
     def test_runner_never_completes_a_job_omitted_from_evaluated_symbols(self):
         events = [source_event("NVDA", []), source_event("TSLA", [])]
+        anchor_completions = []
 
         class Queue:
             def __init__(self):
@@ -972,7 +1030,15 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 return None
 
         queue = Queue()
-        runner = IndependentReasoningJobRunner(queue, Engine(), Registry())
+        runner = IndependentReasoningJobRunner(
+            queue,
+            Engine(),
+            Registry(),
+            market_observation_completion_recorder=lambda event_ids, **kwargs: (
+                anchor_completions.append((list(event_ids), dict(kwargs)))
+                or {"status": "completed", "completedCount": 1}
+            ),
+        )
 
         result = runner.run_once()
 
@@ -981,6 +1047,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertIn("TSLA", queue.superseded[0][1])
         self.assertEqual(1, result["result"]["completed_job_count"])
         self.assertEqual(1, result["result"]["coverage_excluded_job_count"])
+        self.assertEqual(["event:NVDA"], anchor_completions[0][0])
+        self.assertEqual(["NVDA"], anchor_completions[0][1]["symbols"])
 
     def test_runner_shutdown_releases_only_its_owned_jobs_once(self):
         class Queue:

@@ -2015,6 +2015,7 @@ def build_notification_ai_gate_prompt(
         "strategyGuide.aiHypothesis에는 AI의 일반 배경지식으로 볼 수 있는 참고 가설만 쓴다. 예: ADR은 본주·환율·미국 업종 심리에 같이 흔들릴 수 있음. 이 가설은 매매 근거가 아니라 다음 확인 항목이라고 분리한다.",
         "strategyGuide.executionCriteria는 현재 조건 → 실행 강도 → 가격 기준 → 수량 기준 → 판단이 약해지는 조건 순서로 쓴다.",
         "HOLD를 고르면 '그냥 보유'라고 쓰지 않는다. TypeDB executionPlan의 유지·약화 조건과 다음 확인을 설명한다. 해당 조건이 없으면 실행 판단이 아니라 자료 보완 대기라고 명확히 쓴다.",
+        "출력 전 계약 검사를 직접 수행한다. 입력 hypotheses의 각 hypothesisId를 정확히 한 번 평가하고, 각 행의 모든 counterEvidenceIds를 같은 행에 그대로 분류하며, nextActionPlan·invalidationCondition·nextChecks 중 적어도 하나에는 현재 판단이 바뀌는 구체 조건을 쓴다. 이 조건을 충족하지 못하면 실행 행동을 만들지 말고 조건부 HOLD 또는 AVOID로 답하되 필드를 비워 두지 않는다.",
         "확률, 확신도, 관계 점수, 종합 점수는 만들거나 출력하지 않는다. 판단 품질은 시스템이 자료 상태와 검증 상태로 따로 확인한다.",
         "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",

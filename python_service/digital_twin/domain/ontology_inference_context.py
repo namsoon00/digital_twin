@@ -1105,9 +1105,17 @@ def signal_conflict_packet(
     active_matches: List[OntologyRuleMatch],
     relations: List[Dict[str, object]],
 ) -> Dict[str, object]:
-    """Use only TypeDB relation polarity for an inference conflict state."""
+    """Compare only decision-eligible predictive hypotheses.
+
+    Policy, execution, quality and freshness rules can constrain a hypothesis,
+    but they are not an opposing market thesis. Treating their polarity as a
+    competitor produced a permanent ``mixed`` state even when TypeDB had only
+    one eligible investment hypothesis.
+    """
     risk_drivers: List[str] = []
     support_drivers: List[str] = []
+    context_drivers: List[str] = []
+    predictive_matches: List[OntologyRuleMatch] = []
 
     def add(target: List[str], label: str) -> None:
         text = str(label or "").strip()
@@ -1115,14 +1123,36 @@ def signal_conflict_packet(
             target.append(text)
 
     for match in active_matches or []:
+        knowledge_basis = (
+            dict(match.knowledge_basis or {})
+            if isinstance(match.knowledge_basis, dict)
+            else {}
+        )
+        rule_kind = str(knowledge_basis.get("ruleKind") or "").strip().lower()
+        eligibility = str(
+            (match.evidence_state or {}).get("inferenceEligibilityStatus")
+            or "eligible"
+        ).strip().lower()
+        predictive = bool(
+            not match.reference_only
+            and eligibility == "eligible"
+            and (
+                rule_kind == "predictive-hypothesis"
+                or knowledge_basis.get("requiresHypothesis") is True
+            )
+        )
         polarity = str(match.evidence_role or "context")
         label = str(match.label or match.decision_label or match.rule_id).strip()
+        if not predictive:
+            add(context_drivers, label)
+            continue
+        predictive_matches.append(match)
         if polarity in {"risk", "blocking"}:
             add(risk_drivers, label)
         elif polarity in {"support", "counter"}:
             add(support_drivers, label)
 
-    roles = [item.evidence_role for item in active_matches or []]
+    roles = [item.evidence_role for item in predictive_matches]
     if risk_drivers:
         roles.append("risk")
     if support_drivers:
@@ -1144,8 +1174,12 @@ def signal_conflict_packet(
         "conflictStateLabel": CONFLICT_STATE_LABELS[conflict_state],
         "riskDrivers": risk_drivers[:8],
         "supportDrivers": support_drivers[:8],
+        "contextDrivers": context_drivers[:8],
         "decisionEffect": effect,
-        "activeRuleIds": unique_texts([item.rule_id for item in active_matches or []])[:8],
+        "activeRuleIds": unique_texts([item.rule_id for item in predictive_matches])[:8],
+        "contextRuleIds": unique_texts([
+            item.rule_id for item in active_matches or [] if item not in predictive_matches
+        ])[:8],
     }
 
 

@@ -16,7 +16,7 @@ from typing import Dict, Iterable, List, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-RELATION_DELIVERY_FINGERPRINT_VERSION = "ontology-relation-delivery-v2"
+RELATION_DELIVERY_FINGERPRINT_VERSION = "ontology-relation-delivery-v3"
 VOLATILE_EVENT_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
 COMPARABLE_RELATION_SUPPRESSION_REASONS = {
@@ -187,6 +187,39 @@ def _evidence_keys(value: object) -> List[str]:
     return sorted(keys)
 
 
+def _missing_data_rows(*values: object) -> List[Dict[str, object]]:
+    """Return stable missing-data identities without volatile prose or values."""
+
+    rows = {}
+    for value in values:
+        for item in _items(value):
+            row = _mapping(item)
+            if row:
+                key = _normalized(_first(
+                    row,
+                    "key",
+                    "id",
+                    "field",
+                    "code",
+                    "label",
+                    "name",
+                ))
+                required = bool(
+                    row.get("required")
+                    or row.get("judgementBlocking")
+                    or row.get("judgmentBlocking")
+                )
+            else:
+                key = _normalized(item)
+                required = False
+            if key:
+                rows[key] = {
+                    "key": key[:180],
+                    "required": bool(required or rows.get(key, {}).get("required")),
+                }
+    return [rows[key] for key in sorted(rows)]
+
+
 def relation_delivery_components(
     relation_context: Mapping[str, object],
     notification_context: Mapping[str, object] = None,
@@ -197,6 +230,7 @@ def relation_delivery_components(
     context = _mapping(notification_context)
     decision = _mapping(relation.get("decision"))
     action_envelope = _mapping(relation.get("actionEnvelope")) or _mapping(decision.get("actionEnvelope"))
+    data_readiness = _mapping(action_envelope.get("dataReadiness"))
     execution_plan = _mapping(relation.get("executionPlan"))
     state = _mapping(relation.get("decisionState"))
     if not state:
@@ -255,7 +289,20 @@ def relation_delivery_components(
             "deferRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("deferRuleIds")) if _normalized(item)),
             "constraintRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("constraintRuleIds")) if _normalized(item)),
             "blockingRuleIds": sorted(_normalized(item) for item in _items(action_envelope.get("blockingRuleIds")) if _normalized(item)),
-            "dataReadiness": _normalized(_first(_mapping(action_envelope.get("dataReadiness")), "state", "dataState")),
+            "dataReadiness": _normalized(_first(data_readiness, "state", "dataState")),
+            "readinessEvidence": {
+                "judgementBlocked": bool(
+                    action_envelope.get("judgementBlocked")
+                    or data_readiness.get("judgementBlocked")
+                ),
+                "missingData": _missing_data_rows(
+                    relation.get("missingData"),
+                    decision.get("missingData"),
+                    action_envelope.get("missingData"),
+                    data_readiness.get("missingData"),
+                    context.get("missingData"),
+                ),
+            },
         },
         "state": {
             key: _normalized(state.get(key))
@@ -317,9 +364,19 @@ def _decision_transition(
     first = not bool(previous_components)
     action_changed = bool(not first and current_action != previous_action)
     status_changed = bool(not first and current_status != previous_status)
-    readiness_changed = bool(
+    readiness_label_changed = bool(
         not first
         and _first(current_envelope, "dataReadiness") != _first(previous_envelope, "dataReadiness")
+    )
+    current_readiness_evidence = _mapping(current_envelope.get("readinessEvidence"))
+    previous_readiness_evidence = _mapping(previous_envelope.get("readinessEvidence"))
+    readiness_evidence_changed = bool(
+        not first and current_readiness_evidence != previous_readiness_evidence
+    )
+    readiness_block_changed = bool(
+        not first
+        and bool(current_readiness_evidence.get("judgementBlocked"))
+        != bool(previous_readiness_evidence.get("judgementBlocked"))
     )
     if first:
         kind = "initial"
@@ -327,18 +384,27 @@ def _decision_transition(
     elif action_changed:
         kind = "action-changed"
         summary = (previous_action or "이전 판단") + "에서 " + (current_action or "현재 판단") + "으로 바뀌었습니다."
+    elif readiness_block_changed:
+        kind = "readiness-block-changed"
+        summary = "판단 차단 상태가 바뀌었습니다."
     elif status_changed:
-        kind = "envelope-changed"
-        summary = (previous_status or "이전 조건") + "에서 " + (current_status or "현재 조건") + "으로 바뀌었습니다."
-    elif readiness_changed:
-        kind = "readiness-changed"
-        summary = "판단에 쓸 자료 상태가 바뀌었습니다."
+        kind = "envelope-context-changed"
+        summary = "최종 행동은 같고 관계 검토 범위만 바뀌었습니다."
+    elif readiness_label_changed or readiness_evidence_changed:
+        kind = "readiness-context-changed"
+        summary = "최종 행동과 판단 차단 상태는 같고 자료 맥락만 바뀌었습니다."
     else:
         kind = "unchanged"
         summary = "실행 판단 범위는 이전과 같습니다."
     return {
-        "changed": bool(first or action_changed or status_changed or readiness_changed),
-        "material": bool((first and initial_material) or action_changed or status_changed or readiness_changed),
+        "changed": bool(
+            first
+            or action_changed
+            or status_changed
+            or readiness_label_changed
+            or readiness_evidence_changed
+        ),
+        "material": bool((first and initial_material) or action_changed or readiness_block_changed),
         "kind": kind,
         "summary": summary,
         "previousAction": previous_action,
@@ -347,6 +413,9 @@ def _decision_transition(
         "currentStatus": current_status,
         "previousDataReadiness": _first(previous_envelope, "dataReadiness"),
         "currentDataReadiness": _first(current_envelope, "dataReadiness"),
+        "readinessEvidenceChanged": readiness_evidence_changed,
+        "previousJudgementBlocked": bool(previous_readiness_evidence.get("judgementBlocked")),
+        "currentJudgementBlocked": bool(current_readiness_evidence.get("judgementBlocked")),
     }
 
 
@@ -377,10 +446,16 @@ def relation_delivery_metadata(
         for key in ("status", "preferredAction", "dataReadiness")
     )
     if has_envelope_state:
+        readiness_signature = json.dumps(
+            envelope.get("readinessEvidence") or {},
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         state_signature = "|".join(part for part in [
             str(envelope.get("status") or ""),
             str(envelope.get("preferredAction") or ""),
-            str(envelope.get("dataReadiness") or ""),
+            readiness_signature,
             str(decision.get("actionPolicy") or ""),
         ] if part)
     else:
@@ -521,7 +596,7 @@ def relation_delivery_diff(
             # introduced a new source document.
             if key in {"decision", "actionEnvelope"} and transition.get("material"):
                 material_components.append(key)
-            elif key == "state" and transition.get("kind") == "readiness-changed":
+            elif key == "state" and transition.get("kind") == "readiness-block-changed":
                 material_components.append(key)
             elif key == "materialSourceEventKeys":
                 material_components.append(key)

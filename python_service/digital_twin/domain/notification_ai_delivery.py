@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, Mapping
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v5"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v6"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -68,7 +68,26 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "typedbFallback": _text(execution_audit.get("status")).lower() == "typedb-fallback",
     }
     if base["typedbFallback"]:
-        base["reason"] = "AI를 기한 내 사용하지 못해 TypeDB 관계 추론을 먼저 발송합니다."
+        fallback_material = bool(
+            graph_transition.get("material")
+            or user_transition.get("material")
+            or _text(ai_transition.get("kind")).lower() == "action-changed"
+            or material_sources
+        )
+        if not fallback_material:
+            base.update({
+                "decision": "suppress",
+                "suppressionReason": "typedb_fallback_non_material",
+                "reason": (
+                    "AI 검증 실패는 기록하되 최종 행동·판단 차단·판단 변경 원문이 "
+                    "바뀌지 않아 같은 TypeDB 참고 알림을 다시 보내지 않습니다."
+                ),
+            })
+            return base
+        base["reason"] = (
+            "AI를 기한 내 사용하지 못했지만 실질적인 TypeDB 판단 변화가 있어 "
+            "검증된 관계 추론을 먼저 발송합니다."
+        )
         return base
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
     if not validated:

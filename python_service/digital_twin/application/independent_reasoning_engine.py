@@ -1507,6 +1507,8 @@ class IndependentReasoningJobRunner:
         deployment_role: str = "configured",
         graph_writer_guard=None,
         background_graph_tasks=None,
+        market_observation_completion_recorder=None,
+        market_observation_completion_reconciler=None,
     ):
         import os
         import socket
@@ -1521,6 +1523,8 @@ class IndependentReasoningJobRunner:
         self.route_reconciler = route_reconciler
         self.deployment_role = str(deployment_role or "configured").strip().lower()
         self.graph_writer_guard = graph_writer_guard
+        self.market_observation_completion_recorder = market_observation_completion_recorder
+        self.market_observation_completion_reconciler = market_observation_completion_reconciler
         self.background_graph_tasks = [
             {
                 **dict(task or {}),
@@ -1547,9 +1551,106 @@ class IndependentReasoningJobRunner:
         }
         self._background_graph_cursor = 0
         self._last_background_graph_turn: Dict[str, object] = {"status": "not-run"}
+        self._last_market_anchor_reconciliation_at = 0.0
+        self._last_market_anchor_reconciliation: Dict[str, object] = {
+            "status": "not-run",
+            "completedCount": 0,
+        }
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    @staticmethod
+    def market_observation_completion_scope(jobs) -> Dict[str, object]:
+        event_ids = set()
+        account_ids = set()
+        symbols = set()
+        for job in jobs or []:
+            event = dict(job.get("sourceEvent") or {})
+            payload = dict(event.get("payload") or {})
+            for value in [event.get("eventId"), event.get("event_id")]:
+                if str(value or "").strip():
+                    event_ids.add(str(value).strip())
+            shard = dict(payload.get("reasoningShard") or {})
+            parent_event_id = str(shard.get("parentEventId") or "").strip()
+            if parent_event_id:
+                event_ids.add(parent_event_id)
+            coalesced = dict(payload.get("coalescedReasoningChanges") or {})
+            event_ids.update(
+                str(value).strip()
+                for value in coalesced.get("sourceEventIds") or []
+                if str(value or "").strip()
+            )
+            account_ids.update(
+                str(value).strip()
+                for value in payload.get("accountIds") or []
+                if str(value or "").strip()
+            )
+            symbols.update(
+                str(value).upper().strip()
+                for key in ("affectedSymbols", "symbols", "targetSymbols")
+                for value in payload.get(key) or []
+                if str(value or "").strip()
+            )
+        return {
+            "eventIds": sorted(event_ids),
+            "accountIds": sorted(account_ids),
+            "symbols": sorted(symbols),
+        }
+
+    def record_market_observation_completions(self, jobs) -> Dict[str, object]:
+        scope = self.market_observation_completion_scope(jobs)
+        if not scope["eventIds"]:
+            return {"status": "not-required", "completedCount": 0, **scope}
+        if not callable(self.market_observation_completion_recorder):
+            return {"status": "not-configured", "completedCount": 0, **scope}
+        try:
+            result = dict(self.market_observation_completion_recorder(
+                scope["eventIds"],
+                account_ids=scope["accountIds"],
+                symbols=scope["symbols"],
+            ) or {})
+            return {**scope, **result}
+        except Exception as error:  # Anchor repair must not invalidate verified inference.
+            return {
+                "status": "error",
+                "completedCount": 0,
+                "reason": str(error)[:180],
+                **scope,
+            }
+
+    def reconcile_market_observation_completions(self) -> Dict[str, object]:
+        interval = _int_setting(
+            self.settings,
+            "marketObservationReasoningAnchorReconcileSeconds",
+            60,
+            10,
+            3600,
+        )
+        now_monotonic = time.monotonic()
+        if (
+            self._last_market_anchor_reconciliation_at
+            and now_monotonic - self._last_market_anchor_reconciliation_at < interval
+        ):
+            return dict(self._last_market_anchor_reconciliation)
+        self._last_market_anchor_reconciliation_at = now_monotonic
+        if not callable(self.market_observation_completion_reconciler):
+            self._last_market_anchor_reconciliation = {
+                "status": "not-configured",
+                "completedCount": 0,
+            }
+            return dict(self._last_market_anchor_reconciliation)
+        try:
+            self._last_market_anchor_reconciliation = dict(
+                self.market_observation_completion_reconciler() or {}
+            )
+        except Exception as error:  # Repair is best effort and isolated from inference.
+            self._last_market_anchor_reconciliation = {
+                "status": "error",
+                "completedCount": 0,
+                "reason": str(error)[:180],
+            }
+        return dict(self._last_market_anchor_reconciliation)
 
     def run_once(self) -> Dict[str, object]:
         ownership = self.acquire_graph_writer_ownership()
@@ -1574,6 +1675,7 @@ class IndependentReasoningJobRunner:
                 "controlBinding": control_binding,
             }
         self.publish_worker_heartbeat(descriptor.deployment_id)
+        market_anchor_reconciliation = self.reconcile_market_observation_completions()
         case_expiry = self.expire_stale_reasoning_cases()
         route_reconciliation = self.reconcile_ingress_route()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
@@ -1610,6 +1712,7 @@ class IndependentReasoningJobRunner:
                 "queue": health["queue"],
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
+                "marketObservationAnchorReconciliation": market_anchor_reconciliation,
             }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
@@ -1646,6 +1749,7 @@ class IndependentReasoningJobRunner:
                 "queue": self.queue_summary(descriptor.deployment_id),
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
+                "marketObservationAnchorReconciliation": market_anchor_reconciliation,
             }
         jobs, resharded = self.reshard_oversized_jobs(jobs)
         if not jobs:
@@ -1864,6 +1968,9 @@ class IndependentReasoningJobRunner:
                         self.queue.complete(job_id, result, worker_id=self.worker_id)
                     else:
                         self.queue.complete(job_id, result)
+                result["market_observation_anchor_completion"] = (
+                    self.record_market_observation_completions(completion_jobs)
+                )
                 outcome = "completed" if completion_job_ids else "excluded"
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update(self.engine.health())
@@ -1905,6 +2012,7 @@ class IndependentReasoningJobRunner:
                 "queue": health["queue"],
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
+                "marketObservationAnchorReconciliation": market_anchor_reconciliation,
             }
         except Exception as error:  # noqa: BLE001 - durable retry owns recovery.
             retries = [

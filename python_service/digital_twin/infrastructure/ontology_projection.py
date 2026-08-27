@@ -933,7 +933,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v10-model-input-routing"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v11-frozen-tbox"
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
@@ -5360,6 +5360,12 @@ class PortfolioOntologyProjectionRecorder:
             include_derived_decision_items=False,
             reference_positions=observation_input.get("referencePositions") or [],
         )
+        # The graph builder's code-default TBox describes the source tree, but
+        # an immutable V2 deployment executes the TBox frozen into its release.
+        # Persisting the code default here made preflight and projected
+        # fingerprints disagree, disabled exact rule-result slot reuse, and
+        # forced the complete shared RuleBox to run for every observation.
+        graph.worldview["activeTBox"] = deepcopy(active_tbox)
         event_validity_rows = [
             item for item in graph.entities
             if item.kind == "event-validity-assessment"
@@ -5510,6 +5516,7 @@ class PortfolioOntologyProjectionRecorder:
         emit("ontology_graph.done", runtimeMs=int((time.perf_counter() - assembly_started) * 1000))
         emit("persistence_graph.start")
         persistence_graph = self.graph_for_graph_store_persistence(graph, rule_catalog)
+        persistence_graph.worldview["activeTBox"] = deepcopy(active_tbox)
         stage_timings["ontologyGraphAssemblyMs"] = int((time.perf_counter() - assembly_started) * 1000)
         emit("persistence_graph.done", runtimeMs=stage_timings["ontologyGraphAssemblyMs"])
         if cache_enabled:

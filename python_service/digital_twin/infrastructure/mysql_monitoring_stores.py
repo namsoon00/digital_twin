@@ -293,6 +293,108 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
             "eventIds": events,
         }
 
+    def reconcile_completed_reasoning_jobs(
+        self,
+        deployment_id: str,
+    ) -> Dict[str, object]:
+        """Repair acknowledgements lost after a verified V2 queue commit.
+
+        ``source_event_id`` is globally unique and a V2 job reaches completed
+        only after exact requested-symbol coverage is verified. The repair is
+        therefore an idempotent acknowledgement, not a second inference.
+        """
+
+        deployment = str(deployment_id or "").strip()
+        if not deployment:
+            return {
+                "status": "not-configured",
+                "completedCount": 0,
+                "reason": "A V2 deployment id is required for anchor reconciliation.",
+            }
+        with self.connect() as connection:
+            pending = connection.execute(
+                """
+                SELECT account_id, symbol, pending_event_id, pending_at
+                FROM market_observation_reasoning_anchors
+                WHERE pending_event_id <> ''
+                ORDER BY pending_at ASC
+                LIMIT 200
+                """,
+            ).fetchall()
+        if not pending:
+            return {"status": "unchanged", "completedCount": 0}
+
+        completed_event_ids = set()
+        completed_job_ids = set()
+        with self.connect() as connection:
+            for anchor in pending:
+                pending_event_id = str(anchor.get("pending_event_id") or "").strip()
+                source_job = connection.execute(
+                    """
+                    SELECT scope_key, created_at
+                    FROM reasoning_engine_jobs
+                    WHERE deployment_id = %s AND source_event_id = %s
+                    LIMIT 1
+                    """,
+                    (deployment, pending_event_id),
+                ).fetchone() or {}
+                scope_key = str(source_job.get("scope_key") or "").strip()
+                if not scope_key:
+                    continue
+                survivors = connection.execute(
+                    """
+                    SELECT job_id, source_event_id, request_json, result_json
+                    FROM reasoning_engine_jobs
+                    WHERE deployment_id = %s
+                      AND scope_key = %s
+                      AND job_status = 'completed'
+                      AND created_at >= %s
+                    ORDER BY completed_at ASC
+                    LIMIT 10
+                    """,
+                    (
+                        deployment,
+                        scope_key,
+                        str(source_job.get("created_at") or anchor.get("pending_at") or ""),
+                    ),
+                ).fetchall()
+                for survivor in survivors or []:
+                    try:
+                        request = json.loads(str(survivor.get("request_json") or "{}"))
+                        result = json.loads(str(survivor.get("result_json") or "{}"))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    source_event = dict(request.get("sourceEvent") or {})
+                    payload = dict(source_event.get("payload") or {})
+                    coalesced = dict(payload.get("coalescedReasoningChanges") or {})
+                    source_event_ids = {
+                        str(survivor.get("source_event_id") or "").strip(),
+                        str(source_event.get("eventId") or source_event.get("event_id") or "").strip(),
+                        *{
+                            str(value or "").strip()
+                            for value in coalesced.get("sourceEventIds") or []
+                        },
+                    }
+                    evaluated_symbols = {
+                        str(value or "").upper().strip()
+                        for value in result.get("evaluated_symbols") or result.get("evaluatedSymbols") or []
+                    }
+                    if (
+                        pending_event_id in source_event_ids
+                        and str(anchor.get("symbol") or "").upper().strip() in evaluated_symbols
+                    ):
+                        completed_event_ids.add(pending_event_id)
+                        completed_job_ids.add(str(survivor.get("job_id") or ""))
+                        break
+        completion = self.complete(sorted(completed_event_ids))
+        count = int(completion.get("completedCount") or 0)
+        return {
+            "status": "reconciled" if count else "unchanged",
+            "completedCount": count,
+            "eventIds": sorted(completed_event_ids),
+            "reasoningJobIds": sorted(completed_job_ids),
+        }
+
 
 class MySQLMonitorStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None):

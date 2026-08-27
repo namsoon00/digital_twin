@@ -11,6 +11,7 @@ from digital_twin.domain.ontology_inference_context import (
     matches_from_inference,
     portfolio_relation_context_from_snapshot,
     relation_contexts_from_snapshot,
+    signal_conflict_packet,
 )
 from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
 from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context, execution_plan_from_relation_context
@@ -28,6 +29,41 @@ from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_re
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def test_only_predictive_hypotheses_compete_in_signal_conflict(self):
+        predictive_risk = OntologyRuleMatch(
+            rule_id="graph.cross-asset.relative-strength.v1",
+            label="교차자산 상대 강도 신호",
+            version="typedb",
+            relation_type="HAS_INFERRED_RISK",
+            signal_type="holdingTiming",
+            matched=True,
+            review_level="review",
+            review_label="확인 필요",
+            data_state="sufficient",
+            evidence_role="risk",
+            knowledge_basis={"ruleKind": "predictive-hypothesis", "requiresHypothesis": True},
+        )
+        policy_support = OntologyRuleMatch(
+            rule_id="graph.execution.capacity_safe.v1",
+            label="실행 가능 용량 확인",
+            version="typedb",
+            relation_type="SUPPORTS_ACTION",
+            signal_type="execution",
+            matched=True,
+            review_level="observe",
+            review_label="관찰",
+            data_state="partial",
+            evidence_role="support",
+            knowledge_basis={"ruleKind": "execution-policy", "requiresHypothesis": False},
+        )
+
+        packet = signal_conflict_packet({}, [predictive_risk, policy_support], [])
+
+        self.assertEqual("risk-only", packet["conflictState"])
+        self.assertFalse(packet["hasConflict"])
+        self.assertEqual(["교차자산 상대 강도 신호"], packet["riskDrivers"])
+        self.assertEqual(["실행 가능 용량 확인"], packet["contextDrivers"])
+
     def test_portfolio_inferencebox_builds_first_class_relation_context(self):
         relation = inferencebox_relation_payload({
             "type": "REQUIRES_NEXT_CHECK",
@@ -605,6 +641,10 @@ class OntologyInferenceContextTests(unittest.TestCase):
                                         "actionGroup": "lossControl",
                                         "actionLevel": "review",
                                         "nativeTypeDbReasoned": True,
+                                        "knowledgeBasis": {
+                                            "ruleKind": "predictive-hypothesis",
+                                            "requiresHypothesis": True,
+                                        },
                                     }
                                 ],
                                 "traces": [

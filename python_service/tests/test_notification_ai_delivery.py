@@ -6,6 +6,7 @@ from digital_twin.application.notification.admission import NotificationAdmissio
 from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
 from digital_twin.domain.notification_rules import NotificationRuleDecision
 from digital_twin.domain.notifications import NotificationJob
+from digital_twin.domain.ontology_relation_delivery import relation_delivery_diff
 
 
 class SuppressionQueue:
@@ -114,7 +115,22 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertNotIn("preDecisionDeliveryGate", job.context)
         self.assertNotIn("deliverySuppressionReason", job.context)
 
-    def test_typedb_fallback_is_sent_even_when_final_action_is_unchanged(self):
+    def test_typedb_fallback_is_suppressed_when_only_readiness_label_changed(self):
+        context = watchlist_context()
+        context["notificationAiExecutionAudit"] = {"status": "typedb-fallback"}
+        context["decisionTransition"] = {
+            "kind": "readiness-context-changed",
+            "material": False,
+            "previousAction": "HOLD",
+            "currentAction": "HOLD",
+        }
+
+        decision = final_ai_delivery_decision(context)
+
+        self.assertEqual("suppress", decision["decision"])
+        self.assertTrue(decision["typedbFallback"])
+
+    def test_typedb_fallback_still_sends_a_material_action_transition(self):
         context = watchlist_context()
         context["notificationAiExecutionAudit"] = {"status": "typedb-fallback"}
 
@@ -122,6 +138,30 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", decision["decision"])
         self.assertTrue(decision["typedbFallback"])
+
+    def test_same_missing_data_does_not_make_readiness_label_churn_material(self):
+        def relation(readiness):
+            return {
+                "decision": {
+                    "selectedRuleId": "graph.cross-asset.relative-strength.v1",
+                    "candidateAction": "HOLD",
+                },
+                "actionEnvelope": {
+                    "status": "HOLDING_REVIEW",
+                    "preferredAction": "HOLD",
+                    "dataReadiness": {"state": readiness},
+                    "judgementBlocked": False,
+                },
+                "decisionState": {"dataState": "partial" if readiness == "partial" else "sufficient"},
+                "missingData": [{"key": "valuation", "label": "밸류에이션 입력값"}],
+                "activeRules": [{"ruleId": "graph.cross-asset.relative-strength.v1"}],
+            }
+
+        diff = relation_delivery_diff(relation("ready"), relation("partial"))
+
+        self.assertTrue(diff["changed"])
+        self.assertFalse(diff["material"])
+        self.assertEqual("readiness-context-changed", diff["decisionTransition"]["kind"])
 
     def test_candidate_only_watchlist_change_is_suppressed(self):
         decision = final_ai_delivery_decision(watchlist_context())

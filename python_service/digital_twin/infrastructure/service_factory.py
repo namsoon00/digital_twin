@@ -2685,6 +2685,9 @@ def build_v2_reasoning_job_runner(
             },
         ]
 
+    market_observation_anchor_store = stores.market_observation_reasoning_anchor_store(
+        store_settings
+    )
     return IndependentReasoningJobRunner(
         queue=stores.reasoning_engine_job_store(configured),
         engine=build_v2_reasoning_engine(
@@ -2704,6 +2707,12 @@ def build_v2_reasoning_job_runner(
         deployment_role=worker_role,
         graph_writer_guard=graph_writer_guard,
         background_graph_tasks=background_graph_tasks,
+        market_observation_completion_recorder=market_observation_anchor_store.complete,
+        market_observation_completion_reconciler=(
+            lambda: market_observation_anchor_store.reconcile_completed_reasoning_jobs(
+                selected_deployment_id
+            )
+        ),
     )
 
 

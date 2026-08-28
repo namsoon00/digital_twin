@@ -552,7 +552,6 @@
     investmentFlowDetailLoading: {},
     investmentFlowDetailErrors: {},
     investmentCaseDetailTabs: {},
-    investmentCaseTabScrollPositions: {},
     investmentCaseHistories: {},
     investmentCaseHistoryLoading: {},
     investmentCaseHistoryErrors: {},
@@ -601,7 +600,6 @@
     notificationJobDetails: {},
     notificationJobDetailSections: {},
     notificationJobDetailTabs: {},
-    notificationJobDetailTabScrollPositions: {},
     notificationDetailDisclosureOpen: {},
     notificationJobsTotal: 0,
     notificationJobsOffset: 0,
@@ -2868,34 +2866,12 @@
     window.history.replaceState({ tab: normalized, mode: normalizePageMode(mode) }, "", pageModeUrl(normalized, mode));
   }
 
-  function scrollKeyForTab(tab, notificationSection, strategySection, ontologySection, accountSection, feedSection) {
-    var normalized = normalizeTabId(tab || state.activeTab);
-    if (normalized === "accounts") {
-      return normalized + ":" + normalizeAccountSection(accountSection || state.activeAccountSection);
-    }
-    if (normalized === "notifications") {
-      return normalized + ":" + normalizeNotificationSection(notificationSection || state.activeNotificationSection);
-    }
-    if (normalized === "modeling") {
-      return normalized + ":" + normalizeStrategySection(strategySection || state.activeStrategySection);
-    }
-    if (normalized === "ontology") {
-      return normalized + ":" + normalizeOntologySection(ontologySection || state.activeOntologySection);
-    }
-    if (normalized === "feed") {
-      return normalized + ":" + normalizeMarketWorkspaceMode(state.marketWorkspaceMode);
-    }
-    if (normalized === "experiments") {
-      return normalized + ":" + normalizeExperimentSection(state.activeExperimentSection);
-    }
-    if (normalized === "settings") {
-      return normalized + ":" + normalizeSettingsSection(state.activeSettingsSection);
-    }
-    return normalized;
+  function scrollKeyForTab(tab) {
+    return normalizeTabId(tab || state.activeTab);
   }
 
   function activeScrollKey() {
-    return scrollKeyForTab(state.activeTab, state.activeNotificationSection, state.activeStrategySection, state.activeOntologySection, state.activeAccountSection, state.activeFeedSection);
+    return scrollKeyForTab(state.activeTab);
   }
 
   function currentWorkspaceMain() {
@@ -3121,6 +3097,7 @@
     var selectors = [
       "[data-scroll-key]",
       "[data-preserve-scroll]",
+      "[role='tablist']",
       ".tab-bar",
       ".app-nav-tabs",
       ".app-nav-menu-list",
@@ -3132,7 +3109,9 @@
       ".investment-calendar-month-shell",
       ".market-workspace-tabs",
       ".instrument-workspace-tabs",
-      ".instrument-range-control"
+      ".instrument-range-control",
+      ".ontology-catalog-tabs",
+      ".cws-tabs"
     ];
     var elements = Array.prototype.slice.call(app.querySelectorAll(selectors.join(",")));
     var active = document.activeElement;
@@ -25401,40 +25380,7 @@
     })[0] || null;
   }
 
-  function investmentCaseTabScrollKey(key, active) {
-    return String(key || "") + ":" + normalizeInvestmentCaseDetailTab(active);
-  }
-
-  function rememberInvestmentCaseTabScroll(key) {
-    var root = investmentCaseDetailRoot(key);
-    if (!root) return;
-    var panel = root.querySelector("[data-investment-case-panel-tab]");
-    var scroller = root.closest && root.closest(".work-detail-backdrop");
-    if (!panel || !scroller) return;
-    state.investmentCaseTabScrollPositions[investmentCaseTabScrollKey(key, panel.getAttribute("data-investment-case-panel-tab"))] = scrollTopNumber(scroller.scrollTop);
-  }
-
-  function restoreInvestmentCaseTabViewport(key, active) {
-    var root = investmentCaseDetailRoot(key);
-    if (!root) return;
-    var panel = root.querySelector("[data-investment-case-panel-key]");
-    var tabs = root.querySelector(".oa-case-detail-tabs");
-    var scroller = root.closest && root.closest(".work-detail-backdrop");
-    if (!panel || !tabs || !scroller) return;
-    var scrollKey = investmentCaseTabScrollKey(key, active);
-    var max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    if (Object.prototype.hasOwnProperty.call(state.investmentCaseTabScrollPositions, scrollKey)) {
-      scroller.scrollTop = clampScrollTop(state.investmentCaseTabScrollPositions[scrollKey], max);
-      return;
-    }
-    var scrollerRect = scroller.getBoundingClientRect();
-    var panelRect = panel.getBoundingClientRect();
-    var target = scroller.scrollTop + panelRect.top - scrollerRect.top - tabs.offsetHeight - 8;
-    scroller.scrollTop = clampScrollTop(target, max);
-  }
-
-  function patchInvestmentCaseTabRegion(key, active, options) {
-    options = options || {};
+  function patchInvestmentCaseTabRegion(key, active) {
     var normalized = normalizeInvestmentCaseDetailTab(active);
     var detail = state.investmentFlowDetails[key] && typeof state.investmentFlowDetails[key] === "object"
       ? state.investmentFlowDetails[key]
@@ -25461,7 +25407,6 @@
       var endedAt = window.performance && window.performance.now ? window.performance.now() : Date.now();
       runtimePerformance.record("render-region", Math.max(0, endedAt - startedAt), { region: "investment-case", tab: normalized });
     }
-    if (options.restoreViewport) restoreInvestmentCaseTabViewport(key, normalized);
     return true;
   }
 
@@ -26408,47 +26353,11 @@
     ].join("");
   }
 
-  function notificationDetailTabScrollKey(jobId, tabId) {
-    return String(jobId || "") + ":" + String(tabId || "summary");
-  }
-
   function notificationDetailRoot(jobId) {
     return Array.prototype.slice.call(app.querySelectorAll("[data-notification-detail-job-id]")).filter(function (element) {
       return element.getAttribute("data-notification-detail-job-id") === String(jobId || "")
         && element.getAttribute("data-notification-detail-mode") === "full";
     })[0] || null;
-  }
-
-  function rememberNotificationDetailTabScroll(detailRoot, jobId) {
-    if (!detailRoot) return;
-    var tabId = detailRoot.getAttribute("data-notification-active-tab") || "summary";
-    var scroller = detailRoot.closest && detailRoot.closest(".work-detail-backdrop");
-    if (!scroller) return;
-    state.notificationJobDetailTabScrollPositions[notificationDetailTabScrollKey(jobId, tabId)] = scrollTopNumber(scroller.scrollTop);
-  }
-
-  function restoreNotificationDetailTabViewport(jobId, tabId) {
-    var restore = function () {
-      var detailRoot = notificationDetailRoot(jobId);
-      if (!detailRoot) return;
-      var scroller = detailRoot.closest && detailRoot.closest(".work-detail-backdrop");
-      var panel = detailRoot.querySelector(".notification-detail-tab-panel");
-      var tabs = detailRoot.querySelector(".notification-detail-tabs");
-      if (!scroller || !panel || !tabs) return;
-      var scrollKey = notificationDetailTabScrollKey(jobId, tabId);
-      var saved = state.notificationJobDetailTabScrollPositions;
-      var max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      if (Object.prototype.hasOwnProperty.call(saved, scrollKey)) {
-        scroller.scrollTop = clampScrollTop(saved[scrollKey], max);
-        return;
-      }
-      var scrollerRect = scroller.getBoundingClientRect();
-      var panelRect = panel.getBoundingClientRect();
-      var target = scroller.scrollTop + panelRect.top - scrollerRect.top - tabs.offsetHeight - 8;
-      scroller.scrollTop = clampScrollTop(target, max);
-    };
-    var schedule = window.requestAnimationFrame || function (callback) { return window.setTimeout(callback, 0); };
-    schedule(function () { schedule(restore); });
   }
 
   function notificationJobKey(job) {
@@ -34012,11 +33921,9 @@
         var notificationJobId = String(notificationDetailTab.getAttribute("data-notification-job-id") || "");
         var notificationTabId = String(notificationDetailTab.getAttribute("data-notification-detail-tab") || "summary");
         if (!notificationJobId) return;
-        rememberNotificationDetailTabScroll(notificationDetailTab.closest(".notification-decision-detail"), notificationJobId);
         state.notificationJobDetailTabs[notificationJobId] = notificationTabId;
         render({ transition: "section" });
         loadNotificationJobDetailSection(notificationJobId, notificationTabId, false);
-        restoreNotificationDetailTabViewport(notificationJobId, notificationTabId);
         return;
       }
       var caseTab = event.target.closest && event.target.closest("[data-investment-case-tab]");
@@ -34026,7 +33933,6 @@
         var caseTabId = String(caseTab.getAttribute("data-investment-case-tab") || "summary");
         if (!caseKey) return;
         if (caseTabId === "trace" && !investmentCaseOperatorAccess()) caseTabId = "summary";
-        rememberInvestmentCaseTabScroll(caseKey);
         state.investmentCaseDetailTabs[caseKey] = caseTabId;
         var sameCase = state.workDetailLayer
           && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0
@@ -34034,7 +33940,7 @@
         if (caseTabId === "history") loadInvestmentCaseHistory(caseKey, false);
         if (caseTabId === "trace") loadInvestmentCaseTrace(caseKey, false);
         if (sameCase) {
-          if (!patchInvestmentCaseTabRegion(caseKey, caseTabId, { restoreViewport: true })) render();
+          if (!patchInvestmentCaseTabRegion(caseKey, caseTabId)) render();
         } else {
           openWorkDetailLayer("investment-case", caseKey);
         }

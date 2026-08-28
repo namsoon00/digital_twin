@@ -26191,6 +26191,7 @@
     var stateMessage = renderNotificationDetailSectionState(section);
     if (stateMessage) return stateMessage;
     var execution = section.aiExecution || {};
+    var runtime = section.aiRuntime || {};
     var narrative = section.narrative || {};
     var publication = narrative.publication || execution.claimPublication || {};
     var writer = narrative.writerProvenance || execution.writerProvenance || {};
@@ -26208,6 +26209,11 @@
       '<div><dt>검토 모드</dt><dd>' + escapeHtml(execution.reviewMode === "context-narrative" ? "참고 서술" : "투자 판단") + '</dd></div>',
       '<div><dt>행동 권한</dt><dd>' + escapeHtml(execution.actionAuthority === "typedb" ? "TypeDB · AI는 서술만" : (execution.actionAuthority || "기록 없음")) + '</dd></div>',
       '<div><dt>채택 상태</dt><dd>' + escapeHtml(execution.adoptionState || publication.status || "기록 없음") + '</dd></div>',
+      '<div><dt>실효 결과</dt><dd>' + escapeHtml([
+        runtime.publicationMode === "ai-authored" ? "AI 판단·설명 채택" : (runtime.publicationMode === "typedb-fallback" ? "TypeDB 폴백" : runtime.publicationMode),
+        runtime.publicationContractPassed ? "발행 계약 통과" : "발행 계약 미통과",
+        runtime.contractFailureCode || ""
+      ].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
       '<div><dt>모델·시간</dt><dd>' + escapeHtml([execution.model, execution.reasoningEffort, notificationPipelineDuration(execution.latencyMs)].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
       '</dl>',
       '<div class="notification-ai-publication"><strong>문장 발행 결과</strong><span>' + escapeHtml([writer.label || writer.writerKind, "AI " + Number(publication.aiClaimCount || 0) + "개", "시스템 " + Number(publication.deterministicClaimCount || 0) + "개"].filter(Boolean).join(" · ")) + '</span></div>',

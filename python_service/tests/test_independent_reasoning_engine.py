@@ -9,6 +9,7 @@ from digital_twin.application.independent_reasoning_engine import (
     ScopedTypeDBInferenceExecutor,
     V2ReasoningEngine,
     compact_projection_result,
+    reasoning_job_runtime_eligibility,
 )
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import (
@@ -130,6 +131,28 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_reasoning_job_marks_expired_calendar_replay_as_ineligible(self):
+        event = source_event("005930", [])
+        event.payload["sourceFacts"] = [{
+            "factType": "EarningsCalendarEvent",
+            "aggregateId": "earnings:005930:2020-q1",
+            "payload": {
+                "eventId": "earnings:005930:2020-q1",
+                "eventType": "earnings",
+                "importance": 95,
+                "source": "OpenDART",
+                "startsAt": "2020-04-01T00:00:00Z",
+                "status": "active",
+                "symbols": ["005930"],
+                "title": "Past earnings",
+            },
+        }]
+
+        result = reasoning_job_runtime_eligibility({"sourceEvent": event.to_dict()})
+
+        self.assertFalse(result["eligible"])
+        self.assertEqual("expired-calendar-history", result["reasonCode"])
+
     def test_semantic_change_set_preserves_bitemporal_source_boundary(self):
         contract = fact_change_contract(
             ["MarketQuote"],

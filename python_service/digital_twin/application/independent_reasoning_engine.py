@@ -21,6 +21,7 @@ from ..domain.market_observation_reasoning import market_observation_completion_
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.world_partitioned_reasoning import attach_shared_premise_evidence
 from ..domain.ontology_store_routing import ontology_store_route
+from ..domain.reasoning_source_facts import reasoning_source_facts_runtime_eligibility
 
 
 VERIFIED_PROJECTION_STATUSES = {
@@ -34,6 +35,12 @@ VERIFIED_PROJECTION_STATUSES = {
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def reasoning_job_runtime_eligibility(job: Mapping[str, object]) -> Dict[str, object]:
+    source_event = dict(job.get("sourceEvent") or {})
+    payload = dict(source_event.get("payload") or {})
+    return reasoning_source_facts_runtime_eligibility(payload.get("sourceFacts") or [])
 
 
 def _int_setting(settings: Mapping[str, object], key: str, fallback: int, minimum: int, maximum: int) -> int:
@@ -1795,6 +1802,57 @@ class IndependentReasoningJobRunner:
                 "reasoningCaseExpiry": case_expiry,
                 "marketObservationAnchorReconciliation": market_anchor_reconciliation,
             }
+        runtime_excluded_jobs = []
+        runtime_eligible_jobs = []
+        exclude = getattr(self.queue, "exclude", None)
+        for job in jobs:
+            eligibility = reasoning_job_runtime_eligibility(job)
+            if bool(eligibility.get("eligible", True)):
+                runtime_eligible_jobs.append(job)
+                continue
+            runtime_excluded_jobs.append(job)
+            if callable(exclude):
+                exclude(
+                    job["jobId"],
+                    {
+                        "status": "excluded",
+                        "retryable": False,
+                        "runtimeSourceEligibility": eligibility,
+                    },
+                    str(eligibility.get("reason") or "The source fact is no longer current."),
+                    str(eligibility.get("reasonCode") or "source-fact-no-longer-current"),
+                )
+            else:
+                self.queue.supersede(
+                    job["jobId"],
+                    str(eligibility.get("reason") or "The source fact is no longer current."),
+                )
+        jobs = runtime_eligible_jobs
+        runtime_excluded_job_ids = [job["jobId"] for job in runtime_excluded_jobs]
+        if not jobs:
+            health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
+            health.update({
+                "status": "ready",
+                "lastRunAt": utc_now_iso(),
+                "runtimeExcludedJobIds": runtime_excluded_job_ids,
+                "queue": self.queue_summary(descriptor.deployment_id),
+            })
+            health.pop("lastError", None)
+            self.registry.update_health(descriptor.deployment_id, health)
+            return {
+                "status": "excluded",
+                "processedCount": len(runtime_excluded_jobs),
+                "runtimeExcludedJobCount": len(runtime_excluded_jobs),
+                "runtimeExcludedJobIds": runtime_excluded_job_ids,
+                "repairedIngressCount": repaired,
+                "leaseRecovery": lease_recovery,
+                "backlogCompaction": backlog_compaction,
+                "staleObservationCleanup": stale_observations,
+                "queue": health["queue"],
+                "routeReconciliation": route_reconciliation,
+                "reasoningCaseExpiry": case_expiry,
+                "marketObservationAnchorReconciliation": market_anchor_reconciliation,
+            }
         jobs, resharded = self.reshard_oversized_jobs(jobs)
         if not jobs:
             return {
@@ -1871,6 +1929,8 @@ class IndependentReasoningJobRunner:
             result["release_identity"] = release_identity
             result["native_target_symbol_limit"] = self.native_target_symbol_limit()
             result["capacity_deferred_job_count"] = len(capacity_deferred_jobs)
+            result["runtime_excluded_job_count"] = len(runtime_excluded_job_ids)
+            result["runtime_excluded_job_ids"] = runtime_excluded_job_ids
             status = str(result.get("status") or "")
             completion_jobs = list(selected_jobs)
             coverage_excluded_jobs = []

@@ -12,6 +12,7 @@ from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.reasoning_source_facts import investment_calendar_source_fact
+from digital_twin.domain.reasoning_source_facts import reasoning_source_facts_runtime_eligibility
 from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.domain.ontology_projection_audit import compact_reasoning_request_context
 from digital_twin.domain.ontology_execution_trace import reasoning_stage_records
@@ -265,6 +266,32 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
 
         self.assertEqual("ready", profile["status"])
         self.assertEqual([], profile["blockers"])
+
+    def test_expired_calendar_source_fact_is_history_only_during_release_replay(self):
+        payload = calendar_payload()
+        payload["startsAt"] = "2020-01-01T00:00:00Z"
+
+        result = reasoning_source_facts_runtime_eligibility([{
+            "factType": "EarningsCalendarEvent",
+            "aggregateId": payload["eventId"],
+            "payload": payload,
+        }])
+
+        self.assertFalse(result["eligible"])
+        self.assertEqual("expired-calendar-history", result["reasonCode"])
+
+    def test_calendar_removal_revision_remains_reasoning_eligible(self):
+        payload = calendar_payload()
+        payload.update({"startsAt": "2020-01-01T00:00:00Z", "status": "deleted"})
+
+        result = reasoning_source_facts_runtime_eligibility([{
+            "factType": "EarningsCalendarEvent",
+            "aggregateId": payload["eventId"],
+            "payload": payload,
+        }])
+
+        self.assertTrue(result["eligible"])
+        self.assertEqual("calendar-removal-revision", result["status"])
 
 
 if __name__ == "__main__":

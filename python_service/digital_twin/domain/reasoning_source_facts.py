@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
-from typing import Dict, Mapping, Tuple
+from datetime import datetime
+from typing import Dict, Iterable, Mapping, Tuple
 
 from .investment_calendar import InvestmentCalendarEvent
 
@@ -113,3 +114,53 @@ def investment_calendar_source_fact(
         ),
         payload=event_payload,
     )
+
+
+def reasoning_source_facts_runtime_eligibility(
+    source_facts: Iterable[Mapping[str, object]],
+    now_at: datetime = None,
+) -> Dict[str, object]:
+    """Decide whether immutable source facts still belong in the live ABox.
+
+    Calendar history remains durable in MySQL, but candidate release replay
+    must not turn an expired schedule back into current ontology state. Mixed
+    fact batches and explicit removal revisions remain eligible.
+    """
+    facts = [dict(item or {}) for item in source_facts or [] if isinstance(item, Mapping)]
+    calendar_facts = [
+        item for item in facts
+        if str(item.get("factType") or item.get("fact_type") or "")
+        in {"EarningsCalendarEvent", "InvestmentCalendarEvent"}
+    ]
+    if not calendar_facts or len(calendar_facts) != len(facts):
+        return {
+            "eligible": True,
+            "status": "not-calendar-only",
+            "factCount": len(facts),
+            "calendarFactCount": len(calendar_facts),
+        }
+
+    event_ids = []
+    for item in calendar_facts:
+        payload = dict(item.get("payload") or {})
+        event = InvestmentCalendarEvent.from_payload(payload)
+        event_ids.append(str(event.event_id or item.get("aggregateId") or ""))
+        if event.status in {"deleted", "superseded", "rejected"}:
+            return {
+                "eligible": True,
+                "status": "calendar-removal-revision",
+                "eventIds": event_ids,
+            }
+        if event.reasoning_eligible(now_at=now_at):
+            return {
+                "eligible": True,
+                "status": "calendar-review-window-active",
+                "eventIds": event_ids,
+            }
+    return {
+        "eligible": False,
+        "status": "expired-calendar-history",
+        "reasonCode": "expired-calendar-history",
+        "reason": "The calendar fact is outside the live reasoning review window.",
+        "eventIds": event_ids,
+    }

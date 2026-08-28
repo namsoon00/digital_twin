@@ -76,7 +76,11 @@ def evidence(
         source=source,
         title=title,
         summary=statement,
-        url=canonical_url or "https://" + source.lower().replace(" ", "-") + ".example.test/" + evidence_id,
+        url=canonical_url or (
+            "https://www.reuters.com/" + evidence_id
+            if source == "Reuters"
+            else "https://" + source.lower().replace(" ", "-") + ".example.test/" + evidence_id
+        ),
         observed_at=published_at,
         polarity=polarity,
         published_at=published_at,

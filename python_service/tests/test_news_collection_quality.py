@@ -27,6 +27,7 @@ from digital_twin.domain.sent_article_filter import (
 from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpen
 from digital_twin.infrastructure import news_sources
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text, news_article_identity_token
+from digital_twin.news_intelligence.domain.provenance import resolve_source_provenance
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
@@ -89,6 +90,37 @@ class NewsCollectionQualityTests(unittest.TestCase):
 
         self.assertTrue(article_identity_keys(first).intersection(article_identity_keys(second)))
 
+    def test_canonical_publisher_does_not_inherit_yahoo_search_identity(self):
+        provenance = resolve_source_provenance(
+            {"articlePublisher": "Yahoo Finance"},
+            source="Stocktwits",
+            provider="Yahoo Finance Search",
+            url="https://stocktwits.com/news-articles/markets/equity/nvidia-update/example",
+            published_at="2026-08-27T09:00:00Z",
+            summary="Nvidia announced a material corporate update with transaction terms.",
+        )
+
+        self.assertEqual("Stocktwits", provenance.identity.publisher)
+        self.assertEqual("stocktwits.com", provenance.identity.publisher_domain)
+        self.assertEqual("limited", provenance.identity.source_trust_state)
+        self.assertEqual("Yahoo Finance Search", provenance.identity.distribution_channel)
+        self.assertTrue(provenance.provenance_complete)
+
+    def test_registered_canonical_host_overrides_mismatched_feed_publisher(self):
+        provenance = resolve_source_provenance(
+            {},
+            source="Yahoo Finance",
+            provider="Yahoo Finance Search",
+            url="https://marketbeat.com/stocks/NASDAQ/NVDA/earnings/",
+            published_at="2026-08-27T09:00:00Z",
+            summary="Nvidia published quarterly results and guidance.",
+        )
+
+        self.assertEqual("MarketBeat", provenance.identity.publisher)
+        self.assertEqual("marketbeat.com", provenance.identity.publisher_domain)
+        self.assertIn("declared-publisher-domain-mismatch", provenance.reason_codes)
+        self.assertTrue(provenance.provenance_complete)
+
     def test_same_symbol_earnings_articles_share_a_bounded_event_identity(self):
         first = {
             "kind": "news",
@@ -137,6 +169,71 @@ class NewsCollectionQualityTests(unittest.TestCase):
         }
 
         self.assertFalse(article_identity_keys(first).intersection(article_identity_keys(later)))
+
+    def test_acquisition_headline_cannot_inherit_an_earnings_episode_identity(self):
+        earnings = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-27T09:00:00Z",
+            "evidenceId": "research:NVDA:news:earnings",
+            "title": "Nvidia reports quarterly earnings and revenue growth",
+            "url": "https://example.test/nvidia-earnings",
+        }
+        acquisition = {
+            "kind": "news",
+            "symbol": "NVDA",
+            # This reproduces the stale classifier value found in production.
+            "eventType": "earnings",
+            "publishedAt": "2026-08-27T10:00:00Z",
+            "evidenceId": "research:NVDA:news:hugging-face",
+            "title": "Nvidia Is Buying Hugging Face for $12.9 Billion",
+            "url": "https://example.test/nvidia-hugging-face",
+        }
+
+        self.assertFalse(article_identity_keys(earnings).intersection(article_identity_keys(acquisition)))
+
+    def test_guidance_from_same_release_shares_the_earnings_episode(self):
+        earnings = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-27T09:00:00Z",
+            "evidenceId": "research:NVDA:news:earnings",
+            "title": "Nvidia reports quarterly earnings and revenue growth",
+            "url": "https://example.test/nvidia-earnings",
+        }
+        guidance = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "guidance",
+            "publishedAt": "2026-08-27T10:00:00Z",
+            "evidenceId": "research:NVDA:news:guidance",
+            "title": "Nvidia revenue forecast rises after quarterly results",
+            "url": "https://example.test/nvidia-guidance",
+        }
+
+        self.assertTrue(article_identity_keys(earnings).intersection(article_identity_keys(guidance)))
+
+    def test_earnings_preview_does_not_suppress_the_actual_release(self):
+        preview = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-26T09:00:00Z",
+            "evidenceId": "research:NVDA:news:preview",
+            "title": "What to expect ahead of Nvidia Q2 2026 earnings",
+            "url": "https://example.test/nvidia-preview",
+        }
+        release = {
+            **preview,
+            "publishedAt": "2026-08-27T09:00:00Z",
+            "evidenceId": "research:NVDA:news:release",
+            "title": "Nvidia reports Q2 2026 earnings and raises guidance",
+            "url": "https://example.test/nvidia-release",
+        }
+
+        self.assertFalse(article_identity_keys(preview).intersection(article_identity_keys(release)))
 
     def test_legacy_weak_precomputed_keys_are_ignored_when_rebuilding_delivery_history(self):
         context = {
@@ -444,6 +541,32 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertEqual("degraded", health.state)
         self.assertEqual("article-original-url-budget-exhausted", health.reason_code)
 
+    def test_health_is_degraded_when_circuit_breakers_reduce_provider_coverage(self):
+        health = evaluate_news_collection_health({
+            "status": "ok",
+            "targetCount": 1,
+            "fetchedCount": 1,
+            "savedCount": 1,
+            "statuses": [
+                {"source": "google_rss_kr", "ok": True, "count": 1},
+                {
+                    "source": "yahoo_finance",
+                    "providerSuppressed": True,
+                    "circuitOpen": True,
+                    "message": "circuit open",
+                },
+                {
+                    "source": "gdelt",
+                    "providerSuppressed": True,
+                    "circuitOpen": True,
+                    "message": "circuit open",
+                },
+            ],
+        })
+
+        self.assertEqual("degraded", health.state)
+        self.assertEqual("provider-coverage-degraded", health.reason_code)
+
     def test_collection_admission_keeps_only_direct_material_body_from_trusted_source(self):
         material = ResearchEvidence(
             "research:AAPL:news:material",
@@ -535,7 +658,7 @@ class NewsCollectionQualityTests(unittest.TestCase):
                 "Reuters",
                 "Apple " + ("reports earnings" if event_type == "earnings" else "adds an accessory color"),
                 "Apple published a company update.",
-                "https://reuters.example.test/" + evidence_id.rsplit(":", 1)[-1],
+                "https://www.reuters.com/" + evidence_id.rsplit(":", 1)[-1],
                 observed_at,
                 polarity,
                 published_at=observed_at,

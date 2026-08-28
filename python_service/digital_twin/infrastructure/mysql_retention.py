@@ -18,6 +18,7 @@ DEFAULT_SUPPRESSED_NOTIFICATION_RETENTION_MINUTES = 120
 DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 20
 DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 30
 DEFAULT_SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS = 365
+DEFAULT_NEWS_NOTIFICATION_ADMISSION_RETENTION_DAYS = 90
 # The event log is a transport/audit trail, not the canonical store for the
 # same snapshot, evidence claim, or delivered notification. These payloads
 # can be large, so retain a bounded operator window per high-volume event.
@@ -55,10 +56,15 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "notification_jobs",
     "notification_article_delivery_ledger",
     "news_notification_admissions",
+    "news_notification_admission_heads",
     "ai_inference_subject_heads",
     "ai_inference_requests",
     "ai_inference_results",
     "news_article_enrichment_revisions",
+    "news_article_enrichment_heads",
+    "news_event_episodes",
+    "news_event_claims",
+    "news_event_episode_articles",
     "news_analysis_work_items",
     "model_review_jobs",
     "monitor_sent",
@@ -220,6 +226,16 @@ def sent_article_delivery_ledger_retention_days(settings: Mapping[str, object] =
     )
 
 
+def news_notification_admission_retention_days(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(
+        settings or {},
+        "newsNotificationAdmissionRetentionDays",
+        DEFAULT_NEWS_NOTIFICATION_ADMISSION_RETENTION_DAYS,
+        7,
+        365,
+    )
+
+
 def operational_projection_run_keep_count(settings: Mapping[str, object] = None) -> int:
     """Keep a compact, per-world projection audit window.
 
@@ -349,6 +365,18 @@ def sent_article_delivery_ledger_cutoff(
         current = current.replace(tzinfo=timezone.utc)
     current = current.astimezone(timezone.utc)
     cutoff = current - timedelta(days=sent_article_delivery_ledger_retention_days(settings))
+    return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def news_notification_admission_cutoff(
+    settings: Mapping[str, object] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    cutoff = current - timedelta(days=news_notification_admission_retention_days(settings))
     return cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
@@ -591,6 +619,17 @@ def _delete_expired_article_delivery_ledger_rows(connection, cutoff_iso: str, ba
         " WHERE `delivered_at` < "
         + cutoff_sql
         + " ORDER BY `delivered_at`, `account_id`, `identity_key` LIMIT %s"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_expired_news_notification_admission_rows(connection, cutoff_iso: str, batch_size: int) -> int:
+    cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    sql = (
+        "DELETE FROM `news_notification_admissions`"
+        " WHERE `updated_at` < "
+        + cutoff_sql
+        + " ORDER BY `updated_at`, `admission_id` LIMIT %s"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
@@ -983,6 +1022,7 @@ def apply_mysql_operational_history_retention(
     ai_inference_queue_retention_hours = operational_ai_inference_queue_retention_hours(configured)
     delivered_notification_keep_count = operational_delivered_notification_keep_count(configured)
     article_delivery_ledger_cutoff = sent_article_delivery_ledger_cutoff(configured, now=now)
+    admission_cutoff = news_notification_admission_cutoff(configured, now=now)
     locked = False
     if use_lock:
         locked = _acquire_lock(connection)
@@ -1067,6 +1107,14 @@ def apply_mysql_operational_history_retention(
         )
         deleted_by_table["notification_article_delivery_ledger"] = article_delivery_ledger_deleted
         deleted_by_policy["time:notification_article_delivery_ledger"] = article_delivery_ledger_deleted
+
+        admission_deleted = _delete_expired_news_notification_admission_rows(
+            connection,
+            admission_cutoff,
+            batch_size,
+        )
+        deleted_by_table["news_notification_admissions"] = admission_deleted
+        deleted_by_policy["time:news_notification_admissions"] = admission_deleted
 
         domain_event_deleted = _delete_large_domain_events_over_keep_count(
             connection,
@@ -1172,6 +1220,8 @@ def apply_mysql_operational_history_retention(
         "deliveredNotificationKeepCount": delivered_notification_keep_count,
         "sentArticleDeliveryLedgerRetentionDays": sent_article_delivery_ledger_retention_days(configured),
         "sentArticleDeliveryLedgerCutoffIso": article_delivery_ledger_cutoff,
+        "newsNotificationAdmissionRetentionDays": news_notification_admission_retention_days(configured),
+        "newsNotificationAdmissionCutoffIso": admission_cutoff,
         "largeDomainEventKeepCount": operational_large_domain_event_keep_count(configured),
         "largeDomainEventNames": operational_large_domain_event_names(configured),
         "projectionRunKeepCount": projection_run_keep_count,

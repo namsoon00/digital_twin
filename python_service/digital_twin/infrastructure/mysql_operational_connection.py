@@ -1227,6 +1227,29 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS news_notification_admission_heads (
+        admission_head_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        evidence_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_revision VARCHAR(191) NOT NULL DEFAULT '',
+        enrichment_revision VARCHAR(191) NOT NULL DEFAULT '',
+        policy_version VARCHAR(191) NOT NULL DEFAULT '',
+        decision VARCHAR(32) NOT NULL DEFAULT 'suppressed',
+        reason_code VARCHAR(96) NOT NULL DEFAULT '',
+        matched_identity_keys_json LONGTEXT NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        notification_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        observation_count BIGINT NOT NULL DEFAULT 1,
+        first_observed_at VARCHAR(40) NOT NULL,
+        last_observed_at VARCHAR(40) NOT NULL,
+        last_transition_at VARCHAR(40) NOT NULL,
+        KEY idx_news_admission_head_account_time (account_id, last_observed_at, admission_head_id),
+        KEY idx_news_admission_head_evidence (evidence_id, source_revision, enrichment_revision),
+        KEY idx_news_admission_head_decision_time (decision, last_observed_at, admission_head_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS news_notification_admissions (
         admission_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL DEFAULT '',
@@ -1720,9 +1743,65 @@ MYSQL_SCHEMA = [
         payload_json LONGTEXT NOT NULL,
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
-        UNIQUE KEY idx_news_enrichment_subject (evidence_id, source_revision, analyzer_release),
+        KEY idx_news_enrichment_subject (evidence_id, source_revision, analyzer_release, updated_at),
         KEY idx_news_enrichment_status_time (analysis_status, updated_at),
         KEY idx_news_enrichment_source (source_revision, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_article_enrichment_heads (
+        evidence_id VARCHAR(191) NOT NULL,
+        source_revision VARCHAR(191) NOT NULL,
+        analyzer_release VARCHAR(191) NOT NULL,
+        enrichment_revision VARCHAR(191) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (evidence_id, source_revision, analyzer_release),
+        KEY idx_news_enrichment_head_revision (enrichment_revision, updated_at),
+        KEY idx_news_enrichment_head_updated (updated_at, evidence_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_event_episodes (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        event_family VARCHAR(64) NOT NULL DEFAULT '',
+        event_phase VARCHAR(32) NOT NULL DEFAULT '',
+        event_date VARCHAR(40) NOT NULL DEFAULT '',
+        reporting_period VARCHAR(32) NOT NULL DEFAULT '',
+        current_evidence_id VARCHAR(191) NOT NULL DEFAULT '',
+        article_count BIGINT NOT NULL DEFAULT 1,
+        claim_count BIGINT NOT NULL DEFAULT 0,
+        first_seen_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        KEY idx_news_event_episode_symbol_time (symbol, updated_at, episode_id),
+        KEY idx_news_event_episode_family_time (event_family, updated_at, episode_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_event_claims (
+        claim_key VARCHAR(191) PRIMARY KEY,
+        episode_id VARCHAR(191) NOT NULL,
+        evidence_id VARCHAR(191) NOT NULL,
+        claim_kind VARCHAR(64) NOT NULL DEFAULT '',
+        statement_hash VARCHAR(191) NOT NULL DEFAULT '',
+        statement_text TEXT NOT NULL,
+        first_seen_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_news_event_claim_episode (episode_id, updated_at, claim_key),
+        KEY idx_news_event_claim_evidence (evidence_id, claim_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_event_episode_articles (
+        episode_id VARCHAR(191) NOT NULL,
+        evidence_id VARCHAR(191) NOT NULL,
+        evidence_relationship VARCHAR(32) NOT NULL DEFAULT '',
+        first_seen_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (episode_id, evidence_id),
+        KEY idx_news_event_article_evidence (evidence_id, episode_id),
+        KEY idx_news_event_article_updated (updated_at, episode_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

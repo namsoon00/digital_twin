@@ -13,8 +13,11 @@ from digital_twin.infrastructure.external_signals import ExternalSignalProvider
 from digital_twin.infrastructure.mysql_research_evidence import MySQLResearchEvidenceStore, merge_derived_evidence_payload
 from digital_twin.news_intelligence.domain.article import article_source_revision
 from mysql_fixtures import (
+    TestNotificationJobStore,
     TestResearchEvidenceStore,
     mysql_execute,
+    mysql_fetchall,
+    mysql_fetchone,
     mysql_test_settings,
     reset_mysql_test_database,
     test_store_seed,
@@ -52,7 +55,13 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
 
     def setUp(self):
         mysql_execute(self.seed, "DELETE FROM news_analysis_work_items")
+        mysql_execute(self.seed, "DELETE FROM news_event_claims")
+        mysql_execute(self.seed, "DELETE FROM news_event_episode_articles")
+        mysql_execute(self.seed, "DELETE FROM news_event_episodes")
+        mysql_execute(self.seed, "DELETE FROM news_article_enrichment_heads")
         mysql_execute(self.seed, "DELETE FROM news_article_enrichment_revisions")
+        mysql_execute(self.seed, "DELETE FROM news_notification_admission_heads")
+        mysql_execute(self.seed, "DELETE FROM news_notification_admissions")
         mysql_execute(self.seed, "DELETE FROM research_evidence")
 
     def test_replayed_source_payload_preserves_verified_enrichment(self):
@@ -340,6 +349,139 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual("complete", after.raw_payload["translationStatus"])
             self.assertIsNotNone(exact)
             self.assertEqual("ok", exact.raw_payload["aiAnalysis"]["status"])
+
+    def test_news_enrichment_revisions_are_immutable_and_head_tracks_latest(self):
+        store = TestResearchEvidenceStore(self.seed)
+        original = self.direct_news_evidence("research:005930:news:immutable")
+        original.raw_payload.update({
+            "articleText": "Samsung reported HBM demand and annual guidance. " * 8,
+            "sourceLanguage": "en",
+            "translationStatus": "complete",
+            "articleSummaryKo": "삼성전자가 HBM 수요와 연간 전망을 발표했습니다.",
+            "summaryQualityState": "ready",
+            "articleAiAnalysisVersion": "news-ai-analysis-test",
+            "aiAnalysis": {
+                "status": "ok",
+                "version": "news-ai-analysis-test",
+                "sourceTextHash": "immutable-source-hash",
+            },
+        })
+        store.upsert_many([original])
+        first = store.get(original.evidence_id)
+        source_revision = first.raw_payload["articleSourceRevision"]
+        first_revision = first.raw_payload["articleEnrichmentRevision"]
+
+        revised = copy.deepcopy(original)
+        revised.raw_payload["articleSummaryKo"] = "삼성전자가 HBM 수요 증가와 상향된 연간 전망을 발표했습니다."
+        store.upsert_many([revised])
+        latest = store.get(original.evidence_id)
+        second_revision = latest.raw_payload["articleEnrichmentRevision"]
+        rows = mysql_fetchall(
+            self.seed,
+            "SELECT enrichment_revision FROM news_article_enrichment_revisions "
+            "WHERE evidence_id = ? ORDER BY created_at, enrichment_revision",
+            (original.evidence_id,),
+        )
+        head = mysql_fetchone(
+            self.seed,
+            "SELECT enrichment_revision FROM news_article_enrichment_heads "
+            "WHERE evidence_id = ? AND source_revision = ? AND analyzer_release = ?",
+            (original.evidence_id, source_revision, "news-ai-analysis-test"),
+        )
+        historical = store.get_news_evidence_revision(
+            original.evidence_id,
+            source_revision,
+            first_revision,
+        )
+
+        self.assertNotEqual(first_revision, second_revision)
+        self.assertEqual(2, len(rows))
+        self.assertEqual(second_revision, head[0])
+        self.assertEqual(
+            "삼성전자가 HBM 수요와 연간 전망을 발표했습니다.",
+            historical.raw_payload["articleSummaryKo"],
+        )
+
+    def test_news_admission_records_observations_in_head_and_only_state_transitions_in_history(self):
+        store = TestNotificationJobStore(self.seed)
+        payload = {
+            "accountId": "main",
+            "evidenceId": "research:005930:news:admission",
+            "symbol": "005930",
+            "sourceRevision": "news-source:one",
+            "enrichmentRevision": "news-enrichment:one",
+            "policyVersion": "news-notification-admission-test",
+            "decision": "suppressed",
+            "reasonCode": "already-sent",
+            "matchedIdentityKeys": ["event:earnings:005930:2026-q2"],
+            "sourceEventId": "event:first",
+        }
+
+        first_head = store.record_news_notification_admission(payload)
+        second_head = store.record_news_notification_admission({
+            **payload,
+            "enrichmentRevision": "news-enrichment:two",
+            "sourceEventId": "event:replay",
+        })
+        unchanged = store.news_notification_admission_status()
+        head = mysql_fetchone(
+            self.seed,
+            "SELECT observation_count FROM news_notification_admission_heads WHERE admission_head_id = ?",
+            (first_head,),
+        )
+
+        store.record_news_notification_admission({
+            **payload,
+            "decision": "queued",
+            "reasonCode": "material-update",
+            "notificationJobId": "notification:one",
+        })
+        transitioned = store.news_notification_admission_status()
+        first_repair = store.repair_news_notification_admissions(dry_run=False)
+        second_repair = store.repair_news_notification_admissions(dry_run=False)
+        repaired_head = mysql_fetchone(
+            self.seed,
+            "SELECT observation_count FROM news_notification_admission_heads WHERE admission_head_id = ?",
+            (first_head,),
+        )
+
+        self.assertEqual(first_head, second_head)
+        self.assertEqual(2, head[0])
+        self.assertEqual(1, unchanged["headCount"])
+        self.assertEqual(1, unchanged["transitionCount"])
+        self.assertEqual(2, transitioned["transitionCount"])
+        self.assertEqual(2, first_repair["transitionCount"])
+        self.assertEqual(2, second_repair["transitionCount"])
+        self.assertEqual(3, repaired_head[0])
+
+    def test_earnings_event_episode_persists_articles_and_claims(self):
+        store = TestResearchEvidenceStore(self.seed)
+        evidence = self.direct_news_evidence(
+            "research:005930:news:q2-results",
+            url="https://www.reuters.com/markets/asia/samsung-q2-results",
+        )
+        evidence.title = "Samsung reports Q2 2026 earnings and raises guidance"
+        evidence.raw_payload.update({
+            "eventType": "earnings",
+            "claimLedger": {
+                "claims": [{
+                    "claimKind": "reported-fact",
+                    "statement": "Samsung reported second-quarter earnings and raised annual guidance.",
+                }],
+            },
+        })
+
+        store.upsert_many([evidence])
+        persisted = store.get(evidence.evidence_id)
+        episode_id = persisted.raw_payload["eventEpisodeId"]
+        episode = mysql_fetchone(
+            self.seed,
+            "SELECT article_count, claim_count FROM news_event_episodes WHERE episode_id = ?",
+            (episode_id,),
+        )
+
+        self.assertTrue(episode_id)
+        self.assertEqual((1, 1), episode)
 
     def test_stale_cleanup_skips_a_row_locked_by_another_worker(self):
         with tempfile.TemporaryDirectory() as temp:

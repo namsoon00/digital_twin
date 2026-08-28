@@ -10,8 +10,8 @@ from . import news_analysis as news_domain
 from ..news_intelligence.application.analyze_article import annotate_evidence_eligibility
 
 
-NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v15-target-scoped-summary"
-NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v15-target-scoped-summary"
+NEWS_AI_ANALYSIS_VERSION = "news-ai-analysis-v16-grounded-event-summary"
+NEWS_AI_PROMPT_VERSION = "news-ai-prompt-v16-grounded-event-summary"
 
 IMPACT_LABELS = {
     "support": "호재",
@@ -190,7 +190,11 @@ GENERIC_SUMMARY_PATTERNS = (
 
 NUMBER_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z가-힣0-9])(?:[$€£]\s*)?\d[\d,]*(?:\.\d+)?\s*"
-    r"(?:-?\s*(?:trillion|billion|million|thousand)(?:th)?|percent|bp|%|조|억|만|천|원|달러|주|대|개|명|마일)?",
+    r"(?:-?\s*(?:trillion|billion|million|thousand)(?:th)?|trn|tn|bn|mn|bps?|basis\s+points?|percent|[bmk]|bp|%|조|억|만|천|원|달러|gw|mw|기가와트|메가와트|주|대|개|명|마일|자)?",
+    re.IGNORECASE,
+)
+RANGE_NUMBER_PATTERN = re.compile(
+    r"(?<![A-Za-z가-힣0-9])([0-9]+(?:\.[0-9]+)?)\s*(?:~|–|—|-)\s*([0-9]+(?:\.[0-9]+)?)\s*(%|percent|bp|bps|basis\s+points?)",
     re.IGNORECASE,
 )
 KOREAN_MAGNITUDE_SEQUENCE_PATTERN = re.compile(
@@ -268,21 +272,51 @@ ENGLISH_MONTH_PATTERN = re.compile(
 )
 
 
-def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
+@dataclass(frozen=True)
+class NormalizedNumber:
+    kind: str
+    amount: float
+    token: str
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "kind": self.kind,
+            "normalizedValue": self.amount,
+            "token": self.token,
+        }
+
+
+def normalized_numeric_values(value: object) -> List[NormalizedNumber]:
     """Normalize English and Korean magnitude words for summary grounding."""
     text = str(value or "")
-    values: List[Tuple[str, float]] = []
+    values: List[NormalizedNumber] = []
     multipliers = {
         "trillion": 1_000_000_000_000.0,
+        "trn": 1_000_000_000_000.0,
+        "tn": 1_000_000_000_000.0,
         "billion": 1_000_000_000.0,
+        "bn": 1_000_000_000.0,
+        "b": 1_000_000_000.0,
         "million": 1_000_000.0,
+        "mn": 1_000_000.0,
+        "m": 1_000_000.0,
         "thousand": 1_000.0,
+        "k": 1_000.0,
         "조": 1_000_000_000_000.0,
         "억": 100_000_000.0,
         "만": 10_000.0,
         "천": 1_000.0,
     }
     compound_spans: List[Tuple[int, int]] = []
+    range_spans: List[Tuple[int, int]] = []
+    for match in RANGE_NUMBER_PATTERN.finditer(text):
+        unit = str(match.group(3) or "").casefold()
+        kind = "percent" if "%" in unit or "percent" in unit else "basis-point"
+        values.extend([
+            NormalizedNumber(kind, float(match.group(1)), match.group(0).strip()),
+            NormalizedNumber(kind, float(match.group(2)), match.group(0).strip()),
+        ])
+        range_spans.append(match.span())
     for match in KOREAN_MAGNITUDE_SEQUENCE_PATTERN.finditer(text):
         token = match.group(0).strip()
         total = 0.0
@@ -297,10 +331,13 @@ def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
         if trailing:
             total += float(trailing.group(1).replace(",", ""))
         kind = "amount" if re.search(r"(?:원|달러)\s*$", token) else "plain"
-        values.append((kind, total))
+        values.append(NormalizedNumber(kind, total, token))
         compound_spans.append(match.span())
     for match in NUMBER_TOKEN_PATTERN.finditer(text):
-        if any(match.start() < end and match.end() > start for start, end in compound_spans):
+        if any(
+            match.start() < end and match.end() > start
+            for start, end in [*compound_spans, *range_spans]
+        ):
             continue
         token = match.group(0).strip()
         numeric = re.search(r"\d[\d,]*(?:\.\d+)?", token)
@@ -316,40 +353,80 @@ def normalized_numeric_values(value: object) -> List[Tuple[str, float]]:
         suffix = token[numeric.end():].strip().casefold()
         prefix = token[:numeric.start()]
         if "%" in suffix or "percent" in suffix:
-            values.append(("percent", amount))
+            values.append(NormalizedNumber("percent", amount, token))
             continue
-        if "bp" in suffix:
-            values.append(("basis-point", amount))
+        if "bp" in suffix or "basis point" in suffix:
+            values.append(NormalizedNumber("basis-point", amount, token))
             continue
-        multiplier = next((scale for unit, scale in multipliers.items() if unit in suffix), 1.0)
+        if suffix in {"gw", "기가와트"}:
+            values.append(NormalizedNumber("capacity-gw", amount, token))
+            continue
+        if suffix in {"mw", "메가와트"}:
+            values.append(NormalizedNumber("capacity-gw", amount / 1000.0, token))
+            continue
+        if suffix == "자":
+            values.append(NormalizedNumber("document-length", amount, token))
+            continue
+        magnitude = re.sub(r"(?:원|달러|주|대|개|명|마일)$", "", suffix).strip()
+        multiplier = multipliers.get(magnitude, 1.0)
         is_amount = bool(prefix.strip() or any(unit in suffix for unit in ["원", "달러"]))
-        values.append(("amount" if is_amount else "plain", amount * multiplier))
+        values.append(NormalizedNumber("amount" if is_amount else "plain", amount * multiplier, token))
     for match in ENGLISH_PERIOD_NUMBER_PATTERN.finditer(text):
         word = str(match.group(1) or "").casefold()
         quarter = str(match.group(2) or "")
         amount = ENGLISH_PERIOD_NUMBERS.get(word) if word else float(quarter)
-        values.append(("plain", amount))
+        values.append(NormalizedNumber("plain", amount, match.group(0)))
     for match in ENGLISH_NUMBER_WORD_PATTERN.finditer(text):
-        values.append(("plain", ENGLISH_NUMBER_WORDS[match.group(1).casefold()]))
+        values.append(NormalizedNumber("plain", ENGLISH_NUMBER_WORDS[match.group(1).casefold()], match.group(0)))
     for match in ENGLISH_COMPOUND_NUMBER_PATTERN.finditer(text):
         amount = ENGLISH_TENS_NUMBERS[match.group(1).casefold()]
         if match.group(2):
             amount += ENGLISH_NUMBER_WORDS[match.group(2).casefold()]
-        values.append(("plain", amount))
+        values.append(NormalizedNumber("plain", amount, match.group(0)))
     for match in ENGLISH_MONTH_PATTERN.finditer(text):
-        values.append(("plain", ENGLISH_MONTH_NUMBERS[match.group(1).casefold()]))
+        values.append(NormalizedNumber("plain", ENGLISH_MONTH_NUMBERS[match.group(1).casefold()], match.group(0)))
+    for match in re.finditer(r"\b(?:a|one)\s+(?:full\s+)?(?:fiscal\s+)?(?:year|quarter|month|week)\b", text, re.IGNORECASE):
+        values.append(NormalizedNumber("plain", 1.0, match.group(0)))
+    for match in re.finditer(r"\b(?:(?:one|1)\s*|per\s+(?:one\s+)?)(?:gigawatt|gw)\b", text, re.IGNORECASE):
+        values.append(NormalizedNumber("capacity-gw", 1.0, match.group(0)))
+    for match in re.finditer(r"\bfy\s*['’]?(\d{2}|20\d{2})\b", text, re.IGNORECASE):
+        raw_year = float(match.group(1))
+        values.append(NormalizedNumber("plain", raw_year if raw_year >= 2000 else 2000.0 + raw_year, match.group(0)))
+    if re.search(r"\b(?:no|zero)\s+(?:china\s+)?(?:revenue|sales|income)\b", text, re.IGNORECASE):
+        values.append(NormalizedNumber("plain", 0.0, "no/zero revenue"))
     return values
 
 
-def numeric_value_is_grounded(value: Tuple[str, float], source_values: Iterable[Tuple[str, float]]) -> bool:
-    kind, amount = value
-    for source_kind, source_amount in source_values:
-        if source_kind != kind and {source_kind, kind} != {"amount", "plain"}:
+def numeric_kinds_compatible(left: str, right: str) -> bool:
+    return left == right or {left, right} in ({"amount", "plain"}, {"plain", "period"})
+
+
+def numeric_value_is_grounded(value: NormalizedNumber, source_values: Iterable[NormalizedNumber]) -> bool:
+    for source_value in source_values:
+        if not numeric_kinds_compatible(source_value.kind, value.kind):
             continue
-        tolerance = max(0.01, abs(source_amount) * 0.015)
-        if abs(amount - source_amount) <= tolerance:
+        tolerance = max(0.01, abs(source_value.amount) * 0.015)
+        if abs(value.amount - source_value.amount) <= tolerance:
             return True
     return False
+
+
+def numeric_grounding_diagnostic(
+    value: NormalizedNumber,
+    source_values: Iterable[NormalizedNumber],
+) -> Dict[str, object]:
+    compatible = [
+        source_value for source_value in source_values
+        if numeric_kinds_compatible(source_value.kind, value.kind)
+    ]
+    nearest = min(
+        compatible,
+        default=None,
+        key=lambda source_value: abs(source_value.amount - value.amount),
+    )
+    result = value.to_dict()
+    result["nearestSource"] = nearest.to_dict() if nearest else {}
+    return result
 
 
 def source_language(value: object) -> str:
@@ -389,11 +466,16 @@ def summary_quality_payload(summary: object, source_text: object, target_name: o
         issues.append("summary-boilerplate")
     source_numbers = normalized_numeric_values(source)
     summary_numbers = normalized_numeric_values(text)
-    if summary_numbers and source_numbers and any(
-        not numeric_value_is_grounded(number, source_numbers)
-        for number in summary_numbers
-    ):
+    document_metadata_numbers = [number for number in summary_numbers if number.kind == "document-length"]
+    factual_summary_numbers = [number for number in summary_numbers if number.kind != "document-length"]
+    ungrounded_numbers = [
+        number for number in factual_summary_numbers
+        if not numeric_value_is_grounded(number, source_numbers)
+    ]
+    if ungrounded_numbers:
         issues.append("summary-number-not-grounded")
+    if document_metadata_numbers:
+        advisories.append("summary-document-metadata-number")
     target = str(target_name or "").strip()
     target_key = target.casefold()
     if target and source_language(text) == "ko" and len(text) >= 28 and target_key not in text.casefold() and target_key not in source.casefold():
@@ -406,6 +488,15 @@ def summary_quality_payload(summary: object, source_text: object, target_name: o
         "issues": issues[:8],
         "advisories": advisories[:8],
         "summaryLength": len(text),
+        "numericGrounding": {
+            "summaryNumberCount": len(factual_summary_numbers),
+            "sourceNumberCount": len(source_numbers),
+            "unmatched": [
+                numeric_grounding_diagnostic(number, source_numbers)
+                for number in ungrounded_numbers[:8]
+            ],
+            "documentMetadata": [number.to_dict() for number in document_metadata_numbers[:4]],
+        },
         "checkedAtVersion": NEWS_AI_ANALYSIS_VERSION,
     }
 
@@ -1415,6 +1506,10 @@ def apply_news_ai_analysis(evidence: ResearchEvidence, analysis_payload: Dict[st
     analysis = normalize_ai_analysis(analysis_payload, fallback)
     analysis_dict = analysis.to_dict()
     title, body, feed_summary, _read_scope = article_text_parts(evidence)
+    classified_event_type = news_domain.classify_news_event_type(title, body or feed_summary)
+    payload["eventType"] = classified_event_type
+    payload["eventClassificationVersion"] = news_domain.EVENT_CLASSIFICATION_VERSION
+    analysis_dict["eventType"] = classified_event_type
     employment_survey = news_domain.employment_preference_survey_context(title, body or feed_summary)
     scoped_article_text = target_scoped_article_text(
         analysis_target,
@@ -1724,6 +1819,8 @@ def build_news_ai_analysis_prompt(target: NewsCollectionTarget, evidence: Resear
             "watchPoints must name a measurable follow-up such as an official filing, guidance number, price reaction, or volume confirmation. Avoid generic phrases when a specific condition is available.",
             "Write the Korean summary as complete natural sentences. Do not repeat the title, source name, relation status, or phrases such as 확인할 뉴스, 관련 뉴스입니다, 핵심 내용은.",
             "Never invent a number, company action, counterparty, or date. Omit uncertain details rather than guessing.",
+            "Preserve every source number's currency, percentage/basis-point meaning, range, and magnitude. A translated Korean magnitude must be mathematically equivalent to the source token.",
+            "Do not mention prompt length, body character count, preview length, truncation character count, or any other processing metadata in summary fields.",
             "Never include publisher rights notices, photo credits, reporter bylines, or navigation headlines in any summary field.",
             "Do not use generic sector templates such as AI/data-center demand unless that fact is present in the title, feed summary, or body preview.",
             "A merger-review timeline, data request, or stakeholder-hearing update is a regulatory-process status. Do not call it guidance, revenue or earnings change, approval, or rejection unless the target-specific text explicitly says so.",

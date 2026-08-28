@@ -21,10 +21,14 @@ class NewsPipelineRepairService:
             limit=max(1, min(500, int(limit or 300))),
             dry_run=bool(dry_run),
         )
+        admission_repair = self.notification_store.repair_news_notification_admissions(
+            dry_run=bool(dry_run),
+        )
         return {
             "status": "preview" if dry_run else "repaired",
             "dryRun": bool(dry_run),
             "evidence": dict(evidence_repair or {}),
             "deliveryIdentity": dict(identity_repair or {}),
             "eventIdentityBackfill": dict(event_identity_backfill or {}),
+            "notificationAdmissions": dict(admission_repair or {}),
         }

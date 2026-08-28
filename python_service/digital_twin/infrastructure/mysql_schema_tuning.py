@@ -27,6 +27,15 @@ class MySQLIndexDefinition:
 
 
 @dataclass(frozen=True)
+class MySQLUniqueIndexRetirementDefinition:
+    table: str
+    name: str
+
+    def alter_sql(self) -> str:
+        return "ALTER TABLE " + quote_identifier(self.table) + " DROP INDEX " + quote_identifier(self.name)
+
+
+@dataclass(frozen=True)
 class MySQLColumnDefinition:
     table: str
     name: str
@@ -323,6 +332,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`lifecycle_state`, `last_seen_at`, `published_at`, `evidence_id`",
         ),
     ),
+    "news_article_enrichment_revisions": (
+        MySQLIndexDefinition(
+            "news_article_enrichment_revisions",
+            "idx_news_enrichment_subject",
+            "`evidence_id`, `source_revision`, `analyzer_release`, `updated_at`",
+        ),
+    ),
     "ontology_ai_opinion_samples": (
         MySQLIndexDefinition("ontology_ai_opinion_samples", "idx_ontology_quality_created", "`created_at`, `sample_id`"),
     ),
@@ -471,6 +487,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
         ),
     ),
 }
+
+MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS: Sequence[MySQLUniqueIndexRetirementDefinition] = (
+    MySQLUniqueIndexRetirementDefinition(
+        "news_article_enrichment_revisions",
+        "idx_news_enrichment_subject",
+    ),
+)
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
@@ -845,6 +868,16 @@ def mysql_index_exists(connection, table: str, index_name: str) -> bool:
     return bool(cursor.fetchone())
 
 
+def mysql_index_is_unique(connection, table: str, index_name: str) -> bool:
+    cursor = _execute(connection, "SHOW INDEX FROM " + quote_identifier(table) + " WHERE Key_name = %s", (index_name,))
+    row = cursor.fetchone()
+    if not row:
+        return False
+    if isinstance(row, Mapping):
+        return int(row.get("Non_unique") if row.get("Non_unique") is not None else row.get("NON_UNIQUE") or 0) == 0
+    return len(row) > 1 and int(row[1] or 0) == 0
+
+
 def mysql_column_exists(connection, table: str, column_name: str) -> bool:
     cursor = _execute(connection, "SHOW COLUMNS FROM " + quote_identifier(table) + " LIKE %s", (column_name,))
     return bool(cursor.fetchone())
@@ -928,6 +961,19 @@ def ensure_mysql_indexes(
                 raise
             created.append(definition.name)
     return created
+
+
+def retire_mysql_unique_indexes(
+    connection,
+    definitions: Sequence[MySQLUniqueIndexRetirementDefinition],
+) -> List[str]:
+    retired: List[str] = []
+    for definition in definitions or ():
+        if not mysql_index_is_unique(connection, definition.table, definition.name):
+            continue
+        _execute(connection, definition.alter_sql())
+        retired.append(definition.table + "." + definition.name)
+    return retired
 
 
 def mysql_primary_key_columns(connection, table: str) -> List[str]:
@@ -1046,11 +1092,13 @@ def ensure_mysql_key_partitions(
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, List[str]]:
     columns = ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS)
     primary_keys = ensure_reasoning_rule_slot_namespace_primary_key(connection)
+    retired_unique_indexes = retire_mysql_unique_indexes(connection, MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS)
     return {
         "columns": columns,
         "primaryKeys": primary_keys,
         "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
         "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
+        "retiredUniqueIndexes": retired_unique_indexes,
         "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),
         "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),
     }

@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Set, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .news_analysis import normalized_article_title
-from ..news_intelligence.domain.story import story_identity
+from ..news_intelligence.domain.story import news_event_fingerprint, story_identity
 
 
 TRACKING_QUERY_KEYS = {
@@ -70,10 +70,7 @@ DEFAULT_CONTEXT_SCAN_MAX_DEPTH = 8
 DEFAULT_CONTEXT_SCAN_MAX_NODES = 1200
 DEFAULT_CONTEXT_SCAN_MAX_KEYS = 800
 SUPPRESSIBLE_IDENTITY_PREFIXES = {"event", "evidence", "story", "url"}
-EVENT_FAMILY_WINDOW_DAYS = {
-    "capital_policy": 0,
-    "earnings": 1,
-}
+EVENT_FAMILY_WINDOW_DAYS = {"earnings-release": 1}
 NEWS_DECISION_DRIVER_CATEGORIES = {
     "news",
     "article",
@@ -262,16 +259,17 @@ def _article_event_date(item: Dict[str, object]):
 
 
 def article_event_family_keys(item: Dict[str, object]) -> Set[str]:
-    """Group only event classes with a reliably bounded corporate episode."""
+    """Return migration keys only for high-confidence bounded episodes."""
 
-    symbol = _first_nested_value(item, ["symbol", "ticker", "relatedSymbol"]).upper()
-    event_type = _first_nested_value(item, ["eventType", "event_type", "newsType"]).lower()
+    fingerprint = news_event_fingerprint(item)
+    symbol = fingerprint.symbol
     event_date = _article_event_date(item)
-    if not symbol or not event_date or event_type not in EVENT_FAMILY_WINDOW_DAYS:
+    family = fingerprint.family
+    if not fingerprint.high_confidence or not symbol or not event_date or family not in EVENT_FAMILY_WINDOW_DAYS:
         return set()
-    window = EVENT_FAMILY_WINDOW_DAYS[event_type]
+    window = EVENT_FAMILY_WINDOW_DAYS[family]
     return {
-        _hash_key("event", "|".join([symbol, event_type, (event_date + timedelta(days=offset)).isoformat()]))
+        _hash_key("event", "|".join([symbol, family, fingerprint.phase, (event_date + timedelta(days=offset)).isoformat()]))
         for offset in range(-window, window + 1)
     }
 
@@ -343,6 +341,11 @@ def article_weak_identity_keys(item: Dict[str, object]) -> Set[str]:
 def article_has_new_story_fact(item: Dict[str, object], sent_keys: Set[str]) -> bool:
     cluster = article_story_cluster_id(item)
     if not cluster:
+        return False
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    provenance = payload.get("sourceProvenance") if isinstance(payload.get("sourceProvenance"), dict) else {}
+    relationship = _first_nested_value(item, ["evidenceRelationship"]).strip().lower() or str(provenance.get("evidenceRelationship") or "").strip().lower()
+    if not (_truthy(item.get("storyUpdate")) or _truthy(payload.get("storyUpdate")) or relationship == "follow-up"):
         return False
     # Rewritten headlines and per-publisher claim ids are not enough to
     # reopen a sent story. A follow-up needs an explicit fact identity from

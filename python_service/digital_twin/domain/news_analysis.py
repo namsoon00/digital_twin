@@ -184,6 +184,12 @@ MARKET_TOPIC_KEYWORDS = [
 ]
 
 EVENT_TYPE_KEYWORDS = {
+    "acquisition": ["acquire", "acquires", "acquired", "acquisition", "buying", "buys", "인수", "인수합병", "합병"],
+    "strategic_investment": ["invests in", "investment in", "takes a stake", "stake in", "funding round", "전략적 투자", "지분 투자", "투자 유치"],
+    "partnership": ["partnership", "partners with", "strategic alliance", "collaboration", "파트너십", "업무협약", "협력"],
+    "contract": ["contract award", "supply agreement", "purchase agreement", "공급계약", "수주", "납품 계약"],
+    "financing": ["financing", "fundraising", "credit facility", "bond issuance", "자금조달", "회사채 발행", "차입"],
+    "management_change": ["appoints ceo", "names ceo", "chief executive resigns", "ceo departure", "대표이사 선임", "대표이사 사임", "경영진 교체"],
     "earnings": ["실적", "earnings", "revenue", "profit", "매출", "영업이익", "순이익"],
     "guidance": ["guidance", "전망", "가이던스", "목표주가", "estimate", "forecast"],
     "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
@@ -196,6 +202,7 @@ EVENT_TYPE_KEYWORDS = {
     "price_commentary": ["주가", "stock", "목표주가", "급등", "급락", "plunge", "trading volume", "거래량", "거래대금"],
     "labor": ["임단협", "임금", "성과급", "상여", "노조", "파업", "wage", "salary", "bonus", "union", "strike"],
 }
+EVENT_CLASSIFICATION_VERSION = "news-event-type-v3-structured-actions"
 PRICE_COMMENTARY_EDITORIAL_MARKERS = (
     "price target", "analyst rating", "analyst says", "wall street says",
     "목표주가", "투자의견", "증권사 전망", "주식 초고수", "특징주",
@@ -1950,6 +1957,19 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
     text = _lower_text(str(title or "") + " " + str(summary or ""))
     if any(marker in text for marker in PRICE_COMMENTARY_EDITORIAL_MARKERS):
         return "price_commentary"
+    title_text = _lower_text(title)
+    # A concrete corporate action in the headline is more specific than
+    # background earnings language later in the article body.
+    strong_title_actions = (
+        ("acquisition", (r"\bacquir(?:e|es|ed|ing)\b", r"\bbuying\b", r"\bbuys\b", r"\bpurchase[sd]?\b", r"인수", r"합병")),
+        ("strategic_investment", (r"\binvests?\s+in\b", r"\binvestment\s+in\b", r"\btakes?\s+(?:a\s+)?stake\b", r"\bbets?\s+\$?[0-9]", r"전략적\s*투자", r"지분\s*투자")),
+        ("partnership", (r"\bpartners?\s+with\b", r"\bpartnership\b", r"\bstrategic\s+alliance\b", r"파트너십", r"업무협약")),
+        ("contract", (r"\bcontract\s+award\b", r"\bsupply\s+agreement\b", r"공급계약", r"수주")),
+        ("management_change", (r"\bappoints?\s+(?:a\s+)?(?:new\s+)?ceo\b", r"\bceo\s+(?:resigns?|departure)\b", r"대표이사\s*(?:선임|사임)")),
+    )
+    for event_type, patterns in strong_title_actions:
+        if any(re.search(pattern, title_text, re.IGNORECASE) for pattern in patterns):
+            return event_type
     best = ("general", 0)
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
         hits = sum(1 for keyword in keywords if _keyword_in_lowered_text(keyword, text))

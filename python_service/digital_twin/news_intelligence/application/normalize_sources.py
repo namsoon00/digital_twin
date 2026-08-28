@@ -4,7 +4,15 @@ from difflib import SequenceMatcher
 from typing import Dict, Iterable, List
 
 from ..domain.provenance import annotate_source_provenance, normalized_content
-from ..domain.story import STORY_IDENTITY_VERSION, event_cluster_identity, same_story_event, story_event_features, story_identity
+from ..domain.story import (
+    STORY_IDENTITY_VERSION,
+    event_cluster_identity,
+    event_episode_identity,
+    news_event_fingerprint,
+    same_story_event,
+    story_event_features,
+    story_identity,
+)
 
 
 def _payload(item) -> Dict[str, object]:
@@ -89,10 +97,17 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
     """Normalize provenance and classify copies without importing legacy types."""
     rows = _ordered(items)
     for item in rows:
-        item.raw_payload = annotate_source_provenance(_payload(item), **_context(item, source_registry))
+        source_payload = _payload(item)
+        source_payload.pop("storyUpdate", None)
+        source_payload.pop("eventFingerprint", None)
+        source_payload.pop("eventEpisodeId", None)
+        item.raw_payload = annotate_source_provenance(source_payload, **_context(item, source_registry))
         payload = _payload(item)
         payload["storyClusterId"] = _item_story_identity(item)
         payload["storyIdentityVersion"] = STORY_IDENTITY_VERSION
+        story_context = _story_context(item)
+        payload["eventFingerprint"] = news_event_fingerprint(story_context).to_dict()
+        payload["eventEpisodeId"] = event_episode_identity(story_context)
         item.raw_payload = payload
 
     roots: List[object] = []

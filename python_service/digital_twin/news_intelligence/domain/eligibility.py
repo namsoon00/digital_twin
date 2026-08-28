@@ -215,6 +215,8 @@ def assess_news_eligibility(
     display = EligibilityLayer(not display_reasons, display_reasons)
 
     alert_reasons = list(display_reasons)
+    if not _bool(provenance.get("provenanceComplete")):
+        alert_reasons.append("source-provenance-incomplete")
     if scope != "direct":
         alert_reasons.append("not-direct-subject-event")
     if materiality not in {"notable", "material"}:

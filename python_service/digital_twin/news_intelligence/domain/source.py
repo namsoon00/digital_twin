@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
 
-SOURCE_REGISTRY_VERSION = "news-source-registry-v2"
+SOURCE_REGISTRY_VERSION = "news-source-registry-v3-canonical-publisher"
 SOURCE_TIERS = {"A", "B", "C", "D", "DISCOVERY_ONLY"}
 
 
@@ -104,9 +104,21 @@ DEFAULT_SOURCE_ENTRIES = (
     _entry("yonhap", "연합뉴스", ("yna.co.kr",), ("연합뉴스", "yonhap"), "B"),
     _entry("wall-street-journal", "The Wall Street Journal", ("wsj.com",), ("wall street journal", "wsj"), "B"),
     _entry("cnbc", "CNBC", ("cnbc.com",), ("cnbc",), "B"),
+    _entry("barrons", "Barron's", ("barrons.com",), ("barrons", "barron's", "barrons.com"), "B"),
+    _entry("axios", "Axios", ("axios.com",), ("axios",), "B"),
     _entry("ytn", "YTN", ("ytn.co.kr",), ("ytn", "www.ytn.co.kr"), "C"),
     _entry("marketwatch", "MarketWatch", ("marketwatch.com",), ("marketwatch",), "C"),
     _entry("yahoo-finance", "Yahoo Finance", ("finance.yahoo.com",), ("yahoo finance", "yahoo finance uk"), "C"),
+    _entry("quartz", "Quartz", ("qz.com",), ("quartz",), "C"),
+    _entry("investors-business-daily", "Investor's Business Daily", ("investors.com",), ("investor's business daily", "investors business daily", "ibd"), "C"),
+    _entry("marketbeat", "MarketBeat", ("marketbeat.com",), ("marketbeat",), "C", content_type="analysis"),
+    _entry("the-street", "TheStreet", ("thestreet.com",), ("thestreet", "the street"), "C", content_type="analysis"),
+    _entry("zacks", "Zacks", ("zacks.com",), ("zacks",), "C", content_type="analysis"),
+    _entry("trefis", "Trefis", ("trefis.com",), ("trefis",), "C", content_type="analysis"),
+    _entry("verdict", "Verdict", ("verdict.co.uk",), ("verdict",), "C"),
+    _entry("guru-focus", "GuruFocus", ("gurufocus.com",), ("gurufocus", "guru focus"), "C", content_type="analysis"),
+    _entry("coin-desk", "CoinDesk", ("coindesk.com", "videos.coindesk.com"), ("coindesk",), "C"),
+    _entry("decrypt", "Decrypt", ("decrypt.co",), ("decrypt",), "C"),
     _entry("seoul-economic-daily", "서울경제", ("sedaily.com",), ("서울경제",), "C"),
     _entry("seoul-economic-tv", "서울경제TV", ("sentv.co.kr",), ("서울경제tv", "서울경제티브이", "(주) 서울경제티브이"), "C"),
     _entry("financial-news", "파이낸셜뉴스", ("fnnews.com",), ("파이낸셜뉴스",), "C"),
@@ -120,11 +132,14 @@ DEFAULT_SOURCE_ENTRIES = (
     _entry("newspim", "뉴스핌", ("newspim.com",), ("뉴스핌", "newspim"), "C"),
     _entry("mydaily", "마이데일리", ("mydaily.co.kr",), ("마이데일리", "mydaily"), "C"),
     _entry("twenty-four-seven-wall-st", "24/7 Wall St.", ("247wallst.com",), ("24/7 wall st", "247 wall st"), "C", content_type="analysis"),
-    _entry("proactive-investors", "Proactive Investors", ("proactiveinvestors.com", "proactiveinvestors.co.uk"), ("proactive investors",), "C"),
+    _entry("proactive-investors", "Proactive Investors", ("proactiveinvestors.com", "proactiveinvestors.co.uk", "proactiveinvestors.com.au"), ("proactive investors",), "C"),
     _entry("motley-fool", "The Motley Fool", ("fool.com",), ("motley fool", "the motley fool"), "C", content_type="analysis"),
     _entry("seeking-alpha", "Seeking Alpha", ("seekingalpha.com",), ("seeking alpha",), "C", content_type="analysis"),
     _entry("beincrypto", "BeInCrypto", ("beincrypto.com",), ("beincrypto",), "C"),
     _entry("investors-hub", "InvestorsHub", ("investorshub.advfn.com", "advfn.com"), ("investorshub", "advfn"), "D"),
+    _entry("stocktwits", "Stocktwits", ("stocktwits.com",), ("stocktwits",), "D", content_type="social-reporting"),
+    _entry("moby", "Moby", ("moby.co", "app.moby.co"), ("moby",), "D", content_type="analysis"),
+    _entry("crypto-prowl", "CryptoProwl", ("cryptoprowl.com",), ("cryptoprowl", "crypto prowl"), "D"),
     _entry("google-news", "Google News", ("news.google.com",), ("google news", "google news kr", "google news us", "google_rss"), "DISCOVERY_ONLY", "discovery", "aggregation"),
     _entry("gdelt", "GDELT", ("gdeltproject.org",), ("gdelt",), "DISCOVERY_ONLY", "discovery", "aggregation"),
 )

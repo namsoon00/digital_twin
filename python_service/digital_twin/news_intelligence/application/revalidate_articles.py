@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Dict, List
 
+from ...domain import news_analysis as news_analysis_domain
 from .analyze_article import annotate_evidence_eligibility
 from .normalize_sources import normalize_evidence_sources
 from ..domain.article_quality import inspect_article_body
@@ -69,6 +70,21 @@ class RevalidateNewsIntelligenceService:
             )
             for item in items
         }
+        for item in items:
+            payload = dict(getattr(item, "raw_payload", {}) or {})
+            facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+            body = str(payload.get("articleText") or facts.get("bodyText") or facts.get("bodyPreview") or getattr(item, "summary", ""))
+            event_type = news_analysis_domain.classify_news_event_type(getattr(item, "title", ""), body)
+            payload["eventType"] = event_type
+            payload["eventClassificationVersion"] = news_analysis_domain.EVENT_CLASSIFICATION_VERSION
+            facts = dict(facts)
+            facts["eventType"] = event_type
+            payload["articleFacts"] = facts
+            analysis = dict(payload.get("aiAnalysis") or {}) if isinstance(payload.get("aiAnalysis"), dict) else {}
+            if analysis:
+                analysis["eventType"] = event_type
+                payload["aiAnalysis"] = analysis
+            item.raw_payload = payload
         items = normalize_evidence_sources(items, self.source_registry)
         changed: List[object] = []
         blocked_subject = 0

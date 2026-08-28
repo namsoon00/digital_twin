@@ -1,13 +1,18 @@
 import hashlib
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-STORY_IDENTITY_VERSION = "news-story-identity-v4"
+STORY_IDENTITY_VERSION = "news-story-identity-v5-structured-event"
+EVENT_FINGERPRINT_VERSION = "news-event-fingerprint-v1"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "utm_campaign", "utm_medium", "utm_source", "utm_term"}
 EVENT_ACTIONS = (
+    ("acquisition", ("acquire", "acquires", "acquired", "acquisition", "buying", "buys", "인수", "인수합병", "합병")),
+    ("strategic-investment", ("invests in", "investment in", "takes a stake", "stake in", "전략적 투자", "지분 투자")),
+    ("partnership", ("partnership", "partners with", "strategic alliance", "파트너십", "업무협약")),
     ("compensation", ("임금", "임단협", "성과급", "상여", "wage", "salary", "bonus", "compensation")),
     ("buyback", ("자기주식", "자사주", "주식소각", "share buyback", "stock repurchase", "share cancellation")),
     ("reorganization", ("조직개편", "쇄신", "인사개편", "reorganization", "restructuring meeting")),
@@ -15,6 +20,7 @@ EVENT_ACTIONS = (
     ("strike", ("파업", "쟁의", "strike", "walkout")),
     ("app-store", ("앱스토어", "app store")),
     ("contract", ("공급계약", "수주", "supply agreement", "contract award")),
+    ("guidance", ("guidance", "forecast", "outlook", "가이던스", "전망")),
     ("earnings", ("실적", "매출", "영업이익", "earnings", "revenue", "profit")),
 )
 COMPENSATION_MARKERS = ("임금", "임단협", "성과급", "상여", "보너스", "wage", "salary", "bonus", "compensation")
@@ -26,6 +32,67 @@ EVENT_STOP_WORDS = {
     "stock", "stocks", "share", "shares",
     "관련", "대한", "통해", "위한", "올해", "지난", "종합", "단독", "속보",
 }
+EARNINGS_RELEASE_MARKERS = (
+    "earnings", "results", "revenue", "profit", "quarter", "fiscal", "guidance",
+    "forecast", "outlook", "실적", "매출", "영업이익", "순이익", "분기", "가이던스", "전망",
+)
+EARNINGS_PREVIEW_MARKERS = (
+    "ahead of earnings", "before earnings", "earnings preview", "set to report", "due to report",
+    "market braces", "what to expect", "실적 발표 전", "실적 전망", "발표 앞두고",
+)
+EARNINGS_REACTION_MARKERS = (
+    "shares jump", "shares rise", "shares fall", "stock jumps", "stock falls", "premarket",
+    "after-hours", "market reaction", "주가 급등", "주가 급락", "시간외", "장전",
+)
+EVENT_FAMILY_ALIASES = {
+    "earnings": "earnings-release",
+    "guidance": "earnings-release",
+    "acquisition": "acquisition",
+    "strategic_investment": "strategic-investment",
+    "partnership": "partnership",
+    "contract": "contract",
+    "financing": "financing",
+    "management_change": "management-change",
+    "capital_policy": "capital-policy",
+}
+
+
+@dataclass(frozen=True)
+class NewsEventFingerprint:
+    symbol: str
+    family: str
+    phase: str
+    event_date: str
+    reporting_period: str
+    action: str
+    confidence: str
+
+    def identity_material(self) -> str:
+        period = self.reporting_period or self.event_date
+        return "|".join([
+            EVENT_FINGERPRINT_VERSION,
+            self.symbol,
+            self.family,
+            self.phase,
+            period,
+        ])
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "version": EVENT_FINGERPRINT_VERSION,
+            "symbol": self.symbol,
+            "family": self.family,
+            "phase": self.phase,
+            "eventDate": self.event_date,
+            "reportingPeriod": self.reporting_period,
+            "action": self.action,
+            "confidence": self.confidence,
+            "identity": _hash("episode|" + self.identity_material()) if self.high_confidence else "",
+        }
+
+    @property
+    def high_confidence(self) -> bool:
+        return self.confidence == "high" and bool(self.symbol and self.family and (self.reporting_period or self.event_date))
 
 
 def _hash(value: str) -> str:
@@ -84,6 +151,88 @@ def _event_action(value: object) -> str:
     return "general"
 
 
+def _reporting_period(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").casefold())
+    patterns = (
+        r"\b(?:fiscal\s+)?q([1-4])\s*(20\d{2})\b",
+        r"\b(20\d{2})\s*(?:fiscal\s+)?q([1-4])\b",
+        r"\b([1-4])q\s*(20\d{2})\b",
+        r"\b(20\d{2})\s*년?\s*([1-4])\s*분기\b",
+    )
+    for index, pattern in enumerate(patterns):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        left, right = match.groups()
+        if index == 0:
+            quarter, year = left, right
+        elif index in {1, 3}:
+            year, quarter = left, right
+        else:
+            quarter, year = left, right
+        return str(year) + "-Q" + str(quarter)
+    quarter_only = re.search(r"\b(?:fiscal\s+)?q([1-4])\b|\b([1-4])\s*분기\b", text, re.IGNORECASE)
+    if quarter_only:
+        return "Q" + str(quarter_only.group(1) or quarter_only.group(2))
+    fiscal_year = re.search(r"\b(?:fy|fiscal\s+year\s*)(20\d{2}|\d{2})\b|\b(20\d{2})\s*회계연도\b", text, re.IGNORECASE)
+    if fiscal_year:
+        year = str(fiscal_year.group(1) or fiscal_year.group(2))
+        return "FY" + year
+    return ""
+
+
+def _event_phase(family: str, value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").casefold())
+    if family != "earnings-release":
+        return "event"
+    if any(marker in text for marker in EARNINGS_PREVIEW_MARKERS):
+        return "preview"
+    if any(marker in text for marker in EARNINGS_REACTION_MARKERS):
+        return "release"
+    return "release"
+
+
+def news_event_fingerprint(item: Dict[str, object]) -> NewsEventFingerprint:
+    title = _first(item, "title", "headline", "name")
+    summary = _first(item, "articleSummaryKo", "summary", "koreanSummary")
+    event_type = _first(item, "eventType", "newsType", "category").casefold() or "general"
+    corpus = title + " " + summary
+    action = _event_action(title)
+    concrete_actions = {"acquisition", "strategic-investment", "partnership", "contract"}
+    family = action if action in concrete_actions else EVENT_FAMILY_ALIASES.get(event_type, action if action != "general" else "")
+    if family == "guidance":
+        family = "earnings-release"
+    has_release_context = any(marker in corpus.casefold() for marker in EARNINGS_RELEASE_MARKERS)
+    confidence = "low"
+    if family == "earnings-release" and has_release_context:
+        confidence = "high"
+    elif family in {"acquisition", "strategic-investment", "partnership", "contract"} and action != "general":
+        confidence = "high"
+    elif family == "capital-policy" and action in {"buyback"}:
+        confidence = "high"
+    return NewsEventFingerprint(
+        symbol=_first(item, "symbol", "ticker", "relatedSymbol").upper(),
+        family=family,
+        phase=_event_phase(family, corpus),
+        event_date=_date_bucket(_first(item, "publishedAt", "observedAt", "seenDate")),
+        reporting_period=_reporting_period(corpus),
+        action=action,
+        confidence=confidence,
+    )
+
+
+def event_episode_identity(item: Dict[str, object]) -> str:
+    fingerprint = news_event_fingerprint(item)
+    if not fingerprint.high_confidence:
+        return ""
+    # A broad corporate-action family needs an object identity before it can
+    # suppress another article. Earnings releases are naturally bounded by
+    # subject, reporting period/date and release phase.
+    if fingerprint.family != "earnings-release":
+        return ""
+    return _hash("episode|" + fingerprint.identity_material())
+
+
 def _number_keys(value: object) -> List[str]:
     units = {
         "%": "percent",
@@ -117,6 +266,7 @@ def story_event_features(item: Dict[str, object]) -> Dict[str, object]:
     summary = _first(item, "articleSummaryKo", "summary", "koreanSummary")
     event_type = _first(item, "eventType", "newsType", "category").casefold() or "general"
     corpus = title + " " + summary
+    fingerprint = news_event_fingerprint(item)
     return {
         "symbol": _first(item, "symbol", "ticker", "relatedSymbol").upper(),
         "date": _date_bucket(_first(item, "publishedAt", "observedAt", "seenDate")),
@@ -127,11 +277,15 @@ def story_event_features(item: Dict[str, object]) -> Dict[str, object]:
         "action": _event_action(title),
         "numbers": _number_keys(corpus),
         "tokens": _event_tokens(corpus),
+        "eventFingerprint": fingerprint.to_dict(),
     }
 
 
 def event_cluster_identity(item: Dict[str, object]) -> str:
     features = story_event_features(item)
+    episode = event_episode_identity(item)
+    if episode:
+        return episode
     if features["symbol"] and features["date"] and features["action"] != "general" and features["numbers"]:
         return _hash("semantic|" + "|".join([
             str(features["symbol"]),
@@ -157,6 +311,21 @@ def same_story_event(left: Dict[str, object], right: Dict[str, object]) -> bool:
         date_distance = 0 if left_features["date"] == right_features["date"] else 99
     if date_distance > 1:
         return False
+    left_fingerprint = news_event_fingerprint(left)
+    right_fingerprint = news_event_fingerprint(right)
+    if (
+        left_fingerprint.high_confidence
+        and right_fingerprint.high_confidence
+        and left_fingerprint.family == right_fingerprint.family == "earnings-release"
+        and left_fingerprint.phase == right_fingerprint.phase
+    ):
+        if (
+            left_fingerprint.reporting_period
+            and right_fingerprint.reporting_period
+            and left_fingerprint.reporting_period != right_fingerprint.reporting_period
+        ):
+            return False
+        return True
     action = left_features["action"]
     if action == "general" or action != right_features["action"]:
         return False

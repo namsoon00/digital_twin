@@ -1195,53 +1195,141 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         identity = "|".join([
             str(values.get("accountId") or ""),
             str(values.get("evidenceId") or ""),
-            str(values.get("sourceRevision") or ""),
-            str(values.get("enrichmentRevision") or ""),
             str(values.get("policyVersion") or ""),
-            str(values.get("sourceEventId") or ""),
-            str(values.get("decision") or ""),
-            str(values.get("reasonCode") or ""),
         ])
-        admission_id = "news-admission:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        head_id = "news-admission-head:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
         stamp = utc_now()
+        decision = str(values.get("decision") or "suppressed")[:32]
+        reason_code = str(values.get("reasonCode") or "")[:96]
+        matched_keys_json = json_dumps(sorted({str(key or "") for key in values.get("matchedIdentityKeys") or [] if str(key or "")}))
+        source_event_id = str(values.get("sourceEventId") or "")[:191]
+        notification_job_id = str(values.get("notificationJobId") or "")[:191]
         with self.transaction() as connection:
-            connection.execute(
-                """
-                INSERT IGNORE INTO news_notification_admissions (
-                    admission_id, account_id, evidence_id, symbol,
-                    source_revision, enrichment_revision, policy_version,
-                    decision, reason_code, matched_identity_keys_json,
-                    source_event_id, notification_job_id, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    admission_id,
-                    str(values.get("accountId") or "")[:191],
-                    str(values.get("evidenceId") or "")[:191],
-                    str(values.get("symbol") or "")[:64],
-                    str(values.get("sourceRevision") or "")[:191],
-                    str(values.get("enrichmentRevision") or "")[:191],
-                    str(values.get("policyVersion") or "")[:191],
-                    str(values.get("decision") or "suppressed")[:32],
-                    str(values.get("reasonCode") or "")[:96],
-                    json_dumps(sorted({str(key or "") for key in values.get("matchedIdentityKeys") or [] if str(key or "")})),
-                    str(values.get("sourceEventId") or "")[:191],
-                    str(values.get("notificationJobId") or "")[:191],
-                    stamp,
-                    stamp,
-                ),
+            previous = connection.execute(
+                "SELECT * FROM news_notification_admission_heads WHERE admission_head_id = %s FOR UPDATE",
+                (head_id,),
+            ).fetchone()
+            previous_decision = str((previous or {}).get("decision") or "")
+            previous_reason = str((previous or {}).get("reason_code") or "")
+            previous_keys = str((previous or {}).get("matched_identity_keys_json") or "[]")
+            previous_job = str((previous or {}).get("notification_job_id") or "")
+            effective_job = notification_job_id
+            if (
+                previous
+                and not effective_job
+                and previous_decision == decision
+                and previous_reason == reason_code
+            ):
+                effective_job = previous_job
+            transitioned = not previous or (
+                previous_decision,
+                previous_reason,
+                previous_keys,
+                previous_job,
+            ) != (
+                decision,
+                reason_code,
+                matched_keys_json,
+                effective_job,
             )
-        return admission_id
+            if not previous:
+                connection.execute(
+                    """
+                    INSERT INTO news_notification_admission_heads (
+                        admission_head_id, account_id, evidence_id, symbol,
+                        source_revision, enrichment_revision, policy_version,
+                        decision, reason_code, matched_identity_keys_json,
+                        source_event_id, notification_job_id, observation_count,
+                        first_observed_at, last_observed_at, last_transition_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
+                    """,
+                    (
+                        head_id,
+                        str(values.get("accountId") or "")[:191],
+                        str(values.get("evidenceId") or "")[:191],
+                        str(values.get("symbol") or "")[:64],
+                        str(values.get("sourceRevision") or "")[:191],
+                        str(values.get("enrichmentRevision") or "")[:191],
+                        str(values.get("policyVersion") or "")[:191],
+                        decision,
+                        reason_code,
+                        matched_keys_json,
+                        source_event_id,
+                        effective_job,
+                        stamp,
+                        stamp,
+                        stamp,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE news_notification_admission_heads
+                    SET source_revision = %s, enrichment_revision = %s,
+                        decision = %s, reason_code = %s,
+                        matched_identity_keys_json = %s,
+                        source_event_id = %s, notification_job_id = %s,
+                        observation_count = observation_count + 1,
+                        last_observed_at = %s,
+                        last_transition_at = CASE WHEN %s THEN %s ELSE last_transition_at END
+                    WHERE admission_head_id = %s
+                    """,
+                    (
+                        str(values.get("sourceRevision") or "")[:191],
+                        str(values.get("enrichmentRevision") or "")[:191],
+                        decision,
+                        reason_code,
+                        matched_keys_json,
+                        source_event_id,
+                        effective_job,
+                        stamp,
+                        int(transitioned),
+                        stamp,
+                        head_id,
+                    ),
+                )
+            if transitioned:
+                admission_id = "news-admission:" + uuid.uuid4().hex
+                connection.execute(
+                    """
+                    INSERT INTO news_notification_admissions (
+                        admission_id, account_id, evidence_id, symbol,
+                        source_revision, enrichment_revision, policy_version,
+                        decision, reason_code, matched_identity_keys_json,
+                        source_event_id, notification_job_id, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        admission_id,
+                        str(values.get("accountId") or "")[:191],
+                        str(values.get("evidenceId") or "")[:191],
+                        str(values.get("symbol") or "")[:64],
+                        str(values.get("sourceRevision") or "")[:191],
+                        str(values.get("enrichmentRevision") or "")[:191],
+                        str(values.get("policyVersion") or "")[:191],
+                        decision,
+                        reason_code,
+                        matched_keys_json,
+                        source_event_id,
+                        effective_job,
+                        stamp,
+                        stamp,
+                    ),
+                )
+        return head_id
 
     def news_notification_admission_status(self) -> Dict[str, object]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT decision, reason_code, COUNT(*) AS count, MAX(updated_at) AS latest_updated_at
-                FROM news_notification_admissions
+                SELECT decision, reason_code, COUNT(*) AS count, MAX(last_observed_at) AS latest_updated_at
+                FROM news_notification_admission_heads
                 GROUP BY decision, reason_code
                 """
             ).fetchall()
+            history = connection.execute(
+                "SELECT COUNT(*) AS count, MAX(updated_at) AS latest_updated_at FROM news_notification_admissions"
+            ).fetchone() or {}
         return {
             "decisions": [
                 {
@@ -1251,8 +1339,164 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                     "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
                 }
                 for row in rows or []
-            ]
+            ],
+            "headCount": sum(int(row.get("count") or 0) for row in rows or []),
+            "transitionCount": int(history.get("count") or 0),
+            "latestTransitionAt": str(history.get("latest_updated_at") or ""),
         }
+
+    def repair_news_notification_admissions(self, dry_run: bool = True) -> Dict[str, object]:
+        """Collapse replay observations into one head and meaningful transitions."""
+
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM news_notification_admissions ORDER BY created_at, admission_id FOR UPDATE"
+            ).fetchall()
+            existing_heads = connection.execute(
+                "SELECT * FROM news_notification_admission_heads FOR UPDATE"
+            ).fetchall()
+            grouped: Dict[Tuple[str, ...], List[Dict[str, object]]] = {}
+            for raw in rows or []:
+                row = dict(raw or {})
+                key = (
+                    str(row.get("account_id") or ""),
+                    str(row.get("evidence_id") or ""),
+                    str(row.get("policy_version") or ""),
+                )
+                grouped.setdefault(key, []).append(row)
+            existing_by_key: Dict[Tuple[str, ...], List[Dict[str, object]]] = {}
+            for raw in existing_heads or []:
+                row = dict(raw or {})
+                key = (
+                    str(row.get("account_id") or ""),
+                    str(row.get("evidence_id") or ""),
+                    str(row.get("policy_version") or ""),
+                )
+                existing_by_key.setdefault(key, []).append(row)
+            transition_groups: Dict[Tuple[str, ...], List[Dict[str, object]]] = {}
+            for key, group_rows in grouped.items():
+                previous_state = None
+                for row in group_rows:
+                    state = (
+                        str(row.get("decision") or ""),
+                        str(row.get("reason_code") or ""),
+                        str(row.get("matched_identity_keys_json") or "[]"),
+                        str(row.get("notification_job_id") or ""),
+                    )
+                    if state != previous_state:
+                        transition_groups.setdefault(key, []).append(row)
+                        previous_state = state
+            transitions = [
+                row
+                for key in grouped
+                for row in transition_groups.get(key, [])
+            ]
+            logical_keys = list(dict.fromkeys([*grouped.keys(), *existing_by_key.keys()]))
+            result = {
+                "dryRun": bool(dry_run),
+                "observationCount": len(rows or []),
+                "headCount": len(logical_keys),
+                "transitionCount": len(transitions),
+                "removedReplayObservationCount": max(0, len(rows or []) - len(transitions)),
+            }
+            if dry_run:
+                return result
+            connection.execute("DELETE FROM news_notification_admission_heads")
+            connection.execute("DELETE FROM news_notification_admissions")
+            for key in logical_keys:
+                group_rows = grouped.get(key, [])
+                head_rows = existing_by_key.get(key, [])
+                latest_history = group_rows[-1] if group_rows else {}
+                latest_head = max(
+                    head_rows,
+                    default={},
+                    key=lambda row: str(row.get("last_observed_at") or ""),
+                )
+                history_at = str(latest_history.get("updated_at") or latest_history.get("created_at") or "")
+                head_at = str(latest_head.get("last_observed_at") or "")
+                latest = latest_head if head_at >= history_at else latest_history
+                first_candidates = [
+                    str(row.get("created_at") or "") for row in group_rows[:1]
+                ] + [
+                    str(row.get("first_observed_at") or "") for row in head_rows
+                ]
+                first_at = min((value for value in first_candidates if value), default=utc_now())
+                last_at = max(history_at, head_at, first_at)
+                transition_rows = transition_groups.get(key, [])
+                transition_at = str(
+                    (transition_rows[-1] if transition_rows else {}).get("updated_at")
+                    or (transition_rows[-1] if transition_rows else {}).get("created_at")
+                    or ""
+                )
+                existing_transition_at = max(
+                    (str(row.get("last_transition_at") or "") for row in head_rows),
+                    default="",
+                )
+                last_transition_at = max(transition_at, existing_transition_at, first_at)
+                observation_count = max(
+                    len(group_rows),
+                    sum(int(row.get("observation_count") or 0) for row in head_rows),
+                    1,
+                )
+                head_identity = "|".join(key)
+                head_id = "news-admission-head:" + hashlib.sha256(head_identity.encode("utf-8")).hexdigest()[:32]
+                connection.execute(
+                    """
+                    INSERT INTO news_notification_admission_heads (
+                        admission_head_id, account_id, evidence_id, symbol,
+                        source_revision, enrichment_revision, policy_version,
+                        decision, reason_code, matched_identity_keys_json,
+                        source_event_id, notification_job_id, observation_count,
+                        first_observed_at, last_observed_at, last_transition_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        head_id,
+                        key[0],
+                        key[1],
+                        str(latest.get("symbol") or "")[:64],
+                        str(latest.get("source_revision") or "")[:191],
+                        str(latest.get("enrichment_revision") or "")[:191],
+                        key[2],
+                        str(latest.get("decision") or "suppressed")[:32],
+                        str(latest.get("reason_code") or "")[:96],
+                        str(latest.get("matched_identity_keys_json") or "[]"),
+                        str(latest.get("source_event_id") or "")[:191],
+                        str(latest.get("notification_job_id") or "")[:191],
+                        observation_count,
+                        first_at,
+                        last_at,
+                        last_transition_at,
+                    ),
+                )
+            for row in transitions:
+                connection.execute(
+                    """
+                    INSERT INTO news_notification_admissions (
+                        admission_id, account_id, evidence_id, symbol,
+                        source_revision, enrichment_revision, policy_version,
+                        decision, reason_code, matched_identity_keys_json,
+                        source_event_id, notification_job_id, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(row.get("admission_id") or "news-admission:" + uuid.uuid4().hex),
+                        str(row.get("account_id") or "")[:191],
+                        str(row.get("evidence_id") or "")[:191],
+                        str(row.get("symbol") or "")[:64],
+                        str(row.get("source_revision") or "")[:191],
+                        str(row.get("enrichment_revision") or "")[:191],
+                        str(row.get("policy_version") or "")[:191],
+                        str(row.get("decision") or "suppressed")[:32],
+                        str(row.get("reason_code") or "")[:96],
+                        str(row.get("matched_identity_keys_json") or "[]"),
+                        str(row.get("source_event_id") or "")[:191],
+                        str(row.get("notification_job_id") or "")[:191],
+                        str(row.get("created_at") or utc_now()),
+                        str(row.get("updated_at") or row.get("created_at") or utc_now()),
+                    ),
+                )
+            return result
 
     def sent_article_history_keys_with_connection(self, connection, job: NotificationJob):
         if not self.sent_article_filter_enabled():

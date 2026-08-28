@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import copy
+import hashlib
 import json
+import re
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..domain.events import DomainEvent
@@ -24,6 +26,7 @@ from ..news_intelligence.domain.article import (
     authoritative_enrichment,
     enrichment_payload_snapshot,
 )
+from ..news_intelligence.domain.story import event_episode_identity, news_event_fingerprint
 from .operational_common import (
     json_dumps,
     research_evidence_from_row,
@@ -51,6 +54,9 @@ DERIVED_EVIDENCE_PAYLOAD_KEYS = {
     "sourcePublisher",
     "sourceProvenance",
     "articleVerification",
+    "eventClassificationVersion",
+    "eventEpisodeId",
+    "eventFingerprint",
     "storyClusterId",
     "storyIdentityVersion",
     "storyRootEvidenceId",
@@ -335,7 +341,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                     if existing_snapshot:
                         payload = apply_enrichment_snapshot(payload, existing_snapshot)
                         item.raw_payload = payload
-                    elif not dry_run:
+                    if not dry_run:
                         self._persist_news_enrichment_with_connection(connection, item, stamp)
                         payload = dict(item.raw_payload or {})
                 else:
@@ -397,18 +403,11 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         snapshot["articleEnrichmentRevision"] = enrichment_revision
         connection.execute(
             """
-            INSERT INTO news_article_enrichment_revisions (
+            INSERT IGNORE INTO news_article_enrichment_revisions (
                 enrichment_revision, evidence_id, source_revision, analyzer_release,
                 analysis_status, translation_status, summary_quality_state,
                 payload_json, created_at, updated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                enrichment_revision = VALUES(enrichment_revision),
-                analysis_status = VALUES(analysis_status),
-                translation_status = VALUES(translation_status),
-                summary_quality_state = VALUES(summary_quality_state),
-                payload_json = VALUES(payload_json),
-                updated_at = VALUES(updated_at)
             """,
             (
                 enrichment_revision,
@@ -423,7 +422,135 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 stamp,
             ),
         )
+        connection.execute(
+            """
+            INSERT INTO news_article_enrichment_heads (
+                evidence_id, source_revision, analyzer_release,
+                enrichment_revision, updated_at
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                enrichment_revision = VALUES(enrichment_revision),
+                updated_at = VALUES(updated_at)
+            """,
+            (
+                item.evidence_id,
+                source_revision,
+                analyzer_release,
+                enrichment_revision,
+                stamp,
+            ),
+        )
         return enrichment_revision
+
+    @staticmethod
+    def _news_event_claim_statements(payload: Dict[str, object]) -> List[Tuple[str, str]]:
+        rows: List[Tuple[str, str]] = []
+        ledger = payload.get("claimLedger") if isinstance(payload.get("claimLedger"), dict) else {}
+        for raw_claim in ledger.get("claims") or []:
+            claim = raw_claim if isinstance(raw_claim, dict) else {}
+            statement = " ".join(str(claim.get("statement") or claim.get("excerpt") or "").split()).strip()
+            if len(statement) >= 24:
+                rows.append((str(claim.get("claimKind") or "reported-claim"), statement))
+        analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
+        summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+        for value in [summary.get("oneLineKo"), *(summary.get("keyTakeaways") or [])]:
+            statement = " ".join(str(value or "").split()).strip()
+            if len(statement) >= 24:
+                rows.append(("analysis-summary", statement))
+        unique: List[Tuple[str, str]] = []
+        seen = set()
+        for claim_kind, statement in rows:
+            normalized = re.sub(r"[^0-9a-z가-힣%$]+", " ", statement.casefold()).strip()
+            if len(normalized) < 16 or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append((claim_kind, statement))
+        return unique[:24]
+
+    def _persist_news_event_episode_with_connection(
+        self,
+        connection,
+        item: ResearchEvidence,
+        stamp: str,
+    ) -> str:
+        if item.kind != "news":
+            return ""
+        payload = dict(item.raw_payload or {})
+        context = item.to_dict()
+        episode_id = str(payload.get("eventEpisodeId") or event_episode_identity(context) or "").strip()
+        if not episode_id:
+            return ""
+        fingerprint = payload.get("eventFingerprint") if isinstance(payload.get("eventFingerprint"), dict) else news_event_fingerprint(context).to_dict()
+        payload["eventEpisodeId"] = episode_id
+        payload["eventFingerprint"] = fingerprint
+        item.raw_payload = payload
+        provenance = payload.get("sourceProvenance") if isinstance(payload.get("sourceProvenance"), dict) else {}
+        relationship = str(payload.get("evidenceRelationship") or provenance.get("evidenceRelationship") or "original")
+        connection.execute(
+            """
+            INSERT INTO news_event_episodes (
+                episode_id, symbol, event_family, event_phase, event_date,
+                reporting_period, current_evidence_id, article_count, claim_count,
+                first_seen_at, updated_at, payload_json
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 1, 0, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                current_evidence_id = VALUES(current_evidence_id),
+                updated_at = VALUES(updated_at),
+                payload_json = VALUES(payload_json)
+            """,
+            (
+                episode_id,
+                item.symbol,
+                str(fingerprint.get("family") or "")[:64],
+                str(fingerprint.get("phase") or "")[:32],
+                str(fingerprint.get("eventDate") or "")[:40],
+                str(fingerprint.get("reportingPeriod") or "")[:32],
+                item.evidence_id,
+                stamp,
+                stamp,
+                json_dumps(fingerprint),
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO news_event_episode_articles (
+                episode_id, evidence_id, evidence_relationship, first_seen_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                evidence_relationship = VALUES(evidence_relationship),
+                updated_at = VALUES(updated_at)
+            """,
+            (episode_id, item.evidence_id, relationship[:32], stamp, stamp),
+        )
+        for claim_kind, statement in self._news_event_claim_statements(payload):
+            normalized = re.sub(r"[^0-9a-z가-힣%$]+", " ", statement.casefold()).strip()
+            statement_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+            claim_key = "news-event-claim:" + hashlib.sha256((episode_id + "|" + statement_hash).encode("utf-8")).hexdigest()[:32]
+            connection.execute(
+                """
+                INSERT IGNORE INTO news_event_claims (
+                    claim_key, episode_id, evidence_id, claim_kind,
+                    statement_hash, statement_text, first_seen_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (claim_key, episode_id, item.evidence_id, claim_kind[:64], statement_hash, statement, stamp, stamp),
+            )
+        connection.execute(
+            """
+            UPDATE news_event_episodes
+            SET article_count = (
+                    SELECT COUNT(*) FROM news_event_episode_articles article
+                    WHERE article.episode_id = %s
+                ),
+                claim_count = (
+                    SELECT COUNT(*) FROM news_event_claims claim
+                    WHERE claim.episode_id = %s
+                )
+            WHERE episode_id = %s
+            """,
+            (episode_id, episode_id, episode_id),
+        )
+        return episode_id
 
     def enqueue_news_analysis_work(self, jobs: Iterable[Dict[str, object]]) -> int:
         """Upsert latest-wins durable work without copying article payloads."""
@@ -835,6 +962,8 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                         payload = apply_enrichment_snapshot(payload, authoritative)
                 item.raw_payload = payload
                 self._persist_news_enrichment_with_connection(connection, item, stamp)
+                payload = dict(item.raw_payload or {})
+                self._persist_news_event_episode_with_connection(connection, item, stamp)
                 payload = dict(item.raw_payload or {})
             merged_states = news_domain.news_state_payload(payload)
             item.source_trust_state = merged_states["sourceTrustState"]

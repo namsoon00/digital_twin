@@ -283,6 +283,8 @@ def evaluate_news_collection_health(
     provider_failures = sum(integer(row.get("failureCount")) for row in provider_rows)
     provider_successes = sum(integer(row.get("successCount")) for row in provider_rows)
     provider_suppressed = sum(integer(row.get("suppressedCount")) for row in provider_rows)
+    successful_provider_count = sum(1 for row in provider_rows if integer(row.get("successCount")))
+    circuit_open_provider_count = sum(1 for row in provider_rows if integer(row.get("circuitOpenCount")))
     target_statuses = [
         row for row in result.get("statuses") or []
         if (
@@ -329,6 +331,12 @@ def evaluate_news_collection_health(
         state, reason_code, reason = "failed", "all-providers-failed", "구성된 뉴스 공급자 요청이 모두 실패했습니다."
     elif provider_suppressed and not provider_successes:
         state, reason_code, reason = "degraded", "all-providers-suppressed", "보호 회로가 뉴스 공급자 요청을 일시 중지했고 대체 공급자도 이번 실행에서 확보하지 못했습니다."
+    elif (
+        provider_suppressed
+        and circuit_open_provider_count
+        and circuit_open_provider_count >= successful_provider_count
+    ):
+        state, reason_code, reason = "degraded", "provider-coverage-degraded", "일부 뉴스 공급자의 보호 회로가 열려 있어 수집 결과는 확보했지만 출처 커버리지가 제한되었습니다."
     elif provider_failures and (uncovered_failure_symbols or not failed_target_symbols):
         state, reason_code, reason = "degraded", "partial-provider-failure", "일부 뉴스 공급자 요청이 실패해 나머지 공급자 데이터만 사용합니다."
     elif ungoverned_evidence_count or unsafe_syndicated_count:

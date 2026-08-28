@@ -54,7 +54,7 @@ MAX_SOURCES_PER_EVENT = 3
 DEFAULT_RECONCILIATION_INITIAL_LOOKBACK_MINUTES = 1
 DEFAULT_RECONCILIATION_MAX_REPLAY_AGE_MINUTES = 180
 DEFAULT_RECONCILIATION_BATCH_SIZE = 100
-NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION = "news-notification-admission-v3-bounded-event-family"
+NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION = "news-notification-admission-v4-structured-event"
 
 
 def clean_text(value: object, fallback: str = "") -> str:
@@ -1076,7 +1076,8 @@ class NewsDigestEnqueuer:
             if not matched_keys:
                 allowed.append(item)
                 continue
-            if article_has_new_story_fact(item, sent_keys):
+            exact_match = any(str(key).startswith(("evidence:", "url:")) for key in matched_keys)
+            if not exact_match and article_has_new_story_fact(item, sent_keys):
                 follow_up = dict(item)
                 follow_up["storyUpdate"] = True
                 allowed.append(follow_up)

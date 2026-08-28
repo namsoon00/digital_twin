@@ -34,6 +34,7 @@ from digital_twin.domain.news_ai_analysis import (
     summary_quality_payload,
     summary_texts_similar,
 )
+from digital_twin.news_intelligence.domain.article import article_enrichment_revision
 from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.domain.materiality import evidence_materiality
 from digital_twin.domain.ontology_relation_reasoning import research_evidence_facts
@@ -43,6 +44,30 @@ from digital_twin.infrastructure.news_ai_analyzer import FallbackNewsAiAnalyzer,
 
 
 class NewsAnalysisDomainTests(unittest.TestCase):
+    def test_enrichment_revision_ignores_operational_timestamps(self):
+        base = {
+            "articleSourceRevision": "news-source:stable",
+            "articleSummaryKo": "애플이 연간 매출 전망을 상향했습니다.",
+            "summaryQualityState": "ready",
+            "translationStatus": "complete",
+            "sourceLanguage": "en",
+            "aiAnalysis": {
+                "status": "ok",
+                "version": "news-ai-analysis-test",
+                "externalCompletedAt": "2026-08-27T00:00:00Z",
+            },
+            "evidenceGovernance": {"checkedAt": "2026-08-27T00:00:00Z", "dataState": "sufficient"},
+            "promptEvidenceAdmission": {"checkedAt": "2026-08-27T00:00:00Z", "eligible": True},
+        }
+        replay = {
+            **base,
+            "aiAnalysis": {**base["aiAnalysis"], "externalCompletedAt": "2026-08-28T00:00:00Z"},
+            "evidenceGovernance": {**base["evidenceGovernance"], "checkedAt": "2026-08-28T00:00:00Z"},
+            "promptEvidenceAdmission": {**base["promptEvidenceAdmission"], "checkedAt": "2026-08-28T00:00:00Z"},
+        }
+
+        self.assertEqual(article_enrichment_revision(base), article_enrichment_revision(replay))
+
     def test_inline_decision_contract_requires_verified_direct_body_event(self):
         eligible = normalize_ai_analysis({
             "readScope": "body",
@@ -170,6 +195,38 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertIn("매출과 고객 이탈률", analysis["whyItMatters"])
         self.assertEqual(["다음 분기 서비스 매출과 고객 이탈률"], analysis["watchPoints"])
         self.assertFalse(summary_texts_similar(analysis["briefKo"], analysis["whyItMatters"]))
+
+    def test_summary_numeric_grounding_accepts_equivalent_korean_magnitudes_and_ranges(self):
+        quality = summary_quality_payload(
+            "회사는 전망을 1,080억 달러로 제시했고 총마진은 71~72%, 오차 범위는 50bp라고 밝혔다.",
+            "The company gave a $108B outlook and expects gross margin of 71% to 72%, plus or minus 50 basis points.",
+            "Nvidia",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertEqual([], quality["numericGrounding"]["unmatched"])
+
+    def test_summary_numeric_grounding_reports_the_unmatched_token_and_nearest_source(self):
+        quality = summary_quality_payload(
+            "회사는 전망을 1,200억 달러로 제시해 향후 매출 기대를 높였다.",
+            "The company gave a $108B revenue outlook.",
+            "Nvidia",
+        )
+
+        self.assertEqual("blocked", quality["state"])
+        mismatch = quality["numericGrounding"]["unmatched"][0]
+        self.assertEqual("1,200억 달러", mismatch["token"])
+        self.assertEqual(108_000_000_000.0, mismatch["nearestSource"]["normalizedValue"])
+
+    def test_summary_document_length_is_advisory_not_an_investment_number(self):
+        quality = summary_quality_payload(
+            "제공된 263자 분량은 문장이 중간에서 끝나 핵심 사건을 완결적으로 확인하기 어렵다.",
+            "The supplied preview ends before the company action is fully described.",
+            "Nvidia",
+        )
+
+        self.assertNotEqual("blocked", quality["state"])
+        self.assertIn("summary-document-metadata-number", quality["advisories"])
 
     def test_news_analysis_marks_direct_material_event_for_ontology(self):
         target = NewsCollectionTarget("005930", "삼성전자", "KOSPI", "KRW", "반도체")
@@ -419,6 +476,22 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertNotEqual("regulation", classify_news_event_type("Apple issues software update", "general product release"))
         self.assertEqual("regulation", classify_news_event_type("금감원 조사 착수", "회사를 조사 대상으로 지정"))
         self.assertEqual("risk", keyword_polarity("금감원 조사 착수"))
+
+    def test_concrete_corporate_action_in_title_beats_background_earnings_terms(self):
+        self.assertEqual(
+            "acquisition",
+            classify_news_event_type(
+                "Nvidia Is Buying Hugging Face for $12.9 Billion",
+                "The announcement followed Nvidia earnings and revenue growth.",
+            ),
+        )
+        self.assertEqual(
+            "strategic_investment",
+            classify_news_event_type(
+                "Nvidia invests in CoreWeave",
+                "The company discussed the investment after quarterly results.",
+            ),
+        )
 
     def test_legacy_news_payload_uses_publisher_state_without_reliability_number(self):
         states = news_state_payload({

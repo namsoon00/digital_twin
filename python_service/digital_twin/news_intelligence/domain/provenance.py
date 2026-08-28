@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .source import SourceRegistry, SourceRegistryEntry, unknown_entry
 
 
-SOURCE_PROVENANCE_VERSION = "news-source-provenance-v2"
+SOURCE_PROVENANCE_VERSION = "news-source-provenance-v3-canonical-publisher"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "src", "ocid", "output"}
 
 
@@ -190,21 +190,27 @@ def resolve_source_provenance(
     except ValueError:
         host = ""
     source_registry = SourceRegistry(registry)
+    # The provider feed identifies the publisher it discovered. Persisted
+    # enrichment may contain a stale publisher inferred from a search channel,
+    # so a fresh feed declaration must win during revalidation.
     declared = _clean(
-        existing.get("declaredPublisher")
+        source
         or payload.get("declaredPublisher")
+        or existing.get("declaredPublisher")
         or payload.get("articlePublisher")
         or payload.get("sourcePublisher")
         or payload.get("publisher")
-        or source
     )
     host_entry = source_registry.by_host(host)
     declared_entry = source_registry.by_name(declared)
-    official_domain_mismatch = bool(
+    declared_domain_mismatch = bool(
         host
         and declared_entry
-        and declared_entry.primary
         and (not host_entry or host_entry.publisher_id != declared_entry.publisher_id)
+    )
+    official_domain_mismatch = bool(
+        declared_domain_mismatch
+        and declared_entry.primary
     )
     if host_entry and host_entry.publisher_type != "discovery":
         entry = host_entry
@@ -212,6 +218,12 @@ def resolve_source_provenance(
     elif official_domain_mismatch:
         entry = unknown_entry(host, declared)
         resolved_by = "official-publisher-domain-mismatch"
+    elif host:
+        # A canonical document hosted on an unregistered domain must not
+        # inherit the trust tier of Yahoo/Google metadata. Keep its readable
+        # feed name, but bind identity and trust to the actual host.
+        entry = unknown_entry(host, declared)
+        resolved_by = "canonical-domain-publisher-mismatch" if declared_domain_mismatch else "canonical-domain"
     elif declared_entry and declared_entry.publisher_type != "discovery":
         entry = declared_entry
         resolved_by = "publisher-metadata-registry"
@@ -254,6 +266,8 @@ def resolve_source_provenance(
         verification_reasons.append("original-publisher-unresolved")
     if official_domain_mismatch:
         verification_reasons.append("official-publisher-domain-mismatch")
+    elif declared_domain_mismatch:
+        verification_reasons.append("declared-publisher-domain-mismatch")
     verification_state = "verified" if provenance_complete and body_available and published_available else ("partial" if provenance_complete else "unverified")
     content_type = classify_content_type(payload, entry, title, canonical_url)
     if entry.publisher_type == "discovery":

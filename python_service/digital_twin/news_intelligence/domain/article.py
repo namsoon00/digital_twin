@@ -5,8 +5,24 @@ from typing import Dict, Mapping
 
 
 ARTICLE_SOURCE_REVISION_VERSION = "news-article-source-revision-v1"
-ARTICLE_ENRICHMENT_REVISION_VERSION = "news-article-enrichment-revision-v1"
+ARTICLE_ENRICHMENT_REVISION_VERSION = "news-article-enrichment-revision-v2-semantic"
 AUTHORITATIVE_ANALYSIS_STATUSES = {"complete", "ok", "success", "verified"}
+ENRICHMENT_REVISION_VOLATILE_KEYS = {
+    "checkedAt",
+    "collectedAt",
+    "completedAt",
+    "createdAt",
+    "evaluatedAt",
+    "externalCompletedAt",
+    "fetchedAt",
+    "lastAttemptAt",
+    "lastExternalAttemptAt",
+    "lastLocalRepairAt",
+    "observedAt",
+    "processedAt",
+    "queuedAt",
+    "updatedAt",
+}
 ENRICHMENT_PAYLOAD_KEYS = {
     "aiAnalysis",
     "articleAiAnalysisVersion",
@@ -16,7 +32,12 @@ ENRICHMENT_PAYLOAD_KEYS = {
     "decisionInlineEligible",
     "decisionInlineReasonKo",
     "evidenceGovernance",
+    "eventClassificationVersion",
+    "eventEpisodeId",
+    "eventFingerprint",
+    "eventType",
     "newsEligibility",
+    "newsIntelligenceVersion",
     "originalTitle",
     "promptEvidenceAdmission",
     "stockImpact",
@@ -25,6 +46,10 @@ ENRICHMENT_PAYLOAD_KEYS = {
     "stockImpactReasonKo",
     "summaryQualityState",
     "sourceLanguage",
+    "sourceIdentity",
+    "sourceProvenance",
+    "storyClusterId",
+    "storyIdentityVersion",
     "translatedTitleKo",
     "translationStatus",
 }
@@ -167,10 +192,24 @@ def apply_enrichment_snapshot(payload: Dict[str, object], snapshot: Dict[str, ob
     return merged
 
 
+def enrichment_revision_material(value: object) -> object:
+    """Remove operational clocks while preserving semantic analysis content."""
+
+    if isinstance(value, Mapping):
+        return {
+            key: enrichment_revision_material(candidate)
+            for key, candidate in value.items()
+            if key not in ENRICHMENT_REVISION_VOLATILE_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [enrichment_revision_material(candidate) for candidate in value]
+    return value
+
+
 def article_enrichment_revision(value: object) -> str:
     payload = _payload(value)
     source_revision = _text(payload.get("articleSourceRevision")) or article_source_revision(value)
-    snapshot = enrichment_payload_snapshot(payload)
+    snapshot = enrichment_revision_material(enrichment_payload_snapshot(payload))
     digest = hashlib.sha256(
         json.dumps(
             {

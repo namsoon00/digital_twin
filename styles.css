@@ -2319,6 +2319,10 @@
     view-transition-name: oa-detail;
   }
 
+  html[data-app-transition="section"] .work-detail-layer {
+    view-transition-name: none;
+  }
+
   .console-shell.is-tab-transitioning .workspace-main > * {
     animation: none;
   }
@@ -37867,6 +37871,12 @@ html[data-theme="dark"] :where(
 
 .oa-case-detail-content {
   min-height: min(480px, 58vh);
+  contain: layout paint;
+  overflow-anchor: none;
+}
+
+.work-detail-body[data-work-detail-region="body"] {
+  overflow-anchor: none;
 }
 
 .oa-case-record-contract {

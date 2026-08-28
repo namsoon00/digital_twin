@@ -44,6 +44,7 @@ from .mysql_market_stores import (
 from .mysql_market_time_series import MySQLMarketTimeSeriesStore
 from .mysql_statistical_signals import MySQLStatisticalModelSignalStore
 from .mysql_investment_calendar import MySQLInvestmentCalendarStore
+from .mysql_reasoning_source_facts import MySQLReasoningSourceFactStore
 from .mysql_investment_calendar_candidates import MySQLInvestmentCalendarCandidateStore
 from .mysql_investment_strategy_proposals import MySQLInvestmentStrategyProposalStore
 from .mysql_investment_decision_episodes import MySQLInvestmentDecisionEpisodeStore

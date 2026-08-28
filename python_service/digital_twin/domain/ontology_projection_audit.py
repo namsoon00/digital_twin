@@ -37,11 +37,7 @@ def compact_reasoning_request_context(
     context: Mapping[str, object] = None,
     target_symbols: Iterable[object] = None,
 ) -> Dict[str, object]:
-    """Keep trigger provenance without copying source facts into the audit.
-
-    The context explains why a scheduled projection ran. It is never used to
-    evaluate a RuleBox condition or to synthesize an investment conclusion.
-    """
+    """Keep bounded trigger provenance and immutable facts for exact replay."""
     values = dict(context or {}) if isinstance(context, Mapping) else {}
     targets = set(_clean_symbols(target_symbols or values.get("targetSymbols") or []))
 
@@ -219,6 +215,15 @@ def compact_reasoning_request_context(
         if isinstance(values.get("ontologyStoreRoute"), Mapping)
         else {}
     )
+    source_facts = [
+        dict(item)
+        for item in values.get("sourceFacts") or []
+        if isinstance(item, Mapping)
+        and (
+            not targets
+            or targets.intersection(_clean_symbols(item.get("subjectIds") or []))
+        )
+    ][:20]
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
         "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
@@ -269,6 +274,7 @@ def compact_reasoning_request_context(
             and isinstance(vector, Mapping)
         },
         "semanticChangeSet": compact_semantic_change_set,
+        "sourceFacts": source_facts,
         "ontologyStoreRoute": {
             "version": str(ontology_store_route.get("version") or "")[:64],
             "shardId": str(ontology_store_route.get("shard_id") or ontology_store_route.get("shardId") or "")[:64],

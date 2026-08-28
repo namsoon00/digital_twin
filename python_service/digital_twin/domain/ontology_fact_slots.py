@@ -613,12 +613,15 @@ def select_fact_slot_scope_ids(
         deferred = sorted(set(candidates) - selected_set)
     elif dependency_boundary_authoritative and candidates:
         # An authoritative event key is useful only when the compiled scope
-        # metadata can prove a match. Falling back to family routing is safer
-        # than silently omitting a new provider fact.
+        # metadata can prove a match. Widening to a fact family would rewrite
+        # unrelated facts and could publish an inference that never consumed
+        # its cause, so this is a fail-closed contract violation.
         return {
             **base,
             "enabled": False,
-            "status": "fallback-dependency-key-no-scope-match",
+            "status": "blocked-dependency-key-no-scope-match",
+            "selectedScopeIds": [],
+            "deferredScopeIds": sorted(candidates),
             "fallbackReason": "event-dependency-key-not-indexed-in-scope",
         }
     elif plan.get("eventBoundaryAuthoritative") and selected:

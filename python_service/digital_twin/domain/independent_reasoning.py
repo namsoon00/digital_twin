@@ -483,10 +483,19 @@ def independent_reasoning_request(
     fact_revisions_by_symbol = {}
     revision_vectors_by_symbol = {}
     fact_change_contracts = []
+    source_facts = []
     authoritative_fact_boundary = True
     authoritative_dependency_boundary = True
     for event, scope in zip(events, scopes):
         payload = dict(event.payload or {})
+        for source_fact in payload.get("sourceFacts") or []:
+            if not isinstance(source_fact, Mapping):
+                continue
+            fact_id = str(source_fact.get("factId") or "").strip()
+            if fact_id and not any(str(item.get("factId") or "") == fact_id for item in source_facts):
+                source_facts.append(dict(source_fact))
+            if len(source_facts) >= 100:
+                break
         contract = payload.get("factChangeContract")
         if not isinstance(contract, Mapping):
             authoritative_fact_boundary = False
@@ -641,6 +650,7 @@ def independent_reasoning_request(
         "factRevisionsBySymbol": fact_revisions_by_symbol,
         "revisionVectorsBySymbol": revision_vectors_by_symbol,
         "factChangeContracts": fact_change_contracts,
+        "sourceFacts": source_facts,
         "eventFactBoundaryAuthoritative": authoritative_fact_boundary,
         "eventDependencyBoundaryAuthoritative": authoritative_dependency_boundary,
         "verifiedSourceSnapshots": [

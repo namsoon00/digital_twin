@@ -150,6 +150,20 @@ def reasoning_stage_records(
         ),
         "changedFieldsBySymbol": dict(request.get("changedFieldsBySymbol") or {}),
         "revisionVectorsBySymbol": dict(request.get("revisionVectorsBySymbol") or {}),
+        "sourceFacts": [
+            {
+                "factId": _text(item.get("factId")),
+                "factType": _text(item.get("factType")),
+                "aggregateId": _text(item.get("aggregateId")),
+                "subjectIds": _symbols(item.get("subjectIds") or []),
+                "revision": _text(item.get("revision")),
+                "validFrom": _text(item.get("validFrom")),
+                "validTo": _text(item.get("validTo")),
+                "qualityState": _text(item.get("qualityState")),
+            }
+            for item in request.get("sourceFacts") or []
+            if isinstance(item, Mapping)
+        ][:20],
     })
     projection_scope = _mapping(values.get("projectionScope"))
     target_patch = _mapping(projection_scope.get("targetScopedManifestPatch"))

@@ -22,6 +22,7 @@ from ..domain.investment_calendar import (
     utc_iso,
 )
 from ..domain.investment_strategy_guidance import event_strategy_guidance, merge_strategy_context, strategy_message_lines
+from ..domain.reasoning_source_facts import investment_calendar_source_fact
 from ..domain.message_types import INVESTMENT_CALENDAR_REMINDER
 from ..domain.notifications import NotificationJob
 from ..domain.portfolio import utc_now_iso
@@ -123,6 +124,7 @@ class InvestmentCalendarService:
         settings: Dict[str, object] = None,
         event_publisher=None,
         symbol_repository=None,
+        reasoning_source_fact_store=None,
     ):
         self.repository = repository
         self.account_repository = account_repository
@@ -130,6 +132,7 @@ class InvestmentCalendarService:
         self.settings = dict(settings or {})
         self.event_publisher = event_publisher
         self.symbol_repository = symbol_repository
+        self.reasoning_source_fact_store = reasoning_source_fact_store
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarEnabled"), True)
@@ -201,8 +204,23 @@ class InvestmentCalendarService:
     def save_event(self, payload: Dict[str, object]) -> Dict[str, object]:
         event = InvestmentCalendarEvent.from_payload(payload if isinstance(payload, dict) else {})
         saved = self.repository.upsert(event)
-        source_event = publish_event(self.event_publisher, investment_calendar_event_saved_event(saved))
-        if saved.material_for_reasoning() and saved.symbols:
+        source_event = investment_calendar_event_saved_event(saved)
+        source_fact = investment_calendar_source_fact(saved, source_event)
+        append_result = {"inserted": True, "fact": source_fact}
+        if self.reasoning_source_fact_store and hasattr(self.reasoning_source_fact_store, "append"):
+            append_result = self.reasoning_source_fact_store.append(source_fact)
+        publish_event(self.event_publisher, source_event)
+        # Provider syncs frequently rewrite the current-state calendar row.
+        # Only a new semantic revision creates ontology work.
+        reasoning_requested = bool(
+            saved.symbols
+            and bool(append_result.get("inserted", True))
+            and (
+                saved.material_for_reasoning()
+                or saved.status in {"deleted", "superseded", "rejected"}
+            )
+        )
+        if reasoning_requested:
             publish_event(self.event_publisher, ontology_reasoning_requested_event(
                 source_event,
                 "investment-calendar-update",
@@ -218,8 +236,19 @@ class InvestmentCalendarService:
                     "materialityLevel": event_materiality_level(saved.importance),
                     "passed": saved.importance >= 70,
                 }],
+                fact_revisions_by_symbol={symbol: source_fact.revision for symbol in saved.symbols},
+                changed_fields_by_symbol={
+                    symbol: ["external.investmentCalendarEvent"] for symbol in saved.symbols
+                },
+                source_facts=[source_fact.request_payload()],
             ))
-        return {"event": saved.to_dict(), "eventId": source_event.event_id}
+        return {
+            "event": saved.to_dict(),
+            "eventId": source_event.event_id,
+            "reasoningFactId": source_fact.fact_id,
+            "reasoningRevision": source_fact.revision,
+            "reasoningRequested": reasoning_requested,
+        }
 
     def reconcile_unverified_events(self, official_event) -> Dict[str, object]:
         """Supersede nearby automatic estimates after an official schedule lands."""
@@ -370,9 +399,26 @@ class InvestmentCalendarService:
         normalized = clean_text(event_id, 191)
         if not normalized:
             raise ValueError("eventId는 필요합니다.")
-        removed = self.repository.delete(normalized)
+        existing = self.repository.get(normalized) if hasattr(self.repository, "get") else None
+        removed = False
+        reasoning_requested = False
+        if existing:
+            replacement = existing.to_dict()
+            replacement["status"] = "deleted"
+            replacement["reminderOffsetsMinutes"] = []
+            replacement_payload = dict(replacement.get("payload") or {})
+            replacement_payload.update({"scheduleState": "deleted", "reminderEnabled": False})
+            replacement["payload"] = replacement_payload
+            result = self.save_event(replacement)
+            removed = True
+            reasoning_requested = bool(result.get("reasoningRequested"))
+        else:
+            removed = self.repository.delete(normalized)
         event = publish_event(self.event_publisher, investment_calendar_event_removed_event(normalized))
-        return {"removed": bool(removed), "eventId": normalized, "domainEventId": event.event_id}
+        return {
+            "removed": bool(removed), "eventId": normalized,
+            "domainEventId": event.event_id, "reasoningRequested": reasoning_requested,
+        }
 
     def due_reminders(self, now_at: datetime = None) -> List[InvestmentCalendarReminder]:
         now_at = now_at or datetime.now(timezone.utc)

@@ -1875,6 +1875,27 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS reasoning_source_facts (
+        fact_id VARCHAR(191) PRIMARY KEY,
+        fact_type VARCHAR(96) NOT NULL,
+        aggregate_id VARCHAR(191) NOT NULL,
+        revision CHAR(64) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL,
+        source_event_name VARCHAR(191) NOT NULL DEFAULT '',
+        subject_ids_json LONGTEXT NOT NULL,
+        observed_at VARCHAR(40) NOT NULL,
+        ingested_at VARCHAR(40) NOT NULL,
+        valid_from VARCHAR(40) NOT NULL DEFAULT '',
+        valid_to VARCHAR(40) NOT NULL DEFAULT '',
+        quality_state VARCHAR(64) NOT NULL DEFAULT 'verified-source-boundary',
+        contract_version VARCHAR(64) NOT NULL DEFAULT 'reasoning-source-fact-v1',
+        payload_json LONGTEXT NOT NULL,
+        UNIQUE KEY uq_reasoning_source_fact_revision (fact_type, aggregate_id, revision),
+        KEY idx_reasoning_source_fact_event (source_event_id),
+        KEY idx_reasoning_source_fact_subject_time (fact_type, ingested_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_calendar_candidates (
         candidate_id VARCHAR(191) PRIMARY KEY,
         proposed_event_id VARCHAR(191) NOT NULL DEFAULT '',

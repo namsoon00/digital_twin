@@ -2162,6 +2162,16 @@ def select_target_scoped_manifest_patch(
         selected,
         fact_slot_plan,
     )
+    if str(fact_slot_selection.get("status") or "").startswith("blocked-"):
+        return {
+            **base,
+            "status": str(fact_slot_selection.get("status") or "blocked-fact-slot"),
+            "applied": False,
+            "fallbackReason": str(
+                fact_slot_selection.get("fallbackReason") or "authoritative-fact-slot-unresolved"
+            ),
+            "factSlot": dict(fact_slot_selection),
+        }
     selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
     if topology_migration_required:
         # Replace one complete subject boundary so v7 and v8 copies of the

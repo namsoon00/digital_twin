@@ -34,6 +34,7 @@ DEFAULT_ONTOLOGY_EXECUTION_TRACE_RETENTION_DAYS = 90
 DEFAULT_WORLD_PROJECTION_OUTBOX_RETENTION_HOURS = 6
 DEFAULT_INFERENCE_DETAIL_OUTBOX_RETENTION_HOURS = 24 * 7
 DEFAULT_HYPOTHESIS_LIFECYCLE_EVENT_RETENTION_DAYS = 90
+DEFAULT_REASONING_SOURCE_FACT_RETENTION_DAYS = 90
 DEFAULT_MARKET_TIME_SERIES_RETENTION_DAYS = {
     "3m": 7,
     "15m": 30,
@@ -53,6 +54,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "monitor_snapshots",
     "monitor_snapshot_history",
     "verified_reasoning_source_snapshots",
+    "reasoning_source_facts",
     "notification_jobs",
     "notification_article_delivery_ledger",
     "news_notification_admissions",
@@ -332,6 +334,16 @@ def hypothesis_lifecycle_event_retention_days(settings: Mapping[str, object] = N
     )
 
 
+def reasoning_source_fact_retention_days(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(
+        settings or {},
+        "reasoningSourceFactRetentionDays",
+        DEFAULT_REASONING_SOURCE_FACT_RETENTION_DAYS,
+        7,
+        3650,
+    )
+
+
 def operational_history_retention_cutoff(
     settings: Mapping[str, object] = None,
     now: Optional[datetime] = None,
@@ -474,6 +486,22 @@ def _delete_stale_reasoning_source_snapshots(connection, cutoff_iso: str, batch_
         "WHERE mailbox.source_snapshot_id = source.snapshot_id "
         "AND mailbox.state IN ('pending', 'direct-pending')"
         ") ORDER BY source.created_at, source.snapshot_id LIMIT %s) stale_sources)"
+    )
+    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+
+def _delete_stale_reasoning_source_facts(connection, cutoff_iso: str, batch_size: int) -> int:
+    """Bound revision history while retaining the latest fact per aggregate."""
+
+    sql = (
+        "DELETE FROM `reasoning_source_facts` WHERE fact_id IN ("
+        "SELECT fact_id FROM (SELECT stale.fact_id FROM `reasoning_source_facts` stale "
+        "WHERE stale.ingested_at < %s AND EXISTS ("
+        "SELECT 1 FROM `reasoning_source_facts` newer "
+        "WHERE newer.fact_type = stale.fact_type AND newer.aggregate_id = stale.aggregate_id "
+        "AND (newer.ingested_at > stale.ingested_at OR "
+        "(newer.ingested_at = stale.ingested_at AND newer.fact_id > stale.fact_id))"
+        ") ORDER BY stale.ingested_at, stale.fact_id LIMIT %s) stale_revisions)"
     )
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
@@ -1011,6 +1039,11 @@ def apply_mysql_operational_history_retention(
     suppressed_cutoff_iso = operational_suppressed_notification_cutoff(configured, now=now)
     time_series_cutoffs = market_time_series_retention_cutoffs(configured, now=now)
     lifecycle_event_cutoff_iso = hypothesis_lifecycle_event_retention_cutoff(configured, now=now)
+    reasoning_source_fact_days = reasoning_source_fact_retention_days(configured)
+    reasoning_source_fact_cutoff_iso = (
+        (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        - timedelta(days=reasoning_source_fact_days)
+    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     batch_size = operational_history_retention_batch_size(configured)
     # World-projection payloads are multi-megabyte ABox packets. Delete one at
     # a time so the low-priority transaction does not monopolize the redo log.
@@ -1044,6 +1077,14 @@ def apply_mysql_operational_history_retention(
         )
         deleted_by_table["verified_reasoning_source_snapshots"] = source_snapshot_deleted
         deleted_by_policy["terminal:verified_reasoning_source_snapshots"] = source_snapshot_deleted
+
+        source_fact_deleted = _delete_stale_reasoning_source_facts(
+            connection,
+            reasoning_source_fact_cutoff_iso,
+            batch_size,
+        )
+        deleted_by_table["reasoning_source_facts"] = source_fact_deleted
+        deleted_by_policy["revision-history:reasoning_source_facts"] = source_fact_deleted
 
         shared_inference_deleted = _delete_stale_shared_inference_rows(
             connection,
@@ -1232,6 +1273,8 @@ def apply_mysql_operational_history_retention(
         "marketTimeSeriesCutoffs": time_series_cutoffs,
         "hypothesisLifecycleEventRetentionDays": hypothesis_lifecycle_event_retention_days(configured),
         "hypothesisLifecycleEventCutoffIso": lifecycle_event_cutoff_iso,
+        "reasoningSourceFactRetentionDays": reasoning_source_fact_days,
+        "reasoningSourceFactCutoffIso": reasoning_source_fact_cutoff_iso,
         "deleted": sum(deleted_by_table.values()),
         "tables": deleted_by_table,
         "policies": deleted_by_policy,

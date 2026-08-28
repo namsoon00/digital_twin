@@ -15,6 +15,7 @@ from .mysql_operational import (
     MySQLOperationalStorageCapacityStateStore,
     MySQLInvestmentCalendarCandidateStore,
     MySQLInvestmentCalendarStore,
+    MySQLReasoningSourceFactStore,
     MySQLInvestmentStrategyProposalStore,
     MySQLInvestmentDecisionEpisodeStore,
     MySQLInvestmentReasoningCaseStore,
@@ -280,6 +281,10 @@ def research_evidence_store(settings: Dict[str, str] = None):
 def investment_calendar_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLInvestmentCalendarStore(configured)
+
+
+def reasoning_source_fact_store(settings: Dict[str, str] = None):
+    return MySQLReasoningSourceFactStore(configured_settings(settings))
 
 
 def investment_calendar_candidate_store(settings: Dict[str, str] = None):

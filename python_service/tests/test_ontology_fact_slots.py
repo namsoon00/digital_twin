@@ -270,7 +270,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["deferredScopeIds"],
         )
 
-    def test_missing_dependency_index_falls_back_without_dropping_family_scopes(self):
+    def test_missing_authoritative_dependency_index_fails_closed(self):
         plan = build_fact_slot_projection_plan(
             ["005930"],
             ["evidence"],
@@ -289,10 +289,11 @@ class OntologyFactSlotTests(unittest.TestCase):
 
         self.assertFalse(selection["enabled"])
         self.assertEqual(
-            "fallback-dependency-key-no-scope-match",
+            "blocked-dependency-key-no-scope-match",
             selection["status"],
         )
-        self.assertEqual(list(scopes), selection["selectedScopeIds"])
+        self.assertEqual([], selection["selectedScopeIds"])
+        self.assertEqual(list(scopes), selection["deferredScopeIds"])
 
     def test_authoritative_valuation_event_ignores_cross_family_impact_metadata(self):
         plan = build_fact_slot_projection_plan(

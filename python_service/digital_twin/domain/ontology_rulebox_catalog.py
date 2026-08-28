@@ -3850,6 +3850,44 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
         GraphInferenceRule(
+            rule_id="graph.earnings.calendar.review.v1",
+            label="검증된 근접 실적 일정 -> 실적 발표 확인",
+            version="v1",
+            source_kind="stock",
+            action_group="alertReview",
+            action_level="review",
+            prompt_hint="실적 일정은 방향 예측이 아니라 발표 전 확인 항목입니다. 일정 출처와 실제 발표 자료를 구분해 설명합니다.",
+            conditions=[
+                GraphRuleCondition(
+                    "upcoming-earnings-calendar",
+                    "relation",
+                    "검증된 실적 일정이 14일 안에 있습니다.",
+                    relation_type="HAS_EXTERNAL_SIGNAL",
+                    target_kind="earnings-calendar-event",
+                    target_property_filters={
+                        "calendarScheduleEligible": True,
+                        "eventWithinReviewWindow": True,
+                    },
+                ),
+            ],
+            derivations=[
+                GraphRuleDerivation(
+                    relation_type="REQUIRES_NEXT_CHECK",
+                    target_kind="next-check",
+                    target_key="{symbol}:earnings-calendar-review",
+                    target_label="{displayName} 실적 발표 일정 확인",
+                    tbox_class="NextCheck",
+                    tbox_classes=["NextCheck", "EarningsEvent", "EarningsCalendarEvent"],
+                    polarity="context",
+                    belief_label="검증된 실적 일정이 가까워 발표 원문, 컨센서스 대비 결과와 가격 반응을 순서대로 확인해야 합니다.",
+                    ai_influence_label="실적 발표 일정 확인",
+                    action_group="alertReview",
+                    action_level="review",
+                    decision_stage="DISCLOSURE_REVIEW",
+                )
+            ],
+        ),
+        GraphInferenceRule(
             rule_id="graph.earnings.surprise.risk.v1",
             label="원시 실적 서프라이즈 하회 -> 실적 이벤트 리스크",
             version="v1",

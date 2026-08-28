@@ -11,6 +11,7 @@
     {"file": "test_decision_outcome_targets.py", "tier": "unit", "core": true},
     {"file": "test_ontology_change_impact.py", "tier": "unit", "core": true},
     {"file": "test_ontology_fact_slots.py", "tier": "unit", "core": true},
+    {"file": "test_investment_calendar_reasoning_facts.py", "tier": "unit", "core": true},
     {"file": "test_ontology_rule_manifest.py", "tier": "unit", "core": true},
     {"file": "test_rule_claim_contract.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_governance.py", "tier": "unit", "core": true},

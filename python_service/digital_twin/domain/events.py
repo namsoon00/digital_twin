@@ -844,6 +844,40 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
     )
     if subject_changed_fields:
         compact["subjectChangedFields"] = subject_changed_fields
+    source_facts = []
+    for raw in source.get("sourceFacts") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        fact_payload = raw.get("payload") if isinstance(raw.get("payload"), Mapping) else {}
+        calendar_payload = {
+            key: fact_payload.get(key)
+            for key in (
+                "eventId", "title", "eventType", "startsAt", "endsAt", "timezone",
+                "allDay", "status", "importance", "symbols", "markets", "accountIds",
+                "source", "sourceUrl", "notes", "payload",
+            )
+            if key in fact_payload
+        }
+        source_facts.append({
+            "version": _event_text(raw.get("version"), 64),
+            "factId": _event_text(raw.get("factId"), 191),
+            "factType": _event_text(raw.get("factType"), 96),
+            "aggregateId": _event_text(raw.get("aggregateId"), 191),
+            "subjectIds": _event_text_list(raw.get("subjectIds"), limit=100, item_limit=64),
+            "revision": _event_text(raw.get("revision"), 64),
+            "sourceEventId": _event_text(raw.get("sourceEventId"), 191),
+            "sourceEventName": _event_text(raw.get("sourceEventName"), 191),
+            "observedAt": _event_text(raw.get("observedAt"), 40),
+            "ingestedAt": _event_text(raw.get("ingestedAt"), 40),
+            "validFrom": _event_text(raw.get("validFrom"), 40),
+            "validTo": _event_text(raw.get("validTo"), 40),
+            "qualityState": _event_text(raw.get("qualityState"), 64),
+            "payload": calendar_payload,
+        })
+        if len(source_facts) >= 20:
+            break
+    if source_facts:
+        compact["sourceFacts"] = source_facts
     repair_requests = source.get("scopeRepairRequestsBySymbol")
     if isinstance(repair_requests, Mapping):
         compact_repairs = {}
@@ -1458,6 +1492,7 @@ def ontology_reasoning_requested_event(
     subject_changed_fields: Iterable[str] = None,
     account_id: str = "",
     rebalance_review_window: str = "",
+    source_facts: Iterable[Mapping[str, object]] = None,
 ) -> DomainEvent:
     clean_symbols = sorted(set(str(symbol or "").upper().strip() for symbol in (symbols or []) if str(symbol or "").strip()))
     clean_observation_followups = sorted({
@@ -1600,6 +1635,9 @@ def ontology_reasoning_requested_event(
                 if isinstance(scope_repair_requests_by_symbol, Mapping)
                 else {}
             ),
+            # Immutable, bounded source facts make delayed/replayed workers
+            # reconstruct the exact event that caused this request.
+            "sourceFacts": [dict(item) for item in source_facts or [] if isinstance(item, Mapping)][:20],
         }),
     )
 

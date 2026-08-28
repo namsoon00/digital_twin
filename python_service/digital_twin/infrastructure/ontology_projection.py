@@ -2971,6 +2971,7 @@ class PortfolioOntologyProjectionRecorder:
                 target_scoped_input=bool(target_symbols),
                 progress_callback=emit_progress,
                 shared_premise_proof=shared_premise_proof,
+                reasoning_context=compact_reasoning_context,
             )
             graph = projection_graph["graph"]
             persistence_graph = projection_graph["persistenceGraph"]
@@ -3101,6 +3102,7 @@ class PortfolioOntologyProjectionRecorder:
                     target_symbols=target_symbols,
                     target_scoped_input=False,
                     shared_premise_proof=shared_premise_proof,
+                    reasoning_context=compact_reasoning_context,
                 )
                 graph = full_projection_graph["graph"]
                 persistence_graph = full_projection_graph["persistenceGraph"]
@@ -3181,6 +3183,7 @@ class PortfolioOntologyProjectionRecorder:
                 if (
                     not applied_target_patch.get("applied")
                     and str(graph_input.get("mode") or "") == "target-scoped"
+                    and not str(applied_target_patch.get("status") or "").startswith("blocked-")
                 ):
                     # A scoped source can legitimately omit a shared endpoint
                     # that is retained by the active Manifest. Reassemble the
@@ -3202,6 +3205,7 @@ class PortfolioOntologyProjectionRecorder:
                         target_symbols=target_symbols,
                         target_scoped_input=False,
                         shared_premise_proof=shared_premise_proof,
+                        reasoning_context=compact_reasoning_context,
                     )
                     graph = repair_projection_graph["graph"]
                     persistence_graph = repair_projection_graph["persistenceGraph"]
@@ -5216,6 +5220,7 @@ class PortfolioOntologyProjectionRecorder:
         target_symbols: List[str] = None,
         target_scoped_input: bool = False,
         progress_callback: Callable[..., None] = None,
+        reasoning_context: Dict[str, object] = None,
     ) -> tuple:
         """Build or safely clone the immutable pre-identity ABox graph pair."""
         stage_timings: Dict[str, int] = {}
@@ -5271,6 +5276,18 @@ class PortfolioOntologyProjectionRecorder:
                 "runtime_context." + str(stage or "unknown"), **details
             ),
         )
+        source_facts = [
+            dict(item)
+            for item in (reasoning_context or {}).get("sourceFacts") or []
+            if isinstance(item, dict)
+        ]
+        if source_facts:
+            runtime_context = {
+                **dict(runtime_context or {}),
+                "reasoningSourceFacts": source_facts,
+                "semanticChangeSet": dict((reasoning_context or {}).get("semanticChangeSet") or {}),
+            }
+            self.last_runtime_contexts[snapshot.account_id] = frozen_projection_runtime_context(runtime_context)
         try:
             runtime_context_packet = pack_projection_runtime_contexts({
                 snapshot.account_id: self.last_runtime_contexts.get(snapshot.account_id)
@@ -5636,6 +5653,7 @@ class PortfolioOntologyProjectionRecorder:
         target_scoped_input: bool = False,
         progress_callback: Callable[..., None] = None,
         shared_premise_proof: Dict[str, object] = None,
+        reasoning_context: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Assemble one immutable projection graph and its scoped identity."""
         graph_build_started = time.perf_counter()
@@ -5655,6 +5673,7 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=target_symbols,
             target_scoped_input=target_scoped_input,
             progress_callback=progress_callback,
+            reasoning_context=reasoning_context,
         )
         if self.world_partitioned_reasoning_enabled():
             proof = dict(shared_premise_proof or {})

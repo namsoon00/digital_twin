@@ -1194,6 +1194,7 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
         settings=configured_settings,
         event_publisher=event_publisher or default_event_bus(),
         symbol_repository=stores.symbol_universe_store(configured_settings),
+        reasoning_source_fact_store=stores.reasoning_source_fact_store(configured_settings),
     )
 
 

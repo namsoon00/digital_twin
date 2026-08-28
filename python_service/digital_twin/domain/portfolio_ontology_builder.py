@@ -50,6 +50,7 @@ from .portfolio_ontology_market_concepts import (
 from .portfolio_ontology_coverage import add_coverage_gap_concepts
 from .portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from .portfolio_ontology_company_concepts import add_company_knowledge_concepts
+from .portfolio_ontology_calendar_concepts import add_investment_calendar_concepts
 from .portfolio_ontology_exposure_concepts import (
     add_instrument_profile_concepts,
     add_market_exposure_concepts,
@@ -396,6 +397,7 @@ def build_portfolio_ontology(
                 else {}
             ),
         )
+        add_investment_calendar_concepts(graph, stock_id, symbol, runtime_context)
         add_company_knowledge_concepts(graph, stock_id, symbol, external_signals)
         add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)

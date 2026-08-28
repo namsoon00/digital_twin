@@ -135,6 +135,7 @@ ONTOLOGY_SEMANTIC_RULE_IDS = frozenset({
     "graph.crypto.market.7d.up.major.v1",
     "graph.crypto.market.7d.up.watch.v1",
     "graph.disclosure.event_risk.v1",
+    "graph.earnings.calendar.review.v1",
     "graph.market_proxy.observation.risk_context.v1",
     "graph.market_proxy.observation.support_context.v1",
     "graph.news.direct_material_context.v1",

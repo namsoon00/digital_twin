@@ -39,6 +39,7 @@ TEXT_SETTING_KEYS = [
     "mysqlMaintenanceBusyRetrySeconds",
     "mysqlMaintenanceMaxRealtimeDeferralSeconds",
     "mysqlLegacyRetentionIntervalSeconds",
+    "mysqlMaintenanceInitialDelaySeconds",
     "operationalSnapshotHistoryKeepCount",
     "operationalSuppressedNotificationRetentionMinutes",
     "operationalDeliveredNotificationKeepCount",
@@ -1224,6 +1225,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "mysqlLegacyRetentionIntervalSeconds",
             "MYSQL_LEGACY_RETENTION_INTERVAL_SECONDS",
             "3600",
+        ),
+        "mysqlMaintenanceInitialDelaySeconds": value(
+            "mysqlMaintenanceInitialDelaySeconds",
+            "MYSQL_MAINTENANCE_INITIAL_DELAY_SECONDS",
+            "15",
         ),
         "operationalSnapshotHistoryKeepCount": value(
             "operationalSnapshotHistoryKeepCount",

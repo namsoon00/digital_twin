@@ -40,6 +40,7 @@ from .mysql_retention import (
     safe_mysql_operational_compaction_tables,
 )
 from .mysql_minimal_retention import MySQLMinimalRetentionRepository
+from .mysql_realtime_workload_guard import MySQLRealtimeWorkloadGuard
 from .operational_storage_guard import (
     accelerated_mysql_cleanup_settings,
     operational_storage_inventory,
@@ -376,6 +377,9 @@ def monitor_command(args) -> int:
             runner,
             interval,
             minimum_interval_seconds=minimum_interval,
+            cycle_guard=MySQLRealtimeWorkloadGuard(
+                data_dir() / "mysql-realtime-workload.lock"
+            ).monitor_cycle,
         ).run_forever()
         return 0
     return 1
@@ -1808,6 +1812,9 @@ def maintenance_command(args) -> int:
             "deferralStartedAt": 0.0,
             "lastLegacyAt": 0.0,
         }
+        workload_guard = MySQLRealtimeWorkloadGuard(
+            data_dir() / "mysql-realtime-workload.lock"
+        )
 
         def cleanup_once():
             queue_state = dict(reasoning_queue_probe() or {})
@@ -1834,10 +1841,20 @@ def maintenance_command(args) -> int:
                     "nextIntervalSeconds": admission.next_interval_seconds,
                     "reasoningQueue": queue_state,
                 }
-            result = run_mysql_operational_cleanup(
-                settings,
-                include_legacy=admission.include_legacy,
-            )
+            with workload_guard.maintenance_turn() as workload_lease:
+                if not workload_lease.acquired:
+                    return {
+                        "status": "realtime-monitor-deferred",
+                        "skipped": "realtime-monitor-active",
+                        "deleted": 0,
+                        "reason": "실시간 계좌·시장 모니터가 실행 중이어서 MySQL 정리를 연기했습니다.",
+                        "nextIntervalSeconds": admission.next_interval_seconds,
+                        "reasoningQueue": queue_state,
+                    }
+                result = run_mysql_operational_cleanup(
+                    settings,
+                    include_legacy=admission.include_legacy,
+                )
             if admission.include_legacy:
                 maintenance_state["lastLegacyAt"] = now_epoch
             result["status"] = admission.status
@@ -1847,7 +1864,13 @@ def maintenance_command(args) -> int:
             result["reasoningQueue"] = queue_state
             return result
 
-        OperationalHistoryRetentionScheduler(cleanup_once, configured_interval).run_forever()
+        OperationalHistoryRetentionScheduler(
+            cleanup_once,
+            configured_interval,
+            initial_delay_seconds=int(
+                settings.get("mysqlMaintenanceInitialDelaySeconds") or 15
+            ),
+        ).run_forever()
         return 0
     return 1
 

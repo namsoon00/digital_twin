@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from digital_twin.domain.mysql_maintenance_admission import mysql_maintenance_admission
+from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealtimeWorkloadGuard
 
 
 class MySQLMaintenanceAdmissionTests(unittest.TestCase):
@@ -22,6 +25,16 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
         self.assertFalse(first.run_cleanup)
         self.assertFalse(still_busy.run_cleanup)
         self.assertEqual("realtime-queue-deferred", still_busy.status)
+
+        with TemporaryDirectory() as directory:
+            first_guard = MySQLRealtimeWorkloadGuard(Path(directory) / "mysql-workload.lock")
+            second_guard = MySQLRealtimeWorkloadGuard(Path(directory) / "mysql-workload.lock")
+            with first_guard.monitor_cycle() as monitor_lease:
+                with second_guard.maintenance_turn() as maintenance_lease:
+                    self.assertTrue(monitor_lease.acquired)
+                    self.assertFalse(maintenance_lease.acquired)
+            with second_guard.maintenance_turn() as released_lease:
+                self.assertTrue(released_lease.acquired)
 
     def test_sustained_queue_allows_only_bounded_cleanup(self):
         result = mysql_maintenance_admission(

@@ -558,11 +558,19 @@ class PersistentIsolatedOntologyReasoningCycle:
 
 
 class RealtimeScheduler:
-    def __init__(self, runner, interval_seconds: int, error_reporter=None, minimum_interval_seconds: int = None):
+    def __init__(
+        self,
+        runner,
+        interval_seconds: int,
+        error_reporter=None,
+        minimum_interval_seconds: int = None,
+        cycle_guard=None,
+    ):
         self.runner = runner
         minimum = max(5, int(minimum_interval_seconds or MIN_REALTIME_INTERVAL_SECONDS))
         self.interval_seconds = max(minimum, int(interval_seconds or minimum))
         self.error_reporter = error_reporter or operational_error_reporter()
+        self.cycle_guard = cycle_guard
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -574,7 +582,11 @@ class RealtimeScheduler:
         while self.running:
             started = time.monotonic()
             try:
-                self.runner.run_once()
+                if self.cycle_guard:
+                    with self.cycle_guard():
+                        self.runner.run_once()
+                else:
+                    self.runner.run_once()
             except Exception as error:  # noqa: BLE001 - long-running scheduler must continue after a cycle failure.
                 print("Python realtime monitor error: " + str(error))
                 report_runtime_error(self.error_reporter, "Python realtime monitor", error, "monitor cycle")
@@ -685,10 +697,17 @@ class OperationalHistoryRetentionScheduler:
     part of the TypeDB inference deadline.
     """
 
-    def __init__(self, cleanup_once, interval_seconds: int, error_reporter=None):
+    def __init__(
+        self,
+        cleanup_once,
+        interval_seconds: int,
+        error_reporter=None,
+        initial_delay_seconds: int = 0,
+    ):
         self.cleanup_once = cleanup_once
         self.interval_seconds = max(60, int(interval_seconds or 300))
         self.error_reporter = error_reporter or operational_error_reporter()
+        self.initial_delay_seconds = max(0, min(300, int(initial_delay_seconds or 0)))
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -702,8 +721,15 @@ class OperationalHistoryRetentionScheduler:
         print(
             "Python operational history maintenance worker started. interval="
             + str(self.interval_seconds)
+            + "s initialDelay="
+            + str(self.initial_delay_seconds)
             + "s"
         )
+        if self.initial_delay_seconds:
+            wait_until_running(
+                lambda: self.running,
+                time.monotonic() + self.initial_delay_seconds,
+            )
         while self.running:
             started = time.monotonic()
             next_interval = self.interval_seconds

@@ -1258,9 +1258,20 @@ class ReasoningEnginePlatformService:
             "reasoningEngineV2PromotionMinimumSymbols", 3, 1, 10000
         ):
             blockers.append("insufficient-symbol-coverage")
-        if int(summary.get("candidateEventRunCount") or 0) < self.int_setting(
-            "reasoningEngineV2PromotionMinimumCandidateRuns", 2, 1, 10000
-        ):
+        minimum_decision_synthesis_runs = self.int_setting(
+            "reasoningEngineV2PromotionMinimumDecisionSynthesisRuns",
+            self.int_setting(
+                "reasoningEngineV2PromotionMinimumCandidateRuns", 2, 1, 10000
+            ),
+            1,
+            10000,
+        )
+        decision_synthesis_run_count = int(
+            summary.get("decisionSynthesisRunCount")
+            or summary.get("candidateEventRunCount")
+            or 0
+        )
+        if decision_synthesis_run_count < minimum_decision_synthesis_runs:
             blockers.append("insufficient-decision-candidate-coverage")
         if int(summary.get("traceCompleteRunCount") or 0) < successful_runs:
             blockers.append("inference-trace-incomplete")
@@ -1340,6 +1351,7 @@ class ReasoningEnginePlatformService:
             "health": health,
             "release": release,
             "minimumSuccessfulRuns": minimum_runs,
+            "minimumDecisionSynthesisRuns": minimum_decision_synthesis_runs,
             "maximumCandidateP95Ms": maximum_candidate_p95,
             "maximumQueueWaitP95Ms": maximum_queue_wait_p95,
             "endToEndP95Ms": end_to_end_p95,

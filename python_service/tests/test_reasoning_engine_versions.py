@@ -695,6 +695,46 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         )
         self.assertIn("candidate-queue-wait-slo-breached", active_backlog["blockers"])
 
+    def test_independent_v2_gate_uses_decision_synthesis_not_notification_novelty(self):
+        class Registry:
+            def get(self, deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "shadow",
+                    "health": {"status": "ready", "independentExecution": True},
+                    "releaseBundle": {},
+                }
+
+        class Jobs:
+            def summary(self, deployment_id, lookback=200):
+                del deployment_id, lookback
+                return {
+                    "sampleCount": 8,
+                    "successfulRunCount": 8,
+                    "traceCompleteRunCount": 8,
+                    "decisionSynthesisRunCount": 3,
+                    "candidateEventRunCount": 0,
+                    "distinctSymbolCount": 4,
+                    "failureCount": 0,
+                    "shadowDeliveryAuthorizedRunCount": 0,
+                    "durationP95Ms": 1200,
+                    "queueWaitP95Ms": 0,
+                    "endToEndP95Ms": 1200,
+                    "latestCompletedAt": "2099-01-01T00:00:00Z",
+                    "pendingCount": 0,
+                    "oldestPendingAgeSeconds": 0,
+                }
+
+        readiness = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(),
+        ).promotion_readiness("ontology-v2-shadow")
+
+        self.assertTrue(readiness["ready"])
+        self.assertEqual(3, readiness["independentExecution"]["decisionSynthesisRunCount"])
+        self.assertEqual(0, readiness["independentExecution"]["candidateEventRunCount"])
+
     def test_current_status_exposes_only_active_v2_and_unique_run_metrics(self):
         platform = ReasoningEnginePlatformService(object(), {
             "ontologyReasoningQueueCriticalAgeMinutes": "5",

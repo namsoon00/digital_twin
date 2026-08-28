@@ -2645,6 +2645,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         successful = [result for result in results if str(result.get("status") or "") in {"ok", "partial"}]
         trace_complete = [result for result in results if result.get("trace_complete") or result.get("traceComplete")]
         candidate_runs = [result for result in results if result.get("candidate_events") or result.get("candidateEvents")]
+        decision_synthesis_runs = [
+            result
+            for result in results
+            if result.get("decision_syntheses") or result.get("decisionSyntheses")
+        ]
         shadow_delivery_authorized = [
             result for result in results
             if result.get("delivery_authorized") or result.get("deliveryAuthorized")
@@ -2738,6 +2743,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "successfulRunCount": len(successful),
             "traceCompleteRunCount": len(trace_complete),
             "candidateEventRunCount": len(candidate_runs),
+            "decisionSynthesisRunCount": len(decision_synthesis_runs),
             "shadowDeliveryAuthorizedRunCount": len(shadow_delivery_authorized),
             "distinctSymbolCount": len(symbols),
             "symbols": symbols[:200],

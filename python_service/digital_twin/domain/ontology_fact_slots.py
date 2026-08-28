@@ -535,24 +535,16 @@ def select_fact_slot_scope_ids(
 
     def scope_matches_requested_dependency(scope_id: str, item: Mapping[str, object]) -> bool:
         symbol = scope_symbol(scope_id)
-        applicable_slots = slots_by_symbol.get(symbol, slots) if symbol else slots
         applicable_dependency_keys = (
             dependency_keys_by_symbol.get(symbol, dependency_keys)
             if symbol
             else dependency_keys
         )
-        families = _scope_families(
-            scope_id,
-            item,
-            include_impact_families=False,
-            include_semantic_families=False,
-        )
         scope_dependency_keys = _family_values(
             dict(item.get("semanticDependencyFingerprints") or {}).keys()
         )
         return bool(
-            families & applicable_slots
-            and applicable_dependency_keys
+            applicable_dependency_keys
             and scope_dependency_keys
             and any(
                 dependency_key_matches(scope_key, requested_key)
@@ -610,9 +602,18 @@ def select_fact_slot_scope_ids(
                 for requested_key in applicable_dependency_keys
             )
         )
-        if families & applicable_slots and (
-            not dependency_boundary_authoritative or dependency_match
-        ):
+        # Exact dependency identities describe the field that changed, while
+        # scope families describe its semantic use. A stock anchor is stored
+        # in the physical ``state`` scope even though currentPrice and volume
+        # route market/flow events. Requiring both classifications to match
+        # rejects valid exact dependencies. Use the family boundary only for
+        # events that do not carry an authoritative dependency contract.
+        selected_by_boundary = (
+            dependency_match
+            if dependency_boundary_authoritative
+            else bool(families & applicable_slots)
+        )
+        if selected_by_boundary:
             selected.append(scope_id)
             if dependency_match:
                 dependency_matched.append(scope_id)

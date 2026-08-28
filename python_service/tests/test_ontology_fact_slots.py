@@ -306,8 +306,8 @@ class OntologyFactSlotTests(unittest.TestCase):
             dependency_boundary_authoritative=True,
         )
         scopes = {
-            "symbol:MSTR:market": {
-                "scopeFamily": "market",
+            "symbol:MSTR:state": {
+                "scopeFamily": "state",
                 "semanticDependencyFingerprints": {
                     "kind:stock:field:currentprice": "price-v2",
                 },
@@ -333,12 +333,44 @@ class OntologyFactSlotTests(unittest.TestCase):
         )
         self.assertEqual([], selection["selectedScopeIds"])
         self.assertEqual(
-            ["symbol:MSTR:market"],
+            ["symbol:MSTR:state"],
             selection["unchangedDependencyMatchedScopeIds"],
         )
         self.assertEqual(
             ["symbol:MSTR:evidence"],
             selection["deferredScopeIds"],
+        )
+
+    def test_authoritative_dependency_overrides_physical_scope_family(self):
+        plan = build_fact_slot_projection_plan(
+            ["MSTR"],
+            ["flow", "market", "temporal"],
+            requested_dependency_keys=["kind:stock:field:currentprice"],
+            requested_dependency_keys_by_symbol={
+                "MSTR": ["kind:stock:field:currentprice"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+        scopes = {
+            "symbol:MSTR:state": {
+                "scopeFamily": "state",
+                "semanticDependencyFingerprints": {
+                    "kind:stock:field:currentprice": "price-v3",
+                },
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(
+            scopes,
+            ["symbol:MSTR:state"],
+            plan,
+        )
+
+        self.assertTrue(selection["enabled"])
+        self.assertEqual("applied", selection["status"])
+        self.assertEqual(
+            ["symbol:MSTR:state"],
+            selection["selectedScopeIds"],
         )
 
     def test_authoritative_valuation_event_ignores_cross_family_impact_metadata(self):

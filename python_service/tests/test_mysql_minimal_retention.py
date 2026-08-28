@@ -48,6 +48,16 @@ class RepositorySpy:
     def record_run(self, result, now=None):
         self.recorded.append((dict(result), now))
 
+    def compact_delivered_payloads(self, policy, now=None):
+        return {
+            "status": "ok",
+            "deleted": 0,
+            "compacted": 3,
+            "estimatedBytes": 4096,
+            "tables": {"time_series_projection_outbox": 3},
+            "policies": {"timeSeriesProjection:deliveredPayload": 3},
+        }
+
 
 class ApplyConnection:
     def __init__(self):
@@ -88,6 +98,22 @@ class FailedPayloadConnection(ApplyConnection):
         if rendered.lstrip().upper().startswith(("DELETE", "UPDATE")):
             return Cursor(rowcount=1)
         return Cursor()
+
+
+class DeliveredPayloadConnection(ApplyConnection):
+    def execute(self, sql, params=()):
+        rendered = str(sql)
+        values = tuple(params or ())
+        self.calls.append((rendered, values))
+        if "ROW_NUMBER() OVER" in rendered and "ontology_world_projection_outbox" in rendered:
+            return Cursor(rows=[{"job_id": "world-obsolete", "payload_bytes": 8192}])
+        if "FROM `time_series_projection_outbox`" in rendered and "payload_json <> '{}'" in rendered:
+            return Cursor(rows=[{"job_id": "ts-completed", "payload_bytes": 4096}])
+        if rendered.lstrip().startswith("UPDATE `ontology_world_projection_outbox`"):
+            return Cursor(rowcount=1)
+        if rendered.lstrip().startswith("UPDATE `time_series_projection_outbox`"):
+            return Cursor(rowcount=1)
+        return super().execute(sql, params)
 
 
 class AuditConnection:
@@ -241,6 +267,49 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertEqual(1, len(repository.apply_calls))
         self.assertEqual(1, len(repository.recorded))
 
+    def test_delivered_payload_service_uses_the_dedicated_compaction_path(self):
+        repository = RepositorySpy()
+        service = MySQLMinimalRetentionService(repository, {
+            "mysqlMinimalRetentionEnabled": "1",
+        })
+
+        result = service.compact_delivered_payloads(force=True)
+
+        self.assertEqual("payload-compaction", result["mode"])
+        self.assertEqual(3, result["compacted"])
+        self.assertEqual(0, len(repository.preview_calls))
+        self.assertEqual(0, len(repository.apply_calls))
+        self.assertEqual(1, len(repository.recorded))
+
+        self._assert_dedicated_payload_compaction_skips_other_retention_tables()
+
+    def _assert_dedicated_payload_compaction_skips_other_retention_tables(self):
+        connection = DeliveredPayloadConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionBatchSize": "10",
+        })
+
+        result = repository.compact_delivered_payloads(policy)
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(2, result["compacted"])
+        sql_text = "\n".join(sql for sql, _params in connection.calls)
+        self.assertIn("time_series_projection_outbox", sql_text)
+        self.assertIn("ontology_world_projection_outbox", sql_text)
+        self.assertIn("ORDER BY completed_at DESC", sql_text)
+        self.assertNotIn("SELECT 1 FROM `ontology_world_projection_outbox` newer", sql_text)
+        world_updates = [
+            sql for sql, _params in connection.calls
+            if sql.lstrip().startswith("UPDATE `ontology_world_projection_outbox`")
+        ]
+        self.assertTrue(world_updates)
+        self.assertIn("result_json = '{}'", world_updates[-1])
+        self.assertNotIn("notification_jobs", sql_text)
+        self.assertNotIn("monitor_snapshot_history", sql_text)
+        self.assertNotIn("investment_research_runs", sql_text)
+
     def test_repository_deletes_only_terminal_projection_primary_keys(self):
         connection = ApplyConnection()
         repository = MySQLMinimalRetentionRepository(connection)
@@ -287,6 +356,33 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertIn("status = 'failed'", updates[0][0])
         self.assertEqual("failed-world", updates[0][1][0])
         self.assertFalse(any("pending" in sql or "processing" in sql for sql, _params in updates))
+
+    def test_completed_time_series_payload_is_compacted_without_deleting_receipt(self):
+        connection = DeliveredPayloadConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+        budget = {
+            "started": 0,
+            "maxSeconds": 30,
+            "remainingBytes": 1024 * 1024,
+            "deletedBytes": 0,
+        }
+
+        result = repository._compact_completed_time_series_projection_payloads(policy, budget)
+
+        self.assertEqual(1, result["compacted"])
+        self.assertEqual(4096, result["estimatedBytes"])
+        self.assertTrue(any(
+            "SET payload_json = '{}'" in sql and params == ("ts-completed",)
+            for sql, params in connection.calls
+        ))
+        self.assertFalse(any(
+            sql.lstrip().startswith("DELETE FROM `time_series_projection_outbox`")
+            for sql, _params in connection.calls
+        ))
 
     def test_lifecycle_payload_is_deleted_only_after_compact_history_is_archived(self):
         connection = LifecycleArchiveConnection()

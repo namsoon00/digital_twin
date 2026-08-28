@@ -257,8 +257,10 @@ class MySQLOperationalConnection:
 
     def pooled_connection(self, autocommit: bool = True):
         timeout_seconds = mysql_operation_timeout_seconds(self.runtime_settings)
+        pool_role = str(self.runtime_settings.get("_mysqlPoolRole") or "realtime").strip().lower()
         key = (
             "orbit-alpha-operational",
+            pool_role,
             str(self.mysql_config.get("host") or ""),
             int(self.mysql_config.get("port") or 3306),
             str(self.mysql_config.get("user") or ""),

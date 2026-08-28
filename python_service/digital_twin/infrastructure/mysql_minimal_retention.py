@@ -308,6 +308,7 @@ class MySQLMinimalRetentionRepository:
         estimated_bytes = 0
         try:
             actions = [
+                ("worldProjection:obsoletePayload", self._compact_obsolete_world_projection_payloads, ()),
                 ("worldProjection:completed", self._delete_world_projection_rows, (TERMINAL_WORLD_PROJECTION_STATUSES, cutoffs["completedWorldProjection"], "completed_at")),
                 ("inferenceDetail:completed", self._delete_inference_detail_rows, (cutoffs["completedInferenceDetail"],)),
                 ("worldProjection:failedPayload", self._compact_failed_world_projection_payloads, (cutoffs["failedWorldProjectionPayload"],)),
@@ -329,6 +330,11 @@ class MySQLMinimalRetentionRepository:
                 ),
                 ("research:inactiveEvidence", self._delete_inactive_evidence, (cutoffs["inactiveEvidence"],)),
                 ("research:terminalRuns", self._delete_terminal_research_runs, (cutoffs["researchTerminal"],)),
+                (
+                    "timeSeriesProjection:deliveredPayload",
+                    self._compact_completed_time_series_projection_payloads,
+                    (),
+                ),
                 (
                     "timeSeriesProjection:completed",
                     self._delete_completed_time_series_projection,
@@ -433,6 +439,68 @@ class MySQLMinimalRetentionRepository:
             "policies": policies,
         }
 
+    def compact_delivered_payloads(
+        self,
+        policy: MySQLMinimalRetentionPolicy,
+        now: datetime = None,
+    ) -> Dict[str, object]:
+        """Clear delivered outbox bodies without scanning unrelated history."""
+
+        if not self._acquire_lock():
+            return {
+                "status": "skipped",
+                "skipped": "locked",
+                "deleted": 0,
+                "compacted": 0,
+                "tables": {},
+                "policies": {},
+            }
+
+        budget = {
+            "started": time.monotonic(),
+            "maxSeconds": policy.max_run_seconds,
+            "remainingBytes": policy.max_delete_bytes,
+            "deletedBytes": 0,
+        }
+        tables: Dict[str, int] = {}
+        policies: Dict[str, int] = {}
+        compacted = 0
+        estimated_bytes = 0
+        try:
+            actions = [
+                (
+                    "worldProjection:obsoletePayload",
+                    self._compact_obsolete_world_projection_payloads,
+                ),
+                (
+                    "timeSeriesProjection:deliveredPayload",
+                    self._compact_completed_time_series_projection_payloads,
+                ),
+            ]
+            for name, action in actions:
+                if not self._has_budget(budget):
+                    policies[name] = 0
+                    continue
+                result = action(policy, budget)
+                changed = _integer(result.get("compacted"))
+                compacted += changed
+                estimated_bytes += _integer(result.get("estimatedBytes"))
+                policies[name] = changed
+                for table, count in dict(result.get("tables") or {}).items():
+                    tables[table] = tables.get(table, 0) + _integer(count)
+        finally:
+            self._release_lock()
+
+        return {
+            "status": "ok",
+            "deleted": 0,
+            "compacted": compacted,
+            "archived": 0,
+            "estimatedBytes": estimated_bytes,
+            "tables": tables,
+            "policies": policies,
+        }
+
     def record_run(self, result: Mapping[str, object], now: datetime = None) -> None:
         """Persist a compact, payload-free audit row. Audit failure never blocks retention."""
 
@@ -510,6 +578,49 @@ class MySQLMinimalRetentionRepository:
         )
         return self._result("ontology_world_projection_outbox", deleted, bytes_deleted)
 
+    def _compact_obsolete_world_projection_payloads(self, policy, budget) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            """
+            SELECT older.job_id,
+                   OCTET_LENGTH(older.payload_json) + OCTET_LENGTH(older.result_json) AS payload_bytes
+            FROM `ontology_world_projection_outbox` older
+            INNER JOIN (
+                SELECT completed.world_id, completed.projection_kind,
+                       completed.completed_at, completed.job_id
+                FROM (
+                    SELECT world_id, projection_kind, completed_at, job_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY world_id, projection_kind
+                               ORDER BY completed_at DESC, job_id DESC
+                           ) AS completion_rank
+                    FROM `ontology_world_projection_outbox`
+                    WHERE status = 'completed' AND completed_at <> ''
+                ) completed
+                WHERE completed.completion_rank = 1
+            ) latest
+              ON latest.world_id = older.world_id
+             AND latest.projection_kind = older.projection_kind
+            WHERE older.status IN ('completed', 'superseded')
+              AND (older.payload_json <> '{}' OR older.result_json <> '{}')
+              AND (
+                  latest.completed_at > older.completed_at
+                  OR (latest.completed_at = older.completed_at AND latest.job_id > older.job_id)
+              )
+            ORDER BY older.completed_at, older.job_id LIMIT %s
+            """,
+            (policy.batch_size,),
+            "job_id",
+            policy,
+            budget,
+        )
+        return self._compact_payload_candidates(
+            "ontology_world_projection_outbox",
+            candidates,
+            "status IN ('completed', 'superseded')",
+            budget,
+            clear_result=True,
+        )
+
     def _delete_inference_detail_rows(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         statuses = ("completed", "superseded")
         candidates = self._byte_bounded_candidates(
@@ -553,6 +664,90 @@ class MySQLMinimalRetentionRepository:
             budget,
         )
         return self._result("time_series_projection_outbox", deleted, bytes_deleted)
+
+    def _compact_completed_time_series_projection_payloads(self, policy, budget) -> Dict[str, object]:
+        candidates = self._byte_bounded_candidates(
+            "SELECT job_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `time_series_projection_outbox` "
+            "WHERE job_status = 'completed' AND payload_json <> '{}' "
+            "ORDER BY updated_at, job_id LIMIT %s",
+            (policy.batch_size,),
+            "job_id",
+            policy,
+            budget,
+        )
+        return self._compact_payload_candidates(
+            "time_series_projection_outbox",
+            candidates,
+            "job_status = 'completed'",
+            budget,
+        )
+
+    def _compact_payload_candidates(
+        self,
+        table: str,
+        candidates: Sequence[object],
+        guard_sql: str,
+        budget: Dict[str, object],
+        clear_result: bool = False,
+    ) -> Dict[str, object]:
+        selected = [
+            row for row in candidates
+            if str(_row_value(row, "job_id", fallback="") or "").strip()
+        ]
+        if not selected:
+            return {
+                "deleted": 0,
+                "compacted": 0,
+                "estimatedBytes": 0,
+                "tables": {},
+            }
+
+        job_ids = [
+            str(_row_value(row, "job_id", fallback="") or "").strip()
+            for row in selected
+        ]
+        cursor = _execute(
+            self.connection,
+            "UPDATE " + quote_identifier(table)
+            + (
+                " SET payload_json = '{}', result_json = '{}'"
+                if clear_result
+                else " SET payload_json = '{}'"
+            )
+            + " WHERE job_id IN ("
+            + ", ".join(["%s"] * len(job_ids))
+            + ") AND " + guard_sql
+            + (
+                " AND (payload_json <> '{}' OR result_json <> '{}')"
+                if clear_result
+                else " AND payload_json <> '{}'"
+            ),
+            tuple(job_ids),
+        )
+        compacted = max(0, _integer(getattr(cursor, "rowcount", 0)))
+        selected_bytes = sum(
+            max(0, _integer(_row_value(row, "payload_bytes")))
+            for row in selected
+        )
+        bytes_compacted = (
+            selected_bytes
+            if compacted >= len(selected)
+            else int(selected_bytes * compacted / max(1, len(selected)))
+        )
+        budget["remainingBytes"] = max(
+            0,
+            _integer(budget.get("remainingBytes")) - bytes_compacted,
+        )
+        budget["deletedBytes"] = (
+            _integer(budget.get("deletedBytes")) + bytes_compacted
+        )
+        return {
+            "deleted": 0,
+            "compacted": compacted,
+            "estimatedBytes": bytes_compacted,
+            "tables": {table: compacted} if compacted else {},
+        }
 
     def _delete_temporal_feature_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

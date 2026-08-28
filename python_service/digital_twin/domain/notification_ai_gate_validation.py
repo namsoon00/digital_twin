@@ -1198,6 +1198,12 @@ def compact_rule_rows(rows: object, limit: int = 16) -> List[Dict[str, object]]:
             "evidenceRole": item.get("evidenceRole") or item.get("evidence_role"),
             "evidence": evidence_rows,
             "evidenceState": evidence_state,
+            "appliedFactFields": list(
+                evidence_state.get("appliedFactFields")
+                or item.get("appliedFactFields")
+                or item.get("applied_fact_fields")
+                or []
+            )[:20],
             "assessmentScope": item.get("assessmentScope") or item.get("assessment_scope"),
             "ruleRequiredFacts": list(
                 item.get("ruleRequiredFacts") or item.get("rule_required_facts") or []

@@ -79,3 +79,42 @@ class MySQLMinimalRetentionService:
         })
         self.repository.record_run(result, now=current)
         return result
+
+    def compact_delivered_payloads(
+        self,
+        now: datetime = None,
+        force: bool = False,
+    ) -> Dict[str, object]:
+        """Run only the low-cost outbox payload compaction actions."""
+
+        policy = self.policy()
+        current = now or datetime.now(timezone.utc)
+        if not policy.enabled and not force:
+            return {
+                "status": "disabled",
+                "mode": "payload-compaction",
+                "profile": policy.profile,
+                "policy": policy.to_dict(),
+                "deleted": 0,
+                "compacted": 0,
+                "archived": 0,
+                "tables": {},
+                "policies": {},
+            }
+
+        applied = self.repository.compact_delivered_payloads(policy, now=current)
+        result = {
+            "status": str(applied.get("status") or "ok"),
+            "mode": "payload-compaction",
+            "profile": policy.profile,
+            "policy": policy.to_dict(),
+            "deleted": 0,
+            "compacted": int(applied.get("compacted") or 0),
+            "archived": 0,
+            "estimatedBytes": int(applied.get("estimatedBytes") or 0),
+            "tables": dict(applied.get("tables") or {}),
+            "policies": dict(applied.get("policies") or {}),
+            "skipped": str(applied.get("skipped") or ""),
+        }
+        self.repository.record_run(result, now=current)
+        return result

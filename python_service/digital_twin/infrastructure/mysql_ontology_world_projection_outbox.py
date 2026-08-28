@@ -491,13 +491,16 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             current = connection.execute(
                 """
-                SELECT dedupe_key FROM ontology_world_projection_outbox
+                SELECT dedupe_key, projection_kind, world_id
+                FROM ontology_world_projection_outbox
                 WHERE job_id = %s AND status = %s AND lease_owner = %s
                 LIMIT 1 FOR UPDATE
                 """,
                 (_clean(job_id), PROCESSING, _clean(worker_id)),
             ).fetchone()
             dedupe_key = _clean((current or {}).get("dedupe_key"))
+            projection_kind = _clean((current or {}).get("projection_kind"))
+            world_id = _clean((current or {}).get("world_id"))
             cursor = connection.execute(
                 """
                 UPDATE ontology_world_projection_outbox
@@ -521,6 +524,28 @@ class MySQLOntologyWorldProjectionOutboxStore(MySQLOperationalConnection):
                     WHERE dedupe_key = %s AND job_id != %s AND status = %s
                     """,
                     (SUPERSEDED, stamp, stamp, dedupe_key, _clean(job_id), FAILED),
+                )
+            if completed and projection_kind and world_id:
+                # Scope repair needs one latest successful packet per shared
+                # world. Older completed packets are immutable audit receipts,
+                # not replay sources, so retaining their multi-megabyte graph
+                # bodies only multiplies MySQL storage and backup work.
+                connection.execute(
+                    """
+                    UPDATE ontology_world_projection_outbox
+                    SET payload_json = '{}', result_json = '{}', updated_at = %s
+                    WHERE projection_kind = %s AND world_id = %s AND job_id != %s
+                      AND status IN (%s, %s)
+                      AND (payload_json != '{}' OR result_json != '{}')
+                    """,
+                    (
+                        stamp,
+                        projection_kind,
+                        world_id,
+                        _clean(job_id),
+                        COMPLETED,
+                        SUPERSEDED,
+                    ),
                 )
         return completed
 

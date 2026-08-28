@@ -400,6 +400,48 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual(2, second["autoRotationConsecutiveFailureCount"])
         self.assertEqual(0, successful["autoRotationConsecutiveFailureCount"])
 
+    def test_stale_running_rotation_without_live_owner_becomes_interrupted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "marker.json"
+            lock = Path(temp) / "rotation.lock"
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker), \
+                    patch.object(service_manager, "typedb_rotation_lock_path", return_value=lock):
+                service_manager.write_typedb_retention_marker({
+                    "lastAutoRotationAttemptEpoch": 1000,
+                    "lastAutoRotationHeartbeatEpoch": 1100,
+                    "lastAutoRotationStatus": "running",
+                })
+                result = service_manager.reconcile_typedb_auto_rotation_state(
+                    {"autoRotationRunningTimeoutSeconds": "600"},
+                    now_epoch=1800,
+                )
+
+        self.assertEqual("interrupted", result["status"])
+        self.assertEqual("interrupted", result["marker"]["lastAutoRotationStatus"])
+        self.assertEqual(1, result["marker"]["autoRotationConsecutiveFailureCount"])
+
+    def test_live_rotation_owner_refreshes_expired_heartbeat(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "marker.json"
+            lock = Path(temp) / "rotation.lock"
+            lock.write_text(json.dumps({"pid": 4321}), encoding="utf-8")
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker), \
+                    patch.object(service_manager, "typedb_rotation_lock_path", return_value=lock), \
+                    patch.object(service_manager, "pid_exists", return_value=True):
+                service_manager.write_typedb_retention_marker({
+                    "lastAutoRotationAttemptEpoch": 1000,
+                    "lastAutoRotationHeartbeatEpoch": 1100,
+                    "lastAutoRotationStatus": "running",
+                })
+                result = service_manager.reconcile_typedb_auto_rotation_state(
+                    {"autoRotationRunningTimeoutSeconds": "600"},
+                    now_epoch=1800,
+                )
+
+        self.assertEqual("heartbeat-refreshed", result["status"])
+        self.assertEqual("running", result["marker"]["lastAutoRotationStatus"])
+        self.assertEqual(1800, result["marker"]["lastAutoRotationHeartbeatEpoch"])
+
     def test_typedb_rotate_recovers_workers_and_alerts_when_reset_fails(self):
         spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \

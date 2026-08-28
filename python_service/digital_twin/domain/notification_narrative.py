@@ -20,8 +20,8 @@ from .notification_ai_context import relation_context_value
 
 
 NOTIFICATION_NARRATIVE_VERSION = "investment-notification-narrative-v1"
-NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v1"
-NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v1"
+NOTIFICATION_CLAIM_VALIDATION_VERSION = "investment-notification-claim-validation-v2"
+NARRATIVE_CLAIM_CONTRACT_VERSION = "investment-narrative-claim-contract-v2"
 
 CLAIM_SECTIONS = {
     "view", "change", "support", "counter", "next-condition", "limitation",
@@ -183,6 +183,7 @@ class NarrativeEvidence:
     freshness: str = ""
     rule_ids: Tuple[str, ...] = ()
     hypothesis_ids: Tuple[str, ...] = ()
+    related_evidence_ids: Tuple[str, ...] = ()
     judgement_eligible: bool = True
     detail: str = ""
 
@@ -199,6 +200,7 @@ class NarrativeEvidence:
             "freshness": payload.pop("freshness"),
             "ruleIds": list(payload.pop("rule_ids")),
             "hypothesisIds": list(payload.pop("hypothesis_ids")),
+            "relatedEvidenceIds": list(payload.pop("related_evidence_ids")),
             "judgementEligible": payload.pop("judgement_eligible"),
             "detail": payload.pop("detail"),
         }
@@ -388,6 +390,9 @@ def build_decision_core_evidence_ledger(
             rule_ids=(rule_id,),
             judgement_eligible=not reference_only and narrative_role != "limitation",
             detail=_text(" / ".join(str(value) for value in item.get("evidence") or []), 320),
+            related_evidence_ids=tuple(
+                "fact:" + value for value in applied_fields if "fact:" + value in rows
+            ),
         )
         rule_fact_links[rule_id] = ["fact:" + value for value in applied_fields if "fact:" + value in rows]
 
@@ -415,6 +420,7 @@ def build_decision_core_evidence_ledger(
                         freshness=existing.freshness,
                         rule_ids=existing.rule_ids,
                         hypothesis_ids=hypotheses_for_evidence,
+                        related_evidence_ids=existing.related_evidence_ids,
                         judgement_eligible=existing.judgement_eligible,
                         detail=existing.detail,
                     )
@@ -444,6 +450,7 @@ def build_decision_core_evidence_ledger(
                 freshness=existing.freshness,
                 rule_ids=existing.rule_ids,
                 hypothesis_ids=tuple(_unique([*existing.hypothesis_ids, hypothesis_id], 16)),
+                related_evidence_ids=existing.related_evidence_ids,
                 judgement_eligible=existing.judgement_eligible,
                 detail=existing.detail,
             )
@@ -461,6 +468,7 @@ def build_decision_core_evidence_ledger(
                         freshness=fact.freshness,
                         rule_ids=tuple(_unique([*fact.rule_ids, str(rule_id)], 16)),
                         hypothesis_ids=tuple(_unique([*fact.hypothesis_ids, hypothesis_id], 16)),
+                        related_evidence_ids=fact.related_evidence_ids,
                         judgement_eligible=fact.judgement_eligible,
                         detail=fact.detail,
                     )
@@ -626,6 +634,21 @@ def narrative_claim_evidence_contract(
         if str(item.get("kind") or "") == "decision-transition"
     )
     all_decision_ids = _unique([*support_ids, *counter_ids, *context_ids])
+    observed_ids = _unique(
+        item.get("evidenceId")
+        for item in rows
+        if str(item.get("kind") or "") not in {"inference", "data-limit"}
+        and str(item.get("evidenceId") or "") in all_decision_ids
+    )
+    inference_bundles = {
+        str(item.get("evidenceId")): _unique([
+            item.get("evidenceId"),
+            *(item.get("relatedEvidenceIds") or []),
+        ], 8)
+        for item in eligible
+        if str(item.get("kind") or "") == "inference"
+        and str(item.get("evidenceId") or "")
+    }
     return {
         "version": NARRATIVE_CLAIM_CONTRACT_VERSION,
         "allowedEvidenceIdsBySection": {
@@ -636,6 +659,15 @@ def narrative_claim_evidence_contract(
             "next-condition": _unique([*all_decision_ids, *limitation_ids]),
             "limitation": limitation_ids,
         },
+        "recommendedEvidenceIdsBySection": {
+            "view": observed_ids[:4],
+            "change": change_ids[:2],
+            "support": support_ids[:4],
+            "counter": counter_ids[:3],
+            "next-condition": observed_ids[:4],
+            "limitation": limitation_ids[:3],
+        },
+        "evidenceBundlesByInference": inference_bundles,
         "requirements": {
             "allClaimsNeedEvidence": True,
             "actionClaimsNeedJudgementEligibleEvidence": True,
@@ -674,6 +706,25 @@ def normalize_narrative_claims(
         text = _text(item.get("text"), 420)
         claim_id = _text(item.get("claimId") or item.get("claim_id"), 160) or "claim:" + str(index + 1)
         evidence_ids = _unique(item.get("evidenceIds") or item.get("evidence_ids") or [], 12)
+        closure_added_ids: List[str] = []
+        initial_rows = [evidence_by_id[value] for value in evidence_ids if value in evidence_by_id]
+        if section in {"view", "next-condition"} and initial_rows and not any(
+            str(row.get("kind") or "") != "inference" for row in initial_rows
+        ):
+            allowed_ids_for_closure = {
+                str(value or "")
+                for value in allowed_by_section.get(section) or []
+                if str(value or "")
+            }
+            for row in initial_rows:
+                for related_id in row.get("relatedEvidenceIds") or []:
+                    related = evidence_by_id.get(str(related_id or ""))
+                    if not related or str(related.get("kind") or "") == "inference":
+                        continue
+                    if allowed_by_section and str(related_id) not in allowed_ids_for_closure:
+                        continue
+                    closure_added_ids.append(str(related_id))
+            evidence_ids = _unique([*evidence_ids, *closure_added_ids], 12)
         reasons: List[str] = []
         if section not in CLAIM_SECTIONS:
             reasons.append("unsupported-section")
@@ -738,6 +789,7 @@ def normalize_narrative_claims(
             reasons=tuple(reasons),
             writer_kind=writer_kind,
         ).to_dict()
+        validation["evidenceClosureAddedIds"] = _unique(closure_added_ids, 12)
         validations.append(validation)
         if status == "verified":
             claims.append({
@@ -745,14 +797,23 @@ def normalize_narrative_claims(
                 "section": section,
                 "text": text,
                 "evidenceIds": evidence_ids,
+                "evidenceClosureAddedIds": _unique(closure_added_ids, 12),
                 "writerKind": writer_kind,
             })
+    requested_count = len(requested) if isinstance(requested, list) else 0
+    rejected = [item for item in validations if item.get("status") == "rejected"]
+    reason_counts: Dict[str, int] = {}
+    for item in rejected:
+        for reason in item.get("reasons") or []:
+            reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + 1
     return claims, {
         "version": NOTIFICATION_CLAIM_VALIDATION_VERSION,
         "status": "verified" if requested and len(claims) == len(requested) else ("partial" if claims else "unavailable"),
-        "requestedClaimCount": len(requested) if isinstance(requested, list) else 0,
+        "requestedClaimCount": requested_count,
         "verifiedClaimCount": len(claims),
-        "rejectedClaimCount": len([item for item in validations if item.get("status") == "rejected"]),
+        "rejectedClaimCount": len(rejected),
+        "acceptedClaimRatio": round(len(claims) / requested_count, 4) if requested_count else None,
+        "rejectionReasonCounts": reason_counts,
         "validations": validations,
         "evidenceLedger": ledger,
         "claimContract": claim_contract or narrative_claim_evidence_contract(ledger),

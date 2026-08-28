@@ -608,6 +608,7 @@ class ConsoleReadModelService:
         time_series = _mapping(payloads.get("timeSeries"))
         storage = _mapping(payloads.get("storage"))
         providers = _rows(external.get("providers"))
+        now_epoch = datetime.now(timezone.utc).timestamp()
         failed_providers = [item for item in providers if _text(item.get("state")).lower() not in {"healthy", "ok", "ready"}]
         pending = int(reasoning.get("effectivePendingCount") or reasoning.get("pendingCount") or 0)
         processing = int(reasoning.get("processingCount") or 0)
@@ -626,11 +627,51 @@ class ConsoleReadModelService:
         )
         reasoning_status = _text(reasoning.get("status") or reasoning.get("state")).lower()
         reasoning_queue_health = _text(_mapping(_mapping(reasoning.get("legacyReasoningQueue")).get("queueHealth")).get("status")).lower()
+        reasoning_oldest_at = _text(reasoning.get("oldestRequestAt"))
+        reasoning_oldest_age_seconds = max(
+            0,
+            int(now_epoch - _iso_timestamp(reasoning_oldest_at)),
+        ) if _iso_timestamp(reasoning_oldest_at) else 0
         reasoning_healthy = pending == 0 and processing == 0 and (
             reasoning_status in {"active", "healthy", "ready", "idle"}
             or reasoning_queue_health in {"healthy", "ready", "ok"}
         )
-        reasoning_state = "healthy" if reasoning_healthy else ("warning" if pending <= 3 else "critical")
+        reasoning_state = (
+            "critical"
+            if reasoning_status in {"critical", "failed", "blocked"}
+            or reasoning_oldest_age_seconds > 10 * 60
+            else "healthy" if reasoning_healthy
+            else "warning"
+        )
+        monitoring = _mapping(realtime.get("monitoring"))
+        monitor_snapshot = _mapping(monitoring.get("snapshot"))
+        monitor_updated_at = _text(
+            monitor_snapshot.get("occurredAt")
+            or monitor_snapshot.get("generatedAt")
+            or monitor_snapshot.get("updatedAt")
+            or monitoring.get("generatedAt")
+        )
+        monitor_updated_epoch = _iso_timestamp(monitor_updated_at)
+        monitor_age_seconds = max(0, int(now_epoch - monitor_updated_epoch)) if monitor_updated_epoch else 0
+        monitor_state = (
+            "warning"
+            if _text(realtime.get("storeWarning"))
+            or not monitoring
+            or not monitor_updated_epoch
+            or monitor_age_seconds > 15 * 60
+            else "healthy"
+        )
+        ai_states = _mapping(ai_summary.get("states"))
+        ai_oldest_at = min(
+            (
+                _text(_mapping(ai_states.get(state)).get("oldestAt"))
+                for state in ("pending", "retry", "processing")
+                if _text(_mapping(ai_states.get(state)).get("oldestAt"))
+            ),
+            default="",
+        )
+        ai_oldest_epoch = _iso_timestamp(ai_oldest_at)
+        ai_oldest_age_seconds = max(0, int(now_epoch - ai_oldest_epoch)) if ai_oldest_epoch else 0
         time_series_control = _mapping(time_series.get("control"))
         active_backend_id = _text(time_series_control.get("activeBackendId") or time_series_control.get("active_backend_id"))
         time_series_health = _mapping(_mapping(time_series.get("health")).get(active_backend_id))
@@ -676,9 +717,13 @@ class ConsoleReadModelService:
             {
                 "id": "monitoring",
                 "label": "계좌·시장 모니터",
-                "state": "healthy" if not _text(realtime.get("storeWarning")) and _mapping(realtime.get("monitoring")) else "warning",
-                "detail": "최근 모니터링 이벤트를 읽었습니다." if _mapping(realtime.get("monitoring")) else "최근 모니터링 이벤트가 없습니다.",
-                "updatedAt": _text(_mapping(_mapping(realtime.get("monitoring")).get("snapshot")).get("occurredAt")),
+                "state": monitor_state,
+                "detail": (
+                    "최근 모니터링 이벤트를 읽었습니다."
+                    if monitor_state == "healthy"
+                    else "최근 모니터링 스냅샷이 없거나 15분 이상 갱신되지 않았습니다."
+                ),
+                "updatedAt": monitor_updated_at,
             },
             {
                 "id": "external-data",
@@ -691,14 +736,17 @@ class ConsoleReadModelService:
                 "id": "reasoning",
                 "label": "TypeDB 관계 추론",
                 "state": reasoning_state,
-                "detail": f"대기 {pending}건 · 처리 {processing}건 · 배포 {_text(reasoning.get('deploymentId')) or '확인 필요'}",
-                "updatedAt": _text(reasoning.get("oldestRequestAt")),
+                "detail": (
+                    f"대기 {pending}건 · 처리 {processing}건 · 배포 {_text(reasoning.get('deploymentId')) or '확인 필요'}"
+                    + (f" · 최장 {reasoning_oldest_age_seconds}초" if reasoning_oldest_age_seconds else "")
+                ),
+                "updatedAt": reasoning_oldest_at,
             },
             {
                 "id": "ai",
                 "label": "AI 판단 대기열",
                 "state": (
-                    "critical" if ai_actionable_failures or ai_effective_status == "critical"
+                    "critical" if ai_actionable_failures or ai_effective_status == "critical" or ai_oldest_age_seconds > 10 * 60
                     else "warning" if ai_effective_status == "degraded"
                     else "healthy"
                 ),
@@ -707,8 +755,9 @@ class ConsoleReadModelService:
                     f" · 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
                     f" · 폴백 {int(ai_summary.get('effectiveAiFallbackCount') or 0)}건 · 현재 실패 {ai_actionable_failures}건"
                     f" · 누적 감사 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
+                    + (f" · 최장 {ai_oldest_age_seconds}초" if ai_oldest_age_seconds else "")
                 ),
-                "updatedAt": "",
+                "updatedAt": ai_oldest_at,
             },
             {
                 "id": "notifications",

@@ -138,6 +138,30 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_reasoning_engine_job_source_snapshot",
             "`source_snapshot_id`, `job_status`, `created_at`",
         ),
+        MySQLIndexDefinition(
+            "reasoning_engine_jobs",
+            "idx_reasoning_engine_job_local_lease",
+            "`job_status`, `lease_owner`, `updated_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "reasoning_engine_jobs",
+            "idx_reasoning_engine_job_expired_lease",
+            "`job_status`, `lease_expires_at`, `job_id`",
+        ),
+    ),
+    "temporal_feature_snapshots": (
+        MySQLIndexDefinition(
+            "temporal_feature_snapshots",
+            "idx_temporal_feature_created",
+            "`created_at`, `snapshot_id`",
+        ),
+    ),
+    "time_series_projection_outbox": (
+        MySQLIndexDefinition(
+            "time_series_projection_outbox",
+            "idx_time_series_projection_completed",
+            "`job_status`, `updated_at`, `job_id`",
+        ),
     ),
     "service_accounts": (
         MySQLIndexDefinition("service_accounts", "idx_service_accounts_enabled_created", "`enabled`, `created_at`, `id`"),
@@ -376,12 +400,22 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "idx_reasoning_run_stages_generation",
             "`inference_generation_id`, `account_id`, `updated_at`",
         ),
+        MySQLIndexDefinition(
+            "ontology_reasoning_run_stages",
+            "idx_reasoning_run_stages_updated",
+            "`updated_at`, `run_id`, `stage_key`",
+        ),
     ),
     "ontology_reasoning_rule_runs": (
         MySQLIndexDefinition(
             "ontology_reasoning_rule_runs",
             "idx_reasoning_rule_runs_generation",
             "`inference_generation_id`, `account_id`, `updated_at`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_reasoning_rule_runs",
+            "idx_reasoning_rule_runs_updated",
+            "`updated_at`, `run_id`, `rule_run_key`",
         ),
     ),
     "ontology_reasoning_rule_result_slots": (
@@ -406,6 +440,21 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "ontology_world_projection_outbox",
             "idx_world_projection_outbox_completed",
             "`status`, `completed_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_world_projection_outbox",
+            "idx_world_projection_outbox_world_kind_updated",
+            "`world_id`, `projection_kind`, `updated_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_world_projection_outbox",
+            "idx_world_projection_outbox_status_world_kind_updated",
+            "`status`, `world_id`, `projection_kind`, `updated_at`, `job_id`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_world_projection_outbox",
+            "idx_world_projection_outbox_status_world_kind_completed",
+            "`status`, `world_id`, `projection_kind`, `completed_at`, `job_id`",
         ),
     ),
     "ontology_inference_detail_outbox": (

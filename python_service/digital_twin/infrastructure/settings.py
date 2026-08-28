@@ -36,6 +36,9 @@ TEXT_SETTING_KEYS = [
     "operationalHistoryRetentionHours",
     "operationalHistoryRetentionBatchSize",
     "operationalHistoryRetentionCheckIntervalSeconds",
+    "mysqlMaintenanceBusyRetrySeconds",
+    "mysqlMaintenanceMaxRealtimeDeferralSeconds",
+    "mysqlLegacyRetentionIntervalSeconds",
     "operationalSnapshotHistoryKeepCount",
     "operationalSuppressedNotificationRetentionMinutes",
     "operationalDeliveredNotificationKeepCount",
@@ -447,6 +450,7 @@ TEXT_SETTING_KEYS = [
     "typedbCapacityCriticalPercent",
     "typedbCapacityAutoRotateCooldownMinutes",
     "typedbCapacityAutoRotateFailureRetrySeconds",
+    "typedbCapacityAutoRotateRunningTimeoutSeconds",
     "typedbBlueGreenRotationEnabled",
     "typedbBlueGreenStagePortOffset",
     "typedbBlueGreenRetiredRetentionMinutes",
@@ -1205,6 +1209,21 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "operationalHistoryRetentionCheckIntervalSeconds",
             "OPERATIONAL_HISTORY_RETENTION_CHECK_INTERVAL_SECONDS",
             "120",
+        ),
+        "mysqlMaintenanceBusyRetrySeconds": value(
+            "mysqlMaintenanceBusyRetrySeconds",
+            "MYSQL_MAINTENANCE_BUSY_RETRY_SECONDS",
+            "60",
+        ),
+        "mysqlMaintenanceMaxRealtimeDeferralSeconds": value(
+            "mysqlMaintenanceMaxRealtimeDeferralSeconds",
+            "MYSQL_MAINTENANCE_MAX_REALTIME_DEFERRAL_SECONDS",
+            "900",
+        ),
+        "mysqlLegacyRetentionIntervalSeconds": value(
+            "mysqlLegacyRetentionIntervalSeconds",
+            "MYSQL_LEGACY_RETENTION_INTERVAL_SECONDS",
+            "3600",
         ),
         "operationalSnapshotHistoryKeepCount": value(
             "operationalSnapshotHistoryKeepCount",
@@ -2278,6 +2297,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbCapacityAutoRotateFailureRetrySeconds",
             "TYPEDB_CAPACITY_AUTO_ROTATE_FAILURE_RETRY_SECONDS",
             "300",
+        ),
+        "typedbCapacityAutoRotateRunningTimeoutSeconds": value(
+            "typedbCapacityAutoRotateRunningTimeoutSeconds",
+            "TYPEDB_CAPACITY_AUTO_ROTATE_RUNNING_TIMEOUT_SECONDS",
+            "14400",
         ),
         "typedbBlueGreenRotationEnabled": value(
             "typedbBlueGreenRotationEnabled",

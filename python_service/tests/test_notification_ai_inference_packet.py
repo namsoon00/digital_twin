@@ -92,6 +92,12 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertNotIn("fact:currentPrice", contract["support"])
         self.assertIn("fact:currentPrice", contract["view"])
         self.assertEqual([], contract["change"])
+        full_contract = first.decision_core["narrativeClaimContract"]
+        self.assertIn("fact:currentPrice", full_contract["recommendedEvidenceIdsBySection"]["view"])
+        self.assertEqual(
+            ["rule:graph.holding.guard.v1", "fact:currentPrice", "fact:ma20Distance"],
+            full_contract["evidenceBundlesByInference"]["rule:graph.holding.guard.v1"],
+        )
 
     def test_change_claim_requires_snapshot_bound_decision_transition(self):
         context = investment_context()
@@ -177,7 +183,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         self.assertEqual(0, outcome.response.rejected_claim_count)
         self.assertIn("unknown-evidence-id", outcome.executed_prompt)
 
-    def test_rule_only_view_is_repaired_with_observed_state(self):
+    def test_rule_only_view_uses_exact_observed_evidence_closure_without_second_ai_call(self):
         class Reviewer:
             calls = 0
 
@@ -185,7 +191,7 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
                 self.calls += 1
                 core = prepared["_notificationAiPreparedDecisionCore"]
                 support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
-                view_id = support_id if self.calls == 1 else "fact:currentPrice"
+                view_id = support_id
                 payload = response_payload(view_id, support_id, "fact:ma20Distance")
                 return validated_response_from_payload(
                     prepared,
@@ -198,8 +204,13 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         outcome = NotificationAIJudgementService(reviewer, {}).judge(investment_context())
 
         self.assertTrue(outcome.publishable)
-        self.assertEqual(2, reviewer.calls)
-        self.assertIn("view-needs-observed-state", outcome.executed_prompt)
+        self.assertEqual(1, reviewer.calls)
+        self.assertFalse(outcome.repair_attempted)
+        view_claim = next(
+            item for item in outcome.response.narrative_claims
+            if item["section"] == "view"
+        )
+        self.assertIn("fact:currentPrice", view_claim["evidenceClosureAddedIds"])
 
     def test_unrepairable_ai_claims_fall_back_without_ai_writer_label(self):
         class Reviewer:

@@ -552,7 +552,7 @@ ACTION_ENVELOPE_FIELDS = (
 
 RULE_DECISION_FIELDS = (
     "ruleId", "label", "relationType", "reviewLevel", "dataState", "evidenceRole",
-    "evidence", "evidenceState",
+    "evidence", "evidenceState", "appliedFactFields",
 )
 
 DRIVER_DECISION_FIELDS = (

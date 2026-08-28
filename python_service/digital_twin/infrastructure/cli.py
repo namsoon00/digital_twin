@@ -1430,6 +1430,7 @@ def run_mysql_operational_cleanup(
     settings: Dict[str, object],
     optimize: bool = False,
     drop_ephemeral_databases: bool = False,
+    include_legacy: bool = True,
 ) -> Dict[str, object]:
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
@@ -1444,6 +1445,7 @@ def run_mysql_operational_cleanup(
     # low-priority worker must not repeat table/index DDL checks on every
     # separate process because that work can exceed the normal query timeout.
     settings["_skipOperationalSchemaBootstrap"] = True
+    settings["_mysqlPoolRole"] = "maintenance"
     # A completed world-projection row can still carry a multi-megabyte result.
     # Keep this local to the maintenance worker and isolate its pool key so a
     # previously opened 10-second realtime connection cannot be reused here.
@@ -1458,10 +1460,20 @@ def run_mysql_operational_cleanup(
         try:
             store = MySQLOperationalConnection(settings)
             with store.connect() as connection:
-                result = apply_mysql_operational_history_retention(
-                    connection,
-                    settings,
-                    use_lock=True,
+                result = (
+                    apply_mysql_operational_history_retention(
+                        connection,
+                        settings,
+                        use_lock=True,
+                    )
+                    if include_legacy
+                    else {
+                        "status": "bounded-only",
+                        "deleted": 0,
+                        "tables": {},
+                        "policies": {},
+                        "legacyRetentionSkipped": True,
+                    }
                 )
                 minimal_retention = MySQLMinimalRetentionService(
                     MySQLMinimalRetentionRepository(connection),
@@ -1663,6 +1675,94 @@ def run_mysql_minimal_retention(
             raise
 
 
+def run_mysql_delivered_payload_compaction(
+    settings: Dict[str, object],
+    drain_max_passes: int = 20,
+) -> Dict[str, object]:
+    """Compact delivered outbox bodies without running broad retention scans."""
+
+    configured = dict(settings or {})
+    configured.update({
+        "_mysqlPoolRole": "maintenance",
+        "_skipOperationalHistoryRetention": True,
+        "_skipOperationalSchemaBootstrap": True,
+        "_effectiveMysqlMinimalRetentionBatchSize": "1000",
+        "_effectiveMysqlMinimalRetentionMaxDeleteBytes": str(256 * 1024 * 1024),
+        "_effectiveMysqlMinimalRetentionMaxRunSeconds": "60",
+    })
+    configured["mysqlOperationTimeoutSeconds"] = str(
+        max(60, mysql_operation_timeout_seconds(configured))
+    )
+    try:
+        requested_passes = int(drain_max_passes or 20)
+    except (TypeError, ValueError):
+        requested_passes = 20
+    passes = max(1, min(50, requested_passes))
+    connection_retries = 0
+    deadlock_retries = 0
+    while True:
+        try:
+            store = MySQLOperationalConnection(configured)
+            with store.connect() as connection:
+                service = MySQLMinimalRetentionService(
+                    MySQLMinimalRetentionRepository(connection),
+                    configured,
+                )
+                results = []
+                for _index in range(passes):
+                    result = service.compact_delivered_payloads(force=True)
+                    results.append(result)
+                    if int(result.get("compacted") or 0) <= 0:
+                        break
+
+                merged_tables = {}
+                merged_policies = {}
+                for item in results:
+                    for table, count in dict(item.get("tables") or {}).items():
+                        merged_tables[str(table)] = (
+                            int(merged_tables.get(str(table)) or 0) + int(count or 0)
+                        )
+                    for name, count in dict(item.get("policies") or {}).items():
+                        merged_policies[str(name)] = (
+                            int(merged_policies.get(str(name)) or 0) + int(count or 0)
+                        )
+                result = {
+                    "status": str((results[-1] if results else {}).get("status") or "ok"),
+                    "mode": "payload-compaction",
+                    "deleted": 0,
+                    "compacted": sum(int(item.get("compacted") or 0) for item in results),
+                    "archived": 0,
+                    "estimatedBytes": sum(
+                        int(item.get("estimatedBytes") or 0) for item in results
+                    ),
+                    "tables": merged_tables,
+                    "policies": merged_policies,
+                    "drain": {
+                        "enabled": True,
+                        "completedPasses": len(results),
+                        "maxPasses": passes,
+                        "exhausted": bool(results)
+                        and int(results[-1].get("compacted") or 0) == 0,
+                    },
+                }
+            if connection_retries:
+                result["transientConnectionRetryCount"] = connection_retries
+            if deadlock_retries:
+                result["deadlockRetryCount"] = deadlock_retries
+            return result
+        except Exception as error:
+            if mysql_is_deadlock(error) and deadlock_retries < mysql_deadlock_retry_count(configured):
+                deadlock_retries += 1
+                delay_ms = mysql_deadlock_retry_delay_milliseconds(configured, deadlock_retries)
+                time.sleep(delay_ms / 1000.0)
+                continue
+            if mysql_is_connection_lost(error) and connection_retries < 1:
+                connection_retries += 1
+                time.sleep(0.25)
+                continue
+            raise
+
+
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings())
@@ -1671,6 +1771,13 @@ def maintenance_command(args) -> int:
             settings,
             apply=bool(args.apply),
             drain=bool(getattr(args, "drain", False)),
+            drain_max_passes=getattr(args, "drain_max_passes", 20),
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "ok") != "error" else 1
+    if args.maintenance_action == "mysql-payload-compaction":
+        result = run_mysql_delivered_payload_compaction(
+            settings,
             drain_max_passes=getattr(args, "drain_max_passes", 20),
         )
         print(json.dumps(result, ensure_ascii=False))
@@ -1695,6 +1802,12 @@ def maintenance_command(args) -> int:
             configured_interval = min(configured_interval, minimal_policy.interval_seconds)
 
         reasoning_queue_probe = build_ontology_reasoning_queue_probe(settings)
+        from ..domain.mysql_maintenance_admission import mysql_maintenance_admission
+
+        maintenance_state = {
+            "deferralStartedAt": 0.0,
+            "lastLegacyAt": 0.0,
+        }
 
         def cleanup_once():
             queue_state = dict(reasoning_queue_probe() or {})
@@ -1702,15 +1815,36 @@ def maintenance_command(args) -> int:
                 pending_count = int(queue_state.get("effectivePendingCount") or 0)
             except (TypeError, ValueError):
                 pending_count = 0
-            # History retention owns a separate, low-priority worker. Deferring
-            # it forever whenever the inference mailbox is non-empty lets
-            # superseded high-volume events consume the operational database
-            # and eventually blocks the notification outbox itself.
-            result = run_mysql_operational_cleanup(settings)
-            if pending_count > 0:
-                result["status"] = "queue-active-cleanup"
-                result["reasoningQueue"] = queue_state
-                result["reason"] = "추론 대기열 처리와 별개로 저우선 MySQL 이력 정리를 실행했습니다."
+            now_epoch = time.time()
+            admission = mysql_maintenance_admission(
+                settings,
+                pending_count=pending_count,
+                now_epoch=now_epoch,
+                deferral_started_at=maintenance_state["deferralStartedAt"],
+                last_legacy_at=maintenance_state["lastLegacyAt"],
+            )
+            maintenance_state["deferralStartedAt"] = admission.deferral_started_at
+            if not admission.run_cleanup:
+                return {
+                    "status": admission.status,
+                    "skipped": "realtime-reasoning-active",
+                    "deleted": 0,
+                    "reason": admission.reason,
+                    "deferredSeconds": admission.deferred_seconds,
+                    "nextIntervalSeconds": admission.next_interval_seconds,
+                    "reasoningQueue": queue_state,
+                }
+            result = run_mysql_operational_cleanup(
+                settings,
+                include_legacy=admission.include_legacy,
+            )
+            if admission.include_legacy:
+                maintenance_state["lastLegacyAt"] = now_epoch
+            result["status"] = admission.status
+            result["reason"] = admission.reason
+            result["deferredSeconds"] = admission.deferred_seconds
+            result["nextIntervalSeconds"] = admission.next_interval_seconds
+            result["reasoningQueue"] = queue_state
             return result
 
         OperationalHistoryRetentionScheduler(cleanup_once, configured_interval).run_forever()
@@ -2364,6 +2498,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply up to a bounded number of accelerated retention passes after a capacity incident",
     )
     mysql_minimal_retention.add_argument("--drain-max-passes", default="20")
+    mysql_payload_compaction = maintenance_actions.add_parser(
+        "mysql-payload-compaction",
+        help="Clear delivered outbox payload bodies without broad retention scans",
+    )
+    mysql_payload_compaction.add_argument("--drain-max-passes", default="20")
     mysql_retention_watch = maintenance_actions.add_parser("watch")
     mysql_retention_watch.add_argument("--interval", default="")
     maintenance.set_defaults(func=maintenance_command)

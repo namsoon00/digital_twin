@@ -1659,9 +1659,14 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 )
             except (AttributeError, TypeError):
                 pass
+            # Only this host's bounded lease slice can be proven dead by the
+            # local OS.  The previous global FOR UPDATE scan locked every
+            # active worker claim and could stall ordinary queue traffic.
             rows = connection.execute(
                 "SELECT job_id, deployment_id, lease_owner FROM reasoning_engine_jobs "
-                "WHERE job_status = 'processing' AND lease_owner <> '' FOR UPDATE",
+                "WHERE job_status = 'processing' AND lease_owner LIKE %s "
+                "ORDER BY updated_at ASC LIMIT 256 FOR UPDATE SKIP LOCKED",
+                (local_host.replace("%", "\\%").replace("_", "\\_") + ":%",),
             ).fetchall()
             for row in rows or []:
                 owner = str(row.get("lease_owner") or "")
@@ -3088,7 +3093,7 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
                 """
                 UPDATE time_series_projection_outbox
                 SET job_status = 'completed', lease_owner = '', lease_until = '',
-                    last_error = '', updated_at = %s
+                    payload_json = '{}', last_error = '', updated_at = %s
                 WHERE job_id = %s
                 """,
                 (iso_utc(), str(job_id or "")),

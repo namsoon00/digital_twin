@@ -332,6 +332,9 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "autoRotationFailureRetrySeconds": str(
             (settings or {}).get("typedbCapacityAutoRotateFailureRetrySeconds") or "300"
         ),
+        "autoRotationRunningTimeoutSeconds": str(
+            (settings or {}).get("typedbCapacityAutoRotateRunningTimeoutSeconds") or "14400"
+        ),
         "blueGreenRotationEnabled": str(
             (settings or {}).get("typedbBlueGreenRotationEnabled") or "1"
         ),
@@ -1319,6 +1322,7 @@ def typedb_auto_rotation_needed(
         "exception",
         "candidate-failed-active-preserved",
         "cutover-fenced-active-preserved",
+        "interrupted",
     }
     try:
         consecutive_failures = max(
@@ -1538,7 +1542,11 @@ def record_typedb_auto_rotation_state(**updates: object) -> Dict[str, object]:
         "exception",
         "candidate-failed-active-preserved",
         "cutover-fenced-active-preserved",
+        "interrupted",
     }
+    if status == "running":
+        updates.setdefault("lastAutoRotationHeartbeatAt", iso_now())
+        updates.setdefault("lastAutoRotationHeartbeatEpoch", time.time())
     if status in failure_statuses:
         try:
             previous_failures = int(marker.get("autoRotationConsecutiveFailureCount") or 0)
@@ -1550,6 +1558,73 @@ def record_typedb_auto_rotation_state(**updates: object) -> Dict[str, object]:
     marker.update({key: value for key, value in updates.items() if value is not None})
     write_typedb_retention_marker(marker)
     return marker
+
+
+def reconcile_typedb_auto_rotation_state(
+    spec: Dict[str, object],
+    *,
+    now_epoch: float = None,
+) -> Dict[str, object]:
+    """Recover a durable ``running`` marker after its owner disappeared."""
+
+    marker = read_typedb_retention_marker()
+    if str(marker.get("lastAutoRotationStatus") or "").strip().lower() != "running":
+        return {"status": "unchanged", "marker": marker}
+    now = float(now_epoch if now_epoch is not None else time.time())
+    timeout_seconds = int_value(
+        (spec or {}).get("autoRotationRunningTimeoutSeconds"),
+        4 * 60 * 60,
+        5 * 60,
+    )
+    try:
+        activity_epoch = float(
+            marker.get("lastAutoRotationHeartbeatEpoch")
+            or marker.get("lastAutoRotationAttemptEpoch")
+            or 0
+        )
+    except (TypeError, ValueError):
+        activity_epoch = 0.0
+    age_seconds = max(0, int(now - activity_epoch)) if activity_epoch else timeout_seconds + 1
+    if age_seconds <= timeout_seconds:
+        return {
+            "status": "running",
+            "ageSeconds": age_seconds,
+            "timeoutSeconds": timeout_seconds,
+            "marker": marker,
+        }
+    try:
+        lock = json.loads(typedb_rotation_lock_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        lock = {}
+    owner_pid = int_value(lock.get("pid"), 0, 0)
+    if owner_pid and pid_exists(owner_pid):
+        refreshed = record_typedb_auto_rotation_state(
+            lastAutoRotationStatus="running",
+            lastAutoRotationHeartbeatAt=iso_now(),
+            lastAutoRotationHeartbeatEpoch=now,
+        )
+        return {
+            "status": "heartbeat-refreshed",
+            "ownerPid": owner_pid,
+            "ageSeconds": age_seconds,
+            "timeoutSeconds": timeout_seconds,
+            "marker": refreshed,
+        }
+    interrupted = record_typedb_auto_rotation_state(
+        lastAutoRotationFinishedAt=iso_now(),
+        lastAutoRotationStatus="interrupted",
+        lastAutoRotationResult={
+            "status": "interrupted",
+            "reason": "TypeDB rotation heartbeat expired without a live maintenance owner.",
+            "staleRunningAgeSeconds": age_seconds,
+        },
+    )
+    return {
+        "status": "interrupted",
+        "ageSeconds": age_seconds,
+        "timeoutSeconds": timeout_seconds,
+        "marker": interrupted,
+    }
 
 
 def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str, object]:
@@ -3579,6 +3654,17 @@ def supervise() -> int:
                     )
             if time.monotonic() - last_maintenance_at >= 60:
                 typedb_spec = specs.get("typedb")
+                rotation_reconciliation = (
+                    reconcile_typedb_auto_rotation_state(typedb_spec)
+                    if typedb_spec else {}
+                )
+                if rotation_reconciliation.get("status") == "interrupted":
+                    append_log(
+                        supervisor_log_path(),
+                        "typedb stale rotation state recovered as interrupted. age="
+                        + str(rotation_reconciliation.get("ageSeconds") or 0)
+                        + "s",
+                    )
                 decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}
                 automatic = typedb_auto_rotation_needed(typedb_spec) if typedb_spec else {}
                 if automatic.get("needed"):
@@ -4268,6 +4354,10 @@ def typedb_rotate(
                 details={"rotationReason": str(rotation_reason or decision.get("reason") or "manual")},
             )
             prepared = prepare_typedb_blue_green_candidate(spec)
+            record_typedb_auto_rotation_state(
+                lastAutoRotationStatus="running",
+                lastAutoRotationStage="candidate-prepared",
+            )
             candidate = dict(prepared.get("candidate") or {})
             candidate_validation = typedb_candidate_validation_summary(prepared)
             if prepared.get("status") != "prepared":
@@ -4342,6 +4432,10 @@ def typedb_rotate(
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
             cleanup_typedb_candidate(candidate, remove_data=False)
+            record_typedb_auto_rotation_state(
+                lastAutoRotationStatus="running",
+                lastAutoRotationStage="cutover-starting",
+            )
             services_stopped = True
             stop(include_supervisor=False)
             result = swap_typedb_blue_green_data_paths(spec, candidate)

@@ -160,7 +160,13 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
                     "directionalHitRate", "averageActionAdjustedReturnPct",
                 ),
             )
-        applied = _unique(evidence_state.get("appliedFactFields") or [], 12)
+        applied = _unique(
+            evidence_state.get("appliedFactFields")
+            or item.get("appliedFactFields")
+            or item.get("applied_fact_fields")
+            or [],
+            12,
+        )
         if applied:
             row["appliedFactFields"] = applied
         if row:

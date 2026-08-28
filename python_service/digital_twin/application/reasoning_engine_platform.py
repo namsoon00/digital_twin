@@ -749,6 +749,25 @@ class ReasoningEnginePlatformService:
                         "status": "unavailable",
                         "reason": str(error)[:180],
                     }
+        completion = dict(
+            platform_state.get("marketObservationReasoningCompletion") or {}
+        )
+        if str(completion.get("deploymentId") or "") != active_id:
+            completion = {}
+            completion_summary = getattr(
+                self.independent_job_store,
+                "market_observation_completion_summary",
+                None,
+            )
+            if callable(completion_summary) and active_id:
+                try:
+                    completion = dict(completion_summary(active_id, limit=20) or {})
+                except Exception as error:  # noqa: BLE001 - diagnostics stay explicit during storage recovery.
+                    completion = {
+                        "deploymentId": active_id,
+                        "status": "unavailable",
+                        "reason": str(error)[:180],
+                    }
         queue_ids = list(dict.fromkeys(
             value for value in (active_id, delivery_id, candidate_id) if value
         ))
@@ -884,6 +903,7 @@ class ReasoningEnginePlatformService:
                 "latestCompletedAt": str(queue.get("latestCompletedAt") or ""),
                 "jobRowCounts": dict(queue.get("jobRowCounts") or queue.get("counts") or {}),
             },
+            "marketObservationReasoningCompletion": completion,
             "queues": {
                 role: {
                     "deploymentId": deployment_id,

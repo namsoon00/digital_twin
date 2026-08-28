@@ -2994,9 +2994,16 @@ def ontology_reasoning_status_payload() -> Dict[str, object]:
         # read probe instead of constructing the operational worker.
         configured = operational_read_settings()
         payload = dict(build_ontology_reasoning_queue_probe(configured)() or {})
+        control = stores.reasoning_engine_registry_store(configured).control()
+        completion_deployment_id = str(
+            getattr(control, "delivery_deployment_id", "")
+            or getattr(control, "active_deployment_id", "")
+            or configured.get("reasoningEngineV2DeploymentId")
+            or ""
+        )
         payload["marketObservationReasoningCompletion"] = (
             stores.reasoning_engine_job_store(configured).market_observation_completion_summary(
-                str(configured.get("reasoningEngineV2DeploymentId") or ""),
+                completion_deployment_id,
                 limit=12,
             )
         )

@@ -530,6 +530,62 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual(61, current["queue"]["failureCount"])
         self.assertEqual(0, current["queue"]["unresolvedFailureCount"])
 
+    def test_current_status_reads_completion_from_active_not_candidate(self):
+        deployment = {
+            "deploymentId": "v2-active",
+            "engineVersion": "v2",
+            "status": "active",
+            "releaseBundle": {"release_id": "release-v2-active"},
+        }
+
+        class Registry:
+            @staticmethod
+            def get(_deployment_id):
+                return dict(deployment)
+
+        class Jobs:
+            completion_calls = []
+
+            @staticmethod
+            def summary(deployment_id, **_kwargs):
+                return {"deploymentId": deployment_id, "pendingCount": 0}
+
+            @classmethod
+            def market_observation_completion_summary(cls, deployment_id, limit=20):
+                cls.completion_calls.append((deployment_id, limit))
+                return {
+                    "deploymentId": deployment_id,
+                    "status": "healthy",
+                    "receiptCount": 3,
+                }
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            independent_job_store=Jobs(),
+        )
+        state = {
+            "control": {
+                "active_deployment_id": "v2-active",
+                "delivery_deployment_id": "v2-active",
+                "candidate_deployment_id": "v2-candidate",
+            },
+            "deployments": [deployment],
+            "independentQueue": {"deploymentId": "v2-active", "pendingCount": 0},
+            "marketObservationReasoningCompletion": {
+                "deploymentId": "v2-candidate",
+                "status": "healthy",
+                "receiptCount": 0,
+            },
+        }
+
+        current = platform.current_status(state)
+
+        self.assertEqual(
+            {"deploymentId": "v2-active", "status": "healthy", "receiptCount": 3},
+            current["marketObservationReasoningCompletion"],
+        )
+        self.assertEqual([("v2-active", 20)], Jobs.completion_calls)
+
     def test_history_gate_requires_coverage_freshness_and_zero_delivery(self):
         class Registry:
             def get(self, deployment_id):

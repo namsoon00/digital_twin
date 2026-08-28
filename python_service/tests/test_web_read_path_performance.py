@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin.domain.notifications import NotificationJob
@@ -98,6 +99,37 @@ class WebReadPathPerformanceTests(unittest.TestCase):
                 self.assertIs(marker, web_server.ontology_catalog_api_payload("summary", {}))
         self.assertIs(web_server.ONTOLOGY_CATALOG_SUMMARY_READ_MODEL, cached.call_args.args[0])
         self.assertFalse(cached.call_args.kwargs["blocking_first_load"])
+
+    def test_reasoning_completion_uses_production_delivery_deployment(self):
+        settings = {"reasoningEngineV2DeploymentId": "v2-candidate"}
+
+        class Registry:
+            @staticmethod
+            def control():
+                return SimpleNamespace(
+                    active_deployment_id="v2-active",
+                    delivery_deployment_id="v2-delivery",
+                )
+
+        class Jobs:
+            calls = []
+
+            @classmethod
+            def market_observation_completion_summary(cls, deployment_id, limit=12):
+                cls.calls.append((deployment_id, limit))
+                return {"deploymentId": deployment_id, "receiptCount": 2}
+
+        with patch.object(web_server, "operational_read_settings", return_value=settings):
+            with patch.object(web_server, "build_ontology_reasoning_queue_probe", return_value=lambda: {}):
+                with patch.object(web_server.stores, "reasoning_engine_registry_store", return_value=Registry()):
+                    with patch.object(web_server.stores, "reasoning_engine_job_store", return_value=Jobs()):
+                        payload = web_server.ontology_reasoning_status_payload()
+
+        self.assertEqual(
+            {"deploymentId": "v2-delivery", "receiptCount": 2},
+            payload["marketObservationReasoningCompletion"],
+        )
+        self.assertEqual([("v2-delivery", 12)], Jobs.calls)
 
 
 if __name__ == "__main__":

@@ -62,11 +62,12 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
             event_id="source-event-2",
         )
         fact = investment_calendar_source_fact(calendar, source_event)
+        self.assertEqual("EarningsCalendarEvent", fact.fact_type)
         requested = ontology_reasoning_requested_event(
             source_event,
             "investment-calendar-update",
             calendar.symbols,
-            fact_types=["InvestmentCalendarEvent"],
+            fact_types=[fact.fact_type],
             fact_revisions_by_symbol={"035420": fact.revision},
             changed_fields_by_symbol={"035420": ["external.investmentCalendarEvent"]},
             source_facts=[fact.request_payload()],
@@ -76,6 +77,32 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
         request = independent_reasoning_request("test-deployment", [requested])
         self.assertEqual(fact.fact_id, request.context["sourceFacts"][0]["factId"])
         self.assertTrue(request.context["eventDependencyBoundaryAuthoritative"])
+
+    def test_non_earnings_event_uses_generic_calendar_dependency(self):
+        payload = calendar_payload()
+        payload.update({"eventType": "shareholderMeeting", "title": "NAVER 주주총회"})
+        calendar = InvestmentCalendarEvent.from_payload(payload)
+        source_event = DomainEvent(
+            name="investment_calendar.event_saved",
+            aggregate_id=calendar.event_id,
+            occurred_at="2026-08-28T00:00:00Z",
+            event_id="source-event-generic",
+        )
+
+        fact = investment_calendar_source_fact(calendar, source_event)
+        requested = ontology_reasoning_requested_event(
+            source_event,
+            "investment-calendar-update",
+            calendar.symbols,
+            fact_types=[fact.fact_type],
+            source_facts=[fact.request_payload()],
+        )
+
+        self.assertEqual("InvestmentCalendarEvent", fact.fact_type)
+        self.assertEqual(
+            ["kind:investment-calendar-event"],
+            requested.payload["factChangeContract"]["dependencyKeys"],
+        )
 
     def test_calendar_fact_becomes_symbol_scoped_abox_entity(self):
         position = Position(

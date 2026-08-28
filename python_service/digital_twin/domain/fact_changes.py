@@ -81,6 +81,7 @@ FACT_TYPE_SCOPE_FAMILIES = {
     "disclosureevent": {"evidence"},
     "verifiedclaim": {"evidence"},
     "verificationrun": {"evidence"},
+    "earningscalendarevent": {"temporal", "evidence"},
     "investmentcalendarevent": {"temporal", "evidence"},
     "account": {"portfolio"},
     "portfolio": {"portfolio"},
@@ -126,7 +127,8 @@ FACT_TYPE_DEPENDENCY_KEYS = {
     "evidencelifecycle": {"kind:research-evidence", "kind:verified-claim"},
     "disclosure": {"kind:disclosure-filing"},
     "disclosureevent": {"kind:disclosure-filing"},
-    "investmentcalendarevent": {"kind:earnings-calendar-event"},
+    "earningscalendarevent": {"kind:earnings-calendar-event"},
+    "investmentcalendarevent": {"kind:investment-calendar-event"},
     "verifiedclaim": {"kind:verified-claim"},
     "verificationrun": {"kind:verification-run"},
 }

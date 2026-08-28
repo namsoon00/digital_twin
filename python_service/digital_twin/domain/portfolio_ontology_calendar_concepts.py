@@ -39,7 +39,9 @@ def add_investment_calendar_concepts(
 ) -> None:
     evaluated_at = str((runtime_context or {}).get("asOf") or "")
     for fact in _calendar_facts(runtime_context):
-        if str(fact.get("factType") or "") != "InvestmentCalendarEvent":
+        if str(fact.get("factType") or "") not in {
+            "EarningsCalendarEvent", "InvestmentCalendarEvent",
+        }:
             continue
         subjects = {str(value or "").upper().strip() for value in fact.get("subjectIds") or []}
         if symbol not in subjects:

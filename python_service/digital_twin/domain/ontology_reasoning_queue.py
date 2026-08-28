@@ -95,6 +95,7 @@ EVIDENCE_FACT_TYPES = {
     "ResearchEvidence",
     "NewsArticle",
     "Disclosure",
+    "EarningsCalendarEvent",
     "InvestmentCalendarEvent",
 }
 

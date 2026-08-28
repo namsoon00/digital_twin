@@ -227,7 +227,7 @@ class InvestmentCalendarService:
                 saved.symbols,
                 changed_count=len(saved.symbols),
                 observed_count=1,
-                fact_types=["InvestmentCalendarEvent"],
+                fact_types=[source_fact.fact_type],
                 reason="투자 캘린더의 종목 연결 이벤트를 온톨로지 ABox 사실로 반영하고 관련 규칙 추론을 갱신합니다.",
                 materiality_assessments=[{
                     "eventId": saved.event_id,

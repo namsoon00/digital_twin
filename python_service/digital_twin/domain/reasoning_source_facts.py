@@ -81,9 +81,14 @@ def investment_calendar_source_fact(
     event: InvestmentCalendarEvent,
     source_event,
 ) -> ReasoningSourceFact:
+    fact_type = (
+        "EarningsCalendarEvent"
+        if str(event.event_type or "").strip() == "earnings"
+        else "InvestmentCalendarEvent"
+    )
     event_payload = _stable_value(event.to_dict())
     revision = _fingerprint({
-        "factType": "InvestmentCalendarEvent",
+        "factType": fact_type,
         "aggregateId": event.event_id,
         "payload": event_payload,
     })
@@ -91,7 +96,7 @@ def investment_calendar_source_fact(
     occurred_at = str(getattr(source_event, "occurred_at", "") or "")
     return ReasoningSourceFact(
         fact_id="reasoning-fact:" + revision[:32],
-        fact_type="InvestmentCalendarEvent",
+        fact_type=fact_type,
         aggregate_id=str(event.event_id or ""),
         subject_ids=tuple(sorted({str(symbol or "").upper() for symbol in event.symbols if str(symbol or "")})),
         revision=revision,

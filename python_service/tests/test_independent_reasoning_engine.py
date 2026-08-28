@@ -268,6 +268,10 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 self.completed = list(event_ids)
                 return {"status": "completed", "completedCount": len(self.completed)}
 
+            def repair_completed_reasoning_receipts(self, _job_ids):
+                self.completed = [pending_event_id]
+                return {"eventIds": self.completed, "errors": []}
+
         store = Store()
 
         result = store.reconcile_completed_reasoning_jobs("ontology-v2-production-r75")
@@ -313,6 +317,10 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 del account_ids, symbols
                 self.completed = list(event_ids)
                 return {"status": "completed", "completedCount": len(self.completed)}
+
+            def repair_completed_reasoning_receipts(self, _job_ids):
+                self.completed = [pending_event_id]
+                return {"eventIds": self.completed, "errors": []}
 
             def release_pending(self, event_ids):
                 return {"status": "released", "releasedCount": 0, "eventIds": list(event_ids)}
@@ -907,6 +915,97 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             "UPDATE market_observation_reasoning_anchors" in sql
             for sql, _params in connection.calls
         ))
+
+    def test_mysql_queue_carries_transitive_source_lineage_to_survivor(self):
+        event = source_event("MSTR")
+        event = DomainEvent(
+            name=event.name,
+            aggregate_id=event.aggregate_id,
+            occurred_at=event.occurred_at,
+            event_id="event:new",
+            payload={
+                **event.payload,
+                "coalescedReasoningChanges": {
+                    "sourceEventIds": ["event:middle", "event:new"],
+                },
+            },
+        )
+
+        class Connection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, params=()):
+                self.calls.append((str(sql), tuple(params or ())))
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+        MySQLReasoningEngineJobStore.persist_job_sources_with_connection(
+            connection,
+            "ontology-v2-production",
+            "job:survivor",
+            event,
+            predecessor_job_ids=["job:older"],
+        )
+
+        copy_call = next(call for call in connection.calls if "SELECT deployment_id, %s" in call[0])
+        self.assertIn("job:older", copy_call[1])
+        inserted_event_ids = {
+            params[2]
+            for sql, params in connection.calls
+            if "VALUES (%s, %s, %s" in sql
+        }
+        self.assertEqual({"event:middle", "event:new"}, inserted_event_ids)
+
+    def test_mysql_queue_completion_accepts_verified_later_boundary(self):
+        source = source_event("MSTR")
+
+        class Connection:
+            def __init__(self):
+                self.stored_result = {}
+
+            def execute(self, sql, params=()):
+                rendered = str(sql)
+                values = tuple(params or ())
+                if "FROM reasoning_engine_jobs" in rendered and "FOR UPDATE" in rendered:
+                    return SimpleNamespace(fetchone=lambda: {
+                        "job_id": "job:later",
+                        "deployment_id": "ontology-v2-production",
+                        "source_event_id": "event:MSTR",
+                        "source_snapshot_id": "snapshot:later",
+                        "source_snapshot_at": "2026-08-28T00:10:00Z",
+                        "request_json": json.dumps({"sourceEvent": source.to_dict()}),
+                    })
+                if "FROM reasoning_engine_job_sources" in rendered:
+                    return SimpleNamespace(fetchall=lambda: [])
+                if "FROM market_observation_reasoning_anchors" in rendered:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "MSTR",
+                        "pending_event_id": "event:older-unrepresented",
+                    }])
+                if "UPDATE reasoning_engine_jobs" in rendered:
+                    self.stored_result = json.loads(values[0])
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            def __init__(self):
+                self.runtime_settings = {}
+                self.last_transaction_retry = {}
+
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        result = Store().complete(
+            "job:later",
+            {"evaluated_symbols": ["MSTR"], "account_ids": ["acct"]},
+        )
+
+        self.assertEqual(1, result["receiptCount"])
+        self.assertEqual("verified-later-boundary", result["receipts"][0]["completionMode"])
 
     def test_mysql_queue_releases_exact_worker_claims_during_managed_shutdown(self):
         class Connection:

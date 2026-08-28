@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from digital_twin.application.ai_inference_queue_service import (
     AIInferenceQueueRunner,
     ai_response_contract_error,
+    preserve_verified_ai_narrative,
+    typedb_inference_fallback_response,
 )
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
@@ -80,6 +82,32 @@ class RecordingDecisionStore:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
+    def test_verified_ai_narrative_survives_action_contract_fallback(self):
+        reviewed = NotificationAIValidatedResponse(
+            action="BUY",
+            narrative_claims=[{
+                "claimId": "claim:view",
+                "section": "view",
+                "text": "가격 회복은 확인됐지만 거래 확인은 아직 약합니다.",
+                "evidenceIds": ["fact:price"],
+            }],
+            claim_validation={
+                "status": "partial",
+                "verifiedClaimCount": 1,
+                "validations": [{"claimId": "claim:view", "status": "verified"}],
+            },
+        )
+
+        fallback = preserve_verified_ai_narrative(
+            typedb_inference_fallback_response({}, "action envelope violation"),
+            reviewed,
+        )
+
+        self.assertEqual("HOLD", fallback.action)
+        self.assertEqual("typedb", fallback.writer_provenance["decisionOwner"])
+        self.assertTrue(fallback.writer_provenance["aiNarrativePartiallyAdopted"])
+        self.assertEqual(1, fallback.verified_claim_count)
+
     def test_empty_routed_hypothesis_set_is_a_valid_abstention_contract(self):
         context = {
             "_notificationAiPreparedDecisionCore": {
@@ -282,6 +310,13 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(64, len(prompt_audit["promptHash"]))
         result_count = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_results")
         self.assertEqual(1, int(result_count[0]))
+        effective = mysql_fetchone(
+            self.seed,
+            "SELECT publication_mode, ai_authored, publication_contract_passed FROM ai_inference_results LIMIT 1",
+        )
+        self.assertEqual("ai-authored", effective[0])
+        self.assertEqual(1, int(effective[1]))
+        self.assertEqual(1, int(effective[2]))
 
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()
@@ -347,6 +382,13 @@ class AIInferenceQueueTests(unittest.TestCase):
             decision_store.saved[0].episode_id,
             delivered.context["investmentDecisionEpisodeId"],
         )
+        effective = mysql_fetchone(
+            self.seed,
+            "SELECT publication_mode, ai_authored, contract_failure_code FROM ai_inference_results LIMIT 1",
+        )
+        self.assertEqual("typedb-fallback", effective[0])
+        self.assertEqual(0, int(effective[1]))
+        self.assertEqual("delivery-deadline", effective[2])
 
     def test_invalid_ai_contract_releases_typedb_fallback(self):
         job = self.create_job()

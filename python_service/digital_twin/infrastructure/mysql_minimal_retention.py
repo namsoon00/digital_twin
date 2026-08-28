@@ -629,7 +629,10 @@ class MySQLMinimalRetentionRepository:
             + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql()
             + " AND NOT EXISTS (SELECT 1 FROM `market_observation_reasoning_anchors` anchor "
             "WHERE anchor.pending_event_id <> '' "
-            "AND anchor.pending_event_id = `reasoning_engine_jobs`.source_event_id)"
+            "AND (anchor.pending_event_id = `reasoning_engine_jobs`.source_event_id OR EXISTS ("
+            "SELECT 1 FROM `reasoning_engine_job_sources` source "
+            "WHERE source.survivor_job_id = `reasoning_engine_jobs`.job_id "
+            "AND source.source_event_id = anchor.pending_event_id)))"
             + " ORDER BY updated_at, job_id LIMIT %s",
             statuses + (cutoff_iso, policy.batch_size),
             "job_id",
@@ -643,10 +646,19 @@ class MySQLMinimalRetentionRepository:
             "job_status IN (" + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql()
             + " AND NOT EXISTS (SELECT 1 FROM `market_observation_reasoning_anchors` anchor "
             "WHERE anchor.pending_event_id <> '' "
-            "AND anchor.pending_event_id = `reasoning_engine_jobs`.source_event_id)",
+            "AND (anchor.pending_event_id = `reasoning_engine_jobs`.source_event_id OR EXISTS ("
+            "SELECT 1 FROM `reasoning_engine_job_sources` source "
+            "WHERE source.survivor_job_id = `reasoning_engine_jobs`.job_id "
+            "AND source.source_event_id = anchor.pending_event_id)))",
             statuses + (cutoff_iso,),
             budget,
         )
+        if deleted:
+            self.connection.execute(
+                "DELETE source FROM `reasoning_engine_job_sources` source "
+                "LEFT JOIN `reasoning_engine_jobs` job ON job.job_id = source.survivor_job_id "
+                "WHERE job.job_id IS NULL",
+            )
         return self._result("reasoning_engine_jobs", deleted, bytes_deleted)
 
     def _delete_reasoning_source_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:

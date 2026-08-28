@@ -3768,6 +3768,48 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def typedb_candidate_reuse_marker_path(candidate: Dict[str, object]) -> Path:
+    path = Path(candidate.get("dataPath") or data_dir() / "typedb-data-candidate")
+    return path.with_name(path.name + ".release.json")
+
+
+def read_typedb_candidate_reuse_marker(candidate: Dict[str, object]) -> Dict[str, object]:
+    path = typedb_candidate_reuse_marker_path(candidate)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def write_typedb_candidate_reuse_marker(
+    candidate: Dict[str, object],
+    database: str,
+    seed_attestation: Dict[str, object],
+) -> Dict[str, object]:
+    path = typedb_candidate_reuse_marker_path(candidate)
+    marker = read_typedb_candidate_reuse_marker(candidate)
+    attestations = dict(marker.get("seedAttestations") or {})
+    attestations[str(database or "")] = dict(seed_attestation or {})
+    marker.update({
+        "contractVersion": "typedb-candidate-release-cache-v1",
+        "validatedAt": iso_now(),
+        "seedAttestations": attestations,
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(marker, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, path)
+    return marker
+
+
+def clear_typedb_candidate_reuse_marker(candidate: Dict[str, object]) -> None:
+    try:
+        typedb_candidate_reuse_marker_path(candidate).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def typedb_blue_green_database_specs(candidate: Dict[str, object]) -> List[Dict[str, object]]:
     """Return one candidate contract for every deployed reasoning database."""
     primary = str(candidate.get("typedbDatabase") or "orbit_alpha_ontology").strip()
@@ -3814,7 +3856,12 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             "status": "candidate-owner-stop-failed",
             "candidate": candidate,
         }
-    if candidate_path.exists():
+    reuse_marker = read_typedb_candidate_reuse_marker(candidate)
+    if reuse_marker and not candidate_path.exists():
+        clear_typedb_candidate_reuse_marker(candidate)
+        reuse_marker = {}
+    reuse_candidate = bool(candidate_path.exists() and reuse_marker)
+    if candidate_path.exists() and not reuse_candidate:
         shutil.rmtree(candidate_path)
     remove_pid(candidate["pid"])
     try:
@@ -3826,7 +3873,24 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
         validated_release_contracts = {}
         for database_spec in typedb_blue_green_database_specs(candidate):
             database_name = str(database_spec.get("typedbDatabase") or "")
-            if not ensure_typedb_seeded(database_spec):
+            cached_attestation = dict(
+                dict(reuse_marker.get("seedAttestations") or {}).get(database_name) or {}
+            )
+            if cached_attestation:
+                database_spec["_typedbSeedAttestation"] = cached_attestation
+            cached_seed_contract = (
+                validate_typedb_candidate_seed_contract(database_spec)
+                if cached_attestation else {"ready": False}
+            )
+            cached_release_contract = (
+                validate_typedb_candidate_release_contract(database_spec)
+                if bool(cached_seed_contract.get("ready")) else {"ready": False}
+            )
+            seed_reused = bool(
+                cached_seed_contract.get("ready")
+                and cached_release_contract.get("ready")
+            )
+            if not seed_reused and not ensure_typedb_seeded(database_spec):
                 seed_failure = dict(database_spec.get("_typedbSeedFailure") or {})
                 failure_reason = str(seed_failure.get("reason") or "").strip()
                 if str(seed_failure.get("reasonCode") or "") == "typedb-graph-writer-owned":
@@ -3849,12 +3913,20 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             database_spec["_typedbSeedContract"] = seed_contract
             release_contract = validate_typedb_candidate_release_contract(database_spec)
             if not bool(release_contract.get("ready")):
+                candidate["_candidateReusable"] = False
+                clear_typedb_candidate_reuse_marker(candidate)
                 return {
                     "status": "candidate-release-contract-failed",
                     "database": database_name,
                     "releaseContract": release_contract,
                     "candidate": candidate,
                 }
+            write_typedb_candidate_reuse_marker(
+                candidate,
+                database_name,
+                dict(database_spec.get("_typedbSeedAttestation") or cached_attestation),
+            )
+            candidate["_candidateReusable"] = True
             inference_readiness = validate_typedb_candidate_inference_runtime(
                 database_spec,
             )
@@ -3899,6 +3971,7 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             "validatedInferenceModes": validated_inference_modes,
             "validatedSeedContracts": validated_seed_contracts,
             "validatedReleaseContracts": validated_release_contracts,
+            "candidateSeedReused": reuse_candidate,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {
@@ -3916,6 +3989,7 @@ def cleanup_typedb_candidate(candidate: Dict[str, object], remove_data: bool = T
             path = Path(candidate.get("dataPath") or "")
             if owners_stopped and path.exists():
                 shutil.rmtree(path)
+            clear_typedb_candidate_reuse_marker(candidate)
 
 
 def retire_failed_typedb_reasoning_candidate(
@@ -4197,7 +4271,10 @@ def typedb_rotate(
             candidate = dict(prepared.get("candidate") or {})
             candidate_validation = typedb_candidate_validation_summary(prepared)
             if prepared.get("status") != "prepared":
-                cleanup_typedb_candidate(candidate, remove_data=True)
+                cleanup_typedb_candidate(
+                    candidate,
+                    remove_data=not bool(candidate.get("_candidateReusable")),
+                )
                 candidate_retirement = retire_failed_typedb_reasoning_candidate(
                     str(
                         prepared.get("database")

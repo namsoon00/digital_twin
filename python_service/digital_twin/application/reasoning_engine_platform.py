@@ -546,11 +546,32 @@ class ReasoningEnginePlatformService:
             self.settings.get("reasoningEngineV2DeploymentId") or ""
         ).strip()
         configured_v2 = dict(self.registry.get(configured_v2_id) or {})
-        independent_id = (
-            configured_v2_id
-            if str(configured_v2.get("engineVersion") or "").lower() == "v2"
-            and str(configured_v2.get("status") or "") != "retired"
-            else candidate_id
+        deployment_by_id = {
+            str(item.get("deploymentId") or ""): dict(item)
+            for item in response["deployments"]
+            if str(item.get("deploymentId") or "")
+        }
+
+        def usable_v2(deployment_id):
+            descriptor = configured_v2 if deployment_id == configured_v2_id else deployment_by_id.get(deployment_id, {})
+            return (
+                str(descriptor.get("engineVersion") or "").lower() == "v2"
+                and str(descriptor.get("status") or "").lower() != "retired"
+            )
+
+        independent_id = next((
+            deployment_id
+            for deployment_id in (
+                configured_v2_id,
+                candidate_id,
+                str(control.delivery_deployment_id or ""),
+                str(control.active_deployment_id or ""),
+            )
+            if deployment_id and usable_v2(deployment_id)
+        ), "")
+        independent_descriptor = (
+            configured_v2 if independent_id == configured_v2_id
+            else deployment_by_id.get(independent_id, {})
         )
         independent_release = self.release_identity(independent_id) if independent_id else {}
         response["independentDeploymentId"] = independent_id
@@ -594,7 +615,7 @@ class ReasoningEnginePlatformService:
                 "mode": "active-v2",
                 "deploymentId": independent_id,
                 "blockers": [],
-                "health": dict(configured_v2.get("health") or {}),
+                "health": dict(independent_descriptor.get("health") or {}),
             }
         return response
 

@@ -70,6 +70,27 @@ def _decision_case_id_from_context(value: object) -> str:
     return _clean(context.get("investmentReasoningCaseId") or embedded.get("caseId"))
 
 
+def ai_contract_failure_code(reason: object) -> str:
+    """Return one low-cardinality operational failure class."""
+
+    text = _clean(reason).lower()
+    if not text:
+        return ""
+    if "required verified narrative sections" in text:
+        return "missing-narrative-sections"
+    if "counter" in text and ("evidence" in text or "hypothesis" in text):
+        return "counter-evidence-unreviewed"
+    if "action envelope" in text or "originate" in text or "action authority" in text:
+        return "action-authority-violation"
+    if "hypothesis" in text:
+        return "hypothesis-contract-mismatch"
+    if "timeout" in text or "deadline" in text or "exceeded" in text:
+        return "delivery-deadline"
+    if "claim validation" in text or "evidence ledger" in text:
+        return "evidence-ledger-mismatch"
+    return "model-or-contract-error"
+
+
 def compact_ai_queue_context(context: Mapping[str, object]) -> Dict[str, object]:
     """Persist only execution identity; the source notification owns facts.
 
@@ -682,15 +703,52 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             if callable(before_complete):
                 before_complete(connection)
 
+            execution_audit = dict((notification_context or {}).get("notificationAiExecutionAudit") or {})
+            fallback = dict(execution_audit.get("fallback") or {})
+            writer = dict((notification_context or {}).get("notificationWriterProvenance") or {})
+            fallback_used = bool(fallback.get("used")) or result.source == "TypeDB inference fallback"
+            adoption_state = str(execution_audit.get("adoptionState") or "")
+            ai_authored = bool(
+                not fallback_used
+                and (
+                    writer.get("aiAuthored")
+                    or adoption_state in {
+                        "decision-and-narrative-adopted",
+                        "narrative-adopted-action-not-applicable",
+                    }
+                )
+            )
+            publication_mode = (
+                "typedb-fallback" if fallback_used
+                else "ai-authored" if ai_authored
+                else str(execution_audit.get("adoptionState") or "executed-not-adopted")[:32]
+            )
+            contract_error = str(
+                dict(execution_audit.get("hypothesisComparisonRepair") or {}).get("contractError")
+                or dict(execution_audit.get("claimValidationSummary") or {}).get("contractError")
+                or fallback.get("reason")
+                or ""
+            )
+            publication_contract_passed = bool(
+                ai_authored
+                and not contract_error
+                and adoption_state
+                in {"decision-and-narrative-adopted", "narrative-adopted-action-not-applicable"}
+            )
+
             connection.execute(
                 """
                 INSERT INTO ai_inference_results (
                     result_id, request_id, notification_job_id, model,
-                    reasoning_effort, source, validation_state, latency_ms,
+                    reasoning_effort, source, validation_state, publication_mode,
+                    ai_authored, publication_contract_passed, contract_failure_code, latency_ms,
                     prompt_bytes, response_json, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE result_id = VALUES(result_id),
                     source = VALUES(source), validation_state = VALUES(validation_state),
+                    publication_mode = VALUES(publication_mode), ai_authored = VALUES(ai_authored),
+                    publication_contract_passed = VALUES(publication_contract_passed),
+                    contract_failure_code = VALUES(contract_failure_code),
                     latency_ms = VALUES(latency_ms), prompt_bytes = VALUES(prompt_bytes),
                     response_json = VALUES(response_json), created_at = VALUES(created_at)
                 """,
@@ -702,6 +760,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     result.reasoning_effort,
                     result.source,
                     result.validation_state,
+                    publication_mode,
+                    1 if ai_authored else 0,
+                    1 if publication_contract_passed else 0,
+                    ai_contract_failure_code(contract_error),
                     result.latency_ms,
                     result.prompt_bytes,
                     json_dumps(result.response),
@@ -868,6 +930,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                        request.superseded_by, request.last_error, request.context_json,
                        result.result_id, result.source AS result_source,
                        result.validation_state AS result_validation_state,
+                       result.publication_mode, result.ai_authored,
+                       result.publication_contract_passed, result.contract_failure_code,
                        result.latency_ms, result.prompt_bytes,
                        result.response_json, result.created_at AS result_created_at
                 FROM ai_inference_requests request
@@ -907,6 +971,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "resultId": _clean(row.get("result_id")),
             "resultSource": _clean(row.get("result_source")),
             "validationState": _clean(row.get("result_validation_state")),
+            "publicationMode": _clean(row.get("publication_mode")),
+            "aiAuthored": bool(row.get("ai_authored")),
+            "publicationContractPassed": bool(row.get("publication_contract_passed")),
+            "contractFailureCode": _clean(row.get("contract_failure_code")),
             "latencyMs": int(row.get("latency_ms") or 0),
             "promptBytes": int(row.get("prompt_bytes") or 0),
             "resultCreatedAt": _clean(row.get("result_created_at")),
@@ -935,6 +1003,14 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "FROM ai_inference_requests WHERE status = %s AND updated_at >= %s",
                 (AI_INFERENCE_FAILED, active_cutoff),
             ).fetchone()
+            effectiveness_row = connection.execute(
+                "SELECT COUNT(*) AS eligible_count, "
+                "SUM(CASE WHEN result.ai_authored = 1 AND result.publication_contract_passed = 1 THEN 1 ELSE 0 END) AS authored_count, "
+                "SUM(CASE WHEN result.publication_mode = 'typedb-fallback' THEN 1 ELSE 0 END) AS fallback_count "
+                "FROM ai_inference_results result JOIN ai_inference_requests request ON request.request_id = result.request_id "
+                "WHERE request.message_type = 'investmentInsight' AND result.created_at >= %s",
+                (active_cutoff,),
+            ).fetchone() or {}
         states = {
             _clean(row.get("status")): {
                 "count": int(row.get("count") or 0),
@@ -944,6 +1020,9 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         }
         historical_failed = int((states.get(AI_INFERENCE_FAILED) or {}).get("count") or 0)
         actionable_failed = int((active_failure_row or {}).get("count") or 0)
+        eligible_count = int(effectiveness_row.get("eligible_count") or 0)
+        authored_count = int(effectiveness_row.get("authored_count") or 0)
+        fallback_count = int(effectiveness_row.get("fallback_count") or 0)
         return {
             "states": states,
             "pendingCount": int((states.get(AI_INFERENCE_PENDING) or {}).get("count") or 0),
@@ -958,6 +1037,15 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "activeFailureWindowMinutes": active_window_minutes,
             "oldestActionableFailureAt": _clean(
                 (active_failure_row or {}).get("oldest_at")
+            ),
+            "effectiveAiEligibleCount": eligible_count,
+            "effectiveAiAuthoredCount": authored_count,
+            "effectiveAiFallbackCount": fallback_count,
+            "effectiveAiAuthoredRate": round(authored_count / eligible_count, 4) if eligible_count else None,
+            "effectiveAiStatus": (
+                "critical" if eligible_count >= 10 and authored_count == 0
+                else "degraded" if eligible_count >= 5 and authored_count * 2 < eligible_count
+                else "healthy"
             ),
         }
 

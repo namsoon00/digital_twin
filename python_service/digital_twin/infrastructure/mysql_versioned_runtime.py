@@ -26,6 +26,7 @@ from ..domain.independent_reasoning import (
 from ..domain.events import DomainEvent
 from ..domain.investment_reasoning import FactDelta
 from ..domain.market_observation_reasoning import (
+    COMPLETION_MODE_VERIFIED_LATER_BOUNDARY,
     MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
     MarketObservationReasoningReceipt,
     completion_mode,
@@ -1076,7 +1077,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         scope_key: str,
     ) -> List[object]:
         rows = connection.execute(
-            "SELECT request_json FROM reasoning_engine_jobs "
+            "SELECT job_id, request_json FROM reasoning_engine_jobs "
             "WHERE deployment_id = %s AND scope_key = %s AND supersedable = 1 "
             "AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection') "
             "ORDER BY source_snapshot_at, created_at, job_id FOR UPDATE",
@@ -1085,6 +1086,64 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         return [
             event for event in (cls.stored_source_event(row) for row in rows or []) if event is not None
         ]
+
+    @classmethod
+    def pending_slot_rows_with_connection(cls, connection, deployment_id: str, scope_key: str):
+        return connection.execute(
+            "SELECT job_id, request_json FROM reasoning_engine_jobs "
+            "WHERE deployment_id = %s AND scope_key = %s AND supersedable = 1 "
+            "AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection') "
+            "ORDER BY source_snapshot_at, created_at, job_id FOR UPDATE",
+            (str(deployment_id or ""), str(scope_key or "")),
+        ).fetchall() or []
+
+    @classmethod
+    def persist_job_sources_with_connection(
+        cls,
+        connection,
+        deployment_id: str,
+        survivor_job_id: str,
+        source_event,
+        predecessor_job_ids=(),
+    ) -> None:
+        """Carry every represented source identity into the surviving job."""
+
+        predecessor_ids = tuple(sorted({str(value or "").strip() for value in predecessor_job_ids if str(value or "").strip()}))
+        if predecessor_ids:
+            placeholders = ",".join(["%s"] * len(predecessor_ids))
+            connection.execute(
+                "INSERT IGNORE INTO reasoning_engine_job_sources ("
+                "deployment_id, survivor_job_id, source_event_id, account_id, symbol, "
+                "source_snapshot_id, source_snapshot_at, representation_mode, created_at) "
+                "SELECT deployment_id, %s, source_event_id, account_id, symbol, "
+                "source_snapshot_id, source_snapshot_at, 'coalesced', %s "
+                "FROM reasoning_engine_job_sources WHERE survivor_job_id IN (" + placeholders + ")",
+                (str(survivor_job_id or "")[:191], iso_utc(), *predecessor_ids),
+            )
+        scope = market_observation_completion_scope(source_event.to_dict())
+        payload = dict(getattr(source_event, "payload", {}) or {})
+        boundaries = cls.source_boundaries(source_event)
+        primary = max(boundaries, key=lambda value: str(value.get("generatedAt") or ""), default={})
+        account_ids = scope["accountIds"] or ("",)
+        symbols = scope["symbols"] or ("",)
+        direct_event_id = str(getattr(source_event, "event_id", "") or "")
+        stamp = iso_utc()
+        for represented_event_id in scope["eventIds"]:
+            for account_id in account_ids:
+                for symbol in symbols:
+                    connection.execute(
+                        "INSERT IGNORE INTO reasoning_engine_job_sources ("
+                        "deployment_id, survivor_job_id, source_event_id, account_id, symbol, "
+                        "source_snapshot_id, source_snapshot_at, representation_mode, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            str(deployment_id or "")[:191], str(survivor_job_id or "")[:191],
+                            str(represented_event_id or "")[:191], str(account_id or "")[:191],
+                            str(symbol or "").upper()[:64], str(primary.get("snapshotId") or "")[:191],
+                            str(primary.get("generatedAt") or "")[:40],
+                            "direct" if represented_event_id == direct_event_id else "coalesced", stamp,
+                        ),
+                    )
 
     @classmethod
     def ingress_event_with_connection(cls, connection, event) -> Dict[str, object]:
@@ -1108,12 +1167,16 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             for source_event in source_events:
                 material = cls.queued_job_material(deployment_id, source_event)
                 request = material["request"]
+                pending_rows = []
                 if request.supersedable:
-                    pending = cls.pending_slot_events_with_connection(
+                    pending_rows = cls.pending_slot_rows_with_connection(
                         connection,
                         deployment_id,
                         material["scopeKey"],
                     )
+                    pending = [
+                        value for value in (cls.stored_source_event(row) for row in pending_rows) if value is not None
+                    ]
                     if pending:
                         source_event = merge_reasoning_events([*pending, source_event])
                         material = cls.queued_job_material(deployment_id, source_event)
@@ -1154,18 +1217,27 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 if not saved:
                     continue
                 saved_jobs.append(job_id)
+                cls.persist_job_sources_with_connection(
+                    connection,
+                    deployment_id,
+                    job_id,
+                    source_event,
+                    predecessor_job_ids=[row.get("job_id") for row in pending_rows],
+                )
                 if request.supersedable:
                     updated = connection.execute(
                         """
                         UPDATE reasoning_engine_jobs
                         SET job_status = 'superseded', completed_at = %s,
                             lease_owner = '', lease_expires_at = '', updated_at = %s,
+                            superseded_by_job_id = %s,
+                            terminal_reason_code = 'newer-scope-owner',
                             last_error = 'A newer direct source revision owns this scope.'
                         WHERE deployment_id = %s AND scope_key = %s
                           AND job_id <> %s AND supersedable = 1
                           AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection')
                         """,
-                        (stamp, stamp, deployment_id, material["scopeKey"], job_id),
+                        (stamp, stamp, job_id, deployment_id, material["scopeKey"], job_id),
                     )
                     superseded += int(getattr(updated, "rowcount", 0) or 0)
         return {
@@ -1258,6 +1330,16 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     str(job_id or ""),
                 ),
             )
+            connection.execute(
+                "DELETE FROM reasoning_engine_job_sources WHERE survivor_job_id = %s",
+                (str(job_id or ""),),
+            )
+            self.persist_job_sources_with_connection(
+                connection,
+                deployment_id,
+                str(job_id or ""),
+                first_event,
+            )
             inserted_job_ids.append(str(job_id or ""))
             for source_event in source_events[1:]:
                 request = independent_reasoning_request(deployment_id, [source_event])
@@ -1303,6 +1385,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 )
                 if int(getattr(cursor, "rowcount", 0) or 0):
                     inserted_job_ids.append(child_job_id)
+                    self.persist_job_sources_with_connection(
+                        connection,
+                        deployment_id,
+                        child_job_id,
+                        source_event,
+                    )
         return {
             "status": "resharded",
             "shardCount": len(source_events),
@@ -1388,6 +1476,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 scope_migrated = str(survivor_row.get("scope_key") or "") != slot
                 if scope_migrated:
                     migrated += 1
+                self.persist_job_sources_with_connection(
+                    connection,
+                    deployment_id,
+                    survivor_id,
+                    merged_event,
+                    predecessor_job_ids=replaced_ids,
+                )
                 compacted_age_reset = bool(
                     str(survivor_row.get("last_error") or "").startswith("Coalesced ")
                     and str(survivor_row.get("created_at") or "")
@@ -1843,6 +1938,17 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             request_json = json_value(job.get("request_json"), {})
             source_event = dict(request_json.get("sourceEvent") or {})
             scope = market_observation_completion_scope(source_event)
+            lineage_cursor = connection.execute(
+                "SELECT source_event_id, account_id, symbol, source_snapshot_id, source_snapshot_at, "
+                "representation_mode FROM reasoning_engine_job_sources "
+                "WHERE survivor_job_id = %s ORDER BY source_event_id, account_id, symbol",
+                (str(job_id or ""),),
+            )
+            lineage_rows = (
+                lineage_cursor.fetchall() or []
+                if callable(getattr(lineage_cursor, "fetchall", None))
+                else []
+            )
             evaluated_symbols = {
                 str(value or "").upper().strip()
                 for value in values.get("evaluated_symbols") or values.get("evaluatedSymbols") or []
@@ -1859,19 +1965,41 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 account_ids.update(scope["accountIds"])
             if not evaluated_symbols:
                 evaluated_symbols.update(scope["symbols"])
-            event_ids = tuple(scope["eventIds"])
+            event_ids = tuple(sorted({
+                *scope["eventIds"],
+                *{
+                    str(row.get("source_event_id") or "").strip()
+                    for row in lineage_rows
+                    if str(row.get("source_event_id") or "").strip()
+                },
+            }))
             matching_anchors = []
-            if event_ids and account_ids and evaluated_symbols:
-                event_placeholders = ",".join(["%s"] * len(event_ids))
+            if account_ids and evaluated_symbols:
                 account_placeholders = ",".join(["%s"] * len(account_ids))
                 symbol_placeholders = ",".join(["%s"] * len(evaluated_symbols))
+                source_snapshot_at = str(job.get("source_snapshot_at") or "").strip()
+                identity_clause = ""
+                identity_params = ()
+                if event_ids:
+                    event_placeholders = ",".join(["%s"] * len(event_ids))
+                    identity_clause = "pending_event_id IN (" + event_placeholders + ")"
+                    identity_params = tuple(event_ids)
+                if source_snapshot_at:
+                    boundary_clause = "(pending_at <> '' AND pending_at <= %s)"
+                    identity_clause = (
+                        "(" + identity_clause + " OR " + boundary_clause + ")"
+                        if identity_clause else boundary_clause
+                    )
+                    identity_params = identity_params + (source_snapshot_at,)
+                if not identity_clause:
+                    identity_clause = "1 = 0"
                 matching_anchors = connection.execute(
                     "SELECT account_id, symbol, pending_event_id "
                     "FROM market_observation_reasoning_anchors "
-                    "WHERE pending_event_id IN (" + event_placeholders + ") "
+                    "WHERE pending_event_id <> '' AND " + identity_clause + " "
                     "AND account_id IN (" + account_placeholders + ") "
                     "AND symbol IN (" + symbol_placeholders + ") FOR UPDATE",
-                    tuple(event_ids) + tuple(sorted(account_ids)) + tuple(sorted(evaluated_symbols)),
+                    identity_params + tuple(sorted(account_ids)) + tuple(sorted(evaluated_symbols)),
                 ).fetchall()
             release_identity = dict(values.get("release_identity") or values.get("releaseIdentity") or {})
             release_fingerprint = str(
@@ -1891,6 +2019,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 symbol = str(anchor.get("symbol") or "").upper().strip()
                 represented_event_id = str(anchor.get("pending_event_id") or "").strip()
                 projection = dict(projection_results.get(account_id) or {})
+                receipt_mode = (
+                    completion_mode(str(job.get("source_event_id") or ""), represented_event_id)
+                    if represented_event_id in event_ids
+                    else COMPLETION_MODE_VERIFIED_LATER_BOUNDARY
+                )
                 receipt = MarketObservationReasoningReceipt(
                     source_event_id=represented_event_id,
                     account_id=account_id,
@@ -1914,10 +2047,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     tbox_fingerprint=tbox_fingerprint,
                     rulebox_release_id=rulebox_release_id,
                     rulebox_fingerprint=rulebox_fingerprint,
-                    completion_mode=completion_mode(
-                        str(job.get("source_event_id") or ""),
-                        represented_event_id,
-                    ),
+                    completion_mode=receipt_mode,
                     completed_at=stamp,
                 ).to_dict()
                 connection.execute(
@@ -1988,7 +2118,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     duration_ms = %s, lease_owner = '', lease_expires_at = '',
                     heartbeat_at = '', current_stage = '', stage_started_at = '',
                     stage_updated_at = '', stage_details_json = NULL,
-                    last_error = '', completed_at = %s, updated_at = %s
+                    last_error = '', terminal_reason_code = 'completed',
+                    completed_at = %s, updated_at = %s
                 WHERE """ + where,
                 (
                     canonical_json(stored_values),

@@ -182,6 +182,40 @@ def typedb_inference_fallback_response(context: Dict[str, object], reason: objec
     return response
 
 
+def preserve_verified_ai_narrative(fallback, reviewed):
+    """Keep ledger-verified prose while TypeDB retains action authority."""
+
+    if reviewed is None or int(getattr(reviewed, "verified_claim_count", 0) or 0) <= 0:
+        return fallback
+    claims = [dict(item) for item in getattr(reviewed, "narrative_claims", []) or [] if isinstance(item, dict)]
+    if not claims:
+        return fallback
+    fallback.narrative_claims = claims
+    fallback.claim_validation = dict(getattr(reviewed, "claim_validation", {}) or {})
+    view = next((str(item.get("text") or "") for item in claims if item.get("section") == "view"), "")
+    next_condition = next((
+        str(item.get("text") or "")
+        for item in claims
+        if item.get("section") in {"next-condition", "limitation"}
+    ), "")
+    if view:
+        fallback.investment_view = view
+        fallback.opinion = view
+    if next_condition:
+        fallback.next_action_plan = next_condition
+    fallback.writer_provenance = {
+        "decisionOwner": "typedb",
+        "narrativeOwner": "ai-partial",
+        "aiAuthored": False,
+        "aiNarrativePartiallyAdopted": True,
+        "verifiedClaimCount": len(claims),
+    }
+    fallback.validation_warnings.append(
+        "AI 행동 판단은 제외하고 증거 원장 검증을 통과한 설명만 부분 사용했습니다."
+    )
+    return fallback
+
+
 class NotificationAIRequestEnqueuer:
     """Capture one immutable AI context and move its notification to waiting."""
 
@@ -477,6 +511,7 @@ class AIInferenceQueueRunner:
         fallback_reason = ""
         ai_attempted = False
         judgement_outcome = None
+        rejected_ai_response = None
         try:
             remaining_seconds = self.remaining_delivery_seconds(request)
             if remaining_seconds < 5:
@@ -500,6 +535,7 @@ class AIInferenceQueueRunner:
             comparison_repair_contract_error = judgement_outcome.final_contract_error
             comparison_repair_initial_contract_error = judgement_outcome.initial_contract_error
             if not judgement_outcome.publishable:
+                rejected_ai_response = response
                 raise NotificationAIContractError(
                     judgement_outcome.final_contract_error
                     or judgement_outcome.final_publication_error
@@ -508,7 +544,7 @@ class AIInferenceQueueRunner:
                 )
         except Exception as error:  # noqa: BLE001 - retry policy is applied below.
             review_error = error
-            response = None
+            response = rejected_ai_response
         finally:
             stop_heartbeat.set()
             heartbeat.join(timeout=max(1.0, self.heartbeat_seconds + 1.0))
@@ -549,7 +585,10 @@ class AIInferenceQueueRunner:
                     self.reasoning_orchestrator.ai_failed(context, str(review_error))
                 return request.request_id[:8] + (" failed" if failed else " lease-lost")
             fallback_reason = str(review_error)
-            response = typedb_inference_fallback_response(context, review_error)
+            response = preserve_verified_ai_narrative(
+                typedb_inference_fallback_response(context, review_error),
+                response,
+            )
 
         quality_gate = context.get("ontologyQualityGate")
         if not isinstance(quality_gate, dict):
@@ -671,7 +710,11 @@ class AIInferenceQueueRunner:
                         " blocked-invalid-reasoning-contract" if failed else " lease-lost"
                     )
                 fallback_reason = str(validation_reason)
-                response = typedb_inference_fallback_response(context, validation_reason)
+                rejected_ai_response = response
+                response = preserve_verified_ai_narrative(
+                    typedb_inference_fallback_response(context, validation_reason),
+                    rejected_ai_response,
+                )
                 apply_ontology_quality_gate_to_response(response, quality_gate)
                 episode = None if canonical_subject_publication else self.decision_episode_context(
                     request,

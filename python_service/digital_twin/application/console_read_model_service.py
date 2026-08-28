@@ -618,6 +618,7 @@ class ConsoleReadModelService:
             if ai_summary.get("actionableFailedCount") is not None
             else ai_summary.get("failedCount") or 0
         )
+        ai_effective_status = _text(ai_summary.get("effectiveAiStatus") or "healthy").lower()
         notification_actionable_failures = int(
             notification_summary.get("actionable_failed")
             if notification_summary.get("actionable_failed") is not None
@@ -696,8 +697,17 @@ class ConsoleReadModelService:
             {
                 "id": "ai",
                 "label": "AI 판단 대기열",
-                "state": "healthy" if not ai_actionable_failures else "critical",
-                "detail": f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건 · 현재 실패 {ai_actionable_failures}건 · 누적 감사 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건",
+                "state": (
+                    "critical" if ai_actionable_failures or ai_effective_status == "critical"
+                    else "warning" if ai_effective_status == "degraded"
+                    else "healthy"
+                ),
+                "detail": (
+                    f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건"
+                    f" · 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
+                    f" · 폴백 {int(ai_summary.get('effectiveAiFallbackCount') or 0)}건 · 현재 실패 {ai_actionable_failures}건"
+                    f" · 누적 감사 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
+                ),
                 "updatedAt": "",
             },
             {

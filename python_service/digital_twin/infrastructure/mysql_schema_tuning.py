@@ -497,6 +497,12 @@ MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS: Sequence[MySQLUniqueIndexRetirementD
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "ai_inference_results": (
+        MySQLColumnDefinition("ai_inference_results", "publication_mode", "VARCHAR(32) NOT NULL DEFAULT 'unknown'"),
+        MySQLColumnDefinition("ai_inference_results", "ai_authored", "TINYINT NOT NULL DEFAULT 0"),
+        MySQLColumnDefinition("ai_inference_results", "publication_contract_passed", "TINYINT NOT NULL DEFAULT 0"),
+        MySQLColumnDefinition("ai_inference_results", "contract_failure_code", "VARCHAR(96) NOT NULL DEFAULT ''"),
+    ),
     "ontology_reasoning_mailbox_events": (
         MySQLColumnDefinition(
             "ontology_reasoning_mailbox_events",
@@ -518,6 +524,8 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         MySQLColumnDefinition("reasoning_engine_jobs", "validation_cohort_id", "VARCHAR(96) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "runtime_revision", "VARCHAR(64) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("reasoning_engine_jobs", "reasoning_lane", "VARCHAR(32) NOT NULL DEFAULT 'CONTEXT'"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "superseded_by_job_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
+        MySQLColumnDefinition("reasoning_engine_jobs", "terminal_reason_code", "VARCHAR(64) NOT NULL DEFAULT ''"),
     ),
     "reasoning_engine_comparisons": (
         MySQLColumnDefinition("reasoning_engine_comparisons", "baseline_release_id", "VARCHAR(191) NOT NULL DEFAULT ''"),

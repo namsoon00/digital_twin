@@ -283,6 +283,50 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         release_check.assert_called_once()
         rebuild.assert_not_called()
 
+    def test_blue_green_candidate_reuses_release_verified_seed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "pid": Path(temp) / "typedb.pid",
+                "log": Path(temp) / "typedb.log",
+                "dataPath": Path(temp) / "typedb-data",
+                "healthAddress": "127.0.0.1:1729",
+                "httpAddress": "127.0.0.1:8000",
+                "typedbDatabase": "ontology_v2",
+            }
+            candidate = service_manager.typedb_blue_green_stage_spec(spec)
+            Path(candidate["dataPath"]).mkdir(parents=True)
+            service_manager.write_typedb_candidate_reuse_marker(
+                candidate,
+                "ontology_v2",
+                {"status": "unchanged", "saved": True},
+            )
+            with patch.object(service_manager, "stop_worker", return_value=0), \
+                    patch.object(service_manager, "stop_typedb_stage_data_path_processes", return_value=True), \
+                    patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_seeded", return_value=True) as seed, \
+                    patch.object(service_manager, "validate_typedb_candidate_seed_contract", return_value={
+                        "ready": True,
+                        "status": "ready",
+                    }), \
+                    patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
+                        "ready": True,
+                        "status": "ready",
+                    }), \
+                    patch.object(service_manager, "validate_typedb_candidate_inference_runtime", return_value={
+                        "ready": True,
+                        "mode": "native",
+                    }), \
+                    patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
+                    patch.object(service_manager, "typedb_driver_ready", return_value=True):
+                result = service_manager.prepare_typedb_blue_green_candidate(spec)
+
+        self.assertEqual("prepared", result["status"])
+        self.assertTrue(result["candidateSeedReused"])
+        seed.assert_not_called()
+
     def test_wait_for_typedb_ready_bootstraps_only_pending_fresh_store(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

@@ -539,8 +539,15 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
             if pending_datetime <= stale_before:
                 orphan_event_ids.add(pending_event_id)
 
-        completion = self.complete(sorted(completed_event_ids))
-        count = int(completion.get("completedCount") or 0)
+        # Re-run only the completed job's publication transaction. This does
+        # not repeat TypeDB inference: it writes the durable receipt and moves
+        # the matching anchor atomically using the already persisted result.
+        # A failed repair deliberately leaves the anchor pending instead of
+        # acknowledging reasoning without proof.
+        receipt_repair = self.repair_completed_reasoning_receipts(completed_job_ids)
+        repaired_event_ids = set(receipt_repair.get("eventIds") or [])
+        repair_errors = list(receipt_repair.get("errors") or [])
+        count = len(repaired_event_ids)
         release = self.release_pending(sorted(orphan_event_ids))
         released_count = int(release.get("releasedCount") or 0)
         return {
@@ -548,10 +555,39 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
             "completedCount": count,
             "releasedCount": released_count,
             "eventIds": sorted(completed_event_ids),
+            "receiptEventIds": sorted(repaired_event_ids),
+            "receiptRepairErrors": repair_errors,
             "releasedEventIds": sorted(orphan_event_ids),
             "reasoningJobIds": sorted(completed_job_ids),
             "boundaryVerifiedReasoningJobIds": sorted(boundary_verified_job_ids),
         }
+
+    def repair_completed_reasoning_receipts(self, completed_job_ids: Iterable[str]) -> Dict[str, object]:
+        """Publish receipts for already inferred jobs without repeating inference."""
+
+        job_ids = sorted({str(value or "").strip() for value in completed_job_ids or [] if str(value or "").strip()})
+        if not job_ids:
+            return {"eventIds": [], "errors": []}
+        from .mysql_versioned_runtime import MySQLReasoningEngineJobStore
+
+        job_store = MySQLReasoningEngineJobStore(getattr(self, "runtime_settings", {}) or {})
+        with self.connect() as connection:
+            placeholders = ",".join(["%s"] * len(job_ids))
+            completed_rows = connection.execute(
+                "SELECT job_id, result_json FROM reasoning_engine_jobs "
+                "WHERE job_id IN (" + placeholders + ") AND job_status = 'completed'",
+                tuple(job_ids),
+            ).fetchall()
+        event_ids = set()
+        errors = []
+        for row in completed_rows or []:
+            try:
+                stored_result = json.loads(str(row.get("result_json") or "{}"))
+                repair = job_store.complete(str(row.get("job_id") or ""), stored_result)
+                event_ids.update(repair.get("eventIds") or [])
+            except Exception as error:  # repair is retried on the next monitor cycle
+                errors.append(str(error)[:300])
+        return {"eventIds": sorted(event_ids), "errors": errors}
 
 
 class MySQLMonitorStore(MySQLOperationalConnection):

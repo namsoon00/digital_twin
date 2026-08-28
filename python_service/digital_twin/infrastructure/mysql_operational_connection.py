@@ -1230,6 +1230,10 @@ MYSQL_SCHEMA = [
         reasoning_effort VARCHAR(32) NOT NULL DEFAULT 'max',
         source VARCHAR(255) NOT NULL DEFAULT '',
         validation_state VARCHAR(32) NOT NULL DEFAULT 'conditional',
+        publication_mode VARCHAR(32) NOT NULL DEFAULT 'unknown',
+        ai_authored TINYINT NOT NULL DEFAULT 0,
+        publication_contract_passed TINYINT NOT NULL DEFAULT 0,
+        contract_failure_code VARCHAR(96) NOT NULL DEFAULT '',
         latency_ms BIGINT NOT NULL DEFAULT 0,
         prompt_bytes BIGINT NOT NULL DEFAULT 0,
         response_json LONGTEXT NOT NULL,
@@ -1592,6 +1596,8 @@ MYSQL_SCHEMA = [
         validation_cohort_id VARCHAR(96) NOT NULL DEFAULT '',
         runtime_revision VARCHAR(64) NOT NULL DEFAULT '',
         reasoning_lane VARCHAR(32) NOT NULL DEFAULT 'CONTEXT',
+        superseded_by_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        terminal_reason_code VARCHAR(64) NOT NULL DEFAULT '',
         queue_wait_ms BIGINT NOT NULL DEFAULT 0,
         duration_ms BIGINT NOT NULL DEFAULT 0,
         last_error TEXT NOT NULL,
@@ -1604,6 +1610,22 @@ MYSQL_SCHEMA = [
         KEY idx_reasoning_engine_job_source_snapshot (source_snapshot_id, job_status, created_at),
         KEY idx_reasoning_engine_job_completed (deployment_id, completed_at),
         KEY idx_reasoning_engine_job_release (deployment_id, release_fingerprint, job_status, completed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_job_sources (
+        deployment_id VARCHAR(191) NOT NULL,
+        survivor_job_id VARCHAR(191) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
+        representation_mode VARCHAR(32) NOT NULL DEFAULT 'direct',
+        created_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (survivor_job_id, source_event_id, account_id, symbol),
+        KEY idx_reasoning_job_source_event (deployment_id, source_event_id, account_id, symbol),
+        KEY idx_reasoning_job_source_survivor (deployment_id, survivor_job_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

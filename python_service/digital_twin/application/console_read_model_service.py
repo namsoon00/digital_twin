@@ -620,6 +620,7 @@ class ConsoleReadModelService:
             else ai_summary.get("failedCount") or 0
         )
         ai_effective_status = _text(ai_summary.get("effectiveAiStatus") or "healthy").lower()
+        ai_effective_window_hours = int(ai_summary.get("effectiveAiWindowHours") or 24)
         notification_actionable_failures = int(
             notification_summary.get("actionable_failed")
             if notification_summary.get("actionable_failed") is not None
@@ -672,6 +673,18 @@ class ConsoleReadModelService:
         )
         ai_oldest_epoch = _iso_timestamp(ai_oldest_at)
         ai_oldest_age_seconds = max(0, int(now_epoch - ai_oldest_epoch)) if ai_oldest_epoch else 0
+        notification_suppression_categories = _mapping(notification_summary.get("suppression_categories"))
+        suppression_parts = []
+        for key, label in (
+            ("unchanged_decision", "동일 판단"),
+            ("baseline", "기준선"),
+            ("duplicate_or_cooldown", "중복·쿨다운"),
+            ("data_guard", "자료 보호"),
+            ("other_policy", "기타 정책"),
+        ):
+            count = int(notification_suppression_categories.get(key) or 0)
+            if count:
+                suppression_parts.append(label + " " + str(count))
         time_series_control = _mapping(time_series.get("control"))
         active_backend_id = _text(time_series_control.get("activeBackendId") or time_series_control.get("active_backend_id"))
         time_series_health = _mapping(_mapping(time_series.get("health")).get(active_backend_id))
@@ -752,12 +765,12 @@ class ConsoleReadModelService:
                 ),
                 "detail": (
                     f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건"
-                    f" · 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
+                    f" · 최근 {ai_effective_window_hours}시간 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
                     f" · 폴백 {int(ai_summary.get('effectiveAiFallbackCount') or 0)}건 · 현재 실패 {ai_actionable_failures}건"
-                    f" · 누적 감사 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
+                    f" · 누적 실패 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건"
                     + (f" · 최장 {ai_oldest_age_seconds}초" if ai_oldest_age_seconds else "")
                 ),
-                "updatedAt": ai_oldest_at,
+                "updatedAt": ai_oldest_at or _text(ai_summary.get("effectiveAiLatestAt")),
             },
             {
                 "id": "notifications",
@@ -767,9 +780,10 @@ class ConsoleReadModelService:
                     f"현재 대기 {int(notification_summary.get('pending') or 0) + int(notification_summary.get('awaiting_ai') or 0)}건"
                     f" · 처리 {int(notification_summary.get('processing') or 0)}건"
                     f" · 현재 실패 {notification_actionable_failures}건"
-                    f" · 누적 감사 {int(notification_summary.get('historical_failed') or notification_summary.get('failed') or 0)}건"
+                    f" · 누적 실패 {int(notification_summary.get('historical_failed') or notification_summary.get('failed') or 0)}건"
                     f" · 누적 완료 {int(notification_summary.get('done') or 0)}건"
-                    f" · 누적 보류 {int(notification_summary.get('suppressed') or 0)}건"
+                    f" · 정책 억제 {int(notification_summary.get('intentional_suppressed') or notification_summary.get('suppressed') or 0)}건"
+                    + (" (" + " · ".join(suppression_parts) + ")" if suppression_parts else "")
                 ),
                 "updatedAt": "",
             },

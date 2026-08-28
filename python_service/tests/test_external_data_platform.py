@@ -16,6 +16,8 @@ from digital_twin.application.external_data.fact_transition_service import Exter
 from digital_twin.application.external_data.read_model_service import ExternalSignalsReadModelService
 from digital_twin.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
+from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
+from digital_twin.infrastructure.external_api.adapters.opendart import OpenDartDisclosureAdapter
 from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
 from digital_twin.infrastructure.external_api.adapters.yfinance import YFinanceProfileAdapter
 
@@ -308,6 +310,61 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("document-discovery", metadata.change_type)
         self.assertTrue(document.material)
         self.assertEqual("source-revision", document.change_type)
+
+        settings = {
+            "opendartApiKey": "test-key",
+            "externalDartCorpCodes": "005930=00126380",
+        }
+        provider = legacy_provider(settings, externalDartEnabled="1", externalDartMaxSymbols="1")
+        provider.fetch_json = lambda *_args, **_kwargs: {
+            "status": "013",
+            "message": "조회된 데이타가 없습니다.",
+            "list": [],
+        }
+        signals = empty_signals()
+        subject = ExternalSubject("005930", symbol="005930", name="삼성전자", market="KR", currency="KRW")
+
+        provider.add_opendart(
+            signals,
+            [position_for(subject)],
+            include_fundamentals=False,
+            include_document=False,
+        )
+
+        self.assertEqual({}, signals["dartDisclosures"])
+        self.assertTrue(any(
+            item.get("ok") and item.get("emptyResult") and item.get("target") == "005930"
+            for item in signals["statuses"]
+        ))
+
+        class EmptyProvider:
+            @staticmethod
+            def add_opendart(target, _positions, **_kwargs):
+                target["statuses"].append({
+                    "source": "OpenDART",
+                    "ok": True,
+                    "target": "005930",
+                    "dataUsable": True,
+                    "emptyResult": True,
+                })
+
+        job = CollectionJob(
+            "opendart.disclosures",
+            "005930",
+            "opendart",
+            85,
+            subject,
+        )
+        with patch(
+            "digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider",
+            return_value=EmptyProvider(),
+        ):
+            result = OpenDartDisclosureAdapter().fetch(job, settings)
+
+        self.assertEqual({"dartDisclosures": {}}, result.payload)
+        self.assertEqual("no-disclosures", result.source_revision)
+        self.assertTrue(result.quality["dataUsable"])
+        self.assertTrue(result.quality["emptyResult"])
 
     def test_same_provider_jobs_are_serialized_while_provider_groups_are_parallelizable(self):
         adapter = ConcurrencyTrackingAdapter()

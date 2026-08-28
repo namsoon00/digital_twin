@@ -553,6 +553,8 @@ class ExternalSignalMarketMixin:
                     })
                     payload = self.fetch_json(url, {"Accept": "application/json"})
                     status = str(payload.get("status") or "")
+                    if status == "013":
+                        return {}
                     if status and status != "000":
                         raise RuntimeError(str(payload.get("message") or status))
                     items = payload.get("list") if isinstance(payload.get("list"), list) else []
@@ -587,6 +589,17 @@ class ExternalSignalMarketMixin:
                     }
 
                 disclosure = self.guarded_call("OpenDART", "list:" + symbol, fetch_disclosure)
+                if not disclosure:
+                    self.status(
+                        signals,
+                        "OpenDART",
+                        True,
+                        symbol + " 조회 기간 내 공시 없음",
+                        target=symbol,
+                        dataUsable=True,
+                        emptyResult=True,
+                    )
+                    continue
                 if disclosure:
                     disclosure["fetchedAt"] = utc_now_iso()
                     collect_fundamentals = (

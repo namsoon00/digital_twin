@@ -22,6 +22,18 @@ def is_korean_equity(subject: ExternalSubject) -> bool:
     return symbol.isdigit() and len(symbol) == 6
 
 
+def is_successful_empty_disclosure_result(signals: Dict[str, object], symbol: str) -> bool:
+    normalized = str(symbol or "").upper().strip()
+    return any(
+        str(item.get("source") or "") == "OpenDART"
+        and bool(item.get("ok"))
+        and bool(item.get("emptyResult"))
+        and str(item.get("target") or "").upper().strip() == normalized
+        for item in signals.get("statuses") or []
+        if isinstance(item, dict)
+    )
+
+
 class OpenDartDisclosureAdapter:
     descriptor = DatasetDescriptor(
         dataset_id="opendart.disclosures",
@@ -58,7 +70,24 @@ class OpenDartDisclosureAdapter:
             include_fundamentals=False,
             include_document=False,
         )
-        row = require_payload(signals, "dartDisclosures", job.subject.symbol)
+        group = signals.get("dartDisclosures") if isinstance(signals.get("dartDisclosures"), dict) else {}
+        row = group.get(job.subject.symbol) if isinstance(group.get(job.subject.symbol), dict) else {}
+        if not row and is_successful_empty_disclosure_result(signals, job.subject.symbol):
+            return observation(
+                self.descriptor,
+                job.subject.symbol,
+                {"dartDisclosures": {}},
+                preferred_revision="no-disclosures",
+                preferred_source_as_of=str(signals.get("fetchedAt") or ""),
+                watermark={"emptyResult": True},
+                quality={
+                    "dataUsable": True,
+                    "provider": "opendart",
+                    "emptyResult": True,
+                },
+            )
+        if not row:
+            row = require_payload(signals, "dartDisclosures", job.subject.symbol)
         for item in row.get("items") if isinstance(row.get("items"), list) else []:
             if isinstance(item, dict):
                 item.update(classify_disclosure(item.get("reportName"), item.get("reportName"), "OpenDART"))

@@ -988,8 +988,17 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ))))
         except (TypeError, ValueError):
             active_window_minutes = 60
+        try:
+            effectiveness_window_hours = max(1, min(24 * 30, int(float(
+                self.runtime_settings.get("notificationAiQueueRetentionHours") or 24
+            ))))
+        except (TypeError, ValueError):
+            effectiveness_window_hours = 24
         active_cutoff = (
             datetime.now(timezone.utc) - timedelta(minutes=active_window_minutes)
+        ).isoformat().replace("+00:00", "Z")
+        effectiveness_cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=effectiveness_window_hours)
         ).isoformat().replace("+00:00", "Z")
         with self.connect() as connection:
             rows = connection.execute(
@@ -1006,10 +1015,11 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             effectiveness_row = connection.execute(
                 "SELECT COUNT(*) AS eligible_count, "
                 "SUM(CASE WHEN result.ai_authored = 1 AND result.publication_contract_passed = 1 THEN 1 ELSE 0 END) AS authored_count, "
-                "SUM(CASE WHEN result.publication_mode = 'typedb-fallback' THEN 1 ELSE 0 END) AS fallback_count "
+                "SUM(CASE WHEN result.publication_mode = 'typedb-fallback' THEN 1 ELSE 0 END) AS fallback_count, "
+                "MAX(result.created_at) AS latest_at "
                 "FROM ai_inference_results result JOIN ai_inference_requests request ON request.request_id = result.request_id "
                 "WHERE request.message_type = 'investmentInsight' AND result.created_at >= %s",
-                (active_cutoff,),
+                (effectiveness_cutoff,),
             ).fetchone() or {}
         states = {
             _clean(row.get("status")): {
@@ -1042,9 +1052,11 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "effectiveAiAuthoredCount": authored_count,
             "effectiveAiFallbackCount": fallback_count,
             "effectiveAiAuthoredRate": round(authored_count / eligible_count, 4) if eligible_count else None,
+            "effectiveAiWindowHours": effectiveness_window_hours,
+            "effectiveAiLatestAt": _clean(effectiveness_row.get("latest_at")),
             "effectiveAiStatus": (
                 "critical" if eligible_count >= 10 and authored_count == 0
-                else "degraded" if eligible_count >= 5 and authored_count * 2 < eligible_count
+                else "degraded" if eligible_count and authored_count * 2 < eligible_count
                 else "healthy"
             ),
         }

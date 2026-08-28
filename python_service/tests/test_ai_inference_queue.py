@@ -422,6 +422,33 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("typedb", delivered.context["notificationWriterProvenance"]["decisionOwner"])
         self.assertNotIn("가설·행동 계약", delivered.context["notificationAiValidatedResponse"]["summary"])
 
+        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+        mysql_execute(
+            self.seed,
+            "UPDATE ai_inference_results SET created_at = %s WHERE request_id = %s",
+            (two_hours_ago, request.request_id),
+        )
+        summary = self.queue.summary()
+        self.assertEqual(24, summary["effectiveAiWindowHours"])
+        self.assertEqual(1, summary["effectiveAiEligibleCount"])
+        self.assertEqual(1, summary["effectiveAiFallbackCount"])
+        self.assertEqual("degraded", summary["effectiveAiStatus"])
+
+        unchanged = self.create_job(generation="generation-unchanged")
+        duplicate = self.create_job(generation="generation-duplicate")
+        self.notifications.mark_suppressed(
+            unchanged,
+            "TypeDB 관계 판단과 사용자 행동 범위가 같아 AI와 알림을 다시 실행하지 않습니다.",
+        )
+        self.notifications.mark_suppressed(
+            duplicate,
+            "같은 내용이 60분 안에 이미 발송되어 다시 보내지 않습니다.",
+        )
+        notification_summary = self.notifications.summary()
+        self.assertEqual(2, notification_summary["intentional_suppressed"])
+        self.assertEqual(1, notification_summary["suppression_categories"]["unchanged_decision"])
+        self.assertEqual(1, notification_summary["suppression_categories"]["duplicate_or_cooldown"])
+
     def test_prompt_preparation_failure_releases_typedb_fallback(self):
         job = self.create_job()
         job.context["notificationAiExecutionProfile"] = {

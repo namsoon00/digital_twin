@@ -2024,7 +2024,23 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
                 "FROM notification_jobs WHERE status = 'failed' AND updated_at >= %s",
                 (active_cutoff,),
             ).fetchone()
+            suppression_rows = connection.execute(
+                "SELECT CASE "
+                "WHEN last_error LIKE '%%행동 범위가 같아%%' OR last_error LIKE '%%평소 상태가 그대로%%' "
+                "OR last_error LIKE '%%새 변화 없이%%' THEN 'unchanged_decision' "
+                "WHEN last_error LIKE '%%기준선으로 저장%%' THEN 'baseline' "
+                "WHEN last_error LIKE '%%같은 내용이%%' OR last_error LIKE '%%이미 발송한 기사%%' "
+                "OR last_error LIKE '%%중복%%' THEN 'duplicate_or_cooldown' "
+                "WHEN last_error LIKE '%%자료가 부족%%' OR last_error LIKE '%%근거가 없어%%' "
+                "OR last_error LIKE '%%검증이 차단%%' THEN 'data_guard' "
+                "ELSE 'other_policy' END AS category, COUNT(*) AS count "
+                "FROM notification_jobs WHERE status = 'suppressed' GROUP BY category"
+            ).fetchall()
         result = {row["status"]: int(row["count"] or 0) for row in rows}
+        suppression_categories = {
+            str(row.get("category") or "other_policy"): int(row.get("count") or 0)
+            for row in suppression_rows or []
+        }
         result.update({
             "actionable_failed": int((active_failure_row or {}).get("count") or 0),
             "historical_failed": int(result.get("failed") or 0),
@@ -2032,5 +2048,7 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             "oldest_actionable_failure_at": str(
                 (active_failure_row or {}).get("oldest_at") or ""
             ),
+            "intentional_suppressed": int(result.get("suppressed") or 0),
+            "suppression_categories": suppression_categories,
         })
         return result

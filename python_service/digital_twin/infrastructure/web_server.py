@@ -534,8 +534,9 @@ def realtime_event_summary(event: DomainEvent) -> Dict[str, object]:
 
 def realtime_status_payload() -> Dict[str, object]:
     store_warning = ""
+    settings = operational_read_settings()
     try:
-        event_log = stores.event_log()
+        event_log = stores.event_log(settings)
         counts = event_log.event_counts()
         latest_by_name = event_log.latest_events_by_name([
             MONITORING_CYCLE_COMPLETED,
@@ -558,7 +559,7 @@ def realtime_status_payload() -> Dict[str, object]:
     if latest_by_name.get(MONITORING_SNAPSHOT_COLLECTED):
         monitoring["snapshot"] = realtime_event_summary(latest_by_name[MONITORING_SNAPSHOT_COLLECTED])
     try:
-        notification_jobs = notification_queue_store().summary()
+        notification_jobs = notification_queue_store(settings).summary()
     except Exception as error:  # noqa: BLE001 - notification queue may share the same optional MySQL backend.
         store_warning = store_warning or str(error)[:240]
         notification_jobs = {
@@ -571,7 +572,7 @@ def realtime_status_payload() -> Dict[str, object]:
             "failed": 0,
         }
     try:
-        ai_inference_queue = stores.ai_inference_queue_store().summary()
+        ai_inference_queue = stores.ai_inference_queue_store(settings).summary()
     except Exception as error:  # noqa: BLE001 - expose the notification queue even if AI storage is unavailable.
         store_warning = store_warning or str(error)[:240]
         ai_inference_queue = {"pendingCount": 0, "retryCount": 0, "processingCount": 0, "failedCount": 0}
@@ -1447,7 +1448,7 @@ def save_settings_payload(payload: Dict[str, object], access: ShareAccess = None
 def time_series_platform_status_payload() -> Dict[str, object]:
     from .time_series_factory import build_time_series_adapters, initialize_time_series_registry
 
-    settings = runtime_settings()
+    settings = operational_read_settings()
     adapters = build_time_series_adapters(settings)
     registry = initialize_time_series_registry(settings, adapters)
     health = {backend_id: adapter.health() for backend_id, adapter in adapters.items()}
@@ -1466,7 +1467,7 @@ def reasoning_engine_platform_status_payload(
 ) -> Dict[str, object]:
     from .reasoning_engine_factory import build_reasoning_engine_platform
 
-    platform = build_reasoning_engine_platform(runtime_settings())
+    platform = build_reasoning_engine_platform(operational_read_settings())
     state = platform.initialize()
     include_history = request_bool(first_query(query or {}, "historical"), False)
     return platform.current_status(state, include_history=include_history)

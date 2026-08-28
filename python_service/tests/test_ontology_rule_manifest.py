@@ -1,5 +1,6 @@
 import unittest
 
+from digital_twin.domain.ontology_compiler import compile_ontology_release
 from digital_twin.domain.ontology_rule_manifest import (
     ASSESSMENT_SCOPES,
     rule_dependency_reverse_index,
@@ -11,6 +12,16 @@ from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference
 
 
 class OntologyRuleManifestTests(unittest.TestCase):
+    def test_compiled_release_links_every_predictive_rule_to_hypothesis_and_data(self):
+        result = compile_ontology_release(default_graph_inference_rules())
+
+        self.assertTrue(result["valid"], result.get("failures"))
+        self.assertEqual("ready", result["status"])
+        self.assertGreaterEqual(result["predictiveRuleCount"], 1)
+        self.assertEqual([], result["missingHypothesisRuleIds"])
+        self.assertEqual([], result["missingDependencyRuleIds"])
+        self.assertEqual(64, len(result["irFingerprint"]))
+
     def test_default_rulebox_has_complete_v2_manifests(self):
         payload = validate_rule_domain_manifests(default_graph_inference_rules())
 

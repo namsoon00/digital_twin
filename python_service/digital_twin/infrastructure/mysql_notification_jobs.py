@@ -2007,7 +2007,30 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             self.upsert_job_with_connection(connection, job)
             self.record_lifecycle_with_connection(connection, job, "suppressed", "suppressed", job.last_error)
 
-    def summary(self) -> Dict[str, int]:
+    def summary(self) -> Dict[str, object]:
+        try:
+            active_window_minutes = max(5, min(24 * 60, int(float(
+                self.runtime_settings.get("operationalActiveFailureWindowMinutes") or 60
+            ))))
+        except (TypeError, ValueError):
+            active_window_minutes = 60
+        active_cutoff = (
+            datetime.now(timezone.utc) - timedelta(minutes=active_window_minutes)
+        ).isoformat().replace("+00:00", "Z")
         with self.connect() as connection:
             rows = connection.execute("SELECT status, COUNT(*) AS count FROM notification_jobs GROUP BY status").fetchall()
-        return {row["status"]: int(row["count"] or 0) for row in rows}
+            active_failure_row = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_at "
+                "FROM notification_jobs WHERE status = 'failed' AND updated_at >= %s",
+                (active_cutoff,),
+            ).fetchone()
+        result = {row["status"]: int(row["count"] or 0) for row in rows}
+        result.update({
+            "actionable_failed": int((active_failure_row or {}).get("count") or 0),
+            "historical_failed": int(result.get("failed") or 0),
+            "active_failure_window_minutes": active_window_minutes,
+            "oldest_actionable_failure_at": str(
+                (active_failure_row or {}).get("oldest_at") or ""
+            ),
+        })
+        return result

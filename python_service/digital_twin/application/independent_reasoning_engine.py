@@ -19,6 +19,7 @@ from ..domain.independent_reasoning import (
 from ..domain.investment_reasoning import FactDelta
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.world_partitioned_reasoning import attach_shared_premise_evidence
+from ..domain.ontology_store_routing import ontology_store_route
 
 
 VERIFIED_PROJECTION_STATUSES = {
@@ -254,6 +255,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(shared_execution.get("modelSignalBridgeExecution"), Mapping)
         else {}
     )
+    reasoning_execution = (
+        values.get("reasoningExecution")
+        if isinstance(values.get("reasoningExecution"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -275,6 +281,14 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "failureReasonCode": retry["reasonCode"],
         "failureStage": retry["failureStage"],
         "blockingRuleId": retry["blockingRuleId"],
+        "reasoningExecution": {
+            key: reasoning_execution.get(key)
+            for key in [
+                "mode", "sharedPremiseCriticalPath", "typedbProjectionCount",
+                "factSliceProjection", "sharedResultReuseEligible", "storeRoute",
+            ]
+            if key in reasoning_execution
+        },
         "stages": {
             str(key): int(value)
             for key, value in stages.items()
@@ -723,9 +737,32 @@ class ScopedTypeDBInferenceExecutor:
                 "world_partitioned_reasoning_enabled",
                 None,
             )
+            current_state_reader = getattr(
+                self.projection_recorder,
+                "incremental_current_state_reasoning_enabled",
+                None,
+            )
+            current_state_mode = bool(
+                callable(current_state_reader) and current_state_reader()
+            )
             partitioned_mode = bool(
                 callable(partitioned_reader) and partitioned_reader()
             )
+            if current_state_mode:
+                reasoning_context["reasoningExecutionMode"] = (
+                    "incremental-current-state-one-pass-v1"
+                )
+                try:
+                    shard_count = int(float(
+                        self.settings.get("ontologyStoreLogicalShardCount") or 1
+                    ))
+                except (TypeError, ValueError):
+                    shard_count = 1
+                reasoning_context["ontologyStoreRoute"] = ontology_store_route(
+                    request.symbols,
+                    account_id=account_id,
+                    shard_count=shard_count,
+                ).to_dict()
             if partitioned_mode:
                 premise_builder = getattr(
                     self.projection_recorder,
@@ -895,6 +932,19 @@ class ScopedTypeDBInferenceExecutor:
                 if callable(evidence_composer):
                     result = dict(evidence_composer(result, reuse_proof) or result)
             result["hypothesisLifecycle"] = self.observe_projection_result(snapshot, result)
+            if current_state_mode:
+                result["reasoningExecution"] = {
+                    "mode": "incremental-current-state-one-pass-v1",
+                    "sharedPremiseCriticalPath": False,
+                    "typedbProjectionCount": 1,
+                    "factSliceProjection": True,
+                    "sharedResultReuseEligible": bool(
+                        reuse_proof.get("reuseEligible")
+                    ),
+                    "storeRoute": dict(
+                        reasoning_context.get("ontologyStoreRoute") or {}
+                    ),
+                }
             results[account_id] = result
             if partitioned_mode:
                 premise_selection = (
@@ -1016,6 +1066,11 @@ class ScopedTypeDBInferenceExecutor:
                         (time.perf_counter() - account_publication_started) * 1000
                     )
                 result["sharedInferenceExecution"] = {
+                    "status": (
+                        "one-pass-result-published"
+                        if current_state_mode
+                        else "shared-head-result-published"
+                    ),
                     "reuseProofStatus": str(reuse_proof.get("status") or ""),
                     "reuseEligible": bool(reuse_proof.get("reuseEligible")),
                     "publicationStatus": str(publication.get("status") or ""),
@@ -1024,6 +1079,15 @@ class ScopedTypeDBInferenceExecutor:
                     ),
                     "portfolioProjectionReused": False,
                 }
+                if current_state_mode:
+                    shared_summary = result.get("sharedInstrumentInference")
+                    if isinstance(shared_summary, dict):
+                        shared_summary["executionMode"] = (
+                            "one-pass-portfolio-world-result-cache"
+                        )
+                        shared_summary["decisionAuthority"] = (
+                            "typedb-portfolio-world-native-inference"
+                        )
                 publication_receipts.append(publication)
         self.last_shared_publication_ms = publication_elapsed_ms
         if direct_shared_premise_count:

@@ -49,6 +49,12 @@ from .subject_case import (
     SubjectDecisionCase,
     publication_for_subject_case,
 )
+from ..semantic_fact_plane import (
+    FactEnvelope,
+    FactRevisionVector,
+    FactSlice,
+    SemanticChangeSet,
+)
 
 __all__ = [
     "AIJudgmentResult",
@@ -94,4 +100,8 @@ __all__ = [
     "DecisionPublication",
     "SubjectDecisionCase",
     "publication_for_subject_case",
+    "FactEnvelope",
+    "FactRevisionVector",
+    "FactSlice",
+    "SemanticChangeSet",
 ]

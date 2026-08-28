@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from .ontology_execution_units import revision_vector_for_change
+from .semantic_fact_plane import semantic_change_set
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
@@ -660,6 +661,22 @@ def independent_reasoning_request(
         "reasoningRequestFingerprint": fingerprint,
         "reasoningRequestContractVersion": INDEPENDENT_REASONING_REQUEST_VERSION,
     }
+    change_set = semantic_change_set(
+        source_events=event_payloads,
+        source_event_ids=[event.event_id for event in events],
+        account_ids=account_ids,
+        symbols=symbols,
+        fact_types=fact_types,
+        observed_at=source_observed_at,
+        requested_at=requested_at,
+        scope_families_by_symbol=context["requestedScopeFamiliesBySymbol"],
+        dependency_keys_by_symbol=context["requestedDependencyKeysBySymbol"],
+        changed_fields_by_symbol=context["changedFieldsBySymbol"],
+        revision_vectors_by_symbol=context["revisionVectorsBySymbol"],
+        authoritative_fact_boundary=authoritative_fact_boundary,
+        authoritative_dependency_boundary=authoritative_dependency_boundary,
+    )
+    context["semanticChangeSet"] = change_set.to_dict()
     return IndependentReasoningRequest(
         request_id="reasoning-request:" + fingerprint[:32],
         deployment_id=str(deployment_id or ""),

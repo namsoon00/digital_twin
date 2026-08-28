@@ -914,6 +914,15 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         }
 
     def summary(self) -> Dict[str, object]:
+        try:
+            active_window_minutes = max(5, min(24 * 60, int(float(
+                self.runtime_settings.get("operationalActiveFailureWindowMinutes") or 60
+            ))))
+        except (TypeError, ValueError):
+            active_window_minutes = 60
+        active_cutoff = (
+            datetime.now(timezone.utc) - timedelta(minutes=active_window_minutes)
+        ).isoformat().replace("+00:00", "Z")
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -921,6 +930,11 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 FROM ai_inference_requests GROUP BY status
                 """
             ).fetchall()
+            active_failure_row = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_at "
+                "FROM ai_inference_requests WHERE status = %s AND updated_at >= %s",
+                (AI_INFERENCE_FAILED, active_cutoff),
+            ).fetchone()
         states = {
             _clean(row.get("status")): {
                 "count": int(row.get("count") or 0),
@@ -928,12 +942,23 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             }
             for row in rows or []
         }
+        historical_failed = int((states.get(AI_INFERENCE_FAILED) or {}).get("count") or 0)
+        actionable_failed = int((active_failure_row or {}).get("count") or 0)
         return {
             "states": states,
             "pendingCount": int((states.get(AI_INFERENCE_PENDING) or {}).get("count") or 0),
             "retryCount": int((states.get(AI_INFERENCE_RETRY) or {}).get("count") or 0),
             "processingCount": int((states.get(AI_INFERENCE_PROCESSING) or {}).get("count") or 0),
-            "failedCount": int((states.get(AI_INFERENCE_FAILED) or {}).get("count") or 0),
+            # ``failedCount`` remains for API compatibility. Health readers
+            # use actionableFailedCount so retained audit rows cannot keep a
+            # recovered runtime in a permanent critical state.
+            "failedCount": historical_failed,
+            "actionableFailedCount": actionable_failed,
+            "historicalFailedCount": historical_failed,
+            "activeFailureWindowMinutes": active_window_minutes,
+            "oldestActionableFailureAt": _clean(
+                (active_failure_row or {}).get("oldest_at")
+            ),
         }
 
     def prune_terminal(self, retention_hours: int = 24, limit: int = 50) -> int:

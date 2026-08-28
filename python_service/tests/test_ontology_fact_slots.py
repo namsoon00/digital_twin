@@ -202,11 +202,147 @@ class OntologyFactSlotTests(unittest.TestCase):
 
         self.assertTrue(plan["eventBoundaryAuthoritative"])
         self.assertEqual(
-            ["evidence", "link", "temporal"],
+            ["evidence", "temporal"],
             plan["slotFamiliesBySymbol"]["005930"],
         )
         self.assertNotIn("market", plan["slotFamiliesBySymbol"]["005930"])
         self.assertNotIn("financial", plan["slotFamiliesBySymbol"]["005930"])
+
+    def test_authoritative_dependency_key_selects_only_matching_event_scopes(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["temporal", "evidence"],
+            requested_fact_families_by_symbol={"005930": ["temporal", "evidence"]},
+            event_boundary_authoritative=True,
+            requested_dependency_keys=["kind:earnings-calendar-event"],
+            requested_dependency_keys_by_symbol={
+                "005930": ["kind:earnings-calendar-event"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+        scopes = {
+            "symbol:005930:evidence:bucket:01": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {
+                    "kind:earnings-calendar-event": "event-v1",
+                },
+            },
+            "link:symbol:005930:evidence:bucket:01": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {
+                    "relation:mentions-instrument": "link-v1",
+                },
+                "dependencyScopeIds": ["symbol:005930:evidence:bucket:01"],
+            },
+            "symbol:005930:evidence:bucket:02": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {
+                    "kind:news-article": "news-v1",
+                },
+            },
+            "symbol:005930:temporal:window:20d": {
+                "scopeFamily": "temporal",
+                "semanticDependencyFingerprints": {
+                    "kind:temporal-window": "window-v1",
+                },
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertTrue(selection["enabled"])
+        self.assertEqual(
+            [
+                "link:symbol:005930:evidence:bucket:01",
+                "symbol:005930:evidence:bucket:01",
+            ],
+            selection["selectedScopeIds"],
+        )
+        self.assertEqual(
+            ["symbol:005930:evidence:bucket:01"],
+            selection["dependencyMatchedScopeIds"],
+        )
+        self.assertEqual(
+            [
+                "symbol:005930:evidence:bucket:02",
+                "symbol:005930:temporal:window:20d",
+            ],
+            selection["deferredScopeIds"],
+        )
+
+    def test_missing_dependency_index_falls_back_without_dropping_family_scopes(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["evidence"],
+            event_boundary_authoritative=True,
+            requested_dependency_keys=["kind:earnings-calendar-event"],
+            dependency_boundary_authoritative=True,
+        )
+        scopes = {
+            "symbol:005930:evidence": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {"kind:news-article": "news-v1"},
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertFalse(selection["enabled"])
+        self.assertEqual(
+            "fallback-dependency-key-no-scope-match",
+            selection["status"],
+        )
+        self.assertEqual(list(scopes), selection["selectedScopeIds"])
+
+    def test_authoritative_valuation_event_ignores_cross_family_impact_metadata(self):
+        plan = build_fact_slot_projection_plan(
+            ["005930"],
+            ["company-valuation"],
+            requested_fact_families_by_symbol={"005930": ["company-valuation"]},
+            changed_fields_by_symbol={
+                "005930": ["external.companyKnowledge.valuation"],
+            },
+            event_boundary_authoritative=True,
+        )
+        self.assertEqual(
+            ["company-valuation", "valuation"],
+            plan["slotFamiliesBySymbol"]["005930"],
+        )
+        scopes = {
+            "symbol:005930:company-valuation": {
+                "scopeFamily": "company-valuation",
+                "impactScopeFamilies": ["company-valuation", "market", "profile"],
+                "semanticFingerprints": {"company-valuation": "valuation-v2"},
+            },
+            "link:symbol:005930:company-valuation": {
+                "scopeFamily": "company-valuation",
+                "impactScopeFamilies": ["company-valuation", "market", "profile"],
+                "dependencyScopeIds": ["symbol:005930:company-valuation"],
+            },
+            "link:symbol:005930:market": {
+                "scopeFamily": "market",
+                "impactScopeFamilies": ["company-valuation", "market"],
+                "dependencyScopeIds": ["symbol:005930:market"],
+            },
+            "symbol:005930:market": {
+                "scopeFamily": "market",
+                "impactScopeFamilies": ["company-valuation", "market"],
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertEqual(
+            [
+                "link:symbol:005930:company-valuation",
+                "symbol:005930:company-valuation",
+            ],
+            selection["selectedScopeIds"],
+        )
+        self.assertEqual(
+            ["link:symbol:005930:market", "symbol:005930:market"],
+            selection["deferredScopeIds"],
+        )
 
     def test_authoritative_event_defers_unrelated_shared_link_rebind(self):
         graph = PortfolioOntology(
@@ -275,6 +411,87 @@ class OntologyFactSlotTests(unittest.TestCase):
             1,
             selection["scopeSelectionTrace"]["deferredPersistenceRebindScopeCount"],
         )
+
+    def test_endpoint_companion_does_not_expand_into_other_owned_relations(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005930", "Samsung", "stock", {
+                    "ontologyBox": "ABox", "symbol": "005930", "label": "Samsung",
+                }),
+                OntologyEntity("valuation:005930", "Valuation", "company-valuation", {
+                    "ontologyBox": "ABox", "symbol": "005930", "per": 10,
+                }),
+                OntologyEntity("price:005930", "Price", "market-observation", {
+                    "ontologyBox": "ABox", "symbol": "005930", "price": 70000,
+                }),
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:005930",
+                    "valuation:005930",
+                    "HAS_VALUATION",
+                    properties={"ontologyBox": "ABox"},
+                ),
+                OntologyRelation(
+                    "stock:005930",
+                    "price:005930",
+                    "HAS_OBSERVATION",
+                    properties={"ontologyBox": "ABox"},
+                ),
+            ],
+        )
+        first = apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [deepcopy(item) for item in first["scopePlan"]],
+            "scopeGenerationIds": dict(first["scopeGenerationIds"]),
+            "scopeFingerprints": dict(first["scopeFingerprints"]),
+        }
+        graph.entities[0].properties["label"] = "Samsung Electronics"
+        graph.entities[1].properties["per"] = 11
+        apply_scoped_abox_identity(graph, world_id="portfolio:local:test")
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["005930"],
+            fact_slot_plan=build_fact_slot_projection_plan(
+                ["005930"],
+                ["company-valuation"],
+                requested_fact_families_by_symbol={
+                    "005930": ["company-valuation"],
+                },
+                changed_fields_by_symbol={
+                    "005930": ["external.companyKnowledge.valuation"],
+                },
+                event_boundary_authoritative=True,
+            ),
+        )
+
+        selected = set(selection["selectedIncomingScopeIds"])
+        self.assertTrue(any(
+            value.startswith("symbol:005930:company-valuation:")
+            for value in selected
+        ))
+        self.assertTrue(any(
+            value.startswith("link:symbol:005930:company-valuation:")
+            for value in selected
+        ))
+        self.assertTrue(any(
+            value.startswith("symbol:005930:state:")
+            for value in selected
+        ))
+        self.assertFalse(any(
+            value.startswith("symbol:005930:market:")
+            for value in selected
+        ))
+        self.assertFalse(any(
+            value.startswith("link:symbol:005930:market:")
+            for value in selected
+        ))
 
     def test_v8_online_migration_replaces_only_the_requested_subject(self):
         graph = PortfolioOntology(

@@ -166,6 +166,59 @@ def compact_reasoning_request_context(
             if str(symbol or "").strip() and isinstance(proof, Mapping)
         },
     }
+    semantic_change_set = (
+        dict(values.get("semanticChangeSet") or {})
+        if isinstance(values.get("semanticChangeSet"), Mapping)
+        else {}
+    )
+    compact_semantic_change_set = {
+        "version": str(semantic_change_set.get("version") or "")[:64],
+        "changeSetId": str(semantic_change_set.get("changeSetId") or "")[:191],
+        "fingerprint": str(semantic_change_set.get("fingerprint") or "")[:64],
+        "observedAt": str(semantic_change_set.get("observedAt") or "")[:80],
+        "requestedAt": str(semantic_change_set.get("requestedAt") or "")[:80],
+        "authoritativeFactBoundary": bool(
+            semantic_change_set.get("authoritativeFactBoundary")
+        ),
+        "authoritativeDependencyBoundary": bool(
+            semantic_change_set.get("authoritativeDependencyBoundary")
+        ),
+        "factSlices": [
+            {
+                "version": str(item.get("version") or "")[:64],
+                "subjectId": str(item.get("subjectId") or "").upper()[:40],
+                "scopeFamilies": clean_list(item.get("scopeFamilies"), limit=30),
+                "dependencyKeys": clean_list(item.get("dependencyKeys"), limit=120),
+                "changedFields": clean_list(item.get("changedFields"), limit=80),
+                "factTypes": clean_list(item.get("factTypes"), limit=30),
+                "observedAt": str(item.get("observedAt") or "")[:80],
+                "fingerprint": str(item.get("fingerprint") or "")[:64],
+                "revisionVector": {
+                    "fingerprint": str(
+                        dict(item.get("revisionVector") or {}).get("fingerprint") or ""
+                    )[:64],
+                    "revisions": {
+                        str(key or "")[:40]: str(value or "")[:191]
+                        for key, value in dict(
+                            dict(item.get("revisionVector") or {}).get("revisions") or {}
+                        ).items()
+                        if str(key or "").strip() and str(value or "").strip()
+                    },
+                },
+            }
+            for item in semantic_change_set.get("factSlices") or []
+            if isinstance(item, Mapping)
+            and (
+                not targets
+                or str(item.get("subjectId") or "").upper().strip() in targets
+            )
+        ][:80],
+    }
+    ontology_store_route = (
+        dict(values.get("ontologyStoreRoute") or {})
+        if isinstance(values.get("ontologyStoreRoute"), Mapping)
+        else {}
+    )
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
         "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
@@ -214,6 +267,23 @@ def compact_reasoning_request_context(
             if str(symbol or "").strip()
             and (not targets or str(symbol or "").upper().strip() in targets)
             and isinstance(vector, Mapping)
+        },
+        "semanticChangeSet": compact_semantic_change_set,
+        "ontologyStoreRoute": {
+            "version": str(ontology_store_route.get("version") or "")[:64],
+            "shardId": str(ontology_store_route.get("shard_id") or ontology_store_route.get("shardId") or "")[:64],
+            "shardIndex": non_negative_integer(
+                ontology_store_route.get("shard_index")
+                if ontology_store_route.get("shard_index") is not None
+                else ontology_store_route.get("shardIndex")
+            ),
+            "shardCount": max(1, non_negative_integer(
+                ontology_store_route.get("shard_count")
+                if ontology_store_route.get("shard_count") is not None
+                else ontology_store_route.get("shardCount")
+            )),
+            "routingKey": str(ontology_store_route.get("routing_key") or ontology_store_route.get("routingKey") or "")[:80],
+            "symbols": _clean_symbols(ontology_store_route.get("symbols") or [])[:80],
         },
         "scopeRepairRequestsBySymbol": {
             str(symbol or "").upper().strip(): {
@@ -640,6 +710,16 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "status": str(target_patch.get("status") or ""),
             "mode": str(target_patch.get("mode") or ""),
             "fallbackReason": str(target_patch.get("fallbackReason") or "")[:220],
+            "factSlotStatus": str(target_patch.get("factSlotStatus") or ""),
+            "factSlotFallbackReason": str(
+                target_patch.get("factSlotFallbackReason") or ""
+            )[:220],
+            "factSlotSelectedScopeCount": int(
+                target_patch.get("factSlotSelectedScopeCount") or 0
+            ),
+            "factSlotDeferredScopeCount": int(
+                target_patch.get("factSlotDeferredScopeCount") or 0
+            ),
             "targetSymbols": _clean_symbols(target_patch.get("targetSymbols") or []),
             "selectedIncomingScopeCount": int(target_patch.get("selectedIncomingScopeCount") or 0),
             "reusedActiveScopeCount": int(target_patch.get("reusedActiveScopeCount") or 0),

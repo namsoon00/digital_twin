@@ -120,10 +120,12 @@ from ..domain.portfolio import account_snapshot_from_monitor_state
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
+from ..domain.ontology_compiler import compile_ontology_release
 from ..domain.reasoning_engine_versions import reasoning_release_identity
 from ..domain.investment_reasoning import reasoning_rule_inventory
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
+from .graph_store_rulebox import rulebox_rules_from_payload
 from .share_notification_links import ActiveShareNotificationLinkResolver
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .opendart_calendar_source import OpenDartEarningsCalendarSource
@@ -2298,6 +2300,15 @@ def build_v2_reasoning_engine(
     candidate_settings["typedbNativeRuleExecutionEnabled"] = "1"
     candidate_settings["ontologyReasoningTypeDbNativeRuleExecutionEnabled"] = "1"
     candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
+    candidate_settings["ontologyIncrementalCurrentStateReasoningEnabled"] = "1"
+    if str(
+        candidate_settings.get("ontologyTemporalObservationAnchorProjectionEnabled")
+        or "auto"
+    ).strip().lower() in {"", "auto"}:
+        # QuestDB owns historical points. Freeze V2's auto mode to compact
+        # temporal summaries before the projection settings are serialized.
+        candidate_settings["ontologyTemporalObservationAnchorProjectionEnabled"] = "0"
+    candidate_settings["ontologyWorldPartitionedReasoningEnabled"] = "0"
     candidate_settings["ontologyInferenceDetailOutboxEnabled"] = "1"
     candidate_settings["ontologyAsyncQualityRecordEnabled"] = "0"
     provisioning_contract = dict(
@@ -2419,17 +2430,27 @@ def build_v2_reasoning_engine(
         },
     )
     runtime_rulebox_catalog = projection_recorder.ensure_rulebox_ready()
+    compiled_ontology_release = compile_ontology_release(
+        rulebox_rules_from_payload({
+            # ``ensure_rulebox_ready`` may return compact warmed metadata.
+            # The immutable candidate release is the authoritative source of
+            # executable rule bodies for static compilation.
+            "rules": list(candidate_rulebox.get("rules") or [])
+        })
+    )
     runtime_world_partition = projection_recorder.world_rule_partition(
         runtime_rulebox_catalog
     )
     if (
         str(runtime_rulebox_catalog.get("status") or "") != "ready"
+        or not bool(compiled_ontology_release.get("valid"))
         or str(runtime_world_partition.get("status") or "") != "ready"
     ):
         raise RuntimeError(
             "The independent V2 frozen ontology release could not be warmed: "
             + str(
                 runtime_rulebox_catalog.get("reason")
+                or (compiled_ontology_release.get("failures") or [""])[0]
                 or (runtime_world_partition.get("failures") or [{}])[0].get("reason")
                 or "unknown"
             )[:220]
@@ -2505,10 +2526,20 @@ def build_v2_reasoning_engine(
             ),
             "tboxSource": "frozen-v2-release",
             "warmed": True,
+            "compilerVersion": str(compiled_ontology_release.get("version") or ""),
+            "compilerIrFingerprint": str(
+                compiled_ontology_release.get("irFingerprint") or ""
+            ),
+            "compilerStatus": str(compiled_ontology_release.get("status") or ""),
+            "predictiveRuleCount": int(
+                compiled_ontology_release.get("predictiveRuleCount") or 0
+            ),
         },
         "ruleExecutionReadiness": {
             "status": "ready",
             "mode": "typedb-direct-typeql",
+            "realtimeProjectionMode": "incremental-current-state-one-pass-v1",
+            "sharedPremiseCriticalPath": False,
         },
     })
     registry_store.update_health(descriptor.deployment_id, existing_health)

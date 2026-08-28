@@ -452,12 +452,12 @@ class InvestmentReasoningOrchestrator:
         reasoning_case = self.required(subject_case.batch_case_id)
         judgment = AIJudgmentResult.from_result(result, getattr(result, "response", {}) or {})
         if subject_case.publication is not None:
-            if subject_case.ai_judgment and subject_case.ai_judgment.result_id == judgment.result_id:
-                return subject_case
-            raise ValueError(
-                "Subject decision already has a canonical publication: "
-                + subject_case.subject_case_id
-            )
+            # Delivery retries and superseded AI requests can race after the
+            # one canonical decision has already been published. Publication
+            # is immutable, so the only correct outcome is idempotent reuse;
+            # treating a later result as a worker failure opens a false
+            # incident while changing no customer-visible decision.
+            return subject_case
         subject_case.ai_judgment = judgment
         subject_case.ai_request_id = judgment.request_id
         subject_case.notification_job_id = str(getattr(request, "notification_job_id", "") or "")
@@ -701,12 +701,7 @@ class InvestmentReasoningOrchestrator:
             return None
         subject_case = self.required_subject(subject_case_id, context)
         if subject_case.publication is not None:
-            if subject_case.ai_request_id == str(getattr(request, "request_id", "") or ""):
-                return subject_case
-            raise ValueError(
-                "Subject decision already has a canonical publication: "
-                + subject_case.subject_case_id
-            )
+            return subject_case
         subject_case.ai_request_id = str(getattr(request, "request_id", "") or "")
         subject_case.notification_job_id = str(
             getattr(request, "notification_job_id", "") or ""

@@ -2338,20 +2338,35 @@ def select_target_scoped_manifest_patch(
     # Stage changed direct dependencies with a selected link; unchanged active
     # endpoint generations remain reusable without expanding the patch.
     node_scopes = _graph_node_scopes(graph)
+    # Directly selected relation scopes may pull their endpoints into the
+    # candidate generation. Those endpoint scopes are integrity companions,
+    # not new traversal roots. Treating them as roots walks every other
+    # relation owned by the stock anchor and expands one valuation update into
+    # market, flow, temporal, evidence, and portfolio persistence.
+    relation_owner_traversal_scopes: Set[str] = {
+        scope_id
+        for scope_id in selected
+        if _scope_type(scope_id) == "link"
+    }
 
     def include_missing_dependency(
         scope_id: str,
         missing: List[str],
         reason: str,
+        traverse_owned_relations: bool = False,
     ) -> None:
         if scope_id in selected:
             if reason:
                 selection_reasons.setdefault(scope_id, set()).add(reason)
+            if traverse_owned_relations and _scope_type(scope_id) == "link":
+                relation_owner_traversal_scopes.add(scope_id)
             return
         if scope_id not in incoming:
             missing.append(scope_id)
             return
         selected.add(scope_id)
+        if traverse_owned_relations and _scope_type(scope_id) == "link":
+            relation_owner_traversal_scopes.add(scope_id)
         selection_reasons.setdefault(scope_id, set()).add(
             reason or "required-missing-dependency"
         )
@@ -2390,11 +2405,12 @@ def select_target_scoped_manifest_patch(
                             "required-changed-dependency",
                             "required-missing-dependency",
                         ),
+                        traverse_owned_relations=_scope_type(dependency_id) == "link",
                     )
         for relation in graph.relations:
             properties = dict(relation.properties or {})
             owner_scope = _clean(properties.get("aboxScopeId"))
-            if owner_scope not in selected:
+            if owner_scope not in relation_owner_traversal_scopes:
                 continue
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
@@ -2413,7 +2429,7 @@ def select_target_scoped_manifest_patch(
             key = support_relation_key("HAS_EVIDENCE", evidence.subject, evidence.evidence_id)
             support_metadata = dict(support_scopes.get(key) or {})
             owner_scope = _clean(support_metadata.get("scopeId"))
-            if owner_scope not in selected:
+            if owner_scope not in relation_owner_traversal_scopes:
                 continue
             for endpoint in (
                 _clean(support_metadata.get("source")) or _clean(evidence.subject),

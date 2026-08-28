@@ -812,11 +812,20 @@ def add_position_temporal_concepts(
     trend_observation = profile_for_domain(observation_profiles or {}, "trend")
     anchor_setting = (settings or {}).get("ontologyTemporalObservationAnchorProjectionEnabled")
     normalized_anchor_setting = str(anchor_setting or "auto").strip().lower()
-    project_observation_anchors = (
-        not statistical_signal_packet_can_replace_temporal_anchors(runtime_context, symbol)
-        if normalized_anchor_setting in {"", "auto"}
-        else normalized_anchor_setting not in {"0", "false", "no", "off", "disabled"}
-    )
+    current_state_reasoning = str(
+        (settings or {}).get("ontologyIncrementalCurrentStateReasoningEnabled") or ""
+    ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    if normalized_anchor_setting in {"", "auto"}:
+        # QuestDB owns the observation history. Current-state TypeDB reasoning
+        # only needs the derived window summary, not duplicate point anchors.
+        project_observation_anchors = (
+            not current_state_reasoning
+            and not statistical_signal_packet_can_replace_temporal_anchors(runtime_context, symbol)
+        )
+    else:
+        project_observation_anchors = normalized_anchor_setting not in {
+            "0", "false", "no", "off", "disabled",
+        }
 
     for definition in definitions:
         stored_rows = stored_temporal_window_rows(runtime_context, symbol, definition.key)

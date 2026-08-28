@@ -1676,10 +1676,24 @@ class PortfolioOntologyProjectionRecorder:
         }
 
     def world_partitioned_reasoning_enabled(self) -> bool:
+        # V2 realtime execution now compiles shared instrument evidence and
+        # the private account overlay into one bounded PortfolioWorld turn.
+        # SharedPremiseWorld remains available for offline reconciliation but
+        # must not add a second TypeDB projection to the alert critical path.
+        if self.incremental_current_state_reasoning_enabled():
+            return False
         value = self.settings.get("ontologyWorldPartitionedReasoningEnabled")
         if value is None:
             return str(self.settings.get("_reasoningEngineVersion") or "").strip().lower() == "v2"
         return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def incremental_current_state_reasoning_enabled(self) -> bool:
+        value = self.settings.get("ontologyIncrementalCurrentStateReasoningEnabled")
+        if value is None:
+            return str(self.settings.get("_reasoningEngineVersion") or "").strip().lower() == "v2"
+        return str(value).strip().lower() not in {
+            "0", "false", "no", "off", "disabled",
+        }
 
     def world_rule_partition(self, rule_catalog: Dict[str, object]) -> Dict[str, object]:
         if (
@@ -2896,7 +2910,19 @@ class PortfolioOntologyProjectionRecorder:
             result["pendingAboxActivationRecovery"] = pending_activation_recovery
             runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
             result.setdefault("runtimeStages", runtime_stages)
-            self.store_projection_result(snapshot, result, projection_run)
+            resumed_projection_run = self.active_projection_audit_run(
+                portfolio_world_context.world_id,
+            )
+            if resumed_projection_run is not None:
+                result["resumedProjectionAudit"] = {
+                    "status": "completed-with-recovered-activation",
+                    "runId": resumed_projection_run.run_id,
+                }
+            self.store_projection_result(
+                snapshot,
+                result,
+                resumed_projection_run or projection_run,
+            )
             emit_progress("completed", status=str(result.get("status") or ""))
             return result
         # A staged or targetless legacy activation has no bounded InferenceBox
@@ -4458,6 +4484,49 @@ class PortfolioOntologyProjectionRecorder:
             "inferenceReuseProof": dict(result.get("inferenceReuseProof") or {}),
         }
 
+    def active_projection_audit_run(self, world_id: str = ""):
+        """Return the audit owner of the active ABox after staged recovery.
+
+        A restart can finish TypeDB activation before the original MySQL audit
+        and result slots are committed.  Reusing that original run lets the
+        recovery turn persist the proof immediately; otherwise the following
+        live request has to expand the complete durable InferenceBox only to
+        reconstruct operational evidence that was already in memory.
+        """
+        if not self.projection_run_store or not hasattr(
+            self.projection_run_store,
+            "latest",
+        ):
+            return None
+        try:
+            active = self.active_abox_metadata(world_id)
+        except Exception:
+            return None
+        run_id = str(active.get("projectionRunId") or "").strip()
+        snapshot_id = str(active.get("aboxSnapshotId") or "").strip()
+        if not run_id or not snapshot_id:
+            return None
+        try:
+            try:
+                rows = self.projection_run_store.latest(limit=20, world_id=world_id)
+            except TypeError as error:
+                if "unexpected keyword" not in str(error) and "world_id" not in str(error):
+                    raise
+                rows = self.projection_run_store.latest(limit=20)
+        except Exception:
+            return None
+        row = next((
+            item
+            for item in rows or []
+            if isinstance(item, dict)
+            and str(item.get("runId") or "") == run_id
+            and str(item.get("aboxSnapshotId") or "") == snapshot_id
+        ), None)
+        if not row:
+            return None
+        run = projection_run_from_payload(row)
+        return run if run.run_id == run_id and run.abox_snapshot_id == snapshot_id else None
+
     def ensure_rulebox_ready(self) -> Dict[str, object]:
         if self._frozen_rulebox_catalog is not None:
             cached_readiness = getattr(self, "_frozen_rulebox_readiness", None)
@@ -5641,9 +5710,17 @@ class PortfolioOntologyProjectionRecorder:
             "marketContextMode": (
                 "shared-premise-account-overlay"
                 if self.world_partitioned_reasoning_enabled()
+                else "incremental-current-state-one-pass"
+                if self.incremental_current_state_reasoning_enabled()
                 else "shared-market-world-with-portfolio-rule-mirror"
             ),
         }
+        if self.incremental_current_state_reasoning_enabled():
+            world_metadata_payload.update({
+                "reasoningExecutionMode": "incremental-current-state-one-pass-v1",
+                "sharedPremiseCriticalPath": False,
+                "factSliceProjection": True,
+            })
         if self.world_partitioned_reasoning_enabled():
             world_metadata_payload.update({
                 "sharedPremiseWorldId": str((shared_premise_proof or {}).get("worldId") or ""),
@@ -7684,11 +7761,18 @@ class PortfolioOntologyProjectionRecorder:
         })
         if not targets:
             return {}
-        current_rules = [
-            rule
+        # The slot writer persists one row per executable rule ID.  Auxiliary
+        # catalogue records without an ID are useful to the compiler, but are
+        # not executable slots.  Counting them here made every 116-slot V2
+        # generation look incomplete against an expected count of 118 and
+        # forced a full native evaluation on every request.
+        catalog_rule_ids = sorted({
+            rule_id_from_payload(rule)
             for rule in self.rulebox_rules_for_impact()
-            if rule.get("enabled", True) is not False
-        ]
+            if isinstance(rule, dict)
+            and rule.get("enabled", True) is not False
+            and rule_id_from_payload(rule)
+        })
         slot_reader = getattr(
             self.projection_run_store,
             "active_rule_result_slot_context",
@@ -7703,11 +7787,12 @@ class PortfolioOntologyProjectionRecorder:
                     symbols=targets,
                     rulebox_rules_hash=rulebox_rules_hash,
                     tbox_fingerprint=tbox_fingerprint,
-                    expected_rule_count=len(current_rules),
+                    expected_rule_count=len(catalog_rule_ids),
                     execution_namespace_id=str(namespace.get("executionNamespaceId") or ""),
                     engine_deployment_id=str(namespace.get("engineDeploymentId") or ""),
                     graph_database=str(namespace.get("graphDatabase") or ""),
                     release_fingerprint="",
+                    catalog_rule_ids=catalog_rule_ids,
                 )
             except Exception:
                 slot_context = {}
@@ -8320,6 +8405,17 @@ class PortfolioOntologyProjectionRecorder:
                 event_boundary_authoritative=bool(
                     (reasoning_context or {}).get(
                         "eventFactBoundaryAuthoritative"
+                    )
+                ),
+                requested_dependency_keys=(reasoning_context or {}).get(
+                    "requestedDependencyKeys"
+                ) or [],
+                requested_dependency_keys_by_symbol=(reasoning_context or {}).get(
+                    "requestedDependencyKeysBySymbol"
+                ) or {},
+                dependency_boundary_authoritative=bool(
+                    (reasoning_context or {}).get(
+                        "eventDependencyBoundaryAuthoritative"
                     )
                 ),
             ),

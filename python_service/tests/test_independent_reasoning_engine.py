@@ -18,6 +18,7 @@ from digital_twin.domain.independent_reasoning import (
     reasoning_queue_slot_key,
     shard_reasoning_event,
 )
+from digital_twin.domain.fact_changes import fact_change_contract
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.domain.reasoning_engine_versions import (
     EngineReleaseBundle,
@@ -129,6 +130,98 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_semantic_change_set_preserves_bitemporal_source_boundary(self):
+        contract = fact_change_contract(
+            ["MarketQuote"],
+            {"NVDA": ["MarketQuote"]},
+            {"NVDA": ["currentPrice", "volume"]},
+        )
+        event = DomainEvent(
+            name=ONTOLOGY_REASONING_REQUESTED,
+            aggregate_id="market-observation:NVDA",
+            occurred_at="2026-08-16T00:00:02Z",
+            event_id="event:semantic-nvda",
+            payload={
+                "accountIds": ["acct"],
+                "affectedSymbols": ["NVDA"],
+                "factTypes": ["MarketQuote"],
+                "factTypesBySymbol": {"NVDA": ["MarketQuote"]},
+                "changedFieldsBySymbol": {"NVDA": ["currentPrice", "volume"]},
+                "factRevisionsBySymbol": {"NVDA": "market-revision:42"},
+                "sourceObservedAt": "2026-08-16T00:00:00Z",
+                "factChangeContract": contract,
+            },
+        )
+
+        first = independent_reasoning_request("ontology-v2", [event])
+        second = independent_reasoning_request("ontology-v2", [event])
+        change = first.context["semanticChangeSet"]
+
+        self.assertEqual(change["changeSetId"], second.context["semanticChangeSet"]["changeSetId"])
+        self.assertEqual("2026-08-16T00:00:00Z", change["observedAt"])
+        self.assertEqual("2026-08-16T00:00:02Z", change["requestedAt"])
+        self.assertTrue(change["authoritativeFactBoundary"])
+        self.assertTrue(change["authoritativeDependencyBoundary"])
+        self.assertEqual("NVDA", change["factSlices"][0]["subjectId"])
+        self.assertEqual(
+            "market-revision:42",
+            change["factSlices"][0]["revisionVector"]["revisions"]["market-observation"],
+        )
+
+    def test_incremental_current_state_executor_skips_shared_premise_critical_path(self):
+        class Recorder:
+            def __init__(self):
+                self.prepare_calls = 0
+                self.context = {}
+
+            @staticmethod
+            def incremental_current_state_reasoning_enabled():
+                return True
+
+            @staticmethod
+            def world_partitioned_reasoning_enabled():
+                return False
+
+            def prepare_shared_premises(self, *_args, **_kwargs):
+                self.prepare_calls += 1
+                raise AssertionError("SharedPremise must not run in realtime one-pass mode")
+
+            def record_snapshot(self, _snapshot, **kwargs):
+                self.context = dict(kwargs.get("reasoning_context") or {})
+                return {
+                    "status": "ok",
+                    "inferenceBox": {
+                        "nativeTypeDbReasoningCompleted": True,
+                        "generationAligned": True,
+                        "sourceAboxSnapshotId": "abox:one-pass",
+                        "inferenceGenerationId": "inference:one-pass",
+                    },
+                }
+
+        recorder = Recorder()
+        executor = ScopedTypeDBInferenceExecutor(
+            recorder,
+            settings={"ontologyStoreLogicalShardCount": "4"},
+        )
+        request = independent_reasoning_request(
+            "ontology-v2-production",
+            [source_event("NVDA", ["acct"])],
+        )
+
+        result = executor.execute(
+            request,
+            [SimpleNamespace(account_id="acct", metadata={})],
+        )["acct"]
+
+        self.assertEqual(0, recorder.prepare_calls)
+        self.assertEqual(
+            "incremental-current-state-one-pass-v1",
+            recorder.context["reasoningExecutionMode"],
+        )
+        self.assertFalse(result["reasoningExecution"]["sharedPremiseCriticalPath"])
+        self.assertEqual(1, result["reasoningExecution"]["typedbProjectionCount"])
+        self.assertEqual(4, result["reasoningExecution"]["storeRoute"]["shard_count"])
+
     def test_market_anchor_reconciliation_follows_a_completed_coalesced_job(self):
         pending_event_id = "event:old-market"
 

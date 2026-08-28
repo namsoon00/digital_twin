@@ -110,6 +110,88 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_staged_recovery_reuses_the_active_projection_audit_owner(self):
+        class Repository:
+            store_key = "typedb"
+
+            @staticmethod
+            def active_abox_metadata(world_id=""):
+                return {
+                    "status": "ok",
+                    "worldId": world_id,
+                    "aboxSnapshotId": "abox:active",
+                    "projectionRunId": "run:active",
+                }
+
+        class RunStore:
+            @staticmethod
+            def latest(limit=20, world_id=""):
+                return [{
+                    "runId": "run:active",
+                    "worldId": world_id,
+                    "portfolioId": "main",
+                    "accountId": "main",
+                    "status": "projecting",
+                    "graphStore": "typedb",
+                    "aboxSnapshotId": "abox:active",
+                }]
+
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            projection_run_store=RunStore(),
+        )
+
+        run = recorder.active_projection_audit_run("portfolio:local:main")
+
+        self.assertIsNotNone(run)
+        self.assertEqual("run:active", run.run_id)
+        self.assertEqual("abox:active", run.abox_snapshot_id)
+
+    def test_prior_rule_slot_reader_counts_only_executable_unique_rule_ids(self):
+        class Repository:
+            store_key = "typedb"
+
+        class SlotStore:
+            def __init__(self):
+                self.request = {}
+
+            def active_rule_result_slot_context(self, **kwargs):
+                self.request = dict(kwargs)
+                return {"reusable": True, "coverageComplete": True}
+
+        slot_store = SlotStore()
+        recorder = PortfolioOntologyProjectionRecorder(
+            Repository(),
+            projection_run_store=slot_store,
+            settings={
+                "_reasoningEngineDeploymentId": "ontology-v2-test",
+                "_reasoningEngineReleaseFingerprint": "release-test",
+                "typedbDatabase": "ontology-test",
+            },
+        )
+        recorder.rulebox_rules_for_impact = lambda: [
+            {"rule_id": "graph.rule.one", "enabled": True},
+            {"rule_id": "graph.rule.two", "enabled": True},
+            {"rule_id": "graph.rule.two", "enabled": True},
+            {"kind": "compiler-metadata", "enabled": True},
+            {"rule_id": "graph.rule.disabled", "enabled": False},
+        ]
+
+        result = recorder.audited_prior_rule_selection_context(
+            source_snapshot(),
+            ["005930"],
+            rulebox_rules_hash="rules-hash",
+            tbox_fingerprint="tbox-hash",
+            world_id="portfolio:local:main",
+        )
+
+        self.assertTrue(result["reusable"])
+        self.assertEqual(2, slot_store.request["expected_rule_count"])
+        self.assertEqual(
+            ["graph.rule.one", "graph.rule.two"],
+            slot_store.request["catalog_rule_ids"],
+        )
+
     def test_shared_result_slots_rehydrate_only_the_active_inference_generation(self):
         context = {
             "reusable": True,

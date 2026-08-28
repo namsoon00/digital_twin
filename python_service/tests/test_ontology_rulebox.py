@@ -439,6 +439,56 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertIn("temporalWindows", payload)
         self.assertTrue(payload["temporalWindows"])
 
+    def test_current_state_reasoning_keeps_temporal_history_out_of_abox(self):
+        position = Position(
+            symbol="000660",
+            name="SK하이닉스",
+            market="KR",
+            currency="KRW",
+            quantity=1,
+            sellable_quantity=1,
+            average_price=100000,
+            current_price=101000,
+            market_value=101000,
+            profit_loss=1000,
+            profit_loss_rate=1.0,
+            ma20=100000,
+            ma60=99000,
+        )
+        portfolio = portfolio_summary([position], account_cash=200000)
+        graph = build_portfolio_ontology(
+            [position],
+            portfolio,
+            portfolio_id="current-state-temporal-summary-test",
+            runtime_context={
+                "asOf": "2026-07-16T00:00:00Z",
+                "settings": {
+                    "ontologyIncrementalCurrentStateReasoningEnabled": "1",
+                    "ontologyTemporalObservationAnchorProjectionEnabled": "auto",
+                    "temporalWindowPeriods": "1D=1:2",
+                },
+                "metadata": {
+                    "monitorStateHistory": [
+                        {
+                            "generatedAt": "2026-07-15T00:00:00Z",
+                            "positions": {"000660": {"current_price": 100000}},
+                        },
+                        {
+                            "generatedAt": "2026-07-16T00:00:00Z",
+                            "positions": {"000660": {"current_price": 101000}},
+                        },
+                    ],
+                },
+            },
+        )
+
+        self.assertTrue(any(item.kind == "temporal-window" for item in graph.entities))
+        self.assertFalse(any(item.kind == "temporal-observation" for item in graph.entities))
+        self.assertFalse(any(
+            item.relation_type in {"WINDOW_CONTAINS_OBSERVATION", "PRECEDES"}
+            for item in graph.relations
+        ))
+
     def test_temporal_window_keeps_raw_trajectory_and_rejects_stale_flow_as_inference_input(self):
         rows = [
             {

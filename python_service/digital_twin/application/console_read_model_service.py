@@ -613,6 +613,16 @@ class ConsoleReadModelService:
         processing = int(reasoning.get("processingCount") or 0)
         notification_summary = _mapping(realtime.get("notificationJobs"))
         ai_summary = _mapping(realtime.get("aiInferenceQueue"))
+        ai_actionable_failures = int(
+            ai_summary.get("actionableFailedCount")
+            if ai_summary.get("actionableFailedCount") is not None
+            else ai_summary.get("failedCount") or 0
+        )
+        notification_actionable_failures = int(
+            notification_summary.get("actionable_failed")
+            if notification_summary.get("actionable_failed") is not None
+            else notification_summary.get("failed") or 0
+        )
         reasoning_status = _text(reasoning.get("status") or reasoning.get("state")).lower()
         reasoning_queue_health = _text(_mapping(_mapping(reasoning.get("legacyReasoningQueue")).get("queueHealth")).get("status")).lower()
         reasoning_healthy = pending == 0 and processing == 0 and (
@@ -686,18 +696,19 @@ class ConsoleReadModelService:
             {
                 "id": "ai",
                 "label": "AI 판단 대기열",
-                "state": "healthy" if not int(ai_summary.get("failedCount") or 0) else "critical",
-                "detail": f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건 · 실패 {int(ai_summary.get('failedCount') or 0)}건",
+                "state": "healthy" if not ai_actionable_failures else "critical",
+                "detail": f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건 · 현재 실패 {ai_actionable_failures}건 · 누적 감사 {int(ai_summary.get('historicalFailedCount') or ai_summary.get('failedCount') or 0)}건",
                 "updatedAt": "",
             },
             {
                 "id": "notifications",
                 "label": "알림 전달",
-                "state": "warning" if int(notification_summary.get("failed") or 0) else "healthy",
+                "state": "warning" if notification_actionable_failures else "healthy",
                 "detail": (
                     f"현재 대기 {int(notification_summary.get('pending') or 0) + int(notification_summary.get('awaiting_ai') or 0)}건"
                     f" · 처리 {int(notification_summary.get('processing') or 0)}건"
-                    f" · 미처리 실패 {int(notification_summary.get('failed') or 0)}건"
+                    f" · 현재 실패 {notification_actionable_failures}건"
+                    f" · 누적 감사 {int(notification_summary.get('historical_failed') or notification_summary.get('failed') or 0)}건"
                     f" · 누적 완료 {int(notification_summary.get('done') or 0)}건"
                     f" · 누적 보류 {int(notification_summary.get('suppressed') or 0)}건"
                 ),

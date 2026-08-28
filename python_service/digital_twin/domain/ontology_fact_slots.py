@@ -14,7 +14,7 @@ from typing import Dict, Iterable, Mapping, Set
 from .ontology_change_impact import scope_family, scope_symbol
 
 
-FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v2-company-section-routing"
+FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v3-semantic-dependency-routing"
 
 # A source event can update values derived into adjacent factual families.
 # The closure keeps those derived facts coherent while excluding unrelated
@@ -57,7 +57,10 @@ FACT_SLOT_DIRECT_FAMILIES = {
     "fundamental": {"fundamental"},
     "governance": {"governance"},
     "capital": {"capital"},
-    "company-valuation": {"company-valuation"},
+    # Company knowledge uses a dedicated semantic family, while reusable
+    # market-comparison and margin-of-safety facts retain the physical
+    # ``valuation`` family. One issuer-valuation event owns both slots.
+    "company-valuation": {"company-valuation", "valuation"},
     "exposure": {"exposure"},
     "portfolio": {"portfolio", "position"},
     "macro": {"macro"},
@@ -221,6 +224,9 @@ def build_fact_slot_projection_plan(
     requested_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
     changed_fields_by_symbol: Mapping[str, Iterable[object]] = None,
     event_boundary_authoritative: bool = False,
+    requested_dependency_keys: Iterable[object] = None,
+    requested_dependency_keys_by_symbol: Mapping[str, Iterable[object]] = None,
+    dependency_boundary_authoritative: bool = False,
 ) -> Dict[str, object]:
     """Build a conservative write-routing plan from mailbox provenance."""
     targets = sorted({
@@ -254,6 +260,17 @@ def build_fact_slot_projection_plan(
             if _clean(value)
         }
         for symbol, values in raw_changed_fields.items()
+        if _clean(symbol).upper() in targets
+    }
+    dependency_keys = _family_values(requested_dependency_keys or [])
+    raw_dependency_keys_by_symbol = (
+        requested_dependency_keys_by_symbol
+        if isinstance(requested_dependency_keys_by_symbol, Mapping)
+        else {}
+    )
+    dependency_keys_by_symbol: Dict[str, Set[str]] = {
+        _clean(symbol).upper(): _family_values(values)
+        for symbol, values in raw_dependency_keys_by_symbol.items()
         if _clean(symbol).upper() in targets
     }
     unknown = sorted({
@@ -311,8 +328,9 @@ def build_fact_slot_projection_plan(
             if event_boundary_authoritative
             else FACT_SLOT_DEPENDENCY_FAMILIES[family]
         )
-    if event_boundary_authoritative:
-        slots.add("link")
+    # Link ownership is derived from the selected fact scopes below. Treating
+    # every link as a direct fact slot turns one valuation or calendar event
+    # into a rewrite of every relation touching the stock.
     slots_by_symbol: Dict[str, Set[str]] = {}
     fallback_targets = []
     unknown_by_symbol: Dict[str, list] = {}
@@ -352,7 +370,6 @@ def build_fact_slot_projection_plan(
                 symbol_slots.update(
                     FACT_SLOT_DIRECT_FAMILIES.get(family, {family})
                 )
-            symbol_slots.add("link")
         elif use_precise_fields and FOLLOWUP_FIELD not in compact_fields:
             for family in symbol_requested:
                 symbol_slots.update(
@@ -400,6 +417,14 @@ def build_fact_slot_projection_plan(
             symbol: sorted(values)
             for symbol, values in sorted(changed_fields.items())
         },
+        "requestedDependencyKeys": sorted(dependency_keys),
+        "requestedDependencyKeysBySymbol": {
+            symbol: sorted(dependency_keys_by_symbol.get(symbol, dependency_keys))
+            for symbol in targets
+        },
+        "dependencyBoundaryAuthoritative": bool(
+            dependency_boundary_authoritative and dependency_keys
+        ),
         "preciseFieldRoutingSymbols": sorted(precise_field_routing_symbols),
         "unclassifiedChangedFieldsBySymbol": unclassified_fields_by_symbol,
         "fallbackTargetSymbols": sorted(fallback_targets),
@@ -436,6 +461,21 @@ def select_fact_slot_scope_ids(
         for symbol in plan.get("preciseFieldRoutingSymbols") or []
         if _clean(symbol)
     }
+    dependency_keys = _family_values(plan.get("requestedDependencyKeys") or [])
+    raw_dependency_keys_by_symbol = plan.get("requestedDependencyKeysBySymbol")
+    raw_dependency_keys_by_symbol = (
+        raw_dependency_keys_by_symbol
+        if isinstance(raw_dependency_keys_by_symbol, Mapping)
+        else {}
+    )
+    dependency_keys_by_symbol = {
+        _clean(symbol).upper(): _family_values(values)
+        for symbol, values in raw_dependency_keys_by_symbol.items()
+        if _clean(symbol)
+    }
+    dependency_boundary_authoritative = bool(
+        plan.get("dependencyBoundaryAuthoritative") and dependency_keys
+    )
     base = {
         "version": FACT_SLOT_PROJECTION_VERSION,
         "requestedFactFamilies": sorted(_family_values(plan.get("requestedFactFamilies") or [])),
@@ -461,6 +501,13 @@ def select_fact_slot_scope_ids(
             for symbol, values in dict(plan.get("unclassifiedChangedFieldsBySymbol") or {}).items()
             if _clean(symbol)
         },
+        "requestedDependencyKeys": sorted(dependency_keys),
+        "requestedDependencyKeysBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(dependency_keys_by_symbol.items())
+        },
+        "dependencyBoundaryAuthoritative": dependency_boundary_authoritative,
+        "dependencyMatchedScopeIds": [],
         "candidateScopeCount": len(candidates),
         "selectedScopeIds": list(candidates),
         "deferredScopeIds": [],
@@ -476,10 +523,21 @@ def select_fact_slot_scope_ids(
     selected = []
     deferred = []
     unknown = []
+    dependency_matched = []
+
+    def dependency_key_matches(scope_key: str, requested_key: str) -> bool:
+        return bool(
+            scope_key == requested_key
+            or scope_key.startswith(requested_key + ":")
+            or requested_key.startswith(scope_key + ":")
+        )
+
     for scope_id in candidates:
         item = scope_plan_by_id.get(scope_id) or {}
         symbol = scope_symbol(scope_id)
         precise_scope = bool(
+            plan.get("eventBoundaryAuthoritative")
+            or
             symbol in precise_field_routing_symbols
             or (
                 not symbol
@@ -505,10 +563,87 @@ def select_fact_slot_scope_ids(
             unknown.append(scope_id)
             continue
         applicable_slots = slots_by_symbol.get(symbol, slots) if symbol else slots
-        if families & applicable_slots:
+        applicable_dependency_keys = (
+            dependency_keys_by_symbol.get(symbol, dependency_keys)
+            if symbol
+            else dependency_keys
+        )
+        scope_dependency_keys = _family_values(
+            dict(item.get("semanticDependencyFingerprints") or {}).keys()
+        )
+        dependency_match = bool(
+            dependency_boundary_authoritative
+            and applicable_dependency_keys
+            and scope_dependency_keys
+            and any(
+                dependency_key_matches(scope_key, requested_key)
+                for scope_key in scope_dependency_keys
+                for requested_key in applicable_dependency_keys
+            )
+        )
+        if families & applicable_slots and (
+            not dependency_boundary_authoritative or dependency_match
+        ):
             selected.append(scope_id)
+            if dependency_match:
+                dependency_matched.append(scope_id)
         else:
             deferred.append(scope_id)
+    if dependency_boundary_authoritative and dependency_matched:
+        # Relation scopes normally own links while their dependency list owns
+        # the event entity. Include changed reverse dependants so an exact
+        # event slice remains connected to the instrument in the active world.
+        selected_set = set(selected)
+        changed = True
+        while changed:
+            changed = False
+            for scope_id in candidates:
+                if scope_id in selected_set:
+                    continue
+                item = scope_plan_by_id.get(scope_id) or {}
+                dependencies = {
+                    _clean(value)
+                    for value in item.get("dependencyScopeIds") or []
+                    if _clean(value)
+                }
+                if dependencies.intersection(selected_set):
+                    selected_set.add(scope_id)
+                    changed = True
+        selected = sorted(selected_set)
+        deferred = sorted(set(candidates) - selected_set)
+    elif dependency_boundary_authoritative and candidates:
+        # An authoritative event key is useful only when the compiled scope
+        # metadata can prove a match. Falling back to family routing is safer
+        # than silently omitting a new provider fact.
+        return {
+            **base,
+            "enabled": False,
+            "status": "fallback-dependency-key-no-scope-match",
+            "fallbackReason": "event-dependency-key-not-indexed-in-scope",
+        }
+    elif plan.get("eventBoundaryAuthoritative") and selected:
+        # A direct fact scope may be owned by a relation scope. Follow only
+        # changed reverse dependants of the selected facts. Endpoint scopes
+        # are staged later by the manifest integrity closure; they must not
+        # become seeds that re-select every other relation of the instrument.
+        selected_set = set(selected)
+        changed = True
+        while changed:
+            changed = False
+            for scope_id in candidates:
+                if scope_id in selected_set:
+                    continue
+                item = scope_plan_by_id.get(scope_id) or {}
+                dependencies = {
+                    _clean(value)
+                    for value in item.get("dependencyScopeIds") or []
+                    if _clean(value)
+                }
+                if dependencies.intersection(selected_set):
+                    selected_set.add(scope_id)
+                    changed = True
+        selected = sorted(selected_set)
+        deferred = sorted(set(candidates) - selected_set)
     if unknown:
         return {
             **base,
@@ -530,5 +665,6 @@ def select_fact_slot_scope_ids(
         "status": "applied-with-target-fallback" if fallback_targets else "applied",
         "selectedScopeIds": sorted(selected),
         "deferredScopeIds": sorted(deferred),
+        "dependencyMatchedScopeIds": sorted(dependency_matched),
         "fallbackReason": "",
     }

@@ -552,6 +552,7 @@
     investmentFlowDetailLoading: {},
     investmentFlowDetailErrors: {},
     investmentCaseDetailTabs: {},
+    investmentCaseTabScrollPositions: {},
     investmentCaseHistories: {},
     investmentCaseHistoryLoading: {},
     investmentCaseHistoryErrors: {},
@@ -7221,7 +7222,12 @@
       return null;
     }).finally(function () {
       delete state.investmentCaseHistoryLoading[key];
-      if (state.snapshot) render();
+      var active = normalizeInvestmentCaseDetailTab(state.investmentCaseDetailTabs[key]);
+      var visible = state.workDetailLayer
+        && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0
+        && String(state.workDetailLayer.key || "") === key
+        && active === "history";
+      if (visible && !patchInvestmentCaseTabRegion(key, active) && state.snapshot) render();
     });
   }
 
@@ -7244,7 +7250,12 @@
       return null;
     }).finally(function () {
       delete state.investmentCaseTraceLoading[key];
-      if (state.snapshot) render();
+      var active = normalizeInvestmentCaseDetailTab(state.investmentCaseDetailTabs[key]);
+      var visible = state.workDetailLayer
+        && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0
+        && String(state.workDetailLayer.key || "") === key
+        && active === "trace";
+      if (visible && !patchInvestmentCaseTabRegion(key, active) && state.snapshot) render();
     });
   }
 
@@ -11871,6 +11882,49 @@
     });
   }
 
+  function workDetailRegionDepth(region, root) {
+    var depth = 0;
+    var current = region;
+    while (current && current !== root) {
+      depth += 1;
+      current = current.parentElement;
+    }
+    return depth;
+  }
+
+  function workDetailRegionByKey(root, key) {
+    return Array.prototype.slice.call(root.querySelectorAll("[data-work-detail-region]")).filter(function (region) {
+      return region.getAttribute("data-work-detail-region") === key;
+    })[0] || null;
+  }
+
+  function reconcileWorkDetailRegions(currentBackdrop, nextBackdrop) {
+    var nextRegions = Array.prototype.slice.call(nextBackdrop.querySelectorAll("[data-work-detail-region]"));
+    var replaced = 0;
+    nextRegions.sort(function (left, right) {
+      return workDetailRegionDepth(right, nextBackdrop) - workDetailRegionDepth(left, nextBackdrop);
+    }).forEach(function (nextRegion) {
+      var key = nextRegion.getAttribute("data-work-detail-region") || "";
+      var currentRegion = key ? workDetailRegionByKey(currentBackdrop, key) : null;
+      if (!currentRegion || !dashboardDomMismatchPath(currentRegion, nextRegion, "work-detail-region:" + key)) return;
+      var scrollTop = scrollTopNumber(currentRegion.scrollTop);
+      var scrollLeft = scrollTopNumber(currentRegion.scrollLeft);
+      if (currentRegion.querySelector("[data-ontology-cytoscape]")) destroyOntologyCytoscapeGraphs();
+      currentRegion.innerHTML = nextRegion.innerHTML;
+      currentRegion.scrollTop = scrollTop;
+      currentRegion.scrollLeft = scrollLeft;
+      bindAutoGrowingTextareas(currentRegion);
+      bindActions(currentRegion);
+      replaced += 1;
+    });
+    if (replaced) {
+      dashboardRegionReplacementOccurred = true;
+      var runtimePerformance = window.OrbitWebRuntime;
+      if (runtimePerformance) runtimePerformance.record("render-region", 0, { region: "work-detail", count: replaced });
+    }
+    return replaced;
+  }
+
   function reconcileWorkDetailLayer(current, next) {
     var currentBackdrop = current.querySelector("[data-work-detail-backdrop]");
     var nextBackdrop = next.querySelector("[data-work-detail-backdrop]");
@@ -11891,7 +11945,13 @@
     }
     var sameDetail = currentBackdrop.getAttribute("data-work-detail-type") === nextBackdrop.getAttribute("data-work-detail-type")
       && currentBackdrop.getAttribute("data-work-detail-key") === nextBackdrop.getAttribute("data-work-detail-key");
-    if (sameDetail && !dashboardDomMismatchPath(currentBackdrop, nextBackdrop, "work-detail")) return;
+    if (sameDetail) {
+      reconcileWorkDetailRegions(currentBackdrop, nextBackdrop);
+      if (!dashboardDomMismatchPath(currentBackdrop, nextBackdrop, "work-detail")) {
+        syncStableDashboardDom(currentBackdrop, nextBackdrop);
+        return;
+      }
+    }
     var scrollTop = scrollTopNumber(currentBackdrop.scrollTop);
     if (currentBackdrop.querySelector("[data-ontology-cytoscape]")) destroyOntologyCytoscapeGraphs();
     var replacement = nextBackdrop.cloneNode(true);
@@ -12032,7 +12092,7 @@
       var transitionKind = pendingRenderTransition;
       pendingRenderTransition = "";
       var perform = function () { renderNow(); };
-      if (!transitionKind || reducedMotionPreferred()) {
+      if (!transitionKind || transitionKind === "section" || reducedMotionPreferred()) {
         perform();
         return;
       }
@@ -12602,7 +12662,7 @@
       '</div>',
       '<button class="icon-button danger" type="button" data-work-detail-close title="상세 닫기" aria-label="상세 닫기">&times;</button>',
       '</header>',
-      '<div class="work-detail-body">',
+      '<div class="work-detail-body" data-work-detail-region="body">',
       payload.body || '',
       '</div>',
       payload.footer ? '<footer class="work-detail-footer">' + payload.footer + '</footer>' : '',
@@ -25290,6 +25350,22 @@
     ].join("");
   }
 
+  function normalizeInvestmentCaseDetailTab(active) {
+    var normalized = active === "scenarios" ? "reasoning" : String(active || "summary");
+    if (normalized === "trace" && !investmentCaseOperatorAccess()) return "summary";
+    return ["summary", "current", "evidence", "reasoning", "history", "trace"].indexOf(normalized) >= 0 ? normalized : "summary";
+  }
+
+  function renderInvestmentCaseTabContent(key, active, detail) {
+    var normalized = normalizeInvestmentCaseDetailTab(active);
+    if (normalized === "current") return renderInvestmentCaseCurrentState(detail);
+    if (normalized === "evidence") return renderInvestmentCaseEvidence(detail);
+    if (normalized === "reasoning") return renderInvestmentCaseReasoning(detail);
+    if (normalized === "history") return renderInvestmentCaseHistory(key);
+    if (normalized === "trace") return renderInvestmentCaseTrace(key);
+    return renderInvestmentCaseSummary(detail, key);
+  }
+
   function investmentFlowWorkDetailPayload(key) {
     var detail = state.investmentFlowDetails[key] && typeof state.investmentFlowDetails[key] === "object"
       ? state.investmentFlowDetails[key]
@@ -25308,24 +25384,85 @@
     }
     var decision = detail.decision || {};
     var action = decisionActionMeta(decision.action, decision.action);
-    var active = state.investmentCaseDetailTabs[key] || "summary";
-    if (active === "scenarios") active = "reasoning";
-    if (active === "trace" && !investmentCaseOperatorAccess()) active = "summary";
-    var content = active === "current"
-      ? renderInvestmentCaseCurrentState(detail)
-      : (active === "evidence"
-      ? renderInvestmentCaseEvidence(detail)
-      : (active === "reasoning" || active === "scenarios"
-        ? renderInvestmentCaseReasoning(detail)
-        : (active === "history"
-          ? renderInvestmentCaseHistory(key)
-          : (active === "trace" ? renderInvestmentCaseTrace(key) : renderInvestmentCaseSummary(detail, key)))));
+    var active = normalizeInvestmentCaseDetailTab(state.investmentCaseDetailTabs[key]);
+    var content = renderInvestmentCaseTabContent(key, active, detail);
     return {
       kicker: "Investment Case",
       title: detail.name || detail.symbol || "투자 케이스 상세",
       meta: [detail.symbol, action.label, detail.accountId, detail.readinessLabel].filter(Boolean).join(" · "),
-      body: renderInvestmentCaseDetailTabs(key, active) + '<div class="oa-case-detail-content" role="tabpanel">' + content + '</div>'
+      body: renderInvestmentCaseDetailTabs(key, active) + '<div class="oa-case-detail-content" role="tabpanel" data-work-detail-region="investment-case-content" data-investment-case-panel-key="' + escapeHtml(key) + '" data-investment-case-panel-tab="' + escapeHtml(active) + '">' + content + '</div>'
     };
+  }
+
+  function investmentCaseDetailRoot(key) {
+    return Array.prototype.slice.call(app.querySelectorAll("[data-work-detail-dialog]")).filter(function (dialog) {
+      return ["investment-case", "investment-flow"].indexOf(dialog.getAttribute("data-work-detail-type") || "") >= 0
+        && dialog.getAttribute("data-work-detail-key") === String(key || "");
+    })[0] || null;
+  }
+
+  function investmentCaseTabScrollKey(key, active) {
+    return String(key || "") + ":" + normalizeInvestmentCaseDetailTab(active);
+  }
+
+  function rememberInvestmentCaseTabScroll(key) {
+    var root = investmentCaseDetailRoot(key);
+    if (!root) return;
+    var panel = root.querySelector("[data-investment-case-panel-tab]");
+    var scroller = root.closest && root.closest(".work-detail-backdrop");
+    if (!panel || !scroller) return;
+    state.investmentCaseTabScrollPositions[investmentCaseTabScrollKey(key, panel.getAttribute("data-investment-case-panel-tab"))] = scrollTopNumber(scroller.scrollTop);
+  }
+
+  function restoreInvestmentCaseTabViewport(key, active) {
+    var root = investmentCaseDetailRoot(key);
+    if (!root) return;
+    var panel = root.querySelector("[data-investment-case-panel-key]");
+    var tabs = root.querySelector(".oa-case-detail-tabs");
+    var scroller = root.closest && root.closest(".work-detail-backdrop");
+    if (!panel || !tabs || !scroller) return;
+    var scrollKey = investmentCaseTabScrollKey(key, active);
+    var max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    if (Object.prototype.hasOwnProperty.call(state.investmentCaseTabScrollPositions, scrollKey)) {
+      scroller.scrollTop = clampScrollTop(state.investmentCaseTabScrollPositions[scrollKey], max);
+      return;
+    }
+    var scrollerRect = scroller.getBoundingClientRect();
+    var panelRect = panel.getBoundingClientRect();
+    var target = scroller.scrollTop + panelRect.top - scrollerRect.top - tabs.offsetHeight - 8;
+    scroller.scrollTop = clampScrollTop(target, max);
+  }
+
+  function patchInvestmentCaseTabRegion(key, active, options) {
+    options = options || {};
+    var normalized = normalizeInvestmentCaseDetailTab(active);
+    var detail = state.investmentFlowDetails[key] && typeof state.investmentFlowDetails[key] === "object"
+      ? state.investmentFlowDetails[key]
+      : null;
+    var root = investmentCaseDetailRoot(key);
+    var panel = root && root.querySelector("[data-investment-case-panel-key]");
+    if (!detail || !root || !panel) return false;
+    var scroller = root.closest && root.closest(".work-detail-backdrop");
+    var scrollTop = scroller ? scrollTopNumber(scroller.scrollTop) : 0;
+    var startedAt = window.performance && window.performance.now ? window.performance.now() : Date.now();
+    Array.prototype.slice.call(root.querySelectorAll("[data-investment-case-tab]")).forEach(function (button) {
+      var selected = button.getAttribute("data-investment-case-tab") === normalized;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    panel.setAttribute("data-investment-case-panel-tab", normalized);
+    panel.innerHTML = renderInvestmentCaseTabContent(key, normalized, detail);
+    bindAutoGrowingTextareas(panel);
+    syncNetworkActivityDom();
+    decorateRenderedBusyControls();
+    if (scroller) scroller.scrollTop = scrollTop;
+    var runtimePerformance = window.OrbitWebRuntime;
+    if (runtimePerformance) {
+      var endedAt = window.performance && window.performance.now ? window.performance.now() : Date.now();
+      runtimePerformance.record("render-region", Math.max(0, endedAt - startedAt), { region: "investment-case", tab: normalized });
+    }
+    if (options.restoreViewport) restoreInvestmentCaseTabViewport(key, normalized);
+    return true;
   }
 
   function renderNotificationDetailMetric(label, value, tone) {
@@ -26266,7 +26403,7 @@
       compact ? deliveryOverview : '',
       compact ? '<p class="data-refresh-status">전체 메시지, 전체 근거, 중복 키는 상세 리포트에서 확인합니다.</p>' : '',
       detailButton,
-      compact ? '' : '<div class="notification-detail-tab-panel" role="tabpanel" tabindex="-1">' + detailTabBody + '</div>',
+      compact ? '' : '<div class="notification-detail-tab-panel" role="tabpanel" tabindex="-1" data-work-detail-region="notification-detail-content">' + detailTabBody + '</div>',
       '</aside>'
     ].join("");
   }
@@ -33856,13 +33993,17 @@
       var caseHistoryRetry = event.target.closest && event.target.closest("[data-investment-case-history-retry]");
       if (caseHistoryRetry && app.contains(caseHistoryRetry)) {
         event.preventDefault();
-        loadInvestmentCaseHistory(caseHistoryRetry.getAttribute("data-investment-case-history-retry"), true);
+        var historyRetryKey = caseHistoryRetry.getAttribute("data-investment-case-history-retry");
+        loadInvestmentCaseHistory(historyRetryKey, true);
+        patchInvestmentCaseTabRegion(historyRetryKey, "history");
         return;
       }
       var caseTraceRetry = event.target.closest && event.target.closest("[data-investment-case-trace-retry]");
       if (caseTraceRetry && app.contains(caseTraceRetry)) {
         event.preventDefault();
-        loadInvestmentCaseTrace(caseTraceRetry.getAttribute("data-investment-case-trace-retry"), true);
+        var traceRetryKey = caseTraceRetry.getAttribute("data-investment-case-trace-retry");
+        loadInvestmentCaseTrace(traceRetryKey, true);
+        patchInvestmentCaseTabRegion(traceRetryKey, "trace");
         return;
       }
       var notificationDetailTab = event.target.closest && event.target.closest("[data-notification-detail-tab]");
@@ -33885,14 +34026,18 @@
         var caseTabId = String(caseTab.getAttribute("data-investment-case-tab") || "summary");
         if (!caseKey) return;
         if (caseTabId === "trace" && !investmentCaseOperatorAccess()) caseTabId = "summary";
+        rememberInvestmentCaseTabScroll(caseKey);
         state.investmentCaseDetailTabs[caseKey] = caseTabId;
         var sameCase = state.workDetailLayer
           && ["investment-case", "investment-flow"].indexOf(state.workDetailLayer.type) >= 0
           && state.workDetailLayer.key === caseKey;
-        if (sameCase) render({ transition: "section" });
-        else openWorkDetailLayer("investment-case", caseKey);
         if (caseTabId === "history") loadInvestmentCaseHistory(caseKey, false);
         if (caseTabId === "trace") loadInvestmentCaseTrace(caseKey, false);
+        if (sameCase) {
+          if (!patchInvestmentCaseTabRegion(caseKey, caseTabId, { restoreViewport: true })) render();
+        } else {
+          openWorkDetailLayer("investment-case", caseKey);
+        }
         return;
       }
       var detailButton = event.target.closest && event.target.closest("[data-work-detail]");

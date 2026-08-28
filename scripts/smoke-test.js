@@ -408,13 +408,23 @@ function checkWorkflowConsoleContract() {
       && code.indexOf('render({ transition: "tab" })') >= 0
       && code.indexOf("document.startViewTransition") >= 0
       && code.indexOf("function reconcileWorkDetailLayer") >= 0
+      && code.indexOf("function reconcileWorkDetailRegions") >= 0
       && code.indexOf("function reconcileDashboardMainRegion") >= 0
+      && code.indexOf('data-work-detail-region="body"') >= 0
+      && code.indexOf('data-work-detail-region="investment-case-content"') >= 0
+      && code.indexOf("function patchInvestmentCaseTabRegion") >= 0
+      && code.indexOf('transitionKind === "section"') >= 0
+      && code.indexOf('patchInvestmentCaseTabRegion(caseKey, caseTabId, { restoreViewport: true })') >= 0
+      && code.indexOf('if (sameCase) render({ transition: "section" });') < 0
       && code.indexOf("NETWORK_ACTIVITY_REVEAL_MS = 180") >= 0
       && code.indexOf("viewportHeight * 2.25") >= 0
       && code.indexOf("instrumentTimelineLastKeys") >= 0
       && styles.indexOf("view-transition-name: oa-content") >= 0
+      && styles.indexOf('html[data-app-transition="section"] .work-detail-layer') >= 0
+      && styles.indexOf('.work-detail-body[data-work-detail-region="body"]') >= 0
+      && /\.oa-case-detail-content\s*\{[^}]*contain:\s*layout paint;[^}]*overflow-anchor:\s*none;/.test(styles)
       && styles.indexOf(".instrument-chart-refreshing") >= 0,
-    "앱형 화면 전환, 선로딩, 상세 국소 갱신 또는 콘텐츠 유지형 지연 로딩 계약이 없습니다."
+    "앱형 화면 전환, 선로딩, 상세 영역 패치, 스크롤 유지 또는 콘텐츠 유지형 지연 로딩 계약이 없습니다."
   );
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
   assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");

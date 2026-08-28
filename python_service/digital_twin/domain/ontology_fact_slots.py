@@ -524,12 +524,41 @@ def select_fact_slot_scope_ids(
     deferred = []
     unknown = []
     dependency_matched = []
+    unchanged_dependency_matched = []
 
     def dependency_key_matches(scope_key: str, requested_key: str) -> bool:
         return bool(
             scope_key == requested_key
             or scope_key.startswith(requested_key + ":")
             or requested_key.startswith(scope_key + ":")
+        )
+
+    def scope_matches_requested_dependency(scope_id: str, item: Mapping[str, object]) -> bool:
+        symbol = scope_symbol(scope_id)
+        applicable_slots = slots_by_symbol.get(symbol, slots) if symbol else slots
+        applicable_dependency_keys = (
+            dependency_keys_by_symbol.get(symbol, dependency_keys)
+            if symbol
+            else dependency_keys
+        )
+        families = _scope_families(
+            scope_id,
+            item,
+            include_impact_families=False,
+            include_semantic_families=False,
+        )
+        scope_dependency_keys = _family_values(
+            dict(item.get("semanticDependencyFingerprints") or {}).keys()
+        )
+        return bool(
+            families & applicable_slots
+            and applicable_dependency_keys
+            and scope_dependency_keys
+            and any(
+                dependency_key_matches(scope_key, requested_key)
+                for scope_key in scope_dependency_keys
+                for requested_key in applicable_dependency_keys
+            )
         )
 
     for scope_id in candidates:
@@ -589,6 +618,14 @@ def select_fact_slot_scope_ids(
                 dependency_matched.append(scope_id)
         else:
             deferred.append(scope_id)
+    if dependency_boundary_authoritative and not dependency_matched:
+        candidate_set = set(candidates)
+        unchanged_dependency_matched = sorted(
+            scope_id
+            for scope_id, item in scope_plan_by_id.items()
+            if scope_id not in candidate_set
+            and scope_matches_requested_dependency(scope_id, item)
+        )
     if dependency_boundary_authoritative and dependency_matched:
         # Relation scopes normally own links while their dependency list owns
         # the event entity. Include changed reverse dependants so an exact
@@ -611,6 +648,23 @@ def select_fact_slot_scope_ids(
                     changed = True
         selected = sorted(selected_set)
         deferred = sorted(set(candidates) - selected_set)
+    elif dependency_boundary_authoritative and unchanged_dependency_matched:
+        # Candidate scope IDs contain only fragments whose semantic identity
+        # differs from the active Manifest. If the exact event dependency is
+        # indexed by an incoming target scope outside that set, the requested
+        # value is already current. Treat this as a proven semantic no-op and
+        # defer unrelated volatile changes instead of reporting a contract
+        # failure or widening the write to a whole fact family.
+        return {
+            **base,
+            "enabled": True,
+            "status": "applied-noop-dependency-already-current",
+            "selectedScopeIds": [],
+            "deferredScopeIds": sorted(candidates),
+            "dependencyMatchedScopeIds": [],
+            "unchangedDependencyMatchedScopeIds": unchanged_dependency_matched,
+            "fallbackReason": "",
+        }
     elif dependency_boundary_authoritative and candidates:
         # An authoritative event key is useful only when the compiled scope
         # metadata can prove a match. Widening to a fact family would rewrite

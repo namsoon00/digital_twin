@@ -295,6 +295,52 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertEqual([], selection["selectedScopeIds"])
         self.assertEqual(list(scopes), selection["deferredScopeIds"])
 
+    def test_authoritative_dependency_already_current_is_semantic_noop(self):
+        plan = build_fact_slot_projection_plan(
+            ["MSTR"],
+            ["flow", "market", "temporal"],
+            requested_dependency_keys=["kind:stock:field:currentprice"],
+            requested_dependency_keys_by_symbol={
+                "MSTR": ["kind:stock:field:currentprice"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+        scopes = {
+            "symbol:MSTR:market": {
+                "scopeFamily": "market",
+                "semanticDependencyFingerprints": {
+                    "kind:stock:field:currentprice": "price-v2",
+                },
+            },
+            "symbol:MSTR:evidence": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {
+                    "kind:news-article": "news-v2",
+                },
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(
+            scopes,
+            ["symbol:MSTR:evidence"],
+            plan,
+        )
+
+        self.assertTrue(selection["enabled"])
+        self.assertEqual(
+            "applied-noop-dependency-already-current",
+            selection["status"],
+        )
+        self.assertEqual([], selection["selectedScopeIds"])
+        self.assertEqual(
+            ["symbol:MSTR:market"],
+            selection["unchangedDependencyMatchedScopeIds"],
+        )
+        self.assertEqual(
+            ["symbol:MSTR:evidence"],
+            selection["deferredScopeIds"],
+        )
+
     def test_authoritative_valuation_event_ignores_cross_family_impact_metadata(self):
         plan = build_fact_slot_projection_plan(
             ["005930"],

@@ -414,7 +414,8 @@ function checkWorkflowConsoleContract() {
       && code.indexOf('data-work-detail-region="investment-case-content"') >= 0
       && code.indexOf("function patchInvestmentCaseTabRegion") >= 0
       && code.indexOf('transitionKind === "section"') >= 0
-      && code.indexOf('patchInvestmentCaseTabRegion(caseKey, caseTabId, { restoreViewport: true })') >= 0
+      && code.indexOf('patchInvestmentCaseTabRegion(caseKey, caseTabId)') >= 0
+      && code.indexOf("restoreInvestmentCaseTabViewport") < 0
       && code.indexOf('if (sameCase) render({ transition: "section" });') < 0
       && code.indexOf("NETWORK_ACTIVITY_REVEAL_MS = 180") >= 0
       && code.indexOf("viewportHeight * 2.25") >= 0
@@ -422,6 +423,7 @@ function checkWorkflowConsoleContract() {
       && styles.indexOf("view-transition-name: oa-content") >= 0
       && styles.indexOf('html[data-app-transition="section"] .work-detail-layer') >= 0
       && styles.indexOf('.work-detail-body[data-work-detail-region="body"]') >= 0
+      && styles.indexOf("Global tab viewport stability contract") >= 0
       && /\.oa-case-detail-content\s*\{[^}]*contain:\s*layout paint;[^}]*overflow-anchor:\s*none;/.test(styles)
       && styles.indexOf(".instrument-chart-refreshing") >= 0,
     "앱형 화면 전환, 선로딩, 상세 영역 패치, 스크롤 유지 또는 콘텐츠 유지형 지연 로딩 계약이 없습니다."
@@ -2263,9 +2265,12 @@ function checkFrontendAdminRender() {
     assertOk(code.indexOf('data-action="open-settings"') < 0, "topbar 설정 버튼이 상단 관리 탭과 중복됩니다.");
     assertOk(code.indexOf("pushState") >= 0 && code.indexOf("popstate") >= 0, "탭 이동이 브라우저 뒤로가기와 동기화되지 않았습니다.");
     assertOk(code.indexOf("restoreTabBarPosition") >= 0 && code.indexOf("tabBarScrollLeft") >= 0, "하단 탭 위치 복원 로직이 없습니다.");
-    assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "탭별 본문 스크롤 복원 로직이 없습니다.");
+    assertOk(code.indexOf("tabScrollPositions") >= 0 && code.indexOf("restoreRenderedPageScrollPosition") >= 0 && code.indexOf("rememberRenderedPageScrollPosition") >= 0, "주 네비게이션 탭별 본문 스크롤 복원 로직이 없습니다.");
+    assertOk(/function scrollKeyForTab\(tab\)\s*\{\s*return normalizeTabId\(tab \|\| state\.activeTab\);\s*\}/.test(code), "내부 섹션 탭이 현재 페이지와 다른 스크롤 키를 사용합니다.");
+    assertOk(code.indexOf('"[role=\'tablist\']"') >= 0 && code.indexOf('".ontology-catalog-tabs"') >= 0 && code.indexOf('".cws-tabs"') >= 0, "가로 내부 탭의 현재 스크롤 위치를 보존하지 않습니다.");
     assertOk(overviewHtml.indexOf('data-scroll-key="overview"') >= 0, "탭 본문에 스크롤 관리 키가 렌더링되지 않습니다.");
-    assertOk(designSystemDoc.indexOf("각 탭은 독립된 페이지 스크롤 위치") >= 0 && designSystemDoc.indexOf("기본은 window/page 스크롤") >= 0, "디자인 시스템 문서에 탭별 페이지 스크롤 정책이 없습니다.");
+    assertOk(designSystemDoc.indexOf("주 네비게이션 탭은 각각의 페이지 스크롤 위치") >= 0 && designSystemDoc.indexOf("내부 섹션 탭과 상세 탭은 전환 직전의 현재 뷰포트 위치") >= 0, "디자인 시스템 문서에 탭 전환 뷰포트 유지 정책이 없습니다.");
+    assertOk(styles.indexOf("Global tab viewport stability contract") >= 0 && /\[role="tablist"\][\s\S]*contain:\s*inline-size;/.test(styles), "탭 목록이 부모 화면의 가로 폭을 바꾸지 못하게 하는 규칙이 없습니다.");
     assertOk(designSystemDoc.indexOf("업무 탭에서는 상단 상태 카드 묶음을 렌더링하지 않는다") >= 0 && designSystemDoc.indexOf("app-nav-command") >= 0 && designSystemDoc.indexOf("app-nav-routine") >= 0 && designSystemDoc.indexOf("page-flow-spine") >= 0, "디자인 시스템 문서에 단일 command/routine rail/흐름 계약이 없습니다.");
     assertOk(code.indexOf("syncTopbarScrollState") >= 0 && code.indexOf("topbar-collapsed") >= 0, "상단 제목 영역을 스크롤 상태에 따라 접는 로직이 없습니다.");
     assertOk(styles.indexOf(".shell-page.topbar-collapsed") >= 0 && styles.indexOf(".topbar-collapsed .topbar") >= 0, "상단 제목 영역 접힘 레이아웃 스타일이 없습니다.");
@@ -2474,8 +2479,9 @@ function checkFrontendAdminRender() {
         code.indexOf("renderNotificationAIStatusBar(job) + renderNotificationAIReviewSection(jobId)") >= 0 &&
         code.indexOf("deliveryOverview + renderNotificationDeliverySection(job, jobId)") >= 0 &&
         code.indexOf('data-notification-detail-mode="') >= 0 &&
-        code.indexOf("rememberNotificationDetailTabScroll") >= 0 &&
-        code.indexOf("restoreNotificationDetailTabViewport") >= 0 &&
+        code.indexOf('data-work-detail-region="notification-detail-content"') >= 0 &&
+        code.indexOf("rememberNotificationDetailTabScroll") < 0 &&
+        code.indexOf("restoreNotificationDetailTabViewport") < 0 &&
         styles.indexOf('.notification-decision-detail[data-notification-detail-mode="full"]') >= 0 &&
         styles.indexOf(".notification-detail-tab-head") >= 0 &&
         /\.notification-decision-detail\[data-notification-detail-mode="full"\] \.notification-detail-tabs\s*\{[\s\S]*?position: sticky;/.test(styles),

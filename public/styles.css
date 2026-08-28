@@ -38531,3 +38531,49 @@ html[data-theme="dark"] :where(
     contain-intrinsic-size: auto 72px;
   }
 }
+
+/* Global tab viewport stability contract. Keep this last in the cascade. */
+html {
+  scrollbar-gutter: stable;
+}
+
+.workspace-main,
+.work-detail-backdrop {
+  scrollbar-gutter: stable;
+}
+
+:where(
+  [role="tablist"],
+  .tab-bar,
+  .market-workspace-tabs,
+  .instrument-workspace-tabs,
+  .ontology-catalog-tabs,
+  .cws-tabs
+) {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  contain: inline-size;
+}
+
+:where(
+  [role="tabpanel"],
+  .workspace-main,
+  .managed-page,
+  .work-detail-body
+) {
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+@media (max-width: 860px) {
+  html,
+  .workspace-main,
+  .work-detail-backdrop {
+    scrollbar-gutter: auto;
+  }
+
+  :where([role="tablist"], .market-workspace-tabs, .instrument-workspace-tabs, .ontology-catalog-tabs, .cws-tabs) {
+    overscroll-behavior-inline: contain;
+  }
+}

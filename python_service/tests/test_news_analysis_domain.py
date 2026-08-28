@@ -502,6 +502,34 @@ class NewsAnalysisDomainTests(unittest.TestCase):
                 "The company discussed the investment after quarterly results.",
             ),
         )
+        self.assertEqual(
+            "capital_policy",
+            classify_news_event_type(
+                "Nvidia is buying back $5 billion of shares",
+                "The article also reviews acquisition activity and earnings.",
+            ),
+        )
+
+    def test_headline_specific_event_types_beat_generic_body_terms(self):
+        cases = (
+            ("supply_chain", "SK Hynix breaks ground on new fab", "Revenue and profit were also discussed."),
+            ("product", "Apple unveils foldable iPhone", "The launch may affect future earnings."),
+            ("guidance", "Hyundai raises annual guidance", "The company also discussed partnerships."),
+            ("labor", "Hyundai union begins collective bargaining", "Production and supply could be affected."),
+            ("reorganization", "Nvidia announces organization restructuring", "Revenue growth remains strong."),
+        )
+        for expected, title, summary in cases:
+            with self.subTest(title=title):
+                self.assertEqual(expected, classify_news_event_type(title, summary))
+
+    def test_market_roundup_headlines_are_not_company_earnings_events(self):
+        self.assertEqual(
+            "price_commentary",
+            classify_news_event_type(
+                "Premarket movers: Nvidia, Salesforce and CrowdStrike rally on earnings",
+                "Nvidia revenue and profit beat estimates.",
+            ),
+        )
 
     def test_legacy_news_payload_uses_publisher_state_without_reliability_number(self):
         states = news_state_payload({

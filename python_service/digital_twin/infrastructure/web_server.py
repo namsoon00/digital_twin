@@ -1354,6 +1354,8 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "marketSignalDataCollectionEnabled",
         "marketSignalDataBatchSize",
         "dataFreshnessEnabled",
+        "newsDigestFreshnessGateEnabled",
+        "dataFreshnessNewsDigestMaxAgeMinutes",
         "dataFreshnessDefaultMaxAgeMinutes",
         "dataFreshnessQuoteMaxAgeMinutes",
         "dataFreshnessKisPriceMaxAgeMinutes",

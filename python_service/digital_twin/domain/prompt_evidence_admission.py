@@ -5,7 +5,7 @@ from typing import Dict, List
 from .data_freshness import parse_datetime
 
 
-PROMPT_EVIDENCE_ADMISSION_VERSION = "prompt-evidence-admission-v1"
+PROMPT_EVIDENCE_ADMISSION_VERSION = "prompt-evidence-admission-v2-reference-decision"
 NEWS_KINDS = {"news"}
 OFFICIAL_KINDS = {"disclosure", "filing", "sec-filing"}
 DEFAULT_MAX_AGE_MINUTES = {
@@ -153,6 +153,8 @@ def assess_prompt_evidence(
     display_eligible = active
     alert_eligible = False
     prompt_ready = False
+    reference_ready = False
+    decision_ready = False
 
     if kind_group == "news":
         display_state = _explicit_bool(news_eligibility.get("displayEligible"), row.get("displayEligible"))
@@ -162,6 +164,18 @@ def assess_prompt_evidence(
             analysis.get("decisionInlineEligible"),
             row.get("decisionInlineEligible"),
         )
+        summary_quality = _mapping(row.get("articleSummaryQuality"))
+        summary_state = _text(summary_quality.get("state") or row.get("summaryQualityState")).lower()
+        analysis_status = _text(analysis.get("status") or row.get("analysisStatus")).lower()
+        analysis_version = _text(analysis.get("version"))
+        expected_analysis_version = _text(row.get("articleAiAnalysisVersion"))
+        analysis_current = bool(
+            summary_state == "ready"
+            and analysis_status in {"ok", "local", "success", "complete", "verified"}
+            and analysis_version
+            and (not expected_analysis_version or analysis_version == expected_analysis_version)
+            and _text(analysis.get("sourceTextHash"))
+        )
         if display_state is not None:
             display_eligible = active and display_state
         alert_eligible = bool(active and fresh and alert_state is True)
@@ -169,17 +183,21 @@ def assess_prompt_evidence(
             reasons.append("news-reasoning-not-eligible")
         if inline_state is not True:
             reasons.append("news-decision-inline-not-eligible")
+        if not analysis_current:
+            reasons.append("news-analysis-not-current")
         if not governance_eligible:
             reasons.append("claim-governance-not-eligible")
-        prompt_ready = bool(
+        reference_ready = bool(
             active
             and fresh
             and reasoning_state is True
-            and inline_state is True
             and governance_eligible
+            and analysis_current
             and validation not in {"blocked", ""}
             and data_state not in {"insufficient", "unavailable", ""}
         )
+        decision_ready = bool(reference_ready and inline_state is True)
+        prompt_ready = reference_ready
     elif kind_group == "official":
         document_verified = _explicit_bool(row.get("documentVerified")) is True
         analysis_ready = _explicit_bool(row.get("analysisReady")) is True
@@ -216,11 +234,14 @@ def assess_prompt_evidence(
             and data_state not in {"insufficient", "unavailable", ""}
         )
 
-    reference_eligible = prompt_ready
-    decision_eligible = prompt_ready
+    if kind_group != "news":
+        reference_ready = prompt_ready
+        decision_ready = prompt_ready
+    reference_eligible = reference_ready
+    decision_eligible = decision_ready
     prompt_eligible = prompt_ready
     if prompt_ready:
-        usage = "decision" if directly_linked else "reference"
+        usage = "decision" if directly_linked and decision_ready else "reference"
     elif alert_eligible:
         usage = "alert"
     elif display_eligible:

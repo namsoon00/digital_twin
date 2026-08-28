@@ -23,7 +23,12 @@ from ..domain.news_analysis import (
     news_state_payload,
     relation_scope_is_investable,
 )
-from ..domain.news_ai_analysis import clean_summary_text, summary_texts_similar
+from ..domain.news_ai_analysis import (
+    NEWS_AI_ANALYSIS_VERSION,
+    clean_summary_text,
+    news_ai_analysis_is_current,
+    summary_texts_similar,
+)
 from ..domain.notifications import NotificationJob, notification_debug_number
 from ..domain.portfolio import utc_now_iso
 from ..domain.prompt_evidence_admission import assess_prompt_evidence
@@ -54,7 +59,7 @@ MAX_SOURCES_PER_EVENT = 3
 DEFAULT_RECONCILIATION_INITIAL_LOOKBACK_MINUTES = 1
 DEFAULT_RECONCILIATION_MAX_REPLAY_AGE_MINUTES = 180
 DEFAULT_RECONCILIATION_BATCH_SIZE = 100
-NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION = "news-notification-admission-v4-structured-event"
+NEWS_NOTIFICATION_ADMISSION_POLICY_VERSION = "news-notification-admission-v5-fresh-current"
 
 
 def clean_text(value: object, fallback: str = "") -> str:
@@ -271,8 +276,13 @@ def item_source_profile(item: Dict[str, object]) -> Dict[str, object]:
             "publisherId": "",
             "independentEvidenceKey": "",
         }
+    canonical_publisher = clean_text(identity.get("publisher") or original.get("name") or payload.get("sourcePublisher") or item.get("source") or item.get("domain"))
+    attributed_publisher = clean_text(provenance.get("attributedPublisher") or provenance.get("declaredPublisher"))
+    publisher = canonical_publisher
+    if attributed_publisher and attributed_publisher.casefold() != canonical_publisher.casefold():
+        publisher = attributed_publisher + " · 배포 " + canonical_publisher
     return {
-        "publisher": clean_text(identity.get("publisher") or original.get("name") or payload.get("sourcePublisher") or item.get("source") or item.get("domain")),
+        "publisher": publisher,
         "publisherId": clean_text(identity.get("publisherId") or original.get("publisherId") or payload.get("sourceOrigin")),
         "independentEvidenceKey": clean_text(provenance.get("independentEvidenceKey")),
     }
@@ -849,6 +859,44 @@ class NewsDigestEnqueuer:
         self.max_items = max(1, int(max_items or 3))
         self.evidence_repository = evidence_repository
         self.last_audit: Dict[str, object] = {}
+        self.last_filter_audit: Dict[str, object] = {}
+
+    def freshness_gate_enabled(self) -> bool:
+        value = self.settings.get("newsDigestFreshnessGateEnabled")
+        if value in (None, ""):
+            return True
+        return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+    def item_is_fresh_for_notification(self, item: Dict[str, object], now=None) -> bool:
+        if item_event_kind(item) != "news" or not self.freshness_gate_enabled():
+            return True
+        record = freshness_record(
+            clean_text(item.get("source")) or "뉴스 원문",
+            NEWS_DIGEST,
+            settings=self.settings,
+            source_fetched_at=item.get("observedAt"),
+            source_as_of=item.get("publishedAt") or item.get("observedAt"),
+            now=now,
+            require_source_as_of=True,
+        )
+        return record.get("status") == "fresh"
+
+    def item_analysis_is_current(self, item: Dict[str, object]) -> bool:
+        if item_event_kind(item) != "news":
+            return True
+        if item.get("_newsAiAnalysisCurrent") is False:
+            return False
+        payload = item_payload(item)
+        analysis = ai_analysis(item)
+        summary_quality = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
+        return bool(
+            clean_text(analysis.get("version")) == NEWS_AI_ANALYSIS_VERSION
+            and clean_text(payload.get("articleAiAnalysisVersion")) == NEWS_AI_ANALYSIS_VERSION
+            and clean_text(analysis.get("sourceTextHash"))
+            and clean_text(analysis.get("status")).lower() in {"ok", "local", "success", "complete", "verified"}
+            and clean_text(summary_quality.get("state") or payload.get("summaryQualityState")).lower() == "ready"
+            and item.get("_newsAiAnalysisCurrent") is not False
+        )
 
     def require_article_body(self) -> bool:
         value = self.settings.get("newsDigestRequireArticleBody")
@@ -984,7 +1032,8 @@ class NewsDigestEnqueuer:
                 "eventName": event.name,
                 "candidateCount": 0,
                 "queuedCount": 0,
-                "reason": "no-alert-eligible-items",
+                "reason": clean_text(self.last_filter_audit.get("reason")) or "no-alert-eligible-items",
+                "filterAudit": dict(self.last_filter_audit),
             }
             return 0
         queued = 0
@@ -1000,6 +1049,7 @@ class NewsDigestEnqueuer:
             "accountCount": len(accounts),
             "queuedCount": queued,
             "reason": "queued" if queued else "no-matching-account-or-duplicate",
+            "filterAudit": dict(self.last_filter_audit),
         }
         return queued
 
@@ -1104,10 +1154,17 @@ class NewsDigestEnqueuer:
         if not isinstance(raw_items, list):
             return []
         items = [dict(item) for item in raw_items if isinstance(item, dict)]
+        candidate_count = len(items)
         items = self.hydrate_canonical_items(items)
         items = [item for item in items if item_event_kind(item) in {"news", "disclosure"}]
         items = [self.refresh_item_analysis(item) for item in items]
         items = [item for item in items if relation_scope_is_investable(self.item_relation_scope(item))]
+        investable_count = len(items)
+        current_items = [item for item in items if self.item_analysis_is_current(item)]
+        current_count = len(current_items)
+        fresh_items = [item for item in current_items if self.item_is_fresh_for_notification(item)]
+        fresh_count = len(fresh_items)
+        items = fresh_items
         if self.require_article_body():
             items = [
                 item for item in items
@@ -1118,6 +1175,19 @@ class NewsDigestEnqueuer:
             items = [item for item in items if item_title_translation_ready(item)]
         if self.quality_gate_enabled():
             items = [item for item in items if self.item_passes_quality_gate(item)]
+        self.last_filter_audit = {
+            "candidateCount": candidate_count,
+            "investableCount": investable_count,
+            "analysisCurrentCount": current_count,
+            "freshCount": fresh_count,
+            "qualityEligibleCount": len(items),
+            "reason": (
+                "news-analysis-not-current" if investable_count and not current_count
+                else "news-notification-stale" if current_count and not fresh_count
+                else "news-quality-gate-rejected" if fresh_count and not items
+                else "eligible"
+            ),
+        }
         items.sort(key=item_sort_key, reverse=True)
         return items
 
@@ -1163,6 +1233,11 @@ class NewsDigestEnqueuer:
                 hydrated.append(compact)
                 continue
             current = canonical.to_dict()
+            if item_event_kind(current) == "news":
+                try:
+                    current["_newsAiAnalysisCurrent"] = bool(news_ai_analysis_is_current(canonical))
+                except Exception:  # noqa: BLE001 - version fields below still fail closed.
+                    current["_newsAiAnalysisCurrent"] = False
             # Event-local transition metadata remains authoritative while the
             # complete quality and provenance state comes from canonical data.
             for key in ("storyUpdate", "portfolioBucket", "displayName"):

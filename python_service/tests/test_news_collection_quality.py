@@ -16,9 +16,10 @@ from digital_twin.application.news_digest_service import NewsDigestEnqueuer
 from digital_twin.domain.data_pipeline_health import evaluate_news_collection_health
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.materiality import evidence_materiality
-from digital_twin.domain.news_ai_analysis import article_text_parts, local_news_ai_analysis
+from digital_twin.domain.news_ai_analysis import NEWS_AI_ANALYSIS_VERSION, article_text_parts, local_news_ai_analysis
 from digital_twin.domain.news_analysis import article_analysis_facts, article_quality_gate
 from digital_twin.domain.news_collection_quality import assess_news_collection_admission
+from digital_twin.domain.prompt_evidence_admission import assess_prompt_evidence
 from digital_twin.domain.sent_article_filter import (
     article_identity_keys,
     article_weak_identity_keys,
@@ -28,11 +29,80 @@ from digital_twin.infrastructure.external_signal_utils import ExternalCircuitOpe
 from digital_twin.infrastructure import news_sources
 from digital_twin.infrastructure.news_sources import NewsSourceGateway, article_metadata_from_html, extract_article_text, news_article_identity_token
 from digital_twin.news_intelligence.domain.provenance import resolve_source_provenance
+from digital_twin.news_intelligence.domain.article_quality import inspect_article_body
+from digital_twin.news_intelligence.application.normalize_sources import normalize_evidence_sources
 
 
 class NewsCollectionQualityTests(unittest.TestCase):
     def target(self):
         return NewsCollectionTarget("AAPL", "Apple", "NASDAQ", "USD", "Technology")
+
+    def test_news_digest_freshness_is_enforced_independently(self):
+        enqueuer = NewsDigestEnqueuer(
+            None,
+            None,
+            None,
+            settings={"dataFreshnessEnabled": "0", "dataFreshnessNewsDigestMaxAgeMinutes": "240"},
+        )
+        item = {
+            "kind": "news",
+            "source": "Reuters",
+            "publishedAt": "2026-08-28T00:00:00Z",
+            "observedAt": "2026-08-28T00:05:00Z",
+        }
+
+        self.assertTrue(enqueuer.item_is_fresh_for_notification(item, datetime(2026, 8, 28, 3, 59, tzinfo=timezone.utc)))
+        self.assertFalse(enqueuer.item_is_fresh_for_notification(item, datetime(2026, 8, 28, 4, 1, tzinfo=timezone.utc)))
+
+    def test_news_digest_requires_current_completed_analysis(self):
+        enqueuer = NewsDigestEnqueuer(None, None, None)
+        item = {
+            "kind": "news",
+            "payload": {
+                "articleAiAnalysisVersion": NEWS_AI_ANALYSIS_VERSION,
+                "articleSummaryQuality": {"state": "ready"},
+                "aiAnalysis": {
+                    "version": NEWS_AI_ANALYSIS_VERSION,
+                    "status": "ok",
+                    "sourceTextHash": "source-hash",
+                },
+            },
+        }
+
+        self.assertTrue(enqueuer.item_analysis_is_current(item))
+        item["_newsAiAnalysisCurrent"] = False
+        self.assertFalse(enqueuer.item_analysis_is_current(item))
+
+    def test_reference_prompt_does_not_require_direct_decision_inline_permission(self):
+        payload = {
+            "kind": "news",
+            "publishedAt": "2026-08-28T00:00:00Z",
+            "validationState": "ready",
+            "dataState": "sufficient",
+            "articleAiAnalysisVersion": NEWS_AI_ANALYSIS_VERSION,
+            "articleSummaryQuality": {"state": "ready"},
+            "evidenceGovernance": {"investmentJudgmentEligible": True},
+            "newsEligibility": {"reasoningEligible": True, "alertEligible": True, "displayEligible": True},
+            "aiAnalysis": {
+                "version": NEWS_AI_ANALYSIS_VERSION,
+                "status": "ok",
+                "sourceTextHash": "source-hash",
+                "decisionInlineEligible": False,
+            },
+        }
+
+        admission = assess_prompt_evidence(payload, now="2026-08-28T01:00:00Z", directly_linked=True)
+
+        self.assertTrue(admission.reference_eligible)
+        self.assertTrue(admission.prompt_eligible)
+        self.assertFalse(admission.decision_eligible)
+        self.assertEqual("reference", admission.usage)
+
+    def test_body_at_storage_cap_is_not_treated_as_complete(self):
+        quality = inspect_article_body("A" * 5000)
+
+        self.assertFalse(quality.passed)
+        self.assertIn("body-truncated-at-cap", quality.issues)
 
     def evidence(self, payload=None):
         return ResearchEvidence(
@@ -121,6 +191,48 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertIn("declared-publisher-domain-mismatch", provenance.reason_codes)
         self.assertTrue(provenance.provenance_complete)
 
+    def test_declared_editorial_publisher_is_separate_from_distribution_host(self):
+        provenance = resolve_source_provenance(
+            {},
+            source="Reuters",
+            provider="Yahoo Finance RSS",
+            url="https://finance.yahoo.com/news/nvidia-update-120000001.html",
+            published_at="2026-08-27T09:00:00Z",
+            summary="Nvidia announced a material corporate update with transaction terms.",
+        ).to_dict()
+
+        self.assertEqual("Yahoo Finance", provenance["originalPublisher"]["name"])
+        self.assertEqual("Reuters", provenance["attributedPublisher"])
+        self.assertEqual("Yahoo Finance RSS", provenance["distributionChannel"])
+        self.assertIn("declared-publisher-domain-mismatch", provenance["reasonCodes"])
+
+    def test_exact_headline_duplicates_choose_the_higher_quality_representative(self):
+        title = "Apple launches a new enterprise AI service"
+        weak = self.evidence({
+            "articleText": "Apple launches a new enterprise AI service. " * 8,
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": False},
+            "articleSummaryQuality": {"state": "needs-review"},
+        })
+        weak.evidence_id = "research:AAPL:news:weak"
+        weak.title = title
+        weak.url = "https://example.test/weak"
+        strong = self.evidence({
+            "articleText": "Apple launches a new enterprise AI service for corporate customers. " * 8,
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            "articleSummaryQuality": {"state": "ready"},
+            "aiAnalysis": {"status": "ok"},
+        })
+        strong.evidence_id = "research:AAPL:news:strong"
+        strong.title = title
+        strong.url = "https://example.test/strong"
+
+        normalized = normalize_evidence_sources([weak, strong])
+        by_id = {item.evidence_id: item.raw_payload for item in normalized}
+
+        self.assertEqual("original", by_id[strong.evidence_id]["evidenceRelationship"])
+        self.assertEqual("syndicated-copy", by_id[weak.evidence_id]["evidenceRelationship"])
+        self.assertEqual(strong.evidence_id, by_id[weak.evidence_id]["syndicationRootEvidenceId"])
+
     def test_same_symbol_earnings_articles_share_a_bounded_event_identity(self):
         first = {
             "kind": "news",
@@ -128,7 +240,7 @@ class NewsCollectionQualityTests(unittest.TestCase):
             "eventType": "earnings",
             "publishedAt": "2026-08-26T21:00:00Z",
             "evidenceId": "research:NVDA:news:first",
-            "title": "Nvidia quarterly earnings beat expectations",
+            "title": "Nvidia Q2 2026 earnings beat expectations",
             "url": "https://example.test/nvidia-earnings",
         }
         follow_up = {
@@ -137,7 +249,7 @@ class NewsCollectionQualityTests(unittest.TestCase):
             "eventType": "earnings",
             "publishedAt": "2026-08-27T09:00:00Z",
             "evidenceId": "research:NVDA:news:follow-up",
-            "title": "Wall Street reviews Nvidia revenue outlook",
+            "title": "Wall Street reviews Nvidia Q2 2026 revenue outlook",
             "url": "https://example.test/nvidia-outlook",
         }
         unrelated = {
@@ -177,7 +289,7 @@ class NewsCollectionQualityTests(unittest.TestCase):
             "eventType": "earnings",
             "publishedAt": "2026-08-27T09:00:00Z",
             "evidenceId": "research:NVDA:news:earnings",
-            "title": "Nvidia reports quarterly earnings and revenue growth",
+            "title": "Nvidia reports Q2 2026 earnings and revenue growth",
             "url": "https://example.test/nvidia-earnings",
         }
         acquisition = {
@@ -200,7 +312,7 @@ class NewsCollectionQualityTests(unittest.TestCase):
             "eventType": "earnings",
             "publishedAt": "2026-08-27T09:00:00Z",
             "evidenceId": "research:NVDA:news:earnings",
-            "title": "Nvidia reports quarterly earnings and revenue growth",
+            "title": "Nvidia reports Q2 2026 earnings and revenue growth",
             "url": "https://example.test/nvidia-earnings",
         }
         guidance = {
@@ -209,11 +321,51 @@ class NewsCollectionQualityTests(unittest.TestCase):
             "eventType": "guidance",
             "publishedAt": "2026-08-27T10:00:00Z",
             "evidenceId": "research:NVDA:news:guidance",
-            "title": "Nvidia revenue forecast rises after quarterly results",
+            "title": "Nvidia Q2 2026 revenue forecast rises after quarterly results",
             "url": "https://example.test/nvidia-guidance",
         }
 
         self.assertTrue(article_identity_keys(earnings).intersection(article_identity_keys(guidance)))
+
+    def test_earnings_without_a_reporting_period_do_not_share_an_episode(self):
+        first = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-27T09:00:00Z",
+            "evidenceId": "research:NVDA:news:earnings-no-period",
+            "title": "Nvidia quarterly earnings beat expectations",
+            "url": "https://example.test/nvidia-earnings-no-period",
+        }
+        market_commentary = {
+            **first,
+            "publishedAt": "2026-08-27T10:00:00Z",
+            "evidenceId": "research:NVDA:news:commentary-no-period",
+            "title": "Wall Street discusses Nvidia revenue outlook",
+            "url": "https://example.test/nvidia-commentary-no-period",
+        }
+
+        self.assertFalse(article_identity_keys(first).intersection(article_identity_keys(market_commentary)))
+
+    def test_period_bounded_earnings_cannot_merge_with_unbounded_followup_by_tokens(self):
+        bounded = {
+            "kind": "news",
+            "symbol": "NVDA",
+            "eventType": "earnings",
+            "publishedAt": "2026-08-27T09:00:00Z",
+            "evidenceId": "research:NVDA:news:q2-results",
+            "title": "Nvidia Q2 2026 earnings revenue and profit beat estimates",
+            "url": "https://example.test/nvidia-q2-results",
+        }
+        unbounded = {
+            **bounded,
+            "publishedAt": "2026-08-27T10:00:00Z",
+            "evidenceId": "research:NVDA:news:general-results",
+            "title": "Nvidia earnings revenue and profit beat analyst estimates",
+            "url": "https://example.test/nvidia-general-results",
+        }
+
+        self.assertFalse(article_identity_keys(bounded).intersection(article_identity_keys(unbounded)))
 
     def test_earnings_preview_does_not_suppress_the_actual_release(self):
         preview = {

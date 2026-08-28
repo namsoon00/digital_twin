@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .source import SourceRegistry, SourceRegistryEntry, unknown_entry
 
 
-SOURCE_PROVENANCE_VERSION = "news-source-provenance-v3-canonical-publisher"
+SOURCE_PROVENANCE_VERSION = "news-source-provenance-v4-attributed-publisher"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "src", "ocid", "output"}
 
 
@@ -141,6 +141,10 @@ class SourceProvenance:
     syndication_identity: str
 
     def to_dict(self) -> Dict[str, object]:
+        attributed_publisher = self.identity.declared_publisher if (
+            self.identity.declared_publisher
+            and _slug(self.identity.declared_publisher) != _slug(self.identity.publisher)
+        ) else ""
         return {
             "version": SOURCE_PROVENANCE_VERSION,
             "originalPublisher": {
@@ -151,6 +155,7 @@ class SourceProvenance:
                 "publisherType": self.identity.publisher_type,
             },
             "declaredPublisher": self.identity.declared_publisher,
+            "attributedPublisher": attributed_publisher,
             "republisher": self.identity.republisher,
             "distributionChannel": self.identity.distribution_channel,
             "canonicalUrl": self.canonical_url,
@@ -291,9 +296,9 @@ def resolve_source_provenance(
         declared,
         republisher,
     )
-    source_path = [{"role": "original-publisher", "name": entry.name, "id": entry.publisher_id}]
+    source_path = [{"role": "canonical-host-publisher", "name": entry.name, "id": entry.publisher_id}]
     if republisher:
-        source_path.append({"role": "republisher", "name": republisher, "id": _slug(republisher)})
+        source_path.append({"role": "declared-publisher", "name": republisher, "id": _slug(republisher)})
     if channel:
         source_path.append({"role": "distribution-channel", "name": channel, "id": _slug(channel)})
     return SourceProvenance(

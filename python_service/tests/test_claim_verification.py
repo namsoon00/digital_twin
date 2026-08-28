@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from digital_twin.domain.investment_evidence_governance import (
     claim_quality_summary,
     governed_evidence,
+    primary_source,
 )
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.domain.ontology_contracts import PortfolioOntology
@@ -98,6 +99,29 @@ class ClaimVerificationTests(unittest.TestCase):
             policy=POLICY if policy is None else policy,
             now=datetime(2026, 7, 21, tzinfo=timezone.utc),
         )
+
+    def test_url_path_substring_cannot_impersonate_an_official_source(self):
+        article = evidence(
+            "barrons-random-path",
+            "Barron's",
+            "Samsung market commentary",
+            "Samsung Electronics shares moved after an analyst note.",
+            canonical_url="https://www.barrons.com/articles/bOk9randomidentifier",
+        )
+
+        self.assertFalse(primary_source(article))
+
+    def test_official_host_is_still_recognized_as_primary(self):
+        filing = evidence(
+            "sec-official-host",
+            "SEC EDGAR",
+            "Samsung filing",
+            "The company filed an official document.",
+            kind="filing",
+            canonical_url="https://www.sec.gov/Archives/edgar/data/1/document.htm",
+        )
+
+        self.assertTrue(primary_source(filing))
 
     def test_official_document_match_makes_news_claim_eligible(self):
         news = evidence(

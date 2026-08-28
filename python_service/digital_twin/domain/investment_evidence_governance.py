@@ -650,8 +650,32 @@ def evidence_age_minutes(item: ResearchEvidence, now=None):
 
 
 def primary_source(item: ResearchEvidence) -> bool:
-    haystack = " ".join([str(item.source or ""), str(item.url or "")]).casefold()
-    return any(marker.casefold() in haystack for marker in PRIMARY_SOURCE_MARKERS)
+    source = re.sub(r"\s+", " ", str(item.source or "").strip().casefold())
+    try:
+        host = urllib.parse.urlparse(str(item.url or "")).netloc.casefold().split(":")[0]
+    except (TypeError, ValueError):
+        host = ""
+    host = re.sub(r"^(?:www|m)\.", "", host)
+    official_hosts = (
+        "sec.gov",
+        "opendart.fss.or.kr",
+        "dart.fss.or.kr",
+        "bok.or.kr",
+        "krx.co.kr",
+    )
+    if any(host == official or host.endswith("." + official) for official in official_hosts):
+        return True
+    source_patterns = (
+        r"\bopendart\b",
+        r"\bdart\b",
+        r"\bsec\s+edgar\b",
+        r"\bbank\s+of\s+korea\b",
+        r"\bbok\b",
+        r"한국은행",
+        r"(?:^|\s)(?:company\s+)?investor\s+relations(?:$|\s)",
+        r"(?:^|\s)(?:증권|주식)?거래소(?:$|\s)",
+    )
+    return any(re.search(pattern, source, re.IGNORECASE) for pattern in source_patterns)
 
 
 def entity_resolution(item: ResearchEvidence, target: NewsCollectionTarget) -> Tuple[str, List[str]]:

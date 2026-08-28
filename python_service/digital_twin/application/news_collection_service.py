@@ -22,6 +22,7 @@ from ..domain.news_collection_quality import (
     assess_news_collection_admission,
     news_collection_admission_summary,
 )
+from ..domain.news_ai_analysis import news_ai_analysis_is_current
 from ..domain.prompt_evidence_admission import assess_prompt_evidence, attach_prompt_evidence_admission
 from ..domain.repositories import AccountRepository, MonitorSnapshotReader, ResearchEvidenceGateway, ResearchEvidenceRepository, SymbolUniverseRepository
 from ..domain.symbol_universe import ListedSymbol, normalize_market
@@ -594,6 +595,8 @@ class NewsCollectionRunner:
         summary_ready = 0
         summary_needs_review = 0
         summary_blocked = 0
+        analysis_current = 0
+        analysis_outdated = 0
         for item in news_items:
             payload = getattr(item, "raw_payload", {}) if isinstance(getattr(item, "raw_payload", {}), dict) else {}
             facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
@@ -619,6 +622,10 @@ class NewsCollectionRunner:
                     ai_fallback += 1
                 elif analysis_status == "deferred":
                     ai_deferred += 1
+                if news_ai_analysis_is_current(item):
+                    analysis_current += 1
+                else:
+                    analysis_outdated += 1
             language = str(payload.get("sourceLanguage") or "").strip().lower()
             translation_status = str(payload.get("translationStatus") or "").strip().lower()
             if language == "en":
@@ -658,6 +665,8 @@ class NewsCollectionRunner:
             "aiFallbackCount": ai_fallback,
             "aiDeferredCount": ai_deferred,
             "aiMissingCount": max(0, total - ai_analyzed),
+            "analysisCurrentCount": analysis_current,
+            "analysisOutdatedCount": analysis_outdated,
             "translationCompleteCount": translation_complete,
             "translationPendingCount": translation_pending,
             "translationUnavailableCount": translation_unavailable,

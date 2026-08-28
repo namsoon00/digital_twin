@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, List
 
 
-ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v4"
+ARTICLE_BODY_QUALITY_VERSION = "news-body-quality-v5-completeness"
 CONTAMINATION_PATTERNS = (
     ("publisher-navigation", re.compile(r"\b(?:continue reading|read more|more from|recommended stor(?:y|ies))\b", re.IGNORECASE)),
     ("investment-promotion", re.compile(r"\b(?:is now the time to buy|missed nvidia|top \d+ stocks to buy)\b", re.IGNORECASE)),
@@ -11,6 +11,8 @@ CONTAMINATION_PATTERNS = (
     ("related-news-tail", re.compile(r"(?:관련\s*뉴스|함께\s*본\s*뉴스|추천\s*기사|많이\s*본\s*기사|S&P\s*500\s*기업\s*중)", re.IGNORECASE)),
     ("live-widget", re.compile(r"\[\s*스팟\s*Live\s*\]", re.IGNORECASE)),
     ("publisher-navigation", re.compile(r"(?:최신\s*뉴스|주요\s*뉴스|실시간\s*인기|기사\s*더보기|다음\s*기사|what are you looking for)", re.IGNORECASE)),
+    ("publisher-navigation", re.compile(r"\b(?:view on|open in app|continue on)\b", re.IGNORECASE)),
+    ("investment-promotion", re.compile(r"\b(?:don['’]?t wait|act now|limited time)\b", re.IGNORECASE)),
 )
 MOJIBAKE_RE = re.compile(r"(?:�|â€™|â€œ|â€|Ã.|\ufffd)")
 HTML_MARKUP_RE = re.compile(r"<\s*/?\s*(?:script|style|iframe|html|body|article|nav|div|p)\b", re.IGNORECASE)
@@ -56,6 +58,10 @@ def inspect_article_body(
     issues: List[str] = []
     if char_count < minimum:
         issues.append("body-too-short")
+    # Article extraction currently persists at most 5,000 normalized chars.
+    # A row at that boundary is not evidence that the source article ended.
+    if char_count >= 4999:
+        issues.append("body-truncated-at-cap")
     if MOJIBAKE_RE.search(text):
         issues.append("text-encoding-corrupt")
     if HTML_MARKUP_RE.search(raw_text):
@@ -89,6 +95,7 @@ def inspect_article_body(
     if issues:
         labels = {
             "body-too-short": "정제된 본문이 너무 짧습니다",
+            "body-truncated-at-cap": "본문이 저장 길이 한도에서 잘렸을 수 있습니다",
             "text-encoding-corrupt": "본문 문자 인코딩이 손상되었습니다",
             "publisher-navigation": "기사 뒤 탐색 문구가 본문에 섞였습니다",
             "investment-promotion": "투자 홍보 문구가 본문에 섞였습니다",

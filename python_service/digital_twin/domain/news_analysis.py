@@ -184,7 +184,7 @@ MARKET_TOPIC_KEYWORDS = [
 ]
 
 EVENT_TYPE_KEYWORDS = {
-    "acquisition": ["acquire", "acquires", "acquired", "acquisition", "buying", "buys", "인수", "인수합병", "합병"],
+    "acquisition": ["acquire", "acquires", "acquired", "acquisition", "buys", "인수", "인수합병", "합병"],
     "strategic_investment": ["invests in", "investment in", "takes a stake", "stake in", "funding round", "전략적 투자", "지분 투자", "투자 유치"],
     "partnership": ["partnership", "partners with", "strategic alliance", "collaboration", "파트너십", "업무협약", "협력"],
     "contract": ["contract award", "supply agreement", "purchase agreement", "공급계약", "수주", "납품 계약"],
@@ -192,7 +192,7 @@ EVENT_TYPE_KEYWORDS = {
     "management_change": ["appoints ceo", "names ceo", "chief executive resigns", "ceo departure", "대표이사 선임", "대표이사 사임", "경영진 교체"],
     "earnings": ["실적", "earnings", "revenue", "profit", "매출", "영업이익", "순이익"],
     "guidance": ["guidance", "전망", "가이던스", "목표주가", "estimate", "forecast"],
-    "supply_chain": ["공급", "supply", "supplier", "생산", "fab", "foundry", "라인", "공장"],
+    "supply_chain": ["공급", "supply", "supplier", "생산", "생산능력", "증설", "착공", "capex", "fab", "foundry", "라인", "공장"],
     "product": ["launch", "출시", "roadmap", "제품", "서비스", "chip", "GPU", "AI"],
     "regulation": ["regulation", "규제", "소송", "lawsuit", "sue", "sues", "sued", "accuse", "accuses", "accused", "stealing", "stolen", "trade secret", "trade secrets", "legal", "litigation", "antitrust", "probe", "investigation", "당국 조사", "금감원 조사", "공정위 조사", "검찰 조사", "조사 착수", "조사에 착수", "조사 대상", "조사받", "조사 받", "세무조사", "압수수색", "수사", "제재"],
     "capital_policy": ["buyback", "dividend", "자사주", "배당", "증자", "신주", "신주발행", "new shares", "newly issued", "share issuance", "offering", "dilution", "debt", "convertible debt", "repayment", "상환"],
@@ -200,13 +200,16 @@ EVENT_TYPE_KEYWORDS = {
     "macro_sector": ["금리", "환율", "inflation", "FOMC", "업황", "수요", "demand"],
     "crypto_linked": ["bitcoin", "비트코인", "crypto", "암호화폐", "digital asset"],
     "price_commentary": ["주가", "stock", "목표주가", "급등", "급락", "plunge", "trading volume", "거래량", "거래대금"],
-    "labor": ["임단협", "임금", "성과급", "상여", "노조", "파업", "wage", "salary", "bonus", "union", "strike"],
+    "labor": ["임단협", "단체교섭", "임금", "성과급", "상여", "노조", "파업", "collective bargaining", "wage", "salary", "bonus", "union", "strike"],
+    "reorganization": ["조직개편", "인사개편", "구조조정", "reorganization", "restructuring"],
 }
-EVENT_CLASSIFICATION_VERSION = "news-event-type-v3-structured-actions"
+EVENT_CLASSIFICATION_VERSION = "news-event-type-v4-title-weighted"
 PRICE_COMMENTARY_EDITORIAL_MARKERS = (
     "price target", "analyst rating", "analyst says", "wall street says",
     "목표주가", "투자의견", "증권사 전망", "주식 초고수", "특징주",
     "why the stock", "stock could rise", "stock could fall",
+    "stocks to watch", "premarket movers", "midday stories", "market recap",
+    "futures rise", "futures fall", "지수 선물", "장전 주요 종목", "마감 시황",
 )
 
 SOCIAL_SOURCE_TERMS = [
@@ -1961,6 +1964,12 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
     # A concrete corporate action in the headline is more specific than
     # background earnings language later in the article body.
     strong_title_actions = (
+        ("capital_policy", (r"\bbuy(?:ing|s|back)?\s+back\b", r"\bshare\s+buyback\b", r"\bstock\s+repurchase\b", r"자사주", r"자기주식", r"주식\s*소각")),
+        ("labor", (r"collective\s+bargaining", r"\bunion\b", r"\bstrike\b", r"단체교섭", r"임단협", r"노조", r"파업")),
+        ("supply_chain", (r"breaks?\s+ground", r"groundbreaking", r"production\s+capacity", r"capacity\s+expansion", r"\bcapex\b", r"착공", r"증설", r"생산능력")),
+        ("product", (r"\b(?:launch|launches|unveil|unveils|release|releases)\b", r"출시", r"공개", r"신제품")),
+        ("guidance", (r"\b(?:raises?|cuts?|reaffirms?)\s+(?:its\s+)?(?:annual\s+)?(?:guidance|forecast|outlook)\b", r"가이던스", r"연간\s*전망", r"실적\s*전망")),
+        ("reorganization", (r"reorganization", r"restructuring", r"조직개편", r"인사개편", r"구조조정")),
         ("acquisition", (r"\bacquir(?:e|es|ed|ing)\b", r"\bbuying\b", r"\bbuys\b", r"\bpurchase[sd]?\b", r"인수", r"합병")),
         ("strategic_investment", (r"\binvests?\s+in\b", r"\binvestment\s+in\b", r"\btakes?\s+(?:a\s+)?stake\b", r"\bbets?\s+\$?[0-9]", r"전략적\s*투자", r"지분\s*투자")),
         ("partnership", (r"\bpartners?\s+with\b", r"\bpartnership\b", r"\bstrategic\s+alliance\b", r"파트너십", r"업무협약")),
@@ -1971,10 +1980,14 @@ def classify_news_event_type(title: object, summary: object = "") -> str:
         if any(re.search(pattern, title_text, re.IGNORECASE) for pattern in patterns):
             return event_type
     best = ("general", 0)
+    priority = {event_type: len(EVENT_TYPE_KEYWORDS) - index for index, event_type in enumerate(EVENT_TYPE_KEYWORDS)}
+    summary_text = _lower_text(summary)
     for event_type, keywords in EVENT_TYPE_KEYWORDS.items():
-        hits = sum(1 for keyword in keywords if _keyword_in_lowered_text(keyword, text))
-        if hits > best[1]:
-            best = (event_type, hits)
+        title_hits = sum(1 for keyword in keywords if _keyword_in_lowered_text(keyword, title_text))
+        summary_hits = sum(1 for keyword in keywords if _keyword_in_lowered_text(keyword, summary_text))
+        score = title_hits * 4 + summary_hits
+        if score > best[1] or (score == best[1] and score > 0 and priority[event_type] > priority.get(best[0], -1)):
+            best = (event_type, score)
     return best[0]
 
 

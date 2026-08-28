@@ -93,6 +93,22 @@ def _ordered(items: Iterable[object]) -> List[object]:
     )
 
 
+def _representative_quality(item: object) -> tuple:
+    payload = _payload(item)
+    facts = payload.get("articleFacts") if isinstance(payload.get("articleFacts"), dict) else {}
+    summary_quality = payload.get("articleSummaryQuality") if isinstance(payload.get("articleSummaryQuality"), dict) else {}
+    analysis = payload.get("aiAnalysis") if isinstance(payload.get("aiAnalysis"), dict) else {}
+    trust = str(payload.get("sourceTrustState") or facts.get("sourceTrustState") or "unknown").lower()
+    return (
+        facts.get("bodyQualityPassed") is True,
+        bool(facts.get("bodyAvailable")),
+        str(summary_quality.get("state") or payload.get("summaryQualityState") or "") == "ready",
+        str(analysis.get("status") or "").lower() in {"ok", "local", "success", "complete", "verified"},
+        {"unknown": 0, "limited": 1, "standard": 2, "trusted": 3}.get(trust, 0),
+        str(getattr(item, "published_at", "") or getattr(item, "observed_at", "") or ""),
+    )
+
+
 def normalize_evidence_sources(items: Iterable[object], source_registry: object = "") -> List[object]:
     """Normalize provenance and classify copies without importing legacy types."""
     rows = _ordered(items)
@@ -111,7 +127,7 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
         item.raw_payload = payload
 
     roots: List[object] = []
-    for item in rows:
+    for item in sorted(rows, key=_representative_quality, reverse=True):
         payload = _payload(item)
         relationship = "original"
         root = item
@@ -123,10 +139,14 @@ def normalize_evidence_sources(items: Iterable[object], source_registry: object 
             same_url = bool(payload.get("documentIdentity") and payload.get("documentIdentity") == other.get("documentIdentity"))
             same_content = bool(payload.get("articleBodyFingerprint") and payload.get("articleBodyFingerprint") == other.get("articleBodyFingerprint"))
             near_copy = _title_similarity(item, candidate) >= 0.9 and _body_similarity(item, candidate) >= 0.82
+            same_headline = bool(
+                normalized_content(getattr(item, "title", ""))
+                and normalized_content(getattr(item, "title", "")) == normalized_content(getattr(candidate, "title", ""))
+            )
             if same_url:
                 relationship, root = "exact-duplicate", candidate
                 break
-            if same_content or near_copy:
+            if same_content or near_copy or same_headline:
                 relationship, root = "syndicated-copy", candidate
                 break
             if str(getattr(candidate, "evidence_id", "")) in corroborating:

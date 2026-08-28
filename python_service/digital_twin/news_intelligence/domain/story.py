@@ -6,15 +6,15 @@ from typing import Dict, List, Set
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-STORY_IDENTITY_VERSION = "news-story-identity-v5-structured-event"
-EVENT_FINGERPRINT_VERSION = "news-event-fingerprint-v1"
+STORY_IDENTITY_VERSION = "news-story-identity-v6-period-bounded"
+EVENT_FINGERPRINT_VERSION = "news-event-fingerprint-v2-period-bounded"
 TRACKING_KEYS = {"fbclid", "gclid", "ref", "source", "utm_campaign", "utm_medium", "utm_source", "utm_term"}
 EVENT_ACTIONS = (
+    ("buyback", ("buying back", "buys back", "자기주식", "자사주", "주식소각", "share buyback", "stock repurchase", "share cancellation")),
     ("acquisition", ("acquire", "acquires", "acquired", "acquisition", "buying", "buys", "인수", "인수합병", "합병")),
     ("strategic-investment", ("invests in", "investment in", "takes a stake", "stake in", "전략적 투자", "지분 투자")),
     ("partnership", ("partnership", "partners with", "strategic alliance", "파트너십", "업무협약")),
     ("compensation", ("임금", "임단협", "성과급", "상여", "wage", "salary", "bonus", "compensation")),
-    ("buyback", ("자기주식", "자사주", "주식소각", "share buyback", "stock repurchase", "share cancellation")),
     ("reorganization", ("조직개편", "쇄신", "인사개편", "reorganization", "restructuring meeting")),
     ("ipo", ("기업공개", "상장 추진", "ipo", "initial public offering")),
     ("strike", ("파업", "쟁의", "strike", "walkout")),
@@ -25,7 +25,7 @@ EVENT_ACTIONS = (
 )
 COMPENSATION_MARKERS = ("임금", "임단협", "성과급", "상여", "보너스", "wage", "salary", "bonus", "compensation")
 SHARE_COMPENSATION_MARKERS = ("지급", "교부", "처분", "보상", "pay", "paid", "grant", "award", "transfer")
-BUYBACK_EXECUTION_MARKERS = ("취득", "매입", "소각", "buyback", "repurchase", "cancellation", "cancel shares")
+BUYBACK_EXECUTION_MARKERS = ("취득", "매입", "소각", "buying back", "buys back", "buyback", "repurchase", "cancellation", "cancel shares")
 EVENT_STOP_WORDS = {
     "the", "a", "an", "and", "or", "to", "of", "for", "in", "on", "with", "from",
     "about", "are", "as", "how", "what", "why", "finance", "yahoo", "news",
@@ -202,9 +202,10 @@ def news_event_fingerprint(item: Dict[str, object]) -> NewsEventFingerprint:
     family = action if action in concrete_actions else EVENT_FAMILY_ALIASES.get(event_type, action if action != "general" else "")
     if family == "guidance":
         family = "earnings-release"
-    has_release_context = any(marker in corpus.casefold() for marker in EARNINGS_RELEASE_MARKERS)
+    reporting_period = _reporting_period(corpus)
+    has_release_context = any(marker in title.casefold() for marker in EARNINGS_RELEASE_MARKERS)
     confidence = "low"
-    if family == "earnings-release" and has_release_context:
+    if family == "earnings-release" and has_release_context and reporting_period:
         confidence = "high"
     elif family in {"acquisition", "strategic-investment", "partnership", "contract"} and action != "general":
         confidence = "high"
@@ -215,7 +216,7 @@ def news_event_fingerprint(item: Dict[str, object]) -> NewsEventFingerprint:
         family=family,
         phase=_event_phase(family, corpus),
         event_date=_date_bucket(_first(item, "publishedAt", "observedAt", "seenDate")),
-        reporting_period=_reporting_period(corpus),
+        reporting_period=reporting_period,
         action=action,
         confidence=confidence,
     )
@@ -228,7 +229,7 @@ def event_episode_identity(item: Dict[str, object]) -> str:
     # A broad corporate-action family needs an object identity before it can
     # suppress another article. Earnings releases are naturally bounded by
     # subject, reporting period/date and release phase.
-    if fingerprint.family != "earnings-release":
+    if fingerprint.family != "earnings-release" or not fingerprint.reporting_period:
         return ""
     return _hash("episode|" + fingerprint.identity_material())
 
@@ -319,13 +320,16 @@ def same_story_event(left: Dict[str, object], right: Dict[str, object]) -> bool:
         and left_fingerprint.family == right_fingerprint.family == "earnings-release"
         and left_fingerprint.phase == right_fingerprint.phase
     ):
-        if (
+        return bool(
             left_fingerprint.reporting_period
             and right_fingerprint.reporting_period
-            and left_fingerprint.reporting_period != right_fingerprint.reporting_period
-        ):
-            return False
-        return True
+            and left_fingerprint.reporting_period == right_fingerprint.reporting_period
+        )
+    # Earnings coverage is especially repetitive. If either side cannot name
+    # the same bounded reporting period, generic revenue/profit words must not
+    # merge it through the fallback token-overlap path.
+    if "earnings-release" in {left_fingerprint.family, right_fingerprint.family}:
+        return False
     action = left_features["action"]
     if action == "general" or action != right_features["action"]:
         return False

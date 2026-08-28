@@ -222,6 +222,7 @@ ENGLISH_PERIOD_NUMBERS = {
 }
 ENGLISH_NUMBER_WORDS = {
     **ENGLISH_PERIOD_NUMBERS,
+    "zero": 0.0,
     "one": 1.0,
     "two": 2.0,
     "three": 3.0,

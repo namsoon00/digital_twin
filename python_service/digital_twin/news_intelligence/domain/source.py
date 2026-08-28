@@ -106,6 +106,7 @@ DEFAULT_SOURCE_ENTRIES = (
     _entry("cnbc", "CNBC", ("cnbc.com",), ("cnbc",), "B"),
     _entry("barrons", "Barron's", ("barrons.com",), ("barrons", "barron's", "barrons.com"), "B"),
     _entry("axios", "Axios", ("axios.com",), ("axios",), "B"),
+    _entry("euronews", "Euronews", ("euronews.com",), ("euronews",), "C"),
     _entry("ytn", "YTN", ("ytn.co.kr",), ("ytn", "www.ytn.co.kr"), "C"),
     _entry("marketwatch", "MarketWatch", ("marketwatch.com",), ("marketwatch",), "C"),
     _entry("yahoo-finance", "Yahoo Finance", ("finance.yahoo.com",), ("yahoo finance", "yahoo finance uk"), "C"),

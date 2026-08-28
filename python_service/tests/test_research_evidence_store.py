@@ -481,6 +481,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         )
 
         self.assertTrue(episode_id)
+        self.assertEqual("high", persisted.raw_payload["eventFingerprint"]["identityConfidence"])
         self.assertEqual((1, 1), episode)
 
     def test_stale_cleanup_skips_a_row_locked_by_another_worker(self):

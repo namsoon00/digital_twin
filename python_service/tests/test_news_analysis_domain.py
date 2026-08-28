@@ -218,6 +218,16 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("1,200억 달러", mismatch["token"])
         self.assertEqual(108_000_000_000.0, mismatch["nearestSource"]["normalizedValue"])
 
+    def test_summary_numeric_grounding_maps_zero_word_to_numeric_zero(self):
+        quality = summary_quality_payload(
+            "Strategy의 순레버리지가 0에 가까워졌다고 설명한다.",
+            "Strategy said its net leverage is now near zero.",
+            "Strategy",
+        )
+
+        self.assertEqual("ready", quality["state"])
+        self.assertEqual([], quality["numericGrounding"]["unmatched"])
+
     def test_summary_document_length_is_advisory_not_an_investment_number(self):
         quality = summary_quality_payload(
             "제공된 263자 분량은 문장이 중간에서 끝나 핵심 사건을 완결적으로 확인하기 어렵다.",

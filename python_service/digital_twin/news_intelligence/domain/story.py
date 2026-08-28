@@ -86,7 +86,7 @@ class NewsEventFingerprint:
             "eventDate": self.event_date,
             "reportingPeriod": self.reporting_period,
             "action": self.action,
-            "confidence": self.confidence,
+            "identityConfidence": self.confidence,
             "identity": _hash("episode|" + self.identity_material()) if self.high_confidence else "",
         }
 

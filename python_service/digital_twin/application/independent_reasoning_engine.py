@@ -17,6 +17,7 @@ from ..domain.independent_reasoning import (
     reasoning_event_scope,
 )
 from ..domain.investment_reasoning import FactDelta
+from ..domain.market_observation_reasoning import market_observation_completion_scope
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.world_partitioned_reasoning import attach_shared_premise_evidence
 from ..domain.ontology_store_routing import ontology_store_route
@@ -1631,31 +1632,10 @@ class IndependentReasoningJobRunner:
         symbols = set()
         for job in jobs or []:
             event = dict(job.get("sourceEvent") or {})
-            payload = dict(event.get("payload") or {})
-            for value in [event.get("eventId"), event.get("event_id")]:
-                if str(value or "").strip():
-                    event_ids.add(str(value).strip())
-            shard = dict(payload.get("reasoningShard") or {})
-            parent_event_id = str(shard.get("parentEventId") or "").strip()
-            if parent_event_id:
-                event_ids.add(parent_event_id)
-            coalesced = dict(payload.get("coalescedReasoningChanges") or {})
-            event_ids.update(
-                str(value).strip()
-                for value in coalesced.get("sourceEventIds") or []
-                if str(value or "").strip()
-            )
-            account_ids.update(
-                str(value).strip()
-                for value in payload.get("accountIds") or []
-                if str(value or "").strip()
-            )
-            symbols.update(
-                str(value).upper().strip()
-                for key in ("affectedSymbols", "symbols", "targetSymbols")
-                for value in payload.get(key) or []
-                if str(value or "").strip()
-            )
+            scope = market_observation_completion_scope(event)
+            event_ids.update(scope["eventIds"])
+            account_ids.update(scope["accountIds"])
+            symbols.update(scope["symbols"])
         return {
             "eventIds": sorted(event_ids),
             "accountIds": sorted(account_ids),
@@ -1888,6 +1868,7 @@ class IndependentReasoningJobRunner:
             result["batch_job_count"] = len(selected_jobs)
             result["batch_job_ids"] = job_ids
             result["reasoning_lane"] = reasoning_lane
+            result["release_identity"] = release_identity
             result["native_target_symbol_limit"] = self.native_target_symbol_limit()
             result["capacity_deferred_job_count"] = len(capacity_deferred_jobs)
             status = str(result.get("status") or "")
@@ -2026,15 +2007,44 @@ class IndependentReasoningJobRunner:
                             supersede(job["jobId"], reason)
                         else:
                             self.queue.defer(job["jobId"], reason, 5)
+                atomic_completions = []
                 for job_id in completion_job_ids:
                     parameters = inspect.signature(self.queue.complete).parameters
                     if "worker_id" in parameters:
-                        self.queue.complete(job_id, result, worker_id=self.worker_id)
+                        completion = self.queue.complete(
+                            job_id,
+                            result,
+                            worker_id=self.worker_id,
+                        )
                     else:
-                        self.queue.complete(job_id, result)
-                result["market_observation_anchor_completion"] = (
-                    self.record_market_observation_completions(completion_jobs)
-                )
+                        completion = self.queue.complete(job_id, result)
+                    if isinstance(completion, Mapping):
+                        atomic_completions.append(dict(completion))
+                if completion_job_ids and len(atomic_completions) == len(completion_job_ids) and all(
+                    item.get("anchorCompletionAtomic") for item in atomic_completions
+                ):
+                    receipts = [
+                        dict(receipt)
+                        for item in atomic_completions
+                        for receipt in item.get("receipts") or []
+                        if isinstance(receipt, Mapping)
+                    ]
+                    result["market_observation_anchor_completion"] = {
+                        "contractVersion": "market-observation-reasoning-receipt-v1",
+                        "anchorCompletionAtomic": True,
+                        "status": "completed" if receipts else "not-required",
+                        "completedCount": len(receipts),
+                        "receiptCount": len(receipts),
+                        "eventIds": sorted({str(item.get("sourceEventId") or "") for item in receipts if item.get("sourceEventId")}),
+                        "accountIds": sorted({str(item.get("accountId") or "") for item in receipts if item.get("accountId")}),
+                        "symbols": sorted({str(item.get("symbol") or "") for item in receipts if item.get("symbol")}),
+                        "reasoningJobCount": len(atomic_completions),
+                        "receipts": receipts,
+                    }
+                else:
+                    result["market_observation_anchor_completion"] = (
+                        self.record_market_observation_completions(completion_jobs)
+                    )
                 outcome = "completed" if completion_job_ids else "excluded"
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
             health.update(self.engine.health())

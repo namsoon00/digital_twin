@@ -2990,7 +2990,15 @@ def ontology_reasoning_status_payload() -> Dict[str, object]:
         # The full runner status evaluates account priority and TypeDB health.
         # The settings screen needs only queue liveness, so use the bounded
         # read probe instead of constructing the operational worker.
-        return build_ontology_reasoning_queue_probe(operational_read_settings())()
+        configured = operational_read_settings()
+        payload = dict(build_ontology_reasoning_queue_probe(configured)() or {})
+        payload["marketObservationReasoningCompletion"] = (
+            stores.reasoning_engine_job_store(configured).market_observation_completion_summary(
+                str(configured.get("reasoningEngineV2DeploymentId") or ""),
+                limit=12,
+            )
+        )
+        return payload
     except Exception as error:  # noqa: BLE001 - diagnostics must remain readable during store recovery.
         return {"enabled": False, "queueHealth": {"status": "error", "reason": str(error)[:240]}}
 

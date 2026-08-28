@@ -25,6 +25,12 @@ from ..domain.independent_reasoning import (
 )
 from ..domain.events import DomainEvent
 from ..domain.investment_reasoning import FactDelta
+from ..domain.market_observation_reasoning import (
+    MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
+    MarketObservationReasoningReceipt,
+    completion_mode,
+    market_observation_completion_scope,
+)
 from ..domain.ontology_reasoning_queue import work_class_for_fact_types
 from ..domain.time_series_storage import (
     TemporalFeatureSnapshot,
@@ -1811,10 +1817,165 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         return int(getattr(cursor, "rowcount", 0) or 0) == len(selected)
 
     @reasoning_queue_deadlock_retry("reasoning-engine-job-complete")
-    def complete(self, job_id: str, result: Mapping[str, object], worker_id: str = "") -> None:
+    def complete(self, job_id: str, result: Mapping[str, object], worker_id: str = "") -> Dict[str, object]:
         stamp = iso_utc()
         values = dict(result or {})
-        with self.connect() as connection:
+        completion_summary = {
+            "contractVersion": MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
+            "anchorCompletionAtomic": True,
+            "status": "not-required",
+            "completedCount": 0,
+            "receiptCount": 0,
+            "eventIds": [],
+            "accountIds": [],
+            "symbols": [],
+            "receipts": [],
+        }
+        with self.transaction() as connection:
+            job = connection.execute(
+                "SELECT job_id, deployment_id, source_event_id, source_snapshot_id, source_snapshot_at, "
+                "request_json, release_fingerprint FROM reasoning_engine_jobs "
+                "WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone() or {}
+            if not job:
+                raise RuntimeError("The V2 reasoning job disappeared before completion publication.")
+            request_json = json_value(job.get("request_json"), {})
+            source_event = dict(request_json.get("sourceEvent") or {})
+            scope = market_observation_completion_scope(source_event)
+            evaluated_symbols = {
+                str(value or "").upper().strip()
+                for value in values.get("evaluated_symbols") or values.get("evaluatedSymbols") or []
+                if str(value or "").strip()
+            }
+            account_ids = {
+                str(value or "").strip()
+                for value in values.get("account_ids") or values.get("accountIds") or []
+                if str(value or "").strip()
+            }
+            projection_results = dict(values.get("projection_results") or values.get("projectionResults") or {})
+            account_ids.update(str(value or "").strip() for value in projection_results if str(value or "").strip())
+            if not account_ids:
+                account_ids.update(scope["accountIds"])
+            if not evaluated_symbols:
+                evaluated_symbols.update(scope["symbols"])
+            event_ids = tuple(scope["eventIds"])
+            matching_anchors = []
+            if event_ids and account_ids and evaluated_symbols:
+                event_placeholders = ",".join(["%s"] * len(event_ids))
+                account_placeholders = ",".join(["%s"] * len(account_ids))
+                symbol_placeholders = ",".join(["%s"] * len(evaluated_symbols))
+                matching_anchors = connection.execute(
+                    "SELECT account_id, symbol, pending_event_id "
+                    "FROM market_observation_reasoning_anchors "
+                    "WHERE pending_event_id IN (" + event_placeholders + ") "
+                    "AND account_id IN (" + account_placeholders + ") "
+                    "AND symbol IN (" + symbol_placeholders + ") FOR UPDATE",
+                    tuple(event_ids) + tuple(sorted(account_ids)) + tuple(sorted(evaluated_symbols)),
+                ).fetchall()
+            release_identity = dict(values.get("release_identity") or values.get("releaseIdentity") or {})
+            release_fingerprint = str(
+                release_identity.get("releaseFingerprint")
+                or values.get("release_fingerprint")
+                or values.get("releaseFingerprint")
+                or job.get("release_fingerprint")
+                or ""
+            )
+            tbox_fingerprint = str(release_identity.get("tboxFingerprint") or "")
+            tbox_release_id = str(release_identity.get("tboxReleaseId") or "")
+            rulebox_release_id = str(release_identity.get("ruleboxReleaseId") or "")
+            rulebox_fingerprint = str(release_identity.get("ruleboxFingerprint") or "")
+            receipts = []
+            for anchor in matching_anchors or []:
+                account_id = str(anchor.get("account_id") or "").strip()
+                symbol = str(anchor.get("symbol") or "").upper().strip()
+                represented_event_id = str(anchor.get("pending_event_id") or "").strip()
+                projection = dict(projection_results.get(account_id) or {})
+                receipt = MarketObservationReasoningReceipt(
+                    source_event_id=represented_event_id,
+                    account_id=account_id,
+                    symbol=symbol,
+                    survivor_job_id=str(job_id or ""),
+                    deployment_id=str(job.get("deployment_id") or ""),
+                    source_snapshot_id=str(job.get("source_snapshot_id") or ""),
+                    source_snapshot_at=str(job.get("source_snapshot_at") or ""),
+                    source_abox_snapshot_id=str(
+                        projection.get("sourceAboxSnapshotId")
+                        or projection.get("source_abox_snapshot_id")
+                        or ""
+                    ),
+                    inference_generation_id=str(
+                        projection.get("inferenceGenerationId")
+                        or projection.get("inference_generation_id")
+                        or ""
+                    ),
+                    release_fingerprint=release_fingerprint,
+                    tbox_release_id=tbox_release_id,
+                    tbox_fingerprint=tbox_fingerprint,
+                    rulebox_release_id=rulebox_release_id,
+                    rulebox_fingerprint=rulebox_fingerprint,
+                    completion_mode=completion_mode(
+                        str(job.get("source_event_id") or ""),
+                        represented_event_id,
+                    ),
+                    completed_at=stamp,
+                ).to_dict()
+                connection.execute(
+                    """
+                    INSERT INTO market_observation_reasoning_receipts (
+                        source_event_id, account_id, symbol, survivor_job_id, deployment_id,
+                        source_snapshot_id, source_snapshot_at, source_abox_snapshot_id,
+                        inference_generation_id, release_fingerprint,
+                        tbox_release_id, tbox_fingerprint,
+                        rulebox_release_id, rulebox_fingerprint,
+                        completion_mode, completed_at, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        survivor_job_id = VALUES(survivor_job_id),
+                        deployment_id = VALUES(deployment_id),
+                        source_snapshot_id = VALUES(source_snapshot_id),
+                        source_snapshot_at = VALUES(source_snapshot_at),
+                        source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
+                        inference_generation_id = VALUES(inference_generation_id),
+                        release_fingerprint = VALUES(release_fingerprint),
+                        tbox_release_id = VALUES(tbox_release_id),
+                        tbox_fingerprint = VALUES(tbox_fingerprint),
+                        rulebox_release_id = VALUES(rulebox_release_id),
+                        rulebox_fingerprint = VALUES(rulebox_fingerprint),
+                        completion_mode = VALUES(completion_mode),
+                        completed_at = VALUES(completed_at)
+                    """,
+                    (
+                        receipt["sourceEventId"], receipt["accountId"], receipt["symbol"],
+                        receipt["survivorJobId"], receipt["deploymentId"], receipt["sourceSnapshotId"],
+                        receipt["sourceSnapshotAt"], receipt["sourceAboxSnapshotId"],
+                        receipt["inferenceGenerationId"], receipt["releaseFingerprint"],
+                        receipt["tboxReleaseId"], receipt["tboxFingerprint"],
+                        receipt["ruleboxReleaseId"], receipt["ruleboxFingerprint"],
+                        receipt["completionMode"], stamp, stamp,
+                    ),
+                )
+                updated = connection.execute(
+                    """
+                    UPDATE market_observation_reasoning_anchors
+                    SET completed_price = pending_price, completed_at = %s,
+                        pending_price = 0, pending_event_id = '', pending_at = '', updated_at = %s
+                    WHERE account_id = %s AND symbol = %s AND pending_event_id = %s
+                    """,
+                    (stamp, stamp, account_id, symbol, represented_event_id),
+                )
+                if int(getattr(updated, "rowcount", 0) or 0) == 1:
+                    receipts.append(receipt)
+            completion_summary.update({
+                "status": "completed" if receipts else "not-required",
+                "completedCount": len(receipts),
+                "receiptCount": len(receipts),
+                "eventIds": sorted({item["sourceEventId"] for item in receipts}),
+                "accountIds": sorted({item["accountId"] for item in receipts}),
+                "symbols": sorted({item["symbol"] for item in receipts}),
+                "receipts": receipts,
+            })
+            stored_values = {**values, "market_observation_completion_receipt": completion_summary}
             where = "job_id = %s"
             params = [str(job_id or "")]
             if str(worker_id or ""):
@@ -1830,7 +1991,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     last_error = '', completed_at = %s, updated_at = %s
                 WHERE """ + where,
                 (
-                    canonical_json(values),
+                    canonical_json(stored_values),
                     max(0, int(values.get("duration_ms") or values.get("durationMs") or 0)),
                     stamp,
                     stamp,
@@ -1839,6 +2000,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             )
             if str(worker_id or "") and int(getattr(cursor, "rowcount", 0) or 0) != 1:
                 raise RuntimeError("The V2 reasoning job lease was lost before completion publication.")
+        return completion_summary
 
     @reasoning_queue_deadlock_retry("reasoning-engine-job-defer")
     def defer(self, job_id: str, reason: str, retry_after_seconds: int = 15) -> None:
@@ -2161,6 +2323,91 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "oldestAwaitingWorldProjectionAt": (
                 min(waiting_oldest_values) if waiting_oldest_values else ""
             ),
+        }
+
+    def market_observation_completion_summary(
+        self,
+        deployment_id: str = "",
+        limit: int = 20,
+    ) -> Dict[str, object]:
+        """Expose the durable observation-to-inference acknowledgement ledger."""
+
+        clean_deployment_id = str(deployment_id or "").strip()
+        where = " WHERE deployment_id = %s" if clean_deployment_id else ""
+        params = (clean_deployment_id,) if clean_deployment_id else ()
+        bounded = max(1, min(200, int(limit or 20)))
+        try:
+            with self.connect() as connection:
+                counts = connection.execute(
+                    "SELECT completion_mode, COUNT(*) AS row_count, MAX(completed_at) AS latest "
+                    "FROM market_observation_reasoning_receipts" + where
+                    + " GROUP BY completion_mode",
+                    params,
+                ).fetchall()
+                latest = connection.execute(
+                    "SELECT source_event_id, account_id, symbol, survivor_job_id, deployment_id, "
+                    "source_snapshot_id, source_snapshot_at, source_abox_snapshot_id, "
+                    "inference_generation_id, release_fingerprint, tbox_release_id, "
+                    "tbox_fingerprint, rulebox_release_id, rulebox_fingerprint, "
+                    "completion_mode, completed_at "
+                    "FROM market_observation_reasoning_receipts" + where
+                    + " ORDER BY completed_at DESC, source_event_id DESC LIMIT %s",
+                    (*params, bounded),
+                ).fetchall()
+                pending = connection.execute(
+                    "SELECT COUNT(*) AS row_count, MIN(pending_at) AS oldest "
+                    "FROM market_observation_reasoning_anchors WHERE pending_event_id <> ''"
+                ).fetchone() or {}
+        except Exception as error:  # Schema rollout must not hide the queue itself.
+            return {
+                "contractVersion": MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
+                "status": "unavailable",
+                "deploymentId": clean_deployment_id,
+                "reason": str(error)[:220],
+                "receiptCount": 0,
+                "pendingAnchorCount": 0,
+                "latestReceipts": [],
+            }
+        mode_counts = {
+            str(row.get("completion_mode") or "unknown"): int(row.get("row_count") or 0)
+            for row in counts or []
+        }
+        rows = []
+        for row in latest or []:
+            rows.append(MarketObservationReasoningReceipt(
+                source_event_id=str(row.get("source_event_id") or ""),
+                account_id=str(row.get("account_id") or ""),
+                symbol=str(row.get("symbol") or ""),
+                survivor_job_id=str(row.get("survivor_job_id") or ""),
+                deployment_id=str(row.get("deployment_id") or ""),
+                source_snapshot_id=str(row.get("source_snapshot_id") or ""),
+                source_snapshot_at=str(row.get("source_snapshot_at") or ""),
+                source_abox_snapshot_id=str(row.get("source_abox_snapshot_id") or ""),
+                inference_generation_id=str(row.get("inference_generation_id") or ""),
+                release_fingerprint=str(row.get("release_fingerprint") or ""),
+                tbox_release_id=str(row.get("tbox_release_id") or ""),
+                tbox_fingerprint=str(row.get("tbox_fingerprint") or ""),
+                rulebox_release_id=str(row.get("rulebox_release_id") or ""),
+                rulebox_fingerprint=str(row.get("rulebox_fingerprint") or ""),
+                completion_mode=str(row.get("completion_mode") or "direct"),
+                completed_at=str(row.get("completed_at") or ""),
+            ).to_dict())
+        return {
+            "contractVersion": MARKET_OBSERVATION_REASONING_RECEIPT_VERSION,
+            "status": "pending" if int(pending.get("row_count") or 0) else "healthy",
+            "deploymentId": clean_deployment_id,
+            "receiptCount": sum(mode_counts.values()),
+            "receiptCountByMode": mode_counts,
+            "pendingAnchorCount": int(pending.get("row_count") or 0),
+            "oldestPendingAnchorAt": str(pending.get("oldest") or ""),
+            "missingTboxIdentityCount": sum(
+                1 for row in rows if not str(row.get("tboxFingerprint") or "")
+            ),
+            "latestCompletedAt": max(
+                (str(row.get("latest") or "") for row in counts or []),
+                default="",
+            ),
+            "latestReceipts": rows,
         }
 
     @staticmethod

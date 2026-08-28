@@ -585,6 +585,8 @@ TEXT_SETTING_KEYS = [
     "reasoningEngineShadowActiveQueueMaxPending",
     "reasoningEngineV2IndependentEnabled",
     "reasoningEngineV2StaleObservationMaxAgeSeconds",
+    "marketObservationReasoningAnchorReconcileSeconds",
+    "marketObservationReasoningPendingTimeoutSeconds",
     "reasoningEngineWorkerHeartbeatCriticalSeconds",
     "reasoningEngineV2IntervalSeconds",
     "reasoningEngineV2LeaseSeconds",
@@ -2442,6 +2444,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "reasoningEngineV2StaleObservationMaxAgeSeconds",
             "REASONING_ENGINE_V2_STALE_OBSERVATION_MAX_AGE_SECONDS",
             "900",
+        ),
+        "marketObservationReasoningAnchorReconcileSeconds": value(
+            "marketObservationReasoningAnchorReconcileSeconds",
+            "MARKET_OBSERVATION_REASONING_ANCHOR_RECONCILE_SECONDS",
+            "60",
+        ),
+        "marketObservationReasoningPendingTimeoutSeconds": value(
+            "marketObservationReasoningPendingTimeoutSeconds",
+            "MARKET_OBSERVATION_REASONING_PENDING_TIMEOUT_SECONDS",
+            "3600",
         ),
         "reasoningEngineWorkerHeartbeatCriticalSeconds": value(
             "reasoningEngineWorkerHeartbeatCriticalSeconds",

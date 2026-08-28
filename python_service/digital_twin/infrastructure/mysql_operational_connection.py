@@ -992,6 +992,32 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS market_observation_reasoning_receipts (
+        source_event_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        survivor_job_id VARCHAR(191) NOT NULL,
+        deployment_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_snapshot_at VARCHAR(40) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        release_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        tbox_release_id VARCHAR(191) NOT NULL DEFAULT '',
+        tbox_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        rulebox_release_id VARCHAR(191) NOT NULL DEFAULT '',
+        rulebox_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        completion_mode VARCHAR(40) NOT NULL DEFAULT 'direct',
+        completed_at VARCHAR(40) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (source_event_id, account_id, symbol),
+        KEY idx_market_reasoning_receipt_job (survivor_job_id, completed_at),
+        KEY idx_market_reasoning_receipt_deployment (deployment_id, completed_at),
+        KEY idx_market_reasoning_receipt_snapshot (source_snapshot_id, account_id, symbol),
+        KEY idx_market_reasoning_receipt_completed (completed_at, source_event_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monitor_snapshot_history (
         account_id VARCHAR(191) NOT NULL,
         generated_at VARCHAR(40) NOT NULL DEFAULT '',

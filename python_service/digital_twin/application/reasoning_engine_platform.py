@@ -573,6 +573,16 @@ class ReasoningEnginePlatformService:
                 independent_id,
                 independent_release,
             )
+            completion_summary = getattr(
+                self.independent_job_store,
+                "market_observation_completion_summary",
+                None,
+            )
+            if callable(completion_summary):
+                response["marketObservationReasoningCompletion"] = completion_summary(
+                    independent_id,
+                    limit=20,
+                )
         if independent_id and independent_id not in {
             str(control.active_deployment_id or ""),
             str(control.delivery_deployment_id or ""),

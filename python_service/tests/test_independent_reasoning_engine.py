@@ -815,6 +815,99 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertTrue(store.last_transaction_retry["recovered"])
         self.assertEqual(1, store.last_transaction_retry["retryCount"])
 
+    def test_mysql_queue_completion_atomically_records_coalesced_market_receipt(self):
+        base_source = source_event("MSTR")
+        source = DomainEvent(
+            name=base_source.name,
+            aggregate_id=base_source.aggregate_id,
+            occurred_at=base_source.occurred_at,
+            event_id="event:new-market",
+            payload={
+                **dict(base_source.payload or {}),
+                "coalescedReasoningChanges": {
+                    "sourceEventIds": ["event:old-market", "event:new-market"],
+                },
+            },
+        )
+
+        class Connection:
+            def __init__(self):
+                self.calls = []
+                self.stored_result = {}
+
+            def execute(self, sql, params=()):
+                rendered = str(sql)
+                values = tuple(params or ())
+                self.calls.append((rendered, values))
+                if "FROM reasoning_engine_jobs" in rendered and "FOR UPDATE" in rendered:
+                    return SimpleNamespace(fetchone=lambda: {
+                        "job_id": "job:survivor",
+                        "source_event_id": "event:new-market",
+                        "source_snapshot_id": "snapshot:market",
+                        "source_snapshot_at": "2026-08-28T00:00:00Z",
+                        "request_json": json.dumps({"sourceEvent": source.to_dict()}),
+                        "release_fingerprint": "release:stored",
+                    })
+                if "FROM market_observation_reasoning_anchors" in rendered:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "account_id": "acct",
+                        "symbol": "MSTR",
+                        "pending_event_id": "event:old-market",
+                    }])
+                if "UPDATE reasoning_engine_jobs" in rendered:
+                    self.stored_result = json.loads(values[0])
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            def __init__(self):
+                self.runtime_settings = {}
+                self.last_transaction_retry = {}
+
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        result = Store().complete(
+            "job:survivor",
+            {
+                "evaluated_symbols": ["MSTR"],
+                "account_ids": ["acct"],
+                "projection_results": {
+                    "acct": {
+                        "sourceAboxSnapshotId": "abox:acct:1",
+                        "inferenceGenerationId": "generation:acct:1",
+                    },
+                },
+                "release_identity": {
+                    "releaseFingerprint": "release:verified",
+                    "tboxFingerprint": "tbox:verified",
+                },
+            },
+            worker_id="worker:1:v2",
+        )
+
+        self.assertTrue(result["anchorCompletionAtomic"])
+        self.assertEqual(1, result["completedCount"])
+        receipt = result["receipts"][0]
+        self.assertEqual("coalesced", receipt["completionMode"])
+        self.assertEqual("event:old-market", receipt["sourceEventId"])
+        self.assertEqual("generation:acct:1", receipt["inferenceGenerationId"])
+        self.assertEqual("tbox:verified", receipt["tboxFingerprint"])
+        self.assertEqual(
+            receipt,
+            connection.stored_result["market_observation_completion_receipt"]["receipts"][0],
+        )
+        self.assertTrue(any(
+            "INSERT INTO market_observation_reasoning_receipts" in sql
+            for sql, _params in connection.calls
+        ))
+        self.assertTrue(any(
+            "UPDATE market_observation_reasoning_anchors" in sql
+            for sql, _params in connection.calls
+        ))
+
     def test_mysql_queue_releases_exact_worker_claims_during_managed_shutdown(self):
         class Connection:
             def __init__(self):

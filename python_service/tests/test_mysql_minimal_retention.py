@@ -165,6 +165,33 @@ class LifecycleBaselineConnection(LifecycleArchiveConnection):
 
 
 class MySQLMinimalRetentionTests(unittest.TestCase):
+    def test_reasoning_job_retention_preserves_pending_market_anchor_sources(self):
+        connection = ApplyConnection()
+        repository = MySQLMinimalRetentionRepository(connection)
+        policy = mysql_minimal_retention_policy({
+            "mysqlMinimalRetentionEnabled": "1",
+            "mysqlMinimalRetentionMode": "apply",
+        })
+        budget = {
+            "started": 0,
+            "maxSeconds": 30,
+            "remainingBytes": 1024 * 1024,
+            "deletedBytes": 0,
+        }
+
+        repository._delete_reasoning_engine_jobs(
+            policy,
+            budget,
+            "2026-08-01T00:00:00Z",
+        )
+
+        select_sql = next(
+            sql for sql, _params in connection.calls
+            if "FROM `reasoning_engine_jobs`" in sql and sql.lstrip().startswith("SELECT")
+        )
+        self.assertIn("market_observation_reasoning_anchors", select_sql)
+        self.assertIn("pending_event_id", select_sql)
+
     def test_minimal_policy_is_opt_in_without_runtime_defaults_and_bounds_inputs(self):
         self.assertFalse(mysql_minimal_retention_policy({}).enabled)
 

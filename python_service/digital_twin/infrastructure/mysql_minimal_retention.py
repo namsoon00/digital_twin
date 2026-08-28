@@ -627,6 +627,9 @@ class MySQLMinimalRetentionRepository:
             "SELECT job_id, OCTET_LENGTH(request_json) + OCTET_LENGTH(result_json) AS payload_bytes "
             "FROM `reasoning_engine_jobs` WHERE job_status IN ("
             + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM `market_observation_reasoning_anchors` anchor "
+            "WHERE anchor.pending_event_id <> '' "
+            "AND anchor.pending_event_id = `reasoning_engine_jobs`.source_event_id)"
             + " ORDER BY updated_at, job_id LIMIT %s",
             statuses + (cutoff_iso, policy.batch_size),
             "job_id",
@@ -637,7 +640,10 @@ class MySQLMinimalRetentionRepository:
             "reasoning_engine_jobs",
             "job_id",
             candidates,
-            "job_status IN (" + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql(),
+            "job_status IN (" + _status_placeholders(statuses) + ") AND updated_at < " + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM `market_observation_reasoning_anchors` anchor "
+            "WHERE anchor.pending_event_id <> '' "
+            "AND anchor.pending_event_id = `reasoning_engine_jobs`.source_event_id)",
             statuses + (cutoff_iso,),
             budget,
         )

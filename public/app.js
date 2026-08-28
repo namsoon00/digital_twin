@@ -33633,6 +33633,7 @@
     var queueDelay = reasoning.queueDelayHealth && typeof reasoning.queueDelayHealth === "object" ? reasoning.queueDelayHealth : {};
     var queueDispatch = reasoning.queueDispatch && typeof reasoning.queueDispatch === "object" ? reasoning.queueDispatch : {};
     var mailbox = reasoning.mailbox && typeof reasoning.mailbox === "object" ? reasoning.mailbox : {};
+    var marketCompletion = reasoning.marketObservationReasoningCompletion && typeof reasoning.marketObservationReasoningCompletion === "object" ? reasoning.marketObservationReasoningCompletion : {};
     var reasoningStatus = String(queue.status || (state.ontologyReasoningStatusError ? "error" : "unknown")).toLowerCase();
     var reasoningTone = reasoningStatus === "healthy" ? "watch" : (reasoningStatus === "degraded" || reasoningStatus === "unknown" ? "caution" : "danger");
     var reasoningLabel = reasoningStatus === "healthy" ? "정상" : (reasoningStatus === "degraded" ? "대기 처리 중" : (reasoningStatus === "blocked" ? "차단됨" : "확인 필요"));
@@ -33656,6 +33657,13 @@
       ? "최장 " + queueDelayAge + "분 · 요청 " + queueDelayRequests + "건 · 종목 " + queueDelaySymbols + "개 · 한도 초과 " + queueDelayOverdue + "개"
       : (mailboxCount + "개 최신 상태 대기 · 실시간 원천 " + (reasoning.sourceFreshness && reasoning.sourceFreshness.realtimeEventMaxAgeMinutes || "-") + "분 이내만 사용");
     if (queueDelayProgressAt) queueDelayDetail += " · 최근 진행 " + queueDelayProgressAge + "분 전";
+    var marketCompletionStatus = String(marketCompletion.status || "unknown").toLowerCase();
+    var marketCompletionPending = Number(marketCompletion.pendingAnchorCount || 0);
+    var marketCompletionTone = marketCompletionStatus === "healthy" ? "watch" : (marketCompletionStatus === "pending" ? "caution" : "danger");
+    var marketCompletionLabel = marketCompletionStatus === "healthy" ? "승인 정상" : (marketCompletionStatus === "pending" ? "승인 대기 " + marketCompletionPending + "건" : "확인 필요");
+    var marketCompletionDetail = "완료 영수증 " + Number(marketCompletion.receiptCount || 0) + "건";
+    if (marketCompletion.latestCompletedAt) marketCompletionDetail += " · 최근 " + formatClock(marketCompletion.latestCompletedAt);
+    if (marketCompletion.missingTboxIdentityCount) marketCompletionDetail += " · TBox 식별 누락 " + Number(marketCompletion.missingTboxIdentityCount) + "건";
     var diagnostics = [
       {
         label: "저장 상태",
@@ -33687,6 +33695,12 @@
         tone: state.ontologyReasoningStatusLoading ? "caution" : queueDelayTone,
         detail: state.ontologyReasoningStatusError
           || queueDelayDetail
+      },
+      {
+        label: "시세 추론 승인",
+        value: state.ontologyReasoningStatusLoading ? "조회 중" : marketCompletionLabel,
+        tone: state.ontologyReasoningStatusLoading ? "caution" : marketCompletionTone,
+        detail: marketCompletion.reason || marketCompletionDetail
       }
     ];
     return [

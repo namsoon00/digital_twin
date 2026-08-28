@@ -559,15 +559,40 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
 
         account_id = str(account_id or "")
         with self.transaction() as connection:
-            rows = connection.execute(
-                "SELECT episodes.payload_json, episodes.status, episodes.decided_at "
+            # This migration check runs from the market-data cycle. Keep its
+            # steady-state query index-only: selecting the large episode JSON
+            # before proving a target is missing repeatedly read the complete
+            # decision archive even after migration had finished.
+            candidates = connection.execute(
+                "SELECT episodes.episode_id "
                 "FROM investment_decision_episodes AS episodes "
-                "LEFT JOIN investment_decision_outcome_targets AS targets "
-                "ON targets.episode_id = episodes.episode_id "
-                "WHERE episodes.account_id = %s AND targets.episode_id IS NULL "
-                "ORDER BY episodes.decided_at ASC, episodes.episode_id ASC LIMIT %s",
+                "WHERE episodes.account_id = %s "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM investment_decision_outcome_targets AS targets "
+                "WHERE targets.episode_id = episodes.episode_id"
+                ") ORDER BY episodes.decided_at ASC, episodes.episode_id ASC LIMIT %s",
                 (account_id, max(1, min(10000, int(limit or 2000)))),
             ).fetchall()
+            episode_ids = [
+                str(row.get("episode_id") or "").strip()
+                for row in candidates or []
+                if str(row.get("episode_id") or "").strip()
+            ]
+            rows = []
+            if episode_ids:
+                placeholders = ", ".join(["%s"] * len(episode_ids))
+                payload_rows = connection.execute(
+                    "SELECT episode_id, payload_json, status, decided_at "
+                    "FROM investment_decision_episodes WHERE episode_id IN ("
+                    + placeholders
+                    + ")",
+                    tuple(episode_ids),
+                ).fetchall()
+                by_id = {
+                    str(row.get("episode_id") or ""): row
+                    for row in payload_rows or []
+                }
+                rows = [by_id[episode_id] for episode_id in episode_ids if episode_id in by_id]
             stamp = utc_now_iso()
             scheduled = 0
             excluded = 0
@@ -1082,9 +1107,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         observed_at: str = "",
         limit: int = 0,
     ) -> List[Dict[str, object]]:
+        normalized_account_id = str(account_id or "")
         observed_stamp = canonical_investment_timestamp(observed_at) or utc_now_iso()
         target_limit = max(1, min(1000, int(limit or self.outcome_batch_size())))
-        self.backfill_outcome_targets(account_id)
+        completed_accounts = getattr(self, "_outcome_target_backfill_completed_accounts", set())
+        if normalized_account_id not in completed_accounts:
+            backfill = self.backfill_outcome_targets(normalized_account_id)
+            if str(backfill.get("status") or "") == "already-initialized":
+                completed_accounts.add(normalized_account_id)
+                self._outcome_target_backfill_completed_accounts = completed_accounts
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -1094,7 +1125,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 ORDER BY target_at ASC, target_id ASC
                 LIMIT %s
                 """,
-                (str(account_id or ""), observed_stamp, target_limit),
+                (normalized_account_id, observed_stamp, target_limit),
             ).fetchall()
         targets: List[Dict[str, object]] = []
         for row in rows or []:

@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import random
+import re
 import time
 from typing import Callable, Dict, Tuple
 import warnings
@@ -19,6 +20,17 @@ from .mysql_connection_pool import pooled_mysql_connection
 _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
 MYSQL_DEADLOCK_ERROR_CODE = 1213
 MYSQL_CONNECTION_LOST_ERROR_CODES = frozenset({2006, 2013, 2055})
+MYSQL_STATEMENT_TABLE_PATTERN = re.compile(
+    r"^\s*(?P<verb>INSERT(?:\s+IGNORE)?|REPLACE|UPDATE|DELETE|SELECT)\b",
+    re.IGNORECASE,
+)
+MYSQL_STATEMENT_TABLE_PATTERNS = {
+    "INSERT": re.compile(r"\bINTO\s+`?(?P<table>[A-Za-z0-9_]+)`?", re.IGNORECASE),
+    "REPLACE": re.compile(r"\bINTO\s+`?(?P<table>[A-Za-z0-9_]+)`?", re.IGNORECASE),
+    "UPDATE": re.compile(r"\bUPDATE\s+`?(?P<table>[A-Za-z0-9_]+)`?", re.IGNORECASE),
+    "DELETE": re.compile(r"\bFROM\s+`?(?P<table>[A-Za-z0-9_]+)`?", re.IGNORECASE),
+    "SELECT": re.compile(r"\bFROM\s+`?(?P<table>[A-Za-z0-9_]+)`?", re.IGNORECASE),
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +80,30 @@ def mysql_is_deadlock(error: Exception) -> bool:
 def mysql_is_connection_lost(error: Exception) -> bool:
     """Whether retrying a complete idempotent maintenance pass is safe."""
     return mysql_error_code(error) in MYSQL_CONNECTION_LOST_ERROR_CODES
+
+
+def mysql_statement_label(sql: object) -> str:
+    """Return only a safe verb/table label for timeout diagnostics."""
+
+    statement = " ".join(str(sql or "").split())
+    matched = MYSQL_STATEMENT_TABLE_PATTERN.search(statement)
+    if not matched:
+        return "mysql statement"
+    raw_verb = str(matched.group("verb") or "").upper()
+    verb = raw_verb.split()[0]
+    table_match = MYSQL_STATEMENT_TABLE_PATTERNS.get(verb).search(statement)
+    table = str(table_match.group("table") or "") if table_match else ""
+    return (verb + (" " + table if table else "")).strip()
+
+
+def attach_mysql_error_context(error: Exception, sql: object, started_at: float) -> None:
+    """Annotate the original driver error without exposing SQL parameters."""
+
+    try:
+        setattr(error, "orbit_mysql_statement", mysql_statement_label(sql))
+        setattr(error, "orbit_mysql_elapsed_ms", max(0, int((time.monotonic() - started_at) * 1000)))
+    except Exception:
+        return
 
 
 def mysql_deadlock_retry_count(settings: Dict[str, object] = None) -> int:
@@ -186,13 +222,23 @@ class MySQLConnectionProxy:
         self.closed = False
 
     def execute(self, sql: str, params=None):
+        started_at = time.monotonic()
         cursor = self.connection.cursor()
-        cursor.execute(sql, params or ())
+        try:
+            cursor.execute(sql, params or ())
+        except Exception as error:
+            attach_mysql_error_context(error, sql, started_at)
+            raise
         return cursor
 
     def executemany(self, sql: str, rows):
+        started_at = time.monotonic()
         cursor = self.connection.cursor()
-        cursor.executemany(sql, list(rows or []))
+        try:
+            cursor.executemany(sql, list(rows or []))
+        except Exception as error:
+            attach_mysql_error_context(error, sql, started_at)
+            raise
         return cursor
 
     def commit(self) -> None:

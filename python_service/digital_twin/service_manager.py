@@ -480,10 +480,17 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     connection_settings = mysql_settings(settings)
     data_path = Path(str(os.environ.get("MYSQL_DATA_DIR") or data_dir() / "mysql-runtime"))
     port = int_value(os.environ.get("MYSQL_PORT") or (settings or {}).get("mysqlPort"), 3306, 1)
+    buffer_pool_size_mb = int_value(
+        os.environ.get("MYSQL_INNODB_BUFFER_POOL_SIZE_MB")
+        or (settings or {}).get("mysqlInnoDbBufferPoolSizeMb"),
+        2048,
+        256,
+    )
+    buffer_pool_size_mb = min(8192, buffer_pool_size_mb)
     redo_log_capacity_mb = int_value(
         os.environ.get("MYSQL_INNODB_REDO_LOG_CAPACITY_MB")
         or (settings or {}).get("mysqlInnoDbRedoLogCapacityMb"),
-        256,
+        1024,
         64,
     )
     redo_log_capacity_mb = min(4096, redo_log_capacity_mb)
@@ -500,7 +507,7 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "--log-error=" + str(data_path / "mysql.err"),
         "--mysqlx=0",
         "--skip-log-bin",
-        "--innodb-buffer-pool-size=536870912",
+        "--innodb-buffer-pool-size=" + str(buffer_pool_size_mb * 1024 * 1024),
         "--innodb-redo-log-capacity=" + str(redo_log_capacity_mb * 1024 * 1024),
         "--max-connections=100",
     ] if executable and Path(executable).exists() else []

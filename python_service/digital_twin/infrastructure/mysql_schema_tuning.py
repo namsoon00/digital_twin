@@ -113,6 +113,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`prior_decision_episode_id`, `account_id`, `symbol`, `observed_at`",
         ),
     ),
+    "investment_decision_episodes": (
+        MySQLIndexDefinition(
+            "investment_decision_episodes",
+            "idx_decision_episodes_account_decided",
+            "`account_id`, `decided_at`, `episode_id`",
+        ),
+    ),
     "reasoning_engine_comparisons": (
         MySQLIndexDefinition(
             "reasoning_engine_comparisons",
@@ -315,6 +322,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "market_time_series_observations",
             "idx_market_time_series_snapshot_cutoff",
             "`account_id`, `symbol`, `granularity`, `observed_at`, `bucket_at`",
+        ),
+        MySQLIndexDefinition(
+            "market_time_series_observations",
+            "idx_market_time_series_projection_source",
+            "`account_id`, `symbol`, `observed_at`, `granularity`, `bucket_at`",
         ),
     ),
     "symbol_universe": (

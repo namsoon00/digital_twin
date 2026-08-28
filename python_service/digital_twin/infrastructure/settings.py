@@ -31,6 +31,7 @@ TEXT_SETTING_KEYS = [
     "mysqlUnixSocket",
     "mysqlTablePartitioning",
     "mysqlOperationTimeoutSeconds",
+    "mysqlInnoDbBufferPoolSizeMb",
     "mysqlInnoDbRedoLogCapacityMb",
     "operationalHistoryRetentionEnabled",
     "operationalHistoryRetentionHours",
@@ -1185,11 +1186,16 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "mysqlPassword": value("mysqlPassword", "MYSQL_PASSWORD", ""),
         "mysqlUnixSocket": value("mysqlUnixSocket", "MYSQL_UNIX_SOCKET", ""),
         "mysqlTablePartitioning": value("mysqlTablePartitioning", "MYSQL_TABLE_PARTITIONING", "auto"),
-        "mysqlOperationTimeoutSeconds": value("mysqlOperationTimeoutSeconds", "MYSQL_OPERATION_TIMEOUT_SECONDS", "10"),
+        "mysqlOperationTimeoutSeconds": value("mysqlOperationTimeoutSeconds", "MYSQL_OPERATION_TIMEOUT_SECONDS", "30"),
+        "mysqlInnoDbBufferPoolSizeMb": value(
+            "mysqlInnoDbBufferPoolSizeMb",
+            "MYSQL_INNODB_BUFFER_POOL_SIZE_MB",
+            "2048",
+        ),
         "mysqlInnoDbRedoLogCapacityMb": value(
             "mysqlInnoDbRedoLogCapacityMb",
             "MYSQL_INNODB_REDO_LOG_CAPACITY_MB",
-            "256",
+            "1024",
         ),
         "operationalHistoryRetentionEnabled": value(
             "operationalHistoryRetentionEnabled",

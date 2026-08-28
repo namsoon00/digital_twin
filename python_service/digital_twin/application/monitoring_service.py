@@ -164,11 +164,21 @@ class MonitorRunner:
             source_snapshot_replay = bool(self.source_snapshot_replay)
             if source_snapshot_replay and ("source_snapshot_replay" in parameters or accepts_kwargs):
                 kwargs["source_snapshot_replay"] = True
+            self.progress(
+                "cycle_record.start",
+                snapshotCount=len(snapshots),
+                eventCount=len(all_events),
+            )
             cycle_result = recorder(
                 [account.account_id for account in self.accounts],
                 snapshots,
                 all_events,
                 **kwargs,
+            )
+            self.progress(
+                "cycle_record.done",
+                snapshotCount=len(snapshots),
+                eventCount=len(all_events),
             )
             self.last_cycle_record_result = cycle_result
             details = getattr(cycle_result, "details", {}) if cycle_result is not None else {}

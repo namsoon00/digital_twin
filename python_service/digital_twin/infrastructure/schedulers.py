@@ -572,6 +572,37 @@ class RealtimeScheduler:
         self.error_reporter = error_reporter or operational_error_reporter()
         self.cycle_guard = cycle_guard
         self.running = True
+        self.current_stage = "monitor.start"
+        self.current_stage_payload = {}
+        self.stage_started_at = time.monotonic()
+        self.cycle_started_at = self.stage_started_at
+        previous_progress = getattr(self.runner, "progress_callback", None)
+        if hasattr(self.runner, "progress_callback"):
+            self.runner.progress_callback = self.progress_callback(previous_progress)
+
+    def progress_callback(self, previous_callback=None):
+        def handle(stage: str, payload=None) -> None:
+            self.current_stage = str(stage or "monitor.unknown")
+            self.current_stage_payload = dict(payload or {})
+            self.stage_started_at = time.monotonic()
+            if callable(previous_callback):
+                previous_callback(stage, dict(payload or {}))
+
+        return handle
+
+    def error_stage(self, error: Exception) -> str:
+        parts = ["monitor cycle", str(self.current_stage or "monitor.unknown")]
+        account_id = str(self.current_stage_payload.get("accountId") or "").strip()
+        if account_id:
+            parts.append("account=" + account_id[:80])
+        statement = str(getattr(error, "orbit_mysql_statement", "") or "").strip()
+        if statement:
+            parts.append("mysql=" + statement[:100])
+        elapsed_ms = int(getattr(error, "orbit_mysql_elapsed_ms", 0) or 0)
+        if elapsed_ms:
+            parts.append("query=" + str(round(elapsed_ms / 1000.0, 1)) + "s")
+        parts.append("cycle=" + str(round(time.monotonic() - self.cycle_started_at, 1)) + "s")
+        return " · ".join(parts)
 
     def stop(self, *_args) -> None:
         self.running = False
@@ -581,6 +612,10 @@ class RealtimeScheduler:
         print("Python realtime monitor started. interval=" + str(self.interval_seconds) + "s")
         while self.running:
             started = time.monotonic()
+            self.cycle_started_at = started
+            self.stage_started_at = started
+            self.current_stage = "monitor.start"
+            self.current_stage_payload = {}
             try:
                 if self.cycle_guard:
                     with self.cycle_guard():
@@ -588,8 +623,9 @@ class RealtimeScheduler:
                 else:
                     self.runner.run_once()
             except Exception as error:  # noqa: BLE001 - long-running scheduler must continue after a cycle failure.
-                print("Python realtime monitor error: " + str(error))
-                report_runtime_error(self.error_reporter, "Python realtime monitor", error, "monitor cycle")
+                stage = self.error_stage(error)
+                print("Python realtime monitor error: " + str(error) + " stage=" + stage)
+                report_runtime_error(self.error_reporter, "Python realtime monitor", error, stage)
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 

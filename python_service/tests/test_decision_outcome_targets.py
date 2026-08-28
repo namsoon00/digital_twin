@@ -115,7 +115,7 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertEqual(0, insert_params[4])
         self.assertEqual("excluded", insert_params[8])
 
-    def test_backfill_is_reentrant_and_selects_only_episodes_without_targets(self):
+    def test_backfill_steady_state_is_index_only_and_selects_only_missing_targets(self):
         store = self.store()
         connection = EmptyMigrationConnection()
 
@@ -129,8 +129,24 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
 
         self.assertEqual("already-initialized", result["status"])
         query = connection.statements[0][0]
-        self.assertIn("LEFT JOIN investment_decision_outcome_targets", query)
-        self.assertIn("targets.episode_id IS NULL", query)
+        self.assertIn("NOT EXISTS", query)
+        self.assertIn("investment_decision_outcome_targets", query)
+        self.assertNotIn("payload_json", query)
+
+        backfill_calls = []
+        store.backfill_outcome_targets = lambda account_id: (
+            backfill_calls.append(account_id) or {"status": "already-initialized"}
+        )
+        store.outcome_batch_size = lambda: 100
+
+        @contextmanager
+        def connect():
+            yield EmptyMigrationConnection()
+
+        store.connect = connect
+        store.pending_outcome_targets("account:1")
+        store.pending_outcome_targets("account:1")
+        self.assertEqual(["account:1"], backfill_calls)
 
 
 if __name__ == "__main__":

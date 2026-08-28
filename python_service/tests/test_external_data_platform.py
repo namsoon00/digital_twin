@@ -344,6 +344,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
                     "source": "OpenDART",
                     "ok": True,
                     "target": "005930",
+                    "corpCode": "00126380",
                     "dataUsable": True,
                     "emptyResult": True,
                 })
@@ -363,8 +364,66 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertEqual({"dartDisclosures": {}}, result.payload)
         self.assertEqual("no-disclosures", result.source_revision)
+        self.assertEqual("00126380", result.watermark["corpCode"])
         self.assertTrue(result.quality["dataUsable"])
         self.assertTrue(result.quality["emptyResult"])
+
+        maintenance_provider = legacy_provider(
+            {"opendartApiKey": "test-key"},
+            externalDartEnabled="1",
+            externalDartMaxSymbols="1",
+        )
+        maintenance_provider.fetch_bytes = lambda *_args, **_kwargs: (
+            b"<?xml version='1.0' encoding='UTF-8'?><result>"
+            b"<status>800</status><message>service maintenance</message></result>"
+        )
+        maintenance_signals = empty_signals()
+        maintenance_provider.add_opendart(
+            maintenance_signals,
+            [position_for(ExternalSubject("000680", symbol="000680", name="LS Networks", market="KR"))],
+            include_fundamentals=False,
+            include_document=False,
+        )
+        self.assertTrue(any(
+            not item.get("ok") and "OpenDART 800 service maintenance" in item.get("message", "")
+            for item in maintenance_signals["statuses"]
+        ))
+
+        captured_settings = {}
+
+        class RecoveredCodeProvider:
+            @staticmethod
+            def add_opendart(target, _positions, **_kwargs):
+                target["dartDisclosures"]["000680"] = {
+                    "provider": "OpenDART",
+                    "corpCode": "00104698",
+                    "corpName": "LS Networks",
+                    "receiptNo": "20260827000403",
+                    "receiptDate": "20260827",
+                    "items": [],
+                }
+
+        def recovered_provider(configured, **_overrides):
+            captured_settings.update(configured)
+            return RecoveredCodeProvider()
+
+        recovered_job = CollectionJob(
+            "opendart.disclosures",
+            "000680",
+            "opendart",
+            85,
+            ExternalSubject("000680", symbol="000680", name="LS Networks", market="KR"),
+        )
+        with patch(
+            "digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider",
+            side_effect=recovered_provider,
+        ):
+            recovered = OpenDartDisclosureAdapter(
+                lambda: {"000680": "00104698"}
+            ).fetch(recovered_job, {"opendartApiKey": "test-key"})
+
+        self.assertIn("000680=00104698", captured_settings["externalDartCorpCodes"])
+        self.assertEqual("00104698", recovered.watermark["corpCode"])
 
     def test_same_provider_jobs_are_serialized_while_provider_groups_are_parallelizable(self):
         adapter = ConcurrencyTrackingAdapter()

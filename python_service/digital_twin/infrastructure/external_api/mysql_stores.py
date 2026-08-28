@@ -95,6 +95,34 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
             return result
         return fallback
 
+    def opendart_corp_code_assignments(self) -> Dict[str, str]:
+        with self.connect() as connection:
+            fact_rows = connection.execute(
+                "SELECT subject_key, payload_json FROM external_fact_current "
+                "WHERE dataset_id = 'opendart.disclosures' ORDER BY subject_key LIMIT 5000"
+            ).fetchall()
+            state_rows = connection.execute(
+                "SELECT partition_key, watermark_json FROM external_dataset_state "
+                "WHERE dataset_id IN ('opendart.disclosures', 'opendart.company_facts') "
+                "ORDER BY partition_key LIMIT 10000"
+            ).fetchall()
+        assignments: Dict[str, str] = {}
+        for row in fact_rows or []:
+            symbol = str(row.get("subject_key") or "").upper().strip()
+            payload = _json_loads(row.get("payload_json"), {})
+            disclosures = payload.get("dartDisclosures") if isinstance(payload.get("dartDisclosures"), dict) else {}
+            disclosure = disclosures.get(symbol) if isinstance(disclosures.get(symbol), dict) else {}
+            corp_code = str(disclosure.get("corpCode") or "").strip()
+            if symbol and corp_code:
+                assignments[symbol] = corp_code.zfill(8)
+        for row in state_rows or []:
+            symbol = str(row.get("partition_key") or "").upper().strip()
+            watermark = _json_loads(row.get("watermark_json"), {})
+            corp_code = str(watermark.get("corpCode") or "").strip()
+            if symbol and corp_code:
+                assignments[symbol] = corp_code.zfill(8)
+        return assignments
+
     def sync_partitions(
         self,
         plans: Iterable[tuple],

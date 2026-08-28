@@ -9,14 +9,17 @@ from .yfinance import YFinanceProfileAdapter
 from .alpha_vantage import AlphaVantageQuoteAdapter
 
 
-def default_external_dataset_registry(settings: Dict[str, object]) -> ExternalDatasetRegistry:
+def default_external_dataset_registry(
+    settings: Dict[str, object],
+    opendart_corp_code_lookup=None,
+) -> ExternalDatasetRegistry:
     configured = dict(settings or {})
     adapters = [
         CoinGeckoMarketAdapter(),
         FredMacroAdapter(),
-        OpenDartDisclosureAdapter(),
+        OpenDartDisclosureAdapter(opendart_corp_code_lookup),
         OpenDartDocumentAdapter(),
-        OpenDartCompanyFactsAdapter(),
+        OpenDartCompanyFactsAdapter(opendart_corp_code_lookup),
         SecSubmissionsAdapter(),
         SecDocumentAdapter(),
         SecCompanyFactsAdapter(),

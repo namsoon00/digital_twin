@@ -1093,8 +1093,11 @@ def build_market_data_collection_runner(settings=None, event_publisher=None) -> 
 
 def build_external_data_collection_runner(settings=None) -> ExternalDataCollectionService:
     configured_settings = dict(settings or runtime_settings())
-    registry = default_external_dataset_registry(configured_settings)
     store = stores.external_data_store(configured_settings)
+    registry = default_external_dataset_registry(
+        configured_settings,
+        opendart_corp_code_lookup=store.opendart_corp_code_assignments,
+    )
     evidence_projector = ExternalOfficialEvidenceProjectionService(
         fact_store=store,
         evidence_store=stores.research_evidence_store(configured_settings),

@@ -1,6 +1,6 @@
 import hashlib
 import urllib.parse
-from typing import Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List
 
 from ....application.external_data.contracts import (
     CollectionJob,
@@ -13,7 +13,7 @@ from ....application.external_data.contracts import (
 )
 from ....domain.disclosure_quality import assess_disclosure_document
 from ....domain.disclosure_taxonomy import classify_disclosure
-from ...external_signal_utils import dart_document_text
+from ...external_signal_utils import dart_document_text, symbol_assignments
 from .base import empty_signals, equity_partitions, legacy_provider, observation, position_for, require_payload, source_as_of
 
 
@@ -22,16 +22,60 @@ def is_korean_equity(subject: ExternalSubject) -> bool:
     return symbol.isdigit() and len(symbol) == 6
 
 
-def is_successful_empty_disclosure_result(signals: Dict[str, object], symbol: str) -> bool:
+def successful_empty_disclosure_result(signals: Dict[str, object], symbol: str) -> Dict[str, object]:
     normalized = str(symbol or "").upper().strip()
-    return any(
-        str(item.get("source") or "") == "OpenDART"
+    return next((
+        item
+        for item in signals.get("statuses") or []
+        if isinstance(item, dict)
+        and str(item.get("source") or "") == "OpenDART"
         and bool(item.get("ok"))
         and bool(item.get("emptyResult"))
         and str(item.get("target") or "").upper().strip() == normalized
-        for item in signals.get("statuses") or []
-        if isinstance(item, dict)
-    )
+    ), {})
+
+
+class OpenDartCorpCodeResolver:
+    def __init__(self, lookup: Callable[[], Dict[str, str]] = None):
+        self.lookup = lookup
+        self.cached: Dict[str, str] = {}
+        self.loaded = False
+
+    def assignments(self) -> Dict[str, str]:
+        if not self.loaded:
+            self.loaded = True
+            recovered = self.lookup() if callable(self.lookup) else {}
+            self.cached.update({
+                str(symbol or "").zfill(6): str(code or "").zfill(8)
+                for symbol, code in dict(recovered or {}).items()
+                if str(symbol or "").strip() and str(code or "").strip()
+            })
+        return dict(self.cached)
+
+    def settings_for(self, job: CollectionJob, settings: Dict[str, object]) -> Dict[str, object]:
+        configured = dict(settings or {})
+        assignments = symbol_assignments(configured.get("externalDartCorpCodes") or "")
+        symbol = str(job.subject.symbol or job.partition_key or "").upper().strip()
+        code = str(
+            job.watermark.get("corpCode")
+            or assignments.get(symbol)
+            or self.assignments().get(symbol)
+            or ""
+        ).strip()
+        if code:
+            assignments[symbol] = code.zfill(8)
+            configured["externalDartCorpCodes"] = "\n".join(
+                key + "=" + str(value)
+                for key, value in sorted(assignments.items())
+            )
+        return configured
+
+    def remember(self, symbol: str, row: Dict[str, object]) -> str:
+        normalized = str(symbol or "").upper().strip()
+        code = str((row or {}).get("corpCode") or "").strip()
+        if normalized and code:
+            self.cached[normalized] = code.zfill(8)
+        return code.zfill(8) if code else ""
 
 
 class OpenDartDisclosureAdapter:
@@ -52,14 +96,18 @@ class OpenDartDisclosureAdapter:
         materiality_policy="source-revision",
     )
 
+    def __init__(self, corp_code_lookup: Callable[[], Dict[str, str]] = None):
+        self.corp_codes = OpenDartCorpCodeResolver(corp_code_lookup)
+
     def partitions(self, subjects: Iterable[ExternalSubject], settings: Dict[str, object]) -> List[CollectionPartition]:
         if not str(settings.get("opendartApiKey") or "").strip():
             return []
         return equity_partitions(self.descriptor, subjects, is_korean_equity)
 
     def fetch(self, job: CollectionJob, settings: Dict[str, object]):
+        configured = self.corp_codes.settings_for(job, settings)
         provider = legacy_provider(
-            settings,
+            configured,
             externalDartEnabled="1",
             externalDartMaxSymbols="1",
         )
@@ -72,14 +120,16 @@ class OpenDartDisclosureAdapter:
         )
         group = signals.get("dartDisclosures") if isinstance(signals.get("dartDisclosures"), dict) else {}
         row = group.get(job.subject.symbol) if isinstance(group.get(job.subject.symbol), dict) else {}
-        if not row and is_successful_empty_disclosure_result(signals, job.subject.symbol):
+        empty_result = successful_empty_disclosure_result(signals, job.subject.symbol)
+        if not row and empty_result:
+            corp_code = self.corp_codes.remember(job.subject.symbol, empty_result)
             return observation(
                 self.descriptor,
                 job.subject.symbol,
                 {"dartDisclosures": {}},
                 preferred_revision="no-disclosures",
                 preferred_source_as_of=str(signals.get("fetchedAt") or ""),
-                watermark={"emptyResult": True},
+                watermark={"emptyResult": True, "corpCode": corp_code},
                 quality={
                     "dataUsable": True,
                     "provider": "opendart",
@@ -88,6 +138,7 @@ class OpenDartDisclosureAdapter:
             )
         if not row:
             row = require_payload(signals, "dartDisclosures", job.subject.symbol)
+        corp_code = self.corp_codes.remember(job.subject.symbol, row)
         for item in row.get("items") if isinstance(row.get("items"), list) else []:
             if isinstance(item, dict):
                 item.update(classify_disclosure(item.get("reportName"), item.get("reportName"), "OpenDART"))
@@ -99,7 +150,7 @@ class OpenDartDisclosureAdapter:
             {"dartDisclosures": {job.subject.symbol: row}},
             preferred_revision=receipt,
             preferred_source_as_of=as_of,
-            watermark={"receiptNo": receipt},
+            watermark={"receiptNo": receipt, "corpCode": corp_code},
         )
 
     def followup_requests(
@@ -230,14 +281,18 @@ class OpenDartCompanyFactsAdapter:
         materiality_policy="source-revision",
     )
 
+    def __init__(self, corp_code_lookup: Callable[[], Dict[str, str]] = None):
+        self.corp_codes = OpenDartCorpCodeResolver(corp_code_lookup)
+
     def partitions(self, subjects: Iterable[ExternalSubject], settings: Dict[str, object]) -> List[CollectionPartition]:
         if not str(settings.get("opendartApiKey") or "").strip():
             return []
         return equity_partitions(self.descriptor, subjects, is_korean_equity)
 
     def fetch(self, job: CollectionJob, settings: Dict[str, object]):
+        configured = self.corp_codes.settings_for(job, settings)
         provider = legacy_provider(
-            settings,
+            configured,
             externalDartEnabled="1",
             externalDartCompanyFundamentalsEnabled="1",
             externalDartMaxSymbols="1",
@@ -250,6 +305,7 @@ class OpenDartCompanyFactsAdapter:
             include_document=False,
         )
         row = require_payload(signals, "dartDisclosures", job.subject.symbol)
+        corp_code = self.corp_codes.remember(job.subject.symbol, row)
         basis = row.get("financialStatementBasis") if isinstance(row.get("financialStatementBasis"), dict) else {}
         revision = ":".join([
             str(basis.get("businessYear") or ""),
@@ -263,5 +319,5 @@ class OpenDartCompanyFactsAdapter:
             {"dartDisclosures": {job.subject.symbol: row}},
             preferred_revision=revision,
             preferred_source_as_of=as_of,
-            watermark={"financialStatementRevision": revision},
+            watermark={"financialStatementRevision": revision, "corpCode": corp_code},
         )

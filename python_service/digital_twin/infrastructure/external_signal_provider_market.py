@@ -15,7 +15,7 @@ from ..domain.portfolio_calculations import (
 )
 from ..domain.portfolio import Position, utc_now_iso
 from .external_signal_utils import dart_document_text, parse_iso, symbol_assignments, symbol_list
-from .opendart_calendar_source import OPENDART_CORP_CODE_URL, parse_opendart_corp_codes
+from .opendart_calendar_source import OPENDART_CORP_CODE_URL, opendart_error_response, parse_opendart_corp_codes
 
 
 class ExternalSignalMarketMixin:
@@ -531,7 +531,18 @@ class ExternalSignalMarketMixin:
                 # company. Parse it once and persist the complete mapping so
                 # round-robin batches do not download the same ZIP again for
                 # each newly selected symbol.
-                corp_codes.update(parse_opendart_corp_codes(raw_directory))
+                directory_codes = parse_opendart_corp_codes(raw_directory)
+                if not directory_codes:
+                    provider_error = opendart_error_response(raw_directory)
+                    if provider_error:
+                        raise RuntimeError(
+                            "OpenDART "
+                            + str(provider_error.get("status") or "error")
+                            + " "
+                            + str(provider_error.get("message") or "기업코드 조회 실패")
+                        )
+                    raise RuntimeError("OpenDART 기업코드 응답에서 종목 매핑을 읽지 못했습니다.")
+                corp_codes.update(directory_codes)
                 self.provider_state["opendart:corp-code-assignments"] = dict(corp_codes)
             except Exception as error:  # noqa: BLE001 - configured mappings remain usable.
                 self.status_for_error(signals, "OpenDART", "corp-code directory ", error)
@@ -596,6 +607,7 @@ class ExternalSignalMarketMixin:
                         True,
                         symbol + " 조회 기간 내 공시 없음",
                         target=symbol,
+                        corpCode=corp_code,
                         dataUsable=True,
                         emptyResult=True,
                     )

@@ -75,6 +75,21 @@ def parse_opendart_corp_codes(raw: object, target_symbols: List[str] = None) -> 
     return assignments
 
 
+def opendart_error_response(raw: object) -> Dict[str, str]:
+    data = bytes(raw or b"")
+    if not data or data[:2] == b"PK":
+        return {}
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return {}
+    status = str(root.findtext("status") or "").strip()
+    message = str(root.findtext("message") or "").strip()
+    if not status and not message:
+        return {}
+    return {"status": status, "message": message}
+
+
 def is_earnings_ir_report(row: Dict[str, object]) -> bool:
     name = re.sub(r"\s+", "", str((row or {}).get("report_nm") or ""))
     return "기업설명회" in name and ("IR" in name.upper() or "안내공시" in name)

@@ -15,6 +15,8 @@ from digital_twin.domain.reasoning_source_facts import investment_calendar_sourc
 from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.domain.ontology_projection_audit import compact_reasoning_request_context
 from digital_twin.domain.ontology_execution_trace import reasoning_stage_records
+from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.infrastructure.typedb_ontology import typedb_native_rule_profile
 
 
 def calendar_payload(updated_at="2026-08-28T00:00:00Z"):
@@ -214,6 +216,55 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
             1,
             len([event for event in publisher.events if event.name == ONTOLOGY_REASONING_REQUESTED]),
         )
+
+    def test_expired_calendar_revision_is_stored_without_reasoning_request(self):
+        class Repository:
+            def upsert(self, event):
+                return event
+
+        class FactStore:
+            def append(self, fact):
+                return {"inserted": True, "fact": fact}
+
+        class Publisher:
+            def __init__(self):
+                self.events = []
+
+            def publish(self, event):
+                self.events.append(event)
+
+        publisher = Publisher()
+        service = InvestmentCalendarService(
+            Repository(), event_publisher=publisher,
+            reasoning_source_fact_store=FactStore(),
+        )
+        payload = calendar_payload()
+        payload["startsAt"] = "2020-01-01T00:00:00Z"
+
+        result = service.save_event(payload)
+
+        self.assertFalse(result["reasoningRequested"])
+        self.assertEqual(
+            0,
+            len([event for event in publisher.events if event.name == ONTOLOGY_REASONING_REQUESTED]),
+        )
+
+    def test_distant_calendar_revision_waits_until_review_window(self):
+        calendar = InvestmentCalendarEvent.from_payload({
+            **calendar_payload(),
+            "startsAt": "2035-01-01T00:00:00Z",
+        })
+        self.assertFalse(calendar.reasoning_eligible())
+
+    def test_calendar_rule_is_fully_native_typedb_compatible(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.earnings.calendar.review.v1"
+        )
+        profile = typedb_native_rule_profile(rule.to_dict())
+
+        self.assertEqual("ready", profile["status"])
+        self.assertEqual([], profile["blockers"])
 
 
 if __name__ == "__main__":

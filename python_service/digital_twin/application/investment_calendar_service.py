@@ -216,7 +216,7 @@ class InvestmentCalendarService:
             saved.symbols
             and bool(append_result.get("inserted", True))
             and (
-                saved.material_for_reasoning()
+                saved.reasoning_eligible()
                 or saved.status in {"deleted", "superseded", "rejected"}
             )
         )

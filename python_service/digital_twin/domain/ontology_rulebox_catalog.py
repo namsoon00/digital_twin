@@ -3864,10 +3864,6 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
                     "검증된 실적 일정이 14일 안에 있습니다.",
                     relation_type="HAS_EXTERNAL_SIGNAL",
                     target_kind="earnings-calendar-event",
-                    target_property_filters={
-                        "calendarScheduleEligible": True,
-                        "eventWithinReviewWindow": True,
-                    },
                 ),
             ],
             derivations=[

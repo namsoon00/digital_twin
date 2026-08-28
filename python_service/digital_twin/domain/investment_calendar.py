@@ -369,6 +369,33 @@ class InvestmentCalendarEvent:
     def material_for_reasoning(self) -> bool:
         return self.active() and (self.importance >= 70 or bool(self.symbols))
 
+    def reasoning_eligible(
+        self,
+        now_at: datetime = None,
+        post_event_hours: int = 48,
+        review_window_days: int = 14,
+    ) -> bool:
+        """Keep expired provider rewrites out of the live reasoning queue.
+
+        A short post-event window remains eligible because an earnings release
+        can still matter after its scheduled start. Older rows remain durable
+        calendar history, but no longer require a current-state ABox object.
+        """
+        if not self.material_for_reasoning():
+            return False
+        starts_at = self.starts_datetime()
+        if not starts_at:
+            return False
+        observed_at = now_at or datetime.now(timezone.utc)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        observed_at = observed_at.astimezone(timezone.utc)
+        return (
+            observed_at - timedelta(hours=max(0, int(post_event_hours or 0)))
+            <= starts_at
+            <= observed_at + timedelta(days=max(0, int(review_window_days or 0)))
+        )
+
 
 @dataclass(frozen=True)
 class InvestmentCalendarReminder:

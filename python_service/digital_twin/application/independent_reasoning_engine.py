@@ -1633,9 +1633,10 @@ class IndependentReasoningJobRunner:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
     def ensure_candidate_validation_window(self, deployment_id: str) -> Dict[str, object]:
-        """Start candidate evidence collection when its frozen release is ready.
+        """Start candidate evidence collection after release and ABox warmup.
 
-        Provisioning jobs are useful only after TBox/RuleBox warmup completes.
+        The first successful job in a new graph database builds its full ABox
+        manifest and is provisioning work, not steady-state latency evidence.
         Waiting for a later operator command to set this boundary discarded
         successful runs performed between warmup and that command, forcing a
         second validation replay of the same immutable source events.
@@ -1652,9 +1653,16 @@ class IndependentReasoningJobRunner:
             release.get("warmed")
         ):
             return {"status": "release-not-ready"}
+        queue = self.queue_summary(deployment_id)
+        bootstrap_runs = int(queue.get("successfulRunCount") or 0)
+        if bootstrap_runs < 1:
+            return {
+                "status": "abox-bootstrap-pending",
+                "successfulBootstrapRunCount": bootstrap_runs,
+            }
         started_at = utc_now_iso()
         health["validationStartedAt"] = started_at
-        health["validationStartSource"] = "candidate-worker-release-ready"
+        health["validationStartSource"] = "candidate-worker-abox-bootstrap-complete"
         self.registry.update_health(deployment_id, health)
         return {"status": "started", "validationStartedAt": started_at}
 
@@ -1802,6 +1810,12 @@ class IndependentReasoningJobRunner:
             if lane_hint
             else _int_setting(self.settings, "reasoningEngineV2BatchSize", 6, 1, 20)
         )
+        if str(validation_window.get("status") or "") == "abox-bootstrap-pending":
+            # A new graph database needs one full ABox bootstrap. Keep that
+            # provisioning-only execution isolated from steady-state latency
+            # evidence and avoid leasing additional validation jobs before the
+            # boundary is persisted.
+            claim_limit = 1
         claim_kwargs = {
             "limit": claim_limit,
             "lease_seconds": _int_setting(

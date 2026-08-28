@@ -132,6 +132,11 @@ class FakeCycleRecorder:
 
 class IndependentReasoningEngineTests(unittest.TestCase):
     def test_candidate_validation_window_starts_when_frozen_release_is_ready(self):
+        class Queue:
+            @staticmethod
+            def summary(*_args, **_kwargs):
+                return {"successfulRunCount": 1}
+
         class Registry:
             def __init__(self):
                 self.health = {
@@ -149,7 +154,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
         registry = Registry()
         runner = IndependentReasoningJobRunner(
-            object(),
+            Queue(),
             object(),
             registry,
             deployment_role="candidate",
@@ -161,9 +166,45 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("started", first["status"])
         self.assertEqual("already-started", second["status"])
         self.assertEqual(
-            "candidate-worker-release-ready",
+            "candidate-worker-abox-bootstrap-complete",
             registry.health["validationStartSource"],
         )
+
+    def test_candidate_validation_window_waits_for_one_abox_bootstrap_run(self):
+        class Queue:
+            @staticmethod
+            def summary(*_args, **_kwargs):
+                return {"successfulRunCount": 0}
+
+        class Registry:
+            def __init__(self):
+                self.updated = False
+
+            def get(self, _deployment_id):
+                return {
+                    "health": {
+                        "runtimeOntologyRelease": {
+                            "status": "ready",
+                            "warmed": True,
+                        }
+                    }
+                }
+
+            def update_health(self, _deployment_id, _health):
+                self.updated = True
+
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            Queue(),
+            object(),
+            registry,
+            deployment_role="candidate",
+        )
+
+        result = runner.ensure_candidate_validation_window("release:candidate")
+
+        self.assertEqual("abox-bootstrap-pending", result["status"])
+        self.assertFalse(registry.updated)
 
     def test_delivery_worker_never_opens_candidate_validation_window(self):
         class Registry:

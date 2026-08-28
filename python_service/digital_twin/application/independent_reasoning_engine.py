@@ -1632,6 +1632,32 @@ class IndependentReasoningJobRunner:
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
+    def ensure_candidate_validation_window(self, deployment_id: str) -> Dict[str, object]:
+        """Start candidate evidence collection when its frozen release is ready.
+
+        Provisioning jobs are useful only after TBox/RuleBox warmup completes.
+        Waiting for a later operator command to set this boundary discarded
+        successful runs performed between warmup and that command, forcing a
+        second validation replay of the same immutable source events.
+        """
+        if self.deployment_role != "candidate":
+            return {"status": "not-candidate"}
+        row = dict(self.registry.get(deployment_id) or {})
+        health = dict(row.get("health") or {})
+        existing = str(health.get("validationStartedAt") or "").strip()
+        if existing:
+            return {"status": "already-started", "validationStartedAt": existing}
+        release = dict(health.get("runtimeOntologyRelease") or {})
+        if str(release.get("status") or "").lower() != "ready" or not bool(
+            release.get("warmed")
+        ):
+            return {"status": "release-not-ready"}
+        started_at = utc_now_iso()
+        health["validationStartedAt"] = started_at
+        health["validationStartSource"] = "candidate-worker-release-ready"
+        self.registry.update_health(deployment_id, health)
+        return {"status": "started", "validationStartedAt": started_at}
+
     @staticmethod
     def market_observation_completion_scope(jobs) -> Dict[str, object]:
         event_ids = set()
@@ -1726,6 +1752,9 @@ class IndependentReasoningJobRunner:
                 "controlBinding": control_binding,
             }
         self.publish_worker_heartbeat(descriptor.deployment_id)
+        validation_window = self.ensure_candidate_validation_window(
+            descriptor.deployment_id
+        )
         market_anchor_reconciliation = self.reconcile_market_observation_completions()
         case_expiry = self.expire_stale_reasoning_cases()
         route_reconciliation = self.reconcile_ingress_route()
@@ -1764,6 +1793,7 @@ class IndependentReasoningJobRunner:
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
                 "marketObservationAnchorReconciliation": market_anchor_reconciliation,
+                "candidateValidationWindow": validation_window,
             }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
@@ -1801,6 +1831,7 @@ class IndependentReasoningJobRunner:
                 "routeReconciliation": route_reconciliation,
                 "reasoningCaseExpiry": case_expiry,
                 "marketObservationAnchorReconciliation": market_anchor_reconciliation,
+                "candidateValidationWindow": validation_window,
             }
         runtime_excluded_jobs = []
         runtime_eligible_jobs = []

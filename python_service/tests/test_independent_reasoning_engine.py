@@ -131,6 +131,56 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_candidate_validation_window_starts_when_frozen_release_is_ready(self):
+        class Registry:
+            def __init__(self):
+                self.health = {
+                    "runtimeOntologyRelease": {
+                        "status": "ready",
+                        "warmed": True,
+                    }
+                }
+
+            def get(self, _deployment_id):
+                return {"status": "provisioning", "health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            object(),
+            object(),
+            registry,
+            deployment_role="candidate",
+        )
+
+        first = runner.ensure_candidate_validation_window("release:candidate")
+        second = runner.ensure_candidate_validation_window("release:candidate")
+
+        self.assertEqual("started", first["status"])
+        self.assertEqual("already-started", second["status"])
+        self.assertEqual(
+            "candidate-worker-release-ready",
+            registry.health["validationStartSource"],
+        )
+
+    def test_delivery_worker_never_opens_candidate_validation_window(self):
+        class Registry:
+            def get(self, _deployment_id):
+                raise AssertionError("delivery worker must not inspect candidate state")
+
+        runner = IndependentReasoningJobRunner(
+            object(),
+            object(),
+            Registry(),
+            deployment_role="delivery",
+        )
+
+        result = runner.ensure_candidate_validation_window("release:active")
+
+        self.assertEqual("not-candidate", result["status"])
+
     def test_reasoning_job_marks_expired_calendar_replay_as_ineligible(self):
         event = source_event("005930", [])
         event.payload["sourceFacts"] = [{

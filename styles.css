@@ -1216,6 +1216,14 @@
   --tab-icon: url("icons/search.svg");
 }
 
+.app-tool-icon.settings {
+  --tab-icon: url("icons/settings.svg");
+}
+
+.app-settings-button {
+  display: none;
+}
+
 .app-tool-icon.refresh {
   --tab-icon: url("icons/refresh-cw.svg");
 }
@@ -20112,6 +20120,17 @@ button.oa-context-row:hover {
     border-color: var(--blue);
     background: var(--blue);
     color: var(--ds-color-on-action);
+  }
+
+  .app-settings-button {
+    display: grid;
+  }
+
+  .app-nav-tools .app-settings-button.active {
+    border-color: var(--blue);
+    color: var(--blue);
+    background: var(--blue-soft);
+    box-shadow: inset 0 -2px 0 var(--blue);
   }
 
   .tab-bar {

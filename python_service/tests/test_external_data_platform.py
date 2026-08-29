@@ -19,7 +19,11 @@ from digital_twin.infrastructure.external_api.legacy_import import LegacyExterna
 from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
 from digital_twin.infrastructure.external_api.adapters.opendart import OpenDartDisclosureAdapter
 from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
-from digital_twin.infrastructure.external_api.adapters.yfinance import YFinanceProfileAdapter
+from digital_twin.infrastructure.external_api.adapters.yfinance import (
+    YFinanceProfileAdapter,
+    unusable_modules_error_message,
+)
+from digital_twin.infrastructure.schedulers import external_data_failure_requires_alert
 
 
 NOW = datetime(2026, 8, 16, 0, 0, tzinfo=timezone.utc)
@@ -51,6 +55,12 @@ class StaticAdapter:
             fetched_at="2026-08-16T00:00:01Z",
             payload={"equityQuotes": {job.subject.symbol: {"price": 100.0}}},
         )
+
+
+class FailingAdapter(StaticAdapter):
+    def fetch(self, job, settings):
+        del job, settings
+        raise RuntimeError("temporary provider response")
 
 
 class ConcurrencyTrackingAdapter(StaticAdapter):
@@ -112,6 +122,8 @@ class MemoryCollectionStore:
         self.events = []
         self.recorded = []
         self.followups = []
+        self.current = {}
+        self.failure_state = "failed"
 
     def list_subjects(self):
         return [ExternalSubject("NVDA", symbol="NVDA", market="US", currency="USD")]
@@ -140,7 +152,11 @@ class MemoryCollectionStore:
 
     def current_fact(self, dataset_id, subject_key):
         del dataset_id, subject_key
-        return {}
+        return dict(self.current)
+
+    def fail_job(self, job, descriptor, error, next_due_at):
+        del job, descriptor, error, next_due_at
+        return {"state": self.failure_state}
 
     def complete_observation(self, job, descriptor, observation, due_at, event=None):
         self.completed.append((job, descriptor, observation, due_at))
@@ -253,6 +269,42 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual(1, result["processedCount"])
         self.assertEqual(1, len(store.completed))
         self.assertEqual([], store.events, "initial baselines must not fan out reasoning events")
+
+        store = MemoryCollectionStore()
+        store.current = {
+            "payload": {"equityQuotes": {"NVDA": {"price": 225.0}}},
+            "sourceAsOf": "2026-08-16T00:00:00Z",
+        }
+        service = ExternalDataCollectionService(
+            {},
+            ExternalDatasetRegistry([FailingAdapter()]),
+            store,
+            worker_id="test-worker",
+            now_provider=lambda: NOW,
+        )
+
+        result = service.run_once()
+        failure = result["results"][0]
+
+        self.assertTrue(failure["hasUsablePreviousFact"])
+        self.assertFalse(external_data_failure_requires_alert(failure))
+        self.assertTrue(external_data_failure_requires_alert({
+            **failure,
+            "providerState": "circuit_open",
+        }))
+        self.assertTrue(external_data_failure_requires_alert({
+            **failure,
+            "partitionFailureCount": 2,
+        }))
+        self.assertTrue(external_data_failure_requires_alert({
+            **failure,
+            "hasUsablePreviousFact": False,
+        }))
+        message = unusable_modules_error_message("price", "000680.KS", {
+            "errors": [{"section": "history", "message": "temporary empty response"}],
+        })
+        self.assertIn("000680.KS", message)
+        self.assertIn("history: temporary empty response", message)
 
     def test_market_transition_ignores_collection_clock_and_applies_threshold(self):
         service = ExternalFactTransitionService()

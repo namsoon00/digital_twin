@@ -1478,6 +1478,17 @@ class ExternalDataCollectionScheduler:
                 for item in result.get("results") or []:
                     if str(item.get("status") or "") != "error":
                         continue
+                    if not external_data_failure_requires_alert(item):
+                        print(
+                            "External data transient failure retained for retry "
+                            + str(item.get("datasetId") or "external dataset")
+                            + "/"
+                            + str(item.get("partitionKey") or "global")
+                            + " providerState="
+                            + str(item.get("providerState") or "unknown"),
+                            flush=True,
+                        )
+                        continue
                     error = RuntimeError(str(item.get("error") or "external provider collection failed"))
                     report_runtime_error(
                         self.error_reporter,
@@ -1492,6 +1503,20 @@ class ExternalDataCollectionScheduler:
                 report_runtime_error(self.error_reporter, "Python external data collector", error, "collection cycle")
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
+
+
+def external_data_failure_requires_alert(item) -> bool:
+    """Escalate unavailable data, while allowing one retry over a valid baseline."""
+    values = dict(item or {})
+    if str(values.get("status") or "") != "error":
+        return False
+    if str(values.get("providerState") or "").strip().lower() == "circuit_open":
+        return True
+    failure_count = max(0, int(values.get("partitionFailureCount") or 0))
+    alert_threshold = max(1, int(values.get("failureAlertThreshold") or 2))
+    if failure_count >= alert_threshold:
+        return True
+    return not bool(values.get("hasUsablePreviousFact"))
 
 
 class KISRealtimeWebSocketScheduler:

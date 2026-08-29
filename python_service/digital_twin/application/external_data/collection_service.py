@@ -314,6 +314,12 @@ class ExternalDataCollectionService:
             }
         except Exception as error:  # noqa: BLE001 - provider failures are durable operational state.
             completed = self.now_provider()
+            previous_fact = self.store.current_fact(
+                job.dataset_id,
+                str(job.subject.subject_key or job.partition_key),
+            )
+            previous_payload = previous_fact.get("payload") if isinstance(previous_fact, dict) else None
+            has_usable_previous_fact = isinstance(previous_payload, dict) and bool(previous_payload)
             failure_delay = min(
                 descriptor.resolved_cadence_seconds(self.settings),
                 max(60, 30 * (2 ** min(6, max(0, job.attempt_count - 1)))),
@@ -336,6 +342,10 @@ class ExternalDataCollectionService:
                 "durationMs": duration_ms,
                 "error": str(error)[:500],
                 "providerState": failure.get("state"),
+                "partitionFailureCount": max(1, int(job.attempt_count or 0) + 1),
+                "failureAlertThreshold": max(1, int(descriptor.failure_threshold or 1)),
+                "hasUsablePreviousFact": has_usable_previous_fact,
+                "previousFactSourceAsOf": str((previous_fact or {}).get("sourceAsOf") or ""),
                 "nextDueAt": due_at,
             }
 

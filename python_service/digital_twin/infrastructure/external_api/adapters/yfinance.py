@@ -45,6 +45,29 @@ PROFILE_POLICIES = {
 OPTIONAL_EMPTY_PROFILES = {"options", "news", "analyst"}
 
 
+def unusable_modules_error_message(profile: str, query_symbol: str, payload: Dict[str, object]) -> str:
+    errors = [item for item in payload.get("errors") or [] if isinstance(item, dict)]
+    details = [
+        str(item.get("section") or "module") + ": " + str(item.get("message") or "empty response")
+        for item in errors[:4]
+    ]
+    if not details:
+        requested = {
+            "price": "history, historyMetadata, fastInfo",
+            "fundamental": "company and financial modules",
+        }.get(str(profile or ""), str(profile or "profile") + " modules")
+        details.append(requested + " empty")
+    return (
+        "yfinance "
+        + str(profile or "profile")
+        + " returned no usable modules for "
+        + str(query_symbol or "unknown symbol")
+        + " ("
+        + "; ".join(details)
+        + ")"
+    )[:500]
+
+
 class YFinanceProfileAdapter:
     def __init__(self, profile: str):
         normalized = str(profile or "").strip()
@@ -102,7 +125,7 @@ class YFinanceProfileAdapter:
                         "availability": "not-applicable-or-empty",
                     },
                 )
-            raise RuntimeError("yfinance " + self.profile + " returned no usable modules")
+            raise RuntimeError(unusable_modules_error_message(self.profile, query_symbol, payload))
         signals = empty_signals()
         signals["yfinanceData"][job.subject.symbol] = payload
         provider.merge_yfinance_summaries(signals, job.subject.symbol, payload)

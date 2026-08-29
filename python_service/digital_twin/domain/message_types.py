@@ -37,6 +37,7 @@ EXTERNAL_DATA_CONNECTION = "externalDataConnection"
 MODEL_REVIEW = "modelReview"
 WORK_HANDOFF = "workHandoff"
 OPERATOR_REASONING_REPORT = "operatorReasoningReport"
+ONTOLOGY_LAB_EXPERIMENT = "ontologyLabExperiment"
 GENERIC_NOTIFICATION = "notification"
 DEFAULT_MESSAGE = "default"
 
@@ -64,6 +65,7 @@ SYSTEM_MESSAGE_TYPES = {
     MODEL_REVIEW,
     WORK_HANDOFF,
     OPERATOR_REASONING_REPORT,
+    ONTOLOGY_LAB_EXPERIMENT,
     ONTOLOGY_REASONING_QUEUE,
     OPERATIONAL_STORAGE_CAPACITY,
     GENERIC_NOTIFICATION,
@@ -85,6 +87,7 @@ SYSTEM_MANAGED_NOTIFICATION_TYPES = [
     MODEL_REVIEW,
     WORK_HANDOFF,
     OPERATOR_REASONING_REPORT,
+    ONTOLOGY_LAB_EXPERIMENT,
     GENERIC_NOTIFICATION,
     ONTOLOGY_REASONING_QUEUE,
     OPERATIONAL_STORAGE_CAPACITY,
@@ -99,6 +102,7 @@ OPERATIONS_DELIVERY_MESSAGE_TYPES = {
     EXTERNAL_DATA_CONNECTION,
     WORK_HANDOFF,
     OPERATOR_REASONING_REPORT,
+    ONTOLOGY_LAB_EXPERIMENT,
 }
 
 
@@ -254,6 +258,7 @@ MESSAGE_TYPE_LABELS = {
     MODEL_REVIEW: "모델 리뷰",
     WORK_HANDOFF: "작업 완료",
     OPERATOR_REASONING_REPORT: "운영자 추론 보고서",
+    ONTOLOGY_LAB_EXPERIMENT: "온톨로지 실험실",
     GENERIC_NOTIFICATION: "일반 알림",
 }
 
@@ -294,6 +299,7 @@ MESSAGE_TYPE_EMOJIS = {
     MODEL_REVIEW: "🧠",
     WORK_HANDOFF: "📦",
     OPERATOR_REASONING_REPORT: "🛠️",
+    ONTOLOGY_LAB_EXPERIMENT: "🧪",
     GENERIC_NOTIFICATION: "🔔",
 }
 
@@ -329,6 +335,7 @@ TRIGGER_SUMMARIES = {
     EXTERNAL_MACRO_SHIFT: "FRED 금리·스프레드 변화가 기준값을 넘을 때 보냅니다.",
     EXTERNAL_DART_DISCLOSURE: "OpenDART에서 보유 국내 종목의 새 공시가 감지될 때 보냅니다.",
     EXTERNAL_DATA_CONNECTION: "외부 데이터 API 응답 오류나 호출 제한이 감지될 때 보냅니다.",
+    ONTOLOGY_LAB_EXPERIMENT: "온톨로지 후보 규칙이 자동 반영되거나, 반영 오류 또는 수동 검토가 필요할 때만 보냅니다.",
 }
 
 
@@ -338,6 +345,7 @@ def notification_message_types(extra_types: List[str] = None) -> List[str]:
         *MONITORING_MESSAGE_TYPES,
         MODEL_REVIEW,
         WORK_HANDOFF,
+        ONTOLOGY_LAB_EXPERIMENT,
         GENERIC_NOTIFICATION,
         *(extra_types or []),
     ]

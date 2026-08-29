@@ -5,7 +5,14 @@ from typing import Dict, List
 
 from .alert_formatting import signed_pct
 from .external_api_sources import external_api_source_line
-from .message_types import MARKET_OBSERVATION, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, OPERATOR_REASONING_REPORT, TRIGGER_SUMMARIES
+from .message_types import (
+    MARKET_OBSERVATION,
+    MESSAGE_TYPE_EMOJIS,
+    MESSAGE_TYPE_LABELS,
+    ONTOLOGY_LAB_EXPERIMENT,
+    OPERATOR_REASONING_REPORT,
+    TRIGGER_SUMMARIES,
+)
 from .notification_ai import enrich_notification_ai_context
 from .notification_ontology_sections import (
     CURVE_REGIME_LABELS,
@@ -133,6 +140,7 @@ REASONING_EXPLANATION_SKIP_TYPES = {
     "newsDigest",
     "marketObservation",
     "workHandoff",
+    ONTOLOGY_LAB_EXPERIMENT,
     OPERATOR_REASONING_REPORT,
     "ontologyReasoningQueue",
 }
@@ -226,6 +234,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     "workHandoff": {
         "template": BODY_TEMPLATE,
         "description": "작업 완료 핸드오프 알림",
+    },
+    ONTOLOGY_LAB_EXPERIMENT: {
+        "template": BODY_TEMPLATE,
+        "description": "자동 반영 완료·오류·수동 검토가 필요한 온톨로지 실험 알림",
     },
     OPERATOR_REASONING_REPORT: {
         "template": DEFAULT_TEMPLATE,

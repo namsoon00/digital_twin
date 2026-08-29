@@ -53,6 +53,7 @@ EXPECTED_BASE_ICONS = {
     "modelReview": "🧠",
     "workHandoff": "📦",
     "operatorReasoningReport": "🛠️",
+    "ontologyLabExperiment": "🧪",
     "notification": "🔔",
 }
 

@@ -4,6 +4,7 @@ from dataclasses import fields
 from typing import Callable, Dict, Iterable, List
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology, entity_id
+from ..domain.message_types import ONTOLOGY_LAB_EXPERIMENT
 from ..domain.ontology_experiments import (
     OntologyExperiment,
     clean_symbols,
@@ -58,6 +59,7 @@ APPLY_RECOMMENDATION_TYPES = (
     | TBOX_DECISION_STAGE_APPLY_RECOMMENDATION_TYPES
     | TBOX_CLASS_APPLY_RECOMMENDATION_TYPES
 )
+ONTOLOGY_LAB_NOTIFICATION_ACTIONS = {"auto-applied", "notify-error", "notify-review"}
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -997,6 +999,9 @@ class OntologyLabService:
     def notify_automation(self, experiment_id: str, automation: Dict[str, object]) -> Dict[str, object]:
         if not self.auto_notify_enabled():
             return {"status": "disabled", "reason": "auto-notify-disabled"}
+        action = str((automation or {}).get("action") or "").strip()
+        if action not in ONTOLOGY_LAB_NOTIFICATION_ACTIONS:
+            return {"status": "skipped", "reason": "non-actionable-experiment-result"}
         if not self.notification_configured():
             return {"status": "disabled", "reason": "notification-queue-unavailable"}
         experiment = self.experiment_store.get(experiment_id)
@@ -1009,11 +1014,11 @@ class OntologyLabService:
         dedupe_basis = run_id or (experiment.experiment_id + ":" + str((automation or {}).get("automatedAt") or ""))
         job = NotificationJob.create(
             text,
-            message_type="notification",
+            message_type=ONTOLOGY_LAB_EXPERIMENT,
             source_event_name="ontology_lab.automation",
-            dedupe_key="ontology-lab:" + str((automation or {}).get("action") or "observe") + ":" + dedupe_basis,
+            dedupe_key="ontology-lab:" + action + ":" + dedupe_basis,
             context={
-                "messageType": "notification",
+                "messageType": ONTOLOGY_LAB_EXPERIMENT,
                 "source": "ontologyLabAutomation",
                 "ontologyLabAutomation": dict(automation or {}),
             },
@@ -1667,7 +1672,10 @@ def ontology_lab_automation_payload(
     if eligibility.get("eligible"):
         status = "apply-pending"
         action = "auto-apply"
-    elif readiness_status == "needs-review":
+    elif readiness_status == "needs-review" or (
+        readiness_status in {"promote-candidate", "ready", "approved"}
+        and str(eligibility.get("reason") or "") == "auto-apply-disabled"
+    ):
         status = "review-required"
         action = "notify-review"
     elif readiness_status == "needs-data":
@@ -1700,27 +1708,89 @@ def comma_text(values: Iterable[object], fallback: str = "-") -> str:
     return ", ".join(rows[:6]) if rows else fallback
 
 
+ONTOLOGY_LAB_READINESS_LABELS = {
+    "promote-candidate": "운영 반영 후보",
+    "ready": "운영 반영 준비됨",
+    "approved": "검토 승인됨",
+    "needs-review": "수동 검토 필요",
+    "needs-data": "검증 데이터 필요",
+    "needs-materialization": "TypeDB 실행 검증 대기",
+}
+ONTOLOGY_LAB_VALIDATION_LABELS = {
+    "ready": "검증 준비됨",
+    "conditional": "추가 검증 필요",
+    "blocked": "검증 차단",
+}
+ONTOLOGY_LAB_DATA_LABELS = {
+    "sufficient": "검증용 데이터 충분",
+    "partial": "일부 데이터만 확보",
+    "insufficient": "검증 데이터 부족",
+    "unavailable": "검증 데이터 없음",
+}
+ONTOLOGY_LAB_APPLICATION_LABELS = {
+    "applied": "운영 반영 완료",
+    "already-applied": "이미 운영 반영됨",
+    "not-ready": "반영 전 검토 필요",
+    "error": "운영 반영 실패",
+}
+ONTOLOGY_LAB_REASON_LABELS = {
+    "auto-apply-disabled": "자동 반영 설정이 꺼져 있습니다.",
+    "auto-apply-eligible": "자동 반영 조건을 충족했습니다.",
+    "no-apply-targets": "반영할 규칙이나 관계 변경안이 없습니다.",
+    "state-not-auto-applicable": "현재 검증 상태에서는 자동 반영할 수 없습니다.",
+}
+
+
+def ontology_lab_state_label(value: object, labels: Dict[str, str], fallback: str) -> str:
+    return labels.get(str(value or "").strip().lower(), fallback)
+
+
+def ontology_lab_reason_label(value: object) -> str:
+    reason = str(value or "").strip()
+    if not reason:
+        return ""
+    if reason in ONTOLOGY_LAB_REASON_LABELS:
+        return ONTOLOGY_LAB_REASON_LABELS[reason]
+    if reason.startswith("readiness-"):
+        state = reason[len("readiness-"):]
+        label = ONTOLOGY_LAB_READINESS_LABELS.get(state, "추가 검증 필요")
+        return label + " 상태라 자동 반영하지 않았습니다."
+    return "자동 반영 절차를 완료하지 못했습니다. 오류 코드는 " + reason + "입니다."
+
+
 def ontology_lab_notification_text(experiment: OntologyExperiment, automation: Dict[str, object]) -> str:
     action = str((automation or {}).get("action") or "")
-    readiness = str((automation or {}).get("readinessStatus") or "-")
-    validation_state = str((automation or {}).get("validationState") or "conditional")
-    data_state = str((automation or {}).get("dataState") or "partial")
-    application = str((automation or {}).get("applicationStatus") or "")
+    readiness = ontology_lab_state_label(
+        (automation or {}).get("readinessStatus"),
+        ONTOLOGY_LAB_READINESS_LABELS,
+        "판정 정보 없음",
+    )
+    validation_state = ontology_lab_state_label(
+        (automation or {}).get("validationState"),
+        ONTOLOGY_LAB_VALIDATION_LABELS,
+        "검증 상태 확인 필요",
+    )
+    data_state = ontology_lab_state_label(
+        (automation or {}).get("dataState"),
+        ONTOLOGY_LAB_DATA_LABELS,
+        "데이터 상태 확인 필요",
+    )
+    application = ontology_lab_state_label(
+        (automation or {}).get("applicationStatus"),
+        ONTOLOGY_LAB_APPLICATION_LABELS,
+        "",
+    )
     if action == "auto-applied":
-        headline = "[온톨로지 실험실] 자동 반영 완료"
+        headline = "🧪 온톨로지 실험실 · 자동 반영 완료"
         next_line = "다음: 적용된 RuleBox/TBox가 다음 TypeDB 추론 사이클부터 검증됩니다."
     elif action == "notify-error":
-        headline = "[온톨로지 실험실] 자동 반영 오류"
+        headline = "⚠️ 온톨로지 실험실 · 자동 반영 오류"
         next_line = "다음: 웹 실험 탭에서 오류와 적용 결과를 확인해야 합니다."
-    elif action == "notify-data":
-        headline = "[온톨로지 실험실] 실험 데이터 필요"
-        next_line = "다음: 모니터링 스냅샷이 쌓인 뒤 같은 실험을 다시 실행합니다."
     elif action == "notify-review":
-        headline = "[온톨로지 실험실] 검토 후 반영 필요"
+        headline = "🔎 온톨로지 실험실 · 수동 검토 필요"
         next_line = "다음: 웹 실험 탭에서 제안 관계와 규칙을 확인한 뒤 반영하세요."
     else:
-        headline = "[온톨로지 실험실] 실험 결과"
-        next_line = "다음: 추천 액션을 기준으로 후보 규칙을 조정합니다."
+        return ""
     lines = [
         headline,
         "실험: " + str(experiment.title or experiment.experiment_id),
@@ -1734,7 +1804,7 @@ def ontology_lab_notification_text(experiment: OntologyExperiment, automation: D
     recommendations = clean_text_list((automation or {}).get("recommendations") or [])
     if recommendations:
         lines.append("추천: " + " / ".join(recommendations[:3]))
-    reason = str((automation or {}).get("reason") or "").strip()
+    reason = ontology_lab_reason_label((automation or {}).get("reason"))
     if reason:
         lines.append("사유: " + reason)
     lines.append(next_line)

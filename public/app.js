@@ -14723,7 +14723,7 @@
           reason: formatConsoleNarrative(item.headline || "판단 근거를 확인하세요."),
           invalidation: formatConsoleNarrative(item.nextAction || "무효화 조건과 다음 확인을 살펴보세요."),
           quality: consoleQualityMeta(dataState === "sufficient" ? "actual" : dataState),
-          apiSource: "DecisionEpisode",
+          apiSource: item.detailType === "subject-decision-case" ? "SubjectDecisionCase" : "DecisionEpisode",
           isMock: false,
           source: String(matched.portfolioRole || matched.source || "holding"),
           blocked: readinessState === "blocked" || readinessState === "error" || item.caseStatus === "blocked",

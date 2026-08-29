@@ -28,6 +28,7 @@
     {"file": "test_ontology_lab_notifications.py", "tier": "unit", "core": true},
     {"file": "test_web_read_path_performance.py", "tier": "unit", "core": true},
     {"file": "test_console_operations_health.py", "tier": "unit", "core": true},
+    {"file": "test_console_decision_read_model.py", "tier": "unit", "core": true},
     {"file": "test_console_portfolio_interpretation.py", "tier": "unit", "core": true},
     {"file": "test_mysql_maintenance_admission.py", "tier": "unit", "core": true},
     {"file": "test_disclosure_taxonomy.py", "tier": "unit", "core": true},

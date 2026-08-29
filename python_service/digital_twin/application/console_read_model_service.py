@@ -126,7 +126,8 @@ class ConsoleReadModelService:
             items.append({
                 key: row.get(key)
                 for key in [
-                    "version", "caseId", "episodeId", "accountId", "symbol", "name", "market",
+                    "version", "detailType", "caseId", "episodeId", "subjectCaseId", "batchCaseId",
+                    "accountId", "symbol", "name", "market",
                     "currency", "sector", "status", "caseStatus", "phase", "phaseLabel",
                     "readinessState", "readinessLabel", "headline", "nextAction", "decidedAt", "updatedAt",
                 ]
@@ -157,6 +158,11 @@ class ConsoleReadModelService:
                 "explanation": {
                     "primaryCause": _mapping(explanation.get("primaryCause")),
                 },
+                # The bounded subject case contains only the selected TypeDB
+                # generation, competing hypotheses, and trace identifiers. It
+                # is required to open the decision detail without shipping the
+                # full episode/evidence payload in the list response.
+                "subjectDecisionCase": _mapping(row.get("subjectDecisionCase")),
             })
         result["items"] = items
         result["count"] = len(items)

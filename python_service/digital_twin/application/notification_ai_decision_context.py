@@ -35,8 +35,12 @@ TEMPORAL_AI_KEYS = (
     "ma20DistanceEnd", "ma20DistanceChange", "ma20ReclaimCount", "ma20BreakCount",
     "ma60DistanceStart", "ma60DistanceEnd", "volumeRatioEnd", "tradeStrengthEnd",
     "bidAskImbalanceEnd", "smartMoneyObservationCount",
-    "smartMoneyDistinctObservationCount", "smartMoneyDataState", "smartMoneyNetLatest",
-    "smartMoneyNetChange",
+    "smartMoneyDistinctObservationCount", "smartMoneyDistinctSessionCount",
+    "smartMoneyDataState", "smartMoneyNetLatest", "smartMoneyNetChange",
+    "smartMoneyNetCumulative", "smartMoneyNetAmountCumulative",
+    "smartMoneyTradingValueRatioPct", "smartMoneyPositiveSessionRatio",
+    "smartMoneyNegativeSessionRatio", "smartMoneyFlowPersistenceRatio",
+    "smartMoneyFlowAcceleration", "smartMoneyFlowDirection", "smartMoneyFlowBasis",
 )
 
 

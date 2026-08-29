@@ -1,5 +1,6 @@
 """MySQL persistence for immutable model-signal snapshots and latest heads."""
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Dict, List
@@ -26,6 +27,15 @@ def _loads(value: object, fallback):
     return parsed if isinstance(parsed, type(fallback)) else fallback
 
 
+def _assessment_material_hash(rows) -> str:
+    values = sorted(
+        str(getattr(item, "material_hash", "") or "")
+        for item in rows or []
+        if str(getattr(item, "material_hash", "") or "")
+    )
+    return hashlib.sha256(_json(values).encode("utf-8")).hexdigest()
+
+
 class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
     """Keep immutable changed snapshots and one latest head per signal slot."""
 
@@ -35,6 +45,7 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
 
         def mutate(connection):
             existing = {}
+            existing_assessments = {}
             if snapshot.subjects:
                 params: List[object] = [snapshot.account_id, snapshot.model_release_id]
                 params.extend(snapshot.subjects)
@@ -53,6 +64,21 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
                     ): str(row.get("material_hash") or "")
                     for row in rows or []
                 }
+                assessment_rows = connection.execute(
+                    "SELECT account_id, subject_id, model_release_id, assessment_material_hash "
+                    "FROM statistical_model_assessment_heads WHERE account_id = %s "
+                    "AND model_release_id = %s AND subject_id IN ("
+                    + ",".join(["%s"] * len(snapshot.subjects)) + ")",
+                    params,
+                ).fetchall()
+                existing_assessments = {
+                    (
+                        str(row.get("account_id") or ""),
+                        str(row.get("subject_id") or ""),
+                        str(row.get("model_release_id") or ""),
+                    ): str(row.get("assessment_material_hash") or "")
+                    for row in assessment_rows or []
+                }
             changed = [
                 signal
                 for signal in snapshot.signals
@@ -68,8 +94,28 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
                 for signal in snapshot.signals
             }
             removed_keys = [key for key in existing if key not in current_keys]
+            assessments_by_subject = {
+                subject: [
+                    item for item in snapshot.assessments
+                    if item.subject_id == subject
+                ]
+                for subject in snapshot.subjects
+            }
+            assessment_material = {
+                (snapshot.account_id, subject, snapshot.model_release_id): _assessment_material_hash(rows)
+                for subject, rows in assessments_by_subject.items()
+                if rows
+            }
+            changed_assessment_keys = [
+                key for key, material_hash in assessment_material.items()
+                if existing_assessments.get(key) != material_hash
+            ]
+            removed_assessment_keys = [
+                key for key in existing_assessments
+                if key not in assessment_material
+            ]
             inserted = 0
-            if changed or removed_keys:
+            if changed or removed_keys or changed_assessment_keys or removed_assessment_keys:
                 cursor = connection.execute(
                     """
                     INSERT IGNORE INTO statistical_model_signal_snapshots (
@@ -125,12 +171,48 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
                         "account_id = %s AND subject_id = %s AND signal_type = %s AND model_release_id = %s",
                         removed_keys,
                     )
+                if changed_assessment_keys:
+                    connection.executemany(
+                        """
+                        INSERT INTO statistical_model_assessment_heads (
+                            account_id, subject_id, model_release_id, snapshot_id,
+                            assessment_material_hash, assessment_count, observed_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            snapshot_id = VALUES(snapshot_id),
+                            assessment_material_hash = VALUES(assessment_material_hash),
+                            assessment_count = VALUES(assessment_count),
+                            observed_at = VALUES(observed_at),
+                            updated_at = VALUES(updated_at)
+                        """,
+                        [(
+                            account_id,
+                            subject_id,
+                            release_id,
+                            snapshot.snapshot_id,
+                            assessment_material[(account_id, subject_id, release_id)],
+                            len(assessments_by_subject.get(subject_id) or []),
+                            snapshot.as_of,
+                            stamp,
+                        ) for account_id, subject_id, release_id in changed_assessment_keys],
+                    )
+                if removed_assessment_keys:
+                    connection.executemany(
+                        "DELETE FROM statistical_model_assessment_heads WHERE "
+                        "account_id = %s AND subject_id = %s AND model_release_id = %s",
+                        removed_assessment_keys,
+                    )
             return {
-                "status": "changed" if changed or removed_keys else "unchanged",
+                "status": "changed" if (
+                    changed or removed_keys or changed_assessment_keys or removed_assessment_keys
+                ) else "unchanged",
                 "snapshotInserted": bool(inserted),
                 "changedSignalCount": len(changed),
                 "unchangedSignalCount": len(snapshot.signals) - len(changed),
                 "removedSignalCount": len(removed_keys),
+                "assessmentCount": len(snapshot.assessments),
+                "changedAssessmentSubjectCount": len(changed_assessment_keys),
+                "removedAssessmentSubjectCount": len(removed_assessment_keys),
                 "snapshotId": snapshot.snapshot_id,
                 "materialHash": snapshot.material_hash,
             }
@@ -147,12 +229,19 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
             clauses.append("h.model_release_id = %s")
             params.append(str(model_release_id or ""))
         with self.connect() as connection:
+            signal_clauses = list(clauses)
+            assessment_clauses = list(clauses)
+            signal_params = list(params)
+            assessment_params = list(params)
             rows = connection.execute(
-                "SELECT DISTINCT s.* FROM statistical_model_signal_heads h "
-                "JOIN statistical_model_signal_snapshots s ON s.snapshot_id = h.snapshot_id "
-                "WHERE " + " AND ".join(clauses)
-                + " ORDER BY s.as_of DESC, s.created_at DESC LIMIT 20",
-                params,
+                "SELECT DISTINCT s.* FROM ("
+                "SELECT h.snapshot_id FROM statistical_model_signal_heads h WHERE "
+                + " AND ".join(signal_clauses)
+                + " UNION SELECT h.snapshot_id FROM statistical_model_assessment_heads h WHERE "
+                + " AND ".join(assessment_clauses)
+                + ") heads JOIN statistical_model_signal_snapshots s ON s.snapshot_id = heads.snapshot_id "
+                "ORDER BY s.as_of DESC, s.created_at DESC LIMIT 20",
+                signal_params + assessment_params,
             ).fetchall()
         snapshots = []
         for row in rows or []:
@@ -163,6 +252,11 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
                     if str(item.get("subjectId") or "").upper() == str(subject_id or "").upper()
                 ]
                 payload["signalCount"] = len(payload["signals"])
+                payload["assessments"] = [
+                    item for item in payload.get("assessments") or []
+                    if str(item.get("subjectId") or "").upper() == str(subject_id or "").upper()
+                ]
+                payload["assessmentCount"] = len(payload["assessments"])
             payload["createdAt"] = str(row.get("created_at") or "")
             snapshots.append(payload)
         return snapshots[0] if snapshots else {}
@@ -173,9 +267,16 @@ class MySQLStatisticalModelSignalStore(MySQLOperationalConnection):
                 "SELECT COUNT(*) AS head_count, COUNT(DISTINCT subject_id) AS subject_count, "
                 "MAX(updated_at) AS latest_updated_at FROM statistical_model_signal_heads"
             ).fetchone() or {}
+            assessment_row = connection.execute(
+                "SELECT COUNT(*) AS head_count, COUNT(DISTINCT subject_id) AS subject_count, "
+                "MAX(updated_at) AS latest_updated_at FROM statistical_model_assessment_heads"
+            ).fetchone() or {}
         return {
             "status": "ready",
             "headCount": int(row.get("head_count") or 0),
             "subjectCount": int(row.get("subject_count") or 0),
             "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
+            "assessmentHeadCount": int(assessment_row.get("head_count") or 0),
+            "assessmentSubjectCount": int(assessment_row.get("subject_count") or 0),
+            "latestAssessmentUpdatedAt": str(assessment_row.get("latest_updated_at") or ""),
         }

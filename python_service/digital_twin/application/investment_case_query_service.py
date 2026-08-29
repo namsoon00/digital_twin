@@ -38,6 +38,7 @@ class InvestmentCaseQueryService:
         evidence_repository=None,
         investment_domain_store=None,
         symbol_repository=None,
+        subject_case_repository=None,
     ):
         self.decision_episode_store = decision_episode_store
         self.notification_job_store = notification_job_store
@@ -45,6 +46,7 @@ class InvestmentCaseQueryService:
         self.evidence_repository = evidence_repository
         self.investment_domain_store = investment_domain_store
         self.symbol_repository = symbol_repository
+        self.subject_case_repository = subject_case_repository
         self.flow_service = InvestmentFlowQueryService(
             decision_episode_store=decision_episode_store,
             notification_job_store=notification_job_store,
@@ -87,25 +89,47 @@ class InvestmentCaseQueryService:
         ]
         snapshots.sort(key=lambda item: (item.updated_at, item.episode_id), reverse=True)
         items = [item.to_dict(compact=True) for item in snapshots]
-        status_counts = Counter(item.status for item in snapshots)
-        readiness_counts = Counter(item.readiness_state for item in snapshots)
-        attention_counts = Counter(text(item.attention.get("state")) or "review" for item in snapshots)
-        phase_counts = Counter(item.phase for item in snapshots)
+        subject_items = self._latest_subject_case_items(account_id, symbol, limit)
+        for subject_item in subject_items:
+            scope = (
+                text(subject_item.get("accountId")) or "default",
+                text(subject_item.get("symbol")).upper(),
+            )
+            existing = next((item for item in items if (
+                text(item.get("accountId")) or "default",
+                text(item.get("symbol")).upper(),
+            ) == scope), None)
+            if existing and text(existing.get("updatedAt")) >= text(subject_item.get("updatedAt")):
+                continue
+            if existing:
+                items.remove(existing)
+            items.append(subject_item)
+        items.sort(
+            key=lambda item: (text(item.get("updatedAt") or item.get("decidedAt")), text(item.get("symbol"))),
+            reverse=True,
+        )
+        status_counts = Counter(text(item.get("status")) or "active" for item in items)
+        readiness_counts = Counter(text(item.get("readinessState")) or "warning" for item in items)
+        attention_counts = Counter(
+            text(item_dict(item.get("attention")).get("state")) or "review"
+            for item in items
+        )
+        phase_counts = Counter(text(item.get("phase")) or "case" for item in items)
         decision_state_counts = Counter(
-            text(next((row for row in item.status_dimensions if row.get("id") == "decision"), {}).get("state")) or "warning"
-            for item in snapshots
+            text(next((row for row in item.get("statusDimensions") or [] if row.get("id") == "decision"), {}).get("state")) or "warning"
+            for item in items
         )
         data_state_counts = Counter(
-            text(next((row for row in item.status_dimensions if row.get("id") == "data"), {}).get("state")) or "warning"
-            for item in snapshots
+            text(next((row for row in item.get("statusDimensions") or [] if row.get("id") == "data"), {}).get("state")) or "warning"
+            for item in items
         )
         inference_state_counts = Counter(
-            text(next((row for row in item.status_dimensions if row.get("id") == "inference"), {}).get("state")) or "warning"
-            for item in snapshots
+            text(next((row for row in item.get("statusDimensions") or [] if row.get("id") == "inference"), {}).get("state")) or "warning"
+            for item in items
         )
         ai_state_counts = Counter(
-            text(next((row for row in item.status_dimensions if row.get("id") == "ai"), {}).get("state")) or "warning"
-            for item in snapshots
+            text(next((row for row in item.get("statusDimensions") or [] if row.get("id") == "ai"), {}).get("state")) or "warning"
+            for item in items
         )
         operator_view = {"loaded": False, "stages": [], "issues": []}
         if include_operator:
@@ -129,15 +153,21 @@ class InvestmentCaseQueryService:
                 "ready": readiness_counts.get("pass", 0),
                 "review": sum(readiness_counts.get(value, 0) for value in ("warning", "pending")),
                 "blocked": sum(readiness_counts.get(value, 0) for value in ("blocked", "error")),
-                "awaitingOutcome": sum(1 for item in snapshots if item.outcome.get("state") == "pending"),
+                "awaitingOutcome": sum(
+                    1 for item in items
+                    if item_dict(item.get("outcome")).get("state") == "pending"
+                ),
                 "statuses": dict(status_counts),
                 "readiness": dict(readiness_counts),
                 "phases": dict(phase_counts),
                 # Compatibility for clients that still read the old validation summary.
                 "validation": dict(readiness_counts),
-                "attentionRequired": len(items) - readiness_counts.get("pass", 0),
+                "attentionRequired": sum(
+                    attention_counts.get(value, 0) for value in ("action", "review")
+                ),
                 "actionRequired": attention_counts.get("action", 0),
                 "reviewRequired": attention_counts.get("review", 0),
+                "blockedRequired": attention_counts.get("blocked", 0),
                 "systemRequired": attention_counts.get("system", 0),
                 "attention": dict(attention_counts),
                 "dimensions": {
@@ -149,6 +179,167 @@ class InvestmentCaseQueryService:
             },
             "items": items,
             "operatorView": operator_view,
+        }
+
+    def _latest_subject_case_items(
+        self,
+        account_id: str,
+        symbol: str,
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        latest = getattr(self.subject_case_repository, "latest", None)
+        if not callable(latest):
+            return []
+        try:
+            rows = list(latest(account_id, symbol, max(1, min(200, int(limit or 100) * 2))) or [])
+        except Exception:  # noqa: BLE001 - the canonical DecisionEpisode read path remains available.
+            return []
+        result = []
+        seen = set()
+        for subject_case in rows:
+            payload = subject_case.to_dict() if hasattr(subject_case, "to_dict") else item_dict(subject_case)
+            scope = (
+                text(payload.get("accountId")) or "default",
+                text(payload.get("symbol")).upper(),
+            )
+            if not scope[1] or scope in seen:
+                continue
+            seen.add(scope)
+            result.append(self._subject_case_item(payload))
+        return result
+
+    def _subject_case_item(self, payload: Mapping[str, object]) -> Dict[str, object]:
+        case = item_dict(payload)
+        synthesis = item_dict(case.get("synthesis"))
+        candidate_set = item_dict(case.get("candidateSet"))
+        final = item_dict(case.get("finalDecision"))
+        judgment = item_dict(case.get("aiJudgment"))
+        stage = text(case.get("stage")).upper() or "READY"
+        symbol = text(case.get("symbol")).upper()
+        action = text(
+            final.get("action")
+            or synthesis.get("investment_view_action")
+            or synthesis.get("investmentViewAction")
+            or synthesis.get("graph_candidate_action")
+            or synthesis.get("graphCandidateAction")
+            or "NO_ACTION"
+        ).upper()
+        blocked = stage == "BLOCKED" or bool(synthesis.get("judgement_blocked") or synthesis.get("judgementBlocked"))
+        has_final = bool(final)
+        has_candidate = bool(
+            candidate_set.get("eligibleHypothesisIds")
+            or synthesis.get("eligible_hypothesis_ids")
+            or synthesis.get("eligibleHypothesisIds")
+            or (action and action != "NO_ACTION")
+        )
+        if blocked:
+            attention_state, attention_label = "blocked", "판단 보류"
+        elif has_final and action in {"BUY", "ADD", "TRIM", "SELL", "AVOID"}:
+            attention_state, attention_label = "action", "행동 검토"
+        elif has_candidate:
+            attention_state, attention_label = "review", "TypeDB 후보 검토"
+        else:
+            attention_state, attention_label = "observe", "관찰 유지"
+        readiness = "blocked" if blocked else "pass" if has_final else "warning"
+        next_checks = list(synthesis.get("next_checks") or synthesis.get("nextChecks") or [])
+        missing_data = list(candidate_set.get("missingData") or [])
+        hypotheses = [
+            {
+                "hypothesisId": text(item.get("hypothesisId") or item.get("hypothesis_id")),
+                "label": text(item.get("label") or item.get("claim") or item.get("familyId")),
+                "candidateAction": text(item.get("candidateAction") or item.get("candidate_action")).upper(),
+                "supportingRuleIds": list(item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []),
+                "supportingEvidenceIds": list(item.get("supportingEvidenceIds") or item.get("supporting_evidence_ids") or []),
+                "invalidationConditions": list(item.get("invalidationConditions") or item.get("invalidation_conditions") or []),
+            }
+            for item in candidate_set.get("hypotheses") or []
+            if isinstance(item, Mapping)
+        ][:8]
+        selected_rule = text(synthesis.get("selected_rule_id") or synthesis.get("selectedRuleId"))
+        candidate_label = action if action != "NO_ACTION" else "관계 관찰"
+        headline = (
+            "AI가 확정한 " + candidate_label + " 의견"
+            if has_final
+            else "TypeDB가 " + candidate_label + " 후보를 생성했으며 최종 행동은 아직 확정하지 않았습니다."
+            if has_candidate
+            else "TypeDB 추론은 완료됐지만 행동을 바꿀 가설은 성립하지 않았습니다."
+        )
+        scope_account = text(case.get("accountId")) or "default"
+        canonical = self._with_canonical_subject({
+            "accountId": scope_account,
+            "symbol": symbol,
+            "subjectName": symbol,
+        })
+        return {
+            "version": INVESTMENT_CASE_VERSION,
+            "detailType": "subject-decision-case",
+            "caseId": "",
+            "episodeId": "",
+            "subjectCaseId": text(case.get("subjectCaseId")),
+            "batchCaseId": text(case.get("batchCaseId")),
+            "accountId": scope_account,
+            "symbol": symbol,
+            "name": text(canonical.get("subjectName") or canonical.get("name")) or symbol,
+            "status": "active" if not blocked else "blocked",
+            "caseStatus": "active" if not blocked else "blocked",
+            "phase": "case",
+            "phaseLabel": "최신 TypeDB 추론",
+            "readinessState": readiness,
+            "readinessLabel": "판단 가능" if has_final else "최종 판단 전" if not blocked else "판단 보류",
+            "headline": headline,
+            "nextAction": text(next_checks[0] if next_checks else "다음 사실 변경에서 같은 가설과 반대 근거를 다시 비교합니다."),
+            "decidedAt": text(case.get("completedAt") or case.get("updatedAt")),
+            "updatedAt": text(case.get("updatedAt") or case.get("createdAt")),
+            "facts": {"dataState": text(synthesis.get("data_state") or synthesis.get("dataState")) or "partial"},
+            "signals": {},
+            "decision": {
+                "action": action if has_final else "HOLD",
+                "candidateAction": action,
+                "reviewLevel": text(synthesis.get("review_level") or synthesis.get("reviewLevel")) or "check",
+                "dataState": text(synthesis.get("data_state") or synthesis.get("dataState")) or "partial",
+                "validationState": "ready" if has_final else "conditional",
+                "state": readiness,
+                "stateLabel": "AI 최종 판단" if has_final else "TypeDB 후보",
+            },
+            "outcome": {"state": "pending", "count": 0},
+            "statusDimensions": [
+                {"id": "inference", "label": "관계 추론", "state": "pass", "stateLabel": "완료", "reason": "현재 TypeDB 세대의 관계와 가설을 저장했습니다."},
+                {"id": "ai", "label": "AI 판단", "state": "pass" if judgment else "pending", "stateLabel": "완료" if judgment else "대기", "reason": "AI 최종 의견이 저장됐습니다." if judgment else "TypeDB 후보와 알림 중요도 조건을 통과하면 AI가 최종 비교합니다."},
+                {"id": "decision", "label": "현재 의견", "state": readiness, "stateLabel": "확정" if has_final else "후보", "reason": headline},
+                {"id": "data", "label": "판단 자료", "state": "warning" if missing_data else "pass", "stateLabel": "일부 확인" if missing_data else "사용 가능", "reason": text(missing_data[0] if missing_data else "현재 가설 평가에 사용한 자료가 기록되어 있습니다.")},
+            ],
+            "attention": {
+                "state": attention_state,
+                "label": attention_label,
+                "category": "investment" if attention_state in {"action", "observe"} else "review",
+                "userActionable": attention_state == "action",
+                "userReviewable": attention_state == "review",
+                "userAttentionRequired": attention_state in {"action", "review"},
+                "investmentAction": action,
+                "issueCount": len(missing_data),
+                "issues": [],
+                "primaryIssue": {},
+            },
+            "explanation": {
+                "primaryCause": {
+                    "title": selected_rule or "TypeDB 경쟁 가설",
+                    "summary": headline,
+                    "effect": "최종 AI 판단 전에는 주문 행동으로 사용하지 않습니다." if not has_final else "검증된 최종 행동 의견입니다.",
+                },
+            },
+            "subjectDecisionCase": {
+                "stage": stage,
+                "sourceAboxSnapshotId": text(case.get("sourceAboxSnapshotId")),
+                "inferenceGenerationId": text(case.get("inferenceGenerationId")),
+                "candidateFingerprint": text(candidate_set.get("fingerprint")),
+                "selectedRuleId": selected_rule,
+                "candidateAction": action,
+                "allowedActions": list(candidate_set.get("allowedActions") or []),
+                "blockedActions": list(candidate_set.get("blockedActions") or []),
+                "missingData": missing_data[:8],
+                "nextChecks": next_checks[:8],
+                "hypotheses": hypotheses,
+            },
         }
 
     def detail(self, case_id: str) -> Dict[str, object]:

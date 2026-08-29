@@ -1136,6 +1136,18 @@ def time_series_platform_command(args) -> int:
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0
+    if args.time_series_action == "capital-flow-rebuild":
+        from .time_series_factory import build_versioned_time_series_store
+
+        result = build_versioned_time_series_store(configured).rebuild_capital_flow_from_legacy(args.limit)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.time_series_action == "capital-flow-quality":
+        from .time_series_factory import build_versioned_time_series_store
+
+        result = build_versioned_time_series_store(configured).capital_flow_quality(args.days)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     platform = build_time_series_backend_platform(configured)
     if args.time_series_action == "candidate":
         print(json.dumps(platform.mark_candidate(args.backend_id), ensure_ascii=False))
@@ -2444,6 +2456,10 @@ def build_parser() -> argparse.ArgumentParser:
     time_series_backfill.add_argument("--batch-size", type=int, default=50)
     time_series_backfill.add_argument("--max-rows", type=int, default=0)
     time_series_backfill.add_argument("--observed-after", default="")
+    capital_flow_rebuild = time_series_actions.add_parser("capital-flow-rebuild")
+    capital_flow_rebuild.add_argument("--limit", type=int, default=50000)
+    capital_flow_quality = time_series_actions.add_parser("capital-flow-quality")
+    capital_flow_quality.add_argument("--days", type=int, default=30)
     time_series_candidate = time_series_actions.add_parser("candidate")
     time_series_candidate.add_argument("--backend-id", default="questdb-shadow")
     for action_name in ["compare", "promote"]:

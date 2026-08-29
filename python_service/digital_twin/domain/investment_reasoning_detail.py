@@ -66,6 +66,7 @@ RELATION_LABELS = {
     "HAS_INFERENCE_TRACE": "추론 근거 연결",
     "HAS_SHARED_MARKET_PREMISE": "공통 시장 전제 연결",
     "HAS_TEMPORAL_WINDOW": "기간 관측 연결",
+    "HAS_CAPITAL_FLOW_WINDOW": "외국인·기관 자금 흐름 연결",
     "BREAKS_LEVEL": "기준 가격 이탈",
     "REQUIRES_NEXT_CHECK": "다음 확인 필요",
 }

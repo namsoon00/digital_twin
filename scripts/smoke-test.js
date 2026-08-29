@@ -3185,14 +3185,14 @@ async function checkNormalMode(port, context) {
   const investmentCases = await request(port, "/api/investment-cases?limit=10");
   assertOk(investmentCases.statusCode === 200, "투자 케이스 API 응답 코드가 200이 아닙니다: " + investmentCases.statusCode + " · " + investmentCases.body.slice(0, 500));
   const investmentCasesPayload = JSON.parse(investmentCases.body);
-  assertOk(investmentCasesPayload.version === "investment-case-v4", "투자 케이스 API v4 계약이 없습니다.");
+  assertOk(investmentCasesPayload.version === "investment-case-v5", "투자 케이스 API v5 계약이 없습니다.");
   assertOk(Array.isArray(investmentCasesPayload.items), "투자 케이스 API items가 배열이 아닙니다.");
   assertOk(investmentCasesPayload.summary && typeof investmentCasesPayload.summary === "object", "투자 케이스 API summary가 없습니다.");
   assertOk(investmentCasesPayload.operatorView && investmentCasesPayload.operatorView.loaded === false, "투자 케이스 사용자 목록이 운영 진단을 즉시 로드했습니다.");
   const consoleDecisions = await request(port, "/api/decisions?limit=10");
   assertOk(consoleDecisions.statusCode === 200, "판단 워크스페이스 API 응답 코드가 200이 아닙니다: " + consoleDecisions.statusCode);
   const consoleDecisionsPayload = JSON.parse(consoleDecisions.body);
-  assertOk(consoleDecisionsPayload.version === "investment-case-v4" && Array.isArray(consoleDecisionsPayload.items), "판단 워크스페이스 API가 투자 케이스 계약을 유지하지 않습니다.");
+  assertOk(consoleDecisionsPayload.version === "investment-case-v5" && Array.isArray(consoleDecisionsPayload.items), "판단 워크스페이스 API가 투자 케이스 계약을 유지하지 않습니다.");
   const operatorInvestmentCases = await request(port, "/api/investment-cases?limit=10&audience=operator");
   const operatorInvestmentCasesPayload = JSON.parse(operatorInvestmentCases.body);
   assertOk(operatorInvestmentCasesPayload.operatorView && operatorInvestmentCasesPayload.operatorView.loaded === true && Array.isArray(operatorInvestmentCasesPayload.operatorView.stages), "투자 케이스 운영 진단이 없습니다.");
@@ -3257,7 +3257,14 @@ async function checkNormalMode(port, context) {
   const tossLens = await requestReadyFlowLens(port, "/api/flow-lens?mock=1");
   assertOk(tossLens.statusCode === 200, "토스 판단 API 응답 코드가 200이 아닙니다: " + tossLens.statusCode + " · " + tossLens.body.slice(0, 500));
   const tossPayload = JSON.parse(tossLens.body);
-  assertOk(tossPayload.toss && Array.isArray(tossPayload.toss.positions), "토스 판단 API에 보유 종목 배열이 없습니다.");
+  assertOk(
+    tossPayload.toss && Array.isArray(tossPayload.toss.positions),
+    "토스 판단 API에 보유 종목 배열이 없습니다. · " + JSON.stringify({
+      dataMode: tossPayload.dataMode,
+      readModel: tossPayload.readModel,
+      keys: Object.keys(tossPayload || {})
+    }).slice(0, 1000)
+  );
   assertOk(tossPayload.tossDecision && Array.isArray(tossPayload.tossDecision.items), "토스 판단 API에 판단 항목이 없습니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "AAPL"; }), "토스 판단 항목에 AAPL이 없습니다.");
   assertOk(tossPayload.tossDecision.items.some(function (item) { return item.symbol === "TSLA"; }), "토스 판단 항목에 TSLA 관심 종목이 없습니다.");
@@ -3278,7 +3285,7 @@ async function checkNormalMode(port, context) {
   const dashboardSummary = await request(port, "/api/dashboard/summary?mock=1");
   assertOk(dashboardSummary.statusCode === 200, "오늘 요약 API 응답 코드가 200이 아닙니다: " + dashboardSummary.statusCode);
   const dashboardSummaryPayload = JSON.parse(dashboardSummary.body);
-  assertOk(dashboardSummaryPayload.version === "console-read-model-v1" && dashboardSummaryPayload.tasks.length <= 3 && dashboardSummaryPayload.blockerGroups.length <= 3, "오늘 요약이 행동·차단 원인을 제한된 읽기 모델로 반환하지 않습니다.");
+  assertOk(dashboardSummaryPayload.version === "console-read-model-v2" && dashboardSummaryPayload.tasks.length <= 3 && dashboardSummaryPayload.blockerGroups.length <= 3, "오늘 요약이 행동·차단 원인을 제한된 읽기 모델로 반환하지 않습니다.");
 
   const portfolioSummary = await request(port, "/api/portfolio/summary?accountId=default");
   assertOk(portfolioSummary.statusCode === 200, "포트폴리오 요약 API 응답 코드가 200이 아닙니다: " + portfolioSummary.statusCode);
@@ -3303,7 +3310,7 @@ async function checkNormalMode(port, context) {
   const operationsHealth = await request(port, "/api/operations/health");
   assertOk(operationsHealth.statusCode === 200, "운영 상태 API 응답 코드가 200이 아닙니다: " + operationsHealth.statusCode);
   const operationsHealthPayload = JSON.parse(operationsHealth.body);
-  assertOk(operationsHealthPayload.version === "console-read-model-v1" && Array.isArray(operationsHealthPayload.components), "운영 상태 API가 구성요소 읽기 모델을 반환하지 않습니다.");
+  assertOk(operationsHealthPayload.version === "console-read-model-v2" && Array.isArray(operationsHealthPayload.components), "운영 상태 API가 구성요소 읽기 모델을 반환하지 않습니다.");
 
   const tossLensFull = await requestReadyFlowLens(port, "/api/flow-lens?mock=1&detail=full");
   assertOk(tossLensFull.statusCode === 200, "토스 판단 상세 API 응답 코드가 200이 아닙니다: " + tossLensFull.statusCode);

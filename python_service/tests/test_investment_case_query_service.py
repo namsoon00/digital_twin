@@ -97,6 +97,19 @@ class FakeNotificationStore:
         }] if episode_ids else []
 
 
+class FakeSubjectCaseStore:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def latest(self, account_id="", symbol="", limit=20):
+        rows = self.rows
+        if account_id:
+            rows = [item for item in rows if item.get("accountId") == account_id]
+        if symbol:
+            rows = [item for item in rows if item.get("symbol") == symbol]
+        return rows[:limit]
+
+
 class FakeMonitorStore:
     def load_previous(self):
         return {
@@ -165,7 +178,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         store = FakeDecisionStore([episode()])
         result = InvestmentCaseQueryService(store, FakeNotificationStore()).list_cases()
 
-        self.assertEqual("investment-case-v4", result["version"])
+        self.assertEqual("investment-case-v5", result["version"])
         self.assertEqual(1, result["count"])
         self.assertEqual(investment_case_id("default", "AAPL"), result["items"][0]["caseId"])
         self.assertEqual(1, store.head_reads)
@@ -181,6 +194,51 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
 
         self.assertTrue(result["operatorView"]["loaded"])
         self.assertEqual(6, len(result["operatorView"]["stages"]))
+
+    def test_newer_subject_inference_replaces_stale_episode_as_review_not_trade(self):
+        subject_case = {
+            "subjectCaseId": "subject:1",
+            "batchCaseId": "batch:1",
+            "accountId": "default",
+            "symbol": "AAPL",
+            "stage": "SUPPRESSED",
+            "sourceAboxSnapshotId": "abox:2",
+            "inferenceGenerationId": "generation:2",
+            "updatedAt": "2026-08-20T03:00:00Z",
+            "candidateSet": {
+                "fingerprint": "candidate:1",
+                "eligibleHypothesisIds": ["hypothesis:2"],
+                "allowedActions": ["BUY", "HOLD"],
+                "hypotheses": [{
+                    "hypothesisId": "hypothesis:2",
+                    "label": "가격 회복",
+                    "candidateAction": "BUY",
+                    "supportingRuleIds": ["rule:recovery"],
+                    "supportingEvidenceIds": ["evidence:2"],
+                }],
+            },
+            "synthesis": {
+                "graphCandidateAction": "BUY",
+                "investmentViewAction": "BUY",
+                "eligibleHypothesisIds": ["hypothesis:2"],
+                "selectedRuleId": "rule:recovery",
+                "dataState": "sufficient",
+                "nextChecks": ["다음 관측에서도 회복이 유지되는지 확인"],
+            },
+        }
+        result = InvestmentCaseQueryService(
+            FakeDecisionStore([episode()]),
+            subject_case_repository=FakeSubjectCaseStore([subject_case]),
+        ).list_cases()
+
+        item = result["items"][0]
+        self.assertEqual("subject-decision-case", item["detailType"])
+        self.assertEqual("review", item["attention"]["state"])
+        self.assertTrue(item["attention"]["userReviewable"])
+        self.assertFalse(item["attention"]["userActionable"])
+        self.assertEqual("BUY", item["decision"]["candidateAction"])
+        self.assertEqual("HOLD", item["decision"]["action"])
+        self.assertEqual(1, result["summary"]["reviewRequired"])
 
     def test_exact_episode_exposes_frozen_current_state_and_integrity(self):
         row = episode()

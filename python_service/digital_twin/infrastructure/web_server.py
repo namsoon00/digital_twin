@@ -27,6 +27,7 @@ from typing import Dict, List
 from ..application.account_service import AccountApplicationService
 from ..application.account_watchlist_service import AccountWatchlistService
 from ..application.console_read_model_service import ConsoleReadModelService
+from ..application.capital_flow_service import CapitalFlowService
 from ..application.notification_ai_gate_message import (
     compact_invalidation_line,
     compact_next_action_line,
@@ -41,6 +42,7 @@ from ..application.investment_flow_query_service import InvestmentFlowQueryServi
 from ..application.ontology_catalog_query_service import OntologyCatalogQueryService
 from ..application.ontology_diagnostics_service import OntologyDiagnosticsService
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
+from ..domain.accounts import split_symbols
 from ..domain.instrument_timeline import InstrumentTimelineQuery
 from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, SUPPORTED_MARKETS, seed_symbol
 from ..domain.events import (
@@ -1680,6 +1682,43 @@ def investment_flow_api_payload(query: Dict[str, List[str]], episode_id: str = "
     )
 
 
+def capital_flow_api_payload(
+    query: Dict[str, List[str]],
+    *,
+    snapshot: Dict[str, object] = None,
+    subject_id: str = "",
+    quality_only: bool = False,
+) -> Dict[str, object]:
+    """Read capital movement separately from the decision-lineage flow API."""
+
+    settings = operational_read_settings()
+    store = stores.market_time_series_store(settings)
+    if quality_only:
+        return {
+            "contract": "capital-flow-quality-v1",
+            **store.capital_flow_quality(safe_int(first_query(query, "days"), 30, 1, 3650)),
+        }
+    requested_symbols = split_symbols(first_query(query, "symbols") or first_query(query, "symbol") or "")
+    if subject_id:
+        requested_symbols = [str(subject_id or "").upper().strip()]
+    source_snapshot = dict(snapshot or {})
+    toss = source_snapshot.get("toss") if isinstance(source_snapshot.get("toss"), dict) else {}
+    positions = list(toss.get("positions") or []) if isinstance(toss, dict) else []
+    service = CapitalFlowService(store)
+    payload = service.summary(
+        symbols=requested_symbols,
+        market=str(first_query(query, "market") or ""),
+        window_days=safe_int(first_query(query, "windowDays") or first_query(query, "window"), 5, 1, 20),
+        observed_after=str(first_query(query, "observedAfter") or ""),
+        as_of=str(first_query(query, "asOf") or source_snapshot.get("generatedAt") or ""),
+        limit=safe_int(first_query(query, "limit"), 10000, 1, 50000),
+        positions=positions,
+    )
+    payload["readOnly"] = True
+    payload["source"] = "capital-flow-observations"
+    return payload
+
+
 def investment_case_api_payload(
     query: Dict[str, List[str]],
     case_id: str = "",
@@ -1696,6 +1735,7 @@ def investment_case_api_payload(
         evidence_repository=stores.research_evidence_store(settings) if case_id else None,
         investment_domain_store=stores.investment_domain_store(settings) if case_id else None,
         symbol_repository=stores.symbol_universe_store(settings),
+        subject_case_repository=stores.subject_decision_case_store(settings),
     )
     if case_id and section == "history":
         return service.history(
@@ -5831,6 +5871,17 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     payload = dict(result.snapshot)
     payload["readModel"] = result.metadata()
     payload["dataFreshness"] = flow_lens_data_freshness(payload.get("generatedAt"), runtime_settings())
+    try:
+        payload["capitalFlow"] = capital_flow_api_payload(query, snapshot=payload)
+    except Exception as error:  # noqa: BLE001 - portfolio snapshot remains available when the analytical store is down.
+        payload["capitalFlow"] = {
+            "contract": "capital-flow-summary-v1",
+            "status": "unavailable",
+            "error": str(error)[:240],
+            "markets": [],
+            "sectors": [],
+            "subjects": [],
+        }
     if detail not in {"full", "detail", "all"}:
         payload = compact_flow_lens_payload(payload)
         payload["readModel"] = result.metadata()
@@ -7192,6 +7243,28 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
 
         if path == "/api/flow-lens" and self.command == "GET":
             return self.send_payload(200, flow_lens_read_payload(query), cache_control="no-store")
+
+        if path == "/api/capital-flow/summary" and self.command == "GET":
+            return self.send_payload(200, capital_flow_api_payload(query), cache_control="no-store")
+
+        if path == "/api/capital-flow/quality" and self.command == "GET":
+            return self.send_payload(200, capital_flow_api_payload(query, quality_only=True), cache_control="no-store")
+
+        if path == "/api/capital-flow/portfolio" and self.command == "GET":
+            return self.send_payload(
+                200,
+                capital_flow_api_payload(query, snapshot=persisted_flow_lens_snapshot()),
+                cache_control="no-store",
+            )
+
+        capital_flow_subject_match = re.match(r"^/api/capital-flow/subjects/([^/]+)$", path)
+        if capital_flow_subject_match and self.command == "GET":
+            subject_id = urllib.parse.unquote(capital_flow_subject_match.group(1))
+            return self.send_payload(
+                200,
+                capital_flow_api_payload(query, subject_id=subject_id),
+                cache_control="no-store",
+            )
 
         if path == "/api/dashboard/summary" and self.command == "GET":
             return self.send_payload(200, console_dashboard_api_payload(query), cache_control="no-store")

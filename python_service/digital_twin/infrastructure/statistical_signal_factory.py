@@ -4,6 +4,7 @@ from typing import Dict
 
 from ..application.statistical_signals import StatisticalSignalPipelineService
 from ..domain.statistical_signals import (
+    CAPITAL_FLOW_SHADOW_RELEASE_ID,
     DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
     DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
     DEFAULT_EVENT_SIGNAL_RELEASE_ID,
@@ -33,6 +34,7 @@ def build_statistical_signal_pipeline_service(settings: Dict[str, object] = None
         model_release_ids=(
             price_release_id,
             flow_release_id,
+            CAPITAL_FLOW_SHADOW_RELEASE_ID,
             DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
             DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
             DEFAULT_EVENT_SIGNAL_RELEASE_ID,
@@ -41,6 +43,6 @@ def build_statistical_signal_pipeline_service(settings: Dict[str, object] = None
         feature_set_version=str(
             configured.get("_reasoningFeatureSetVersion")
             or configured.get("temporalFeatureSetVersion")
-            or "temporal-features-v1"
+            or "temporal-features-v2"
         ),
     )

@@ -3,12 +3,15 @@
 from .contracts import (
     MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION,
     MODEL_SIGNAL_CONTRACT_VERSION,
+    MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION,
+    ModelHypothesisAssessment,
     ModelSignal,
     ModelSignalBundle,
     ModelSignalSnapshot,
     SignalEligibility,
 )
 from .registry import (
+    CAPITAL_FLOW_SHADOW_RELEASE_ID,
     DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
     DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
     DEFAULT_EVENT_SIGNAL_RELEASE_ID,
@@ -50,6 +53,7 @@ from .candidate_release import (
 
 
 __all__ = [
+    "CAPITAL_FLOW_SHADOW_RELEASE_ID",
     "DEFAULT_PRICE_SIGNAL_RELEASE_ID",
     "DEFAULT_FLOW_SIGNAL_RELEASE_ID",
     "DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID",
@@ -58,6 +62,8 @@ __all__ = [
     "DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID",
     "MODEL_SIGNAL_CONTRACT_VERSION",
     "MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION",
+    "MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION",
+    "ModelHypothesisAssessment",
     "ModelSignal",
     "ModelSignalBundle",
     "ModelSignalSnapshot",

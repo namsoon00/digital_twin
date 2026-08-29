@@ -10,6 +10,12 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
 
+from ..domain.capital_flow import (
+    boolean_value,
+    merge_capital_flow_rows,
+    observation_from_row,
+    observed_fields_from_coverage,
+)
 from ..domain.market_time_series import (
     completed_daily_rows,
     granularity_preferences,
@@ -53,6 +59,18 @@ MARKET_COLUMNS = [
 PORTFOLIO_MARK_COLUMNS = [
     "event_at", "observed_at", "account_id", "symbol", "quantity",
     "average_price", "profit_loss_rate", "current_price", "provider",
+]
+
+CAPITAL_FLOW_TABLE = "capital_flow_observations"
+CAPITAL_FLOW_NUMERIC_FIELDS = [
+    ("current_price", "currentPrice"), ("market_volume", "marketVolume"),
+    ("trading_value", "tradingValue"),
+    ("foreign_net_volume", "foreignNetVolume"), ("foreign_net_amount", "foreignNetAmount"),
+    ("foreign_buy_volume", "foreignBuyVolume"), ("foreign_sell_volume", "foreignSellVolume"),
+    ("institution_net_volume", "institutionNetVolume"), ("institution_net_amount", "institutionNetAmount"),
+    ("institution_buy_volume", "institutionBuyVolume"), ("institution_sell_volume", "institutionSellVolume"),
+    ("individual_net_volume", "individualNetVolume"), ("individual_net_amount", "individualNetAmount"),
+    ("individual_buy_volume", "individualBuyVolume"), ("individual_sell_volume", "individualSellVolume"),
 ]
 
 
@@ -229,9 +247,7 @@ class QuestDBTimeSeriesAdapter:
             ("current_price", "currentPrice"), ("change_rate", "changeRate"), ("volume", "volume"),
             ("trading_value", "tradingValue"), ("quantity", "quantity"), ("average_price", "averagePrice"),
             ("profit_loss_rate", "profitLossRate"), ("volume_ratio", "volumeRatio"),
-            ("trade_strength", "tradeStrength"), ("bid_ask_imbalance", "bidAskImbalance"),
-            ("foreign_net_volume", "foreignNetVolume"), ("institution_net_volume", "institutionNetVolume"),
-            ("individual_net_volume", "individualNetVolume"), ("ma5", "ma5"), ("ma20", "ma20"),
+            ("ma5", "ma5"), ("ma20", "ma20"),
             ("ma60", "ma60"), ("ma20_slope", "ma20Slope"), ("ma60_slope", "ma60Slope"),
             ("ma20_distance", "ma20Distance"), ("ma60_distance", "ma60Distance"),
         ]:
@@ -240,7 +256,55 @@ class QuestDBTimeSeriesAdapter:
         if isinstance(coverage, (dict, list)):
             coverage = json.dumps(coverage, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         fields.append("investor_coverage_json=" + ilp_string(coverage))
+        observed_fields = set(observed_fields_from_coverage(coverage))
+        for snake, camel in [
+            ("foreign_net_volume", "foreignNetVolume"),
+            ("institution_net_volume", "institutionNetVolume"),
+            ("individual_net_volume", "individualNetVolume"),
+        ]:
+            value = source_value(raw, snake, camel)
+            if camel in observed_fields and value not in (None, ""):
+                fields.append(snake + "=" + format(numeric_value(value), ".17g"))
+        for snake, camel in [("trade_strength", "tradeStrength"), ("bid_ask_imbalance", "bidAskImbalance")]:
+            value = source_value(raw, snake, camel)
+            if value not in (None, "", 0, 0.0):
+                fields.append(snake + "=" + format(numeric_value(value), ".17g"))
         return table_name + tags + " " + ",".join(fields) + " " + str(epoch_value(event_at, 1_000_000_000))
+
+    def capital_flow_line(self, raw: Mapping[str, object]) -> str:
+        source_as_of = source_value(raw, "source_as_of", "sourceAsOf") or source_value(raw, "observed_at", "observedAt")
+        observed_at = source_value(raw, "observed_at", "observedAt") or source_as_of
+        received_at = source_value(raw, "received_at", "receivedAt") or observed_at
+        event_at = source_as_of or observed_at
+        tags = self.ilp_tags(raw, [
+            ("subject_kind", "subjectKind"), ("subject_id", "subjectId"),
+            ("market", "market"), ("currency", "currency"), ("sector", "sector"),
+            ("provider", "provider"), ("measurement_type", "measurementType"),
+            ("status", "status"), ("freshness_status", "freshnessStatus"),
+            ("data_quality", "dataQuality"),
+        ])
+        observed_fields = source_value(raw, "observed_fields_json", "observedFields") or []
+        if isinstance(observed_fields, (dict, list, tuple)):
+            observed_fields = json.dumps(observed_fields, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        coverage = source_value(raw, "coverage_json", "coverage") or {}
+        if isinstance(coverage, (dict, list, tuple)):
+            coverage = json.dumps(coverage, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        fields = [
+            "observed_at=" + str(epoch_value(observed_at, 1_000_000)) + "t",
+            "source_as_of=" + str(epoch_value(source_as_of, 1_000_000)) + "t",
+            "received_at=" + str(epoch_value(received_at, 1_000_000)) + "t",
+            "observation_id=" + ilp_string(source_value(raw, "observation_id", "observationId")),
+            "trading_date=" + ilp_string(source_value(raw, "trading_date", "tradingDate")),
+            "judgement_eligible=" + ("true" if boolean_value(source_value(raw, "judgement_eligible", "judgementEligible")) else "false"),
+            "observed_fields_json=" + ilp_string(observed_fields or "[]"),
+            "coverage_json=" + ilp_string(coverage or "{}"),
+            "contract_version=" + ilp_string(source_value(raw, "contract_version", "contractVersion") or "capital-flow-observation-v1"),
+        ]
+        for snake, camel in CAPITAL_FLOW_NUMERIC_FIELDS:
+            value = source_value(raw, snake, camel)
+            if value not in (None, ""):
+                fields.append(snake + "=" + format(numeric_value(value), ".17g"))
+        return CAPITAL_FLOW_TABLE + tags + " " + ",".join(fields) + " " + str(epoch_value(event_at, 1_000_000_000))
 
     def portfolio_mark_line(self, raw: Mapping[str, object]) -> str:
         event_at = source_value(raw, "bucket_at", "bucketAt") or source_value(raw, "observed_at", "observedAt")
@@ -274,10 +338,11 @@ class QuestDBTimeSeriesAdapter:
                 for granularity, table_name in GRANULARITY_TABLES.items()
             },
             "portfolio_marks": retention_days["3m"],
+            CAPITAL_FLOW_TABLE: retention_days["1d"],
         }
 
     def schema_metadata(self) -> Dict[str, Dict[str, object]]:
-        table_names = [*GRANULARITY_TABLES.values(), "portfolio_marks"]
+        table_names = [*GRANULARITY_TABLES.values(), "portfolio_marks", CAPITAL_FLOW_TABLE]
         rows = self.query_rows(
             "SELECT table_name, ttlValue AS ttl_value, ttlUnit AS ttl_unit FROM tables() "
             "WHERE table_name IN ("
@@ -360,6 +425,49 @@ class QuestDBTimeSeriesAdapter:
                     provider SYMBOL
                 ) TIMESTAMP(event_at) PARTITION BY DAY WAL
                 DEDUP UPSERT KEYS(event_at, account_id, symbol, provider)
+                """
+                )
+            if CAPITAL_FLOW_TABLE not in metadata:
+                self.execute(
+                    """
+                CREATE TABLE IF NOT EXISTS capital_flow_observations (
+                    event_at TIMESTAMP,
+                    observed_at TIMESTAMP,
+                    source_as_of TIMESTAMP,
+                    received_at TIMESTAMP,
+                    observation_id VARCHAR,
+                    subject_kind SYMBOL,
+                    subject_id SYMBOL,
+                    market SYMBOL,
+                    currency SYMBOL,
+                    sector SYMBOL,
+                    trading_date VARCHAR,
+                    provider SYMBOL,
+                    measurement_type SYMBOL,
+                    status SYMBOL,
+                    freshness_status SYMBOL,
+                    judgement_eligible BOOLEAN,
+                    observed_fields_json VARCHAR,
+                    coverage_json VARCHAR,
+                    current_price DOUBLE,
+                    market_volume DOUBLE,
+                    trading_value DOUBLE,
+                    foreign_net_volume DOUBLE,
+                    foreign_net_amount DOUBLE,
+                    foreign_buy_volume DOUBLE,
+                    foreign_sell_volume DOUBLE,
+                    institution_net_volume DOUBLE,
+                    institution_net_amount DOUBLE,
+                    institution_buy_volume DOUBLE,
+                    institution_sell_volume DOUBLE,
+                    individual_net_volume DOUBLE,
+                    individual_net_amount DOUBLE,
+                    individual_buy_volume DOUBLE,
+                    individual_sell_volume DOUBLE,
+                    data_quality SYMBOL,
+                    contract_version VARCHAR
+                ) TIMESTAMP(event_at) PARTITION BY DAY WAL
+                DEDUP UPSERT KEYS(event_at, subject_id, provider, measurement_type)
                 """
                 )
             if set(metadata) != set(expected_ttl_days):
@@ -453,6 +561,72 @@ class QuestDBTimeSeriesAdapter:
             "status": "completed",
         }
 
+    def write_capital_flow_observations(self, observations: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+        rows = [dict(item or {}) for item in observations or []]
+        if not rows:
+            return {"backendId": self.backend_id, "writtenCount": 0, "status": "completed"}
+        self.ensure_schema()
+        lines = [self.capital_flow_line(row) for row in rows]
+        self.write_lines(lines)
+        return {"backendId": self.backend_id, "writtenCount": len(lines), "status": "completed"}
+
+    def load_capital_flow_observations(
+        self,
+        symbols: Iterable[str] = (),
+        market: str = "",
+        observed_after: str = "",
+        as_of: str = "",
+        limit: int = 5000,
+    ) -> List[Dict[str, object]]:
+        self.ensure_schema()
+        clauses = ["judgement_eligible = true", "status = 'available'"]
+        clean_symbols = sorted({clean_text(symbol).upper() for symbol in symbols or [] if clean_text(symbol)})
+        if clean_symbols:
+            clauses.append("subject_id IN (" + ",".join(sql_text(symbol) for symbol in clean_symbols) + ")")
+        if clean_text(market):
+            clauses.append("market = " + sql_text(clean_text(market).upper()))
+        if clean_text(observed_after):
+            clauses.append("observed_at >= " + sql_text(observed_after))
+        if clean_text(as_of):
+            clauses.append("observed_at <= " + sql_text(as_of))
+        selected = (
+            "observation_id, subject_kind, subject_id, market, currency, sector, trading_date, "
+            "observed_at, source_as_of, received_at, provider, measurement_type, status, freshness_status, "
+            "judgement_eligible, observed_fields_json, coverage_json, current_price, market_volume, trading_value, "
+            "foreign_net_volume, foreign_net_amount, foreign_buy_volume, foreign_sell_volume, "
+            "institution_net_volume, institution_net_amount, institution_buy_volume, institution_sell_volume, "
+            "individual_net_volume, individual_net_amount, individual_buy_volume, individual_sell_volume, "
+            "data_quality, contract_version"
+        )
+        rows = self.query_rows(
+            "SELECT " + selected + " FROM " + CAPITAL_FLOW_TABLE + " WHERE " + " AND ".join(clauses)
+            + " ORDER BY subject_id, event_at LIMIT " + str(max(1, min(50000, int(limit or 5000))))
+        )
+        payloads = []
+        for row in rows:
+            observation = observation_from_row(row)
+            if observation and observation.valid():
+                payloads.append(observation.to_payload())
+        return payloads
+
+    def capital_flow_quality(self, legacy_days: int = 30) -> Dict[str, object]:
+        self.ensure_schema()
+        rows = self.query_rows(
+            "SELECT count(*) total, count_distinct(subject_id) subjects, max(source_as_of) source_as_of, "
+            "sum(case when measurement_type = 'daily-final' then 1 else 0 end) daily_final, "
+            "sum(case when measurement_type = 'intraday-estimate' then 1 else 0 end) intraday_estimate "
+            "FROM " + CAPITAL_FLOW_TABLE + " WHERE judgement_eligible = true AND status = 'available'"
+        )
+        row = rows[0] if rows else {}
+        return {
+            "status": "ready",
+            "observationCount": int(numeric_value(row.get("total"))),
+            "subjectCount": int(numeric_value(row.get("subjects"))),
+            "dailyFinalCount": int(numeric_value(row.get("daily_final"))),
+            "intradayEstimateCount": int(numeric_value(row.get("intraday_estimate"))),
+            "sourceAsOf": clean_text(row.get("source_as_of")),
+        }
+
     def rows_for(self, account_id: str, symbol: str, granularity: str, as_of: str, limit: int) -> List[Dict[str, object]]:
         table_name = GRANULARITY_TABLES.get(str(granularity or ""))
         if not table_name:
@@ -504,6 +678,14 @@ class QuestDBTimeSeriesAdapter:
             for definition in definition_rows
         }
         maximum = max(20, min(2000, int(float(self.settings.get("marketTimeSeriesMaxPointsPerWindow") or 500))))
+        capital_flow_rows = self.load_capital_flow_observations(
+            symbols=clean_symbols,
+            as_of=as_of,
+            limit=max(100, len(clean_symbols) * 80),
+        )
+        capital_flow_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+        for row in capital_flow_rows:
+            capital_flow_by_symbol.setdefault(clean_text(row.get("subjectId")).upper(), []).append(row)
         result: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
         for symbol in clean_symbols:
             windows: Dict[str, List[Dict[str, object]]] = {}
@@ -545,6 +727,7 @@ class QuestDBTimeSeriesAdapter:
                     ordered = window_rows(ordered, definition, parse_timestamp(as_of))
                 else:
                     ordered = trim_to_recent_sessions(ordered, required)
+                    ordered = merge_capital_flow_rows(ordered, capital_flow_by_symbol.get(symbol, []))
                 windows[key] = ordered
             result[symbol] = windows
         return result

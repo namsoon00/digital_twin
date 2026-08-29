@@ -428,6 +428,7 @@ def prompt_relation_sort_key(item: OntologyRelation):
         "FAILED_AFTER",
         "MATERIAL_TO",
         "HAS_TEMPORAL_WINDOW",
+        "HAS_CAPITAL_FLOW_WINDOW",
         "HAS_PRICE_PATH_PATTERN",
         "HAS_FLOW_PATTERN",
         "HAS_EVENT_CLUSTER",

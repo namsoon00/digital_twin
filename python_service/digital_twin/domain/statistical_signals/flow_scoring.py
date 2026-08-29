@@ -16,8 +16,6 @@ from .registry import DEFAULT_FLOW_SIGNAL_RELEASE_ID, model_release, signal_hypo
 FLOW_FIELDS = (
     "foreignNetVolume",
     "institutionNetVolume",
-    "tradeStrength",
-    "bidAskImbalance",
 )
 FLOW_SIGNAL_MAX_SOURCE_AGE_SECONDS = 4 * 24 * 60 * 60
 
@@ -45,6 +43,36 @@ def _observed_at(row: Mapping[str, object]) -> str:
     return str(_first(row, "bucketAt", "bucket_at", "generatedAt", "observedAt", "observed_at") or "")
 
 
+def _investor_coverage(row: Mapping[str, object]) -> Dict[str, object]:
+    coverage = row.get("marketSignalCoverage") if isinstance(row.get("marketSignalCoverage"), Mapping) else {}
+    investor = coverage.get("investor") if isinstance(coverage.get("investor"), Mapping) else {}
+    return dict(investor or {})
+
+
+def _observed_flow_fields(row: Mapping[str, object]) -> set:
+    investor = _investor_coverage(row)
+    return {
+        str(field)
+        for field in (investor.get("observedFields") or investor.get("fields") or [])
+        if str(field or "").strip()
+    }
+
+
+def _usable_flow_row(row: Mapping[str, object]) -> bool:
+    investor = _investor_coverage(row)
+    status = str(investor.get("status") or "").lower()
+    if status in {"stale", "invalid", "missing", "empty", "unavailable", "error"}:
+        return False
+    observed = _observed_flow_fields(row)
+    return set(FLOW_FIELDS).issubset(observed) and all(
+        _first(row, camel, snake) is not None
+        for camel, snake in (
+            ("foreignNetVolume", "foreign_net_volume"),
+            ("institutionNetVolume", "institution_net_volume"),
+        )
+    )
+
+
 def _ordered_daily_rows(rows: Iterable[Mapping[str, object]]) -> List[Dict[str, object]]:
     """Collapse repeated intraday cumulative KIS values to one sample per day."""
 
@@ -54,7 +82,7 @@ def _ordered_daily_rows(rows: Iterable[Mapping[str, object]]) -> List[Dict[str, 
             continue
         row = dict(raw)
         stamp = _observed_at(row)
-        day = stamp[:10] if len(stamp) >= 10 else stamp
+        day = str(row.get("marketSessionDate") or row.get("tradingDate") or stamp)[:10]
         key = day or "undated"
         previous = by_day.get(key)
         if previous is None or _observed_at(previous) <= stamp:
@@ -79,27 +107,31 @@ def _flow_metrics(
         if not cutoff or (stamp and stamp <= cutoff):
             bounded_rows.append(row)
     rows = _ordered_daily_rows(bounded_rows)
-    usable = [
-        row for row in rows
-        if any(field in row and row.get(field) not in (None, "") for field in FLOW_FIELDS)
-    ]
+    usable = [row for row in rows if _usable_flow_row(row)]
     if not usable:
         return {}
 
     ratios = []
+    smart_money_values = []
+    value_basis = "volume"
     positive = 0
     negative = 0
     for row in usable:
-        smart_money_value = _first(row, "smartMoneyNetVolume", "smart_money_net_volume")
-        smart_money = _number(smart_money_value)
-        if smart_money_value in (None, ""):
+        foreign_amount = _first(row, "foreignNetAmount", "foreign_net_amount")
+        institution_amount = _first(row, "institutionNetAmount", "institution_net_amount")
+        if foreign_amount not in (None, "") and institution_amount not in (None, ""):
+            smart_money = _number(foreign_amount) + _number(institution_amount)
+            denominator = max(1.0, abs(_number(_first(row, "tradingValue", "trading_value"))), abs(smart_money))
+            value_basis = "amount"
+        else:
             smart_money = (
                 _number(_first(row, "foreignNetVolume", "foreign_net_volume"))
                 + _number(_first(row, "institutionNetVolume", "institution_net_volume"))
             )
-        volume = abs(_number(_first(row, "volume", "tradingVolume")))
-        denominator = max(1.0, volume, abs(smart_money))
+            volume = abs(_number(_first(row, "volume", "tradingVolume")))
+            denominator = max(1.0, volume, abs(smart_money))
         ratio = smart_money / denominator
+        smart_money_values.append(smart_money)
         ratios.append(ratio)
         positive += int(ratio > 0)
         negative += int(ratio < 0)
@@ -123,14 +155,20 @@ def _flow_metrics(
         "volumeRatio",
         "rawVolumeRatio",
     ))
+    investor_quality = _investor_coverage(latest)
     quality_text = " ".join(str(_first(latest, key) or "") for key in (
         "dataQuality", "freshnessStatus", "investorFlowDataState",
+    )).lower() + " " + " ".join(str(investor_quality.get(key) or "") for key in (
+        "status", "freshnessStatus", "latencyStatus",
     )).lower()
     stale = any(value in quality_text for value in ("stale", "invalid", "missing", "error", "unavailable"))
-    present_fields = sum(
-        1 for field in FLOW_FIELDS
-        if field in latest and latest.get(field) not in (None, "")
-    )
+    observed_latest = _observed_flow_fields(latest)
+    present_fields = sum(1 for field in FLOW_FIELDS if field in observed_latest)
+    midpoint = max(1, len(smart_money_values) // 2)
+    prior_values = smart_money_values[:midpoint]
+    recent_values = smart_money_values[midpoint:] or prior_values
+    prior_mean = mean(prior_values) if prior_values else 0.0
+    recent_mean = mean(recent_values) if recent_values else 0.0
     latest_observed_at = _observed_at(latest)
     latest_stamp = parse_timestamp(latest_observed_at)
     source_age_seconds = None
@@ -149,6 +187,9 @@ def _flow_metrics(
         "fieldCoverageRatio": _bounded(present_fields / float(len(FLOW_FIELDS))),
         "latestSmartMoneyVolumeRatio": latest_ratio,
         "meanSmartMoneyVolumeRatio": mean_ratio,
+        "smartMoneyCumulative": round(sum(smart_money_values), 6),
+        "smartMoneyAcceleration": round(recent_mean - prior_mean, 6),
+        "flowValueBasis": value_basis,
         "flowSignPersistence": persistence,
         "dominantFlowSign": dominant_sign,
         "priceReturn": price_return,

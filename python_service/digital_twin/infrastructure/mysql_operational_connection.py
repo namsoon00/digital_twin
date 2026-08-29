@@ -1427,6 +1427,53 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS capital_flow_observations (
+        observation_id VARCHAR(191) PRIMARY KEY,
+        subject_kind VARCHAR(32) NOT NULL DEFAULT 'security',
+        subject_id VARCHAR(64) NOT NULL,
+        market VARCHAR(64) NOT NULL DEFAULT '',
+        currency VARCHAR(16) NOT NULL DEFAULT '',
+        sector VARCHAR(191) NOT NULL DEFAULT '',
+        trading_date VARCHAR(10) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL,
+        source_as_of VARCHAR(40) NOT NULL DEFAULT '',
+        received_at VARCHAR(40) NOT NULL DEFAULT '',
+        provider VARCHAR(191) NOT NULL DEFAULT '',
+        measurement_type VARCHAR(32) NOT NULL DEFAULT 'unspecified',
+        observation_status VARCHAR(32) NOT NULL DEFAULT '',
+        freshness_status VARCHAR(64) NOT NULL DEFAULT '',
+        judgement_eligible TINYINT NOT NULL DEFAULT 0,
+        observed_fields_json TEXT NOT NULL,
+        coverage_json LONGTEXT NOT NULL,
+        current_price DOUBLE NULL,
+        market_volume DOUBLE NULL,
+        trading_value DOUBLE NULL,
+        foreign_net_volume DOUBLE NULL,
+        foreign_net_amount DOUBLE NULL,
+        foreign_buy_volume DOUBLE NULL,
+        foreign_sell_volume DOUBLE NULL,
+        institution_net_volume DOUBLE NULL,
+        institution_net_amount DOUBLE NULL,
+        institution_buy_volume DOUBLE NULL,
+        institution_sell_volume DOUBLE NULL,
+        individual_net_volume DOUBLE NULL,
+        individual_net_amount DOUBLE NULL,
+        individual_buy_volume DOUBLE NULL,
+        individual_sell_volume DOUBLE NULL,
+        data_quality VARCHAR(64) NOT NULL DEFAULT 'actual',
+        contract_version VARCHAR(64) NOT NULL DEFAULT 'capital-flow-observation-v1',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_capital_flow_source (
+            subject_kind, subject_id, trading_date, provider, measurement_type, source_as_of
+        ),
+        KEY idx_capital_flow_subject_date (subject_id, trading_date, observed_at),
+        KEY idx_capital_flow_market_date (market, trading_date, subject_id),
+        KEY idx_capital_flow_sector_date (sector, trading_date, subject_id),
+        KEY idx_capital_flow_as_of (observed_at, subject_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS time_series_backend_deployments (
         backend_id VARCHAR(191) PRIMARY KEY,
         adapter_name VARCHAR(64) NOT NULL,
@@ -1529,6 +1576,22 @@ MYSQL_SCHEMA = [
         KEY idx_model_signal_head_snapshot (snapshot_id),
         KEY idx_model_signal_head_subject (subject_id, observed_at),
         KEY idx_model_signal_head_updated (updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS statistical_model_assessment_heads (
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        subject_id VARCHAR(191) NOT NULL,
+        model_release_id VARCHAR(191) NOT NULL,
+        snapshot_id VARCHAR(191) NOT NULL,
+        assessment_material_hash VARCHAR(64) NOT NULL,
+        assessment_count INT NOT NULL DEFAULT 0,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (account_id, subject_id, model_release_id),
+        KEY idx_model_assessment_head_snapshot (snapshot_id),
+        KEY idx_model_assessment_head_subject (subject_id, observed_at),
+        KEY idx_model_assessment_head_updated (updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

@@ -233,13 +233,43 @@ class VersionedMarketTimeSeriesStore:
                 ))
         return queued
 
+    def enqueue_capital_flow_rows_with_connection(self, connection, rows: Iterable[Mapping[str, object]]) -> int:
+        observations = [dict(row or {}) for row in rows or []]
+        if not observations:
+            return 0
+        chunk_size = max(1, min(100, int(float(self.settings.get("timeSeriesProjectionPayloadRows") or 50))))
+        queued = 0
+        for offset in range(0, len(observations), chunk_size):
+            chunk = observations[offset:offset + chunk_size]
+            source_as_of = max(str(row.get("observed_at") or row.get("source_as_of") or "") for row in chunk)
+            payload = {"contractVersion": "capital-flow-observation-v1", "observations": chunk}
+            for backend_id in self.projection_backend_ids():
+                queued += int(self.outbox.enqueue_with_connection(
+                    connection,
+                    backend_id=backend_id,
+                    operation_name="write-capital-flow-observations",
+                    payload=payload,
+                    source_observed_at=source_as_of,
+                    dedupe_key=backend_id + ":capital-flow:" + payload_fingerprint(chunk),
+                ))
+        return queued
+
     def enqueue_rows(self, rows: Iterable[Mapping[str, object]]) -> int:
         with self.outbox.transaction() as connection:
             return self.enqueue_rows_with_connection(connection, rows)
 
+    def enqueue_capital_flow_rows(self, rows: Iterable[Mapping[str, object]]) -> int:
+        with self.outbox.transaction() as connection:
+            return self.enqueue_capital_flow_rows_with_connection(connection, rows)
+
     def record_snapshots_with_connection(self, connection, snapshots: Iterable[object]) -> Dict[str, object]:
         materialized, account_ids, symbols, observed_ats = self.snapshot_scope(snapshots)
         result = dict(self.baseline.record_snapshots_with_connection(connection, materialized) or {})
+        capital_flow_rows = [dict(row or {}) for row in result.pop("_capitalFlowRows", []) or []]
+        result["capitalFlowProjectionQueuedCount"] = self.enqueue_capital_flow_rows_with_connection(
+            connection,
+            capital_flow_rows,
+        )
         if (
             not materialized
             or not account_ids
@@ -267,6 +297,8 @@ class VersionedMarketTimeSeriesStore:
     def record_positions(self, account_id, positions, observed_at, provider="", replace=True) -> Dict[str, object]:
         materialized = list(positions or [])
         result = dict(self.baseline.record_positions(account_id, materialized, observed_at, provider, replace) or {})
+        capital_flow_rows = [dict(row or {}) for row in result.pop("_capitalFlowRows", []) or []]
+        result["capitalFlowProjectionQueuedCount"] = self.enqueue_capital_flow_rows(capital_flow_rows)
         symbols = [str(getattr(position, "symbol", "") or "").upper().strip() for position in materialized]
         if (
             not str(account_id or "").strip()
@@ -283,6 +315,31 @@ class VersionedMarketTimeSeriesStore:
             observed_ats=[str(observed_at or "")],
         )
         result["projectionQueuedCount"] = self.enqueue_rows(rows)
+        result["activeBackendId"] = self.active_backend_id()
+        return result
+
+    def load_capital_flow_observations(self, **kwargs):
+        adapter = self.active_adapter()
+        reader = getattr(adapter, "load_capital_flow_observations", None)
+        if not callable(reader):
+            reader = getattr(self.baseline, "load_capital_flow_observations")
+        return reader(**kwargs)
+
+    def capital_flow_quality(self, legacy_days: int = 30) -> Dict[str, object]:
+        baseline_quality = dict(self.baseline.capital_flow_quality(legacy_days) or {})
+        baseline_quality["activeBackendId"] = self.active_backend_id()
+        adapter = self.active_adapter()
+        if adapter is not self.baseline and callable(getattr(adapter, "capital_flow_quality", None)):
+            try:
+                baseline_quality["activeBackend"] = adapter.capital_flow_quality(legacy_days)
+            except Exception as error:  # noqa: BLE001 - baseline quality remains available.
+                baseline_quality["activeBackend"] = {"status": "unavailable", "error": str(error)[:240]}
+        return baseline_quality
+
+    def rebuild_capital_flow_from_legacy(self, limit: int = 50000) -> Dict[str, object]:
+        result = dict(self.baseline.rebuild_capital_flow_from_legacy(limit) or {})
+        observations = [dict(row or {}) for row in result.pop("observations", []) or []]
+        result["projectionQueuedCount"] = self.enqueue_capital_flow_rows(observations)
         result["activeBackendId"] = self.active_backend_id()
         return result
 
@@ -349,9 +406,14 @@ class TimeSeriesProjectionRunner:
                 continue
             try:
                 operation = str(job.get("operation") or "")
-                if operation != "write-observations":
+                if operation == "write-capital-flow-observations":
+                    adapter.write_capital_flow_observations(
+                        dict(job.get("payload") or {}).get("observations") or []
+                    )
+                elif operation == "write-observations":
+                    adapter.write_observations(dict(job.get("payload") or {}).get("observations") or [])
+                else:
                     raise ValueError("Unsupported time-series projection operation: " + operation)
-                adapter.write_observations(dict(job.get("payload") or {}).get("observations") or [])
                 self.outbox.complete(job.get("jobId"))
                 completed += 1
             except Exception as error:  # noqa: BLE001 - retries isolate candidate backend failures.

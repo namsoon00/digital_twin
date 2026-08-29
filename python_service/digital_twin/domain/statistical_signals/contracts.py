@@ -8,9 +8,10 @@ import json
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 
-MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v3"
-MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v3"
+MODEL_SIGNAL_CONTRACT_VERSION = "statistical-model-signal-v4"
+MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION = "statistical-model-signal-bundle-v4"
 SIGNAL_ELIGIBILITY_CONTRACT_VERSION = "statistical-signal-eligibility-v1"
+MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION = "model-hypothesis-assessment-v1"
 
 
 def _text(value: object) -> str:
@@ -307,6 +308,129 @@ class ModelSignal:
 
 
 @dataclass(frozen=True)
+class ModelHypothesisAssessment:
+    """Point-in-time result of testing one predictive contract.
+
+    ``not-supported`` deliberately does not mean that a market hypothesis was
+    disproved. It only records that the contract conditions were not satisfied
+    at this cutoff. Only ``supported`` assessments may create exact TypeDB
+    model-evidence nodes.
+    """
+
+    assessment_id: str
+    hypothesis_contract_id: str
+    hypothesis_family_id: str
+    model_release_id: str
+    signal_type: str
+    subject_id: str
+    status: str
+    observed_at: str
+    knowledge_cutoff_at: str
+    source_feature_snapshot_id: str
+    coverage_ratio: float
+    matched_condition_ids: Tuple[str, ...] = ()
+    failed_condition_ids: Tuple[str, ...] = ()
+    unknown_condition_ids: Tuple[str, ...] = ()
+    evidence_ids: Tuple[str, ...] = ()
+    decision_eligibility: str = "reference-only"
+    scorer_version: str = ""
+    material_hash: str = ""
+    contract_version: str = MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION
+
+    @classmethod
+    def create(
+        cls,
+        hypothesis_contract_id: object,
+        hypothesis_family_id: object,
+        model_release_id: object,
+        signal_type: object,
+        subject_id: object,
+        status: object,
+        observed_at: object,
+        knowledge_cutoff_at: object,
+        source_feature_snapshot_id: object,
+        coverage_ratio: object,
+        matched_condition_ids: Iterable[object] = (),
+        failed_condition_ids: Iterable[object] = (),
+        unknown_condition_ids: Iterable[object] = (),
+        evidence_ids: Iterable[object] = (),
+        decision_eligibility: object = "reference-only",
+        scorer_version: object = "",
+    ) -> "ModelHypothesisAssessment":
+        normalized_status = _text(status).lower() or "untested"
+        if normalized_status not in {"supported", "not-supported", "untested"}:
+            normalized_status = "untested"
+        normalized_eligibility = _text(decision_eligibility).lower() or "reference-only"
+        if normalized_status != "supported":
+            normalized_eligibility = "reference-only"
+        elif normalized_eligibility not in {"eligible", "conditional", "reference-only"}:
+            normalized_eligibility = "reference-only"
+        material = {
+            "contractVersion": MODEL_HYPOTHESIS_ASSESSMENT_CONTRACT_VERSION,
+            "hypothesisContractId": _text(hypothesis_contract_id),
+            "hypothesisFamilyId": _text(hypothesis_family_id),
+            "modelReleaseId": _text(model_release_id),
+            "signalType": _text(signal_type).lower(),
+            "subjectId": _text(subject_id).upper(),
+            "status": normalized_status,
+            "observedAt": _text(observed_at),
+            "knowledgeCutoffAt": _text(knowledge_cutoff_at) or _text(observed_at),
+            "sourceFeatureSnapshotId": _text(source_feature_snapshot_id),
+            "coverageRatio": round(_bounded(coverage_ratio), 8),
+            "matchedConditionIds": list(_unique_text(matched_condition_ids, 64)),
+            "failedConditionIds": list(_unique_text(failed_condition_ids, 64)),
+            "unknownConditionIds": list(_unique_text(unknown_condition_ids, 64)),
+            "evidenceIds": list(_unique_text(evidence_ids, 64)),
+            "decisionEligibility": normalized_eligibility,
+            "scorerVersion": _text(scorer_version),
+        }
+        digest = payload_hash(material)
+        return cls(
+            assessment_id="model-hypothesis-assessment:" + digest[:32],
+            hypothesis_contract_id=str(material["hypothesisContractId"]),
+            hypothesis_family_id=str(material["hypothesisFamilyId"]),
+            model_release_id=str(material["modelReleaseId"]),
+            signal_type=str(material["signalType"]),
+            subject_id=str(material["subjectId"]),
+            status=str(material["status"]),
+            observed_at=str(material["observedAt"]),
+            knowledge_cutoff_at=str(material["knowledgeCutoffAt"]),
+            source_feature_snapshot_id=str(material["sourceFeatureSnapshotId"]),
+            coverage_ratio=float(material["coverageRatio"]),
+            matched_condition_ids=tuple(material["matchedConditionIds"]),
+            failed_condition_ids=tuple(material["failedConditionIds"]),
+            unknown_condition_ids=tuple(material["unknownConditionIds"]),
+            evidence_ids=tuple(material["evidenceIds"]),
+            decision_eligibility=str(material["decisionEligibility"]),
+            scorer_version=str(material["scorerVersion"]),
+            material_hash=digest,
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "contractVersion": self.contract_version,
+            "assessmentId": self.assessment_id,
+            "hypothesisContractId": self.hypothesis_contract_id,
+            "hypothesisFamilyId": self.hypothesis_family_id,
+            "modelReleaseId": self.model_release_id,
+            "signalType": self.signal_type,
+            "subjectId": self.subject_id,
+            "status": self.status,
+            "observedAt": self.observed_at,
+            "knowledgeCutoffAt": self.knowledge_cutoff_at,
+            "sourceFeatureSnapshotId": self.source_feature_snapshot_id,
+            "coverageRatio": self.coverage_ratio,
+            "matchedConditionIds": list(self.matched_condition_ids),
+            "failedConditionIds": list(self.failed_condition_ids),
+            "unknownConditionIds": list(self.unknown_condition_ids),
+            "evidenceIds": list(self.evidence_ids),
+            "decisionEligibility": self.decision_eligibility,
+            "scorerVersion": self.scorer_version,
+            "materialHash": self.material_hash,
+        }
+
+
+@dataclass(frozen=True)
 class ModelSignalSnapshot:
     snapshot_id: str
     account_id: str
@@ -316,6 +440,7 @@ class ModelSignalSnapshot:
     model_release_id: str
     subjects: Tuple[str, ...]
     signals: Tuple[ModelSignal, ...]
+    assessments: Tuple[ModelHypothesisAssessment, ...]
     material_hash: str
     shared_material_hash: str
     contract_version: str = MODEL_SIGNAL_CONTRACT_VERSION
@@ -330,14 +455,28 @@ class ModelSignalSnapshot:
         model_release_id: object,
         signals: Iterable[ModelSignal],
         subjects: Iterable[object] = (),
+        assessments: Iterable[ModelHypothesisAssessment] = (),
     ) -> "ModelSignalSnapshot":
         rows = tuple(sorted(
             [item for item in signals or [] if isinstance(item, ModelSignal)],
             key=lambda item: (item.subject_id, item.signal_type, item.horizon, item.signal_id),
         ))
+        assessment_rows = tuple(sorted(
+            [item for item in assessments or [] if isinstance(item, ModelHypothesisAssessment)],
+            key=lambda item: (
+                item.subject_id,
+                item.hypothesis_family_id,
+                item.hypothesis_contract_id,
+                item.assessment_id,
+            ),
+        ))
         normalized_subjects = tuple(sorted({
             _text(item).upper()
-            for item in [*list(subjects or []), *(signal.subject_id for signal in rows)]
+            for item in [
+                *list(subjects or []),
+                *(signal.subject_id for signal in rows),
+                *(assessment.subject_id for assessment in assessment_rows),
+            ]
             if _text(item)
         }))
         material = {
@@ -346,6 +485,7 @@ class ModelSignalSnapshot:
             "featureSetVersion": _text(feature_set_version),
             "subjects": list(normalized_subjects),
             "signals": [item.material_hash for item in rows],
+            "assessments": [item.material_hash for item in assessment_rows],
         }
         shared_digest = payload_hash(material)
         digest = payload_hash({
@@ -361,6 +501,7 @@ class ModelSignalSnapshot:
             model_release_id=_text(model_release_id),
             subjects=normalized_subjects,
             signals=rows,
+            assessments=assessment_rows,
             material_hash=digest,
             shared_material_hash=shared_digest,
         )
@@ -375,8 +516,10 @@ class ModelSignalSnapshot:
             "featureSetVersion": self.feature_set_version,
             "modelReleaseId": self.model_release_id,
             "signalCount": len(self.signals),
+            "assessmentCount": len(self.assessments),
             "subjects": list(self.subjects),
             "signals": [item.to_dict() for item in self.signals],
+            "assessments": [item.to_dict() for item in self.assessments],
             "materialHash": self.material_hash,
             "sharedMaterialHash": self.shared_material_hash,
         }
@@ -395,6 +538,7 @@ class ModelSignalBundle:
     subjects: Tuple[str, ...]
     snapshots: Tuple[ModelSignalSnapshot, ...]
     signals: Tuple[ModelSignal, ...]
+    assessments: Tuple[ModelHypothesisAssessment, ...]
     material_hash: str
     contract_version: str = MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION
 
@@ -421,8 +565,22 @@ class ModelSignalBundle:
                 item.signal_id,
             ),
         ))
+        assessment_rows = tuple(sorted(
+            [assessment for snapshot in snapshot_rows for assessment in snapshot.assessments],
+            key=lambda item: (
+                item.subject_id,
+                item.model_release_id,
+                item.hypothesis_family_id,
+                item.hypothesis_contract_id,
+            ),
+        ))
         release_ids = tuple(sorted({item.model_release_id for item in snapshot_rows if item.model_release_id}))
-        subjects = tuple(sorted({item.subject_id for item in signal_rows if item.subject_id}))
+        subjects = tuple(sorted({
+            item
+            for snapshot in snapshot_rows
+            for item in snapshot.subjects
+            if item
+        }))
         material = {
             "contractVersion": MODEL_SIGNAL_BUNDLE_CONTRACT_VERSION,
             "accountId": _text(account_id),
@@ -443,6 +601,7 @@ class ModelSignalBundle:
             subjects=subjects,
             snapshots=snapshot_rows,
             signals=signal_rows,
+            assessments=assessment_rows,
             material_hash=digest,
         )
 
@@ -457,8 +616,10 @@ class ModelSignalBundle:
             "modelReleaseIds": list(self.model_release_ids),
             "modelReleaseCount": len(self.model_release_ids),
             "signalCount": len(self.signals),
+            "assessmentCount": len(self.assessments),
             "subjects": list(self.subjects),
             "signals": [item.to_dict() for item in self.signals],
+            "assessments": [item.to_dict() for item in self.assessments],
             "snapshots": [item.to_dict() for item in self.snapshots],
             "materialHash": self.material_hash,
             "sharedMaterialHash": self.material_hash,

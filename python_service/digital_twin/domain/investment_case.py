@@ -30,7 +30,7 @@ from .decision_integrity import (
 )
 
 
-INVESTMENT_CASE_VERSION = "investment-case-v4"
+INVESTMENT_CASE_VERSION = "investment-case-v5"
 
 ACTIONABLE_INVESTMENT_ACTIONS = {"BUY", "ADD", "TRIM", "SELL", "AVOID"}
 
@@ -245,11 +245,14 @@ def _attention_summary(
         state, label, category = "review", "근거 확인", "review"
     else:
         state, label, category = "observe", "관찰 유지", "investment"
+    reviewable = state == "review"
     return {
         "state": state,
         "label": label,
         "category": category,
         "userActionable": actionable,
+        "userReviewable": reviewable,
+        "userAttentionRequired": actionable or reviewable,
         "investmentAction": normalized_action,
         "issueCount": len(issue_rows),
         "issues": issue_rows,

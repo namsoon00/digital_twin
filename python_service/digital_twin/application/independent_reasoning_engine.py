@@ -1361,15 +1361,19 @@ class V2ReasoningEngine:
                 "durationMs": stages["candidateBuildMs"],
                 "detectedCount": len(candidates.get("detected") or []),
                 "readyCount": len(candidates.get("ready") or []),
+                "hypothesisCandidateCount": len(candidates.get("hypothesisCandidates") or []),
             },
         )
         detected_events = list(candidates.get("detected") or [])
         ready_events = list(candidates.get("ready") or [])
         decision_syntheses = list(candidates.get("syntheses") or [])
+        hypothesis_candidates = list(
+            candidates.get("hypothesisCandidates") or detected_events
+        )
         if reasoning_case is not None and verified_accounts:
             reasoning_case = self.reasoning_orchestrator.hypotheses_ready(
                 reasoning_case.case_id,
-                detected_events,
+                hypothesis_candidates,
             )
             reasoning_case = self.reasoning_orchestrator.decisions_synthesized(
                 reasoning_case.case_id,

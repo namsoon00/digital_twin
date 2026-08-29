@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional
 
 
-CONSOLE_READ_MODEL_VERSION = "console-read-model-v1"
+CONSOLE_READ_MODEL_VERSION = "console-read-model-v2"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -150,6 +150,8 @@ class ConsoleReadModelService:
                     "state": _text(attention.get("state")),
                     "label": _text(attention.get("label")),
                     "userActionable": bool(attention.get("userActionable")),
+                    "userReviewable": bool(attention.get("userReviewable")),
+                    "userAttentionRequired": bool(attention.get("userAttentionRequired")),
                     "issues": _rows(attention.get("issues"))[:1],
                 },
                 "explanation": {
@@ -177,7 +179,8 @@ class ConsoleReadModelService:
             decision = _mapping(item.get("decision"))
             action = _text(decision.get("action")).upper() or "HOLD"
             actionable = bool(attention.get("userActionable")) or action in {"BUY", "ADD", "SELL", "TRIM", "AVOID"}
-            if not actionable:
+            reviewable = bool(attention.get("userReviewable"))
+            if not actionable and not reviewable:
                 continue
             tasks.append({
                 "id": _text(item.get("caseId") or item.get("episodeId")),
@@ -187,6 +190,7 @@ class ConsoleReadModelService:
                 "headline": _text(item.get("headline")),
                 "nextAction": _text(item.get("nextAction")),
                 "attentionState": _text(attention.get("state")) or "action",
+                "taskType": "trade-review" if actionable else "evidence-review",
                 "updatedAt": _text(item.get("updatedAt") or item.get("decidedAt")),
                 "detailPath": "/?tab=modeling&detail=investment-case&detailKey=" + _text(item.get("caseId") or item.get("episodeId")),
             })

@@ -262,6 +262,7 @@ class V2GraphDecisionCandidateBuilder:
         del previous_by_account
         base_events = []
         syntheses = []
+        hypothesis_candidates = []
         for snapshot in snapshots or []:
             account_id = _text(getattr(snapshot, "account_id", ""))
             projection = _mapping(projection_results.get(account_id))
@@ -285,6 +286,9 @@ class V2GraphDecisionCandidateBuilder:
                     continue
                 synthesis = decision_synthesis_from_relation_context(account_id, relation)
                 syntheses.append(synthesis)
+                hypothesis_candidates.append({
+                    "context": {"ontologyRelationContext": dict(relation)},
+                })
                 event = self._base_event(snapshot, relation, synthesis)
                 if event is not None:
                     base_events.append(event)
@@ -298,6 +302,9 @@ class V2GraphDecisionCandidateBuilder:
                 if relation:
                     synthesis = decision_synthesis_from_relation_context(account_id, relation)
                     syntheses.append(synthesis)
+                    hypothesis_candidates.append({
+                        "context": {"ontologyRelationContext": dict(relation)},
+                    })
                     event = self._base_event(snapshot, relation, synthesis)
                     if event is not None:
                         event.rule = PORTFOLIO_ONTOLOGY_SIGNAL
@@ -308,6 +315,10 @@ class V2GraphDecisionCandidateBuilder:
             "detected": detected,
             "ready": self.cadence.ready(detected, force=force),
             "syntheses": syntheses,
+            # Hypothesis capture is an audit boundary, not a notification
+            # boundary. A quiet relation context must still become a durable
+            # subject decision case even when no user alert is warranted.
+            "hypothesisCandidates": hypothesis_candidates,
         }
 
 

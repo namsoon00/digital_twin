@@ -433,11 +433,7 @@ def has_row_field(row: Dict[str, object], *fields: str) -> bool:
 def has_investor_flow_observation(row: Dict[str, object]) -> bool:
     observed = investor_observed_fields(row)
     if observed:
-        return any(abs(row_number(row, camel, snake)) > 0 for camel, snake in [
-            ("foreignNetVolume", "foreign_net_volume"),
-            ("institutionNetVolume", "institution_net_volume"),
-            ("individualNetVolume", "individual_net_volume"),
-        ] if camel in observed)
+        return bool(observed & {"foreignNetVolume", "institutionNetVolume", "individualNetVolume"})
     return any(abs(row_number(row, camel, snake)) > 0 for camel, snake in [
         ("foreignNetVolume", "foreign_net_volume"),
         ("institutionNetVolume", "institution_net_volume"),
@@ -458,10 +454,17 @@ def investor_observed_fields(row: Dict[str, object]) -> set:
 def has_smart_money_flow_observation(row: Dict[str, object]) -> bool:
     observed = investor_observed_fields(row)
     if observed:
-        return (
+        volume_observed = (
             {"foreignNetVolume", "institutionNetVolume"}.issubset(observed)
-            and has_investor_flow_observation(row)
+            and has_row_field(row, "foreignNetVolume", "foreign_net_volume")
+            and has_row_field(row, "institutionNetVolume", "institution_net_volume")
         )
+        amount_observed = (
+            {"foreignNetAmount", "institutionNetAmount"}.issubset(observed)
+            and has_row_field(row, "foreignNetAmount", "foreign_net_amount")
+            and has_row_field(row, "institutionNetAmount", "institution_net_amount")
+        )
+        return volume_observed or amount_observed
     # Legacy rows did not persist per-field coverage. Require both non-zero
     # values so a default zero cannot masquerade as an observed institution.
     return (
@@ -542,8 +545,37 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
     ]
     smart_money_first = smart_money_rows[0] if smart_money_rows else {}
     smart_money_last = smart_money_rows[-1] if smart_money_rows else {}
-    smart_money_start = row_number(smart_money_first, "foreignNetVolume", "foreign_net_volume") + row_number(smart_money_first, "institutionNetVolume", "institution_net_volume")
-    smart_money_end = row_number(smart_money_last, "foreignNetVolume", "foreign_net_volume") + row_number(smart_money_last, "institutionNetVolume", "institution_net_volume")
+    smart_money_amount_rows = [
+        row for row in smart_money_rows
+        if (
+            not investor_observed_fields(row)
+            or {"foreignNetAmount", "institutionNetAmount"}.issubset(investor_observed_fields(row))
+        )
+        and has_row_field(row, "foreignNetAmount", "foreign_net_amount")
+        and has_row_field(row, "institutionNetAmount", "institution_net_amount")
+    ]
+    smart_money_amount_values = [
+        row_number(row, "foreignNetAmount", "foreign_net_amount")
+        + row_number(row, "institutionNetAmount", "institution_net_amount")
+        for row in smart_money_amount_rows
+    ]
+    smart_money_volume_rows = [
+        row for row in smart_money_rows
+        if (
+            not investor_observed_fields(row)
+            or {"foreignNetVolume", "institutionNetVolume"}.issubset(investor_observed_fields(row))
+        )
+        and has_row_field(row, "foreignNetVolume", "foreign_net_volume")
+        and has_row_field(row, "institutionNetVolume", "institution_net_volume")
+    ]
+    smart_money_volume_values = [
+        row_number(row, "foreignNetVolume", "foreign_net_volume")
+        + row_number(row, "institutionNetVolume", "institution_net_volume")
+        for row in smart_money_volume_rows
+    ]
+    smart_money_values = smart_money_amount_values or smart_money_volume_values
+    smart_money_start = smart_money_values[0] if smart_money_values else 0.0
+    smart_money_end = smart_money_values[-1] if smart_money_values else 0.0
     distinct_smart_money_observations = {
         (
             row_number(row, "foreignNetVolume", "foreign_net_volume"),
@@ -552,6 +584,27 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         )
         for row in smart_money_rows
     }
+    distinct_smart_money_dates = {
+        str(
+            row.get("marketSessionDate")
+            or row.get("tradingDate")
+            or row.get("capitalFlowSourceAsOf")
+            or row.get("sourceAsOf")
+            or row_timestamp(row)
+        )[:10]
+        for row in smart_money_rows
+        if str(
+            row.get("marketSessionDate")
+            or row.get("tradingDate")
+            or row.get("capitalFlowSourceAsOf")
+            or row.get("sourceAsOf")
+            or row_timestamp(row)
+        ).strip()
+    }
+    separated_capital_flow = any(
+        str(row.get("capitalFlowObservationId") or "").strip()
+        for row in smart_money_rows
+    )
     elapsed_hours = ((last_time - first_time).total_seconds() / 3600.0) if first_time and last_time and last_time >= first_time else 0.0
     session_dates = {
         str(
@@ -651,17 +704,52 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
         "bidAskImbalanceEnd": round(row_number(last, "bidAskImbalance", "bid_ask_imbalance"), 2),
         "smartMoneyObservationCount": len(smart_money_rows),
         "smartMoneyDistinctObservationCount": len(distinct_smart_money_observations),
+        "smartMoneyDistinctSessionCount": len(distinct_smart_money_dates),
         "smartMoneyDataState": (
             "sufficient"
-            if len(smart_money_rows) >= 2 and len(distinct_smart_money_observations) >= 2
+            if len(smart_money_values) >= 2 and (
+                len(distinct_smart_money_dates) >= 2
+                if separated_capital_flow
+                else len(distinct_smart_money_observations) >= 2
+            )
             else "partial" if smart_money_rows else "unavailable"
         ),
     }
-    if smart_money_rows:
+    if smart_money_values:
+        positive_count = len([value for value in smart_money_values if value > 0])
+        negative_count = len([value for value in smart_money_values if value < 0])
+        midpoint = max(1, len(smart_money_values) // 2)
+        prior_values = smart_money_values[:midpoint]
+        recent_values = smart_money_values[midpoint:] or prior_values
+        prior_mean = sum(prior_values) / len(prior_values) if prior_values else 0.0
+        recent_mean = sum(recent_values) / len(recent_values) if recent_values else 0.0
         values.update({
             "smartMoneyNetLatest": round(smart_money_end, 2),
             "smartMoneyNetChange": round(smart_money_end - smart_money_start, 2),
+            "smartMoneyNetCumulative": round(sum(smart_money_values), 2),
+            "smartMoneyFlowBasis": "amount" if smart_money_amount_values else "volume",
+            "smartMoneyPositiveSessionRatio": round(positive_count / len(smart_money_values), 3),
+            "smartMoneyNegativeSessionRatio": round(negative_count / len(smart_money_values), 3),
+            "smartMoneyFlowPersistenceRatio": round(max(positive_count, negative_count) / len(smart_money_values), 3),
+            "smartMoneyFlowAcceleration": round(recent_mean - prior_mean, 2),
+            "smartMoneyFlowDirection": (
+                "inflow" if sum(smart_money_values) > 0
+                else "outflow" if sum(smart_money_values) < 0
+                else "neutral"
+            ),
         })
+        if smart_money_amount_values:
+            trading_value_sum = sum(
+                row_number(row, "tradingValue", "trading_value")
+                for row in smart_money_amount_rows
+                if row_number(row, "tradingValue", "trading_value") > 0
+            )
+            values["smartMoneyNetAmountCumulative"] = round(sum(smart_money_amount_values), 2)
+            if trading_value_sum > 0:
+                values["smartMoneyTradingValueRatioPct"] = round(
+                    sum(smart_money_amount_values) / trading_value_sum * 100,
+                    4,
+                )
         if "individualNetVolume" in investor_observed_fields(smart_money_last):
             values["individualNetLatest"] = round(
                 row_number(smart_money_last, "individualNetVolume", "individual_net_volume"),
@@ -857,9 +945,13 @@ def add_position_temporal_concepts(
             values["sessionPhase"] = phase.get("phaseKey")
             values["sessionPhaseLabel"] = phase.get("phaseLabel")
 
+        has_capital_flow = values.get("smartMoneyDataState") != "unavailable"
+        window_classes = ["Observation", "TemporalWindow", definition.tbox_class, "TemporalMateriality"]
+        if has_capital_flow:
+            window_classes.extend(["CapitalFlowWindow", "InvestorFlowWindow"])
         window_id = add_entity(graph, "temporal-window", symbol + ":" + definition.key, symbol + " " + definition.key + " 기간 흐름", {
             "tboxClass": definition.tbox_class,
-            "tboxClasses": ["Observation", "TemporalWindow", definition.tbox_class, "TemporalMateriality"],
+            "tboxClasses": window_classes,
             "field": "temporalWindow",
             "value": values.get("priceChangePct", 0),
             **values,
@@ -876,6 +968,17 @@ def add_position_temporal_concepts(
             "dataState": data_state,
             "aiInfluenceLabel": definition.key + " 기간 흐름",
         })
+        if has_capital_flow:
+            add_relation(graph, stock_id, window_id, "HAS_CAPITAL_FLOW_WINDOW", properties={
+                "source": values["source"],
+                "field": "capitalFlowWindow",
+                "windowKey": definition.key,
+                "polarity": "context",
+                "evidenceRole": "context" if values.get("smartMoneyDataState") == "sufficient" else "reference",
+                "reviewLevel": "normal" if values.get("smartMoneyDataState") == "sufficient" else "observe",
+                "dataState": values.get("smartMoneyDataState"),
+                "aiInfluenceLabel": definition.key + " 자금 흐름",
+            })
         if phase:
             phase_id = add_entity(
                 graph,

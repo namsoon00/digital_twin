@@ -31,6 +31,8 @@ from digital_twin.domain.statistical_signals import (
     DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
     DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
+    ModelHypothesisAssessment,
+    ModelSignalSnapshot,
     model_signal_evaluation_report,
     price_signal_rule_candidates,
     score_flow_feature_snapshot,
@@ -91,6 +93,12 @@ def flow_feature_snapshot(direction=1):
             "tradeStrength": 112 if direction > 0 else 88,
             "bidAskImbalance": 12 if direction > 0 else -12,
             "dataQuality": "actual",
+            "marketSignalCoverage": {
+                "investor": {
+                    "status": "fresh",
+                    "observedFields": ["foreignNetVolume", "institutionNetVolume"],
+                },
+            },
         })
     return TemporalFeatureSnapshot.create(
         backend_id="questdb-shadow",
@@ -202,13 +210,15 @@ class StatisticalSignalTests(unittest.TestCase):
         result = service.run("account-1", "questdb-shadow", snapshot.windows, snapshot.as_of)
         bundle = result["signalBundle"]
 
-        self.assertEqual(2, len(bundle.model_release_ids))
-        self.assertEqual(7, len(bundle.signals))
-        self.assertEqual(2, len(result["persistence"]["signalSnapshots"]))
-        self.assertTrue(all(
-            item["status"] == "changed"
+        self.assertEqual(3, len(bundle.model_release_ids))
+        self.assertEqual(10, len(bundle.signals))
+        self.assertEqual(3, len(result["persistence"]["signalSnapshots"]))
+        persistence_statuses = [
+            item["status"]
             for item in result["persistence"]["signalSnapshots"].values()
-        ))
+        ]
+        self.assertEqual(3, persistence_statuses.count("changed"))
+        self.assertEqual(0, persistence_statuses.count("unchanged"))
 
     def test_distinct_knowledge_cutoff_changes_signal_contract(self):
         feature_store = MemoryFeatureStore()
@@ -267,6 +277,55 @@ class StatisticalSignalTests(unittest.TestCase):
         family_entities = [item for item in graph.entities if item.kind == "hypothesis-family-definition"]
         self.assertEqual(3, len(family_entities))
 
+    def test_abox_projects_bounded_hypothesis_assessment_summary(self):
+        base = score_temporal_feature_snapshot(feature_snapshot())
+        assessment = ModelHypothesisAssessment.create(
+            hypothesis_contract_id="graph.test.recovery.v1",
+            hypothesis_family_id="trend-continuation",
+            model_release_id=base.model_release_id,
+            signal_type="price-trend-continuation-support",
+            subject_id="NVDA",
+            status="not-supported",
+            observed_at=base.as_of,
+            knowledge_cutoff_at=base.as_of,
+            source_feature_snapshot_id=base.source_feature_snapshot_id,
+            coverage_ratio=1,
+            failed_condition_ids=["price-recovery"],
+        )
+        snapshot = ModelSignalSnapshot.create(
+            account_id=base.account_id,
+            as_of=base.as_of,
+            source_feature_snapshot_id=base.source_feature_snapshot_id,
+            feature_set_version=base.feature_set_version,
+            model_release_id=base.model_release_id,
+            signals=base.signals,
+            subjects=base.subjects,
+            assessments=[assessment],
+        ).to_dict()
+        graph = PortfolioOntology("portfolio:account-1")
+        stock_id = add_entity(graph, "stock", "NVDA", "NVIDIA", {
+            "tboxClass": "Stock",
+            "tboxClasses": ["Instrument", "Stock"],
+            "symbol": "NVDA",
+        })
+
+        add_position_statistical_signal_concepts(
+            graph,
+            stock_id,
+            "NVDA",
+            {"statisticalSignalSnapshot": snapshot},
+        )
+
+        summaries = [item for item in graph.entities if item.kind == "model-hypothesis-assessment"]
+        self.assertEqual(1, len(summaries))
+        self.assertEqual(1, summaries[0].properties["notSupportedCount"])
+        self.assertEqual(1, [item.relation_type for item in graph.relations].count("HAS_HYPOTHESIS_ASSESSMENT"))
+        self.assertFalse(any(
+            item.kind == "statistical-model-hypothesis-evidence"
+            and item.properties.get("hypothesisContractId") == "graph.test.recovery.v1"
+            for item in graph.entities
+        ))
+
     def test_every_predictive_rule_has_governed_signal_migration_contract(self):
         rules = default_graph_inference_rules()
         validation = validate_rule_domain_manifests(rules)
@@ -289,8 +348,10 @@ class StatisticalSignalTests(unittest.TestCase):
         )
         flow_contract = flow_rule["statisticalSignalContract"]
         self.assertEqual("implemented", flow_contract["signalAvailability"])
-        self.assertTrue(flow_contract["productionEligible"])
-        self.assertEqual("typedb-model-signal-rule", flow_contract["currentDecisionAuthority"])
+        self.assertFalse(flow_contract["productionEligible"])
+        self.assertTrue(flow_contract["shadowOnly"])
+        self.assertIn("model-release-reference-only", flow_contract["promotionBlockers"])
+        self.assertEqual("disabled-awaiting-model-signal", flow_contract["currentDecisionAuthority"])
 
     def test_high_consequence_recovery_rules_require_exact_hypothesis_contract(self):
         rules = {rule.rule_id: rule for rule in default_graph_inference_rules()}
@@ -461,10 +522,53 @@ class StatisticalSignalTests(unittest.TestCase):
         ]
         self.assertTrue(all(signal.contract_matched for signal in matched_signals))
         self.assertTrue(any(signal.score < 1.0 for signal in matched_signals))
+        supported_assessments = [
+            item for item in result["signalBundle"].assessments
+            if item.status == "supported"
+        ]
+        self.assertTrue(supported_assessments)
+        self.assertTrue(exact_contract_ids.issubset({
+            item.hypothesis_contract_id for item in supported_assessments
+        }))
         for signal in matched_signals:
             family_score = signal.input_features.get("familyScore")
             if family_score is not None:
                 self.assertEqual(float(family_score), signal.score)
+        self._assert_unmatched_predictive_contract_is_recorded_without_type_db_evidence()
+
+    def _assert_unmatched_predictive_contract_is_recorded_without_type_db_evidence(self):
+        rule = next(
+            item for item in governed_graph_inference_rules()
+            if item.rule_id == "graph.temporal.persistent_decline.risk.v1"
+        )
+        graph = PortfolioOntology(
+            "portfolio:account-1",
+            entities=[OntologyEntity(
+                "stock:NVDA",
+                "NVIDIA",
+                "stock",
+                {"symbol": "NVDA", "source": "holding"},
+            )],
+        )
+
+        result = StatisticalSignalPipelineService().run(
+            "account-1",
+            "test-time-series",
+            feature_snapshot().windows,
+            "2026-08-10T07:00:00Z",
+            graph=graph,
+            rules=[rule],
+        )
+
+        assessments = result["signalBundle"].assessments
+        self.assertEqual(1, len(assessments))
+        self.assertEqual("not-supported", assessments[0].status)
+        self.assertEqual("reference-only", assessments[0].decision_eligibility)
+        self.assertEqual([], [
+            signal for signal in result["signalBundle"].signals
+            if rule.rule_id in signal.hypothesis_contract_ids
+        ])
+        self.assertEqual(1, result["signalBundle"].to_dict()["assessmentCount"])
 
     def test_price_contract_is_ineligible_without_family_feature_snapshot(self):
         graph = PortfolioOntology(

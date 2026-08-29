@@ -228,6 +228,7 @@ MARKET_WORLD_ENTITY_KINDS = {
     "statistical-model-release",
     "statistical-model-signal",
     "statistical-model-hypothesis-evidence",
+    "model-hypothesis-assessment",
     "signal-eligibility-assessment",
     "market-session-phase",
     "fact-change",
@@ -278,11 +279,14 @@ MARKET_WORLD_RELATION_TYPES = {
     "HAS_SECURITY_LINE",
     "HAS_TECHNICAL_INDICATOR",
     "HAS_TEMPORAL_WINDOW",
+    "HAS_CAPITAL_FLOW_WINDOW",
     "HAS_MODEL_SIGNAL",
     "DERIVED_FROM_MODEL_SIGNAL",
     "GENERATED_BY_MODEL_RELEASE",
     "BASED_ON_FEATURE_SNAPSHOT",
     "HAS_SIGNAL_ELIGIBILITY",
+    "HAS_HYPOTHESIS_ASSESSMENT",
+    "ASSESSES_HYPOTHESIS_FAMILY",
     "HAS_RELATIVE_PERFORMANCE",
     "HAS_TRADE_FLOW",
     "ISSUES",
@@ -456,7 +460,10 @@ def _graph_observed_at(graph: PortfolioOntology, fallback: object = "") -> str:
 
 def is_account_entity(entity: OntologyEntity) -> bool:
     kind = _clean(entity.kind).lower()
-    if kind == "statistical-model-hypothesis-evidence":
+    if kind in {
+        "statistical-model-hypothesis-evidence",
+        "model-hypothesis-assessment",
+    }:
         return False
     if kind in ACCOUNT_ENTITY_KINDS:
         return True

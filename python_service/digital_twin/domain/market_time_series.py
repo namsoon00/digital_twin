@@ -326,7 +326,7 @@ def temporal_observation_payload(
         except (TypeError, ValueError, json.JSONDecodeError):
             parsed_coverage = {}
         investor_coverage = dict(parsed_coverage) if isinstance(parsed_coverage, dict) else {}
-    return {
+    payload = {
         "generatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
         "updatedAt": str(row.get("observed_at") or row.get("bucket_at") or ""),
         "sourceAsOf": str(row.get("source_as_of") or ""),
@@ -356,11 +356,6 @@ def temporal_observation_payload(
         "volume": float(row.get("volume") or 0),
         "tradingValue": float(row.get("trading_value") or 0),
         "volumeRatio": float(row.get("volume_ratio") or 0),
-        "tradeStrength": float(row.get("trade_strength") or 0),
-        "bidAskImbalance": float(row.get("bid_ask_imbalance") or 0),
-        "foreignNetVolume": float(row.get("foreign_net_volume") or 0),
-        "institutionNetVolume": float(row.get("institution_net_volume") or 0),
-        "individualNetVolume": float(row.get("individual_net_volume") or 0),
         "marketSignalCoverage": {"investor": investor_coverage},
         "ma5": float(row.get("ma5") or 0),
         "ma20": float(row.get("ma20") or 0),
@@ -371,3 +366,23 @@ def temporal_observation_payload(
         "ma60Distance": float(row.get("ma60_distance") or 0),
         "dataQuality": str(row.get("data_quality") or ""),
     }
+    observed_fields = {
+        str(field)
+        for field in (investor_coverage.get("observedFields") or investor_coverage.get("fields") or [])
+        if str(field or "").strip()
+    }
+    for public_field, storage_field in [
+        ("foreignNetVolume", "foreign_net_volume"),
+        ("institutionNetVolume", "institution_net_volume"),
+        ("individualNetVolume", "individual_net_volume"),
+    ]:
+        if public_field in observed_fields and row.get(storage_field) not in (None, ""):
+            payload[public_field] = float(row.get(storage_field))
+    # The legacy mixed table has no per-field coverage for execution data.
+    # A non-zero value proves observation; zero remains missing rather than
+    # being promoted from the column default into a false neutral signal.
+    if row.get("trade_strength") not in (None, "", 0, 0.0):
+        payload["tradeStrength"] = float(row.get("trade_strength"))
+    if row.get("bid_ask_imbalance") not in (None, "", 0, 0.0):
+        payload["bidAskImbalance"] = float(row.get("bid_ask_imbalance"))
+    return payload

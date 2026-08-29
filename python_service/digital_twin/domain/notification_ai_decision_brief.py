@@ -515,6 +515,9 @@ TEMPORAL_DECISION_FIELDS = (
     "priorPriceChangePct", "recentPriceChangePct", "priceVelocityChangePct",
     "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd",
     "smartMoneyDataState", "smartMoneyNetLatest", "smartMoneyNetChange",
+    "smartMoneyNetCumulative", "smartMoneyNetAmountCumulative",
+    "smartMoneyTradingValueRatioPct", "smartMoneyFlowPersistenceRatio",
+    "smartMoneyFlowAcceleration", "smartMoneyFlowDirection", "smartMoneyFlowBasis",
 )
 
 HYPOTHESIS_DECISION_FIELDS = (
@@ -1226,7 +1229,10 @@ def _minimum_temporal_windows(value: object, *, emergency: bool = False) -> List
         "hasSufficientHistory", "lastObservedAt", "startPrice", "currentPrice", "priceChangePct",
         "drawdownFromPeakPct", "reboundFromTroughPct", "priceVelocityChangePct",
         "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd",
-        "smartMoneyDataState", "smartMoneyNetLatest",
+        "smartMoneyDataState", "smartMoneyNetLatest", "smartMoneyNetCumulative",
+        "smartMoneyNetAmountCumulative", "smartMoneyTradingValueRatioPct",
+        "smartMoneyFlowPersistenceRatio", "smartMoneyFlowAcceleration",
+        "smartMoneyFlowDirection", "smartMoneyFlowBasis",
     )
     if emergency:
         fields = (

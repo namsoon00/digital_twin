@@ -16,7 +16,12 @@ from ..hypothesis_scoping import condition_scope_profile
 from ..ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
 from ..ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition
 from ..time_series_storage import TemporalFeatureSnapshot
-from .contracts import ModelSignal, ModelSignalSnapshot, SignalEligibility
+from .contracts import (
+    ModelHypothesisAssessment,
+    ModelSignal,
+    ModelSignalSnapshot,
+    SignalEligibility,
+)
 from .registry import (
     DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
@@ -27,7 +32,7 @@ from .registry import (
 from .rule_contracts import rule_statistical_signal_contract
 
 
-MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v2"
+MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v3"
 
 
 def _number(value: object):
@@ -350,6 +355,7 @@ def score_graph_hypothesis_contracts(
         for signal in item.signals
     }
     grouped: Dict[Tuple[str, str, str], List[Dict[str, object]]] = defaultdict(list)
+    assessments_by_release: Dict[str, List[ModelHypothesisAssessment]] = defaultdict(list)
     stock_entities = [item for item in graph.entities if item.kind == "stock"]
     match_index = _graph_match_index(graph)
     predictive_contracts = []
@@ -383,6 +389,8 @@ def score_graph_hypothesis_contracts(
             market_conditions,
         ))
     for rule, release_id, signal_type, market_conditions in predictive_contracts:
+        release = model_release(release_id)
+        family_id = signal_hypothesis_family(signal_type)
         for subject in stock_entities:
             symbol = str((subject.properties or {}).get("symbol") or "").upper().strip()
             if not symbol:
@@ -393,6 +401,48 @@ def score_graph_hypothesis_contracts(
                 rule,
                 match_index=match_index,
                 market_conditions=market_conditions,
+            )
+            result_status = str(result.get("status") or "incomplete")
+            assessment_status = {
+                "matched": "supported",
+                "unmatched": "not-supported",
+                "incomplete": "untested",
+            }.get(result_status, "untested")
+            family_features_available = bool(
+                release_id not in {
+                    DEFAULT_PRICE_SIGNAL_RELEASE_ID,
+                    DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+                }
+                or (release_id, symbol) in baseline_release_subjects
+            )
+            decision_eligibility = (
+                release.decision_eligibility
+                if assessment_status == "supported"
+                and family_features_available
+                and float(result.get("coverageRatio") or 0)
+                >= float(release.minimum_coverage_ratio or 0)
+                and release.status == "production"
+                else "reference-only"
+            )
+            assessments_by_release[release_id].append(
+                ModelHypothesisAssessment.create(
+                    hypothesis_contract_id=rule.rule_id,
+                    hypothesis_family_id=family_id,
+                    model_release_id=release_id,
+                    signal_type=signal_type,
+                    subject_id=symbol,
+                    status=assessment_status,
+                    observed_at=feature_snapshot.as_of,
+                    knowledge_cutoff_at=feature_snapshot.as_of,
+                    source_feature_snapshot_id=feature_snapshot.snapshot_id,
+                    coverage_ratio=result.get("coverageRatio"),
+                    matched_condition_ids=result.get("matchedConditionIds") or [],
+                    failed_condition_ids=result.get("failedConditionIds") or [],
+                    unknown_condition_ids=result.get("unknownConditionIds") or [],
+                    evidence_ids=result.get("evidenceIds") or [],
+                    decision_eligibility=decision_eligibility,
+                    scorer_version=result.get("scorerVersion"),
+                )
             )
             if result.get("status") == "matched":
                 grouped[(release_id, symbol, signal_type)].append(result)
@@ -510,5 +560,6 @@ def score_graph_hypothesis_contracts(
             model_release_id=release.release_id,
             signals=signals_by_release.get(release.release_id) or [],
             subjects=subjects,
+            assessments=assessments_by_release.get(release.release_id) or [],
         ))
     return tuple(snapshots)

@@ -9908,6 +9908,123 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.capital-flow-head-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.capital-flow-quality-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px 16px 16px;
+  background: var(--line);
+}
+
+.capital-flow-quality-strip section {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px;
+  background: var(--panel);
+}
+
+.capital-flow-quality-strip span,
+.capital-flow-quality-strip em,
+.capital-flow-row em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.capital-flow-quality-strip strong {
+  color: var(--ink);
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.capital-flow-table {
+  display: grid;
+  min-width: 0;
+  margin: 0 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.capital-flow-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.3fr) repeat(4, minmax(100px, 1fr)) minmax(105px, 0.8fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 720px;
+  padding: 11px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.capital-flow-row:first-child {
+  border-top: 0;
+}
+
+.capital-flow-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capital-flow-row strong,
+.capital-flow-row b {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.capital-flow-row strong {
+  font-size: 13px;
+}
+
+.capital-flow-table-head {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  background: var(--panel-soft);
+}
+
+.capital-flow-table-head span {
+  display: block;
+}
+
+.flow-value.watch {
+  color: var(--green);
+}
+
+.flow-value.danger {
+  color: var(--red);
+}
+
+@media (max-width: 860px) {
+  .capital-flow-head-meta {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .capital-flow-quality-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .capital-flow-table {
+    overflow-x: auto;
+  }
+}
+
 .investment-action-list,
 .investment-lineage-list {
   display: grid;

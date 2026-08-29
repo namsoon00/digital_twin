@@ -6,6 +6,11 @@ from digital_twin.application.notification_ai_gate_message import (
     _investor_text_from_relation_facts,
     compact_investor_flow_line,
 )
+from digital_twin.domain.capital_flow import (
+    CapitalFlowObservation,
+    canonical_observations,
+    subject_flow_summary,
+)
 from digital_twin.domain.investor_flow_psychology import (
     investor_flow_contract,
     investor_flow_observation,
@@ -244,6 +249,118 @@ class InvestorFlowContractTests(unittest.TestCase):
             "not-yet-published",
             payload["marketSignalCoverage"]["investor"]["participantStatus"]["institution"],
         )
+        self._assert_capital_flow_storage_distinguishes_missing_from_observed_zero()
+        self._assert_daily_final_capital_flow_replaces_same_day_estimate()
+        self._assert_capital_flow_window_uses_cumulative_amount_and_coverage()
+
+    def _assert_capital_flow_storage_distinguishes_missing_from_observed_zero(self):
+        foreign_only = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            foreign_net_volume=12000,
+            institution_net_volume=0,
+            market_signal_coverage=investor_coverage(["foreignNetVolume"]),
+        )
+        both_observed = Position(
+            symbol="035420",
+            name="NAVER",
+            market="KR",
+            currency="KRW",
+            foreign_net_volume=12000,
+            institution_net_volume=0,
+            market_signal_coverage=investor_coverage(
+                ["foreignNetVolume", "institutionNetVolume"]
+            ),
+        )
+
+        partial = CapitalFlowObservation.from_position(
+            foreign_only, "2026-08-13T00:35:00Z", provider="KIS"
+        )
+        complete = CapitalFlowObservation.from_position(
+            both_observed, "2026-08-13T00:35:00Z", provider="KIS"
+        )
+
+        self.assertIsNone(partial.institution_net_volume)
+        self.assertEqual(0, complete.institution_net_volume)
+        self.assertEqual(0, complete.to_payload()["institutionNetVolume"])
+
+    def _assert_daily_final_capital_flow_replaces_same_day_estimate(self):
+        def observation(measurement_type, source_as_of, foreign):
+            coverage = investor_coverage(
+                ["foreignNetVolume", "institutionNetVolume"]
+            )
+            coverage["investor"].update({
+                "measurementType": measurement_type,
+                "sourceAsOf": source_as_of,
+            })
+            return CapitalFlowObservation.from_position(
+                Position(
+                    symbol="000660",
+                    name="SK하이닉스",
+                    market="KR",
+                    currency="KRW",
+                    foreign_net_volume=foreign,
+                    institution_net_volume=0,
+                    market_signal_coverage=coverage,
+                ),
+                source_as_of,
+                provider="KIS",
+            )
+
+        estimate = observation("intraday-estimate", "2026-08-13T01:00:00Z", 100)
+        final = observation("daily-final", "2026-08-13T07:00:00Z", 250)
+
+        canonical = canonical_observations([estimate, final])
+        intraday_canonical = canonical_observations(
+            [estimate, final], "2026-08-13T02:00:00Z"
+        )
+
+        self.assertEqual(1, len(canonical))
+        self.assertEqual("daily-final", canonical[0].measurement_type)
+        self.assertEqual(250, canonical[0].foreign_net_volume)
+        self.assertEqual(1, len(intraday_canonical))
+        self.assertEqual("intraday-estimate", intraday_canonical[0].measurement_type)
+        self.assertEqual(100, intraday_canonical[0].foreign_net_volume)
+
+    def _assert_capital_flow_window_uses_cumulative_amount_and_coverage(self):
+        observations = []
+        for day, foreign, institution in [
+            ("2026-08-11T07:00:00Z", 100, 50),
+            ("2026-08-12T07:00:00Z", -20, 10),
+            ("2026-08-13T07:00:00Z", 200, 100),
+        ]:
+            coverage = investor_coverage(
+                ["foreignNetAmount", "institutionNetAmount"]
+            )
+            coverage["investor"].update({
+                "measurementType": "daily-final",
+                "sourceAsOf": day,
+            })
+            observations.append(CapitalFlowObservation.from_position(
+                Position(
+                    symbol="005930",
+                    name="삼성전자",
+                    market="KR",
+                    currency="KRW",
+                    sector="반도체",
+                    trading_value=10000,
+                    foreign_net_amount=foreign,
+                    institution_net_amount=institution,
+                    market_signal_coverage=coverage,
+                ),
+                day,
+                provider="KIS",
+            ))
+
+        summary = subject_flow_summary(observations, 3)
+
+        self.assertEqual(440, summary["smartMoneyNetAmount"])
+        self.assertEqual(1.466667, summary["normalizedFlowPct"])
+        self.assertEqual("inflow", summary["direction"])
+        self.assertEqual(1.0, summary["coverageRatio"])
+        self.assertEqual(0.6667, summary["persistenceRatio"])
 
 
 if __name__ == "__main__":

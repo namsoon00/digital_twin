@@ -34,7 +34,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
     def test_curated_suite_stays_within_the_deliberate_size_budget(self):
         total = sum(len(_test_methods(TEST_DIR / entry["file"])) for entry in _entries())
         self.assertGreaterEqual(total, 600)
-        self.assertLessEqual(total, 810)
+        self.assertLessEqual(total, 820)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -3,6 +3,12 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Dict, Iterable, List
 
+from ..domain.capital_flow import (
+    CapitalFlowObservation,
+    canonical_observations,
+    merge_capital_flow_rows,
+    observation_from_row,
+)
 from ..domain.market_time_series import (
     MarketTimeSeriesObservation,
     bucket_start,
@@ -44,6 +50,24 @@ OBSERVATION_COLUMNS = [
     "ma20_slope", "ma60_slope", "ma20_distance", "ma60_distance", "data_quality",
 ]
 
+CAPITAL_FLOW_COLUMNS = [
+    "observation_id", "subject_kind", "subject_id", "market", "currency", "sector",
+    "trading_date", "observed_at", "source_as_of", "received_at", "provider",
+    "measurement_type", "observation_status", "freshness_status", "judgement_eligible",
+    "observed_fields_json", "coverage_json", "current_price", "market_volume", "trading_value",
+    "foreign_net_volume", "foreign_net_amount", "foreign_buy_volume", "foreign_sell_volume",
+    "institution_net_volume", "institution_net_amount", "institution_buy_volume", "institution_sell_volume",
+    "individual_net_volume", "individual_net_amount", "individual_buy_volume", "individual_sell_volume",
+    "data_quality", "contract_version", "created_at", "updated_at",
+]
+
+CAPITAL_FLOW_OPTIONAL_NUMERIC_COLUMNS = [
+    "current_price", "market_volume", "trading_value",
+    "foreign_net_volume", "foreign_net_amount", "foreign_buy_volume", "foreign_sell_volume",
+    "institution_net_volume", "institution_net_amount", "institution_buy_volume", "institution_sell_volume",
+    "individual_net_volume", "individual_net_amount", "individual_buy_volume", "individual_sell_volume",
+]
+
 
 def insert_placeholders() -> str:
     return ", ".join(["%s"] * len(OBSERVATION_COLUMNS))
@@ -51,6 +75,19 @@ def insert_placeholders() -> str:
 
 def row_values(row: Dict[str, object]):
     return tuple(row.get(column) for column in OBSERVATION_COLUMNS)
+
+
+def capital_flow_row(observation: CapitalFlowObservation, now_value: str = "") -> Dict[str, object]:
+    row = observation.to_row()
+    row["observation_status"] = row.pop("status")
+    stamp = str(now_value or observation.received_at or observation.observed_at)
+    row["created_at"] = stamp
+    row["updated_at"] = stamp
+    return row
+
+
+def capital_flow_values(row: Dict[str, object]):
+    return tuple(row.get(column) for column in CAPITAL_FLOW_COLUMNS)
 
 
 def positive_int(value: object, fallback: int, lower: int = 1, upper: int = 10000) -> int:
@@ -117,6 +154,8 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             return {"enabled": False, "savedCount": 0, "aggregateCount": 0}
         saved = 0
         aggregate_count = 0
+        capital_flow_count = 0
+        capital_flow_rows = []
         symbols = set()
         for snapshot in snapshots or []:
             for position in list(snapshot.positions or []) + list(snapshot.watchlist or []):
@@ -128,6 +167,14 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     snapshot.generated_at,
                     provider=snapshot.provider,
                 )
+                flow_observation = CapitalFlowObservation.from_position(
+                    position,
+                    snapshot.generated_at,
+                    provider=snapshot.provider,
+                )
+                if flow_observation and self.insert_capital_flow_with_connection(connection, flow_observation):
+                    capital_flow_count += 1
+                    capital_flow_rows.append(flow_observation.to_row())
                 if not observation.valid():
                     continue
                 inserted = self.insert_observation_with_connection(connection, observation, replace=False)
@@ -141,7 +188,9 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "enabled": True,
             "savedCount": saved,
             "aggregateCount": aggregate_count,
+            "capitalFlowCount": capital_flow_count,
             "symbolCount": len(symbols),
+            "_capitalFlowRows": capital_flow_rows,
         }
 
     def record_snapshots(self, snapshots: Iterable[AccountSnapshot]) -> Dict[str, object]:
@@ -161,6 +210,8 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             return {"enabled": False, "savedCount": 0, "aggregateCount": 0}
         saved = 0
         aggregate_count = 0
+        capital_flow_count = 0
+        capital_flow_rows = []
         symbols = set()
         with self.transaction() as connection:
             for position in positions or []:
@@ -172,6 +223,10 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     observed_at,
                     provider=provider,
                 )
+                flow_observation = CapitalFlowObservation.from_position(position, observed_at, provider=provider)
+                if flow_observation and self.insert_capital_flow_with_connection(connection, flow_observation):
+                    capital_flow_count += 1
+                    capital_flow_rows.append(flow_observation.to_row())
                 if not observation.valid():
                     continue
                 inserted = self.insert_observation_with_connection(
@@ -190,7 +245,9 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             "enabled": True,
             "savedCount": saved,
             "aggregateCount": aggregate_count,
+            "capitalFlowCount": capital_flow_count,
             "symbolCount": len(symbols),
+            "_capitalFlowRows": capital_flow_rows,
         }
 
     def record_daily_candles(
@@ -464,6 +521,186 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         )
         return bool(int(getattr(cursor, "rowcount", 0) or 0))
 
+    def insert_capital_flow_with_connection(
+        self,
+        connection,
+        observation: CapitalFlowObservation,
+    ) -> bool:
+        if not observation or not observation.valid():
+            return False
+        row = capital_flow_row(observation, iso_utc(observation.received_at or observation.observed_at))
+        update_columns = [
+            column for column in CAPITAL_FLOW_COLUMNS
+            if column not in {"observation_id", "created_at"}
+        ]
+        assignments = []
+        for column in update_columns:
+            if column in CAPITAL_FLOW_OPTIONAL_NUMERIC_COLUMNS:
+                assignments.append(column + " = COALESCE(VALUES(" + column + "), " + column + ")")
+            else:
+                assignments.append(column + " = VALUES(" + column + ")")
+        cursor = connection.execute(
+            "INSERT INTO capital_flow_observations ("
+            + ", ".join(CAPITAL_FLOW_COLUMNS)
+            + ") VALUES ("
+            + ", ".join(["%s"] * len(CAPITAL_FLOW_COLUMNS))
+            + ") ON DUPLICATE KEY UPDATE "
+            + ", ".join(assignments),
+            capital_flow_values(row),
+        )
+        return bool(int(getattr(cursor, "rowcount", 0) or 0))
+
+    def write_capital_flow_observations(self, observations: Iterable[Dict[str, object]]) -> Dict[str, object]:
+        inserted = 0
+        accepted = 0
+        with self.transaction() as connection:
+            for raw in observations or []:
+                observation = observation_from_row(raw) if isinstance(raw, dict) else None
+                if not observation or not observation.valid():
+                    continue
+                accepted += 1
+                inserted += int(self.insert_capital_flow_with_connection(connection, observation))
+        return {
+            "backendId": self.backend_id,
+            "acceptedCount": accepted,
+            "writtenCount": inserted,
+            "status": "completed",
+        }
+
+    def load_capital_flow_observations(
+        self,
+        symbols: Iterable[str] = (),
+        market: str = "",
+        observed_after: str = "",
+        as_of: str = "",
+        limit: int = 5000,
+    ) -> List[Dict[str, object]]:
+        clauses = ["judgement_eligible = 1", "observation_status = 'available'"]
+        params: List[object] = []
+        clean_symbols = sorted({str(symbol or "").upper().strip() for symbol in symbols or [] if str(symbol or "").strip()})
+        if clean_symbols:
+            clauses.append("subject_id IN (" + ",".join(["%s"] * len(clean_symbols)) + ")")
+            params.extend(clean_symbols)
+        if str(market or "").strip():
+            clauses.append("market = %s")
+            params.append(str(market or "").upper().strip())
+        if str(observed_after or "").strip():
+            clauses.append("observed_at >= %s")
+            params.append(iso_utc(observed_after))
+        if str(as_of or "").strip():
+            clauses.append("observed_at <= %s")
+            params.append(iso_utc(as_of))
+        bounded_limit = max(1, min(50000, int(limit or 5000)))
+        params.append(bounded_limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT "
+                + ", ".join(CAPITAL_FLOW_COLUMNS[:-2])
+                + " FROM capital_flow_observations WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY subject_id, trading_date, observed_at LIMIT %s",
+                params,
+            ).fetchall()
+        payloads = []
+        for raw in rows or []:
+            row = dict(raw or {})
+            row["status"] = row.pop("observation_status", "")
+            observation = observation_from_row(row)
+            if observation and observation.valid():
+                payloads.append(observation.to_payload())
+        return payloads
+
+    def capital_flow_quality(self, legacy_days: int = 30) -> Dict[str, object]:
+        bounded_days = max(1, min(3650, int(legacy_days or 30)))
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN measurement_type = 'daily-final' THEN 1 ELSE 0 END) AS daily_final, "
+                "SUM(CASE WHEN measurement_type = 'intraday-estimate' THEN 1 ELSE 0 END) AS intraday_estimate, "
+                "COUNT(DISTINCT subject_id) AS subjects, MAX(source_as_of) AS source_as_of "
+                "FROM capital_flow_observations WHERE judgement_eligible = 1 AND observation_status = 'available'"
+            ).fetchone() or {}
+            legacy = connection.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN investor_coverage_json IS NULL OR investor_coverage_json = '{}' THEN 1 ELSE 0 END) AS empty_coverage, "
+                "SUM(CASE WHEN foreign_net_volume = 0 AND institution_net_volume = 0 THEN 1 ELSE 0 END) AS zero_smart_money "
+                "FROM market_time_series_observations WHERE market = 'KR' "
+                "AND bucket_at >= DATE_FORMAT(DATE_SUB(UTC_TIMESTAMP(), INTERVAL %s DAY), '%%Y-%%m-%%dT%%H:%%i:%%sZ')",
+                [bounded_days],
+            ).fetchone() or {}
+        return {
+            "status": "ready",
+            "capitalFlow": {
+                "observationCount": int(current.get("total") or 0),
+                "dailyFinalCount": int(current.get("daily_final") or 0),
+                "intradayEstimateCount": int(current.get("intraday_estimate") or 0),
+                "subjectCount": int(current.get("subjects") or 0),
+                "sourceAsOf": str(current.get("source_as_of") or ""),
+            },
+            "legacyMixedSeries": {
+                "lookbackDays": bounded_days,
+                "observationCount": int(legacy.get("total") or 0),
+                "emptyCoverageCount": int(legacy.get("empty_coverage") or 0),
+                "zeroSmartMoneyCount": int(legacy.get("zero_smart_money") or 0),
+            },
+            "missingConvertedToZeroCount": 0,
+        }
+
+    def rebuild_capital_flow_from_legacy(self, limit: int = 50000) -> Dict[str, object]:
+        bounded_limit = max(1, min(500000, int(limit or 50000)))
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM market_time_series_observations "
+                "WHERE market = 'KR' AND investor_coverage_json IS NOT NULL "
+                "AND investor_coverage_json <> '{}' "
+                "ORDER BY observed_at, account_id, symbol, granularity LIMIT %s",
+                [bounded_limit],
+            ).fetchall()
+            accepted = 0
+            projectable = []
+            for raw in rows or []:
+                observation = CapitalFlowObservation.from_legacy_row(dict(raw or {}))
+                if not observation or not observation.valid():
+                    continue
+                accepted += 1
+                projectable.append(observation)
+            # Account writers and rollups repeat the same public source slot.
+            # Collapse that duplication, but retain every sourceAsOf and
+            # measurement version so an intraday point-in-time replay does
+            # not see a later daily-final observation.
+            by_observation_id = {}
+            for observation in projectable:
+                previous = by_observation_id.get(observation.observation_id)
+                if not previous:
+                    by_observation_id[observation.observation_id] = observation
+                    continue
+                observation_rank = (len(observation.observed_fields()), observation.observed_at)
+                previous_rank = (len(previous.observed_fields()), previous.observed_at)
+                if observation_rank[0] > previous_rank[0] or (
+                    observation_rank[0] == previous_rank[0]
+                    and observation_rank[1] < previous_rank[1]
+                ):
+                    by_observation_id[observation.observation_id] = observation
+            source_observations = sorted(
+                by_observation_id.values(),
+                key=lambda item: (item.subject_id, item.trading_date, item.observed_at, item.observation_id),
+            )
+            written = sum(
+                int(self.insert_capital_flow_with_connection(connection, observation))
+                for observation in source_observations
+            )
+        canonical = canonical_observations(source_observations)
+        return {
+            "status": "completed",
+            "scannedCount": len(rows or []),
+            "acceptedCount": accepted,
+            "sourceObservationCount": len(source_observations),
+            "writtenCount": written,
+            "canonicalCount": len(canonical),
+            "rejectedCount": max(0, len(rows or []) - accepted),
+            "observations": [item.to_row() for item in source_observations],
+        }
+
     def upsert_aggregate_with_connection(
         self,
         connection,
@@ -564,6 +801,14 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     key = (str(row.get("account_id") or ""), str(row.get("symbol") or "").upper(), granularity)
                     if len(grouped[key]) < per_group:
                         grouped[key].append(self.observation_payload(row))
+        capital_flow_rows = self.load_capital_flow_observations(
+            symbols=clean_symbols,
+            as_of=observation_cutoff,
+            limit=max(100, len(clean_symbols) * 80),
+        )
+        capital_flow_by_symbol = defaultdict(list)
+        for row in capital_flow_rows:
+            capital_flow_by_symbol[str(row.get("subjectId") or "").upper()].append(row)
         result: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
         for symbol in clean_symbols:
             windows: Dict[str, List[Dict[str, object]]] = {}
@@ -605,6 +850,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                     ordered = window_rows(ordered, definition, parse_timestamp(observation_cutoff))
                 else:
                     ordered = trim_to_recent_sessions(ordered, required_sessions)
+                    ordered = merge_capital_flow_rows(ordered, capital_flow_by_symbol.get(symbol, []))
                 windows[window_key] = ordered
             result[symbol] = windows
         return result

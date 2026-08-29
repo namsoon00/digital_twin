@@ -161,6 +161,7 @@ from .time_series_factory import build_temporal_feature_snapshot_service, build_
 from .statistical_signal_factory import build_statistical_signal_pipeline_service
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.statistical_signals import (
+    CAPITAL_FLOW_SHADOW_RELEASE_ID,
     DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
     DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
     DEFAULT_EVENT_SIGNAL_RELEASE_ID,
@@ -270,6 +271,7 @@ def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
         DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
         DEFAULT_EVENT_SIGNAL_RELEASE_ID,
         DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
+        CAPITAL_FLOW_SHADOW_RELEASE_ID,
     }
     available.discard("")
     missing = sorted(required - available)

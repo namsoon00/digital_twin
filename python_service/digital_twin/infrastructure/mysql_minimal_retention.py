@@ -200,7 +200,9 @@ class MySQLMinimalRetentionRepository:
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `statistical_model_signal_snapshots` snapshot WHERE created_at < " + _cutoff_sql()
                 + " AND NOT EXISTS (SELECT 1 FROM `statistical_model_signal_heads` head "
-                "WHERE head.snapshot_id = snapshot.snapshot_id)",
+                "WHERE head.snapshot_id = snapshot.snapshot_id)"
+                + " AND NOT EXISTS (SELECT 1 FROM `statistical_model_assessment_heads` assessment "
+                "WHERE assessment.snapshot_id = snapshot.snapshot_id)",
                 (cutoffs["statisticalModelSignalSnapshots"],),
             ),
             "reasoningShadowJobs": self._summary(
@@ -774,6 +776,8 @@ class MySQLMinimalRetentionRepository:
             "created_at < " + _cutoff_sql()
             + " AND NOT EXISTS (SELECT 1 FROM `statistical_model_signal_heads` head "
             + "WHERE head.snapshot_id = statistical_model_signal_snapshots.snapshot_id)"
+            + " AND NOT EXISTS (SELECT 1 FROM `statistical_model_assessment_heads` assessment "
+            + "WHERE assessment.snapshot_id = statistical_model_signal_snapshots.snapshot_id)"
         )
         candidates = self._byte_bounded_candidates(
             "SELECT snapshot_id, OCTET_LENGTH(payload_json) AS payload_bytes "

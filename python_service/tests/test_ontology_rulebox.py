@@ -112,12 +112,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
         executable = default_graph_inference_rules()
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(117, sum(item.enabled for item in executable))
-        self.assertEqual(74, sum(
+        self.assertEqual(106, sum(item.enabled for item in executable))
+        self.assertEqual(63, sum(
             item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
             and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"
             for item in executable
         ))
+        awaiting_flow_model = [
+            item for item in executable
+            if item.resolved_knowledge_basis.migration_disposition == "awaiting-governed-model-scorer"
+        ]
+        self.assertEqual(11, len(awaiting_flow_model))
+        self.assertTrue(all(not item.enabled for item in awaiting_flow_model))
         disclosure = rules_by_id["graph.disclosure.event_risk.v1"]
         self.assertEqual("context-observation", disclosure.resolved_knowledge_basis.rule_kind)
         self.assertEqual("reference-only", disclosure.resolved_knowledge_basis.decision_eligibility)
@@ -1111,11 +1117,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
             for item in condition_rows
             if item["id"] == "rule-condition:graph.holding.trend_transition.risk.v1:validated-model-signal:graph.holding.trend_transition.risk.v1"
         )
-        sell_pressure = next(
-            item
-            for item in condition_rows
-            if item["id"] == "rule-condition:graph.flow.sell_pressure.v1:validated-model-signal:graph.flow.sell_pressure.v1"
-        )
         direct_news_risk = next(
             item
             for item in governed_condition_rows
@@ -1170,16 +1171,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
             item
             for item in condition_rows
             if item["id"] == "rule-condition:graph.watchlist.trend_transition.support.v1:watchlist-strategy-role"
-        )
-        loss_smart_money = next(
-            item
-            for item in condition_rows
-            if item["id"] == "rule-condition:graph.loss_smart_money.defense.v1:validated-model-signal:graph.loss_smart_money.defense.v1"
-        )
-        investor_flow_accumulation = next(
-            item
-            for item in condition_rows
-            if item["id"] == "rule-condition:graph.investor_flow.smart_money_accumulation.v1:validated-model-signal:graph.investor_flow.smart_money_accumulation.v1"
         )
         retail_dip_buying = next(
             item
@@ -1361,8 +1352,21 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("statistical-model-hypothesis-evidence", support_transition["conditionTargetKind"])
         self.assertEqual("HAS_MODEL_SIGNAL", risk_transition["conditionRelationType"])
         self.assertEqual("statistical-model-hypothesis-evidence", risk_transition["conditionTargetKind"])
-        self.assertEqual("HAS_MODEL_SIGNAL", sell_pressure["conditionRelationType"])
-        self.assertIn("signalType", sell_pressure["conditionTargetFields"])
+        flow_rules = {
+            item.rule_id: item
+            for item in rules
+            if item.rule_id in {
+                "graph.flow.sell_pressure.v1",
+                "graph.loss_smart_money.defense.v1",
+                "graph.investor_flow.smart_money_accumulation.v1",
+            }
+        }
+        self.assertEqual(3, len(flow_rules))
+        self.assertTrue(all(not item.enabled for item in flow_rules.values()))
+        self.assertTrue(all(
+            item.resolved_knowledge_basis.migration_disposition == "awaiting-governed-model-scorer"
+            for item in flow_rules.values()
+        ))
         self.assertEqual(["direct"], direct_news_risk["conditionTargetRelationScopes"])
         self.assertEqual(["risk"], direct_news_risk["conditionTargetPolarities"])
         self.assertTrue(direct_news_risk["conditionTargetMaterialityPassed"])
@@ -1392,8 +1396,6 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual("profit-policy", strategy_profit_policy["conditionTargetKind"])
         self.assertEqual("HAS_POSITION_ROLE", watchlist_strategy_role["conditionRelationType"])
         self.assertEqual("position-role", watchlist_strategy_role["conditionTargetKind"])
-        self.assertEqual("HAS_MODEL_SIGNAL", loss_smart_money["conditionRelationType"])
-        self.assertEqual("HAS_MODEL_SIGNAL", investor_flow_accumulation["conditionRelationType"])
         self.assertEqual("foreignNetVolume", retail_dip_buying["conditionField"])
         self.assertEqual("<", retail_dip_buying["conditionOperator"])
         self.assertEqual("any", add_buy_volume["conditionRole"])

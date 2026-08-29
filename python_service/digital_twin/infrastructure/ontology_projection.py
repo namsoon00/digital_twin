@@ -551,7 +551,9 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
 # TypeDB reasoning even when the active catalog currently reads aggregate
 # window properties only.
 ABOX_STRUCTURAL_RELATION_TYPES = {
+    "ASSESSES_HYPOTHESIS_FAMILY",
     "COMPARES_WITH_MARKET_PROXY",
+    "HAS_CAPITAL_FLOW_WINDOW",
     "ISSUES",
     "OCCURS_IN_SESSION_PHASE",
     "WINDOW_CONTAINS_OBSERVATION",
@@ -570,6 +572,7 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
     "EVALUATES_PORTFOLIO_CANDIDATE",
     "HAS_RISK_SNAPSHOT",
     "HAS_POSITION_RISK",
+    "HAS_HYPOTHESIS_ASSESSMENT",
     "HAS_REBALANCE_PROPOSAL",
     "HAS_REBALANCE_SCENARIO",
 }
@@ -934,7 +937,7 @@ class SharedOntologyQualityRecordCoordinator:
 
 
 SHARED_PORTFOLIO_GRAPH_ASSEMBLY_CACHE = SharedPortfolioGraphAssemblyCache()
-PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v11-frozen-tbox"
+PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = "portfolio-graph-assembly-cache-v12-hypothesis-assessment"
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = "projection-runtime-context-cache-v1"
 SHARED_ONTOLOGY_QUALITY_RECORD_COORDINATOR = SharedOntologyQualityRecordCoordinator()
 
@@ -957,6 +960,23 @@ def rule_catalog_requires_statistical_signal_scoring(
     }
     has_contract = bool(catalog.get("rules") or relation_types)
     return not has_contract or "HAS_MODEL_SIGNAL" in relation_types
+
+
+def governed_statistical_rules_for_catalog(
+    rule_catalog: Mapping[str, object] = None,
+):
+    """Keep model-contract scoring inside the active world RuleBox boundary."""
+
+    catalog = dict(rule_catalog or {})
+    active_rule_ids = {
+        rule_id_from_payload(item)
+        for item in catalog.get("rules") or []
+        if isinstance(item, dict) and item.get("enabled") is not False
+    }
+    rules = governed_graph_inference_rules()
+    if not active_rule_ids:
+        return rules
+    return tuple(rule for rule in rules if rule.rule_id in active_rule_ids)
 
 
 def rule_id_from_payload(rule: Dict[str, object]) -> str:
@@ -5782,6 +5802,7 @@ class PortfolioOntologyProjectionRecorder:
             statistical_signal_context = {}
             statistical_result = {}
             try:
+                statistical_rules = governed_statistical_rules_for_catalog(rule_catalog)
                 statistical_result = self.statistical_signal_service.run(
                     account_id=snapshot.account_id,
                     backend_id=str(
@@ -5797,7 +5818,7 @@ class PortfolioOntologyProjectionRecorder:
                         else ""
                     ),
                     graph=graph,
-                    rules=governed_graph_inference_rules(),
+                    rules=statistical_rules,
                 )
                 feature_snapshot = statistical_result.get("featureSnapshot")
                 signal_snapshot = statistical_result.get("signalSnapshot")
@@ -5818,6 +5839,7 @@ class PortfolioOntologyProjectionRecorder:
                     "statisticalSignalPipeline": {
                         "status": str(statistical_result.get("status") or ""),
                         "decisionEligible": bool(statistical_result.get("decisionEligible")),
+                        "diagnosticReady": bool(statistical_result.get("diagnosticReady")),
                         "decisionBlockers": list(
                             statistical_result.get("decisionBlockers") or []
                         ),
@@ -5826,6 +5848,12 @@ class PortfolioOntologyProjectionRecorder:
                         "pointInTime": dict(statistical_result.get("pointInTime") or {}),
                         "skippedModelReleaseIds": list(
                             statistical_result.get("skippedModelReleaseIds") or []
+                        ),
+                        "activatedPredictiveRuleCount": len(statistical_rules),
+                        "assessmentCount": int(
+                            getattr(signal_bundle, "assessments", ())
+                            and len(signal_bundle.assessments)
+                            or 0
                         ),
                     },
                 }
@@ -5840,7 +5868,10 @@ class PortfolioOntologyProjectionRecorder:
                 **dict(runtime_context or {}),
                 **statistical_signal_context,
             }
-            if bool(statistical_result.get("decisionEligible")):
+            if bool(
+                statistical_result.get("decisionEligible")
+                or statistical_result.get("diagnosticReady")
+            ):
                 stock_entities = [item for item in graph.entities if item.kind == "stock"]
                 for stock in stock_entities:
                     symbol = str((stock.properties or {}).get("symbol") or "").upper().strip()

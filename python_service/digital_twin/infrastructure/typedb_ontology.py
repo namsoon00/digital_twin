@@ -1898,8 +1898,16 @@ TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "bidAskImbalanceEnd": "ontology-bid-ask-imbalance-end",
     "smartMoneyNetLatest": "ontology-smart-money-net-latest",
     "smartMoneyNetChange": "ontology-smart-money-net-change",
+    "smartMoneyNetCumulative": "ontology-smart-money-net-cumulative",
+    "smartMoneyNetAmountCumulative": "ontology-smart-money-net-amount-cumulative",
+    "smartMoneyTradingValueRatioPct": "ontology-smart-money-trading-value-ratio-pct",
+    "smartMoneyPositiveSessionRatio": "ontology-smart-money-positive-session-ratio",
+    "smartMoneyNegativeSessionRatio": "ontology-smart-money-negative-session-ratio",
+    "smartMoneyFlowPersistenceRatio": "ontology-smart-money-flow-persistence-ratio",
+    "smartMoneyFlowAcceleration": "ontology-smart-money-flow-acceleration",
     "smartMoneyObservationCount": "ontology-smart-money-observation-count",
     "smartMoneyDistinctObservationCount": "ontology-smart-money-distinct-observation-count",
+    "smartMoneyDistinctSessionCount": "ontology-smart-money-distinct-session-count",
     "individualNetLatest": "ontology-individual-net-latest",
     "eventCount": "ontology-event-count",
     "riskEventCount": "ontology-risk-event-count",
@@ -2058,6 +2066,8 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "deliveryLevelLabel": "ontology-language-delivery-level-label",
     "renderedLabel": "ontology-language-rendered-label",
     "smartMoneyDirection": "ontology-smart-money-direction",
+    "smartMoneyFlowDirection": "ontology-smart-money-flow-direction",
+    "smartMoneyFlowBasis": "ontology-smart-money-flow-basis",
     "investorFlowPsychology": "ontology-investor-flow-psychology",
     "investorFlowEvidenceRole": "ontology-investor-flow-evidence-role",
     "investorFlowDataState": "ontology-investor-flow-data-state",
@@ -14700,8 +14710,16 @@ attribute ontology-trade-strength-end, value double;
 attribute ontology-bid-ask-imbalance-end, value double;
 attribute ontology-smart-money-net-latest, value double;
 attribute ontology-smart-money-net-change, value double;
+attribute ontology-smart-money-net-cumulative, value double;
+attribute ontology-smart-money-net-amount-cumulative, value double;
+attribute ontology-smart-money-trading-value-ratio-pct, value double;
+attribute ontology-smart-money-positive-session-ratio, value double;
+attribute ontology-smart-money-negative-session-ratio, value double;
+attribute ontology-smart-money-flow-persistence-ratio, value double;
+attribute ontology-smart-money-flow-acceleration, value double;
 attribute ontology-smart-money-observation-count, value double;
 attribute ontology-smart-money-distinct-observation-count, value double;
+attribute ontology-smart-money-distinct-session-count, value double;
 attribute ontology-individual-net-latest, value double;
 attribute ontology-event-count, value double;
 attribute ontology-risk-event-count, value double;
@@ -14772,6 +14790,8 @@ attribute ontology-language-delivery-level, value string;
 attribute ontology-language-delivery-level-label, value string;
 attribute ontology-language-rendered-label, value string;
 attribute ontology-smart-money-direction, value string;
+attribute ontology-smart-money-flow-direction, value string;
+attribute ontology-smart-money-flow-basis, value string;
 attribute ontology-investor-flow-psychology, value string;
 attribute ontology-investor-flow-evidence-role, value string;
 attribute ontology-investor-flow-data-state, value string;
@@ -14969,8 +14989,16 @@ entity ontology-node @abstract,
     owns ontology-bid-ask-imbalance-end,
     owns ontology-smart-money-net-latest,
     owns ontology-smart-money-net-change,
+    owns ontology-smart-money-net-cumulative,
+    owns ontology-smart-money-net-amount-cumulative,
+    owns ontology-smart-money-trading-value-ratio-pct,
+    owns ontology-smart-money-positive-session-ratio,
+    owns ontology-smart-money-negative-session-ratio,
+    owns ontology-smart-money-flow-persistence-ratio,
+    owns ontology-smart-money-flow-acceleration,
     owns ontology-smart-money-observation-count,
     owns ontology-smart-money-distinct-observation-count,
+    owns ontology-smart-money-distinct-session-count,
     owns ontology-individual-net-latest,
     owns ontology-event-count,
     owns ontology-risk-event-count,
@@ -15041,6 +15069,8 @@ entity ontology-node @abstract,
     owns ontology-language-delivery-level-label,
     owns ontology-language-rendered-label,
     owns ontology-smart-money-direction,
+    owns ontology-smart-money-flow-direction,
+    owns ontology-smart-money-flow-basis,
     owns ontology-investor-flow-psychology,
     owns ontology-investor-flow-evidence-role,
     owns ontology-investor-flow-data-state,

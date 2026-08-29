@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Mapping, Protocol, Tuple
 
 
 TIME_SERIES_CONTRACT_VERSION = "time-series-storage-contract-v1"
-TEMPORAL_FEATURE_SET_VERSION = "temporal-features-v1"
+TEMPORAL_FEATURE_SET_VERSION = "temporal-features-v2"
 
 BACKEND_STATUSES = {
     "registered",

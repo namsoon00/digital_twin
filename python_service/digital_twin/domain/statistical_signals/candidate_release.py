@@ -311,6 +311,7 @@ def production_model_signal_rulebox(rules: Iterable[GraphInferenceRule]) -> List
                 rule,
                 knowledge_basis=basis,
                 execution_stage="awaiting-model-signal",
+                model_input_contract=_model_input_routing_contract(rule),
                 enabled=False,
             ))
     return result

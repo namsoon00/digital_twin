@@ -2,6 +2,7 @@ import json
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from digital_twin.application.independent_reasoning_engine import (
     IndependentReasoningInputAssembler,
@@ -10,6 +11,9 @@ from digital_twin.application.independent_reasoning_engine import (
     V2ReasoningEngine,
     compact_projection_result,
     reasoning_job_runtime_eligibility,
+)
+from digital_twin.application.investment_reasoning.decision_synthesis import (
+    V2GraphDecisionCandidateBuilder,
 )
 from digital_twin.domain.events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
 from digital_twin.domain.independent_reasoning import (
@@ -131,6 +135,56 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_quiet_typedb_context_still_captures_hypotheses_and_synthesis(self):
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+        request = independent_reasoning_request("ontology-v2-shadow", [source_event()])
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-08-16T00:00:00Z",
+        )
+        relation = {
+            "accountId": "acct",
+            "subject": {"symbol": "NVDA", "name": "NVIDIA"},
+            "sourceAboxSnapshotId": "abox:1",
+            "inferenceGenerationId": "inference:1",
+            "generationAligned": True,
+            "decision": {},
+            "graphStoreInference": {"traces": [{"traceId": "trace:1"}]},
+            "hypothesisSet": {
+                "hypotheses": [{
+                    "hypothesisId": "hypothesis:quiet",
+                    "familyId": "trend-continuation",
+                    "candidateAction": "HOLD",
+                    "supportingRuleIds": ["graph.test.quiet.v1"],
+                    "supportingEvidenceIds": ["evidence:1"],
+                    "evidenceState": "supported",
+                }],
+            },
+        }
+        projection = {
+            "acct": {
+                "inferenceBox": {
+                    "generationAligned": True,
+                    "sourceAboxSnapshotId": "abox:1",
+                    "inferenceGenerationId": "inference:1",
+                    "nativeTypeDbReasoningCompleted": True,
+                },
+            },
+        }
+
+        with patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
+            return_value={"NVDA": relation},
+        ):
+            result = builder.build(request, [snapshot], {}, projection)
+
+        self.assertEqual([], result["detected"])
+        self.assertEqual(1, len(result["syntheses"]))
+        self.assertEqual(1, len(result["hypothesisCandidates"]))
+        context = result["hypothesisCandidates"][0]["context"]["ontologyRelationContext"]
+        self.assertEqual("hypothesis:quiet", context["hypothesisSet"]["hypotheses"][0]["hypothesisId"])
+
     def test_candidate_validation_window_starts_when_frozen_release_is_ready(self):
         class Queue:
             @staticmethod

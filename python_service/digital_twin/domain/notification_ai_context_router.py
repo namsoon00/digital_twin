@@ -326,7 +326,10 @@ def _temporal_evidence(current: Dict[str, object]) -> Dict[str, object]:
                 "hasSufficientHistory", "startPrice", "currentPrice", "priceChangePct",
                 "drawdownFromPeakPct", "reboundFromTroughPct", "priceVelocityChangePct",
                 "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd",
-                "smartMoneyDataState", "smartMoneyNetLatest",
+                "smartMoneyDataState", "smartMoneyNetLatest", "smartMoneyNetCumulative",
+                "smartMoneyNetAmountCumulative", "smartMoneyTradingValueRatioPct",
+                "smartMoneyFlowPersistenceRatio", "smartMoneyFlowAcceleration",
+                "smartMoneyFlowDirection", "smartMoneyFlowBasis",
             ),
         ))
     return {

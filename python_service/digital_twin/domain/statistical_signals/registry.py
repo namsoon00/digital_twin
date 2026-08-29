@@ -6,6 +6,7 @@ from typing import Dict, Iterable, Tuple
 
 DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-production-v2"
 DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-production-v2"
+CAPITAL_FLOW_SHADOW_RELEASE_ID = "capital-flow-statistics-shadow-v1"
 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-production-v2"
 DEFAULT_VALUATION_SIGNAL_RELEASE_ID = "valuation-statistics-production-v2"
 DEFAULT_EVENT_SIGNAL_RELEASE_ID = "event-response-statistics-production-v2"
@@ -106,11 +107,27 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
             ),
             status="production",
             validation_status="validated-deterministic",
-            decision_eligibility="conditional",
+            decision_eligibility="reference-only",
             minimum_samples=20,
             minimum_coverage_ratio=0.75,
             scorer_version="flow-score-v1",
-            description="시점 고정 투자자별 수급, 체결과 가격 괴리를 검증하는 조건부 통계 신호입니다.",
+            description="혼합 시계열의 결손값 오염을 차단하는 동안 참고 전용으로 유지하는 기존 수급 신호입니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=CAPITAL_FLOW_SHADOW_RELEASE_ID,
+            model_family="capital-flow-statistics",
+            signal_types=(
+                "flow-accumulation-support",
+                "flow-distribution-risk",
+                "flow-price-divergence-risk",
+            ),
+            status="shadow",
+            validation_status="historical-replay-required",
+            decision_eligibility="reference-only",
+            minimum_samples=20,
+            minimum_coverage_ratio=0.75,
+            scorer_version="capital-flow-score-v1",
+            description="분리 저장된 확정·추정 수급과 가격 경로를 검증하는 shadow 자금 흐름 신호입니다.",
         ),
         StatisticalModelRelease(
             release_id=DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,

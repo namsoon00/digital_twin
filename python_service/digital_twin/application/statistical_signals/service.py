@@ -7,6 +7,7 @@ from typing import Dict, Iterable, Mapping
 
 from ...domain.market_time_series import parse_timestamp
 from ...domain.statistical_signals import (
+    CAPITAL_FLOW_SHADOW_RELEASE_ID,
     DEFAULT_FLOW_SIGNAL_RELEASE_ID,
     DEFAULT_PRICE_SIGNAL_RELEASE_ID,
     ModelSignalBundle,
@@ -145,6 +146,7 @@ class StatisticalSignalPipelineService:
             for value in (model_release_ids or (
                 self.model_release_id,
                 DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+                CAPITAL_FLOW_SHADOW_RELEASE_ID,
             ))
             if str(value or "").strip()
         )
@@ -192,12 +194,14 @@ class StatisticalSignalPipelineService:
         scorers = {
             DEFAULT_PRICE_SIGNAL_RELEASE_ID: score_temporal_feature_snapshot,
             DEFAULT_FLOW_SIGNAL_RELEASE_ID: score_flow_feature_snapshot,
+            CAPITAL_FLOW_SHADOW_RELEASE_ID: score_flow_feature_snapshot,
         }
         baseline_snapshots = []
         skipped_releases = []
         baseline_release_ids = tuple(dict.fromkeys((
             DEFAULT_PRICE_SIGNAL_RELEASE_ID,
             DEFAULT_FLOW_SIGNAL_RELEASE_ID,
+            CAPITAL_FLOW_SHADOW_RELEASE_ID,
         )))
         for release_id in baseline_release_ids:
             scorer = scorers.get(release_id)
@@ -285,6 +289,16 @@ class StatisticalSignalPipelineService:
                 and signal_persistence_ready
             )
         )
+        supported_assessment_count = sum(
+            1 for item in signal_bundle.assessments
+            if item.status == "supported"
+        )
+        decision_eligible_assessment_count = sum(
+            1 for item in signal_bundle.assessments
+            if item.status == "supported"
+            and item.decision_eligibility in {"eligible", "conditional"}
+        )
+        diagnostic_ready = bool(signal_bundle.assessments and durable_evidence_ready)
         decision_blockers = []
         if production_evidence_requested and not self.feature_snapshot_store:
             decision_blockers.append("feature-snapshot-store-not-configured")
@@ -300,12 +314,18 @@ class StatisticalSignalPipelineService:
         return {
             "status": (
                 "ready"
-                if signal_bundle.signals and durable_evidence_ready
+                if (signal_bundle.signals or signal_bundle.assessments) and durable_evidence_ready
                 else "evidence-not-durable"
-                if signal_bundle.signals
+                if signal_bundle.signals or signal_bundle.assessments
                 else "empty"
             ),
-            "decisionEligible": bool(signal_bundle.signals and durable_evidence_ready),
+            "decisionEligible": bool(
+                decision_eligible_assessment_count and durable_evidence_ready
+            ),
+            "diagnosticReady": diagnostic_ready,
+            "assessmentCount": len(signal_bundle.assessments),
+            "supportedAssessmentCount": supported_assessment_count,
+            "decisionEligibleAssessmentCount": decision_eligible_assessment_count,
             "decisionBlockers": sorted(set(decision_blockers)),
             "featureSnapshot": feature_snapshot,
             "signalSnapshot": signal_snapshot,

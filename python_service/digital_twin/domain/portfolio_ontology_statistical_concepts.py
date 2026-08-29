@@ -59,6 +59,50 @@ def statistical_signal_rows_for_symbol(
     ]
 
 
+def statistical_assessment_rows_for_symbol(
+    runtime_context: Mapping[str, object],
+    symbol: object,
+):
+    snapshot = _mapping(runtime_context.get("statisticalSignalSnapshot"))
+    normalized = str(symbol or "").upper().strip()
+    return snapshot, [
+        dict(item)
+        for item in snapshot.get("assessments") or []
+        if isinstance(item, Mapping)
+        and str(item.get("subjectId") or "").upper().strip() == normalized
+    ]
+
+
+def _ensure_hypothesis_family_node(
+    graph: PortfolioOntology,
+    family_nodes: Dict[str, str],
+    family_id: str,
+) -> str:
+    if family_id in family_nodes:
+        return family_nodes[family_id]
+    family = hypothesis_family_definition(family_id)
+    family_nodes[family_id] = add_entity(
+        graph,
+        "hypothesis-family-definition",
+        family_id,
+        family.label if family else family_id,
+        {
+            "tboxClass": "HypothesisFamily",
+            "tboxClasses": ["InvestmentThesis", "HypothesisFamily"],
+            "familyId": family_id,
+            "predictionTarget": family.prediction_target if family else "",
+            "expectedOutcome": family.expected_outcome if family else "",
+            "expectedDirection": family.expected_direction if family else "",
+            "defaultHorizon": family.default_horizon if family else "",
+            "outcomeMetric": family.outcome_metric if family else "",
+            "falsificationContract": family.falsification_contract if family else "",
+            "competingFamilyIds": list(family.competing_family_ids) if family else [],
+            "source": "investment-hypothesis-catalog",
+        },
+    )
+    return family_nodes[family_id]
+
+
 def statistical_signal_packet_can_replace_temporal_anchors(
     runtime_context: Mapping[str, object],
     symbol: object,
@@ -90,7 +134,8 @@ def add_position_statistical_signal_concepts(
 ) -> None:
     runtime_context = runtime_context if isinstance(runtime_context, dict) else {}
     snapshot, signals = statistical_signal_rows_for_symbol(runtime_context, symbol)
-    if not signals:
+    _, assessments = statistical_assessment_rows_for_symbol(runtime_context, symbol)
+    if not signals and not assessments:
         return
     feature_reference = str(
         snapshot.get("sourceFeatureSnapshotId")
@@ -288,34 +333,99 @@ def add_position_statistical_signal_concepts(
             )
         hypothesis_family_id = str(signal.get("hypothesisFamilyId") or "").strip()
         if hypothesis_family_id:
-            family = hypothesis_family_definition(hypothesis_family_id)
-            if hypothesis_family_id not in hypothesis_family_nodes:
-                hypothesis_family_nodes[hypothesis_family_id] = add_entity(
-                    graph,
-                    "hypothesis-family-definition",
-                    hypothesis_family_id,
-                    family.label if family else hypothesis_family_id,
-                    {
-                        "tboxClass": "HypothesisFamily",
-                        "tboxClasses": ["InvestmentThesis", "HypothesisFamily"],
-                        "familyId": hypothesis_family_id,
-                        "predictionTarget": family.prediction_target if family else "",
-                        "expectedOutcome": family.expected_outcome if family else "",
-                        "expectedDirection": family.expected_direction if family else "",
-                        "defaultHorizon": family.default_horizon if family else "",
-                        "outcomeMetric": family.outcome_metric if family else "",
-                        "falsificationContract": family.falsification_contract if family else "",
-                        "competingFamilyIds": list(family.competing_family_ids) if family else [],
-                        "source": "investment-hypothesis-catalog",
-                    },
-                )
+            family_node_id = _ensure_hypothesis_family_node(
+                graph,
+                hypothesis_family_nodes,
+                hypothesis_family_id,
+            )
             add_relation(
                 graph,
                 signal_id,
-                hypothesis_family_nodes[hypothesis_family_id],
+                family_node_id,
                 "SUPPORTS_HYPOTHESIS_FAMILY",
                 properties={
                     **relation_properties,
                     "evidenceRole": "reference" if str(eligibility.get("decisionEligibility") or "") != "eligible" else "support",
                 },
             )
+
+    assessments_by_family = {}
+    for assessment in assessments:
+        family_id = str(assessment.get("hypothesisFamilyId") or "").strip()
+        if family_id:
+            assessments_by_family.setdefault(family_id, []).append(assessment)
+    for family_id, rows in sorted(assessments_by_family.items()):
+        status_contracts = {
+            status: sorted({
+                str(item.get("hypothesisContractId") or "").strip()
+                for item in rows
+                if str(item.get("status") or "") == status
+                and str(item.get("hypothesisContractId") or "").strip()
+            })
+            for status in ("supported", "not-supported", "untested")
+        }
+        assessment_hashes = sorted({
+            str(item.get("materialHash") or "").strip()
+            for item in rows
+            if str(item.get("materialHash") or "").strip()
+        })
+        summary_key = ":".join([
+            str(snapshot.get("sourceFeatureSnapshotId") or snapshot.get("materialHash") or ""),
+            str(symbol or "").upper(),
+            family_id,
+        ])
+        summary_node_id = add_entity(
+            graph,
+            "model-hypothesis-assessment",
+            summary_key,
+            str(symbol or "").upper() + " " + family_id + " 가설 평가",
+            {
+                "tboxClass": "ModelHypothesisAssessment",
+                "tboxClasses": ["ActionabilityAssessment", "ModelHypothesisAssessment"],
+                "symbol": str(symbol or "").upper(),
+                "hypothesisFamilyId": family_id,
+                "assessmentCount": len(rows),
+                "supportedCount": len(status_contracts["supported"]),
+                "notSupportedCount": len(status_contracts["not-supported"]),
+                "untestedCount": len(status_contracts["untested"]),
+                "supportedContractIds": status_contracts["supported"][:24],
+                "notSupportedContractIds": status_contracts["not-supported"][:24],
+                "untestedContractIds": status_contracts["untested"][:24],
+                "decisionEligibleSupportedCount": sum(
+                    1 for item in rows
+                    if str(item.get("status") or "") == "supported"
+                    and str(item.get("decisionEligibility") or "") in {"eligible", "conditional"}
+                ),
+                "observedAt": str(snapshot.get("asOf") or ""),
+                "sourceFeatureSnapshotId": str(snapshot.get("sourceFeatureSnapshotId") or ""),
+                "assessmentMaterialHashes": assessment_hashes[:24],
+                "source": "statistical-hypothesis-assessment",
+            },
+        )
+        relation_properties = {
+            "source": "statistical-hypothesis-assessment",
+            "hypothesisFamilyId": family_id,
+            "evidenceRole": "diagnostic",
+            "observedAt": str(snapshot.get("asOf") or ""),
+        }
+        add_relation(
+            graph,
+            stock_id,
+            summary_node_id,
+            "HAS_HYPOTHESIS_ASSESSMENT",
+            properties=relation_properties,
+        )
+        add_relation(
+            graph,
+            summary_node_id,
+            _ensure_hypothesis_family_node(graph, hypothesis_family_nodes, family_id),
+            "ASSESSES_HYPOTHESIS_FAMILY",
+            properties=relation_properties,
+        )
+        add_relation(
+            graph,
+            summary_node_id,
+            feature_node_id,
+            "BASED_ON_FEATURE_SNAPSHOT",
+            properties=relation_properties,
+        )

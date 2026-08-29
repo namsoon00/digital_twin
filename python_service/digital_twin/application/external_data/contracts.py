@@ -173,6 +173,8 @@ class SourceObservation:
     payload: Dict[str, object]
     quality: Dict[str, object] = field(default_factory=dict)
     watermark: Dict[str, object] = field(default_factory=dict)
+    empty_result: bool = False
+    retain_previous: bool = False
 
 
 class ExternalDatasetAdapter(Protocol):

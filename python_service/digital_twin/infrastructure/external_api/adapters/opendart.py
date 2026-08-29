@@ -135,6 +135,8 @@ class OpenDartDisclosureAdapter:
                     "provider": "opendart",
                     "emptyResult": True,
                 },
+                empty_result=True,
+                retain_previous=True,
             )
         if not row:
             row = require_payload(signals, "dartDisclosures", job.subject.symbol)
@@ -304,7 +306,29 @@ class OpenDartCompanyFactsAdapter:
             include_fundamentals=True,
             include_document=False,
         )
-        row = require_payload(signals, "dartDisclosures", job.subject.symbol)
+        group = signals.get("dartDisclosures") if isinstance(signals.get("dartDisclosures"), dict) else {}
+        row = group.get(job.subject.symbol) if isinstance(group.get(job.subject.symbol), dict) else {}
+        empty_result = successful_empty_disclosure_result(signals, job.subject.symbol)
+        if not row and empty_result:
+            corp_code = self.corp_codes.remember(job.subject.symbol, empty_result)
+            return observation(
+                self.descriptor,
+                job.subject.symbol,
+                {"dartDisclosures": {}},
+                preferred_revision="no-company-facts",
+                preferred_source_as_of=str(signals.get("fetchedAt") or ""),
+                watermark={"emptyResult": True, "corpCode": corp_code},
+                quality={
+                    "dataUsable": True,
+                    "provider": "opendart",
+                    "emptyResult": True,
+                    "reason": "no-disclosures-in-lookback",
+                },
+                empty_result=True,
+                retain_previous=True,
+            )
+        if not row:
+            row = require_payload(signals, "dartDisclosures", job.subject.symbol)
         corp_code = self.corp_codes.remember(job.subject.symbol, row)
         basis = row.get("financialStatementBasis") if isinstance(row.get("financialStatementBasis"), dict) else {}
         revision = ":".join([

@@ -581,6 +581,48 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
 
         return dict(self.transaction_with_deadlock_retry("external-data-complete-observation", mutation) or {})
 
+    def complete_empty_observation(
+        self,
+        job: CollectionJob,
+        observation: SourceObservation,
+        next_due_at: str,
+    ) -> Dict[str, object]:
+        """Complete a valid no-data poll without erasing the last usable fact."""
+        stamp = iso(utc_now())
+
+        def mutation(connection):
+            previous = connection.execute(
+                """
+                SELECT 1 AS present
+                FROM external_fact_current
+                WHERE dataset_id = %s AND subject_key = %s
+                LIMIT 1
+                """,
+                (observation.dataset_id, observation.subject_key),
+            ).fetchone() or {}
+            connection.execute(
+                """
+                UPDATE external_dataset_state
+                SET job_status = 'pending', next_due_at = %s, last_success_at = %s,
+                    source_as_of = %s, watermark_json = %s, lease_owner = '', lease_until = '',
+                    attempt_count = 0, consecutive_failures = 0, last_error = '', updated_at = %s
+                WHERE dataset_id = %s AND partition_key = %s AND lease_owner = %s
+                """,
+                (
+                    next_due_at,
+                    stamp,
+                    str(observation.source_as_of or "")[:80],
+                    json_dumps(observation.watermark),
+                    stamp,
+                    job.dataset_id,
+                    job.partition_key,
+                    job.lease_owner,
+                ),
+            )
+            return {"changed": False, "retainedPreviousFact": bool(previous.get("present"))}
+
+        return dict(self.transaction_with_deadlock_retry("external-data-complete-empty", mutation) or {})
+
     def fail_job(
         self,
         job: CollectionJob,

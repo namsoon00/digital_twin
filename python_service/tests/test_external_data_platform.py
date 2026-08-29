@@ -18,7 +18,10 @@ from digital_twin.application.external_data.read_model_service import ExternalSi
 from digital_twin.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
 from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
-from digital_twin.infrastructure.external_api.adapters.opendart import OpenDartDisclosureAdapter
+from digital_twin.infrastructure.external_api.adapters.opendart import (
+    OpenDartCompanyFactsAdapter,
+    OpenDartDisclosureAdapter,
+)
 from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
 from digital_twin.infrastructure.external_api.adapters.yfinance import (
     YFinanceProfileAdapter,
@@ -62,6 +65,23 @@ class FailingAdapter(StaticAdapter):
     def fetch(self, job, settings):
         del job, settings
         raise RuntimeError("temporary provider response")
+
+
+class NoDataAdapter(StaticAdapter):
+    def fetch(self, job, settings):
+        del settings
+        return SourceObservation(
+            dataset_id=self.descriptor.dataset_id,
+            provider_id=self.descriptor.provider_id,
+            subject_key=job.subject.subject_key,
+            source_revision="no-data",
+            source_as_of="2026-08-16T00:00:00Z",
+            fetched_at="2026-08-16T00:00:01Z",
+            payload={},
+            quality={"dataUsable": True, "emptyResult": True},
+            empty_result=True,
+            retain_previous=True,
+        )
 
 
 class ConcurrencyTrackingAdapter(StaticAdapter):
@@ -120,6 +140,7 @@ class MemoryCollectionStore:
     def __init__(self):
         self.jobs = []
         self.completed = []
+        self.empty_completed = []
         self.events = []
         self.recorded = []
         self.followups = []
@@ -164,6 +185,10 @@ class MemoryCollectionStore:
         if event:
             self.events.append(event)
         return {"changed": True}
+
+    def complete_empty_observation(self, job, observation, due_at):
+        self.empty_completed.append((job, observation, due_at))
+        return {"changed": False, "retainedPreviousFact": bool(self.current)}
 
     def enqueue_followups(self, plans, now=None):
         del now
@@ -421,6 +446,20 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertEqual("00126380", result.watermark["corpCode"])
         self.assertTrue(result.quality["dataUsable"])
         self.assertTrue(result.quality["emptyResult"])
+        self.assertTrue(result.empty_result)
+        self.assertTrue(result.retain_previous)
+
+        company_job = replace(job, dataset_id="opendart.company_facts", priority=40)
+        with patch(
+            "digital_twin.infrastructure.external_api.adapters.opendart.legacy_provider",
+            return_value=EmptyProvider(),
+        ):
+            company_result = OpenDartCompanyFactsAdapter().fetch(company_job, settings)
+
+        self.assertEqual({"dartDisclosures": {}}, company_result.payload)
+        self.assertEqual("no-company-facts", company_result.source_revision)
+        self.assertTrue(company_result.empty_result)
+        self.assertTrue(company_result.retain_previous)
 
         maintenance_provider = legacy_provider(
             {"opendartApiKey": "test-key"},
@@ -478,6 +517,28 @@ class ExternalDataPlatformTest(unittest.TestCase):
 
         self.assertIn("000680=00104698", captured_settings["externalDartCorpCodes"])
         self.assertEqual("00104698", recovered.watermark["corpCode"])
+
+        store = MemoryCollectionStore()
+        store.current = {"payload": {"company": {"name": "existing"}}}
+        service = ExternalDataCollectionService(
+            {},
+            ExternalDatasetRegistry([NoDataAdapter()]),
+            store,
+            worker_id="test-worker",
+            now_provider=lambda: NOW,
+        )
+
+        result = service.run_once()
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(1, result["successCount"])
+        self.assertEqual(1, result["noDataCount"])
+        self.assertEqual(0, result["failureCount"])
+        self.assertEqual([], store.completed)
+        self.assertEqual(1, len(store.empty_completed))
+        self.assertEqual([], store.events)
+        self.assertEqual("no-data", store.recorded[-1][0][1])
+        self.assertTrue(result["results"][0]["retainedPreviousFact"])
 
     def test_same_provider_jobs_are_serialized_while_provider_groups_are_parallelizable(self):
         adapter = ConcurrencyTrackingAdapter()

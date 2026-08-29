@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List
 
 from ...domain.events import external_fact_changed_event
 from .contracts import DatasetDescriptor, ExternalSubject, setting_enabled
-from .fact_transition_service import ExternalFactTransitionService
+from .fact_transition_service import ExternalFactTransitionService, FactTransition
 
 
 def utc_now() -> datetime:
@@ -163,6 +163,7 @@ class ExternalDataCollectionService:
                             })
         failures = [item for item in results if item.get("status") == "error"]
         deferred = [item for item in results if item.get("status") == "deferred"]
+        no_data = [item for item in results if item.get("status") == "no-data"]
         projection_after = self.reconcile_official_evidence()
         return {
             "status": "partial" if failures else "ok",
@@ -170,6 +171,7 @@ class ExternalDataCollectionService:
             "successCount": len(results) - len(failures) - len(deferred),
             "failureCount": len(failures),
             "deferredCount": len(deferred),
+            "noDataCount": len(no_data),
             "results": results,
             "partitionSync": sync,
             "legacyMigration": migration,
@@ -253,11 +255,16 @@ class ExternalDataCollectionService:
         try:
             observation = adapter.fetch(job, self.settings)
             previous = self.store.current_fact(observation.dataset_id, observation.subject_key)
-            transition = self.transition_service.assess(
-                observation.dataset_id,
-                previous,
-                observation.payload,
-                observation.source_revision,
+            no_data = bool(observation.empty_result)
+            transition = (
+                FactTransition(False, False, "no-data", [], "provider returned a valid empty result")
+                if no_data
+                else self.transition_service.assess(
+                    observation.dataset_id,
+                    previous,
+                    observation.payload,
+                    observation.source_revision,
+                )
             )
             event = None
             if transition.material:
@@ -272,14 +279,17 @@ class ExternalDataCollectionService:
                     transition.reason,
                 )
             due_at = next_due_at(descriptor, self.settings, job.partition_key)
-            committed = self.store.complete_observation(
-                job,
-                descriptor,
-                observation,
-                due_at,
-                event=event,
-            )
-            followup_plans = self.registry.followups(job.dataset_id, observation, self.settings)
+            if no_data and observation.retain_previous:
+                committed = self.store.complete_empty_observation(job, observation, due_at)
+            else:
+                committed = self.store.complete_observation(
+                    job,
+                    descriptor,
+                    observation,
+                    due_at,
+                    event=event,
+                )
+            followup_plans = [] if no_data else self.registry.followups(job.dataset_id, observation, self.settings)
             followup_count = (
                 int(self.store.enqueue_followups(followup_plans, now=self.now_provider()) or 0)
                 if followup_plans and callable(getattr(self.store, "enqueue_followups", None))
@@ -291,7 +301,7 @@ class ExternalDataCollectionService:
             duration_ms = max(0, int((completed - started).total_seconds() * 1000))
             self.store.record_run(
                 job,
-                "success",
+                "no-data" if no_data else "success",
                 started_at,
                 iso(completed),
                 duration_ms,
@@ -303,7 +313,7 @@ class ExternalDataCollectionService:
             return {
                 "datasetId": job.dataset_id,
                 "partitionKey": job.partition_key,
-                "status": "success",
+                "status": "no-data" if no_data else "success",
                 "durationMs": duration_ms,
                 "responseBytes": response_bytes,
                 "sourceAsOf": observation.source_as_of,
@@ -311,6 +321,7 @@ class ExternalDataCollectionService:
                 "materialChange": bool(transition.material and committed.get("changed")),
                 "nextDueAt": "" if descriptor.completion_mode == "once" else due_at,
                 "followupCount": followup_count,
+                "retainedPreviousFact": bool(committed.get("retainedPreviousFact")),
             }
         except Exception as error:  # noqa: BLE001 - provider failures are durable operational state.
             completed = self.now_provider()

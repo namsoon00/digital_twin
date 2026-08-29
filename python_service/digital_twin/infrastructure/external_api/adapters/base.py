@@ -178,6 +178,8 @@ def observation(
     preferred_source_as_of: str = "",
     watermark: Dict[str, object] = None,
     quality: Dict[str, object] = None,
+    empty_result: bool = False,
+    retain_previous: bool = False,
 ) -> SourceObservation:
     fetched_at = utc_now_iso()
     return SourceObservation(
@@ -190,6 +192,8 @@ def observation(
         payload=fragment,
         quality=dict(quality or {"dataUsable": True, "provider": descriptor.provider_id}),
         watermark=dict(watermark or {}),
+        empty_result=bool(empty_result),
+        retain_previous=bool(retain_previous),
     )
 
 

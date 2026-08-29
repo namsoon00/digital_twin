@@ -36,6 +36,9 @@ class Cursor:
     def fetchall(self):
         return list(self.rows)
 
+    def fetchone(self):
+        return dict(self.rows[0]) if self.rows else None
+
 
 class RecordingConnection:
     def __init__(self, rows=None):
@@ -646,6 +649,31 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertIn("world_id = %s", recovery_query)
         self.assertEqual("portfolio:local:main", recovery_params[1])
         self.assertEqual(1, recovery_params[-1])
+
+        failed_connection = RecordingConnection(rows=[{
+            "resume_stage": "source-bound",
+            "detail_json": "{}",
+            "completed_at": "",
+            "inference_generation_id": "",
+        }])
+        failed_store = MySQLOntologyProjectionRunStore.__new__(
+            MySQLOntologyProjectionRunStore
+        )
+        failed_store.transaction = lambda: ConnectionContext(failed_connection)
+        failed_transition = failed_store.advance_current_state_transition(
+            "projection:failed",
+            "source-bound",
+            status="failed",
+            detail={"reason": "verification failed"},
+        )
+        self.assertEqual("ok", failed_transition["status"])
+        update_params = failed_connection.calls[1][1]
+        self.assertEqual("failed", update_params[1])
+        self.assertTrue(update_params[4])
+        self.assertFalse(any(
+            "INSERT INTO ontology_current_state_heads" in sql
+            for sql, _params in failed_connection.calls
+        ))
 
         empty_recorder = PortfolioOntologyProjectionRecorder(
             SimpleNamespace(store_key="typedb"),

@@ -6619,16 +6619,30 @@ class ScopedABoxManifestMixin:
                             for key in ["nodes", "relations"]
                             for storage_id, item in dict(post_inventory.get(key) or {}).items()
                         }
-                        missing_or_stale = [
+                        missing_storage_ids = [
+                            storage_id
+                            for storage_id in desired_fingerprints
+                            if storage_id not in actual_fingerprints
+                        ]
+                        stale_storage_ids = [
                             storage_id
                             for storage_id, fingerprint in desired_fingerprints.items()
-                            if actual_fingerprints.get(storage_id) != fingerprint
+                            if storage_id in actual_fingerprints
+                            and actual_fingerprints.get(storage_id) != fingerprint
+                        ]
+                        missing_or_stale = [
+                            *missing_storage_ids,
+                            *stale_storage_ids,
                         ]
                         if missing_or_stale:
                             raise RuntimeError(
                                 "Current-state ABox delta verification failed for "
                                 + str(len(missing_or_stale))
-                                + " physical facts."
+                                + " physical facts"
+                                + " missing=" + str(len(missing_storage_ids))
+                                + " stale=" + str(len(stale_storage_ids))
+                                + " sample=" + ",".join(missing_or_stale[:5])
+                                + "."
                             )
                     else:
                         inserted_counts_by_scope = self.scoped_abox_scope_row_counts_batch(

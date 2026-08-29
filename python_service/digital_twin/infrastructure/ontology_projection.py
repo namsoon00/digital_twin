@@ -8936,6 +8936,23 @@ class PortfolioOntologyProjectionRecorder:
                                 "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
                             },
                         )
+                    elif not bool(result.get("saved")):
+                        failed_stage = "source-bound"
+                        if isinstance(result.get("currentStateInferenceCheckpoint"), dict):
+                            failed_stage = "inferred"
+                        elif isinstance(result.get("currentStatePatchCheckpoint"), dict):
+                            failed_stage = "patch-applied"
+                        result["currentStateFailureCheckpoint"] = self.advance_current_state_transition(
+                            completed_run,
+                            failed_stage,
+                            status="failed",
+                            inference_generation_id=inference_generation_id,
+                            detail={
+                                "projectionStatus": completed_run.status,
+                                "reason": str(result.get("reason") or "")[:500],
+                                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+                            },
+                        )
                         result["currentStateCompletionCheckpoint"] = self.advance_current_state_transition(
                             completed_run,
                             "completed",

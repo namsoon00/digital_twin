@@ -257,6 +257,11 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                 **dict(detail or {}),
             }
             terminal = clean_stage == "completed" and clean_status == "completed"
+            finished = terminal or clean_status in {
+                "failed",
+                "aborted",
+                "superseded",
+            }
             connection.execute(
                 "UPDATE ontology_current_state_transitions SET "
                 "resume_stage = %s, status = %s, inference_generation_id = %s, "
@@ -267,7 +272,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
                     clean_status,
                     str(inference_generation_id or row.get("inference_generation_id") or ""),
                     json_dumps(merged_detail),
-                    stamp if terminal else str(row.get("completed_at") or ""),
+                    stamp if finished else str(row.get("completed_at") or ""),
                     stamp,
                     clean_run_id,
                 ),

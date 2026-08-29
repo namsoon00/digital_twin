@@ -1,5 +1,6 @@
 import unittest
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -144,7 +145,7 @@ class MemoryCollectionStore:
     def claim_due(self, worker_id, limit, lease_seconds, now=None):
         del worker_id, lease_seconds, now
         jobs, self.jobs = self.jobs[:limit], self.jobs[limit:]
-        return jobs
+        return [replace(job, attempt_count=job.attempt_count + 1) for job in jobs]
 
     def reserve_provider_call(self, descriptor, now=None):
         del descriptor, now
@@ -286,6 +287,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         result = service.run_once()
         failure = result["results"][0]
 
+        self.assertEqual(1, failure["partitionFailureCount"])
         self.assertTrue(failure["hasUsablePreviousFact"])
         self.assertFalse(external_data_failure_requires_alert(failure))
         self.assertTrue(external_data_failure_requires_alert({

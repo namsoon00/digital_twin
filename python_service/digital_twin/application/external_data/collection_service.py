@@ -342,7 +342,8 @@ class ExternalDataCollectionService:
                 "durationMs": duration_ms,
                 "error": str(error)[:500],
                 "providerState": failure.get("state"),
-                "partitionFailureCount": max(1, int(job.attempt_count or 0) + 1),
+                # claim_due already increments attempt_count for the current lease.
+                "partitionFailureCount": max(1, int(job.attempt_count or 0)),
                 "failureAlertThreshold": max(1, int(descriptor.failure_threshold or 1)),
                 "hasUsablePreviousFact": has_usable_previous_fact,
                 "previousFactSourceAsOf": str((previous_fact or {}).get("sourceAsOf") or ""),

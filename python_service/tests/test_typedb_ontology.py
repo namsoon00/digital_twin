@@ -366,6 +366,39 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "logical-market-2",
             by_scope[market_scope]["logicalGenerationId"],
         )
+        legacy_active = {
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeFingerprints": {
+                market_scope: "market-1",
+                flow_scope: "flow-1",
+            },
+            "scopeGenerationIds": {
+                market_scope: "legacy-market-generation",
+                flow_scope: "legacy-flow-generation",
+            },
+        }
+        logical_plan = [
+            {"scopeId": market_scope, "generationId": "logical-market-2", "fingerprint": "market-2"},
+            {"scopeId": flow_scope, "generationId": "logical-flow-1", "fingerprint": "flow-1"},
+        ]
+        self.assertEqual(
+            [market_scope],
+            repository.scoped_abox_changed_scope_ids(
+                logical_plan,
+                legacy_active,
+                current_state_mode=True,
+                migration_mode="progressive",
+            ),
+        )
+        self.assertEqual(
+            [market_scope, flow_scope],
+            repository.scoped_abox_changed_scope_ids(
+                logical_plan,
+                legacy_active,
+                current_state_mode=True,
+                migration_mode="full",
+            ),
+        )
 
         snapshot_id = "abox-current:scope-a:a"
         unchanged = {

@@ -3727,6 +3727,50 @@ class ScopedABoxManifestMixin:
         return sorted(result, key=lambda item: str(item.get("scopeId") or ""))
 
     @staticmethod
+    def scoped_abox_changed_scope_ids(
+        logical_scope_plan: Iterable[Dict[str, object]],
+        active_metadata: Dict[str, object],
+        current_state_mode: bool,
+        migration_mode: str = "",
+    ) -> List[str]:
+        """Select physical writes for steady-state and progressive migration."""
+
+        active = dict(active_metadata or {})
+        active_fingerprints = dict(active.get("scopeFingerprints") or {})
+        active_generations = dict(active.get("scopeGenerationIds") or {})
+        scoped_active = (
+            str(active.get("scopedAboxManifestVersion") or "")
+            == SCOPED_ABOX_MANIFEST_VERSION
+        )
+        active_current_state = (
+            str(active.get("persistenceMode") or active.get("physicalStateMode") or "")
+            == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+        )
+        full_current_state_migration = bool(
+            current_state_mode
+            and not active_current_state
+            and str(migration_mode or "").strip().lower() == "full"
+        )
+        return [
+            str(item.get("scopeId") or "")
+            for item in logical_scope_plan or []
+            if str(item.get("scopeId") or "")
+            and (
+                not scoped_active
+                or full_current_state_migration
+                or str(
+                    active_fingerprints.get(str(item.get("scopeId") or "")) or ""
+                ) != str(item.get("fingerprint") or "")
+                or (
+                    not current_state_mode
+                    and str(
+                        active_generations.get(str(item.get("scopeId") or "")) or ""
+                    ) != str(item.get("generationId") or "")
+                )
+            )
+        ]
+
+    @staticmethod
     def current_state_physical_graph(
         graph: PortfolioOntology,
         physical_scope_plan: Iterable[Dict[str, object]],
@@ -6255,13 +6299,10 @@ class ScopedABoxManifestMixin:
             )
         except Exception:
             active_before = {}
-        active_fingerprints = dict(active_before.get("scopeFingerprints") or {})
-        active_generations = dict(active_before.get("scopeGenerationIds") or {})
         scoped_active = str(active_before.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
-        active_current_state = (
-            str(active_before.get("persistenceMode") or active_before.get("physicalStateMode") or "")
-            == CURRENT_STATE_ABOX_PERSISTENCE_MODE
-        )
+        migration_mode = str(
+            worldview.get("currentStateMigrationMode") or ""
+        ).strip().lower()
         active_manifest_index_repair: Dict[str, object] = {}
         if scoped_active and native_rule_manifest_index_required(active_before):
             active_index = normalize_native_rule_evidence_read_index(
@@ -6298,19 +6339,12 @@ class ScopedABoxManifestMixin:
                         "writeLeaseRelease": release,
                     }
                 active_before = dict(self.active_abox_metadata(world_id) or {})
-        changed_scope_ids = [
-            str(item.get("scopeId") or "")
-            for item in logical_scope_plan
-            if not scoped_active
-            or (current_state_mode and not active_current_state)
-            or str(active_fingerprints.get(str(item.get("scopeId") or "")) or "") != str(item.get("fingerprint") or "")
-            or (
-                not current_state_mode
-                and str(active_generations.get(str(item.get("scopeId") or "")) or "")
-                != str(item.get("generationId") or "")
-            )
-        ]
-        changed_scope_ids = [item for item in changed_scope_ids if item]
+        changed_scope_ids = self.scoped_abox_changed_scope_ids(
+            logical_scope_plan,
+            active_before,
+            current_state_mode=current_state_mode,
+            migration_mode=migration_mode,
+        )
         persistence_graph = graph
         if current_state_mode:
             scope_plan = self.current_state_physical_scope_plan(
@@ -6332,8 +6366,9 @@ class ScopedABoxManifestMixin:
                 "worldviewManifestId": manifest_id,
                 "changedScopeIds": [],
                 "scopePlan": scope_plan,
-                "activeAbox": active_before,
-            }
+                    "activeAbox": active_before,
+                    "currentStateMigrationMode": migration_mode,
+                }
         if scoped_active and previous_manifest_id == manifest_id:
             release = release_write_lease()
             return {

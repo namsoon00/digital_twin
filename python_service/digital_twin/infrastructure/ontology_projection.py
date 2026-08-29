@@ -3607,17 +3607,20 @@ class PortfolioOntologyProjectionRecorder:
                 or active_abox.get("physicalStateMode")
                 or SCOPED_ABOX_PERSISTENCE_MODE
             )
-            current_state_cycle_eligible = bool(
-                self.current_state_abox_storage_enabled()
-                and (
-                    active_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
-                    or str(graph_input.get("mode") or "full") == "full"
-                )
-            )
+            current_state_cycle_eligible = self.current_state_abox_storage_enabled()
             desired_persistence_mode = (
                 CURRENT_STATE_ABOX_PERSISTENCE_MODE
                 if current_state_cycle_eligible
                 else SCOPED_ABOX_PERSISTENCE_MODE
+            )
+            current_state_migration_mode = (
+                "steady-state"
+                if active_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                else (
+                    "full"
+                    if str(graph_input.get("mode") or "full") == "full"
+                    else "progressive"
+                )
             )
             physical_state_migration_required = bool(
                 active_abox_is_scoped_manifest
@@ -3625,6 +3628,9 @@ class PortfolioOntologyProjectionRecorder:
             )
             persistence_graph.worldview["persistenceMode"] = desired_persistence_mode
             persistence_graph.worldview["physicalStateMode"] = desired_persistence_mode
+            persistence_graph.worldview["currentStateMigrationMode"] = (
+                current_state_migration_mode
+            )
             emit_progress("abox_validation.start")
             validation_started = time.perf_counter()
             validation = validate_ontology(persistence_graph)
@@ -3800,6 +3806,7 @@ class PortfolioOntologyProjectionRecorder:
                 "explicitTargetSymbols": list(compact_impact_plan.get("explicitTargetSymbols") or []),
                 "persistenceMode": desired_persistence_mode,
                 "physicalStateMigrationRequired": physical_state_migration_required,
+                "currentStateMigrationMode": current_state_migration_mode,
                 "atomicActivation": True,
                 "manifestId": material_snapshot_id,
                 "worldId": portfolio_world_context.world_id,

@@ -545,7 +545,7 @@
     consoleDecisionAction: "all",
     consoleDecisionQuality: "all",
     consoleDecisionStatus: "all",
-    consoleDecisionView: "action",
+    consoleDecisionView: "attention",
     investmentFlow: null,
     investmentFlowLoading: false,
     investmentFlowLoaded: false,
@@ -12641,6 +12641,7 @@
       "ontology-audit-section",
       "hypothesis-review",
       "hypothesis-governance",
+      "subject-decision-case",
       "investment-case",
       "investment-flow",
       "investment-model-overview",
@@ -12743,6 +12744,7 @@
     if (type === "feed-sources") return feedSourcesWorkDetailPayload();
     if (type === "feed-quality") return feedQualityWorkDetailPayload();
     if (type === "investment-action") return investmentActionWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
+    if (type === "subject-decision-case") return subjectDecisionCaseWorkDetailPayload(key);
     if (type === "investment-case" || type === "investment-flow") return investmentFlowWorkDetailPayload(key);
     if (type === "investment-calendar-event") return investmentCalendarEventWorkDetailPayload(key) || instrumentTimelineEventWorkDetailPayload(type, key);
     if (type === "investment-reasoning-card") return investmentReasoningCardWorkDetailPayload(key);
@@ -14705,6 +14707,9 @@
         return {
           key: String(item.caseId || item.episodeId || item.symbol),
           caseId: String(item.caseId || ""),
+          detailType: String(item.detailType || "investment-case"),
+          subjectCaseId: String(item.subjectCaseId || ""),
+          subjectDecisionCase: item.subjectDecisionCase && typeof item.subjectDecisionCase === "object" ? item.subjectDecisionCase : {},
           decisionKey: String(matched.decisionKey || ""),
           decisionEpisodeId: String(item.episodeId || ""),
           accountId: String(item.accountId || matched.accountId || "default"),
@@ -14723,6 +14728,8 @@
           source: String(matched.portfolioRole || matched.source || "holding"),
           blocked: readinessState === "blocked" || readinessState === "error" || item.caseStatus === "blocked",
           userActionable: Boolean(attention.userActionable),
+          userReviewable: Boolean(attention.userReviewable),
+          userAttentionRequired: Boolean(attention.userAttentionRequired || attention.userActionable || attention.userReviewable),
           attentionState: String(attention.state || (readinessState === "blocked" ? "blocked" : "review")),
           attentionLabel: String(attention.label || item.readinessLabel || "확인 필요"),
           attentionIssues: Array.isArray(attention.issues) ? attention.issues : [],
@@ -14782,6 +14789,8 @@
         source: String(row.portfolioRole || row.source || "holding"),
         blocked: Boolean(graph.blocked) || reviewLevel === "blocked" || validationState === "blocked",
         userActionable: !Boolean(graph.blocked) && ["BUY", "ADD", "SELL", "TRIM", "AVOID"].indexOf(presentation.actionCode || action.code) >= 0,
+        userReviewable: !Boolean(graph.blocked) && ["BUY", "ADD", "SELL", "TRIM", "AVOID"].indexOf(presentation.actionCode || action.code) < 0,
+        userAttentionRequired: !Boolean(graph.blocked),
         attentionState: Boolean(graph.blocked) || reviewLevel === "blocked" || validationState === "blocked" ? "blocked" : (["BUY", "ADD", "SELL", "TRIM", "AVOID"].indexOf(presentation.actionCode || action.code) >= 0 ? "action" : "review"),
         attentionLabel: Boolean(graph.blocked) || reviewLevel === "blocked" || validationState === "blocked" ? "판단 보류" : "근거 확인",
         attentionIssues: [],
@@ -14835,11 +14844,14 @@
     var quality = String(state.consoleDecisionQuality || "all");
     var status = String(state.consoleDecisionStatus || "all");
     return selectConsoleDecisionRows(snapshot).filter(function (row) {
-      var view = String(state.consoleDecisionView || "action");
+      var view = String(state.consoleDecisionView || "attention");
       var actionRequired = Boolean(row.userActionable);
+      var reviewRequired = Boolean(row.userReviewable) || row.attentionState === "review";
       var changedAt = recordChangedAtValue(row);
       var recentlyChanged = row.changeState !== "unchanged" || (changedAt && Date.now() - changedAt <= 7 * 24 * 60 * 60 * 1000);
+      if (view === "attention" && !actionRequired && !reviewRequired) return false;
       if (view === "action" && !actionRequired) return false;
+      if (view === "review" && !reviewRequired) return false;
       if (view === "recent" && !recentlyChanged) return false;
       var isWatch = row.source === "watchlist";
       if (scope === "holding" && isWatch) return false;
@@ -15191,8 +15203,10 @@
   }
 
   function renderDecisionConsoleRow(row) {
-    var detailType = row.caseId || row.decisionEpisodeId ? "investment-case" : "investment-action";
-    var detailKey = row.caseId || row.decisionEpisodeId || row.key;
+    var detailType = row.detailType === "subject-decision-case"
+      ? "subject-decision-case"
+      : (row.caseId || row.decisionEpisodeId ? "investment-case" : "investment-action");
+    var detailKey = row.subjectCaseId || row.caseId || row.decisionEpisodeId || row.key;
     var readinessTone = row.attentionState === "action" ? "watch" : investmentFlowStateTone(row.readinessState || (row.blocked ? "blocked" : "warning"));
     var primary = (row.explanation || {}).primaryCause || {};
     var attention = row.attention && typeof row.attention === "object" ? row.attention : {};
@@ -15316,11 +15330,13 @@
   function renderDecisionViewSwitch(rows) {
     rows = Array.isArray(rows) ? rows : [];
     var counts = {
+      attention: rows.filter(function (row) { return row.userActionable || row.userReviewable || row.attentionState === "review"; }).length,
       action: rows.filter(function (row) { return row.userActionable; }).length,
+      review: rows.filter(function (row) { return row.userReviewable || row.attentionState === "review"; }).length,
       recent: rows.filter(function (row) { var value = recordChangedAtValue(row); return row.changeState !== "unchanged" || (value && Date.now() - value <= 7 * 24 * 60 * 60 * 1000); }).length,
       all: rows.length
     };
-    var items = [["action", "행동 필요"], ["recent", "최근 변화"], ["all", "전체"]];
+    var items = [["attention", "지금 확인"], ["action", "주문 검토"], ["review", "근거 검토"], ["recent", "최근 변화"], ["all", "전체"]];
     return '<nav class="oa-decision-view-switch" aria-label="투자 의견 범위">' + items.map(function (item) {
       var active = state.consoleDecisionView === item[0];
       return '<button type="button" data-decision-view="' + item[0] + '"' + (active ? ' class="active" aria-current="page"' : '') + '><strong>' + item[1] + '</strong><span>' + escapeHtml(counts[item[0]]) + '</span></button>';
@@ -15338,6 +15354,52 @@
       "전체 투자 행동 후보",
       "canonical 판단 큐 " + rows.length + "건",
       '<section class="oa-detail-queue">' + renderConsoleLiveRegion("decision-full-body", body) + renderConsolePager("decision", page) + '</section>'
+    );
+  }
+
+  function subjectDecisionCaseWorkDetailPayload(key) {
+    var rows = selectConsoleDecisionRows(state.snapshot || {});
+    var row = rows.filter(function (item) {
+      return String(item.subjectCaseId || "") === String(key || "");
+    })[0];
+    if (!row) {
+      return editorWorkDetailPayload(
+        "TypeDB Inference",
+        "최신 추론을 찾을 수 없습니다",
+        String(key || ""),
+        renderConsoleEmpty("추론 기록이 갱신되었습니다", "판단 목록을 새로고침해 최신 세대를 확인하세요.")
+      );
+    }
+    var detail = row.subjectDecisionCase || {};
+    var hypotheses = Array.isArray(detail.hypotheses) ? detail.hypotheses : [];
+    var candidate = decisionActionMeta(detail.candidateAction, detail.candidateAction);
+    var hypothesisBody = hypotheses.length ? '<div class="oa-assurance-groups"><section class="oa-assurance-group"><header><div><strong>경쟁 가설</strong><p>같은 TypeDB 세대에서 성립한 대안을 비교합니다.</p></div><span>' + escapeHtml(hypotheses.length) + '개</span></header><div>' + hypotheses.map(function (item) {
+      var rules = Array.isArray(item.supportingRuleIds) ? item.supportingRuleIds : [];
+      var evidence = Array.isArray(item.supportingEvidenceIds) ? item.supportingEvidenceIds : [];
+      var invalidation = Array.isArray(item.invalidationConditions) ? item.invalidationConditions : [];
+      return [
+        '<article class="oa-assurance-row" data-flow-state="pass">',
+        '<div class="oa-assurance-row-main"><span><strong>' + escapeHtml(item.label || item.hypothesisId || "가설") + '</strong><em>' + escapeHtml(item.hypothesisId || "") + '</em></span><b class="watch">' + escapeHtml(decisionActionMeta(item.candidateAction, item.candidateAction).label) + '</b></div>',
+        '<p><strong>성립 규칙</strong> · ' + escapeHtml(rules.join(", ") || "규칙 식별자 없음") + '</p>',
+        '<p><strong>근거 연결</strong> · ' + escapeHtml(evidence.length + "건") + '</p>',
+        invalidation[0] ? '<div class="oa-assurance-next"><span>무효화 조건</span><strong>' + escapeHtml(invalidation[0]) + '</strong></div>' : '',
+        '</article>'
+      ].join("");
+    }).join("") + '</div></section></div>' : renderConsoleEmpty("성립한 예측 가설이 없습니다", "관계 추론은 완료됐지만 현재 기준시각에 행동 후보로 승격할 예측 가설은 없습니다.");
+    var checks = Array.isArray(detail.nextChecks) ? detail.nextChecks : [];
+    var gaps = Array.isArray(detail.missingData) ? detail.missingData : [];
+    var body = [
+      '<section class="oa-assurance-context"><span>TYPE DB SUBJECT CASE</span><strong>' + escapeHtml(row.name || row.symbol) + ' · ' + escapeHtml(candidate.label) + '</strong><p>' + escapeHtml(row.reason || "TypeDB 관계와 가설 후보를 확인합니다.") + '</p></section>',
+      '<div class="oa-console-metrics"><article><span>현재 단계</span><strong>' + escapeHtml(detail.stage || "-") + '</strong><em>AI·발송과 분리된 추론 상태</em></article><article><span>가설</span><strong>' + escapeHtml(hypotheses.length + "개") + '</strong><em>현재 세대 후보</em></article><article><span>허용 행동</span><strong>' + escapeHtml((detail.allowedActions || []).length + "개") + '</strong><em>' + escapeHtml((detail.allowedActions || []).join(", ") || "없음") + '</em></article><article><span>자료 공백</span><strong>' + escapeHtml(gaps.length + "개") + '</strong><em>행동 확정 제약</em></article></div>',
+      hypothesisBody,
+      '<section class="oa-assurance-context"><span>NEXT VALIDATION</span><strong>다음 판단에서 확인할 조건</strong><p>' + escapeHtml(checks.join(" · ") || "다음 사실 변경에서 동일 가설과 반대 근거를 다시 비교합니다.") + '</p></section>',
+      '<section class="oa-assurance-context"><span>TRACE IDENTITY</span><strong>재현 가능한 세대 식별자</strong><p>' + escapeHtml([detail.sourceAboxSnapshotId, detail.inferenceGenerationId, detail.candidateFingerprint].filter(Boolean).join(" · ") || "식별자 없음") + '</p></section>'
+    ].join("");
+    return editorWorkDetailPayload(
+      "TypeDB Inference",
+      (row.name || row.symbol) + " 최신 추론",
+      "최종 주문 행동이 아닌 현재 세대의 후보와 근거",
+      body
     );
   }
 
@@ -15400,14 +15462,19 @@
       { label: "판단 보류", value: blocked + "건", detail: "행동 아님", tone: blocked ? "danger" : "watch", target: { type: "tab", value: "experiments" } },
       { label: "결과 대기", value: awaitingOutcome + "건", detail: "성과 관측", target: { type: "decision", value: "all", key: "all", quality: "all" } }
     ];
-    var viewLabels = { action: "행동이 필요한 의견", recent: "최근 달라진 의견", all: "전체 투자 의견" };
-    var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", state.consoleDecisionView === "action" ? "현재 즉시 검토할 행동이 없습니다. 전체 의견에서 관찰 상태를 확인할 수 있습니다." : "검색어나 필터를 조정하세요.", '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
+    var viewLabels = { attention: "지금 확인할 투자 의견", action: "주문 전 검토 의견", review: "근거를 더 확인할 의견", recent: "최근 달라진 의견", all: "전체 투자 의견" };
+    var emptyDetail = state.consoleDecisionView === "action"
+      ? "현재 주문을 검토할 의견은 없습니다. 근거 검토에는 행동을 바꿀 수 있는 확인 항목이 표시됩니다."
+      : state.consoleDecisionView === "attention"
+      ? "현재 사용자 확인이 필요한 판단 변화가 없습니다."
+      : "검색어나 필터를 조정하세요.";
+    var list = page.items.length ? '<div class="oa-case-list" data-console-keyed-list="decision-primary">' + page.items.map(renderDecisionConsoleRow).join("") + '</div>' : renderConsoleEmpty("조건에 맞는 투자 의견이 없습니다", emptyDetail, '<button class="text-button primary" type="button" data-decision-view="all">전체 의견 보기</button>');
     return renderConsoleManagedPage("modeling", metrics, [
       '<section class="oa-decision-context"><span>DECISION WORKSPACE</span><strong>판단은 주문이 아니라 현재 근거에 따른 투자 의견입니다.</strong><p>의견이 달라졌거나 행동이 필요한 종목부터 확인하고, 부족한 근거는 별도 점검 화면에서 보완합니다.</p></section>',
       renderDecisionViewSwitch(allRows),
       renderDecisionFilterToolbar(),
       '<div data-console-monitor-destination="decisions" tabindex="-1">',
-      renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[state.consoleDecisionView] || viewLabels.action, description: "회사를 열면 판단 당시 데이터, 근거, 추론 과정과 결과 이력을 전체 화면에서 확인합니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
+      renderConsoleSurface({ kicker: "CURRENT OPINIONS", title: viewLabels[state.consoleDecisionView] || viewLabels.attention, description: "회사를 열면 판단 당시 데이터, 근거, 추론 과정과 결과 이력을 전체 화면에서 확인합니다.", meta: page.items.length + " / " + rows.length + "건", className: "decision-list-surface", body: renderConsoleLiveRegion("decision-primary-body", list), footer: renderConsolePager("decision", page) }),
       '</div>'
     ].join(""), { leading: renderDecisionWorkspaceNavigation("modeling") });
   }
@@ -19963,6 +20030,45 @@
     };
   }
 
+  function capitalFlowModel(snapshot) {
+    var flow = (snapshot || {}).capitalFlow || {};
+    if (flow && String(flow.contract || "").indexOf("capital-flow-") === 0) return flow;
+    return {
+      contract: "capital-flow-summary-v1",
+      status: "empty",
+      windowDays: 5,
+      markets: [],
+      sectors: [],
+      subjects: [],
+      transitions: [],
+      portfolioImpact: {},
+      quality: {},
+      storageQuality: {}
+    };
+  }
+
+  function capitalFlowDirectionMeta(direction) {
+    var value = String(direction || "unavailable").toLowerCase();
+    if (value === "inflow") return { label: "순유입", tone: "watch", sign: "+" };
+    if (value === "outflow") return { label: "순유출", tone: "danger", sign: "" };
+    if (value === "neutral") return { label: "중립", tone: "hold", sign: "" };
+    return { label: "미수집", tone: "caution", sign: "" };
+  }
+
+  function capitalFlowValueText(item) {
+    item = item || {};
+    if (hasNumericValue(item.smartMoneyNetAmount)) return formatMoney(item.smartMoneyNetAmount) + "원";
+    if (hasNumericValue(item.smartMoneyNetVolume)) return formatMoney(item.smartMoneyNetVolume) + "주";
+    return "미수집";
+  }
+
+  function capitalFlowPartyText(item) {
+    item = item || {};
+    if (hasNumericValue(item.netAmount)) return formatMoney(item.netAmount) + "원";
+    if (hasNumericValue(item.netVolume)) return formatMoney(item.netVolume) + "주";
+    return "미수집";
+  }
+
   function investmentChartPeriodOptions() {
     return [
       { id: "1d", label: "일", description: "장중·일간" },
@@ -20022,34 +20128,20 @@
         quality: item.hasData ? "actual" : "missing"
       });
     });
-    var flow = analysis.moneyFlow || {};
-    (Array.isArray(flow.buckets) ? flow.buckets : []).slice(0, 5).forEach(function (bucket) {
-      var changeRate = Number(bucket.changeRate || 0);
-      var stateMeta = investmentChartState(bucket.direction || bucket.polarity, changeRate > 0 ? "support" : (changeRate < 0 ? "risk" : "context"));
+    var flow = capitalFlowModel(snapshot);
+    (Array.isArray(flow.subjects) ? flow.subjects : []).slice(0, 8).forEach(function (item) {
+      var direction = capitalFlowDirectionMeta(item.direction);
+      var stateMeta = investmentChartState(item.direction === "inflow" ? "support" : (item.direction === "outflow" ? "risk" : "context"));
       rows.push({
         group: "자금",
-        label: bucket.label || bucket.name || bucket.asset || "Money flow",
-        detail: bucket.caption || bucket.description || bucket.kind || "global flow",
+        label: stockDisplayName(item.subjectId, item),
+        detail: [item.sector || "기타", "외국인 " + capitalFlowPartyText(item.foreign), "기관 " + capitalFlowPartyText(item.institution)].join(" · "),
         state: stateMeta.key,
-        stateLabel: stateMeta.label,
+        stateLabel: direction.label + " · " + (item.windowDays || flow.windowDays || 5) + "일",
         tone: stateMeta.tone,
-        value: bucket.valueText || bucket.value || bucket.amount || "-",
-        source: bucket.source || bucket.provider || "investmentAnalysis.moneyFlow",
-        quality: bucket.mock ? "mock" : (bucket.quality || "actual")
-      });
-    });
-    (Array.isArray(flow.emergingFlows) ? flow.emergingFlows : []).slice(0, 3).forEach(function (item) {
-      var stateMeta = investmentChartState(item.direction || item.polarity, "context");
-      rows.push({
-        group: "새 흐름",
-        label: item.label || item.name || "Emerging flow",
-        detail: item.reason || item.description || "새 자금 흐름 후보",
-        state: stateMeta.key,
-        stateLabel: stateMeta.label,
-        tone: stateMeta.tone,
-        value: item.value || item.signal || "-",
-        source: item.source || "investmentAnalysis.emergingFlows",
-        quality: item.mock ? "mock" : (item.quality || "actual")
+        value: capitalFlowValueText(item),
+        source: flow.source || "capital-flow-observations",
+        quality: item.dataState === "sufficient" ? "actual" : "gap"
       });
     });
     var macro = ontologyMacroSignalData(parts || {});
@@ -21288,35 +21380,67 @@
   }
 
   function renderInvestmentMoneyFlowPanel(snapshot) {
-    var flow = investmentAnalysisModel(snapshot).moneyFlow || {};
-    var buckets = Array.isArray(flow.buckets) ? flow.buckets : [];
-    var emerging = Array.isArray(flow.emergingFlows) ? flow.emergingFlows : [];
+    var flow = capitalFlowModel(snapshot);
+    var markets = Array.isArray(flow.markets) ? flow.markets : [];
+    var sectors = Array.isArray(flow.sectors) ? flow.sectors : [];
+    var subjects = Array.isArray(flow.subjects) ? flow.subjects : [];
+    var transitions = Array.isArray(flow.transitions) ? flow.transitions : [];
+    var quality = flow.quality || {};
+    var portfolio = flow.portfolioImpact || {};
+    var storage = flow.storageQuality || {};
+    var storageFlow = storage.capitalFlow || storage;
+    var windowDays = Number(flow.windowDays || 5);
+    var statusLabel = flow.status === "ready" ? "관측 중" : (flow.status === "unavailable" ? "저장소 오류" : "수집 대기");
+    var statusTone = flow.status === "ready" ? "watch" : "caution";
+    var coverageText = Number(quality.subjectCount || 0) > 0
+      ? Number(quality.sufficientSubjectCount || 0) + "/" + Number(quality.subjectCount || 0) + " 종목"
+      : "미수집";
+    var outflowExposure = hasNumericValue(portfolio.outflowExposureRatioPct)
+      ? Number(portfolio.outflowExposureRatioPct).toFixed(1) + "%"
+      : "해당 없음";
+    var overview = markets.slice(0, 3).concat(sectors.slice(0, 4).map(function (item) {
+      return Object.assign({ scopeLabel: "업종" }, item);
+    }));
     return [
       '<article class="panel investment-flow-panel">',
       '<div class="panel-head">',
       '<div>',
-      '<p class="label">Global Flow Lens</p>',
-      '<h2>세계 돈의 흐름 단서</h2>',
-      '<p class="subtle">현재 계좌 노출과 외부 신호가 어떤 자산·시장 흐름을 봐야 하는지 알려줍니다.</p>',
+      '<p class="label">Capital Flow</p>',
+      '<h2>외국인·기관 자금 흐름</h2>',
+      '<p class="subtle">계좌 평가액과 분리된 시장 수급 관측값입니다.</p>',
       '</div>',
-      '<span class="metric">' + escapeHtml(buckets.length + emerging.length) + '</span>',
+      '<div class="capital-flow-head-meta"><span class="tone-chip ' + statusTone + '">' + escapeHtml(statusLabel) + '</span><span class="metric">' + escapeHtml(subjects.length + "종목 · " + windowDays + "일") + '</span></div>',
+      '</div>',
+      '<div class="capital-flow-quality-strip">',
+      '<section><span>판단 가능</span><strong>' + escapeHtml(coverageText) + '</strong><em>필요 관측 충족</em></section>',
+      '<section><span>보유 유출 노출</span><strong>' + escapeHtml(outflowExposure) + '</strong><em>' + escapeHtml(Number(portfolio.outflowHoldingCount || 0) + "개 보유 종목") + '</em></section>',
+      '<section><span>별도 저장 관측</span><strong>' + escapeHtml(Number(storageFlow.observationCount || quality.canonicalObservationCount || 0).toLocaleString("ko-KR") + "건") + '</strong><em>결측→0 변환 ' + escapeHtml(Number(storage.missingConvertedToZeroCount || quality.missingConvertedToZeroCount || 0)) + '건</em></section>',
+      '<section><span>자료 기준</span><strong>' + escapeHtml(flow.asOf ? formatClock(flow.asOf) : "미수집") + '</strong><em>' + escapeHtml(Number(storageFlow.dailyFinalCount || 0) + "건 확정") + '</em></section>',
       '</div>',
       '<div class="investment-flow-grid">',
-      buckets.length ? buckets.map(function (bucket) {
+      overview.length ? overview.map(function (item) {
+        var direction = capitalFlowDirectionMeta(item.direction);
         return [
-          '<section' + cardTypeAttrs("source-card") + '>',
-          '<span>' + escapeHtml(bucket.source || "") + '</span>',
-          '<strong>' + escapeHtml(bucket.label || bucket.key || "-") + '</strong>',
-          '<em>' + escapeHtml(bucket.value ? formatMoney(bucket.value) : bucket.caption || "-") + '</em>',
+          '<section' + cardTypeAttrs("source-card", direction.tone) + '>',
+          '<span>' + escapeHtml(item.scopeLabel || "시장") + ' · ' + escapeHtml(direction.label) + '</span>',
+          '<strong>' + escapeHtml(item.label || item.key || "-") + '</strong>',
+          '<em>' + escapeHtml(capitalFlowValueText(item)) + (hasNumericValue(item.normalizedFlowPct) ? ' · 거래대금 대비 ' + escapeHtml(Number(item.normalizedFlowPct).toFixed(2)) + '%' : '') + '</em>',
           '</section>'
         ].join("");
-      }).join("") : '<div class="ontology-empty">시장 흐름 버킷 없음</div>',
+      }).join("") : '<div class="ontology-empty">외국인·기관 수급 관측이 아직 없습니다.</div>',
       '</div>',
-      '<div class="investment-emerging-list">',
-      emerging.length ? emerging.map(function (item) {
-        return '<div' + cardTypeAttrs("signal-card", "hold") + '><strong>' + escapeHtml(item.title || "-") + '</strong><span>' + escapeHtml(item.description || "") + '</span><em>' + escapeHtml(item.source || "") + '</em></div>';
-      }).join("") : '<div class="ontology-empty">새 흐름 후보가 아직 없습니다.</div>',
+      '<div class="capital-flow-table" role="table" aria-label="종목별 외국인 기관 자금 흐름">',
+      '<div class="capital-flow-row capital-flow-table-head" role="row"><span>종목</span><span>합산</span><span>외국인</span><span>기관</span><span>지속성</span><span>기준</span></div>',
+      subjects.length ? subjects.slice(0, 12).map(function (item) {
+        var direction = capitalFlowDirectionMeta(item.direction);
+        var persistence = hasNumericValue(item.persistenceRatio) ? Math.round(Number(item.persistenceRatio) * 100) + "%" : "미수집";
+        return '<div class="capital-flow-row" role="row"' + cardTypeAttrs("signal-card", direction.tone) + '><span><strong>' + escapeHtml(stockDisplayName(item.subjectId, item)) + '</strong><em>' + escapeHtml([item.subjectId, item.sector].filter(Boolean).join(" · ")) + '</em></span><span><b class="flow-value ' + escapeHtml(direction.tone) + '">' + escapeHtml(capitalFlowValueText(item)) + '</b><em>' + escapeHtml(direction.label) + '</em></span><span><b>' + escapeHtml(capitalFlowPartyText(item.foreign)) + '</b></span><span><b>' + escapeHtml(capitalFlowPartyText(item.institution)) + '</b></span><span><b>' + escapeHtml(persistence) + '</b><em>' + escapeHtml(Number(item.observationCount || 0) + "/" + Number(item.requiredObservationCount || windowDays) + "일") + '</em></span><span><b>' + escapeHtml(item.throughTradingDate || "-") + '</b><em>' + escapeHtml(item.measurementType === "daily-final" ? "확정" : "추정") + '</em></span></div>';
+      }).join("") : '<div class="ontology-empty">종목별 수급 데이터가 수집되면 표시됩니다.</div>',
       '</div>',
+      transitions.length ? '<div class="investment-emerging-list capital-flow-transitions"><p class="label">최근 방향 전환</p>' + transitions.slice(0, 6).map(function (item) {
+        var direction = capitalFlowDirectionMeta(item.toDirection);
+        return '<div' + cardTypeAttrs("signal-card", direction.tone) + '><strong>' + escapeHtml(stockDisplayName(item.subjectId, item)) + '</strong><span>' + escapeHtml(capitalFlowDirectionMeta(item.fromDirection).label + " → " + direction.label + " · " + Number(item.windowDays || windowDays) + "일") + '</span><em>' + escapeHtml(item.throughTradingDate || "-") + '</em></div>';
+      }).join("") + '</div>' : '',
       '</article>'
     ].join("");
   }
@@ -34032,7 +34156,7 @@
       var decisionView = event.target.closest && event.target.closest("[data-decision-view]");
       if (decisionView && app.contains(decisionView)) {
         event.preventDefault();
-        state.consoleDecisionView = decisionView.getAttribute("data-decision-view") || "action";
+        state.consoleDecisionView = decisionView.getAttribute("data-decision-view") || "attention";
         state.consolePages.decision = 1;
         render({ transition: "section" });
         return;

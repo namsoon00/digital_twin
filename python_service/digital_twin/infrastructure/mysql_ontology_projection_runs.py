@@ -120,10 +120,20 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
         world_id: str = "",
         limit: int = 5,
     ) -> List[Dict[str, object]]:
-        """Return only unfinished legacy audit rows from the recovery index."""
+        """Return only recent unfinished rows eligible for inline recovery.
 
-        clauses = ["status = 'projecting'"]
-        params: List[object] = []
+        Rows older than the projection execution boundary are reclaimed by
+        ``_recover_stale_runs`` when the next audit begins.  Returning every
+        historical ``projecting`` row here would reopen TypeDB history on
+        every healthy request, which is exactly the latency this index avoids.
+        """
+
+        stale_after = self.projection_audit_stale_after_seconds()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=stale_after)
+        ).isoformat().replace("+00:00", "Z")
+        clauses = ["status = 'projecting'", "updated_at >= %s"]
+        params: List[object] = [cutoff]
         clean_world_id = str(world_id or "").strip()
         if clean_world_id:
             clauses.append("world_id = %s")

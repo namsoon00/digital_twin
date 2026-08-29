@@ -632,6 +632,20 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         store.runtime_settings = {"ontologyProjectionAuditStaleAfterSeconds": "175"}
 
         self.assertEqual(175, store.projection_audit_stale_after_seconds())
+        indexed_connection = RecordingConnection(rows=[])
+        store.connect = lambda: ConnectionContext(indexed_connection)
+        self.assertEqual(
+            [],
+            store.interrupted_projection_recovery_candidates(
+                "portfolio:local:main",
+                limit=1,
+            ),
+        )
+        recovery_query, recovery_params = indexed_connection.calls[0]
+        self.assertIn("updated_at >= %s", recovery_query)
+        self.assertIn("world_id = %s", recovery_query)
+        self.assertEqual("portfolio:local:main", recovery_params[1])
+        self.assertEqual(1, recovery_params[-1])
 
         empty_recorder = PortfolioOntologyProjectionRecorder(
             SimpleNamespace(store_key="typedb"),

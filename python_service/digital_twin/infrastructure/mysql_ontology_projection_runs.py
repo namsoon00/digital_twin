@@ -3,6 +3,7 @@ import hashlib
 from typing import Dict, List, Mapping
 
 from ..domain.ontology_execution_trace import reasoning_execution_trace_payload
+from ..domain.ontology_current_state import CURRENT_STATE_TRANSITION_STAGES
 from ..domain.ontology_projection_audit import (
     OntologyProjectionRun,
     projection_run_from_payload,
@@ -113,6 +114,218 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             )
         self.last_stale_recovery = dict(recovery)
         return recovery
+
+    def interrupted_projection_recovery_candidates(
+        self,
+        world_id: str = "",
+        limit: int = 5,
+    ) -> List[Dict[str, object]]:
+        """Return only unfinished legacy audit rows from the recovery index."""
+
+        clauses = ["status = 'projecting'"]
+        params: List[object] = []
+        clean_world_id = str(world_id or "").strip()
+        if clean_world_id:
+            clauses.append("world_id = %s")
+            params.append(clean_world_id)
+        bounded = max(1, min(20, int(limit or 5)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id, world_id, account_id, abox_snapshot_id, "
+                "material_fingerprint, started_at, updated_at "
+                "FROM ontology_projection_runs WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY updated_at ASC, run_id ASC LIMIT %s",
+                [*params, bounded],
+            ).fetchall()
+        return [dict(item or {}) for item in rows or []]
+
+    def begin_current_state_transition(
+        self,
+        run: OntologyProjectionRun,
+        base_manifest_id: str,
+        target_manifest_id: str,
+        patch_fingerprint: str,
+        physical_state_mode: str,
+        detail: Mapping[str, object] = None,
+    ) -> Dict[str, object]:
+        """Persist the source-bound checkpoint before TypeDB is mutated."""
+
+        stamp = utc_now()
+        payload = dict(detail or {})
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO ontology_current_state_transitions (
+                    run_id, execution_namespace_id, world_id,
+                    base_manifest_id, target_manifest_id, patch_fingerprint,
+                    physical_state_mode, source_snapshot_fingerprint,
+                    inference_generation_id, resume_stage, status, detail_json,
+                    started_at, completed_at, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s, %s, '', %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    base_manifest_id = VALUES(base_manifest_id),
+                    target_manifest_id = VALUES(target_manifest_id),
+                    patch_fingerprint = VALUES(patch_fingerprint),
+                    physical_state_mode = VALUES(physical_state_mode),
+                    source_snapshot_fingerprint = VALUES(source_snapshot_fingerprint),
+                    detail_json = VALUES(detail_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (
+                    run.run_id,
+                    run.execution_namespace_id,
+                    run.world_id,
+                    str(base_manifest_id or ""),
+                    str(target_manifest_id or ""),
+                    str(patch_fingerprint or ""),
+                    str(physical_state_mode or ""),
+                    run.source_snapshot_fingerprint,
+                    CURRENT_STATE_TRANSITION_STAGES[0],
+                    "running",
+                    json_dumps(payload),
+                    stamp,
+                    stamp,
+                    stamp,
+                ),
+            )
+        return {
+            "status": "ok",
+            "runId": run.run_id,
+            "worldId": run.world_id,
+            "resumeStage": CURRENT_STATE_TRANSITION_STAGES[0],
+        }
+
+    def advance_current_state_transition(
+        self,
+        run_id: str,
+        stage: str,
+        status: str = "running",
+        inference_generation_id: str = "",
+        detail: Mapping[str, object] = None,
+    ) -> Dict[str, object]:
+        """Advance a transition monotonically and publish its completed head."""
+
+        clean_run_id = str(run_id or "").strip()
+        clean_stage = str(stage or "").strip()
+        if not clean_run_id or clean_stage not in CURRENT_STATE_TRANSITION_STAGES:
+            return {
+                "status": "invalid",
+                "runId": clean_run_id,
+                "resumeStage": clean_stage,
+            }
+        requested_index = CURRENT_STATE_TRANSITION_STAGES.index(clean_stage)
+        clean_status = str(status or "running").strip() or "running"
+        stamp = utc_now()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM ontology_current_state_transitions "
+                "WHERE run_id = %s FOR UPDATE",
+                (clean_run_id,),
+            ).fetchone()
+            if not row:
+                return {
+                    "status": "not-found",
+                    "runId": clean_run_id,
+                    "resumeStage": clean_stage,
+                }
+            current_stage = str(row.get("resume_stage") or CURRENT_STATE_TRANSITION_STAGES[0])
+            current_index = (
+                CURRENT_STATE_TRANSITION_STAGES.index(current_stage)
+                if current_stage in CURRENT_STATE_TRANSITION_STAGES
+                else 0
+            )
+            if requested_index < current_index:
+                return {
+                    "status": "stale-stage",
+                    "runId": clean_run_id,
+                    "resumeStage": current_stage,
+                }
+            existing_detail = _json_loads(row.get("detail_json"), {})
+            merged_detail = {
+                **(existing_detail if isinstance(existing_detail, dict) else {}),
+                **dict(detail or {}),
+            }
+            terminal = clean_stage == "completed" and clean_status == "completed"
+            connection.execute(
+                "UPDATE ontology_current_state_transitions SET "
+                "resume_stage = %s, status = %s, inference_generation_id = %s, "
+                "detail_json = %s, completed_at = %s, updated_at = %s "
+                "WHERE run_id = %s",
+                (
+                    clean_stage,
+                    clean_status,
+                    str(inference_generation_id or row.get("inference_generation_id") or ""),
+                    json_dumps(merged_detail),
+                    stamp if terminal else str(row.get("completed_at") or ""),
+                    stamp,
+                    clean_run_id,
+                ),
+            )
+            if terminal:
+                connection.execute(
+                    """
+                    INSERT INTO ontology_current_state_heads (
+                        execution_namespace_id, world_id, revision,
+                        logical_manifest_id, previous_manifest_id,
+                        patch_fingerprint, physical_state_mode,
+                        source_snapshot_fingerprint, inference_generation_id,
+                        completed_run_id, status, detail_json, created_at, updated_at
+                    ) VALUES (%s, %s, 1, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        revision = revision + 1,
+                        previous_manifest_id = logical_manifest_id,
+                        logical_manifest_id = VALUES(logical_manifest_id),
+                        patch_fingerprint = VALUES(patch_fingerprint),
+                        physical_state_mode = VALUES(physical_state_mode),
+                        source_snapshot_fingerprint = VALUES(source_snapshot_fingerprint),
+                        inference_generation_id = VALUES(inference_generation_id),
+                        completed_run_id = VALUES(completed_run_id),
+                        status = VALUES(status),
+                        detail_json = VALUES(detail_json),
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        str(row.get("execution_namespace_id") or ""),
+                        str(row.get("world_id") or ""),
+                        str(row.get("target_manifest_id") or ""),
+                        str(row.get("base_manifest_id") or ""),
+                        str(row.get("patch_fingerprint") or ""),
+                        str(row.get("physical_state_mode") or ""),
+                        str(row.get("source_snapshot_fingerprint") or ""),
+                        str(inference_generation_id or row.get("inference_generation_id") or ""),
+                        clean_run_id,
+                        json_dumps(merged_detail),
+                        stamp,
+                        stamp,
+                    ),
+                )
+        return {
+            "status": "ok",
+            "runId": clean_run_id,
+            "resumeStage": clean_stage,
+            "completed": terminal,
+        }
+
+    def current_state_recovery_candidates(
+        self,
+        world_id: str = "",
+        limit: int = 10,
+    ) -> List[Dict[str, object]]:
+        clauses = ["status = 'running'"]
+        params: List[object] = []
+        if str(world_id or "").strip():
+            clauses.append("world_id = %s")
+            params.append(str(world_id).strip())
+        bounded = max(1, min(50, int(limit or 10)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM ontology_current_state_transitions WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY updated_at ASC, run_id ASC LIMIT %s",
+                [*params, bounded],
+            ).fetchall()
+        return [dict(item or {}) for item in rows or []]
 
     def begin(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
         stamp = utc_now()

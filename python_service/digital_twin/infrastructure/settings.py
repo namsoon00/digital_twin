@@ -602,6 +602,7 @@ TEXT_SETTING_KEYS = [
     "reasoningEngineSharedPremiseInlineRetryCount",
     "reasoningEngineSharedPremiseInlineRetryMaxSeconds",
     "ontologyIncrementalCurrentStateReasoningEnabled",
+    "ontologyCurrentStateAboxStorageEnabled",
     "operationalActiveFailureWindowMinutes",
     "ontologyStoreLogicalShardCount",
     "reasoningEngineV2BatchSize",
@@ -2515,6 +2516,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "ontologyIncrementalCurrentStateReasoningEnabled": value(
             "ontologyIncrementalCurrentStateReasoningEnabled",
             "ONTOLOGY_INCREMENTAL_CURRENT_STATE_REASONING_ENABLED",
+            "1",
+        ),
+        "ontologyCurrentStateAboxStorageEnabled": value(
+            "ontologyCurrentStateAboxStorageEnabled",
+            "ONTOLOGY_CURRENT_STATE_ABOX_STORAGE_ENABLED",
             "1",
         ),
         "operationalActiveFailureWindowMinutes": value(

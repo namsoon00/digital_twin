@@ -406,6 +406,32 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`account_id`, `material_fingerprint`",
         ),
     ),
+    "ontology_current_state_heads": (
+        MySQLIndexDefinition(
+            "ontology_current_state_heads",
+            "idx_ontology_current_state_heads_status",
+            "`status`, `updated_at`, `world_id`",
+        ),
+    ),
+    "ontology_current_state_transitions": (
+        MySQLIndexDefinition(
+            "ontology_current_state_transitions",
+            "idx_current_state_transitions_recovery",
+            "`world_id`, `status`, `updated_at`, `run_id`",
+        ),
+        MySQLIndexDefinition(
+            "ontology_current_state_transitions",
+            "idx_current_state_transitions_namespace",
+            "`execution_namespace_id`, `status`, `updated_at`, `run_id`",
+        ),
+    ),
+    "ontology_current_fact_heads": (
+        MySQLIndexDefinition(
+            "ontology_current_fact_heads",
+            "idx_ontology_current_fact_slot",
+            "`world_id`, `physical_generation_id`, `owner_kind`",
+        ),
+    ),
     "ontology_reasoning_run_stages": (
         MySQLIndexDefinition(
             "ontology_reasoning_run_stages",

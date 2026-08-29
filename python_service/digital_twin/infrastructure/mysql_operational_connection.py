@@ -2088,6 +2088,74 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_current_state_heads (
+        execution_namespace_id VARCHAR(64) NOT NULL DEFAULT '',
+        world_id VARCHAR(191) NOT NULL,
+        revision BIGINT NOT NULL DEFAULT 0,
+        logical_manifest_id VARCHAR(191) NOT NULL DEFAULT '',
+        previous_manifest_id VARCHAR(191) NOT NULL DEFAULT '',
+        patch_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        physical_state_mode VARCHAR(64) NOT NULL DEFAULT '',
+        source_snapshot_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        completed_run_id VARCHAR(191) NOT NULL DEFAULT '',
+        status VARCHAR(64) NOT NULL DEFAULT 'empty',
+        detail_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (execution_namespace_id, world_id),
+        KEY idx_ontology_current_state_heads_status (
+            status, updated_at, world_id
+        )
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_current_state_transitions (
+        run_id VARCHAR(191) PRIMARY KEY,
+        execution_namespace_id VARCHAR(64) NOT NULL DEFAULT '',
+        world_id VARCHAR(191) NOT NULL,
+        base_manifest_id VARCHAR(191) NOT NULL DEFAULT '',
+        target_manifest_id VARCHAR(191) NOT NULL DEFAULT '',
+        patch_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        physical_state_mode VARCHAR(64) NOT NULL DEFAULT '',
+        source_snapshot_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        resume_stage VARCHAR(64) NOT NULL DEFAULT 'source-bound',
+        status VARCHAR(64) NOT NULL DEFAULT 'running',
+        detail_json LONGTEXT NOT NULL,
+        started_at VARCHAR(40) NOT NULL,
+        completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_current_state_transitions_recovery (
+            world_id, status, updated_at, run_id
+        ),
+        KEY idx_current_state_transitions_namespace (
+            execution_namespace_id, status, updated_at, run_id
+        )
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ontology_current_fact_heads (
+        execution_namespace_id VARCHAR(64) NOT NULL DEFAULT '',
+        world_id VARCHAR(191) NOT NULL,
+        scope_id VARCHAR(191) NOT NULL,
+        fact_storage_id VARCHAR(191) NOT NULL,
+        owner_kind VARCHAR(32) NOT NULL DEFAULT '',
+        logical_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        physical_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        content_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (
+            execution_namespace_id, world_id, scope_id, fact_storage_id
+        ),
+        KEY idx_ontology_current_fact_slot (
+            world_id, physical_generation_id, owner_kind
+        )
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_reasoning_run_stages (
         run_id VARCHAR(191) NOT NULL,
         stage_key VARCHAR(191) NOT NULL,

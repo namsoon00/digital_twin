@@ -2305,6 +2305,7 @@ def build_v2_reasoning_engine(
     candidate_settings["ontologyReasoningTypeDbNativeRuleExecutionEnabled"] = "1"
     candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
     candidate_settings["ontologyIncrementalCurrentStateReasoningEnabled"] = "1"
+    candidate_settings["ontologyCurrentStateAboxStorageEnabled"] = "1"
     if str(
         candidate_settings.get("ontologyTemporalObservationAnchorProjectionEnabled")
         or "auto"
@@ -2543,6 +2544,7 @@ def build_v2_reasoning_engine(
             "status": "ready",
             "mode": "typedb-direct-typeql",
             "realtimeProjectionMode": "incremental-current-state-one-pass-v1",
+            "aboxPersistenceMode": "current-state-dual-slot-v1",
             "sharedPremiseCriticalPath": False,
         },
     })

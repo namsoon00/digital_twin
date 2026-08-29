@@ -18,6 +18,10 @@ from functools import wraps
 from typing import Dict, Iterable, List, Set, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
+from ..domain.ontology_current_state import (
+    CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+    next_current_state_slot,
+)
 from ..domain.model_signal_interpretation import (
     MODEL_SIGNAL_BRIDGE_VERSION,
     is_batchable_model_signal_interpretation_rule,
@@ -3624,10 +3628,18 @@ class ScopedABoxManifestMixin:
     def is_scoped_abox_graph(graph: PortfolioOntology) -> bool:
         worldview = dict(getattr(graph, "worldview", {}) or {})
         return (
-            str(worldview.get("persistenceMode") or "") == SCOPED_ABOX_PERSISTENCE_MODE
+            str(worldview.get("persistenceMode") or "") in {
+                SCOPED_ABOX_PERSISTENCE_MODE,
+                CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            }
             and str(worldview.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
             and isinstance(worldview.get("scopePlan"), list)
         )
+
+    @staticmethod
+    def is_current_state_scoped_abox_graph(graph: PortfolioOntology) -> bool:
+        worldview = dict(getattr(graph, "worldview", {}) or {})
+        return str(worldview.get("persistenceMode") or "") == CURRENT_STATE_ABOX_PERSISTENCE_MODE
 
     @staticmethod
     def scoped_abox_plan(graph: PortfolioOntology) -> List[Dict[str, object]]:
@@ -3676,6 +3688,432 @@ class ScopedABoxManifestMixin:
                 "observedAt": str(item.get("observedAt") or ""),
             })
         return sorted(rows, key=lambda item: str(item.get("scopeId") or ""))
+
+    @staticmethod
+    def current_state_physical_scope_plan(
+        logical_scope_plan: Iterable[Dict[str, object]],
+        active_metadata: Dict[str, object],
+        changed_scope_ids: Iterable[str],
+        world_id: str,
+    ) -> List[Dict[str, object]]:
+        """Map logical scope generations to bounded inactive physical slots."""
+
+        changed = {
+            str(value or "").strip()
+            for value in changed_scope_ids or []
+            if str(value or "").strip()
+        }
+        active_generations = dict((active_metadata or {}).get("scopeGenerationIds") or {})
+        result: List[Dict[str, object]] = []
+        for raw in logical_scope_plan or []:
+            item = dict(raw or {})
+            scope_id = str(item.get("scopeId") or "").strip()
+            logical_generation_id = str(
+                item.get("logicalGenerationId") or item.get("generationId") or ""
+            ).strip()
+            active_generation_id = str(active_generations.get(scope_id) or "").strip()
+            physical_generation_id = (
+                next_current_state_slot(world_id, scope_id, active_generation_id)
+                if scope_id in changed or not active_generation_id
+                else active_generation_id
+            )
+            item.update({
+                "generationId": physical_generation_id,
+                "logicalGenerationId": logical_generation_id,
+                "physicalGenerationId": physical_generation_id,
+                "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            })
+            result.append(item)
+        return sorted(result, key=lambda item: str(item.get("scopeId") or ""))
+
+    @staticmethod
+    def current_state_physical_graph(
+        graph: PortfolioOntology,
+        physical_scope_plan: Iterable[Dict[str, object]],
+    ) -> PortfolioOntology:
+        """Return a persistence copy whose ABox rows use physical slot ids."""
+
+        clone = copy.deepcopy(graph)
+        physical_plan = [dict(item or {}) for item in physical_scope_plan or []]
+        by_scope = {
+            str(item.get("scopeId") or "").strip(): item
+            for item in physical_plan
+            if str(item.get("scopeId") or "").strip()
+        }
+
+        def bind(properties: Dict[str, object]) -> Dict[str, object]:
+            values = dict(properties or {})
+            if str(values.get("ontologyBox") or "ABox") != "ABox":
+                return values
+            scope_id = str(values.get("aboxScopeId") or values.get("scopeId") or "").strip()
+            physical = by_scope.get(scope_id) or {}
+            generation_id = str(physical.get("generationId") or "").strip()
+            if not generation_id:
+                return values
+            logical_generation_id = str(
+                physical.get("logicalGenerationId")
+                or values.get("scopeGenerationId")
+                or values.get("snapshotId")
+                or values.get("aboxSnapshotId")
+                or ""
+            ).strip()
+            values.update({
+                "logicalScopeGenerationId": logical_generation_id,
+                "physicalGenerationId": generation_id,
+                "scopeGenerationId": generation_id,
+                "snapshotId": generation_id,
+                "aboxSnapshotId": generation_id,
+                "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            })
+            return values
+
+        for item in clone.entities:
+            item.properties = bind(item.properties)
+        for item in clone.relations:
+            item.properties = bind(item.properties)
+        for item in clone.evidence:
+            item.value = bind(item.value)
+        for item in clone.opinions:
+            item.legacy_model = bind(item.legacy_model)
+        clone.reasoning_cards = [
+            bind(item) if isinstance(item, dict) else item
+            for item in clone.reasoning_cards or []
+        ]
+        support_scopes = {}
+        for key, raw in dict((clone.worldview or {}).get("supportRelationScopes") or {}).items():
+            metadata = dict(raw or {})
+            scope_id = str(metadata.get("scopeId") or "").strip()
+            physical = by_scope.get(scope_id) or {}
+            generation_id = str(physical.get("generationId") or "").strip()
+            if generation_id:
+                metadata.update({
+                    "logicalScopeGenerationId": str(
+                        physical.get("logicalGenerationId")
+                        or metadata.get("scopeGenerationId")
+                        or ""
+                    ),
+                    "physicalGenerationId": generation_id,
+                    "scopeGenerationId": generation_id,
+                    "snapshotId": generation_id,
+                    "aboxSnapshotId": generation_id,
+                })
+            support_scopes[str(key)] = metadata
+        logical_generations = {
+            str(item.get("scopeId") or ""): str(item.get("logicalGenerationId") or "")
+            for item in physical_plan
+            if str(item.get("scopeId") or "")
+        }
+        physical_generations = {
+            str(item.get("scopeId") or ""): str(item.get("generationId") or "")
+            for item in physical_plan
+            if str(item.get("scopeId") or "")
+        }
+        clone.worldview.update({
+            "persistenceMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            "scopePlan": physical_plan,
+            "logicalScopeGenerationIds": logical_generations,
+            "scopeGenerationIds": physical_generations,
+            "supportRelationScopes": support_scopes,
+        })
+        return clone
+
+    def delete_current_state_slot_rows(
+        self,
+        driver,
+        imported,
+        physical_generation_ids: Iterable[str],
+    ) -> Dict[str, object]:
+        """Replace inactive physical slots with bounded grouped deletes."""
+
+        generation_ids = sorted({
+            str(value or "").strip()
+            for value in physical_generation_ids or []
+            if str(value or "").startswith("abox-current:")
+        })
+        if not generation_ids:
+            return {
+                "status": "skipped",
+                "physicalGenerationCount": 0,
+                "transactionCount": 0,
+            }
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        batch_size = 32
+        transaction_count = 0
+        started = time.monotonic()
+        for offset in range(0, len(generation_ids), batch_size):
+            batch = generation_ids[offset: offset + batch_size]
+            for type_label, variable in [
+                ("ontology-assertion", "$r"),
+                ("ontology-node", "$n"),
+            ]:
+                query = (
+                    "match " + variable + " isa " + type_label
+                    + ', has ontology-box "ABox", has ontology-snapshot-id $slot; '
+                    + typedb_value_match(
+                        variable,
+                        "ontology-snapshot-id",
+                        batch,
+                        "==",
+                        "slotFilter",
+                    )
+                    + " delete " + variable + ";"
+                )
+
+                def delete_batch():
+                    with typedb_operation_timeout(
+                        self.write_operation_timeout_seconds(),
+                        "TypeDB current-state inactive slot delete",
+                    ):
+                        with driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            tx.query(query).resolve()
+                            tx.commit()
+
+                self.with_typedb_retries(delete_batch)
+                transaction_count += 1
+        return {
+            "status": "ok",
+            "physicalGenerationCount": len(generation_ids),
+            "transactionCount": transaction_count,
+            "durationMs": int((time.monotonic() - started) * 1000),
+        }
+
+    def current_state_slot_inventory(
+        self,
+        driver,
+        imported,
+        physical_generation_ids: Iterable[str],
+    ) -> Dict[str, Dict[str, Dict[str, object]]]:
+        """Read bounded physical slot identities and their semantic hashes."""
+
+        generation_ids = sorted({
+            str(value or "").strip()
+            for value in physical_generation_ids or []
+            if str(value or "").startswith("abox-current:")
+        })
+        result = {"nodes": {}, "relations": {}}
+        if not generation_ids:
+            return result
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        batch_size = 32
+        for offset in range(0, len(generation_ids), batch_size):
+            batch = generation_ids[offset: offset + batch_size]
+            slot_filter = typedb_value_match(
+                "$item",
+                "ontology-snapshot-id",
+                batch,
+                "==",
+                "slotFilter",
+            )
+            for type_label, key in [
+                ("ontology-node", "nodes"),
+                ("ontology-assertion", "relations"),
+            ]:
+                base_query = (
+                    "match $item isa " + type_label
+                    + ', has ontology-box "ABox", '
+                    + "has ontology-storage-id $storageId, "
+                    + "has ontology-scope-id $scopeId, "
+                    + "has ontology-snapshot-id $snapshotId; "
+                    + slot_filter
+                )
+                with driver.transaction(
+                    self.database,
+                    TransactionType.READ,
+                    options=self.read_transaction_options(),
+                ) as tx:
+                    identity_rows = self.read_rows_in_transaction(
+                        tx,
+                        base_query,
+                        ["storageId", "scopeId", "snapshotId"],
+                        label="typedb.current-state-slot-inventory",
+                    )
+                    fingerprint_rows = self.read_rows_in_transaction(
+                        tx,
+                        base_query.replace(
+                            "has ontology-snapshot-id $snapshotId; ",
+                            "has ontology-snapshot-id $snapshotId, "
+                            "has ontology-content-fingerprint $contentFingerprint; ",
+                        ),
+                        [
+                            "storageId",
+                            "scopeId",
+                            "snapshotId",
+                            "contentFingerprint",
+                        ],
+                        label="typedb.current-state-slot-content",
+                    )
+                fingerprints = {
+                    str(item.get("storageId") or ""): str(
+                        item.get("contentFingerprint") or ""
+                    )
+                    for item in fingerprint_rows or []
+                    if str(item.get("storageId") or "")
+                }
+                for item in identity_rows or []:
+                    storage_id = str(item.get("storageId") or "").strip()
+                    if not storage_id:
+                        continue
+                    result[key][storage_id] = {
+                        "storageId": storage_id,
+                        "scopeId": str(item.get("scopeId") or ""),
+                        "physicalGenerationId": str(
+                            item.get("snapshotId") or ""
+                        ),
+                        "contentFingerprint": fingerprints.get(storage_id, ""),
+                    }
+        return result
+
+    @staticmethod
+    def current_state_delta_plan(
+        node_rows: Iterable[Dict[str, object]],
+        relation_rows: Iterable[Dict[str, object]],
+        inventory: Dict[str, Dict[str, Dict[str, object]]],
+    ) -> Dict[str, object]:
+        """Compare a desired slot image with the retained inactive image."""
+
+        desired_nodes: Dict[str, Dict[str, object]] = {}
+        for raw in node_rows or []:
+            row = dict(raw or {})
+            storage_id = ontology_storage_id(row, row.get("id"), "node")
+            row["contentFingerprint"] = ontology_row_content_fingerprint(
+                row,
+                "node",
+            )
+            desired_nodes[storage_id] = row
+        desired_relations: Dict[str, Dict[str, object]] = {}
+        for raw in relation_rows or []:
+            row = dict(raw or {})
+            storage_id = ontology_storage_id(
+                row,
+                relation_row_id(row),
+                "relation",
+            )
+            row["contentFingerprint"] = ontology_row_content_fingerprint(
+                row,
+                "relation",
+            )
+            desired_relations[storage_id] = row
+        existing_nodes = dict((inventory or {}).get("nodes") or {})
+        existing_relations = dict((inventory or {}).get("relations") or {})
+        changed_node_ids = {
+            storage_id
+            for storage_id, row in desired_nodes.items()
+            if str((existing_nodes.get(storage_id) or {}).get("contentFingerprint") or "")
+            != str(row.get("contentFingerprint") or "")
+        }
+        removed_node_ids = set(existing_nodes) - set(desired_nodes)
+        changed_node_scopes = {
+            str((desired_nodes.get(storage_id) or existing_nodes.get(storage_id) or {}).get("scopeId") or "")
+            for storage_id in changed_node_ids | removed_node_ids
+        }
+        changed_node_scopes.discard("")
+        changed_relation_ids = {
+            storage_id
+            for storage_id, row in desired_relations.items()
+            if str((existing_relations.get(storage_id) or {}).get("contentFingerprint") or "")
+            != str(row.get("contentFingerprint") or "")
+            or str(row.get("scopeId") or "") in changed_node_scopes
+        }
+        removed_relation_ids = {
+            storage_id
+            for storage_id, row in existing_relations.items()
+            if storage_id not in desired_relations
+            or str(row.get("scopeId") or "") in changed_node_scopes
+        }
+        node_rows_to_insert = [
+            desired_nodes[storage_id]
+            for storage_id in sorted(changed_node_ids)
+        ]
+        relation_rows_to_insert = [
+            desired_relations[storage_id]
+            for storage_id in sorted(changed_relation_ids)
+        ]
+        return {
+            "nodeRows": list(desired_nodes.values()),
+            "relationRows": list(desired_relations.values()),
+            "nodeRowsToInsert": node_rows_to_insert,
+            "relationRowsToInsert": relation_rows_to_insert,
+            "nodeStorageIdsToDelete": sorted(changed_node_ids | removed_node_ids),
+            "relationStorageIdsToDelete": sorted(
+                changed_relation_ids | removed_relation_ids
+            ),
+            "reusedNodeRows": [
+                row
+                for storage_id, row in desired_nodes.items()
+                if storage_id not in changed_node_ids
+            ],
+            "reusedRelationRows": [
+                row
+                for storage_id, row in desired_relations.items()
+                if storage_id not in changed_relation_ids
+            ],
+            "changedNodeScopeIds": sorted(changed_node_scopes),
+        }
+
+    def delete_current_state_storage_ids(
+        self,
+        driver,
+        imported,
+        node_storage_ids: Iterable[str],
+        relation_storage_ids: Iterable[str],
+    ) -> Dict[str, object]:
+        """Delete stale slot rows by exact unique identity before reinsertion."""
+
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        transaction_count = 0
+        deleted_identity_count = 0
+        started = time.monotonic()
+        for type_label, variable, raw_ids in [
+            ("ontology-assertion", "$r", relation_storage_ids),
+            ("ontology-node", "$n", node_storage_ids),
+        ]:
+            ids = sorted({
+                str(value or "").strip()
+                for value in raw_ids or []
+                if str(value or "").strip()
+            })
+            for offset in range(0, len(ids), 64):
+                batch = ids[offset: offset + 64]
+                query = (
+                    "match " + variable + " isa " + type_label
+                    + ", has ontology-storage-id $storageId; "
+                    + typedb_value_match(
+                        variable,
+                        "ontology-storage-id",
+                        batch,
+                        "==",
+                        "storageIdFilter",
+                    )
+                    + " delete " + variable + ";"
+                )
+
+                def delete_batch():
+                    with typedb_operation_timeout(
+                        self.write_operation_timeout_seconds(),
+                        "TypeDB current-state delta delete",
+                    ):
+                        with driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            tx.query(query).resolve()
+                            tx.commit()
+
+                self.with_typedb_retries(delete_batch)
+                transaction_count += 1
+                deleted_identity_count += len(batch)
+        return {
+            "status": "ok",
+            "deletedIdentityCount": deleted_identity_count,
+            "transactionCount": transaction_count,
+            "durationMs": int((time.monotonic() - started) * 1000),
+        }
 
     def scoped_abox_persistence_rows(
         self,
@@ -4685,6 +5123,9 @@ class ScopedABoxManifestMixin:
                 "lastFullScopeReconcileAt": str(worldview.get("lastFullScopeReconcileAt") or ""),
                 "scopePlan": list(scope_plan),
                 "scopeGenerationIds": dict(worldview.get("scopeGenerationIds") or {}),
+                "logicalScopeGenerationIds": dict(
+                    worldview.get("logicalScopeGenerationIds") or {}
+                ),
                 "scopeFingerprints": dict(worldview.get("scopeFingerprints") or {}),
                 "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
                 "scopeFamilyCounts": dict(worldview.get("scopeFamilyCounts") or {}),
@@ -4731,6 +5172,14 @@ class ScopedABoxManifestMixin:
                 "changedScopeIds": sorted({str(item or "") for item in changed_scope_ids if str(item or "")}),
                 "projectionStatus": "complete",
                 "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "persistenceMode": str(
+                    worldview.get("persistenceMode") or SCOPED_ABOX_PERSISTENCE_MODE
+                ),
+                "physicalStateMode": str(
+                    worldview.get("physicalStateMode")
+                    or worldview.get("persistenceMode")
+                    or SCOPED_ABOX_PERSISTENCE_MODE
+                ),
             },
         )
         return PortfolioOntology(str(graph.portfolio_id or "typedb-scoped-manifest"), entities=[marker])
@@ -5662,8 +6111,10 @@ class ScopedABoxManifestMixin:
         adopted_write_lease: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Stage changed scopes before native inference activates a Manifest."""
-        scope_plan = self.scoped_abox_plan(graph)
+        logical_scope_plan = self.scoped_abox_plan(graph)
+        scope_plan = list(logical_scope_plan)
         worldview = dict(getattr(graph, "worldview", {}) or {})
+        current_state_mode = self.is_current_state_scoped_abox_graph(graph)
         topology_migration = dict(
             (worldview.get("targetScopedManifestPatch") or {}).get("scopeTopologyMigration") or {}
         ) if isinstance(worldview.get("targetScopedManifestPatch"), dict) else {}
@@ -5672,7 +6123,7 @@ class ScopedABoxManifestMixin:
         inference_target_symbols = clean_symbols_from_payload(
             worldview.get("inferenceTargetSymbols") or worldview.get("targetSymbols") or []
         )
-        if not scope_plan or not manifest_id:
+        if not logical_scope_plan or not manifest_id:
             return {
                 "configured": True,
                 "saved": False,
@@ -5807,6 +6258,10 @@ class ScopedABoxManifestMixin:
         active_fingerprints = dict(active_before.get("scopeFingerprints") or {})
         active_generations = dict(active_before.get("scopeGenerationIds") or {})
         scoped_active = str(active_before.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
+        active_current_state = (
+            str(active_before.get("persistenceMode") or active_before.get("physicalStateMode") or "")
+            == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+        )
         active_manifest_index_repair: Dict[str, object] = {}
         if scoped_active and native_rule_manifest_index_required(active_before):
             active_index = normalize_native_rule_evidence_read_index(
@@ -5845,12 +6300,26 @@ class ScopedABoxManifestMixin:
                 active_before = dict(self.active_abox_metadata(world_id) or {})
         changed_scope_ids = [
             str(item.get("scopeId") or "")
-            for item in scope_plan
+            for item in logical_scope_plan
             if not scoped_active
+            or (current_state_mode and not active_current_state)
             or str(active_fingerprints.get(str(item.get("scopeId") or "")) or "") != str(item.get("fingerprint") or "")
-            or str(active_generations.get(str(item.get("scopeId") or "")) or "") != str(item.get("generationId") or "")
+            or (
+                not current_state_mode
+                and str(active_generations.get(str(item.get("scopeId") or "")) or "")
+                != str(item.get("generationId") or "")
+            )
         ]
         changed_scope_ids = [item for item in changed_scope_ids if item]
+        persistence_graph = graph
+        if current_state_mode:
+            scope_plan = self.current_state_physical_scope_plan(
+                logical_scope_plan,
+                active_before,
+                changed_scope_ids,
+                world_id,
+            )
+            persistence_graph = self.current_state_physical_graph(graph, scope_plan)
         previous_manifest_id = str(active_before.get("worldviewManifestId") or active_before.get("aboxSnapshotId") or "").strip()
         if scoped_active and previous_manifest_id == manifest_id and not changed_scope_ids:
             release_write_lease()
@@ -5882,7 +6351,7 @@ class ScopedABoxManifestMixin:
             }
         native_manifest_index_started = time.monotonic()
         native_manifest_index = self.prepare_scoped_manifest_native_rule_indexes(
-            graph,
+            persistence_graph,
             active_before,
         )
         if str(native_manifest_index.get("status") or "") not in {
@@ -5908,7 +6377,10 @@ class ScopedABoxManifestMixin:
                 "activeManifestEvidenceIndexRepair": active_manifest_index_repair,
                 "writeLeaseRelease": release,
             }
-        node_rows, relation_rows = self.scoped_abox_persistence_rows(graph, changed_scope_ids)
+        node_rows, relation_rows = self.scoped_abox_persistence_rows(
+            persistence_graph,
+            changed_scope_ids,
+        )
         scope_rows = {str(item.get("scopeId") or ""): item for item in scope_plan}
         verification: Dict[str, object] = {}
         timing: Dict[str, object] = {
@@ -5975,14 +6447,88 @@ class ScopedABoxManifestMixin:
                     timing["stage"] = "changed-scope-write"
                     write_progress: Dict[str, object] = {}
                     timing["changedScopeWriteProgress"] = write_progress
-                    write_plan = self.write_persistence_rows(
-                        driver,
-                        imported,
-                        node_rows,
-                        relation_rows,
-                        telemetry=write_progress,
-                        assume_missing_storage=fresh_world_bootstrap,
-                    )
+                    if current_state_mode:
+                        inventory_started = time.monotonic()
+                        before_inventory = self.current_state_slot_inventory(
+                            driver,
+                            imported,
+                            candidate_generation_ids,
+                        )
+                        timing["currentStateInventoryReadMs"] = round(
+                            (time.monotonic() - inventory_started) * 1000,
+                            1,
+                        )
+                        delta_plan = self.current_state_delta_plan(
+                            node_rows,
+                            relation_rows,
+                            before_inventory,
+                        )
+                        delta_delete = self.delete_current_state_storage_ids(
+                            driver,
+                            imported,
+                            delta_plan.get("nodeStorageIdsToDelete") or [],
+                            delta_plan.get("relationStorageIdsToDelete") or [],
+                        )
+                        write_plan = self.write_persistence_rows(
+                            driver,
+                            imported,
+                            delta_plan.get("nodeRowsToInsert") or [],
+                            delta_plan.get("relationRowsToInsert") or [],
+                            telemetry=write_progress,
+                            assume_missing_storage=True,
+                        )
+                        expected_counts = self.scoped_abox_counts_by_scope(
+                            delta_plan.get("nodeRows") or [],
+                            delta_plan.get("relationRows") or [],
+                        )
+                        reused_counts = self.scoped_abox_counts_by_scope(
+                            delta_plan.get("reusedNodeRows") or [],
+                            delta_plan.get("reusedRelationRows") or [],
+                        )
+                        write_plan.update({
+                            "requestedNodeCount": len(delta_plan.get("nodeRows") or []),
+                            "requestedRelationCount": len(delta_plan.get("relationRows") or []),
+                            "insertedNodeCount": len(delta_plan.get("nodeRowsToInsert") or []),
+                            "insertedRelationCount": len(delta_plan.get("relationRowsToInsert") or []),
+                            "reusedNodeCount": len(delta_plan.get("reusedNodeRows") or []),
+                            "reusedRelationCount": len(delta_plan.get("reusedRelationRows") or []),
+                            "expectedCountsByScope": expected_counts,
+                            "reusedCountsByScope": reused_counts,
+                            "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+                            "deltaDelete": delta_delete,
+                            "changedNodeScopeIds": list(
+                                delta_plan.get("changedNodeScopeIds") or []
+                            ),
+                            "requestedRelationBreakdown": self.scoped_abox_relation_breakdown(
+                                delta_plan.get("relationRows") or []
+                            ),
+                            "insertedRelationBreakdown": self.scoped_abox_relation_breakdown(
+                                delta_plan.get("relationRowsToInsert") or []
+                            ),
+                            "reusedRelationBreakdown": self.scoped_abox_relation_breakdown(
+                                delta_plan.get("reusedRelationRows") or []
+                            ),
+                        })
+                        timing["currentStateDeltaPlan"] = {
+                            "requestedNodeCount": write_plan["requestedNodeCount"],
+                            "requestedRelationCount": write_plan["requestedRelationCount"],
+                            "insertedNodeCount": write_plan["insertedNodeCount"],
+                            "insertedRelationCount": write_plan["insertedRelationCount"],
+                            "reusedNodeCount": write_plan["reusedNodeCount"],
+                            "reusedRelationCount": write_plan["reusedRelationCount"],
+                            "deletedIdentityCount": int(
+                                delta_delete.get("deletedIdentityCount") or 0
+                            ),
+                        }
+                    else:
+                        write_plan = self.write_persistence_rows(
+                            driver,
+                            imported,
+                            node_rows,
+                            relation_rows,
+                            telemetry=write_progress,
+                            assume_missing_storage=fresh_world_bootstrap,
+                        )
                     timing["changedScopeWritePlan"] = write_plan
                     timing["changedScopeWriteMs"] = round((time.monotonic() - write_started) * 1000, 1)
                     verification_started = time.monotonic()
@@ -5996,21 +6542,77 @@ class ScopedABoxManifestMixin:
                         scope_rows.get(scope_id) or {}
                         for scope_id in changed_scope_ids
                     ]
-                    inserted_counts_by_scope = self.scoped_abox_scope_row_counts_batch(
-                        changed_scope_rows,
-                        manifest_id=manifest_id,
-                        world_id=world_id,
-                    )
                     expected_counts_by_scope = dict(write_plan.get("expectedCountsByScope") or {})
                     reused_counts_by_scope = dict(write_plan.get("reusedCountsByScope") or {})
-                    actual_counts_by_scope = self.merged_scoped_abox_counts(
-                        inserted_counts_by_scope,
-                        reused_counts_by_scope,
-                    )
+                    if current_state_mode:
+                        post_inventory = self.current_state_slot_inventory(
+                            driver,
+                            imported,
+                            candidate_generation_ids,
+                        )
+                        actual_counts_by_scope: Dict[str, Dict[str, int]] = {}
+                        for key, count_key in [
+                            ("nodes", "entityCount"),
+                            ("relations", "relationCount"),
+                        ]:
+                            for item in dict(post_inventory.get(key) or {}).values():
+                                scope_id = str(item.get("scopeId") or "")
+                                actual_counts_by_scope.setdefault(
+                                    scope_id,
+                                    {"entityCount": 0, "relationCount": 0},
+                                )[count_key] += 1
+                        desired_fingerprints = {
+                            ontology_storage_id(row, row.get("id"), "node"): str(
+                                row.get("contentFingerprint")
+                                or ontology_row_content_fingerprint(row, "node")
+                            )
+                            for row in node_rows
+                        }
+                        desired_fingerprints.update({
+                            ontology_storage_id(
+                                row,
+                                relation_row_id(row),
+                                "relation",
+                            ): str(
+                                row.get("contentFingerprint")
+                                or ontology_row_content_fingerprint(row, "relation")
+                            )
+                            for row in relation_rows
+                        })
+                        actual_fingerprints = {
+                            storage_id: str(item.get("contentFingerprint") or "")
+                            for key in ["nodes", "relations"]
+                            for storage_id, item in dict(post_inventory.get(key) or {}).items()
+                        }
+                        missing_or_stale = [
+                            storage_id
+                            for storage_id, fingerprint in desired_fingerprints.items()
+                            if actual_fingerprints.get(storage_id) != fingerprint
+                        ]
+                        if missing_or_stale:
+                            raise RuntimeError(
+                                "Current-state ABox delta verification failed for "
+                                + str(len(missing_or_stale))
+                                + " physical facts."
+                            )
+                    else:
+                        inserted_counts_by_scope = self.scoped_abox_scope_row_counts_batch(
+                            changed_scope_rows,
+                            manifest_id=manifest_id,
+                            world_id=world_id,
+                        )
+                        actual_counts_by_scope = self.merged_scoped_abox_counts(
+                            inserted_counts_by_scope,
+                            reused_counts_by_scope,
+                        )
                     timing["changedScopeStorageIdentityVerification"] = {
                         "status": "ok",
-                        "mode": "manifest-scope-count",
-                        "manifestScopedReadCount": 2,
+                        "mode": (
+                            "current-state-content-fingerprint"
+                            if current_state_mode
+                            else "manifest-scope-count"
+                        ),
+                        "manifestScopedReadCount": 0 if current_state_mode else 2,
                         "reusedStorageIdentityCount": (
                             int(write_plan.get("reusedNodeCount") or 0)
                             + int(write_plan.get("reusedRelationCount") or 0)
@@ -6041,11 +6643,15 @@ class ScopedABoxManifestMixin:
                     failed = [scope_id for scope_id, item in verification.items() if str(item.get("status") or "") != "ok"]
                     if failed:
                         raise RuntimeError("Scoped ABox candidate verification failed for " + ", ".join(failed))
-                    marker_graph = self.scoped_manifest_marker_graph(graph, scope_plan, changed_scope_ids)
+                    marker_graph = self.scoped_manifest_marker_graph(
+                        persistence_graph,
+                        scope_plan,
+                        changed_scope_ids,
+                    )
                     if not marker_graph.entities:
                         raise RuntimeError("Scoped ABox candidate has no Manifest marker.")
                     pending_graph = self.scoped_manifest_pending_graph(
-                        graph,
+                        persistence_graph,
                         scope_plan,
                         active_before,
                         inference_target_symbols=inference_target_symbols,
@@ -6120,7 +6726,13 @@ class ScopedABoxManifestMixin:
                 "tenantId": str(worldview.get("tenantId") or ""),
                 "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
                 "scopePlan": scope_plan,
+                "logicalScopePlan": logical_scope_plan if current_state_mode else scope_plan,
                 "changedScopeIds": changed_scope_ids,
+                "physicalStateMode": (
+                    CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                    if current_state_mode
+                    else SCOPED_ABOX_PERSISTENCE_MODE
+                ),
                 "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
                 "scopeTopologyMigration": topology_migration,
                 "boundedScopeCount": len([
@@ -6145,7 +6757,11 @@ class ScopedABoxManifestMixin:
                 "writeLeaseRelease": release,
                 "aboxPersistenceVerification": {
                     "status": "ok",
-                    "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
+                    "persistenceMode": (
+                        CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                        if current_state_mode
+                        else SCOPED_ABOX_PERSISTENCE_MODE
+                    ),
                     "scopeVerification": verification,
                     "activePointer": active_after,
                     "activation": {
@@ -6187,9 +6803,15 @@ class ScopedABoxManifestMixin:
                 "accountId": str(worldview.get("accountId") or graph.portfolio_id or ""),
                 "changedScopeIds": changed_scope_ids,
                 "scopePlan": scope_plan,
+                "logicalScopePlan": logical_scope_plan if current_state_mode else scope_plan,
                 "scopeTopologyVersion": str(worldview.get("scopeTopologyVersion") or ""),
                 "scopeTopologyMigration": topology_migration,
                 "preservedActiveGeneration": bool(previous_manifest_id),
+                "physicalStateMode": (
+                    CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                    if current_state_mode
+                    else SCOPED_ABOX_PERSISTENCE_MODE
+                ),
                 "reasonCode": reason_code,
                 "reason": str(error)[:220],
                 "retryable": reason_code in {
@@ -8930,6 +9552,64 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 tx.commit()
 
     @staticmethod
+    def ontology_content_fingerprint_schema_migration_required(
+        schema_text: str,
+    ) -> bool:
+        text = str(schema_text or "")
+        if "ontology-node" not in text or "ontology-assertion" not in text:
+            return False
+        return (
+            "attribute ontology-content-fingerprint" not in text
+            or not re.search(
+                r"ontology-node[\s\S]*?owns ontology-content-fingerprint",
+                text,
+            )
+            or not re.search(
+                r"ontology-assertion[\s\S]*?owns ontology-content-fingerprint",
+                text,
+            )
+        )
+
+    def migrate_ontology_content_fingerprint_schema(
+        self,
+        driver,
+        imported,
+        schema_text: str,
+    ) -> None:
+        """Add the content identity used by current-state delta writes."""
+
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        text = str(schema_text or "")
+        definitions = []
+        if "attribute ontology-content-fingerprint" not in text:
+            definitions.append(
+                "attribute ontology-content-fingerprint, value string;"
+            )
+        if not re.search(
+            r"ontology-node[\s\S]*?owns ontology-content-fingerprint",
+            text,
+        ):
+            definitions.append(
+                "ontology-node owns ontology-content-fingerprint;"
+            )
+        if not re.search(
+            r"ontology-assertion[\s\S]*?owns ontology-content-fingerprint",
+            text,
+        ):
+            definitions.append(
+                "ontology-assertion owns ontology-content-fingerprint;"
+            )
+        if not definitions:
+            return
+        with typedb_operation_timeout(
+            self.schema_operation_timeout_seconds(),
+            "TypeDB current-state content fingerprint schema migration",
+        ):
+            with driver.transaction(self.database, TransactionType.SCHEMA) as tx:
+                tx.query("define " + " ".join(definitions)).resolve()
+                tx.commit()
+
+    @staticmethod
     def ontology_world_schema_migration_required(schema_text: str) -> bool:
         text = str(schema_text or "")
         if "ontology-node" not in text or "ontology-assertion" not in text:
@@ -9505,6 +10185,15 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     schema_text = self.typedb_schema_text(driver)
                 if self.ontology_scope_schema_migration_required(schema_text):
                     self.migrate_ontology_scope_schema(driver, imported)
+                    schema_text = self.typedb_schema_text(driver)
+                if self.ontology_content_fingerprint_schema_migration_required(
+                    schema_text
+                ):
+                    self.migrate_ontology_content_fingerprint_schema(
+                        driver,
+                        imported,
+                        schema_text,
+                    )
                     schema_text = self.typedb_schema_text(driver)
                 if self.ontology_world_schema_migration_required(schema_text):
                     self.migrate_ontology_world_schema(driver, imported)
@@ -10839,9 +11528,21 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "asOf": str(payload.get("asOf") or ""),
             "lastFullScopeReconcileAt": str(payload.get("lastFullScopeReconcileAt") or ""),
             "scopedAboxManifestVersion": str(payload.get("scopedAboxManifestVersion") or SCOPED_ABOX_MANIFEST_VERSION),
-            "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
+            "persistenceMode": str(
+                payload.get("persistenceMode")
+                or payload.get("physicalStateMode")
+                or SCOPED_ABOX_PERSISTENCE_MODE
+            ),
+            "physicalStateMode": str(
+                payload.get("physicalStateMode")
+                or payload.get("persistenceMode")
+                or SCOPED_ABOX_PERSISTENCE_MODE
+            ),
             "scopePlan": list(scope_plan),
             "scopeGenerationIds": dict(generations),
+            "logicalScopeGenerationIds": dict(
+                payload.get("logicalScopeGenerationIds") or {}
+            ),
             "scopeFingerprints": dict(fingerprints),
             "scopeTopologyVersion": str(payload.get("scopeTopologyVersion") or ""),
             "scopeFamilyCounts": dict(payload.get("scopeFamilyCounts") or {}),
@@ -13773,6 +14474,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 define
 attribute ontology-id, value string;
 attribute ontology-storage-id, value string;
+attribute ontology-content-fingerprint, value string;
 attribute ontology-label, value string;
 attribute ontology-kind, value string;
 attribute ontology-box, value string;
@@ -14044,6 +14746,7 @@ attribute ontology-valuation-reliability-state, value string;
 entity ontology-node @abstract,
     owns ontology-id,
     owns ontology-storage-id @unique,
+    owns ontology-content-fingerprint,
     owns ontology-label,
     owns ontology-kind,
     owns ontology-box,
@@ -14322,6 +15025,7 @@ relation ontology-assertion,
     relates target,
     owns ontology-id,
     owns ontology-storage-id @unique,
+    owns ontology-content-fingerprint,
     owns ontology-relation-type,
     owns ontology-box,
     owns ontology-symbol,
@@ -14756,6 +15460,11 @@ relation ontology-assertion,
             str(variable or "$n") + " isa " + node_type
             + ", has ontology-id " + typedb_string(node_id)
             + ", has ontology-storage-id " + typedb_string(ontology_storage_id(row, node_id, "node"))
+            + typeql_has(
+                "ontology-content-fingerprint",
+                row.get("contentFingerprint")
+                or ontology_row_content_fingerprint(row, "node"),
+            )
             + typeql_has("ontology-label", row.get("label"))
             + typeql_has("ontology-kind", row.get("kind"))
             + typeql_has("ontology-box", row.get("ontologyBox") or "ABox")
@@ -14871,6 +15580,11 @@ relation ontology-assertion,
             + ")"
             + ", has ontology-id " + typedb_string(relation_id)
             + ", has ontology-storage-id " + typedb_string(ontology_storage_id(row, relation_id, "relation"))
+            + typeql_has(
+                "ontology-content-fingerprint",
+                row.get("contentFingerprint")
+                or ontology_row_content_fingerprint(row, "relation"),
+            )
             + typeql_has("ontology-relation-type", row.get("type"))
             + typeql_has("ontology-box", row.get("ontologyBox") or "ABox")
             + typeql_has("ontology-symbol", row.get("symbol"))
@@ -15034,6 +15748,13 @@ relation ontology-assertion,
             )),
             ("relation-id", "ontology-id", "string", relation_id),
             ("relation-storage-id", "ontology-storage-id", "string", ontology_storage_id(row, relation_id, "relation")),
+            (
+                "content-fingerprint",
+                "ontology-content-fingerprint",
+                "string",
+                row.get("contentFingerprint")
+                or ontology_row_content_fingerprint(row, "relation"),
+            ),
             ("relation-type", "ontology-relation-type", "string", row.get("type")),
             ("ontology-box", "ontology-box", "string", row.get("ontologyBox") or "ABox"),
             ("ontology-symbol", "ontology-symbol", "string", row.get("symbol")),
@@ -26629,6 +27350,63 @@ def relation_row_id(row: Dict[str, object]) -> str:
         str(row.get("ruleId") or ""),
     ])
     return "ontology-assertion:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+
+
+CURRENT_STATE_STORAGE_ONLY_KEYS = {
+    "aboxSnapshotId",
+    "logicalScopeGenerationId",
+    "manifestId",
+    "physicalGenerationId",
+    "physicalStateMode",
+    "projectionRunId",
+    "scopeGenerationId",
+    "snapshotId",
+    "worldviewManifestId",
+}
+
+
+def ontology_row_content_fingerprint(
+    row: Dict[str, object],
+    owner_kind: str,
+) -> str:
+    """Hash semantic row content without physical generation bookkeeping."""
+
+    def semantic(value: object):
+        if isinstance(value, dict):
+            return {
+                str(key): semantic(item)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                if str(key) not in CURRENT_STATE_STORAGE_ONLY_KEYS
+                and str(key) not in {"contentFingerprint", "updatedAt"}
+            }
+        if isinstance(value, list):
+            return [semantic(item) for item in value]
+        return value
+
+    values = dict(row or {})
+    properties = json_object(values.get("propertiesJson"))
+    payload = {
+        str(key): semantic(value)
+        for key, value in sorted(values.items(), key=lambda pair: str(pair[0]))
+        if str(key) not in CURRENT_STATE_STORAGE_ONLY_KEYS
+        and str(key) not in {
+            "contentFingerprint",
+            "propertiesJson",
+            "sourceStorageId",
+            "targetStorageId",
+            "updatedAt",
+        }
+    }
+    payload["properties"] = semantic(properties)
+    payload["ownerKind"] = str(owner_kind or "row")
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def ontology_storage_id(row: Dict[str, object], canonical_id: object, owner_kind: str) -> str:

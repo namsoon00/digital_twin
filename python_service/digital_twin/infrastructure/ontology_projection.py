@@ -11,6 +11,7 @@ import traceback
 
 from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from ..domain.ontology_contracts import PortfolioOntology
+from ..domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from ..domain.decision_performance import evaluate_decision_performance
 from ..domain.crypto_market_signals import crypto_markets_by_symbol
 from ..domain.market_signal_transitions import (
@@ -1695,6 +1696,65 @@ class PortfolioOntologyProjectionRecorder:
             "0", "false", "no", "off", "disabled",
         }
 
+    def current_state_abox_storage_enabled(self) -> bool:
+        value = self.settings.get("ontologyCurrentStateAboxStorageEnabled")
+        if value is None:
+            return False
+        return str(value).strip().lower() not in {
+            "0", "false", "no", "off", "disabled",
+        }
+
+    def interrupted_projection_recovery_required(self, world_id: str) -> bool:
+        """Use MySQL's recovery index before opening historical TypeDB reads."""
+
+        if not self.projection_run_store:
+            return False
+        candidates = getattr(
+            self.projection_run_store,
+            "interrupted_projection_recovery_candidates",
+            None,
+        )
+        if not callable(candidates):
+            # Compatibility stores used by explicit recovery tests retain the
+            # old behavior. Production MySQL always provides the index.
+            return True
+        try:
+            return bool(candidates(world_id=world_id, limit=1))
+        except TypeError:
+            return bool(candidates(world_id, 1))
+        except Exception:
+            # An unreadable recovery index must not make TypeDB history part
+            # of every normal request. The dedicated recovery worker retries.
+            return False
+
+    def advance_current_state_transition(
+        self,
+        projection_run: OntologyProjectionRun,
+        stage: str,
+        status: str = "running",
+        inference_generation_id: str = "",
+        detail: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        if not projection_run or not self.projection_run_store:
+            return {"status": "disabled"}
+        advance = getattr(
+            self.projection_run_store,
+            "advance_current_state_transition",
+            None,
+        )
+        if not callable(advance):
+            return {"status": "unsupported"}
+        try:
+            return dict(advance(
+                projection_run.run_id,
+                stage,
+                status=status,
+                inference_generation_id=inference_generation_id,
+                detail=detail or {},
+            ) or {})
+        except Exception as error:  # noqa: BLE001 - projection audit remains authoritative.
+            return {"status": "error", "reason": str(error)[:180]}
+
     def world_rule_partition(self, rule_catalog: Dict[str, object]) -> Dict[str, object]:
         if (
             self._frozen_rulebox_catalog is not None
@@ -2933,11 +2993,22 @@ class PortfolioOntologyProjectionRecorder:
             not fresh_candidate_rebuild
             and recovery_status not in {"retry-required", "staged", "finalized-empty-target"}
         ):
-            audit_recovery_started = time.perf_counter()
-            self.reconcile_interrupted_projection_audit(portfolio_world_context.world_id)
-            runtime_stages["interruptedProjectionAuditRecoveryMs"] = int(
-                (time.perf_counter() - audit_recovery_started) * 1000
+            audit_recovery_required = self.interrupted_projection_recovery_required(
+                portfolio_world_context.world_id
             )
+            runtime_stages["interruptedProjectionAuditRecoveryCandidate"] = (
+                1 if audit_recovery_required else 0
+            )
+            if audit_recovery_required:
+                audit_recovery_started = time.perf_counter()
+                self.reconcile_interrupted_projection_audit(
+                    portfolio_world_context.world_id
+                )
+                runtime_stages["interruptedProjectionAuditRecoveryMs"] = int(
+                    (time.perf_counter() - audit_recovery_started) * 1000
+                )
+            else:
+                runtime_stages["interruptedProjectionAuditRecoveryMs"] = 0
         try:
             emit_progress("rule_catalog.start")
             rulebox_bootstrap_started = time.perf_counter()
@@ -3531,6 +3602,29 @@ class PortfolioOntologyProjectionRecorder:
                             applied_target_patch.get("scopeTopologyMigration") or {}
                         ),
                     }
+            active_persistence_mode = str(
+                active_abox.get("persistenceMode")
+                or active_abox.get("physicalStateMode")
+                or SCOPED_ABOX_PERSISTENCE_MODE
+            )
+            current_state_cycle_eligible = bool(
+                self.current_state_abox_storage_enabled()
+                and (
+                    active_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                    or str(graph_input.get("mode") or "full") == "full"
+                )
+            )
+            desired_persistence_mode = (
+                CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                if current_state_cycle_eligible
+                else SCOPED_ABOX_PERSISTENCE_MODE
+            )
+            physical_state_migration_required = bool(
+                active_abox_is_scoped_manifest
+                and active_persistence_mode != desired_persistence_mode
+            )
+            persistence_graph.worldview["persistenceMode"] = desired_persistence_mode
+            persistence_graph.worldview["physicalStateMode"] = desired_persistence_mode
             emit_progress("abox_validation.start")
             validation_started = time.perf_counter()
             validation = validate_ontology(persistence_graph)
@@ -3596,6 +3690,7 @@ class PortfolioOntologyProjectionRecorder:
                 active_abox_complete
                 and active_abox_is_scoped_manifest
                 and active_material_fingerprint(active_abox) == material_fingerprint
+                and not physical_state_migration_required
             ):
                 upgrader = getattr(self.repository, "ensure_scoped_manifest_evidence_read_index", None)
                 if callable(upgrader):
@@ -3703,7 +3798,8 @@ class PortfolioOntologyProjectionRecorder:
                 "targetSymbols": list(inference_symbols),
                 "schedulerTargetSymbolLimit": scheduler_target_limit,
                 "explicitTargetSymbols": list(compact_impact_plan.get("explicitTargetSymbols") or []),
-                "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE,
+                "persistenceMode": desired_persistence_mode,
+                "physicalStateMigrationRequired": physical_state_migration_required,
                 "atomicActivation": True,
                 "manifestId": material_snapshot_id,
                 "worldId": portfolio_world_context.world_id,
@@ -3736,6 +3832,7 @@ class PortfolioOntologyProjectionRecorder:
                 active_abox_complete
                 and active_abox_is_scoped_manifest
                 and active_material_fingerprint(active_abox) == material_fingerprint
+                and not physical_state_migration_required
             ):
                 inferencebox = self.existing_inference_result(
                     snapshot,
@@ -3843,6 +3940,55 @@ class PortfolioOntologyProjectionRecorder:
                 }
                 self.store_projection_result(snapshot, result)
                 return result
+            current_state_transition = {}
+            begin_current_state_transition = getattr(
+                self.projection_run_store,
+                "begin_current_state_transition",
+                None,
+            ) if self.projection_run_store else None
+            if (
+                projection_run
+                and desired_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                and callable(begin_current_state_transition)
+            ):
+                try:
+                    current_state_transition = dict(begin_current_state_transition(
+                        projection_run,
+                        str(
+                            active_abox.get("worldviewManifestId")
+                            or active_abox.get("aboxSnapshotId")
+                            or ""
+                        ),
+                        material_snapshot_id,
+                        material_fingerprint,
+                        desired_persistence_mode,
+                        detail={
+                            "targetSymbols": list(inference_symbols),
+                            "scopeCount": len(scoped_identity.get("scopePlan") or []),
+                            "targetScopedPatch": dict(target_scoped_patch or {}),
+                        },
+                    ) or {})
+                except Exception as error:  # noqa: BLE001 - no unaudited physical mutation.
+                    current_state_transition = {
+                        "status": "error",
+                        "reason": str(error)[:180],
+                    }
+                if str(current_state_transition.get("status") or "") != "ok":
+                    result = {
+                        "saved": False,
+                        "status": "current-state-transition-audit-failed",
+                        "reason": str(
+                            current_state_transition.get("reason")
+                            or "Current-state transition checkpoint could not be stored."
+                        )[:220],
+                        "graphStore": self.active_graph_store_key(),
+                        "materialFingerprint": material_fingerprint,
+                        "aboxSnapshotId": material_snapshot_id,
+                        "preservedActiveGeneration": True,
+                        "currentStateTransition": current_state_transition,
+                    }
+                    self.store_projection_result(snapshot, result, projection_run)
+                    return result
             # Target subjects do not change the material ABox identity. They
             # are persisted only in the activation journal so a restart can
             # verify that the eventual native InferenceBox covered the exact
@@ -3892,6 +4038,8 @@ class PortfolioOntologyProjectionRecorder:
                     result = {"saved": False, "status": "error", "reason": "ontology repository returned non-dict result"}
                 if projection_run:
                     result["projectionRunId"] = projection_run.run_id
+                if current_state_transition:
+                    result["currentStateTransition"] = current_state_transition
                 self.attach_abox_persistence_runtime_stages(runtime_stages, result)
                 result["projectionMode"] = "abox-facts-only-typedb-native-rules"
                 result["materialFingerprint"] = material_fingerprint
@@ -3940,6 +4088,17 @@ class PortfolioOntologyProjectionRecorder:
                         "status": "released-after-abox-persistence",
                     }
                 if result.get("saved") or save_status == "staged-scoped-manifest":
+                    if projection_run and current_state_transition:
+                        result["currentStatePatchCheckpoint"] = self.advance_current_state_transition(
+                            projection_run,
+                            "patch-applied",
+                            detail={
+                                "saved": bool(result.get("saved")),
+                                "changedScopeIds": list(result.get("changedScopeIds") or []),
+                                "entityCount": int(result.get("entityCount") or 0),
+                                "relationCount": int(result.get("relationCount") or 0),
+                            },
+                        )
                     pending = result.get("pendingAboxActivation") if isinstance(result.get("pendingAboxActivation"), dict) else {}
                     emit_progress(
                         "native_inference.start",
@@ -3951,7 +4110,11 @@ class PortfolioOntologyProjectionRecorder:
                         pending.get("targetSymbols") or inference_symbols,
                         compact_impact_plan,
                         world_id=portfolio_world_context.world_id,
-                        candidate_scope_plan=scoped_identity.get("scopePlan") or [],
+                        candidate_scope_plan=(
+                            result.get("scopePlan")
+                            or scoped_identity.get("scopePlan")
+                            or []
+                        ),
                         rulebox_rules_hash=str(rulebox_bootstrap.get("ruleboxRulesHash") or ""),
                         tbox_fingerprint=str(
                             ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
@@ -3972,6 +4135,26 @@ class PortfolioOntologyProjectionRecorder:
                         ),
                         runtimeMs=int((result.get("runtimeStages") or {}).get("nativeInferenceMs") or 0),
                     )
+                    inference_payload = (
+                        dict(result.get("inferenceBox") or {})
+                        if isinstance(result.get("inferenceBox"), dict)
+                        else {}
+                    )
+                    if projection_run and current_state_transition:
+                        result["currentStateInferenceCheckpoint"] = self.advance_current_state_transition(
+                            projection_run,
+                            "inferred",
+                            inference_generation_id=str(
+                                inference_payload.get("inferenceGenerationId") or ""
+                            ),
+                            detail={
+                                "inferenceStatus": str(inference_payload.get("status") or ""),
+                                "nativeCompleted": bool(
+                                    inference_payload.get("nativeTypeDbReasoningCompleted")
+                                    or inference_payload.get("typedbNativeRuleEvaluationCompleted")
+                                ),
+                            },
+                        )
                 elif save_status == "deferred-pending-scoped-manifest":
                     # This input did not stage the pending candidate. Running
                     # native rules with its graph would compare a new Manifest
@@ -8718,6 +8901,44 @@ class PortfolioOntologyProjectionRecorder:
                     complete_with_trace(completed_run, result)
                 else:
                     self.projection_run_store.complete(completed_run)
+                transition_payload = result.get("currentStateTransition")
+                if isinstance(transition_payload, dict) and str(
+                    transition_payload.get("status") or ""
+                ) == "ok":
+                    inference_payload = (
+                        dict(result.get("inferenceBox") or {})
+                        if isinstance(result.get("inferenceBox"), dict)
+                        else {}
+                    )
+                    inference_generation_id = str(
+                        inference_payload.get("inferenceGenerationId")
+                        or completed_run.inference_generation_id
+                        or ""
+                    )
+                    native_completed = bool(
+                        inference_payload.get("nativeTypeDbReasoningCompleted")
+                        or inference_payload.get("typedbNativeRuleEvaluationCompleted")
+                    )
+                    if bool(result.get("saved")) and native_completed:
+                        result["currentStateSynthesisCheckpoint"] = self.advance_current_state_transition(
+                            completed_run,
+                            "synthesis-persisted",
+                            inference_generation_id=inference_generation_id,
+                            detail={
+                                "projectionStatus": completed_run.status,
+                                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+                            },
+                        )
+                        result["currentStateCompletionCheckpoint"] = self.advance_current_state_transition(
+                            completed_run,
+                            "completed",
+                            status="completed",
+                            inference_generation_id=inference_generation_id,
+                            detail={
+                                "projectionStatus": completed_run.status,
+                                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+                            },
+                        )
                 result["projectionAudit"] = {
                     "status": "recorded",
                     "runId": completed_run.run_id,

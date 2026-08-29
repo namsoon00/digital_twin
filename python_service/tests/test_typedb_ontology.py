@@ -23,6 +23,10 @@ from digital_twin.domain.ontology_rulebox_contracts import (
     GraphRuleDerivation,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
+from digital_twin.domain.ontology_current_state import (
+    CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+    current_state_slot_id,
+)
 from digital_twin.domain.ontology_fact_slots import build_fact_slot_projection_plan
 from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
@@ -70,6 +74,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     merge_native_rule_evidence_read_index,
     normalize_native_rule_evidence_read_index,
     ontology_storage_id,
+    ontology_row_content_fingerprint,
     relation_row_id,
     typedb_literal,
     typedb_literal_for_attribute,
@@ -322,6 +327,125 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(first_generations["symbol:005930:state"], second_generations["symbol:005930:state"])
         self.assertEqual(first_generations["symbol:MSTR:state"], second_generations["symbol:MSTR:state"])
         self.assertEqual(first_generations["macro:fx"], second_generations["macro:fx"])
+
+        repository = TypeDBOntologyGraphRepository("")
+        world_id = "portfolio:local:main"
+        market_scope = "symbol:005930:market"
+        flow_scope = "symbol:005930:flow"
+        active_market_slot = current_state_slot_id(world_id, market_scope, "a")
+        active_flow_slot = current_state_slot_id(world_id, flow_scope, "b")
+        physical_plan = repository.current_state_physical_scope_plan(
+            [
+                {
+                    "scopeId": market_scope,
+                    "generationId": "logical-market-2",
+                    "fingerprint": "market-2",
+                },
+                {
+                    "scopeId": flow_scope,
+                    "generationId": "logical-flow-1",
+                    "fingerprint": "flow-1",
+                },
+            ],
+            {
+                "scopeGenerationIds": {
+                    market_scope: active_market_slot,
+                    flow_scope: active_flow_slot,
+                },
+            },
+            [market_scope],
+            world_id,
+        )
+        by_scope = {item["scopeId"]: item for item in physical_plan}
+        self.assertEqual(
+            current_state_slot_id(world_id, market_scope, "b"),
+            by_scope[market_scope]["generationId"],
+        )
+        self.assertEqual(active_flow_slot, by_scope[flow_scope]["generationId"])
+        self.assertEqual(
+            "logical-market-2",
+            by_scope[market_scope]["logicalGenerationId"],
+        )
+
+        snapshot_id = "abox-current:scope-a:a"
+        unchanged = {
+            "id": "stock:005930",
+            "kind": "stock",
+            "ontologyBox": "ABox",
+            "scopeId": market_scope,
+            "snapshotId": snapshot_id,
+            "propertiesJson": json.dumps({"currentPrice": 100}),
+        }
+        changed = {
+            "id": "price:005930",
+            "kind": "price-observation",
+            "ontologyBox": "ABox",
+            "scopeId": market_scope,
+            "snapshotId": snapshot_id,
+            "propertiesJson": json.dumps({"currentPrice": 101}),
+        }
+        relation = {
+            "source": "stock:005930",
+            "target": "price:005930",
+            "type": "HAS_PRICE",
+            "ontologyBox": "ABox",
+            "scopeId": market_scope,
+            "snapshotId": snapshot_id,
+            "propertiesJson": "{}",
+        }
+        unchanged_id = ontology_storage_id(unchanged, unchanged["id"], "node")
+        changed_id = ontology_storage_id(changed, changed["id"], "node")
+        relation_id = ontology_storage_id(
+            relation,
+            relation_row_id(relation),
+            "relation",
+        )
+        delta = repository.current_state_delta_plan(
+            [unchanged, changed],
+            [relation],
+            {
+                "nodes": {
+                    unchanged_id: {
+                        "storageId": unchanged_id,
+                        "scopeId": market_scope,
+                        "contentFingerprint": ontology_row_content_fingerprint(
+                            unchanged,
+                            "node",
+                        ),
+                    },
+                    changed_id: {
+                        "storageId": changed_id,
+                        "scopeId": market_scope,
+                        "contentFingerprint": "old-price",
+                    },
+                },
+                "relations": {
+                    relation_id: {
+                        "storageId": relation_id,
+                        "scopeId": market_scope,
+                        "contentFingerprint": ontology_row_content_fingerprint(
+                            relation,
+                            "relation",
+                        ),
+                    },
+                },
+            },
+        )
+        self.assertEqual(1, len(delta["nodeRowsToInsert"]))
+        self.assertEqual("price:005930", delta["nodeRowsToInsert"][0]["id"])
+        self.assertEqual(1, len(delta["reusedNodeRows"]))
+        self.assertEqual(1, len(delta["relationRowsToInsert"]))
+        self.assertIn(relation_id, delta["relationStorageIdsToDelete"])
+
+        schema = repository.schema_query()
+        self.assertIn(
+            "attribute ontology-content-fingerprint, value string;",
+            schema,
+        )
+        self.assertGreaterEqual(
+            schema.count("owns ontology-content-fingerprint"),
+            2,
+        )
 
     def test_scoped_abox_manifest_verification_rejects_unexpected_scope_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

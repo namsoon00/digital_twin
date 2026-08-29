@@ -633,6 +633,31 @@ class OntologyProjectionAuditTests(unittest.TestCase):
 
         self.assertEqual(175, store.projection_audit_stale_after_seconds())
 
+        empty_recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            projection_run_store=SimpleNamespace(
+                interrupted_projection_recovery_candidates=lambda **_kwargs: [],
+            ),
+        )
+        self.assertFalse(
+            empty_recorder.interrupted_projection_recovery_required(
+                "portfolio:local:main"
+            )
+        )
+        interrupted_recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            projection_run_store=SimpleNamespace(
+                interrupted_projection_recovery_candidates=lambda **_kwargs: [
+                    {"run_id": "projection:interrupted"}
+                ],
+            ),
+        )
+        self.assertTrue(
+            interrupted_recorder.interrupted_projection_recovery_required(
+                "portfolio:local:main"
+            )
+        )
+
     def test_recorder_recovers_interrupted_audit_only_from_aligned_typedb_generation(self):
         _snapshot, _graph, _fingerprint, run = self.build_run()
         stored_row = {

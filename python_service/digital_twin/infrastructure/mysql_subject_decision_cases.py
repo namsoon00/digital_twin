@@ -217,6 +217,23 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
             ).fetchall()
         return [item for item in (self.case_from_row(row) for row in rows or []) if item]
 
+    def latest_portfolio(self, account_id: str = "") -> Optional[SubjectDecisionCase]:
+        """Return the latest account-wide case without scanning instrument cases."""
+
+        conditions = ["symbol = ''"]
+        params = []
+        if str(account_id or ""):
+            conditions.append("account_id = %s")
+            params.append(str(account_id or ""))
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM investment_subject_decision_cases WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY updated_at DESC, subject_case_id DESC LIMIT 1",
+                tuple(params),
+            ).fetchone()
+        return self.case_from_row(row)
+
     @staticmethod
     def case_from_row(row) -> Optional[SubjectDecisionCase]:
         if not row:

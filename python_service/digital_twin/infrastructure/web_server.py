@@ -5896,13 +5896,28 @@ def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, obje
 def console_portfolio_api_payload(query: Dict[str, List[str]], view: str) -> Dict[str, object]:
     account_id = first_query(query, "accountId") or "default"
     portfolio_id = first_query(query, "portfolioId") or "portfolio:" + account_id
-    cache_key = "|".join([account_id, portfolio_id, str(view or "summary")])
+    cache_key = "|".join([
+        "portfolio-console-v2",
+        account_id,
+        portfolio_id,
+        str(view or "summary"),
+    ])
 
     def load() -> Dict[str, object]:
         settings = operational_read_settings()
         lifecycle = stores.investment_domain_store(settings).latest_portfolio_lifecycle(portfolio_id)
-        snapshot = flow_lens_read_payload(query)
-        return console_read_model_service(settings).portfolio(lifecycle, view, snapshot=snapshot)
+        snapshot = flow_lens_read_payload(query) if view in {"summary", "positions"} else {}
+        subject_case = (
+            stores.subject_decision_case_store(settings).latest_portfolio(account_id)
+            if view in {"summary", "rebalance", "interpretation"}
+            else None
+        )
+        return console_read_model_service(settings).portfolio(
+            lifecycle,
+            view,
+            snapshot=snapshot,
+            subject_case=subject_case.to_dict() if subject_case else {},
+        )
 
     payload = cached_api_payload(
         PORTFOLIO_CONSOLE_READ_MODEL,
@@ -7186,6 +7201,7 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             "/api/portfolio/positions": "positions",
             "/api/portfolio/rebalance": "rebalance",
             "/api/portfolio/activity": "activity",
+            "/api/portfolio/interpretation": "interpretation",
         }
         if path in portfolio_console_views and self.command == "GET":
             return self.send_payload(

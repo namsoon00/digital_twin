@@ -346,10 +346,25 @@ function checkWorkflowConsoleContract() {
   const consoleWorkspacesSandbox = { window: {} };
   vm.runInNewContext(consoleWorkspacesCode, consoleWorkspacesSandbox, { filename: "console-workspaces.js" });
   const consoleWorkspaces = consoleWorkspacesSandbox.window.OrbitAlphaConsoleWorkspaces;
-  const portfolioWorkspaceHtml = consoleWorkspaces.renderPortfolio({ version: "console-read-model-v1", summary: {}, positions: [] }, "summary", {});
+  const portfolioWorkspaceHtml = consoleWorkspaces.renderPortfolio({
+    version: "console-read-model-v1",
+    summary: {},
+    positions: [],
+    interpretation: {
+      contract: "portfolio-interpretation-v1",
+      status: "ready",
+      statusLabel: "최신 AI 해석",
+      headline: "정책 이탈을 검토합니다.",
+      rationale: "자동 주문 없이 시나리오를 비교합니다.",
+      drivers: [],
+      ai: { executed: true, current: true },
+      revision: { state: "current" }
+    }
+  }, "summary", {});
   const operationsWorkspaceHtml = consoleWorkspaces.renderOperations({ version: "console-read-model-v1", summary: {}, components: [] }, "health", {});
   assertOk(
     portfolioWorkspaceHtml.indexOf('data-portfolio-view="rebalance"') >= 0
+      && portfolioWorkspaceHtml.indexOf('data-work-detail="portfolio-interpretation"') >= 0
       && operationsWorkspaceHtml.indexOf('data-operations-view="reasoning"') >= 0
       && operationsWorkspaceHtml.indexOf('data-operations-view="governance"') >= 0,
     "포트폴리오 또는 운영 워크스페이스의 독립 화면 계약이 없습니다."
@@ -3269,6 +3284,11 @@ async function checkNormalMode(port, context) {
   assertOk(portfolioSummary.statusCode === 200, "포트폴리오 요약 API 응답 코드가 200이 아닙니다: " + portfolioSummary.statusCode);
   const portfolioSummaryPayload = JSON.parse(portfolioSummary.body);
   assertOk(portfolioSummaryPayload.version === "console-read-model-v1" && portfolioSummaryPayload.view === "summary", "포트폴리오 요약이 독립 읽기 모델 계약을 반환하지 않습니다.");
+
+  const portfolioInterpretation = await request(port, "/api/portfolio/interpretation?accountId=default");
+  assertOk(portfolioInterpretation.statusCode === 200, "포트폴리오 해석 API 응답 코드가 200이 아닙니다: " + portfolioInterpretation.statusCode);
+  const portfolioInterpretationPayload = JSON.parse(portfolioInterpretation.body);
+  assertOk(portfolioInterpretationPayload.version === "console-read-model-v1" && portfolioInterpretationPayload.view === "interpretation", "포트폴리오 해석이 독립 읽기 모델 계약을 반환하지 않습니다.");
 
   const marketInstruments = await request(port, "/api/market/instruments?mock=1");
   assertOk(marketInstruments.statusCode === 200, "시장 종목 API 응답 코드가 200이 아닙니다: " + marketInstruments.statusCode);

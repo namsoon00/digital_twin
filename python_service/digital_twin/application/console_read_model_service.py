@@ -276,6 +276,7 @@ class ConsoleReadModelService:
         lifecycle: Mapping[str, object],
         view: str = "summary",
         snapshot: Optional[Mapping[str, object]] = None,
+        subject_case: Optional[Mapping[str, object]] = None,
     ) -> Dict[str, object]:
         lifecycle = _mapping(lifecycle)
         snapshot = _mapping(snapshot)
@@ -311,6 +312,18 @@ class ConsoleReadModelService:
         exposure_metrics = _rows(exposure.get("metrics"))
         policy_breaches = [item for item in exposure_metrics if _number(item.get("policyDeltaPct")) > 0]
         candidates = _rows(cycle.get("candidates"))
+        action_plans = _rows(lifecycle.get("actionPlans"))
+        risk_breach_count = sum(
+            1 for key in ("volatilityPolicyDeltaPct", "drawdownPolicyDeltaPct")
+            if _number(_mapping(lifecycle.get("rebalanceState")).get(key)) > 0
+        )
+        interpretation = self._portfolio_interpretation(
+            lifecycle,
+            subject_case,
+            policy_breaches,
+            candidates,
+            full=view == "interpretation",
+        )
         summary = {
             "portfolioId": _text(lifecycle.get("portfolioId") or state.get("portfolioId")),
             "status": _text(lifecycle.get("status")) or "unavailable",
@@ -322,9 +335,12 @@ class ConsoleReadModelService:
             "periodReturnPct": _number(risk.get("periodReturnPct")),
             "annualizedVolatilityPct": _number(risk.get("annualizedVolatilityPct")),
             "maximumDrawdownPct": _number(risk.get("maximumDrawdownPct")),
-            "policyBreachCount": len(policy_breaches),
+            "policyBreachCount": len(policy_breaches) + risk_breach_count,
+            "exposureBreachCount": len(policy_breaches),
+            "riskBreachCount": risk_breach_count,
             "rebalanceStatus": _text(rebalance.get("status")) or "not-ready",
             "reconciliationStatus": _text(_mapping(lifecycle.get("reconciliation")).get("status")) or "unknown",
+            "interpretationStatus": _text(interpretation.get("status")) or "unavailable",
         }
         if current_portfolio:
             current_total = _first(current_portfolio, "accountEquityTotal", "account_equity_total", "total")
@@ -363,6 +379,8 @@ class ConsoleReadModelService:
             "view": view,
             "summary": summary,
         }
+        if view in {"summary", "rebalance", "interpretation"}:
+            base["interpretation"] = interpretation
         if view == "positions":
             base.update({"positions": positions, "count": len(positions)})
         elif view == "rebalance":
@@ -376,6 +394,7 @@ class ConsoleReadModelService:
                     "recommendedScenarioId": _text(rebalance.get("recommendedScenarioId")),
                 },
                 "candidates": candidates,
+                "actionPlans": [self._action_plan_head(item) for item in action_plans[:8]],
                 "policyBreaches": policy_breaches,
                 "risk": {
                     key: risk.get(key)
@@ -386,10 +405,19 @@ class ConsoleReadModelService:
                     ]
                 },
             })
+        elif view == "interpretation":
+            base.update({
+                "proposal": {
+                    "proposalId": _text(rebalance.get("proposalId")),
+                    "status": _text(rebalance.get("status")),
+                    "createdAt": _text(rebalance.get("createdAt")),
+                    "scenarioCount": len(_rows(rebalance.get("scenarios"))),
+                    "candidateCount": len(candidates),
+                },
+            })
         elif view == "activity":
             ledger = _rows(lifecycle.get("ledgerEntries"))
             activity = _rows(lifecycle.get("recentActivityEpisodes"))
-            plans = _rows(lifecycle.get("actionPlans"))
             reviews = _rows(lifecycle.get("decisionReviews"))
             base.update({
                 "ledgerSummary": _mapping(lifecycle.get("ledgerSummary")),
@@ -399,12 +427,12 @@ class ConsoleReadModelService:
                 },
                 "ledgerEntries": [self._ledger_head(item) for item in ledger[:40]],
                 "activityEpisodes": [self._activity_head(item) for item in activity[:20]],
-                "actionPlans": [self._action_plan_head(item) for item in plans[:20]],
+                "actionPlans": [self._action_plan_head(item) for item in action_plans[:20]],
                 "decisionReviews": [self._decision_review_head(item) for item in reviews[:20]],
                 "counts": {
                     "ledger": len(ledger),
                     "activity": len(activity),
-                    "actionPlans": len(plans),
+                    "actionPlans": len(action_plans),
                     "decisionReviews": len(reviews),
                 },
             })
@@ -430,6 +458,188 @@ class ConsoleReadModelService:
                 },
             })
         return base
+
+    @staticmethod
+    def _portfolio_interpretation(
+        lifecycle: Mapping[str, object],
+        subject_case: Optional[Mapping[str, object]],
+        policy_breaches: List[Mapping[str, object]],
+        candidates: List[Mapping[str, object]],
+        full: bool = False,
+    ) -> Dict[str, object]:
+        lifecycle = _mapping(lifecycle)
+        case = _mapping(subject_case)
+        state = _mapping(lifecycle.get("rebalanceState"))
+        cycle = _mapping(lifecycle.get("portfolioDecisionCycle"))
+        checkpoint = _mapping(lifecycle.get("snapshotCheckpoint"))
+        proposal = _mapping(lifecycle.get("rebalanceProposal"))
+        risk = _mapping(lifecycle.get("portfolioRiskSnapshot"))
+        synthesis = _mapping(case.get("synthesis"))
+        judgment = _mapping(case.get("aiJudgment"))
+        publication = _mapping(case.get("publication"))
+        explanation = _mapping(publication.get("explanationSnapshot"))
+
+        current_revision = _text(state.get("revision") or cycle.get("cycleId") or checkpoint.get("balanceFingerprint"))
+        interpreted_revision = _text(case.get("sourceAboxSnapshotId"))
+        current_at = _text(checkpoint.get("observedAt") or state.get("observedAt"))
+        interpreted_at = _text(case.get("updatedAt") or publication.get("createdAt"))
+        current_epoch = _iso_timestamp(current_at)
+        interpreted_epoch = _iso_timestamp(interpreted_at)
+        revision_state = "unknown"
+        if current_epoch and interpreted_epoch:
+            revision_state = "current" if interpreted_epoch + 300 >= current_epoch else "stale"
+
+        has_ai = bool(
+            _text(judgment.get("result_id") or judgment.get("resultId"))
+            or _text(judgment.get("rationale"))
+        )
+        case_status = _text(case.get("stage")).lower()
+        if has_ai:
+            status = "ready" if revision_state != "stale" else "stale"
+        elif case:
+            status = "observation" if revision_state != "stale" else "stale"
+        else:
+            status = "pending"
+
+        drivers = []
+        exposure_labels = {
+            "position": "종목 비중",
+            "sector": "섹터 비중",
+            "currency": "통화 비중",
+            "cash": "현금 비중",
+        }
+        sorted_breaches = sorted(
+            policy_breaches,
+            key=lambda item: _number(item.get("policyDeltaPct")),
+            reverse=True,
+        )
+        for row in sorted_breaches:
+            kind = _text(row.get("exposure_type") or row.get("exposureType")).lower()
+            key = _text(row.get("key"))
+            delta = _number(row.get("policyDeltaPct"))
+            drivers.append({
+                "id": kind + ":" + key,
+                "label": (key + " " if key else "") + exposure_labels.get(kind, kind or "배분 정책"),
+                "value": ("%.2f%%p 초과" % delta),
+                "detail": "저장된 계좌 노출이 투자 정책 한도를 벗어났습니다.",
+                "tone": "danger",
+                "source": "portfolio-exposure",
+            })
+        for key, label in (("volatilityPolicyDeltaPct", "변동성 한도"), ("drawdownPolicyDeltaPct", "낙폭 한도")):
+            delta = _number(state.get(key))
+            if delta > 0:
+                drivers.append({
+                    "id": "risk:" + key,
+                    "label": label,
+                    "value": "%.2f%%p 초과" % delta,
+                    "detail": "저장된 위험 시계열과 포트폴리오 정책을 비교한 결과입니다.",
+                    "tone": "danger",
+                    "source": "portfolio-risk",
+                })
+
+        breach_count = len(drivers)
+        if breach_count:
+            headline = "정책 이탈 %d건, 리밸런싱 검토가 필요합니다." % breach_count
+            rationale = "가장 큰 이탈부터 시나리오의 비용과 제약을 비교하세요. 자동 주문은 실행하지 않습니다."
+        else:
+            headline = "현재 포트폴리오는 저장된 정책 한도 안에 있습니다."
+            rationale = "새 계좌 스냅샷과 위험 시계열이 들어오면 같은 기준으로 다시 평가합니다."
+
+        missing_data = []
+        for value in list(cycle.get("missingData") or []) + list(risk.get("missingData") or []) + list(
+            synthesis.get("missing_data") or synthesis.get("missingData") or []
+        ):
+            text = _text(value)
+            if text and text not in missing_data:
+                missing_data.append(text)
+        next_checks = []
+        for value in list(judgment.get("next_observations") or judgment.get("nextObservations") or []) + list(
+            synthesis.get("next_checks") or synthesis.get("nextChecks") or []
+        ):
+            text = _text(value)
+            if text and text not in next_checks:
+                next_checks.append(text)
+        if not next_checks:
+            if missing_data:
+                next_checks.append("누락된 위험·벤치마크 시계열 보완")
+            if candidates:
+                next_checks.append("리밸런싱 시나리오의 비용과 실행 제약 검토")
+
+        invalidation = []
+        for value in list(judgment.get("reversal_conditions") or judgment.get("reversalConditions") or []) + list(
+            synthesis.get("reversal_conditions") or synthesis.get("reversalConditions") or []
+        ):
+            text = _text(value)
+            if text and text not in invalidation:
+                invalidation.append(text)
+        conflicts = []
+        for value in judgment.get("opposing_evidence_ids") or judgment.get("opposingEvidenceIds") or []:
+            text = _text(value)
+            if text:
+                conflicts.append({"label": "반대 근거", "detail": text})
+        rejected_reason = _text(judgment.get("rejected_candidate_reason") or judgment.get("rejectedCandidateReason"))
+        if rejected_reason:
+            conflicts.insert(0, {"label": "후보 조정", "detail": rejected_reason})
+
+        ai_rationale = _text(judgment.get("rationale") or explanation.get("reason"))
+        status_labels = {
+            "ready": "최신 AI 해석",
+            "stale": "이전 AI 해석" if has_ai else "이전 추론 기록",
+            "observation": "AI 실행 없음",
+            "pending": "해석 대기",
+        }
+        limit = 12 if full else 4
+        return {
+            "contract": "portfolio-interpretation-v1",
+            "status": status,
+            "statusLabel": status_labels.get(status, "해석 상태 확인"),
+            "headline": headline,
+            "rationale": rationale,
+            "action": _text(judgment.get("action") or synthesis.get("execution_action") or synthesis.get("executionAction") or "NO_ACTION"),
+            "confidence": _number(judgment.get("confidence")),
+            "dataState": _text(state.get("dataState") or cycle.get("dataState") or synthesis.get("data_state") or synthesis.get("dataState")) or "unknown",
+            "generatedAt": interpreted_at,
+            "drivers": drivers[:limit],
+            "conflicts": conflicts[:limit],
+            "missingData": missing_data[:limit],
+            "nextChecks": next_checks[:limit],
+            "invalidationConditions": invalidation[:limit],
+            "ai": {
+                "executed": has_ai,
+                "current": has_ai and revision_state != "stale",
+                "status": "executed" if has_ai else "not-run",
+                "rationale": ai_rationale,
+                "model": _text(judgment.get("model")),
+                "validationState": _text(judgment.get("validation_state") or judgment.get("validationState")),
+                "selectedHypothesisId": _text(judgment.get("selected_hypothesis_id") or judgment.get("selectedHypothesisId")),
+                "supportingEvidenceIds": list(judgment.get("supporting_evidence_ids") or judgment.get("supportingEvidenceIds") or [])[:limit],
+                "opposingEvidenceIds": list(judgment.get("opposing_evidence_ids") or judgment.get("opposingEvidenceIds") or [])[:limit],
+            },
+            "revision": {
+                "state": revision_state,
+                "current": current_revision,
+                "interpreted": interpreted_revision,
+                "currentObservedAt": current_at,
+                "interpretedAt": interpreted_at,
+                "comparisonBasis": "observed-at-window",
+            },
+            "sources": [
+                {"kind": "calculation", "label": "계좌 원장·위험 시계열", "id": _text(checkpoint.get("valuationSnapshotId"))},
+                {"kind": "typedb", "label": "TypeDB 추론", "id": _text(case.get("inferenceGenerationId"))},
+                {"kind": "ai", "label": "저장된 AI 판단", "id": _text(judgment.get("result_id") or judgment.get("resultId")), "used": has_ai},
+            ],
+            "trace": {
+                "subjectCaseId": _text(case.get("subjectCaseId")),
+                "stage": case_status,
+                "publicationOutcome": _text(publication.get("outcomeKind")),
+                "sourceAboxSnapshotId": interpreted_revision,
+                "inferenceGenerationId": _text(case.get("inferenceGenerationId")),
+                "deploymentId": _text(case.get("deploymentId")),
+                "releaseFingerprint": _text(case.get("releaseFingerprint")),
+                "proposalId": _text(proposal.get("proposalId")),
+                "cycleId": _text(cycle.get("cycleId")),
+            },
+        }
 
     def market_instruments(self, snapshot: Mapping[str, object]) -> Dict[str, object]:
         toss = _mapping(snapshot.get("toss"))

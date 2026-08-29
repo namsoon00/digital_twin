@@ -71,6 +71,35 @@
     }).join("") + '</nav>';
   }
 
+  function interpretationTone(status) {
+    return status === "ready" ? "positive" : status === "stale" ? "warning" : "neutral";
+  }
+
+  function portfolioInterpretationCard(payload, compact) {
+    var item = payload.interpretation || {};
+    var drivers = Array.isArray(item.drivers) ? item.drivers : [];
+    var ai = item.ai || {};
+    var revision = item.revision || {};
+    var driverRows = drivers.slice(0, compact ? 2 : 4).map(function (driver) {
+      return '<li><span><strong>' + escapeHtml(driver.label || "위험 요인") + '</strong><em>' + escapeHtml(driver.detail || "") + '</em></span><b class="' + escapeHtml(driver.tone || "neutral") + '">' + escapeHtml(driver.value || "확인") + '</b></li>';
+    }).join("");
+    var aiMessage = ai.executed
+      ? (ai.current ? (ai.rationale || "현재 리비전의 AI 해석이 저장되어 있습니다.") : "저장된 AI 해석이 현재 계좌 리비전보다 이전입니다.")
+      : (ai.rationale || "중요한 판단 변화가 없어 현재 리비전에서는 AI를 실행하지 않았습니다.");
+    return [
+      '<section class="cws-section cws-interpretation ' + escapeHtml(interpretationTone(item.status)) + '">',
+      '<header><div><span>Portfolio interpretation</span><h2>현재 위험과 해석</h2></div><span class="cws-status-chip ' + escapeHtml(interpretationTone(item.status)) + '">' + escapeHtml(item.statusLabel || "해석 상태 확인") + '</span></header>',
+      '<div class="cws-interpretation-main">',
+      '<div><strong>' + escapeHtml(item.headline || "포트폴리오 해석을 준비하고 있습니다.") + '</strong><p>' + escapeHtml(item.rationale || "") + '</p></div>',
+      '<div class="cws-source-badges"><span>계산</span><span>TypeDB</span><span class="' + (ai.executed ? "active" : "muted") + '">AI ' + escapeHtml(ai.executed ? "실행" : "미실행") + '</span></div>',
+      '</div>',
+      driverRows ? '<ul class="cws-driver-list">' + driverRows + '</ul>' : '',
+      '<div class="cws-ai-note"><span>' + escapeHtml(ai.executed ? "AI 해석" : "AI 상태") + '</span><p>' + escapeHtml(aiMessage) + '</p><em>' + escapeHtml(revision.state === "stale" ? "현재 원장과 리비전 불일치" : "현재 원장 기준") + '</em></div>',
+      '<footer class="cws-section-actions"><button type="button" data-work-detail="portfolio-interpretation" data-work-detail-key="">근거 전체 보기</button><button type="button" class="primary" data-portfolio-view="rebalance">시나리오 비교</button></footer>',
+      '</section>'
+    ].join("");
+  }
+
   function portfolioSummary(payload) {
     var summary = payload.summary || {};
     var positions = Array.isArray(payload.positions) ? payload.positions : [];
@@ -91,6 +120,7 @@
       return '<div><span>' + escapeHtml([item.exposure_type, item.key].filter(Boolean).join(" · ")) + '</span><strong class="danger">한도 ' + escapeHtml(percent(item.policyDeltaPct)) + ' 초과</strong></div>';
     }).join("") + '</div>' : '<div class="cws-policy-clear"><strong>배분 한도 안</strong><span>현재 저장된 노출 기준</span></div>';
     return [
+      portfolioInterpretationCard(payload, false),
       '<div class="cws-grid cws-grid-primary">',
       '<section class="cws-section"><header><div><span>보유 구성</span><h2>종목별 노출</h2></div><strong>' + positions.length + '개</strong></header>' + exposureRows + '</section>',
       '<section class="cws-section"><header><div><span>위험 예산</span><h2>정책 이탈</h2></div><strong>' + breaches.length + '건</strong></header>',
@@ -106,8 +136,35 @@
     var items = Array.isArray(payload.positions) ? payload.positions : [];
     if (!items.length) return empty("보유 종목이 없습니다", "현재 원장에 열린 포지션이 없습니다.");
     return '<section class="cws-section cws-section-table"><header><div><span>포지션</span><h2>보유 종목 원장</h2></div><strong>' + items.length + '개</strong></header><div class="cws-table"><div class="cws-table-head cws-position-columns"><span>종목</span><span>수량</span><span>평균가</span><span>현재가</span><span>평가액</span><span>손익</span></div>' + items.map(function (item) {
-      return '<button type="button" class="cws-table-row cws-position-columns" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(item.symbol) + '"><span><strong>' + escapeHtml(item.name || item.symbol) + '</strong><em>' + escapeHtml(item.symbol + " · " + (item.market || "-")) + '</em></span><span>' + escapeHtml(quantity(item.quantity)) + '</span><span>' + escapeHtml(quantity(item.averagePrice)) + '</span><span>' + escapeHtml(quantity(item.currentPrice)) + '</span><span>' + escapeHtml(money(item.marketValueKrw)) + '</span><span class="' + tone(item.profitLossRate) + '"><strong>' + escapeHtml(percent(item.profitLossRate)) + '</strong><em>비중 ' + escapeHtml(percent(item.currentWeightPct)) + '</em></span></button>';
+      return '<button type="button" class="cws-table-row cws-position-columns" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(item.symbol) + '"><span><strong>' + escapeHtml(item.name || item.symbol) + '</strong><em>' + escapeHtml(item.symbol + " · " + (item.market || "-")) + '</em></span><span data-label="수량">' + escapeHtml(quantity(item.quantity)) + '</span><span data-label="평균가">' + escapeHtml(quantity(item.averagePrice)) + '</span><span data-label="현재가">' + escapeHtml(quantity(item.currentPrice)) + '</span><span data-label="평가액">' + escapeHtml(money(item.marketValueKrw)) + '</span><span data-label="손익" class="' + tone(item.profitLossRate) + '"><strong>' + escapeHtml(percent(item.profitLossRate)) + '</strong><em>비중 ' + escapeHtml(percent(item.currentWeightPct)) + '</em></span></button>';
     }).join("") + '</div></section>';
+  }
+
+  function scenarioComparison(item) {
+    var before = item.before_metrics || item.beforeMetrics || {};
+    var after = item.after_metrics || item.afterMetrics || {};
+    var firstLeg = (Array.isArray(item.legs) ? item.legs : [])[0] || {};
+    var facts = [
+      ["정책 이탈", before.overPolicyCount, after.overPolicyCount, "건"],
+      ["현금 비중", before.cashWeightPct, after.cashWeightPct, "%"],
+      ["종목 비중", before.positionWeightPct != null ? before.positionWeightPct : firstLeg.before_weight_pct, after.positionWeightPct != null ? after.positionWeightPct : firstLeg.after_weight_pct, "%"],
+      ["변동성", before.annualizedVolatilityPct, after.annualizedVolatilityPct, "%"],
+      ["최대 낙폭", before.maximumDrawdownPct, after.maximumDrawdownPct, "%"]
+    ].filter(function (fact) { return fact[1] != null || fact[2] != null; });
+    if (!facts.length) return "";
+    return '<dl class="cws-scenario-facts">' + facts.map(function (fact) {
+      var digits = fact[3] === "건" ? 0 : 1;
+      return '<div><dt>' + escapeHtml(fact[0]) + '</dt><dd><span>' + escapeHtml(number(fact[1]).toFixed(digits) + fact[3]) + '</span><b aria-hidden="true">→</b><strong>' + escapeHtml(number(fact[2]).toFixed(digits) + fact[3]) + '</strong></dd></div>';
+    }).join("") + '</dl>';
+  }
+
+  function portfolioActionPlans(plans) {
+    if (!plans.length) return "";
+    return '<section class="cws-section cws-action-plans"><header><div><span>Review gate</span><h2>실행 계획 검토</h2></div><strong>' + plans.length + '건</strong></header><div>' + plans.map(function (plan) {
+      var status = String(plan.status || "recorded").toLowerCase();
+      var id = plan.planId || plan.plan_id || "";
+      return '<article><span><strong>' + escapeHtml(plan.action || "NO_ACTION") + '</strong><em>' + escapeHtml(status + " · 주문 후보 " + number(plan.orderIntentCount).toFixed(0) + "건") + '</em></span>' + (status === "review-required" ? '<span class="cws-plan-actions"><button type="button" class="primary" data-action-plan-review="approve" data-action-plan-id="' + escapeHtml(id) + '">승인</button><button type="button" data-action-plan-review="reject" data-action-plan-id="' + escapeHtml(id) + '">거절</button></span>' : '<b>' + escapeHtml(clock(plan.createdAt || plan.created_at)) + '</b>') + '</article>';
+    }).join("") + '</div><footer class="cws-section-note">승인은 저장된 실행 계획의 검토 상태만 바꾸며 자동 주문을 제출하지 않습니다.</footer></section>';
   }
 
   function portfolioRebalance(payload) {
@@ -115,14 +172,18 @@
     var scenarios = Array.isArray(proposal.scenarios) ? proposal.scenarios : [];
     var candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
     var breaches = Array.isArray(payload.policyBreaches) ? payload.policyBreaches : [];
+    var plans = Array.isArray(payload.actionPlans) ? payload.actionPlans : [];
     var scenarioRows = scenarios.length ? '<div class="cws-scenario-list">' + scenarios.map(function (item) {
       var legs = Array.isArray(item.legs) ? item.legs : [];
-      return '<article><header><span><strong>' + escapeHtml(item.label || item.scenario_type || "시나리오") + '</strong><em>' + escapeHtml(item.data_state || "자료 확인") + '</em></span><b>' + escapeHtml(percent(item.turnover_pct)) + ' 회전</b></header><p>' + escapeHtml((item.policy_effects || ["정책 영향을 확인하세요."])[0]) + '</p><footer><span>주문 후보 ' + legs.length + '건</span><span>예상 비용 ' + money(item.estimated_cost) + '</span></footer></article>';
+      return '<article><header><span><strong>' + escapeHtml(item.label || item.scenario_type || "시나리오") + '</strong><em>' + escapeHtml(item.data_state || "자료 확인") + '</em></span><b>' + escapeHtml(percent(item.turnover_pct)) + ' 회전</b></header><p>' + escapeHtml((item.policy_effects || ["정책 영향을 확인하세요."])[0]) + '</p>' + scenarioComparison(item) + '<footer><span>주문 후보 ' + legs.length + '건</span><span>예상 비용 ' + money(item.estimated_cost) + '</span></footer></article>';
     }).join("") + '</div>' : empty("리밸런싱 시나리오가 없습니다", "다음 계좌 평가 주기에 다시 계산됩니다.");
     var candidateRows = candidates.length ? '<div class="cws-candidate-list">' + candidates.map(function (item) {
-      return '<div><span><strong>' + escapeHtml(item.label || item.candidate_type) + '</strong><em>' + escapeHtml(item.affected_symbol || "포트폴리오 전체") + '</em></span><span class="' + (item.executable ? "positive" : "warning") + '">' + escapeHtml(item.executable ? "실행 가능" : "추론 확인") + '</span><b>' + escapeHtml(money(item.maximum_notional)) + '</b></div>';
+      var symbol = item.affected_symbol || item.affectedSymbol || "";
+      var tag = symbol ? "button" : "div";
+      var attrs = symbol ? ' type="button" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(symbol) + '"' : "";
+      return '<' + tag + attrs + ' class="cws-candidate-row"><span><strong>' + escapeHtml(item.label || item.candidate_type) + '</strong><em>' + escapeHtml(symbol || "포트폴리오 전체") + '</em></span><span class="' + (item.executable ? "positive" : "warning") + '">' + escapeHtml(item.executable ? "실행 가능" : "추론 확인") + '</span><b>' + escapeHtml(money(item.maximum_notional)) + '</b></' + tag + '>';
     }).join("") + '</div>' : empty("행동 후보가 없습니다", "정책 이탈이 생기면 검토 후보가 생성됩니다.");
-    return '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>배분 대안</span><h2>리밸런싱 시나리오</h2></div><strong>' + escapeHtml(proposal.status || "not-ready") + '</strong></header>' + scenarioRows + '</section><section class="cws-section"><header><div><span>검토 범위</span><h2>행동 후보</h2></div><strong>' + candidates.length + '건</strong></header>' + candidateRows + '<footer class="cws-section-note">정책 이탈 ' + breaches.length + '건 · 자동 주문 없음</footer></section></div>';
+    return portfolioInterpretationCard(payload, true) + '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>배분 대안</span><h2>리밸런싱 시나리오</h2></div><strong>' + escapeHtml(proposal.status || "not-ready") + '</strong></header>' + scenarioRows + '</section><section class="cws-section"><header><div><span>검토 범위</span><h2>행동 후보</h2></div><strong>' + candidates.length + '건</strong></header>' + candidateRows + '<footer class="cws-section-note">정책 이탈 ' + breaches.length + '건 · 자동 주문 없음</footer></section></div>' + portfolioActionPlans(plans);
   }
 
   function portfolioActivity(payload) {
@@ -142,7 +203,8 @@
       var symbol = item.symbol || item.subjectSymbol || symbols || item.key || "";
       var detail = item.summary || item.reason || item.description || item.status || item.source || (item.orderIntentCount != null ? "주문 후보 " + item.orderIntentCount + "건" : "저장된 원장 기록");
       var at = item.observedAt || item.reviewedAt || item.reviewed_at || item.occurredAt || item.occurred_at || item.createdAt || item.created_at || item.updatedAt || item.recordedAt;
-      return '<article><time>' + escapeHtml(clock(at)) + '</time><span><strong>' + escapeHtml(title) + '</strong><em>' + escapeHtml([symbol, detail].filter(Boolean).join(" · ")) + '</em></span></article>';
+      var kind = item.episodeId ? "계좌 변화" : (item.planId || item.plan_id) ? "실행 계획" : (item.reviewId || item.review_id) ? "사후 검증" : "원장";
+      return '<article><time>' + escapeHtml(clock(at)) + '</time><span><i>' + escapeHtml(kind) + '</i><strong>' + escapeHtml(title) + '</strong><em>' + escapeHtml([symbol, detail].filter(Boolean).join(" · ")) + '</em></span></article>';
     }).join("") + '</div></section>';
   }
 

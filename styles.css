@@ -27241,6 +27241,32 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   border-bottom: 0;
 }
 
+.portfolio-interpretation-detail-row > span:first-child {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--blue);
+}
+
+.portfolio-interpretation-detail-row > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.portfolio-interpretation-detail-row em,
+.portfolio-interpretation-detail-row b {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.portfolio-interpretation-detail-row b {
+  color: var(--red);
+  text-align: right;
+}
+
 .work-detail-row b,
 .work-detail-row > .tone-chip {
   align-self: center;

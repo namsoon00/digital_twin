@@ -6596,12 +6596,14 @@ class ScopedABoxManifestMixin:
                                     scope_id,
                                     {"entityCount": 0, "relationCount": 0},
                                 )[count_key] += 1
+                        desired_node_rows = list(delta_plan.get("nodeRows") or [])
+                        desired_relation_rows = list(delta_plan.get("relationRows") or [])
                         desired_fingerprints = {
                             ontology_storage_id(row, row.get("id"), "node"): str(
                                 row.get("contentFingerprint")
                                 or ontology_row_content_fingerprint(row, "node")
                             )
-                            for row in node_rows
+                            for row in desired_node_rows
                         }
                         desired_fingerprints.update({
                             ontology_storage_id(
@@ -6612,7 +6614,7 @@ class ScopedABoxManifestMixin:
                                 row.get("contentFingerprint")
                                 or ontology_row_content_fingerprint(row, "relation")
                             )
-                            for row in relation_rows
+                            for row in desired_relation_rows
                         })
                         actual_fingerprints = {
                             storage_id: str(item.get("contentFingerprint") or "")

@@ -675,6 +675,80 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             for sql, _params in failed_connection.calls
         ))
 
+        recovery_connection = RecordingConnection(rows=[{
+            "run_id": "projection:committed",
+            "resume_stage": "synthesis-persisted",
+            "inference_generation_id": "generation:committed",
+        }])
+        recovery_store = MySQLOntologyProjectionRunStore.__new__(
+            MySQLOntologyProjectionRunStore
+        )
+        recovery_store.connect = lambda: ConnectionContext(recovery_connection)
+        recovery_advances = []
+        recovery_store.advance_current_state_transition = (
+            lambda run_id, stage, **kwargs: recovery_advances.append(
+                (run_id, stage, kwargs)
+            ) or {
+                "status": "ok",
+                "resumeStage": stage,
+                "completed": stage == "completed",
+            }
+        )
+        recovered = recovery_store.recover_committed_current_state_transitions(
+            "portfolio:local:main"
+        )
+        self.assertEqual(["projection:committed"], recovered["recoveredRunIds"])
+        self.assertEqual(["completed"], [row[1] for row in recovery_advances])
+        self.assertIn("projection.active_abox_snapshot_id", recovery_connection.calls[0][0])
+
+        _snapshot, _graph, _fingerprint, run = self.build_run()
+        completed_run = complete_ontology_projection_run(run, {
+            "saved": True,
+            "status": "ok",
+            "graphStore": "typedb",
+            "aboxSnapshotId": run.abox_snapshot_id,
+            "inferenceBox": {
+                "status": "ok",
+                "inferenceGenerationId": "generation:committed",
+                "sourceAboxSnapshotId": run.abox_snapshot_id,
+                "nativeTypeDbReasoningCompleted": True,
+            },
+        })
+        transition_calls = []
+        transition_recorder = PortfolioOntologyProjectionRecorder(
+            SimpleNamespace(store_key="typedb"),
+            projection_run_store=SimpleNamespace(
+                advance_current_state_transition=lambda run_id, stage, **kwargs: (
+                    transition_calls.append((run_id, stage, kwargs))
+                    or {
+                        "status": "ok",
+                        "resumeStage": stage,
+                        "completed": stage == "completed",
+                    }
+                ),
+            ),
+        )
+        transition_result = {
+            "saved": True,
+            "currentStateTransition": {"status": "ok"},
+            "inferenceBox": {
+                "inferenceGenerationId": "generation:committed",
+                "nativeTypeDbReasoningCompleted": True,
+            },
+        }
+        finalization = transition_recorder.finalize_current_state_transition(
+            completed_run,
+            transition_result,
+        )
+        self.assertEqual("completed", finalization["status"])
+        self.assertEqual(
+            ["synthesis-persisted", "completed"],
+            [row[1] for row in transition_calls],
+        )
+        self.assertTrue(
+            transition_result["currentStateCompletionCheckpoint"]["completed"]
+        )
+
         empty_recorder = PortfolioOntologyProjectionRecorder(
             SimpleNamespace(store_key="typedb"),
             projection_run_store=SimpleNamespace(

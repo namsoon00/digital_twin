@@ -342,6 +342,72 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             ).fetchall()
         return [dict(item or {}) for item in rows or []]
 
+    def recover_committed_current_state_transitions(
+        self,
+        world_id: str = "",
+        limit: int = 10,
+    ) -> Dict[str, object]:
+        """Publish heads for committed projections interrupted before final checkpoint."""
+
+        clauses = [
+            "transition.status = 'running'",
+            "projection.status = 'ok'",
+            "projection.active_abox_snapshot_id = transition.target_manifest_id",
+        ]
+        params: List[object] = []
+        clean_world_id = str(world_id or "").strip()
+        if clean_world_id:
+            clauses.append("transition.world_id = %s")
+            params.append(clean_world_id)
+        bounded = max(1, min(50, int(limit or 10)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT transition.run_id, transition.resume_stage, "
+                "transition.inference_generation_id "
+                "FROM ontology_current_state_transitions transition "
+                "JOIN ontology_projection_runs projection "
+                "ON projection.run_id = transition.run_id WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY transition.updated_at ASC, transition.run_id ASC LIMIT %s",
+                [*params, bounded],
+            ).fetchall()
+        recovered = []
+        failed = []
+        for raw in rows or []:
+            row = dict(raw or {})
+            run_id = str(row.get("run_id") or "").strip()
+            generation_id = str(row.get("inference_generation_id") or "").strip()
+            stage = str(row.get("resume_stage") or "").strip()
+            try:
+                if stage != "synthesis-persisted":
+                    checkpoint = self.advance_current_state_transition(
+                        run_id,
+                        "synthesis-persisted",
+                        inference_generation_id=generation_id,
+                        detail={"recoveredAfterCommit": True},
+                    )
+                    if str(checkpoint.get("status") or "") != "ok":
+                        raise RuntimeError(str(checkpoint.get("status") or "checkpoint-failed"))
+                completed = self.advance_current_state_transition(
+                    run_id,
+                    "completed",
+                    status="completed",
+                    inference_generation_id=generation_id,
+                    detail={"recoveredAfterCommit": True},
+                )
+                if str(completed.get("status") or "") != "ok":
+                    raise RuntimeError(str(completed.get("status") or "completion-failed"))
+                recovered.append(run_id)
+            except Exception as error:  # noqa: BLE001 - leave the durable row retryable.
+                failed.append({"runId": run_id, "reason": str(error)[:180]})
+        return {
+            "status": "ok" if not failed else "partial",
+            "worldId": clean_world_id,
+            "candidateCount": len(rows or []),
+            "recoveredRunIds": recovered,
+            "failed": failed,
+        }
+
     def begin(self, run: OntologyProjectionRun) -> OntologyProjectionRun:
         stamp = utc_now()
         with self.transaction() as connection:

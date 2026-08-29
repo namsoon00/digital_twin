@@ -1755,6 +1755,92 @@ class PortfolioOntologyProjectionRecorder:
         except Exception as error:  # noqa: BLE001 - projection audit remains authoritative.
             return {"status": "error", "reason": str(error)[:180]}
 
+    def finalize_current_state_transition(
+        self,
+        completed_run: OntologyProjectionRun,
+        result: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Close a committed current-state transition or retain a failed audit."""
+
+        transition = result.get("currentStateTransition")
+        if not isinstance(transition, dict) or str(transition.get("status") or "") != "ok":
+            return {"status": "not-applicable"}
+        inference_payload = (
+            dict(result.get("inferenceBox") or {})
+            if isinstance(result.get("inferenceBox"), dict)
+            else {}
+        )
+        inference_generation_id = str(
+            inference_payload.get("inferenceGenerationId")
+            or completed_run.inference_generation_id
+            or ""
+        )
+        native_completed = bool(
+            inference_payload.get("nativeTypeDbReasoningCompleted")
+            or inference_payload.get("typedbNativeRuleEvaluationCompleted")
+        )
+        if bool(result.get("saved")) and native_completed:
+            synthesis = self.advance_current_state_transition(
+                completed_run,
+                "synthesis-persisted",
+                inference_generation_id=inference_generation_id,
+                detail={
+                    "projectionStatus": completed_run.status,
+                    "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+                },
+            )
+            result["currentStateSynthesisCheckpoint"] = synthesis
+            if str(synthesis.get("status") or "") != "ok":
+                return {
+                    "status": "pending-recovery",
+                    "stage": "synthesis-persisted",
+                    "checkpoint": synthesis,
+                }
+            completion = self.advance_current_state_transition(
+                completed_run,
+                "completed",
+                status="completed",
+                inference_generation_id=inference_generation_id,
+                detail={
+                    "projectionStatus": completed_run.status,
+                    "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+                },
+            )
+            result["currentStateCompletionCheckpoint"] = completion
+            return {
+                "status": "completed"
+                if bool(completion.get("completed"))
+                else "pending-recovery",
+                "stage": str(completion.get("resumeStage") or "completed"),
+                "checkpoint": completion,
+            }
+
+        failed_stage = "source-bound"
+        if isinstance(result.get("currentStateInferenceCheckpoint"), dict):
+            failed_stage = "inferred"
+        elif isinstance(result.get("currentStatePatchCheckpoint"), dict):
+            failed_stage = "patch-applied"
+        failure = self.advance_current_state_transition(
+            completed_run,
+            failed_stage,
+            status="failed",
+            inference_generation_id=inference_generation_id,
+            detail={
+                "projectionStatus": completed_run.status,
+                "reason": str(
+                    result.get("reason")
+                    or "Native inference did not complete after the ABox patch committed."
+                )[:500],
+                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
+            },
+        )
+        result["currentStateFailureCheckpoint"] = failure
+        return {
+            "status": "failed",
+            "stage": failed_stage,
+            "checkpoint": failure,
+        }
+
     def world_rule_partition(self, rule_catalog: Dict[str, object]) -> Dict[str, object]:
         if (
             self._frozen_rulebox_catalog is not None
@@ -3958,6 +4044,28 @@ class PortfolioOntologyProjectionRecorder:
                 and desired_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
                 and callable(begin_current_state_transition)
             ):
+                recover_committed = getattr(
+                    self.projection_run_store,
+                    "recover_committed_current_state_transitions",
+                    None,
+                )
+                if callable(recover_committed):
+                    try:
+                        current_state_recovery = dict(recover_committed(
+                            world_id=projection_run.world_id,
+                            limit=10,
+                        ) or {})
+                    except TypeError:
+                        current_state_recovery = dict(
+                            recover_committed(projection_run.world_id, 10) or {}
+                        )
+                    except Exception as error:  # noqa: BLE001 - a new audited transition can continue.
+                        current_state_recovery = {
+                            "status": "error",
+                            "reason": str(error)[:180],
+                        }
+                else:
+                    current_state_recovery = {"status": "unsupported"}
                 try:
                     current_state_transition = dict(begin_current_state_transition(
                         projection_run,
@@ -4047,6 +4155,7 @@ class PortfolioOntologyProjectionRecorder:
                     result["projectionRunId"] = projection_run.run_id
                 if current_state_transition:
                     result["currentStateTransition"] = current_state_transition
+                    result["currentStateRecovery"] = current_state_recovery
                 self.attach_abox_persistence_runtime_stages(runtime_stages, result)
                 result["projectionMode"] = "abox-facts-only-typedb-native-rules"
                 result["materialFingerprint"] = material_fingerprint
@@ -7669,6 +7778,7 @@ class PortfolioOntologyProjectionRecorder:
 
         for source_key, target_key in {
             "candidateCleanupMs": "aboxCandidateCleanupMs",
+            "currentStateInventoryReadMs": "aboxCurrentStateInventoryReadMs",
             "changedScopeWriteMs": "aboxChangedScopeWriteMs",
             "changedScopeVerificationMs": "aboxChangedScopeVerificationMs",
             "manifestControlWriteMs": "aboxManifestControlWriteMs",
@@ -8908,61 +9018,10 @@ class PortfolioOntologyProjectionRecorder:
                     complete_with_trace(completed_run, result)
                 else:
                     self.projection_run_store.complete(completed_run)
-                transition_payload = result.get("currentStateTransition")
-                if isinstance(transition_payload, dict) and str(
-                    transition_payload.get("status") or ""
-                ) == "ok":
-                    inference_payload = (
-                        dict(result.get("inferenceBox") or {})
-                        if isinstance(result.get("inferenceBox"), dict)
-                        else {}
-                    )
-                    inference_generation_id = str(
-                        inference_payload.get("inferenceGenerationId")
-                        or completed_run.inference_generation_id
-                        or ""
-                    )
-                    native_completed = bool(
-                        inference_payload.get("nativeTypeDbReasoningCompleted")
-                        or inference_payload.get("typedbNativeRuleEvaluationCompleted")
-                    )
-                    if bool(result.get("saved")) and native_completed:
-                        result["currentStateSynthesisCheckpoint"] = self.advance_current_state_transition(
-                            completed_run,
-                            "synthesis-persisted",
-                            inference_generation_id=inference_generation_id,
-                            detail={
-                                "projectionStatus": completed_run.status,
-                                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
-                            },
-                        )
-                    elif not bool(result.get("saved")):
-                        failed_stage = "source-bound"
-                        if isinstance(result.get("currentStateInferenceCheckpoint"), dict):
-                            failed_stage = "inferred"
-                        elif isinstance(result.get("currentStatePatchCheckpoint"), dict):
-                            failed_stage = "patch-applied"
-                        result["currentStateFailureCheckpoint"] = self.advance_current_state_transition(
-                            completed_run,
-                            failed_stage,
-                            status="failed",
-                            inference_generation_id=inference_generation_id,
-                            detail={
-                                "projectionStatus": completed_run.status,
-                                "reason": str(result.get("reason") or "")[:500],
-                                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
-                            },
-                        )
-                        result["currentStateCompletionCheckpoint"] = self.advance_current_state_transition(
-                            completed_run,
-                            "completed",
-                            status="completed",
-                            inference_generation_id=inference_generation_id,
-                            detail={
-                                "projectionStatus": completed_run.status,
-                                "activeAboxSnapshotId": completed_run.active_abox_snapshot_id,
-                            },
-                        )
+                result["currentStateFinalization"] = self.finalize_current_state_transition(
+                    completed_run,
+                    result,
+                )
                 result["projectionAudit"] = {
                     "status": "recorded",
                     "runId": completed_run.run_id,

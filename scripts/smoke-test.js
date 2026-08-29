@@ -281,6 +281,27 @@ function checkWorkflowConsoleContract() {
     "모바일 핵심 5탭·더보기와 판단 내부 근거 점검 구성이 일치하지 않습니다."
   );
   assertOk(
+    code.indexOf('class="icon-button app-settings-button') >= 0
+      && code.indexOf('data-tab="settings" title="설정"') >= 0
+      && code.indexOf('data-command-palette-mode="more"') >= 0
+      && code.indexOf('data-command-palette-mode="search"') >= 0
+      && code.indexOf('var moreActive = ["calendar", "operations"].indexOf(state.activeTab) >= 0;') >= 0
+      && styles.indexOf(".app-settings-button") >= 0
+      && styles.indexOf(".app-nav-tools .app-settings-button.active") >= 0
+      && /@media \(max-width: 860px\)[\s\S]*\.app-settings-button\s*\{\s*display: grid;/.test(styles),
+    "모바일 상단 설정 바로가기 또는 더보기·전체 검색 모드 분리가 없습니다."
+  );
+  assertOk(
+    code.indexOf('{ key: "account-connections-board", tab: "settings"') >= 0
+      && code.indexOf('{ key: "notification-policy-board", tab: "notifications"') >= 0
+      && code.indexOf('{ key: "investment-model-overview", tab: "modeling"') >= 0
+      && code.indexOf('{ key: "investment-model-management", tab: "modeling"') >= 0
+      && code.indexOf('{ key: "settings-runtime", tab: "operations"') >= 0
+      && code.indexOf('paletteResult.getAttribute("data-command-palette-tab")') >= 0
+      && code.indexOf('normalizeTabId(preferredTab || "settings")') >= 0,
+    "더보기·검색 관리 링크가 각 소유 화면으로 이동하는 목적지 계약이 없습니다."
+  );
+  assertOk(
     indexHtml.indexOf("web-runtime.js?v=") >= 0 &&
       serviceWorker.indexOf("web-runtime.js?v=") >= 0 &&
       webRuntime.indexOf("web-runtime-performance-v1") >= 0 &&

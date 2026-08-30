@@ -1,4 +1,5 @@
 import json
+import time
 import unittest
 from datetime import datetime, timezone
 
@@ -199,7 +200,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             "mysqlMinimalRetentionMode": "apply",
         })
         budget = {
-            "started": 0,
+            "started": time.monotonic(),
             "maxSeconds": 30,
             "remainingBytes": 1024 * 1024,
             "deletedBytes": 0,
@@ -365,7 +366,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             "mysqlMinimalRetentionMode": "apply",
         })
         budget = {
-            "started": 0,
+            "started": time.monotonic(),
             "maxSeconds": 30,
             "remainingBytes": 1024 * 1024,
             "deletedBytes": 0,

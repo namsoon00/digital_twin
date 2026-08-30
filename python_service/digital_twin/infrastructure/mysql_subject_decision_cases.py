@@ -259,6 +259,26 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
             ).fetchall()
         return [item for item in (self.case_from_row(row) for row in rows or []) if item]
 
+    def stale_ready(self, max_age_minutes: int = 30, limit: int = 100) -> List[SubjectDecisionCase]:
+        """Return decision candidates that never reached the AI handoff.
+
+        READY is a transient orchestration state. Keeping an old READY row
+        makes the console report work that can no longer be resumed safely
+        because its point-in-time facts may have expired.
+        """
+
+        age_minutes = max(1, min(24 * 60, int(max_age_minutes or 30)))
+        row_limit = max(1, min(1000, int(limit or 100)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM investment_subject_decision_cases "
+                "WHERE stage = 'READY' "
+                "AND updated_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL %s MINUTE) "
+                "ORDER BY updated_at ASC LIMIT " + str(row_limit),
+                (age_minutes,),
+            ).fetchall()
+        return [item for item in (self.case_from_row(row) for row in rows or []) if item]
+
     def get_by_scope(
         self,
         batch_case_id: str,

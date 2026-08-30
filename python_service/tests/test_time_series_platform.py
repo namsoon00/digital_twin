@@ -194,7 +194,7 @@ class RecordingQuestDB(QuestDBTimeSeriesAdapter):
 
 
 class SchemaQuestDB(QuestDBTimeSeriesAdapter):
-    def __init__(self, ttl_overrides=None, missing_tables=None, metadata_error=""):
+    def __init__(self, ttl_overrides=None, missing_tables=None, metadata_error="", ttl_units=None):
         super().__init__({
             "questDbHttpUrl": "http://schema-test-" + uuid.uuid4().hex,
             "marketTimeSeriesRawRetentionDays": "2",
@@ -211,8 +211,10 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
             "market_observations_1h": 90,
             "market_observations_1d": 180,
             "portfolio_marks": 2,
+            "capital_flow_observations": 180,
             **dict(ttl_overrides or {}),
         }
+        self.ttl_units = {**{table_name: "DAY" for table_name in self.ttl_days}, **dict(ttl_units or {})}
 
     def execute(self, sql):
         normalized = " ".join(str(sql).split())
@@ -227,7 +229,7 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
                     {"name": "ttl_unit"},
                 ],
                 "dataset": [
-                    [table_name, days, "DAY"]
+                    [table_name, days, self.ttl_units.get(table_name, "DAY")]
                     for table_name, days in self.ttl_days.items()
                     if table_name not in self.missing_tables
                 ],
@@ -238,7 +240,50 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
             return {}
         if normalized == "SELECT 1 AS ready":
             return {"columns": [{"name": "ready"}], "dataset": [[1]]}
+        if normalized.startswith("SELECT name, suspended"):
+            return {
+                "columns": [
+                    {"name": "name"}, {"name": "suspended"},
+                    {"name": "writer_txn"}, {"name": "sequencer_txn"},
+                    {"name": "error_tag"}, {"name": "error_message"},
+                ],
+                "dataset": [],
+            }
         return {}
+
+
+class PartialSummaryQuestDB(QuestDBTimeSeriesAdapter):
+    def __init__(self):
+        self.backend_id = "questdb-shadow"
+
+    def query_rows(self, sql):
+        if "market_observations_3m" in sql:
+            raise RuntimeError("metadata read timeout")
+        return [{
+            "count": 10,
+            "symbol_count": 2,
+            "earliest_at": "2026-08-15T00:00:00Z",
+            "latest_at": "2026-08-16T00:00:00Z",
+        }]
+
+
+class SuspendedWalQuestDB(SchemaQuestDB):
+    def execute(self, sql):
+        normalized = " ".join(str(sql).split())
+        if normalized.startswith("SELECT name, suspended"):
+            self.statements.append(normalized)
+            return {
+                "columns": [
+                    {"name": "name"}, {"name": "suspended"},
+                    {"name": "writer_txn"}, {"name": "sequencer_txn"},
+                    {"name": "error_tag"}, {"name": "error_message"},
+                ],
+                "dataset": [[
+                    "market_observations_3m", True, 10, 12,
+                    "critical", "metadata read timeout",
+                ]],
+            }
+        return super().execute(sql)
 
 
 class TimeSeriesPlatformTests(unittest.TestCase):
@@ -267,6 +312,18 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         ttl_statements = [statement for statement in adapter.statements if " SET TTL " in statement]
         self.assertEqual(["ALTER TABLE market_observations_1h SET TTL 90 DAYS"], ttl_statements)
 
+    def test_questdb_schema_accepts_equivalent_week_ttl(self):
+        adapter = SchemaQuestDB(
+            {"market_observations_3m": 1, "portfolio_marks": 1},
+            ttl_units={"market_observations_3m": "WEEK", "portfolio_marks": "WEEK"},
+        )
+        adapter.settings["marketTimeSeriesRawRetentionDays"] = "7"
+
+        adapter.ensure_schema()
+
+        ttl_statements = [statement for statement in adapter.statements if " SET TTL " in statement]
+        self.assertEqual([], ttl_statements)
+
     def test_questdb_health_checks_schema_readiness_without_ddl(self):
         adapter = SchemaQuestDB(metadata_error="metadata unavailable")
 
@@ -275,6 +332,20 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual("unavailable", result["status"])
         self.assertIn("metadata unavailable", result["error"])
         self.assertFalse(any(statement.startswith("CREATE TABLE") for statement in adapter.statements))
+
+    def test_questdb_health_reports_suspended_wal_as_degraded(self):
+        result = SuspendedWalQuestDB().health()
+
+        self.assertEqual("degraded", result["status"])
+        self.assertEqual("market_observations_3m", result["suspendedTables"][0]["table"])
+
+    def test_questdb_summary_preserves_healthy_granularities(self):
+        result = PartialSummaryQuestDB().summary()
+
+        self.assertEqual("degraded", result["status"])
+        self.assertEqual(4, len(result["granularities"]))
+        self.assertEqual("unavailable", result["granularities"][0]["status"])
+        self.assertEqual("ready", result["granularities"][1]["status"])
 
     def test_active_write_queues_shadow_without_changing_baseline_result(self):
         baseline = FakeBaseline()

@@ -85,6 +85,43 @@ def graph_risk_context(material=True):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
+    def test_repeat_cooldown_is_deferred_until_after_subject_decision(self):
+        policy = NotificationAdmissionPolicy()
+        context = graph_risk_context(material=True)
+        context["investmentSubjectDecisionCaseId"] = "subject-case:1"
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+        decision = NotificationRuleDecision(
+            message_type="investmentInsight",
+            enabled=True,
+            should_send=False,
+            delivery_state="suppressed",
+            gate_state="blocked",
+            gate_reason="같은 판단 상태",
+            suppression_reason="state_cooldown",
+            state_suppressed=True,
+            state_decision="cooldown",
+            state_reason="같은 판단 상태가 쿨다운 중입니다.",
+        )
+
+        outcome = policy.apply_result(job, decision)
+
+        self.assertTrue(outcome.accepted)
+        self.assertEqual("pending", job.status)
+        self.assertEqual(
+            "deferred",
+            job.context["preDecisionDeliveryGate"]["status"],
+        )
+        self.assertEqual(
+            "delivery-only",
+            job.context["preDecisionDeliveryGate"]["decisionBoundary"],
+        )
+        self.assertNotIn("deliverySuppressionReason", job.context)
+
     def test_closed_market_admission_remains_deliverable(self):
         policy = NotificationAdmissionPolicy()
         job = NotificationJob.create(

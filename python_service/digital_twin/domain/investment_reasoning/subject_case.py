@@ -11,7 +11,7 @@ from typing import Dict, Iterable, Mapping, Optional, Tuple
 from .contracts import AIJudgmentResult, DecisionSynthesis, FinalDecision, HypothesisRecord
 
 
-SUBJECT_CASE_VERSION = "investment-subject-decision-case-v1"
+SUBJECT_CASE_VERSION = "investment-subject-decision-case-v2"
 CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v1"
 PUBLICATION_VERSION = "investment-decision-publication-v1"
 
@@ -287,6 +287,9 @@ class SubjectDecisionCase:
     final_decision: Optional[FinalDecision] = None
     abstention: Optional[DecisionAbstention] = None
     publication: Optional[DecisionPublication] = None
+    delivery_state: str = "not-requested"
+    delivery_reason: str = ""
+    delivery_updated_at: str = ""
     errors: Tuple[Dict[str, object], ...] = ()
     created_at: str = field(default_factory=_now)
     updated_at: str = ""
@@ -372,6 +375,16 @@ class SubjectDecisionCase:
         }:
             self.completed_at = stamp
 
+    def mark_delivery(self, state: str, reason: str = "") -> None:
+        """Record delivery without changing the investment decision stage."""
+
+        stamp = _now()
+        self.delivery_state = str(state or "not-requested").strip().lower()
+        self.delivery_reason = str(reason or "")[:500]
+        self.delivery_updated_at = stamp
+        self.updated_at = stamp
+        self.version += 1
+
     def to_dict(self) -> Dict[str, object]:
         return {
             "subjectCaseId": self.subject_case_id,
@@ -394,6 +407,9 @@ class SubjectDecisionCase:
             "finalDecision": self.final_decision.to_dict() if self.final_decision else {},
             "abstention": self.abstention.to_dict() if self.abstention else {},
             "publication": self.publication.to_dict() if self.publication else {},
+            "deliveryState": self.delivery_state,
+            "deliveryReason": self.delivery_reason,
+            "deliveryUpdatedAt": self.delivery_updated_at,
             "errors": [dict(item) for item in self.errors],
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -432,6 +448,9 @@ class SubjectDecisionCase:
             final_decision=FinalDecision.from_dict(decision) if decision else None,
             abstention=DecisionAbstention.from_dict(abstention) if abstention else None,
             publication=DecisionPublication.from_dict(publication) if publication else None,
+            delivery_state=str(payload.get("deliveryState") or "not-requested"),
+            delivery_reason=str(payload.get("deliveryReason") or ""),
+            delivery_updated_at=str(payload.get("deliveryUpdatedAt") or ""),
             errors=tuple(dict(item) for item in payload.get("errors") or [] if isinstance(item, Mapping)),
             created_at=str(payload.get("createdAt") or _now()),
             updated_at=str(payload.get("updatedAt") or ""),

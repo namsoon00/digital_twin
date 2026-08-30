@@ -1,6 +1,7 @@
 import json
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -23,6 +24,7 @@ from digital_twin.domain.independent_reasoning import (
     reasoning_queue_slot_key,
     shard_reasoning_event,
 )
+from digital_twin.domain.investment_reasoning import DecisionSynthesis
 from digital_twin.domain.fact_changes import fact_change_contract
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.domain.reasoning_engine_versions import (
@@ -135,6 +137,61 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def test_delivery_cadence_does_not_remove_judgment_candidate(self):
+        monitor = SimpleNamespace(sent={})
+        builder = V2GraphDecisionCandidateBuilder({}, monitor)
+        request = independent_reasoning_request("ontology-v2-shadow", [source_event()])
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-08-16T00:00:00Z",
+        )
+        relation = {
+            "accountId": "acct",
+            "subject": {"symbol": "NVDA", "name": "NVIDIA"},
+            "facts": {"currentPrice": 100.0},
+            "decision": {"notificationSeverity": "WATCH", "label": "보유 점검"},
+        }
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:judgment",
+            account_id="acct",
+            symbol="NVDA",
+            source_abox_snapshot_id="abox:1",
+            inference_generation_id="inference:1",
+            graph_candidate_action="HOLD",
+            eligible_hypothesis_ids=("hypothesis:1",),
+        )
+        projection = {"acct": {"inferenceBox": {
+            "generationAligned": True,
+            "sourceAboxSnapshotId": "abox:1",
+            "inferenceGenerationId": "inference:1",
+            "nativeTypeDbReasoningCompleted": True,
+        }}}
+
+        with patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
+            return_value={"NVDA": relation},
+        ), patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
+            return_value=synthesis,
+        ), patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.build_investment_insight_events_by_snapshot",
+            side_effect=lambda _snapshots, events: list(events),
+        ):
+            first = builder.build(request, [snapshot], {}, projection)
+            self.assertEqual(1, len(first["judgmentReady"]))
+            monitor.sent[first["judgmentReady"][0].cadence_key()] = datetime.now(
+                timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+            second = builder.build(request, [snapshot], {}, projection)
+
+        self.assertEqual(1, len(second["judgmentReady"]))
+        self.assertEqual([], second["deliveryReady"])
+        self.assertEqual(second["judgmentReady"], second["ready"])
+        self.assertFalse(
+            second["judgmentReady"][0].metadata["preDecisionDeliveryCadence"]["eligible"]
+        )
+
     def test_quiet_typedb_context_still_captures_hypotheses_and_synthesis(self):
         builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
         request = independent_reasoning_request("ontology-v2-shadow", [source_event()])

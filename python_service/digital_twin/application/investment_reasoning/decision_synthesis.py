@@ -311,9 +311,24 @@ class V2GraphDecisionCandidateBuilder:
                         base_events.append(event)
 
         detected = build_investment_insight_events_by_snapshot(snapshots, base_events)
+        delivery_ready = self.cadence.ready(detected, force=force)
+        delivery_ready_keys = {event.key for event in delivery_ready}
+        for event in detected:
+            metadata = dict(getattr(event, "metadata", {}) or {})
+            metadata["preDecisionDeliveryCadence"] = {
+                "version": "pre-decision-delivery-cadence-v1",
+                "eligible": event.key in delivery_ready_keys,
+                "minutes": self.cadence.minutes(event),
+                "decisionBoundary": "delivery-only",
+            }
+            event.metadata = metadata
         return {
             "detected": detected,
-            "ready": self.cadence.ready(detected, force=force),
+            # Every material TypeDB candidate is judgment-ready. Delivery
+            # cadence is evaluated after the immutable decision is persisted.
+            "judgmentReady": detected,
+            "deliveryReady": delivery_ready,
+            "ready": detected,
             "syntheses": syntheses,
             # Hypothesis capture is an audit boundary, not a notification
             # boundary. A quiet relation context must still become a durable

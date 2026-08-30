@@ -153,12 +153,24 @@ def investment_model_projection(
         item for item in rulebox.get("rules") or [] if isinstance(item, Mapping)
     ])
     comparison = _mapping(promotion.get("comparison")) or _mapping(active_health.get("comparisonSummary"))
+    readiness_health = {
+        **active_health,
+        "queue": (
+            _mapping(active_health.get("queue"))
+            or _mapping(platform.get("queue"))
+            or _mapping(platform.get("queuePerformance"))
+        ),
+        "queuePerformance": (
+            _mapping(active_health.get("queuePerformance"))
+            or _mapping(platform.get("queuePerformance"))
+        ),
+    }
     product_readiness = investment_product_readiness(
         operational_promotion_ready=promotion_ready,
         rule_inventory=inventory,
         catalog=catalog,
         experiments=experiments,
-        active_health=active_health,
+        active_health=readiness_health,
         comparison=comparison,
         settings=settings,
     )

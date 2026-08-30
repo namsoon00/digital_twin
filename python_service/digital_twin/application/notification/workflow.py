@@ -513,7 +513,13 @@ class NotificationQueueRunner:
                 continue
             account = accounts.get(job.account_id)
             self.apply_account_delivery_context(job, account)
-            if not self.dry_run and account and account.quiet_hours_active(self.now_provider(), job.message_type):
+            ai_decision_pending = self.should_defer_ai_inference(job)
+            if (
+                not self.dry_run
+                and account
+                and account.quiet_hours_active(self.now_provider(), job.message_type)
+                and not ai_decision_pending
+            ):
                 self.mark_quiet_hours_suppressed(job, account)
                 self.mark_reasoning_case_suppressed(job, "account quiet hours")
                 self.record_operational_delivery(job, "suppressed", "quiet hours")

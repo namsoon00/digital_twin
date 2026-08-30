@@ -301,6 +301,40 @@ class NotificationAdmissionPolicy:
         if decision.should_send and not str(context.get("deliverySuppressionReason") or "").strip():
             context.pop("deliverySuppressionReason", None)
         job.context = context
+        if not decision.should_send and self.defer_repeat_delivery_until_after_decision(
+            job,
+            decision.suppression_reason,
+        ):
+            reason_code = str(decision.suppression_reason or "")
+            if reason_code == "state_cooldown":
+                reason = str(
+                    decision.state_reason
+                    or decision.gate_reason
+                    or "같은 판단 상태가 이어져 AI 판단 저장 후 알림 발송을 억제합니다."
+                )
+            else:
+                reason = str(
+                    decision.similarity_reason
+                    or decision.gate_reason
+                    or "유사한 판단이 이어져 AI 판단 저장 후 알림 발송을 억제합니다."
+                )
+            context = dict(job.context or {})
+            context["preDecisionDeliveryGate"] = {
+                "version": "pre-decision-delivery-gate-v1",
+                "status": "deferred",
+                "reasonCode": reason_code,
+                "reasonCodes": [reason_code],
+                "reason": reason,
+                "reasonDetails": {reason_code: reason},
+                "decisionBoundary": "delivery-only",
+            }
+            context["deliveryDecision"] = "deferred-until-after-decision"
+            context.pop("deliverySuppressionReason", None)
+            context.pop("deliverySuppressionDetail", None)
+            job.context = context
+            job.status = "pending"
+            job.last_error = ""
+            return NotificationAdmissionOutcome(True, True, job.status, "")
         if not decision.should_send:
             job.status = "suppressed"
             if decision.suppression_reason == "state_cooldown":
@@ -309,3 +343,19 @@ class NotificationAdmissionPolicy:
                 job.last_error = decision.gate_reason or "발송 조건을 충족하지 않아 보내지 않았습니다."
             return NotificationAdmissionOutcome(False, True, job.status, job.last_error)
         return NotificationAdmissionOutcome(True, True, job.status, "")
+
+    @staticmethod
+    def defer_repeat_delivery_until_after_decision(
+        job: NotificationJob,
+        suppression_reason: str,
+    ) -> bool:
+        """Keep delivery cooldowns from becoming decision suppressors."""
+
+        context = dict(job.context or {})
+        return bool(
+            str(job.message_type or "") == INVESTMENT_INSIGHT
+            and str(suppression_reason or "") in {"state_cooldown", "similar_repeat"}
+            and str(context.get("investmentSubjectDecisionCaseId") or "").strip()
+            and not context.get("notificationAiValidatedResponse")
+            and context.get("requiresAiJudgement") is not False
+        )

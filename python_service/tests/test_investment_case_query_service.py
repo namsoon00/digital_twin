@@ -237,7 +237,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertTrue(item["attention"]["userReviewable"])
         self.assertFalse(item["attention"]["userActionable"])
         self.assertEqual("BUY", item["decision"]["candidateAction"])
-        self.assertEqual("HOLD", item["decision"]["action"])
+        self.assertEqual("NO_ACTION", item["decision"]["action"])
         self.assertEqual(1, result["summary"]["reviewRequired"])
 
     def test_exact_episode_exposes_frozen_current_state_and_integrity(self):

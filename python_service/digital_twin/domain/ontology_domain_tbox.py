@@ -85,8 +85,10 @@ DOMAIN_CLASS_DEFS = [
     TBoxClassDef("ExecutionEpisode", "trade-execution", "실행 에피소드"),
     TBoxClassDef("ExecutionReconciliation", "trade-execution", "체결 대사"),
     TBoxClassDef("PerformanceAttribution", "outcome-learning", "성과 귀속"),
+    TBoxClassDef("DecisionOutcomeTarget", "outcome-learning", "판단 결과 관측 일정"),
     TBoxClassDef("DecisionReview", "outcome-learning", "판단 리뷰"),
     TBoxClassDef("DeliveryReceipt", "notification-delivery", "알림 전달 결과"),
+    TBoxClassDef("DecisionLifecycleIncident", "operations-audit", "판단 생명주기 장애"),
 ]
 
 
@@ -130,9 +132,14 @@ DOMAIN_RELATION_DEFS = [
     TBoxRelationDef("MATCHES_DECISION", "trade-execution", "trade-execution", "decision-intelligence"),
     TBoxRelationDef("DEVIATES_FROM_PLAN", "trade-execution", "trade-execution", "trade-execution"),
     TBoxRelationDef("PRODUCES_OUTCOME", "outcome-learning", "decision-intelligence", "outcome-learning"),
+    TBoxRelationDef("SCHEDULES_OUTCOME_OBSERVATION", "outcome-learning", "decision-intelligence", "outcome-learning"),
+    TBoxRelationDef("OBSERVES_OUTCOME_TARGET", "outcome-learning", "outcome-learning", "outcome-learning"),
+    TBoxRelationDef("VALIDATES_SELECTED_HYPOTHESIS", "outcome-learning", "outcome-learning", "decision-intelligence"),
+    TBoxRelationDef("FEEDS_DECISION_REVIEW", "outcome-learning", "outcome-learning", "outcome-learning"),
     TBoxRelationDef("ATTRIBUTED_TO", "outcome-learning", "outcome-learning", "decision-intelligence"),
     TBoxRelationDef("REVIEWS_DECISION", "outcome-learning", "outcome-learning", "decision-intelligence"),
     TBoxRelationDef("DELIVERED_AS", "notification-delivery", "decision-intelligence", "notification-delivery"),
+    TBoxRelationDef("RECORDS_DECISION_LIFECYCLE_INCIDENT", "operations-audit", "operations-audit", "decision-intelligence"),
 ]
 
 
@@ -148,6 +155,11 @@ DOMAIN_RULE_DEFS = [
     TBoxRuleDef("an executable action plan must remain inside cash, quantity, and mandate constraints", "trade-execution"),
     TBoxRuleDef("broker fills are immutable and idempotent by provider execution identity", "trade-execution"),
     TBoxRuleDef("notification delivery never changes the investment meaning selected before dispatch", "notification-delivery"),
+    TBoxRuleDef("READY is transient and an expired candidate becomes an explicit abstention that requires fresh point-in-time reasoning", "decision-intelligence"),
+    TBoxRuleDef("NO_ACTION means that no investment decision was made and must never be projected as HOLD", "decision-intelligence"),
+    TBoxRuleDef("every final investment decision freezes a complete predictive outcome contract and schedules at least one outcome observation", "outcome-learning"),
+    TBoxRuleDef("a delivery suppression records channel state only and never suppresses, rewrites, or deletes a validated decision episode", "notification-delivery"),
+    TBoxRuleDef("an observed outcome may create a review or governed proposal but never mutates the original decision episode", "outcome-learning"),
 ]
 
 

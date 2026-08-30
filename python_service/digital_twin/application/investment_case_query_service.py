@@ -293,7 +293,7 @@ class InvestmentCaseQueryService:
             "facts": {"dataState": text(synthesis.get("data_state") or synthesis.get("dataState")) or "partial"},
             "signals": {},
             "decision": {
-                "action": action if has_final else "HOLD",
+                "action": action if has_final else "NO_ACTION",
                 "candidateAction": action,
                 "reviewLevel": text(synthesis.get("review_level") or synthesis.get("reviewLevel")) or "check",
                 "dataState": text(synthesis.get("data_state") or synthesis.get("dataState")) or "partial",

@@ -1355,17 +1355,27 @@ class V2ReasoningEngine:
             force=force,
         )
         stages["candidateBuildMs"] = int((time.perf_counter() - candidate_started) * 1000)
+        detected_events = list(candidates.get("detected") or [])
+        judgment_ready_events = list(
+            candidates.get("judgmentReady")
+            or candidates.get("ready")
+            or []
+        )
+        delivery_ready_events = list(
+            candidates.get("deliveryReady")
+            or judgment_ready_events
+        )
+        ready_events = judgment_ready_events
         progress(
             "candidate_build.completed",
             {
                 "durationMs": stages["candidateBuildMs"],
-                "detectedCount": len(candidates.get("detected") or []),
-                "readyCount": len(candidates.get("ready") or []),
+                "detectedCount": len(detected_events),
+                "judgmentReadyCount": len(judgment_ready_events),
+                "deliveryCadenceReadyCount": len(delivery_ready_events),
                 "hypothesisCandidateCount": len(candidates.get("hypothesisCandidates") or []),
             },
         )
-        detected_events = list(candidates.get("detected") or [])
-        ready_events = list(candidates.get("ready") or [])
         decision_syntheses = list(candidates.get("syntheses") or [])
         hypothesis_candidates = list(
             candidates.get("hypothesisCandidates") or detected_events
@@ -1479,10 +1489,10 @@ class V2ReasoningEngine:
                     completion_reason = "현재 v2 배포는 알림 발송 권한이 없어 TypeDB 판단까지만 완료했습니다."
                     completion_source = "typedb-shadow"
                 elif not ready_events:
-                    completion_reason = "새롭거나 중요한 판단 변화가 없어 AI 판단 요청과 알림을 생성하지 않았습니다."
+                    completion_reason = "새롭거나 중요한 판단 변화가 없어 AI 판단 요청을 생성하지 않았습니다."
                     completion_source = "typedb-no-material-change"
                 elif ai_handoff_status == "notification-admission-suppressed":
-                    completion_reason = "알림 입구의 검증·중복·쿨다운 정책에서 후보가 억제되어 AI 판단 요청을 생성하지 않았습니다."
+                    completion_reason = "알림 입구에서 판단 후보를 큐에 저장하지 못했습니다. 발송 정책과 무관한 판단 경로를 점검해야 합니다."
                     completion_source = "typedb-notification-admission-suppressed"
                 else:
                     completion_reason = "반복·쿨다운·발송 정책을 통과한 새 알림이 없어 AI 판단 요청을 생성하지 않았습니다."

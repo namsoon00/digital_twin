@@ -6,6 +6,9 @@ from digital_twin.domain.hypothesis_outcome_contract import (
     HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
     outcome_contract_fingerprint,
 )
+from digital_twin.application.investment_reasoning.episode_projection import (
+    decision_episode_outcome_contract_readiness,
+)
 from digital_twin.infrastructure.mysql_investment_decision_episodes import (
     MySQLInvestmentDecisionEpisodeStore,
 )
@@ -96,6 +99,17 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertEqual("scheduled", result["status"])
         self.assertEqual(2, result["targetCount"])
         self.assertEqual(2, len(inserts))
+
+    def test_final_decision_contract_readiness_requires_exact_fingerprint(self):
+        contract = predictive_contract()
+
+        ready = decision_episode_outcome_contract_readiness(episode(contract))
+        contract["contractFingerprint"] = "sha256:tampered"
+        rejected = decision_episode_outcome_contract_readiness(episode(contract))
+
+        self.assertTrue(ready["ready"])
+        self.assertFalse(rejected["ready"])
+        self.assertIn("contract-fingerprint-mismatch", rejected["missing"])
 
     def test_incomplete_legacy_decision_is_audited_without_contract_reconstruction(self):
         connection = RecordingConnection()

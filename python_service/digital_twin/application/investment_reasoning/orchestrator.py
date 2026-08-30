@@ -53,6 +53,7 @@ from ...domain.investment_reasoning.subject_case import (
 )
 from .episode_projection import (
     decision_episode_from_subject_case,
+    decision_episode_outcome_contract_readiness,
     hypothesis_gap_request_from_subject_case,
 )
 
@@ -109,6 +110,10 @@ class _EphemeralSubjectDecisionCaseStore:
             and item.inference_generation_id == str(inference_generation_id or "")
             and (not synthesis_id or item.synthesis.synthesis_id == str(synthesis_id or ""))
         ), None)
+
+    def stale_ready(self, max_age_minutes=30, limit=100):
+        del max_age_minutes, limit
+        return []
 
 
 def _prompt_hypotheses(subject_case: SubjectDecisionCase, relation: Mapping[str, object]):
@@ -194,6 +199,7 @@ class InvestmentReasoningOrchestrator:
         self.decision_episode_store = decision_episode_store
         self.hypothesis_proposal_request_store = hypothesis_proposal_request_store
         self.subject_cases = subject_case_repository or _EphemeralSubjectDecisionCaseStore()
+        self._stale_recovery_checked = False
 
     def _persist(self, reasoning_case: ReasoningCase) -> ReasoningCase:
         return self.repository.save(reasoning_case)
@@ -212,10 +218,46 @@ class InvestmentReasoningOrchestrator:
         return self.subject_cases.save(subject_case)
 
     def start(self, request, release_identity: Mapping[str, object] = None) -> ReasoningCase:
+        if not self._stale_recovery_checked:
+            self.recover_stale_subject_cases()
+            self._stale_recovery_checked = True
         existing = self.repository.get_by_request(str(getattr(request, "request_id", "") or ""))
         if existing:
             return existing
         return self.repository.save(ReasoningCase.create(request, release_identity))
+
+    def recover_stale_subject_cases(
+        self,
+        max_age_minutes: int = 30,
+        limit: int = 100,
+    ) -> tuple:
+        """Close point-in-time candidates that missed their AI handoff."""
+
+        finder = getattr(self.subject_cases, "stale_ready", None)
+        if not callable(finder):
+            return ()
+        recovered = []
+        reason = (
+            "AI handoff did not start before the point-in-time facts expired; "
+            "fresh reasoning is required."
+        )
+        for subject_case in finder(max_age_minutes=max_age_minutes, limit=limit) or []:
+            if subject_case.stage != SUBJECT_READY or subject_case.publication is not None:
+                continue
+            subject_case.abstention = DecisionAbstention(
+                reason_code="stale-ready-ai-handoff-missed",
+                reason=reason,
+                details={
+                    "candidateFingerprint": subject_case.candidate_set.fingerprint,
+                    "maximumReadyAgeMinutes": max(1, int(max_age_minutes or 30)),
+                    "recoveryAction": "fresh-reasoning-required",
+                },
+            )
+            subject_case.mark(SUBJECT_ABSTAINED, reason)
+            subject_case.publication = publication_for_subject_case(subject_case, ABSTAIN)
+            self._persist_subject(subject_case)
+            recovered.append(subject_case)
+        return tuple(recovered)
 
     def input_ready(self, case_id: str) -> ReasoningCase:
         reasoning_case = self.required(case_id)
@@ -488,6 +530,31 @@ class InvestmentReasoningOrchestrator:
         )
         subject_case.mark(SUBJECT_VALIDATED)
         episode = decision_episode_from_subject_case(reasoning_case, subject_case)
+        outcome_readiness = decision_episode_outcome_contract_readiness(episode)
+        if not outcome_readiness.get("ready"):
+            subject_case.final_decision = None
+            subject_case.abstention = DecisionAbstention(
+                reason_code="outcome-contract-invalid",
+                reason=(
+                    "The selected hypothesis has no complete point-in-time outcome contract; "
+                    "the investment judgment was not published."
+                ),
+                details={
+                    **outcome_readiness,
+                    "candidateFingerprint": subject_case.candidate_set.fingerprint,
+                    "selectedHypothesisId": judgment.selected_hypothesis_id,
+                    "aiRequestId": judgment.request_id,
+                    "aiResultId": judgment.result_id,
+                },
+            )
+            subject_case.mark(
+                SUBJECT_ABSTAINED,
+                subject_case.abstention.reason,
+                outcome_readiness,
+            )
+            subject_case.publication = publication_for_subject_case(subject_case, ABSTAIN)
+            self._persist_subject(subject_case, connection=connection)
+            return subject_case
         subject_case.publication = publication_for_subject_case(
             subject_case,
             FINAL_DECISION,
@@ -569,7 +636,12 @@ class InvestmentReasoningOrchestrator:
                 delivered_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 version=publication.version,
             )
-        subject_case.mark(SUBJECT_PUBLISHED)
+        subject_case.mark_delivery("delivered")
+        if (
+            subject_case.publication is not None
+            and subject_case.publication.outcome_kind == FINAL_DECISION
+        ):
+            subject_case.mark(SUBJECT_PUBLISHED)
         self._persist_subject(subject_case)
         return subject_case
 
@@ -616,6 +688,13 @@ class InvestmentReasoningOrchestrator:
         subject_case_id = self.subject_case_id_from_context(context)
         if subject_case_id:
             subject_case = self.required_subject(subject_case_id, context)
+            if subject_case.final_decision is not None or (
+                subject_case.publication is not None
+                and subject_case.publication.outcome_kind == FINAL_DECISION
+            ):
+                subject_case.mark_delivery("suppressed", reason)
+                self._persist_subject(subject_case)
+                return subject_case
             if subject_case.stage not in {
                 SUBJECT_PUBLISHED, SUBJECT_ABSTAINED, SUBJECT_OBSERVATION,
                 SUBJECT_REVIEW_ONLY, SUBJECT_SUPPRESSED, SUBJECT_BLOCKED,
@@ -626,6 +705,7 @@ class InvestmentReasoningOrchestrator:
                     SUPPRESSED,
                     explanation_snapshot={"reason": str(reason or "")},
                 )
+                subject_case.mark_delivery("suppressed", reason)
                 self._persist_subject(subject_case)
             return subject_case
         case_id = self.case_id_from_context(context)

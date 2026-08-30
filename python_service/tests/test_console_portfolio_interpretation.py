@@ -199,6 +199,12 @@ class PortfolioReasoningRevisionLineageTest(unittest.TestCase):
         restored = SubjectDecisionCase.from_dict(subject_case.to_dict())
         self.assertEqual("rebalance:current", restored.source_subject_revision)
 
+        subject_case.mark_delivery("suppressed", "cooldown")
+        restored = SubjectDecisionCase.from_dict(subject_case.to_dict())
+        self.assertEqual("READY", restored.stage)
+        self.assertEqual("suppressed", restored.delivery_state)
+        self.assertEqual("cooldown", restored.delivery_reason)
+
 
 if __name__ == "__main__":
     unittest.main()

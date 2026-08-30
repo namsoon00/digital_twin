@@ -4,6 +4,8 @@
     {"file": "test_portfolio_valuation_contract.py", "tier": "unit", "core": true},
     {"file": "test_toss_base_currency_values.py", "tier": "unit", "core": true},
     {"file": "test_investment_domain_architecture.py", "tier": "unit", "core": true},
+    {"file": "test_investment_domain_boundaries.py", "tier": "unit", "core": true},
+    {"file": "test_investment_product_readiness.py", "tier": "unit", "core": true},
     {"file": "test_investment_brain.py", "tier": "unit", "core": true},
     {"file": "test_decision_continuity.py", "tier": "unit", "core": true},
     {"file": "test_decision_audit_entries.py", "tier": "unit", "core": true},
@@ -41,6 +43,7 @@
 
     {"file": "test_portfolio_lifecycle_service.py", "tier": "contract", "core": true},
     {"file": "test_investment_case_query_service.py", "tier": "contract", "core": true},
+    {"file": "test_subject_decision_recovery.py", "tier": "contract", "core": true},
     {"file": "test_decision_episode_reconciliation_service.py", "tier": "contract", "core": true},
     {"file": "test_ontology_rulebox.py", "tier": "contract", "core": true},
     {"file": "test_independent_reasoning_engine.py", "tier": "contract", "core": true},

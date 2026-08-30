@@ -61,11 +61,13 @@ TypeDB is not the account, ledger, order, or delivery source of truth. Projectio
 5. Direct TypeQL rules join exact model evidence with semantic, private account, policy, quality, and execution facts and materialize one immutable InferenceBox generation.
 6. The investment brain builds competing hypotheses from exact contracts, active TypeDB traces, and explicit counter-evidence.
 7. The decision-continuity assembler loads the immediately prior decision plus its bounded follow-up, observed outcome, account-activity, execution, and review facts.
-8. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.
-9. A `DecisionEpisode` and review-only `ActionPlan` are persisted atomically.
-10. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
-11. Later observations create attribution and a `DecisionReview`; learning changes remain review-only proposals.
-12. Notification delivery applies channel policy after the investment decision is complete.
+8. A per-account, per-symbol `SubjectDecisionCase` freezes the candidate set. `READY` means AI handoff is pending; it is never a durable investment opinion.
+9. AI receives the bounded graph packet and `DecisionContinuityPacket` and selects a hypothesis and categorical action inside the action envelope.
+10. The selected hypothesis must carry a complete point-in-time outcome contract: observation horizons, required domains, result criteria, invalidation criteria, lineage, and an exact fingerprint. An incomplete contract produces `ABSTAINED`, not a synthetic `HOLD` or an unverifiable final opinion.
+11. A `DecisionEpisode`, its `DecisionOutcomeTarget` rows, and the canonical decision publication are persisted atomically. Every new final opinion can therefore be checked later.
+12. Notification admission runs only after investment meaning exists. Cooldown, quiet hours, similarity, and channel failure change delivery state but never the decision stage.
+13. Explicit user approval or a future governed executor may submit orders. Broker fills remain immutable.
+14. Due outcome targets load point-in-time observations, create `ObservedOutcome`, attribution, and `DecisionReview`, then project verified learning facts into the next ABox generation. Learning changes remain review-only proposals.
 
 Statistical signals have no implicit action authority. All predictive rules use
 the production model-contract path, but only exact `hypothesisContractId`
@@ -91,6 +93,56 @@ sourceEventId
   -> decisionReviewId
   -> notificationJobId / deliveryReceiptId
 ```
+
+## Decision And Delivery State
+
+The subject decision and its customer delivery are separate state machines.
+
+| State | Meaning | Terminal |
+| --- | --- | --- |
+| `READY` | Immutable candidate set exists and is waiting for AI handoff | No |
+| `AI_PENDING` | One durable AI request owns the candidate fingerprint | No |
+| `VALIDATED` | AI selected an allowed hypothesis and a complete outcome contract exists | No |
+| `ABSTAINED` | No final investment opinion was created; the reason is explicit | Yes |
+| `OBSERVATION` | TypeDB found context but no actionable hypothesis | Yes |
+| `PUBLISHED` | Validated decision was also delivered | Yes |
+| delivery `suppressed` | A valid decision exists but channel policy did not send it | Delivery only |
+
+`NO_ACTION` is the absence of an investment action. It is not `HOLD`.
+`HOLD` is a real AI-selected opinion and must be backed by a selected hypothesis
+and an outcome contract. A `READY` case older than the configured recovery
+window is converted to an explicit abstention because current facts may no
+longer match its point-in-time snapshot.
+
+## Operational Closed Loop
+
+The loop is complete only when all of these links exist:
+
+```text
+source fact -> ABox snapshot -> InferenceBox generation -> candidate fingerprint
+-> AI request/result -> DecisionEpisode -> DecisionOutcomeTarget
+-> ObservedOutcome -> DecisionReview -> governed evidence/rule proposal
+```
+
+Operational invariants:
+
+- A final decision and its outcome schedule commit in the same MySQL transaction.
+- Outcome collection is retryable and idempotent by episode, horizon, and contract fingerprint.
+- Outcome review cannot mutate historical facts, hypotheses, contracts, or decisions.
+- A failed TypeDB generation preserves the last usable generation but cannot be presented as fresh reasoning.
+- A partially unhealthy time-series table is reported as degraded; healthy granularities remain queryable and visible.
+- Queue latency is measured end to end and participates in product readiness. Missing latency is a blocked gate, not zero latency.
+- Delivery receipts and cooldown history are not investment evidence and cannot alter the selected action.
+
+Recovery ownership:
+
+| Failure | Owner | Recovery |
+| --- | --- | --- |
+| stale `READY` | Decision Intelligence / Operations Audit | Abstain old candidate and request fresh reasoning |
+| AI contract mismatch | Decision Intelligence | Abstain with immutable candidate and AI receipt references |
+| incomplete outcome contract | Outcome Learning | Reject final publication; fix the authored hypothesis contract |
+| suspended QuestDB WAL table | Market Observation / Operations Audit | Mark backend degraded, retain healthy reads, repair or rebuild the derived table |
+| notification cooldown or channel failure | Notification Delivery | Retain validated decision and retry/suppress delivery only |
 
 ## Investment Case Read Model
 

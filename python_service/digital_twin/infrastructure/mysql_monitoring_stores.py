@@ -1327,7 +1327,16 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                         queued += 1
                         outboxed_events.append(event)
                 model_review_store.enqueue_from_event_with_connection(connection, alert_source_event)
-                sent_entries = self.monitor_store.mark_sent_with_connection(connection, guarded_events, stamp)
+                # Independent reasoning creates a decision request here, not a
+                # delivered customer notification. Only the legacy direct
+                # delivery path may advance the fallback cadence clock; V2
+                # delivery history is advanced by a successful outbox send.
+                if not source_snapshot_replay:
+                    sent_entries = self.monitor_store.mark_sent_with_connection(
+                        connection,
+                        guarded_events,
+                        stamp,
+                    )
             if outboxed_events:
                 for account_id, state in list(snapshot_states.items()):
                     account_events = [event for event in outboxed_events if event.account_id == account_id]

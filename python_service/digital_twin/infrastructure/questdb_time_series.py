@@ -112,6 +112,18 @@ def numeric_value(value: object) -> float:
     return number if math.isfinite(number) else 0.0
 
 
+def ttl_days_value(value: object, unit: object) -> int:
+    """Normalize QuestDB's canonical TTL units before drift comparison."""
+
+    amount = int(numeric_value(value))
+    normalized_unit = clean_text(unit).upper().rstrip("S")
+    multiplier = {
+        "DAY": 1,
+        "WEEK": 7,
+    }.get(normalized_unit)
+    return amount * multiplier if multiplier is not None else -1
+
+
 def epoch_value(value: object, multiplier: int) -> int:
     parsed = parse_timestamp(value)
     if not parsed:
@@ -473,9 +485,8 @@ class QuestDBTimeSeriesAdapter:
             if set(metadata) != set(expected_ttl_days):
                 metadata = self.schema_metadata()
             current_ttl_days = {
-                table_name: int(numeric_value(row.get("ttl_value")))
+                table_name: ttl_days_value(row.get("ttl_value"), row.get("ttl_unit"))
                 for table_name, row in metadata.items()
-                if clean_text(row.get("ttl_unit")).upper() == "DAY"
             }
             for table_name, expected_days in expected_ttl_days.items():
                 if current_ttl_days.get(table_name) == expected_days:
@@ -746,6 +757,7 @@ class QuestDBTimeSeriesAdapter:
 
     def health(self) -> Dict[str, object]:
         started = datetime.now(timezone.utc)
+        suspended_tables = []
         try:
             expected_tables = set(self.expected_ttl_days())
             missing_tables = sorted(expected_tables - set(self.schema_metadata()))
@@ -753,7 +765,23 @@ class QuestDBTimeSeriesAdapter:
                 raise RuntimeError("QuestDB schema is missing tables: " + ", ".join(missing_tables))
             rows = self.query_rows("SELECT 1 AS ready")
             ready = bool(rows and int(rows[0].get("ready") or 0) == 1)
-            status = "ready" if ready else "unhealthy"
+            wal_rows = self.query_rows(
+                "SELECT name, suspended, writerTxn AS writer_txn, "
+                "sequencerTxn AS sequencer_txn, errorTag AS error_tag, "
+                "errorMessage AS error_message FROM wal_tables()"
+            )
+            suspended_tables = [
+                {
+                    "table": clean_text(row.get("name")),
+                    "writerTxn": int(numeric_value(row.get("writer_txn"))),
+                    "sequencerTxn": int(numeric_value(row.get("sequencer_txn"))),
+                    "errorTag": clean_text(row.get("error_tag")),
+                    "error": clean_text(row.get("error_message"))[:240],
+                }
+                for row in wal_rows
+                if str(row.get("suspended") or "").strip().lower() in {"true", "1"}
+            ]
+            status = "degraded" if ready and suspended_tables else ("ready" if ready else "unhealthy")
             error = ""
         except Exception as caught:  # noqa: BLE001 - candidate health is data, not a caller failure.
             status = "unavailable"
@@ -765,34 +793,42 @@ class QuestDBTimeSeriesAdapter:
             "status": status,
             "latencyMs": duration_ms,
             "error": error,
+            "suspendedTables": suspended_tables,
             "checkedAt": utc_iso(),
         }
 
     def summary(self, account_id: str = "") -> Dict[str, object]:
         del account_id
-        try:
-            rows = []
-            for granularity, table_name in GRANULARITY_TABLES.items():
+        rows = []
+        errors = []
+        for granularity, table_name in GRANULARITY_TABLES.items():
+            try:
                 result = self.query_rows(
                     "SELECT count() AS count, count_distinct(symbol) AS symbol_count, "
                     "min(event_at) AS earliest_at, max(observed_at) AS latest_at FROM " + table_name
                 )
                 row = dict((result or [{}])[0] or {})
                 row["granularity"] = granularity
+                row["status"] = "ready"
                 rows.append(row)
-        except Exception as error:  # noqa: BLE001 - shadow summary must not break the active service.
-            return {"backendId": self.backend_id, "enabled": True, "status": "unavailable", "error": str(error)[:240]}
+            except Exception as error:  # noqa: BLE001 - one damaged WAL table must not hide healthy tables.
+                detail = str(error)[:240]
+                rows.append({"granularity": granularity, "status": "unavailable", "error": detail})
+                errors.append({"granularity": granularity, "table": table_name, "error": detail})
         return {
             "backendId": self.backend_id,
             "enabled": True,
-            "status": "ready",
+            "status": "degraded" if errors and len(errors) < len(rows) else ("unavailable" if errors else "ready"),
+            "errors": errors,
             "granularities": [
                 {
                     "granularity": clean_text(row.get("granularity")),
+                    "status": clean_text(row.get("status")) or "ready",
                     "count": int(row.get("count") or 0),
                     "symbolCount": int(row.get("symbol_count") or 0),
                     "earliestAt": clean_text(row.get("earliest_at")),
                     "latestAt": clean_text(row.get("latest_at")),
+                    "error": clean_text(row.get("error")),
                 }
                 for row in rows
             ],

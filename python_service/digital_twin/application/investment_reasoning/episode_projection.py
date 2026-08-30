@@ -403,6 +403,50 @@ def decision_episode_from_subject_case(
     return episode
 
 
+def decision_episode_outcome_contract_readiness(episode: DecisionEpisode) -> Dict[str, object]:
+    """Verify that a final decision can enter the outcome feedback loop."""
+
+    facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, Mapping) else {}
+    calibration = (
+        dict(facts.get("calibrationPolicy") or {})
+        if isinstance(facts.get("calibrationPolicy"), Mapping)
+        else {}
+    )
+    contract = (
+        dict(facts.get("hypothesisOutcomeContract") or {})
+        if isinstance(facts.get("hypothesisOutcomeContract"), Mapping)
+        else {}
+    )
+    completeness = outcome_contract_completeness(contract)
+    missing = list(completeness.get("missing") or [])
+    expected_fingerprint = outcome_contract_fingerprint(contract) if completeness.get("complete") else ""
+    actual_fingerprint = _text(contract.get("contractFingerprint"))
+    fingerprint_valid = bool(expected_fingerprint and actual_fingerprint == expected_fingerprint)
+    if completeness.get("complete") and not fingerprint_valid:
+        missing.append("contract-fingerprint-mismatch")
+    ready = bool(
+        _text(episode.selected_hypothesis_id)
+        and calibration.get("eligible") is True
+        and completeness.get("complete")
+        and fingerprint_valid
+    )
+    reason = "outcome-contract-ready"
+    if not _text(episode.selected_hypothesis_id):
+        reason = "no-selected-hypothesis"
+    elif calibration.get("eligible") is not True:
+        reason = _text(calibration.get("reason")) or "calibration-ineligible"
+    elif missing:
+        reason = "outcome-contract-incomplete"
+    return {
+        "ready": ready,
+        "reason": reason,
+        "missing": _unique(missing),
+        "contractFingerprint": actual_fingerprint,
+        "expectedContractFingerprint": expected_fingerprint,
+        "horizonCount": len(contract.get("outcomeHorizonMinutes") or []),
+    }
+
+
 class V2DecisionEpisodeProjector:
     """Idempotent adapter from ReasoningCase to the shared decision history."""
 

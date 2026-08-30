@@ -269,22 +269,45 @@
 
   function operationsHealth(payload, performance) {
     var items = Array.isArray(payload.components) ? payload.components : [];
+    var actions = Array.isArray(payload.actions) ? payload.actions : [];
+    var dimensions = payload.dimensions || {};
     var storage = payload.storage || {};
+    var forecast = storage.forecast || {};
+    var cleanup = storage.cleanupPlan || {};
     var retention = storage.retentionPolicy || {};
+    var etaMinutes = forecast.etaMinutes == null ? null : Math.max(0, number(forecast.etaMinutes));
+    var forecastValue = etaMinutes != null
+      ? (etaMinutes >= 1440 ? (etaMinutes / 1440).toFixed(1) + "일" : etaMinutes >= 120 ? (etaMinutes / 60).toFixed(1) + "시간" : etaMinutes.toFixed(0) + "분")
+      : forecast.available ? "안정" : "수집 중";
+    var forecastDetail = forecast.detected
+      ? "보호 기준 " + number(forecast.thresholdMb).toFixed(0) + "MB"
+      : etaMinutes != null ? "현재 경보 범위 밖" : forecast.available ? "감소 추세 없음" : "표본 " + number(forecast.sampleCount).toFixed(0) + "개";
     var storageSummary = '<div class="cws-metrics">' +
       metric("공용 디스크", number(storage.freeMb).toFixed(0) + "MB", "여유 공간") +
       metric("MySQL 파일", number(storage.mysqlSizeMb).toFixed(1) + "MB", "한도 " + number(storage.mysqlLimitMb).toFixed(0) + "MB", storage.mysqlCapacityStage === "normal" ? "positive" : "danger") +
-      metric("MySQL 실데이터", number(storage.mysqlLiveDataMb).toFixed(1) + "MB", "회수 가능 " + number(storage.mysqlReclaimableMb).toFixed(1) + "MB") +
       metric("TypeDB", number(storage.typedbSizeMb).toFixed(1) + "MB", "WAL " + number(storage.typedbWalMb).toFixed(1) + "MB") +
+      metric("임계점 예상", forecastValue, forecastDetail, forecast.detected ? "warning" : "positive") +
+      metric("정리 가능", number(cleanup.estimatedReclaimableMb).toFixed(1) + "MB", cleanup.automatic ? "자동 정리 중" : "정상 보관", cleanup.automatic ? "warning" : "neutral") +
       '</div>';
+    var dimensionRows = Object.keys(dimensions).map(function (key) {
+      var item = dimensions[key] || {};
+      if (!item.count) return "";
+      return '<div class="' + escapeHtml(item.state || "unknown") + '"><span class="cws-health-dot" aria-hidden="true"></span><strong>' + escapeHtml(item.label || key) + '</strong><em>' + escapeHtml(number(item.attentionCount).toFixed(0) + "건 확인") + '</em></div>';
+    }).join("");
+    var actionRows = actions.length ? '<section class="cws-section cws-operations-attention"><header><div><span>Operator attention</span><h2>확인이 필요한 항목</h2></div><strong>' + actions.length + '건</strong></header><div>' + actions.map(function (item) {
+      return '<article><span><strong>' + escapeHtml(item.label || "상태 확인") + '</strong><em>' + escapeHtml(item.historical ? "과거 운영 부채" : "현재 운영 주의") + '</em></span><button type="button" data-operations-action-view="' + escapeHtml(item.view || "health") + '">이동</button></article>';
+    }).join("") + '</div></section>' : '';
     var retentionSummary = '<section class="cws-section"><header><div><span>보관 정책</span><h2>검증 이력·시계열</h2></div></header><dl class="cws-queue-facts">' +
       '<div><dt>TypeDB</dt><dd>' + escapeHtml(retention.typedbActiveHours || 72) + '시간 · WAL ' + escapeHtml(retention.typedbWalTriggerMb || 4096) + 'MB</dd></div>' +
       '<div><dt>알림 원문</dt><dd>' + escapeHtml(retention.notificationPayloadDays || 30) + '일</dd></div>' +
       '<div><dt>추론 사례</dt><dd>' + escapeHtml(retention.reasoningCaseDays || 90) + '일</dd></div>' +
       '<div><dt>시계열</dt><dd>3분 ' + escapeHtml((retention.timeSeriesDays || {})["3m"] || 7) + '일 · 일봉 ' + escapeHtml((retention.timeSeriesDays || {})["1d"] || 1825) + '일</dd></div>' +
-      '</dl></section>';
-    return storageSummary + operationsWebPerformance(performance) + retentionSummary + '<section class="cws-section cws-section-table"><header><div><span>실행 상태</span><h2>핵심 구성요소</h2></div><strong>' + items.length + '개</strong></header><div class="cws-health-list">' + items.map(function (item) {
-      return '<article class="' + escapeHtml(item.state || "unknown") + '"><span class="cws-health-dot" aria-hidden="true"></span><div><strong>' + escapeHtml(item.label) + '</strong><em>' + escapeHtml(item.detail) + '</em></div><span><b>' + escapeHtml(healthLabel(item.state)) + '</b><time>' + escapeHtml(item.updatedAt ? clock(item.updatedAt) : "") + '</time></span></article>';
+      '</dl><footer class="cws-section-note">핵심 보호: ' + escapeHtml((cleanup.protectedData || []).join(" · ") || "투자 판단과 체결 원장") + '</footer></section>';
+    var dimensionSummary = '<section class="cws-section cws-operations-dimensions"><header><div><span>Health dimensions</span><h2>영향 범위별 상태</h2></div></header><div>' + dimensionRows + '</div></section>';
+    return storageSummary + actionRows + '<div class="cws-grid cws-grid-primary">' + dimensionSummary + retentionSummary + '</div>' + operationsWebPerformance(performance) + '<section class="cws-section cws-section-table"><header><div><span>실행 상태</span><h2>핵심 구성요소</h2></div><strong>' + items.length + '개</strong></header><div class="cws-health-list">' + items.map(function (item) {
+      var action = item.action || {};
+      var impact = item.impact === "user" ? "사용자 영향" : item.historical ? "과거 기록" : "운영 영향";
+      return '<article class="' + escapeHtml(item.state || "unknown") + '"><span class="cws-health-dot" aria-hidden="true"></span><div><strong>' + escapeHtml(item.label) + '</strong><em>' + escapeHtml(item.detail) + '</em><small>' + escapeHtml(impact) + '</small></div><span><b>' + escapeHtml(healthLabel(item.state)) + '</b><time>' + escapeHtml(item.updatedAt ? clock(item.updatedAt) : "") + '</time>' + (action.view ? '<button type="button" data-operations-action-view="' + escapeHtml(action.view) + '">' + escapeHtml(action.label || "확인") + '</button>' : '') + '</span></article>';
     }).join("") + '</div></section>';
   }
 
@@ -320,8 +343,13 @@
     var active = engine.activeDeployment || {};
     var ruleExecution = active.ruleExecutionReadiness || {};
     var reasons = Array.isArray(engine.reasons) ? engine.reasons : [];
+    var historicalDebt = engine.historicalDebt || {};
+    var debtSummary = number(historicalDebt.unresolvedFailureCount)
+      ? '<section class="cws-section cws-reasoning-debt"><header><div><span>Historical debt</span><h2>과거 추론 실패</h2></div><strong class="warning">' + escapeHtml(historicalDebt.unresolvedFailureCount) + '건</strong></header><dl class="cws-queue-facts"><div><dt>최근 24시간</dt><dd>' + escapeHtml(historicalDebt.recentFailureCount24h || 0) + '건</dd></div><div><dt>분류</dt><dd>' + escapeHtml(historicalDebt.status === "current" ? "현재 영향" : "현재 처리 영향 없음") + '</dd></div></dl><footer class="cws-section-note">일시적 TypeDB 오류는 이력을 보존한 새 복구 작업으로 최대 1회 자동 재처리합니다.</footer></section>'
+      : '';
     return '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>온톨로지</span><h2>관계 추론 대기열</h2></div></header>' + queueFacts(queues.reasoning, [["pending", "대기"], ["processing", "처리"], ["retrying", "재시도"]]) + '<footer class="cws-section-note">가장 오래된 요청 ' + escapeHtml(queues.reasoning && queues.reasoning.oldestRequestAt ? clock(queues.reasoning.oldestRequestAt) : "없음") + '</footer></section><section class="cws-section"><header><div><span>AI 판단</span><h2>검증 대기열</h2></div></header>' + queueFacts(queues.ai, [["pendingCount", "대기"], ["processingCount", "처리"], ["retryCount", "재시도"], ["failedCount", "실패"]]) + '</section></div>' +
-      '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>배포별 소비</span><h2>운영·후보 추론 워커</h2></div><strong>' + escapeHtml(engine.status || "unknown") + '</strong></header><div class="cws-health-list">' + (deploymentRows || empty("배포 정보가 없습니다", "제어 포인터를 확인하세요.")) + '</div></section><section class="cws-section"><header><div><span>TypeDB 실행</span><h2>규칙 실행 경로</h2></div><strong class="positive">직접 TypeQL</strong></header><dl class="cws-queue-facts"><div><dt>상태</dt><dd>' + escapeHtml(ruleExecution.status || "ready") + '</dd></div><div><dt>실행 모드</dt><dd>' + escapeHtml(ruleExecution.mode || "typedb-direct-typeql") + '</dd></div></dl><footer class="cws-section-note">' + escapeHtml(reasons.length ? reasons.join(" · ") : "운영 차단 사유 없음") + '</footer></section></div>';
+      '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>배포별 소비</span><h2>운영·후보 추론 워커</h2></div><strong>' + escapeHtml(engine.status || "unknown") + '</strong></header><div class="cws-health-list">' + (deploymentRows || empty("배포 정보가 없습니다", "제어 포인터를 확인하세요.")) + '</div></section><section class="cws-section"><header><div><span>TypeDB 실행</span><h2>규칙 실행 경로</h2></div><strong class="positive">직접 TypeQL</strong></header><dl class="cws-queue-facts"><div><dt>상태</dt><dd>' + escapeHtml(ruleExecution.status || "ready") + '</dd></div><div><dt>실행 모드</dt><dd>' + escapeHtml(ruleExecution.mode || "typedb-direct-typeql") + '</dd></div></dl><footer class="cws-section-note">' + escapeHtml(reasons.length ? reasons.join(" · ") : "운영 차단 사유 없음") + '</footer></section></div>' +
+      debtSummary;
   }
 
   function operationsDelivery(payload) {
@@ -364,10 +392,10 @@
     return [
       '<div class="cws-page cws-operations">',
       '<div class="cws-metrics">',
-      metric("전체 상태", healthLabel(payload.state), "실행 구성요소", payload.state === "healthy" ? "positive" : payload.state === "critical" ? "danger" : "warning"),
-      metric("정상", (summary.healthy || 0) + "개", "즉시 조치 없음", "positive"),
-      metric("확인", ((summary.warning || 0) + (summary.unknown || 0)) + "개", "지연·미확인", summary.warning || summary.unknown ? "warning" : "neutral"),
-      metric("장애", (summary.critical || 0) + "개", "운영 조치", summary.critical ? "danger" : "positive"),
+      metric("현재 서비스", healthLabel(payload.serviceState || payload.state), "사용자 영향 기준", (payload.serviceState || payload.state) === "healthy" ? "positive" : (payload.serviceState || payload.state) === "critical" ? "danger" : "warning"),
+      metric("운영 주의", (payload.attentionCount || 0) + "건", healthLabel(payload.attentionState), payload.attentionCount ? "warning" : "positive"),
+      metric("과거 부채", (payload.historicalDebtCount || 0) + "건", "현재 상태와 분리", payload.historicalDebtCount ? "warning" : "positive"),
+      metric("현재 장애", (summary.critical || 0) + "개", "즉시 조치 대상", summary.critical ? "danger" : "positive"),
       metric("기준", clock(payload.generatedAt), "상태 조회 시각"),
       '</div>',
       '<section class="cws-data-line cws-health-freshness"><span>상태 기준 <strong>' + escapeHtml(clock(payload.generatedAt)) + '</strong></span><span>신선성 <strong class="' + (stale ? "warning" : "positive") + '">' + escapeHtml(stale ? "갱신 필요" : "최신") + '</strong></span><span>경과 <strong>' + escapeHtml(ageSeconds + "초") + '</strong></span><button type="button" data-action="refresh-operations-health"' + (options.loading ? ' disabled' : '') + '>' + escapeHtml(options.loading ? "확인 중" : "새로고침") + '</button></section>',

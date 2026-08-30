@@ -1370,6 +1370,22 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS historical_replay_jobs (
+        job_id VARCHAR(191) PRIMARY KEY,
+        replay_kind VARCHAR(32) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL DEFAULT '',
+        request_json LONGTEXT NOT NULL,
+        result_json LONGTEXT NOT NULL,
+        last_error TEXT NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        KEY idx_historical_replay_jobs_status (status, created_at),
+        KEY idx_historical_replay_jobs_kind (replay_kind, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS market_quote_cache (
         provider VARCHAR(64) NOT NULL,
         account_id VARCHAR(191) NOT NULL,
@@ -1823,6 +1839,25 @@ MYSQL_SCHEMA = [
         UNIQUE KEY uq_decision_publication_fingerprint (publication_fingerprint),
         KEY idx_decision_publication_notification (notification_job_id),
         KEY idx_decision_publication_episode (decision_episode_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_decision_audit_entries (
+        audit_id VARCHAR(191) PRIMARY KEY,
+        subject_case_id VARCHAR(191) NOT NULL,
+        case_version INT NOT NULL,
+        stage VARCHAR(32) NOT NULL,
+        outcome_kind VARCHAR(32) NOT NULL DEFAULT '',
+        ai_status VARCHAR(32) NOT NULL DEFAULT 'not-requested',
+        final_action VARCHAR(32) NOT NULL DEFAULT '',
+        candidate_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        publication_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        entry_fingerprint VARCHAR(64) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_decision_audit_case_version (subject_case_id, case_version),
+        KEY idx_decision_audit_case_stage (subject_case_id, stage, created_at),
+        KEY idx_decision_audit_ai_status (ai_status, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

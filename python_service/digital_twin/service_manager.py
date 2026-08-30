@@ -85,6 +85,13 @@ BASE_WORKERS = {
         "command": [sys.executable, "-u", "python_service/service.py", "model-review", "watch"],
         "needle": "python_service/service.py model-review watch",
     },
+    "historical-replay": {
+        "label": "Python historical replay worker",
+        "pid": data_dir() / "python-historical-replay.pid",
+        "log": data_dir() / "python-historical-replay.log",
+        "command": [sys.executable, "-u", "python_service/service.py", "historical-replay", "watch", "--limit", "1"],
+        "needle": "python_service/service.py historical-replay watch",
+    },
     "ontology-reasoning": {
         "label": "Python ontology reasoning worker",
         "pid": data_dir() / "python-ontology-reasoning.pid",
@@ -1077,6 +1084,24 @@ def typedb_rotation_lock_path() -> Path:
     return data_dir() / "typedb-rotation.lock"
 
 
+def typedb_maintenance_lock_expired(
+    payload: Dict[str, object],
+    *,
+    now_epoch: float = None,
+) -> bool:
+    """Treat the filesystem fence as a lease, not a permanent PID lock."""
+
+    try:
+        expires_at = float((payload or {}).get("expiresAtEpoch") or 0)
+    except (TypeError, ValueError):
+        expires_at = 0.0
+    # Legacy locks did not carry a lease boundary. Preserve their former PID
+    # semantics so an upgrade cannot steal an in-flight maintenance operation.
+    if expires_at <= 0:
+        return False
+    return float(now_epoch if now_epoch is not None else time.time()) > expires_at
+
+
 def acquire_typedb_maintenance_lock(
     operation: str = "maintenance",
     max_age_seconds: int = 3600,
@@ -1099,7 +1124,10 @@ def acquire_typedb_maintenance_lock(
         "token": token,
         "startedAt": iso_now(),
         "startedAtEpoch": started_epoch,
+        "heartbeatAt": iso_now(),
+        "heartbeatAtEpoch": started_epoch,
         "expiresAtEpoch": started_epoch + max(60, int(max_age_seconds or 3600)),
+        "leaseSeconds": max(60, int(max_age_seconds or 3600)),
     }
     for _attempt in range(2):
         try:
@@ -1110,7 +1138,7 @@ def acquire_typedb_maintenance_lock(
             except (OSError, ValueError, json.JSONDecodeError):
                 existing = {}
             owner = int_value(existing.get("pid"), 0, 0)
-            if owner and pid_exists(owner):
+            if owner and pid_exists(owner) and not typedb_maintenance_lock_expired(existing):
                 return {
                     "acquired": False,
                     "reason": "another TypeDB maintenance operation is active",
@@ -1153,7 +1181,57 @@ def typedb_maintenance_lock_owned(lock: Dict[str, object]) -> bool:
     return (
         int_value(current.get("pid"), 0, 0) == int_value((lock or {}).get("pid"), 0, 0)
         and str(current.get("token") or "") == expected
+        and not typedb_maintenance_lock_expired(current)
     )
+
+
+def renew_typedb_maintenance_lock(
+    lock: Dict[str, object],
+    *,
+    now_epoch: float = None,
+) -> Dict[str, object]:
+    """Renew a maintenance lease only while the caller still owns its token."""
+
+    if not bool((lock or {}).get("acquired")):
+        return {"renewed": False, "reason": "lock-not-acquired"}
+    path = typedb_rotation_lock_path()
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {"renewed": False, "reason": "lock-unavailable"}
+    expected = str((lock or {}).get("token") or "")
+    if (
+        int_value(current.get("pid"), 0, 0) != int_value((lock or {}).get("pid"), 0, 0)
+        or str(current.get("token") or "") != expected
+    ):
+        return {"renewed": False, "reason": "fencing-token-replaced"}
+    now = float(now_epoch if now_epoch is not None else time.time())
+    lease_seconds = int_value(
+        current.get("leaseSeconds") or (lock or {}).get("leaseSeconds"),
+        3600,
+        60,
+    )
+    current.update({
+        "heartbeatAt": iso_now(),
+        "heartbeatAtEpoch": now,
+        "expiresAtEpoch": now + lease_seconds,
+    })
+    temporary = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(current, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except OSError as error:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        return {"renewed": False, "reason": str(error)[:180]}
+    lock.update(current)
+    return {"renewed": True, **current}
 
 
 def release_typedb_rotation_lock(lock: Dict[str, object]) -> None:
@@ -1604,7 +1682,8 @@ def reconcile_typedb_auto_rotation_state(
     except (OSError, ValueError, json.JSONDecodeError):
         lock = {}
     owner_pid = int_value(lock.get("pid"), 0, 0)
-    if owner_pid and pid_exists(owner_pid):
+    lock_expired = typedb_maintenance_lock_expired(lock, now_epoch=now)
+    if owner_pid and pid_exists(owner_pid) and not lock_expired:
         refreshed = record_typedb_auto_rotation_state(
             lastAutoRotationStatus="running",
             lastAutoRotationHeartbeatAt=iso_now(),
@@ -3252,6 +3331,23 @@ def status() -> int:
         + " · launch-agent="
         + ("configured" if configured else "not-configured")
     )
+    heartbeat = read_supervisor_heartbeat()
+    try:
+        heartbeat_age = max(0, int(time.time() - float(heartbeat.get("observedAtEpoch") or 0)))
+    except (TypeError, ValueError):
+        heartbeat_age = -1
+    watchdog_pid = read_pid(supervisor_watchdog_pid_path())
+    watchdog_running = bool(
+        watchdog_pid
+        and pid_exists(watchdog_pid)
+        and "monitor_service.py watchdog" in command_for_pid(watchdog_pid)
+    )
+    print(
+        "Orbit Alpha supervisor watchdog: "
+        + ("running" if watchdog_running else "stopped")
+        + " · heartbeat-age="
+        + (str(heartbeat_age) + "s" if heartbeat_age >= 0 else "unknown")
+    )
     return 0
 
 
@@ -3357,6 +3453,84 @@ def supervisor_pid_path() -> Path:
 
 def supervisor_log_path() -> Path:
     return data_dir() / "python-supervisor.log"
+
+
+def supervisor_heartbeat_path() -> Path:
+    return data_dir() / "python-supervisor-heartbeat.json"
+
+
+def supervisor_watchdog_pid_path() -> Path:
+    return data_dir() / "python-supervisor-watchdog.pid"
+
+
+def supervisor_watchdog_log_path() -> Path:
+    return data_dir() / "python-supervisor-watchdog.log"
+
+
+def write_supervisor_heartbeat(state: str = "running", **details: object) -> Dict[str, object]:
+    payload = {
+        "pid": os.getpid(),
+        "state": str(state or "running"),
+        "observedAt": iso_now(),
+        "observedAtEpoch": time.time(),
+        **{key: value for key, value in details.items() if value is not None},
+    }
+    path = supervisor_heartbeat_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return payload
+
+
+def read_supervisor_heartbeat() -> Dict[str, object]:
+    try:
+        payload = json.loads(supervisor_heartbeat_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(payload or {}) if isinstance(payload, dict) else {}
+
+
+def process_state_for_pid(pid: int) -> str:
+    if not pid:
+        return ""
+    try:
+        output = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return str(output or "").strip().upper()
+
+
+def supervisor_recovery_decision(
+    *,
+    pid: int,
+    process_exists: bool,
+    process_state: str,
+    heartbeat: Dict[str, object],
+    now_epoch: float = None,
+    stale_after_seconds: int = 30,
+) -> Dict[str, object]:
+    """Return a deterministic recovery action for the independent watchdog."""
+
+    now = float(now_epoch if now_epoch is not None else time.time())
+    try:
+        heartbeat_epoch = float((heartbeat or {}).get("observedAtEpoch") or 0)
+    except (TypeError, ValueError):
+        heartbeat_epoch = 0.0
+    age_seconds = max(0, int(now - heartbeat_epoch)) if heartbeat_epoch else None
+    state = str(process_state or "").upper()
+    if not pid or not process_exists:
+        return {"action": "start", "reason": "supervisor-process-missing", "heartbeatAgeSeconds": age_seconds}
+    if "T" in state:
+        return {"action": "continue", "reason": "supervisor-process-stopped", "heartbeatAgeSeconds": age_seconds}
+    if heartbeat_epoch <= 0 or age_seconds > max(10, int(stale_after_seconds or 30)):
+        return {"action": "replace", "reason": "supervisor-heartbeat-stale", "heartbeatAgeSeconds": age_seconds}
+    return {"action": "none", "reason": "healthy", "heartbeatAgeSeconds": age_seconds}
 
 
 def supervisor_maintenance_path() -> Path:
@@ -3478,6 +3652,10 @@ def launch_agent_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / "com.orbitalpha.services.plist"
 
 
+def watchdog_launch_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / "com.orbitalpha.services.watchdog.plist"
+
+
 def configured_supervisor_available() -> bool:
     return bool(launch_agent_path().exists() and shutil.which("launchctl"))
 
@@ -3511,8 +3689,9 @@ def reload_configured_supervisor() -> int:
             remove_pid(supervisor_pid_path())
         else:
             if wait_for_supervisor_replacement(previous_pid):
+                watchdog_result = install_supervisor_watchdog()
                 print("Orbit Alpha runtime supervisor reloaded after service restart.")
-                return 0
+                return watchdog_result
     result = install_supervisor()
     if result == 0:
         print("Orbit Alpha runtime supervisor reloaded after service restart.")
@@ -3543,9 +3722,19 @@ def bootout_supervisor_launch_agent() -> None:
     subprocess.run([launchctl, "bootout", domain, str(path)], capture_output=True, text=True)
 
 
+def bootout_watchdog_launch_agent() -> None:
+    path = watchdog_launch_agent_path()
+    launchctl = shutil.which("launchctl")
+    if not launchctl or not path.exists():
+        return
+    domain = "gui/" + str(os.getuid())
+    subprocess.run([launchctl, "bootout", domain, str(path)], capture_output=True, text=True)
+
+
 def stop_supervisor() -> None:
     # KeepAlive would immediately relaunch the supervisor unless launchd is
     # detached before honoring an explicit service stop.
+    bootout_watchdog_launch_agent()
     bootout_supervisor_launch_agent()
     pid = read_pid(supervisor_pid_path())
     if not pid or pid == os.getpid():
@@ -3573,6 +3762,7 @@ def supervise() -> int:
     supervisor_pid_path().write_text(str(os.getpid()) + "\n", encoding="utf-8")
     os.chmod(supervisor_pid_path(), 0o600)
     append_log(supervisor_log_path(), "start")
+    write_supervisor_heartbeat("starting")
     stopping = {"value": False}
 
     def request_stop(_signum, _frame):
@@ -3590,8 +3780,10 @@ def supervise() -> int:
         initialized_typedb_pid = 0
         typedb_initialization_retry_at = 0.0
         while not stopping["value"]:
+            write_supervisor_heartbeat("running")
             if supervisor_maintenance_active():
                 acknowledge_supervisor_maintenance()
+                write_supervisor_heartbeat("maintenance")
                 time.sleep(1)
                 continue
             specs = worker_specs()
@@ -3740,9 +3932,136 @@ def supervise() -> int:
                 last_maintenance_at = time.monotonic()
             time.sleep(5)
     finally:
+        write_supervisor_heartbeat("stopping")
         stop(include_supervisor=False)
         remove_pid(supervisor_pid_path())
         append_log(supervisor_log_path(), "stop")
+    return 0
+
+
+def kickstart_supervisor_launch_agent(replace: bool = False) -> bool:
+    launchctl = shutil.which("launchctl")
+    if not launchctl:
+        return False
+    domain_target = "gui/" + str(os.getuid()) + "/com.orbitalpha.services"
+    command = [launchctl, "kickstart"]
+    if replace:
+        command.append("-k")
+    command.append(domain_target)
+    result = subprocess.run(command, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def supervisor_watchdog_once(
+    *,
+    stale_after_seconds: int = 300,
+) -> Dict[str, object]:
+    pid = read_pid(supervisor_pid_path())
+    command = command_for_pid(pid) if pid else ""
+    exists = bool(pid and pid_exists(pid) and "monitor_service.py supervise" in command)
+    state = process_state_for_pid(pid) if exists else ""
+    decision = supervisor_recovery_decision(
+        pid=pid,
+        process_exists=exists,
+        process_state=state,
+        heartbeat=read_supervisor_heartbeat(),
+        stale_after_seconds=stale_after_seconds,
+    )
+    action = str(decision.get("action") or "none")
+    recovered = False
+    if action == "continue" and pid:
+        try:
+            os.kill(pid, signal.SIGCONT)
+            recovered = True
+        except OSError:
+            recovered = kickstart_supervisor_launch_agent()
+    elif action == "start":
+        recovered = kickstart_supervisor_launch_agent()
+    elif action == "replace" and pid:
+        try:
+            # SIGHUP replaces only the supervisor under launchd. Managed
+            # workers continue serving while the new supervisor adopts them.
+            os.kill(pid, signal.SIGHUP)
+            recovered = True
+        except OSError:
+            recovered = kickstart_supervisor_launch_agent(replace=True)
+    result = {**decision, "pid": pid, "processState": state, "recovered": recovered}
+    if action != "none":
+        append_log(
+            supervisor_watchdog_log_path(),
+            "action=" + action
+            + " reason=" + str(decision.get("reason") or "")
+            + " pid=" + str(pid or 0)
+            + " recovered=" + str(recovered).lower(),
+        )
+    return result
+
+
+def supervise_watchdog() -> int:
+    path = supervisor_watchdog_pid_path()
+    existing = read_pid(path)
+    if existing and existing != os.getpid() and pid_exists(existing):
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    stopping = {"value": False}
+
+    def request_stop(_signum, _frame):
+        stopping["value"] = True
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    append_log(supervisor_watchdog_log_path(), "start")
+    try:
+        while not stopping["value"]:
+            supervisor_watchdog_once()
+            time.sleep(10)
+    finally:
+        remove_pid(path)
+        append_log(supervisor_watchdog_log_path(), "stop")
+    return 0
+
+
+def install_supervisor_watchdog() -> int:
+    launchctl = shutil.which("launchctl")
+    if not launchctl:
+        return 0
+    path = watchdog_launch_agent_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "Label": "com.orbitalpha.services.watchdog",
+        "ProgramArguments": [sys.executable, str(ROOT_DIR / "python_service" / "monitor_service.py"), "watchdog"],
+        "WorkingDirectory": str(ROOT_DIR),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ThrottleInterval": 10,
+        "ProcessType": "Background",
+        "EnvironmentVariables": {
+            "PYTHONUNBUFFERED": "1",
+            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+        "StandardOutPath": str(supervisor_watchdog_log_path()),
+        "StandardErrorPath": str(supervisor_watchdog_log_path()),
+    }
+    with path.open("wb") as handle:
+        plistlib.dump(payload, handle, sort_keys=True)
+    os.chmod(path, 0o600)
+    domain = "gui/" + str(os.getuid())
+    subprocess.run([launchctl, "bootout", domain, str(path)], capture_output=True, text=True)
+    result = subprocess.run(
+        [launchctl, "bootstrap", domain, str(path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("Watchdog LaunchAgent install failed: " + str(result.stderr or result.stdout).strip())
+        return result.returncode
+    subprocess.run(
+        [launchctl, "kickstart", domain + "/com.orbitalpha.services.watchdog"],
+        capture_output=True,
+        text=True,
+    )
     return 0
 
 
@@ -3775,6 +4094,9 @@ def install_supervisor() -> int:
     if result.returncode != 0:
         print("LaunchAgent install failed: " + str(result.stderr or result.stdout).strip())
         return result.returncode
+    watchdog_result = install_supervisor_watchdog()
+    if watchdog_result != 0:
+        return watchdog_result
     # RunAtLoad normally starts the service during bootstrap. A non-destructive
     # kickstart covers the narrow case where launchd has not scheduled it yet;
     # ``-k`` would kill that first supervisor and interrupt healthy workers.
@@ -3785,9 +4107,14 @@ def install_supervisor() -> int:
 
 def uninstall_supervisor() -> int:
     path = launch_agent_path()
+    watchdog_path = watchdog_launch_agent_path()
     stop_supervisor()
     try:
         path.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        watchdog_path.unlink()
     except FileNotFoundError:
         pass
     print("Orbit Alpha supervisor uninstalled.")
@@ -4361,9 +4688,11 @@ def typedb_rotate(
                 details={"rotationReason": str(rotation_reason or decision.get("reason") or "manual")},
             )
             prepared = prepare_typedb_blue_green_candidate(spec)
+            lease_renewal = renew_typedb_maintenance_lock(rotation_lock)
             record_typedb_auto_rotation_state(
                 lastAutoRotationStatus="running",
                 lastAutoRotationStage="candidate-prepared",
+                lastAutoRotationLeaseRenewed=bool(lease_renewal.get("renewed")),
             )
             candidate = dict(prepared.get("candidate") or {})
             candidate_validation = typedb_candidate_validation_summary(prepared)
@@ -4415,7 +4744,7 @@ def typedb_rotate(
                 database=str(spec.get("typedbDatabase") or ""),
                 details=candidate_validation,
             )
-            if not typedb_maintenance_lock_owned(rotation_lock):
+            if not bool(lease_renewal.get("renewed")) or not typedb_maintenance_lock_owned(rotation_lock):
                 cleanup_typedb_candidate(candidate, remove_data=False)
                 result = {
                     "status": "cutover-fenced-active-preserved",
@@ -4445,12 +4774,14 @@ def typedb_rotate(
             )
             services_stopped = True
             stop(include_supervisor=False)
+            renew_typedb_maintenance_lock(rotation_lock)
             result = swap_typedb_blue_green_data_paths(spec, candidate)
             result["operationId"] = operation_id
             result["candidateValidation"] = candidate_validation
         else:
             services_stopped = True
             stop(include_supervisor=False)
+            renew_typedb_maintenance_lock(rotation_lock)
             try:
                 result = run_typedb_data_retention(spec, force=True)
             except Exception as error:  # noqa: BLE001 - the stopped runtime must still be recovered.
@@ -4585,9 +4916,11 @@ def main(argv: List[str] = None) -> int:
         return result if result != 0 else supervisor_result
     if command == "supervise":
         return supervise()
+    if command == "watchdog":
+        return supervise_watchdog()
     if command == "supervisor-install":
         return install_supervisor()
     if command == "supervisor-uninstall":
         return uninstall_supervisor()
-    print("Usage: python3 python_service/monitor_service.py start|stop|restart [--restart-share]|status|supervise|supervisor-install|supervisor-uninstall|typedb-maintenance|typedb-rotate [--force]")
+    print("Usage: python3 python_service/monitor_service.py start|stop|restart [--restart-share]|status|supervise|watchdog|supervisor-install|supervisor-uninstall|typedb-maintenance|typedb-rotate [--force]")
     return 1

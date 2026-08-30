@@ -654,6 +654,37 @@ class ModelReviewScheduler:
             wait_until_running(lambda: self.running, end_at)
 
 
+class HistoricalReplayScheduler:
+    def __init__(self, runner, interval_seconds: int = 5, error_reporter=None):
+        self.runner = runner
+        self.interval_seconds = max(2, int(interval_seconds or 5))
+        self.error_reporter = error_reporter or operational_error_reporter()
+        self.running = True
+
+    def stop(self, *_args) -> None:
+        self.running = False
+
+    def run_forever(self, limit: int = 1) -> None:
+        install_stop_handlers(self.stop)
+        print("Python historical replay worker started. interval=" + str(self.interval_seconds) + "s")
+        while self.running:
+            started = time.monotonic()
+            try:
+                processed = self.runner.run_once(limit=limit)
+                if processed:
+                    print("Processed historical replay jobs: " + str(processed))
+            except Exception as error:  # noqa: BLE001 - worker must survive one failed replay.
+                print("Python historical replay worker error: " + str(error))
+                report_runtime_error(
+                    self.error_reporter,
+                    "Python historical replay worker",
+                    error,
+                    "historical replay cycle",
+                )
+            end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
+            wait_until_running(lambda: self.running, end_at)
+
+
 class NotificationQueueScheduler:
     def __init__(self, runner, interval_seconds: int, error_reporter=None):
         self.runner = runner

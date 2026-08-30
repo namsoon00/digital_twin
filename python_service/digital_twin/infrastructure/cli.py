@@ -59,6 +59,7 @@ from .service_factory import (
     build_investment_strategy_proposal_service,
     build_kis_realtime_websocket_runner,
     build_external_data_collection_runner,
+    build_historical_replay_job_service,
     build_market_data_collection_runner,
     build_model_review_runner,
     build_monitor_runner,
@@ -89,6 +90,7 @@ from .schedulers import (
     ExternalDataCollectionScheduler,
     MarketDataCollectionScheduler,
     ModelReviewScheduler,
+    HistoricalReplayScheduler,
     NewsCollectionScheduler,
     NewsAnalysisEnrichmentScheduler,
     NotificationQueueScheduler,
@@ -400,6 +402,27 @@ def model_review_command(args) -> int:
     if args.model_review_action == "watch":
         interval = int(os.environ.get("MODEL_REVIEW_INTERVAL_SECONDS") or settings.get("modelReviewIntervalSeconds") or 300)
         ModelReviewScheduler(runner, interval).run_forever(limit=limit)
+        return 0
+    return 1
+
+
+def historical_replay_command(args) -> int:
+    service = build_historical_replay_job_service()
+    if args.historical_replay_action == "status":
+        print(json.dumps(service.list(limit=20), ensure_ascii=False))
+        return 0
+    limit = max(1, min(5, int(args.limit or 1)))
+    if args.historical_replay_action == "once":
+        print("historicalReplayJobsProcessed=" + str(service.run_once(limit=limit)))
+        return 0
+    if args.historical_replay_action == "watch":
+        settings = runtime_settings()
+        interval = int(
+            os.environ.get("HISTORICAL_REPLAY_INTERVAL_SECONDS")
+            or settings.get("historicalReplayIntervalSeconds")
+            or 5
+        )
+        HistoricalReplayScheduler(service, interval).run_forever(limit=limit)
         return 0
     return 1
 
@@ -2233,6 +2256,21 @@ def build_parser() -> argparse.ArgumentParser:
     review_watch.add_argument("--limit", default="")
     model_review_actions.add_parser("status")
     model_review.set_defaults(func=model_review_command)
+
+    historical_replay = subparsers.add_parser(
+        "historical-replay",
+        help="Run isolated point-in-time replay jobs",
+    )
+    historical_replay_actions = historical_replay.add_subparsers(
+        dest="historical_replay_action",
+        required=True,
+    )
+    historical_replay_once = historical_replay_actions.add_parser("once")
+    historical_replay_once.add_argument("--limit", default="1")
+    historical_replay_watch = historical_replay_actions.add_parser("watch")
+    historical_replay_watch.add_argument("--limit", default="1")
+    historical_replay_actions.add_parser("status")
+    historical_replay.set_defaults(func=historical_replay_command)
 
     notifications = subparsers.add_parser("notifications", help="Run queued notification delivery")
     notification_actions = notifications.add_subparsers(dest="notifications_action", required=True)

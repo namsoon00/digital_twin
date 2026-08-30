@@ -29,6 +29,7 @@ from .mysql_operational import (
     MySQLMarketObservationReasoningAnchorStore,
     MySQLMarketTimeSeriesStore,
     MySQLModelReviewJobStore,
+    MySQLHistoricalReplayJobStore,
     MySQLMonitorStore,
     MySQLOntologyReasoningMonitorStore,
     MySQLMonitoringCycleRecorder,
@@ -181,6 +182,11 @@ def event_log(settings: Dict[str, str] = None):
 def model_review_job_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLModelReviewJobStore(configured)
+
+
+def historical_replay_job_store(settings: Dict[str, str] = None):
+    configured = configured_settings(settings)
+    return MySQLHistoricalReplayJobStore(configured)
 
 
 def notification_job_store(settings: Dict[str, str] = None):

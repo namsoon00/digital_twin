@@ -33,6 +33,11 @@ def episode(episode_id="episode-1", eligibility="eligible", missing=None):
         "accountId": "demo",
         "symbol": "AAPL",
         "selectedHypothesisId": "hypothesis:trend",
+        "factsAtDecision": {
+            "hypothesisOutcomeContract": {
+                "sourceRuleIds": ["graph.loss_guard.breakdown.v1"],
+            },
+        },
         "hypothesisSet": {
             "hypotheses": [{
                 "hypothesisId": "hypothesis:trend",
@@ -247,6 +252,10 @@ class HypothesisGovernanceTests(unittest.TestCase):
         self.assertFalse(proposed["proposals"][0]["proposedChange"]["automaticDeployment"])
         self.assertFalse(replay["mutated"])
         self.assertEqual("historical-replay-only", replay["decisionEligibility"])
+        self.assertEqual("hypothesis:trend", replay["performanceByHypothesis"][0]["id"])
+        self.assertEqual("graph.loss_guard.breakdown.v1", replay["performanceByRule"][0]["id"])
+        self.assertEqual(1.0, replay["performanceByRule"][0]["corroborationRate"])
+        self.assertFalse(replay["performanceSummary"]["automaticDeployment"])
 
 
 if __name__ == "__main__":

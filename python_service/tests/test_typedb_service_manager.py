@@ -452,6 +452,69 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("running", result["marker"]["lastAutoRotationStatus"])
         self.assertEqual(1800, result["marker"]["lastAutoRotationHeartbeatEpoch"])
 
+    def test_expired_rotation_lock_does_not_block_new_owner_even_if_pid_exists(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock = Path(temp) / "rotation.lock"
+            lock.write_text(json.dumps({
+                "pid": 4321,
+                "token": "stale",
+                "expiresAtEpoch": 1000,
+            }), encoding="utf-8")
+            with patch.object(service_manager, "typedb_rotation_lock_path", return_value=lock), \
+                    patch.object(service_manager, "pid_exists", return_value=True), \
+                    patch.object(service_manager.time, "time", return_value=1100):
+                acquired = service_manager.acquire_typedb_maintenance_lock(
+                    "replacement",
+                    max_age_seconds=60,
+                )
+
+        self.assertTrue(acquired["acquired"])
+        self.assertEqual("replacement", acquired["operation"])
+        self.assertNotEqual("stale", acquired["token"])
+
+    def test_rotation_lock_renewal_preserves_token_and_extends_lease(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lock_path = Path(temp) / "rotation.lock"
+            lock = {
+                "acquired": True,
+                "pid": os.getpid(),
+                "token": "owned",
+                "leaseSeconds": 60,
+                "expiresAtEpoch": 1060,
+            }
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            with patch.object(service_manager, "typedb_rotation_lock_path", return_value=lock_path):
+                renewed = service_manager.renew_typedb_maintenance_lock(lock, now_epoch=1050)
+
+        self.assertTrue(renewed["renewed"])
+        self.assertEqual("owned", renewed["token"])
+        self.assertEqual(1110, renewed["expiresAtEpoch"])
+
+    def test_supervisor_watchdog_resumes_stopped_process_before_restarting(self):
+        decision = service_manager.supervisor_recovery_decision(
+            pid=123,
+            process_exists=True,
+            process_state="T",
+            heartbeat={"observedAtEpoch": 1000},
+            now_epoch=1010,
+        )
+
+        self.assertEqual("continue", decision["action"])
+        self.assertEqual("supervisor-process-stopped", decision["reason"])
+
+    def test_supervisor_watchdog_replaces_live_process_with_stale_heartbeat(self):
+        decision = service_manager.supervisor_recovery_decision(
+            pid=123,
+            process_exists=True,
+            process_state="S",
+            heartbeat={"observedAtEpoch": 1000},
+            now_epoch=1401,
+            stale_after_seconds=300,
+        )
+
+        self.assertEqual("replace", decision["action"])
+        self.assertEqual(401, decision["heartbeatAgeSeconds"])
+
     def test_typedb_rotate_recovers_workers_and_alerts_when_reset_fails(self):
         spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \

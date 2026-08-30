@@ -48,6 +48,7 @@ from ..application.hypothesis_review_service import HypothesisReviewService
 from ..application.hypothesis_quality_review_service import HypothesisQualityReviewService
 from ..application.hypothesis_outcome_replay_service import HypothesisOutcomeReplayService
 from ..application.historical_decision_replay_service import HistoricalDecisionReplayService
+from ..application.historical_replay_job_service import HistoricalReplayJobService
 from ..application.hypothesis_development_service import HypothesisDevelopmentService
 from ..application.investment_strategy_proposal_service import InvestmentStrategyProposalService
 from ..application.investment_calendar_candidate_service import InvestmentCalendarCandidateService
@@ -963,6 +964,27 @@ def build_historical_decision_replay_service(settings=None) -> HistoricalDecisio
     configured_settings = settings or runtime_settings()
     return HistoricalDecisionReplayService(
         decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+    )
+
+
+def build_historical_replay_job_service(
+    settings=None,
+    *,
+    execution_enabled: bool = True,
+) -> HistoricalReplayJobService:
+    """Build isolated replay work without notification or ABox writers."""
+
+    configured_settings = settings or runtime_settings()
+    brain = build_investment_brain_service(configured_settings) if execution_enabled else None
+    return HistoricalReplayJobService(
+        store=stores.historical_replay_job_store(configured_settings),
+        decision_replay_service=(
+            build_historical_decision_replay_service(configured_settings)
+            if execution_enabled else None
+        ),
+        hypothesis_replay_service=(
+            brain.hypothesis_outcome_replay_service if brain else None
+        ),
     )
 
 

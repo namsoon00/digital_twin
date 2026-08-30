@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import hashlib
+import json
 from typing import List, Optional
 
 from ..domain.investment_reasoning import SubjectDecisionCase
@@ -152,6 +154,93 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
                     publication.delivered_at,
                 ),
             )
+        MySQLSubjectDecisionCaseStore.save_audit_entry_with_connection(
+            connection,
+            subject_case,
+        )
+
+    @staticmethod
+    def save_audit_entry_with_connection(connection, subject_case: SubjectDecisionCase) -> None:
+        """Append one compact immutable receipt for every lifecycle version."""
+
+        publication = subject_case.publication
+        judgment = subject_case.ai_judgment
+        decision = subject_case.final_decision
+        abstention = subject_case.abstention
+        if judgment:
+            ai_status = "completed"
+        elif subject_case.stage == "AI_PENDING":
+            ai_status = "pending"
+        elif abstention and str(abstention.reason_code or "").startswith("ai-"):
+            ai_status = "failed"
+        else:
+            ai_status = "not-requested"
+        payload = {
+            "subjectCaseId": subject_case.subject_case_id,
+            "batchCaseId": subject_case.batch_case_id,
+            "requestId": subject_case.request_id,
+            "deploymentId": subject_case.deployment_id,
+            "releaseFingerprint": subject_case.release_fingerprint,
+            "accountId": subject_case.account_id,
+            "symbol": subject_case.symbol,
+            "sourceAboxSnapshotId": subject_case.source_abox_snapshot_id,
+            "inferenceGenerationId": subject_case.inference_generation_id,
+            "synthesisId": subject_case.synthesis.synthesis_id,
+            "candidateSetId": subject_case.candidate_set.candidate_set_id,
+            "candidateFingerprint": subject_case.candidate_set.fingerprint,
+            "eligibleHypothesisIds": list(subject_case.candidate_set.eligible_hypothesis_ids),
+            "graphCandidateAction": subject_case.synthesis.graph_candidate_action,
+            "stage": subject_case.stage,
+            "caseVersion": subject_case.version,
+            "aiRequestId": subject_case.ai_request_id,
+            "aiStatus": ai_status,
+            "aiJudgment": judgment.to_dict() if judgment else {},
+            "finalDecision": decision.to_dict() if decision else {},
+            "abstention": abstention.to_dict() if abstention else {},
+            "publication": publication.to_dict() if publication else {},
+            "notificationJobId": subject_case.notification_job_id,
+            "createdAt": subject_case.updated_at or subject_case.created_at,
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        entry_fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        audit_id = hashlib.sha256(
+            (
+                subject_case.subject_case_id
+                + "|" + str(subject_case.version)
+                + "|" + subject_case.stage
+            ).encode("utf-8")
+        ).hexdigest()
+        existing = connection.execute(
+            "SELECT entry_fingerprint FROM investment_decision_audit_entries WHERE audit_id = %s",
+            (audit_id,),
+        ).fetchone()
+        if existing:
+            if str(existing.get("entry_fingerprint") or "") != entry_fingerprint:
+                raise ValueError("Immutable decision audit fingerprint mismatch: " + audit_id)
+            return
+        connection.execute(
+            """
+            INSERT INTO investment_decision_audit_entries (
+                audit_id, subject_case_id, case_version, stage, outcome_kind,
+                ai_status, final_action, candidate_fingerprint,
+                publication_fingerprint, entry_fingerprint, payload_json, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                audit_id,
+                subject_case.subject_case_id,
+                subject_case.version,
+                subject_case.stage,
+                publication.outcome_kind if publication else "",
+                ai_status,
+                decision.action if decision else "",
+                subject_case.candidate_set.fingerprint,
+                publication.fingerprint if publication else "",
+                entry_fingerprint,
+                canonical,
+                subject_case.updated_at or subject_case.created_at,
+            ),
+        )
 
     def get(self, subject_case_id: str) -> Optional[SubjectDecisionCase]:
         with self.connect() as connection:
@@ -233,6 +322,19 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
                 tuple(params),
             ).fetchone()
         return self.case_from_row(row)
+
+    def audit_trail(self, subject_case_id: str) -> List[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM investment_decision_audit_entries "
+                "WHERE subject_case_id = %s ORDER BY case_version, created_at, audit_id",
+                (str(subject_case_id or ""),),
+            ).fetchall()
+        return [
+            _json_loads(row.get("payload_json"), {})
+            for row in rows or []
+            if row.get("payload_json")
+        ]
 
     @staticmethod
     def case_from_row(row) -> Optional[SubjectDecisionCase]:

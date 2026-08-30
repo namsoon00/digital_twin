@@ -127,7 +127,7 @@ from ..infrastructure.service_factory import (
     build_instrument_timeline_query_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
-    build_historical_decision_replay_service,
+    build_historical_replay_job_service,
     build_hypothesis_development_service,
     build_trade_execution_service,
     build_notification_queue_runner,
@@ -1523,6 +1523,7 @@ def investment_reasoning_cases_payload(query: Dict[str, List[str]]) -> Dict[str,
             "status": "ok" if subject_case else "not-found",
             "subjectCase": subject_case.to_dict() if subject_case else {},
             "batchCase": batch_case.to_dict() if batch_case else {},
+            "auditTrail": subject_store.audit_trail(subject_case_id) if subject_case else [],
         }
     case_id = str(first_query(query, "caseId") or "").strip()
     if case_id:
@@ -7489,42 +7490,65 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
                 author=configured(body.get("author")) or "web-main",
             ))
 
+        replay_job_match = re.match(r"^/api/investment-brain/replay-jobs/([^/]+)$", path)
+        if replay_job_match and self.command == "GET":
+            replay_service = build_historical_replay_job_service(
+                operational_read_settings(), execution_enabled=False,
+            )
+            job = replay_service.get(urllib.parse.unquote(replay_job_match.group(1)))
+            return self.send_payload(200 if job else 404, {
+                "status": str(job.get("status") or "not-found") if job else "not-found",
+                "job": job,
+            })
+
         if path == "/api/investment-brain/hypothesis-replay" and self.command in {"GET", "POST"}:
-            body = self.read_json_body() if self.command == "POST" else {}
+            replay_service = build_historical_replay_job_service(
+                operational_read_settings(), execution_enabled=False,
+            )
+            if self.command == "GET":
+                return self.send_payload(200, replay_service.list(replay_kind="hypothesis", limit=20))
+            if not self.ensure_writable("공유 보기 모드에서는 과거 가설 재현 작업을 시작할 수 없습니다."):
+                return
+            body = self.read_json_body()
             try:
-                limit = int(body.get("limit") or first_query(query, "limit") or 500)
+                limit = int(body.get("limit") or 500)
             except (TypeError, ValueError):
                 limit = 500
-            return self.send_payload(200, build_investment_brain_service().replay_hypothesis_outcomes(
-                account_id=configured(body.get("accountId")) or first_query(query, "accountId"),
-                symbol=configured(body.get("symbol")) or first_query(query, "symbol"),
-                limit=limit,
-            ))
+            job = replay_service.enqueue("hypothesis", {
+                "accountId": configured(body.get("accountId")),
+                "symbol": configured(body.get("symbol")),
+                "limit": max(1, min(2000, limit)),
+            })
+            return self.send_payload(202, {"status": "queued", "job": job})
 
         if path == "/api/investment-brain/decision-replay" and self.command in {"GET", "POST"}:
-            body = self.read_json_body() if self.command == "POST" else {}
+            replay_service = build_historical_replay_job_service(
+                operational_read_settings(), execution_enabled=False,
+            )
+            if self.command == "GET":
+                return self.send_payload(200, replay_service.list(replay_kind="decision", limit=20))
+            if not self.ensure_writable("공유 보기 모드에서는 과거 판단 재현 작업을 시작할 수 없습니다."):
+                return
+            body = self.read_json_body()
             try:
-                limit = int(body.get("limit") or first_query(query, "limit") or 500)
+                limit = int(body.get("limit") or 500)
             except (TypeError, ValueError):
                 limit = 500
             try:
-                case_limit = int(body.get("caseLimit") or first_query(query, "caseLimit") or 30)
+                case_limit = int(body.get("caseLimit") or 30)
             except (TypeError, ValueError):
                 case_limit = 30
             include_cases_value = body.get("includeCases")
-            if include_cases_value is None:
-                include_cases_value = first_query(query, "includeCases")
             include_cases = str(include_cases_value or "").strip().lower() in {"1", "true", "yes", "on"}
-            return self.send_payload(200, build_historical_decision_replay_service(
-                operational_read_settings(),
-            ).run(
-                account_id=str(body.get("accountId") or first_query(query, "accountId") or ""),
-                symbol=str(body.get("symbol") or first_query(query, "symbol") or ""),
-                limit=limit,
-                include_cases=include_cases,
-                case_limit=case_limit,
-                replay_mode=str(body.get("replayMode") or first_query(query, "replayMode") or "strict-replay"),
-            ))
+            job = replay_service.enqueue("decision", {
+                "accountId": str(body.get("accountId") or ""),
+                "symbol": str(body.get("symbol") or ""),
+                "limit": max(1, min(2000, limit)),
+                "includeCases": include_cases,
+                "caseLimit": max(1, min(100, case_limit)),
+                "replayMode": str(body.get("replayMode") or "strict-replay"),
+            })
+            return self.send_payload(202, {"status": "queued", "job": job})
 
         if path == "/api/investment-brain/hypothesis-quality-review" and self.command == "POST":
             if not self.ensure_writable("공유 모드에서는 가설 품질 검토 제안을 저장할 수 없습니다."):

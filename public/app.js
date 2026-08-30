@@ -7876,6 +7876,7 @@
     var qualitySummary = quality.summary && typeof quality.summary === "object" ? quality.summary : {};
     var replay = state.hypothesisReplay && typeof state.hypothesisReplay === "object" ? state.hypothesisReplay : {};
     var integrity = replay.integrity && typeof replay.integrity === "object" ? replay.integrity : {};
+    var replayPerformance = replay.performanceSummary && typeof replay.performanceSummary === "object" ? replay.performanceSummary : {};
     var versions = state.hypothesisPolicyVersions && typeof state.hypothesisPolicyVersions === "object" ? state.hypothesisPolicyVersions : {};
     var operational = payload && payload.operational && typeof payload.operational === "object" ? payload.operational : {};
     var versionRows = Array.isArray(versions.versions) ? versions.versions : [];
@@ -7893,16 +7894,36 @@
       '<div class="hypothesis-governance-metrics">',
       '<span class="tone-chip ' + escapeHtml(reviewRequired ? "caution" : "hold") + '">품질 검토 ' + escapeHtml(reviewRequired + "건") + '</span>',
       '<span class="tone-chip ' + escapeHtml(integrity.passed === false ? "danger" : "hold") + '">' + escapeHtml(replay.status ? (integrity.passed === false ? "재생 점검 필요" : "재생 기록 있음") : "재생 전") + '</span>',
+      replayPerformance.observedHypothesisCount != null ? '<span class="tone-chip watch">성과 관측 가설 ' + escapeHtml(replayPerformance.observedHypothesisCount + "개") + '</span>' : '',
+      replayPerformance.observedRuleCount != null ? '<span class="tone-chip watch">성과 관측 규칙 ' + escapeHtml(replayPerformance.observedRuleCount + "개") + '</span>' : '',
       '<span class="tone-chip hold">RuleBox 버전 ' + escapeHtml(versionRows.length + "개") + '</span>',
       operational.ruleOutcomeContractCount != null ? '<span class="tone-chip ' + escapeHtml(Number(operational.fallbackRuleContractCount || 0) ? "caution" : "watch") + '">구조화 계약 ' + escapeHtml((operational.structuredRuleContractCount || 0) + "/" + operational.ruleOutcomeContractCount) + '</span>' : '',
       operational.legacyLifecycleContractCount ? '<span class="tone-chip caution">이전 계약 누락 ' + escapeHtml(operational.legacyLifecycleContractCount + "건") + '</span>' : '',
       operational.symbolCount != null ? '<span class="tone-chip hold">검토 범위 ' + escapeHtml(operational.symbolCount + "종목 · 종목당 " + (operational.episodeLimitPerSymbol || "-") + "건") + '</span>' : '',
       '</div>',
       replay.summary ? '<p class="hypothesis-governance-result">' + escapeHtml(replay.summary) + '</p>' : '',
+      renderHistoricalReplayPerformance(replay),
       operational.note ? '<p class="hypothesis-governance-result">' + escapeHtml(operational.note) + '</p>' : '',
       state.hypothesisPolicyVersionsError ? '<p class="form-error">' + escapeHtml(state.hypothesisPolicyVersionsError) + '</p>' : '',
       renderHypothesisPolicyVersions(versionRows, readOnly),
       '</section>'
+    ].join("");
+  }
+
+  function renderHistoricalReplayPerformance(replay) {
+    var rows = Array.isArray(replay && replay.performanceByRule) ? replay.performanceByRule.slice(0, 5) : [];
+    if (!rows.length) return "";
+    return [
+      '<details class="hypothesis-governance-performance">',
+      '<summary>규칙별 과거 관측 결과</summary>',
+      '<div class="compact-table">',
+      rows.map(function (row) {
+        var rate = row.corroborationRate == null ? "결론 표본 없음" : "지지 " + Math.round(Number(row.corroborationRate) * 100) + "%";
+        return '<div><code>' + escapeHtml(row.id || "-") + '</code><span>' + escapeHtml(rate + " · 적격 " + Number(row.eligibleCount || 0) + "건 · 유보 " + Number(row.inconclusiveCount || 0) + "건") + '</span></div>';
+      }).join(""),
+      '</div>',
+      '<p>이 통계는 자동 배포 기준이 아니라 검토 근거입니다.</p>',
+      '</details>'
     ].join("");
   }
 
@@ -8483,6 +8504,16 @@
       symbol: payload.symbol || "",
       limit: 500
     })
+      .then(function (queued) {
+        var job = queued && queued.job && typeof queued.job === "object" ? queued.job : {};
+        if (!job.jobId) throw new Error("재현 작업 번호를 받지 못했습니다.");
+        state.hypothesisReplay = {
+          status: "queued",
+          summary: "과거 관측 검증을 백그라운드에서 실행하고 있습니다. 화면은 계속 사용할 수 있습니다."
+        };
+        render();
+        return pollHistoricalReplayJob(job.jobId, 180);
+      })
       .then(function (result) {
         state.hypothesisReplay = result && typeof result === "object" ? result : {};
         showSnackbar("저장된 사후 관측을 다시 점검했습니다.");
@@ -8495,6 +8526,23 @@
         state.hypothesisReplayLoading = false;
         render();
       });
+  }
+
+  function pollHistoricalReplayJob(jobId, remainingAttempts) {
+    return requestJson(
+      "/api/investment-brain/replay-jobs/" + encodeURIComponent(jobId),
+      { force: true, cacheTtlMs: 0, silent: true, timeoutMs: 10000 }
+    ).then(function (payload) {
+      var job = payload && payload.job && typeof payload.job === "object" ? payload.job : {};
+      if (job.status === "completed") return job.result || {};
+      if (job.status === "failed") throw new Error(job.lastError || "과거 관측 검증에 실패했습니다.");
+      if (remainingAttempts <= 0) throw new Error("과거 관측 검증이 계속 실행 중입니다. 잠시 후 검증 운영 화면에서 상태를 확인하세요.");
+      return new Promise(function (resolve) {
+        setTimeout(resolve, 2000);
+      }).then(function () {
+        return pollHistoricalReplayJob(jobId, remainingAttempts - 1);
+      });
+    });
   }
 
   function proposeHypothesisQualityReview() {

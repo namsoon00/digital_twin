@@ -34458,6 +34458,57 @@ button:is(.symbol-watch-toggle, [data-network-busy-icon-only="true"]).is-request
   line-height: 1.5;
 }
 
+.hypothesis-governance-performance {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.hypothesis-governance-performance summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.hypothesis-governance-performance .compact-table {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.hypothesis-governance-performance .compact-table > div {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.3fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.hypothesis-governance-performance code,
+.hypothesis-governance-performance span,
+.hypothesis-governance-performance p {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.hypothesis-governance-performance p {
+  margin: 8px 0 0;
+}
+
+@media (max-width: 640px) {
+  .hypothesis-governance-performance .compact-table > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+}
+
 .hypothesis-policy-version-list {
   display: grid;
   gap: 7px;

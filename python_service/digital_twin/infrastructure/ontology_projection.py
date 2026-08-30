@@ -4054,6 +4054,7 @@ class PortfolioOntologyProjectionRecorder:
                 self.store_projection_result(snapshot, result)
                 return result
             current_state_transition = {}
+            current_state_recovery = {}
             begin_current_state_transition = getattr(
                 self.projection_run_store,
                 "begin_current_state_transition",
@@ -4070,6 +4071,7 @@ class PortfolioOntologyProjectionRecorder:
                     None,
                 )
                 if callable(recover_committed):
+                    current_state_recovery_started = time.perf_counter()
                     try:
                         current_state_recovery = dict(recover_committed(
                             world_id=projection_run.world_id,
@@ -4084,8 +4086,13 @@ class PortfolioOntologyProjectionRecorder:
                             "status": "error",
                             "reason": str(error)[:180],
                         }
+                    runtime_stages["currentStateRecoveryMs"] = int(
+                        (time.perf_counter() - current_state_recovery_started) * 1000
+                    )
                 else:
                     current_state_recovery = {"status": "unsupported"}
+                    runtime_stages["currentStateRecoveryMs"] = 0
+                current_state_transition_started = time.perf_counter()
                 try:
                     current_state_transition = dict(begin_current_state_transition(
                         projection_run,
@@ -4108,6 +4115,9 @@ class PortfolioOntologyProjectionRecorder:
                         "status": "error",
                         "reason": str(error)[:180],
                     }
+                runtime_stages["currentStateTransitionAuditMs"] = int(
+                    (time.perf_counter() - current_state_transition_started) * 1000
+                )
                 if str(current_state_transition.get("status") or "") != "ok":
                     result = {
                         "saved": False,
@@ -4129,9 +4139,13 @@ class PortfolioOntologyProjectionRecorder:
             # verify that the eventual native InferenceBox covered the exact
             # requested incremental scope before predecessor cleanup.
             persistence_graph.worldview["inferenceTargetSymbols"] = list(inference_symbols)
+            coordinator_acquire_started = time.perf_counter()
             coordinator_lease = self.acquire_projection_coordinator_lease(
                 "portfolio:" + material_snapshot_id,
                 portfolio_world_context.world_id,
+            )
+            runtime_stages["projectionCoordinatorAcquireMs"] = int(
+                (time.perf_counter() - coordinator_acquire_started) * 1000
             )
             if not bool(coordinator_lease.get("acquired")):
                 result = {
@@ -4161,10 +4175,17 @@ class PortfolioOntologyProjectionRecorder:
             result: Dict[str, object] = {}
             coordinator_release = {}
             try:
+                runtime_stages["persistencePreflightMs"] = int(
+                    runtime_stages.get("projectionAuditCreateMs", 0)
+                    + runtime_stages.get("currentStateRecoveryMs", 0)
+                    + runtime_stages.get("currentStateTransitionAuditMs", 0)
+                    + runtime_stages.get("projectionCoordinatorAcquireMs", 0)
+                )
                 emit_progress(
                     "abox_persistence.start",
                     targetSymbolCount=len(inference_symbols or []),
                     inputMode=str(graph_input.get("mode") or "full"),
+                    preflightRuntimeMs=runtime_stages["persistencePreflightMs"],
                 )
                 abox_persistence_started = time.perf_counter()
                 result = self.repository.save_graph(persistence_graph)

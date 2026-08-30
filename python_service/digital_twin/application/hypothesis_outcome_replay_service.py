@@ -30,14 +30,18 @@ class HypothesisOutcomeReplayService:
         rows = self.decision_episode_store.list(account_id=account_id, symbol=symbol, limit=max(1, min(2000, int(limit or 500))))
         episodes = [as_dict(item) for item in rows]
         integrity = self.integrity(episodes)
+        # Episode integrity can scan a broad history, while graph-backed
+        # hypothesis details stay bounded so the replay queue remains finite.
+        assessment_limit = min(25, max(1, int(limit or 500)))
         workspace = self.hypothesis_review_service.workspace(
             account_id=account_id,
             symbol=symbol,
-            limit=min(1000, max(100, int(limit or 500))),
+            limit=assessment_limit,
             event_limit=0,
         ) if self.hypothesis_review_service else {"items": []}
         quality = self.quality_review_service.assess(workspace) if self.quality_review_service else {}
         observed = integrity["outcomeCount"]
+        performance = self.performance(episodes)
         return {
             "status": "completed" if episodes else "no-history",
             "source": "persisted-decision-episode+observed-outcome-replay",
@@ -50,8 +54,91 @@ class HypothesisOutcomeReplayService:
             "outcomeCount": observed,
             "integrity": integrity,
             "hypothesisAssessments": list(workspace.get("items") or [])[:100],
+            "hypothesisAssessmentLimit": assessment_limit,
             "qualityReview": quality,
+            "performanceByHypothesis": performance["hypotheses"],
+            "performanceByRule": performance["rules"],
+            "performanceSummary": performance["summary"],
             "summary": self.summary(len(episodes), integrity, quality),
+        }
+
+    def performance(self, episodes: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+        """Aggregate observed outcomes without inventing deployment thresholds."""
+
+        hypotheses: Dict[str, Dict[str, object]] = {}
+        rules: Dict[str, Dict[str, object]] = {}
+
+        def observe(bucket: Dict[str, Dict[str, object]], key: str, status: str, eligible: bool):
+            if not key:
+                return
+            row = bucket.setdefault(key, {
+                "id": key,
+                "observedCount": 0,
+                "eligibleCount": 0,
+                "corroboratedCount": 0,
+                "contradictedCount": 0,
+                "inconclusiveCount": 0,
+            })
+            row["observedCount"] += 1
+            if eligible:
+                row["eligibleCount"] += 1
+            if "corroborated" in status:
+                row["corroboratedCount"] += 1
+            elif "contradicted" in status:
+                row["contradictedCount"] += 1
+            else:
+                row["inconclusiveCount"] += 1
+
+        for raw in episodes or []:
+            episode = as_dict(raw)
+            hypothesis_id = str(episode.get("selectedHypothesisId") or "").strip()
+            facts = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), Mapping) else {}
+            contract = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), Mapping) else {}
+            rule_ids = [str(item or "").strip() for item in contract.get("sourceRuleIds") or [] if str(item or "").strip()]
+            for raw_outcome in episode.get("outcomes") or []:
+                outcome = as_dict(raw_outcome)
+                payload = outcome.get("payload") if isinstance(outcome.get("payload"), Mapping) else {}
+                status = str(
+                    outcome.get("selectedHypothesisStatus")
+                    or payload.get("selectedHypothesisStatus")
+                    or "inconclusive"
+                ).lower()
+                eligible = str(payload.get("calibrationEligibility") or "") == "eligible"
+                observe(hypotheses, hypothesis_id, status, eligible)
+                for rule_id in rule_ids:
+                    observe(rules, rule_id, status, eligible)
+
+        def rows(bucket: Dict[str, Dict[str, object]]):
+            values = []
+            for row in bucket.values():
+                conclusive = int(row["corroboratedCount"]) + int(row["contradictedCount"])
+                values.append({
+                    **row,
+                    "conclusiveCount": conclusive,
+                    "corroborationRate": (
+                        round(int(row["corroboratedCount"]) / conclusive, 4)
+                        if conclusive else None
+                    ),
+                    "automaticDeployment": False,
+                })
+            return sorted(
+                values,
+                key=lambda item: (-int(item["eligibleCount"]), -int(item["conclusiveCount"]), item["id"]),
+            )[:100]
+
+        hypothesis_rows = rows(hypotheses)
+        rule_rows = rows(rules)
+        return {
+            "hypotheses": hypothesis_rows,
+            "rules": rule_rows,
+            "summary": {
+                "hypothesisCount": len(hypotheses),
+                "ruleCount": len(rules),
+                "observedHypothesisCount": len(hypothesis_rows),
+                "observedRuleCount": len(rule_rows),
+                "thresholdPolicyApplied": False,
+                "automaticDeployment": False,
+            },
         }
 
     def integrity(self, episodes: Iterable[Mapping[str, object]]) -> Dict[str, object]:

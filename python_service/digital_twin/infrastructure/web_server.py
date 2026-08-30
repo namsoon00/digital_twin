@@ -101,6 +101,7 @@ from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_analysis import investment_decision_key
 from ..domain.investment_evidence_governance import claim_quality_summary
 from ..domain.investment_model import INVESTMENT_MODEL_VERSION, investment_model_projection
+from ..domain.investment_reasoning.rule_inventory import reasoning_rule_inventory
 from ..domain.prompt_evidence_admission import assess_prompt_evidence
 from ..domain.news_ai_analysis import has_mojibake, local_news_ai_analysis, apply_news_ai_analysis, news_ai_analysis_is_current
 from ..domain.parsing import parse_assignments
@@ -1574,6 +1575,9 @@ def ontology_rulebox_payload(force: bool = False, blocking_first_load: bool = Fa
 def ontology_rulebox_summary_payload() -> Dict[str, object]:
     payload = ontology_rulebox_payload(blocking_first_load=True)
     profile = payload.get("nativeReasoningProfile") if isinstance(payload.get("nativeReasoningProfile"), dict) else {}
+    inventory = reasoning_rule_inventory(
+        item for item in payload.get("rules") or [] if isinstance(item, dict)
+    )
     return {
         key: payload.get(key)
         for key in [
@@ -1583,6 +1587,7 @@ def ontology_rulebox_summary_payload() -> Dict[str, object]:
         ]
         if key in payload
     } | {
+        "ruleInventory": inventory,
         "nativeReasoningProfile": {
             key: profile.get(key)
             for key in [

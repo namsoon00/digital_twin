@@ -118,12 +118,15 @@ def investment_model_projection(
     active = next((
         item for item in deployments
         if _text(item.get("deploymentId") or item.get("id")) == active_id
-    ), {})
+    ), {}) or _mapping(platform.get("activeDeployment"))
     candidate = next((
         item for item in deployments
         if _text(item.get("deploymentId") or item.get("id")) == candidate_id
-    ), {})
-    active_health = _mapping(active.get("health"))
+    ), {}) or _mapping(platform.get("candidateDeployment"))
+    active_health = {
+        **active,
+        **_mapping(active.get("health")),
+    }
     active_release = _mapping(active.get("releaseBundle"))
     active_capabilities = _mapping(active.get("capabilities"))
     candidate_health = _mapping(candidate.get("health"))
@@ -136,7 +139,23 @@ def investment_model_projection(
     )
     counts = _mapping(catalog.get("counts"))
     blockers = [str(item) for item in promotion.get("blockers") or [] if str(item).strip()]
-    promotion_ready = bool(promotion.get("ready")) and not blockers
+    if promotion:
+        promotion_ready = bool(promotion.get("ready")) and not blockers
+    else:
+        platform_reasons = [
+            str(item) for item in platform.get("reasons") or [] if str(item).strip()
+        ]
+        blockers = platform_reasons
+        active_rule_readiness = _mapping(active_health.get("ruleExecutionReadiness"))
+        promotion_ready = bool(
+            _text(platform.get("status")) == "ready"
+            and active_id
+            and _text(active.get("deploymentId") or active.get("id")) == active_id
+            and _text(active.get("status")) == "active"
+            and _text(control.get("delivery_deployment_id") or control.get("deliveryDeploymentId")) == active_id
+            and _mapping(active_health.get("capabilities")).get("productionDelivery") is True
+            and _text(active_rule_readiness.get("status")) == "ready"
+        )
     release_fingerprint = _text(
         active_health.get("releaseFingerprint")
         or active_health.get("candidateReleaseFingerprint")
@@ -145,11 +164,13 @@ def investment_model_projection(
     )
     release_id = _text(
         active_release.get("release_id")
+        or active.get("releaseId")
+        or active.get("release_id")
         or active_health.get("candidateReleaseId")
         or promotion_health.get("candidateReleaseId")
     )
     status = "ready" if active_id and promotion_ready else ("review" if active_id else "unavailable")
-    inventory = reasoning_rule_inventory([
+    inventory = _mapping(rulebox.get("ruleInventory")) or reasoning_rule_inventory([
         item for item in rulebox.get("rules") or [] if isinstance(item, Mapping)
     ])
     comparison = _mapping(promotion.get("comparison")) or _mapping(active_health.get("comparisonSummary"))
@@ -246,7 +267,11 @@ def investment_model_projection(
             "promotionReady": promotion_ready,
             "blockers": blockers,
             "cohortId": _text(active_health.get("validationCohortId") or promotion_health.get("validationCohortId")),
-            "ruleInventoryReady": bool(active_health.get("ruleInventoryReleaseReady") or promotion_health.get("ruleInventoryReleaseReady")),
+            "ruleInventoryReady": bool(
+                active_health.get("ruleInventoryReleaseReady")
+                or promotion_health.get("ruleInventoryReleaseReady")
+                or inventory.get("releaseReady")
+            ),
         },
         "productReadiness": product_readiness,
         "candidate": {

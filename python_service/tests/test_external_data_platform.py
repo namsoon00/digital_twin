@@ -1,5 +1,6 @@
 import unittest
 import time
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -16,11 +17,18 @@ from digital_twin.application.external_data.contracts import (
 from digital_twin.application.external_data.fact_transition_service import ExternalFactTransitionService
 from digital_twin.application.external_data.read_model_service import ExternalSignalsReadModelService
 from digital_twin.application.external_data.registry import ExternalDatasetRegistry
+from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.ontology_projection_input import compact_external_signals_for_ontology
+from digital_twin.domain.portfolio import Position
+from digital_twin.domain.portfolio_ontology_market_concepts import add_official_daily_price_concepts
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
 from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
 from digital_twin.infrastructure.external_api.adapters.opendart import (
     OpenDartCompanyFactsAdapter,
     OpenDartDisclosureAdapter,
+)
+from digital_twin.infrastructure.external_api.adapters.public_data_portal import (
+    PublicDataPortalStockPriceAdapter,
 )
 from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
 from digital_twin.infrastructure.external_api.adapters.yfinance import (
@@ -258,6 +266,149 @@ class RecordingCache:
         self.replace_count += 1
 
 class ExternalDataPlatformTest(unittest.TestCase):
+    @staticmethod
+    def public_data_job(symbol="005930"):
+        return CollectionJob(
+            dataset_id="public-data.kr-stock-daily",
+            partition_key=symbol,
+            provider_id="data-go-kr-fsc",
+            priority=45,
+            subject=ExternalSubject(
+                subject_key=symbol,
+                symbol=symbol,
+                name="삼성전자",
+                market="KR",
+                currency="KRW",
+            ),
+        )
+
+    def test_public_data_stock_adapter_collects_official_daily_reference_without_secret_leak(self):
+        requested = {}
+
+        def fetcher(url, headers, timeout):
+            requested.update({"url": url, "headers": headers, "timeout": timeout})
+            return {
+                "response": {
+                    "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},
+                    "body": {
+                        "items": {
+                            "item": [{
+                                "basDt": "20260827",
+                                "srtnCd": "005930",
+                                "isinCd": "KR7005930003",
+                                "itmsNm": "삼성전자",
+                                "mrktCtg": "KOSPI",
+                                "clpr": "266000",
+                                "vs": "-4000",
+                                "fltRt": "-1.48",
+                                "mkp": "270000",
+                                "hipr": "271000",
+                                "lopr": "262500",
+                                "trqu": "16829395",
+                                "trPrc": "4488160057932",
+                                "lstgStCnt": "5843635200",
+                                "mrktTotAmt": "1555110109728000",
+                            }]
+                        }
+                    },
+                }
+            }
+
+        adapter = PublicDataPortalStockPriceAdapter(fetcher)
+        observation = adapter.fetch(
+            self.public_data_job(),
+            {"publicDataPortalServiceKey": "raw+/service==", "externalPublicDataTimeoutSeconds": "9"},
+        )
+
+        price = observation.payload["officialDailyPrices"]["005930"]
+        self.assertEqual(266000, price["close"])
+        self.assertEqual(16829395, price["volume"])
+        self.assertEqual("20260827", price["baseDate"])
+        self.assertFalse(price["realTime"])
+        self.assertEqual("reference-only", price["decisionEligibility"])
+        self.assertEqual("2026-08-27T06:30:00Z", observation.source_as_of)
+        self.assertIn("serviceKey=raw%2B%2Fservice%3D%3D", requested["url"])
+        self.assertEqual(9.0, requested["timeout"])
+        self.assertNotIn("raw+/service==", json.dumps(observation.__dict__, ensure_ascii=False))
+
+    def test_public_data_stock_adapter_filters_non_korean_symbols_and_requires_key(self):
+        adapter = PublicDataPortalStockPriceAdapter(lambda *_args: {})
+        subjects = [
+            ExternalSubject("005930", symbol="005930", market="KR", currency="KRW"),
+            ExternalSubject("NVDA", symbol="NVDA", market="US", currency="USD"),
+        ]
+
+        self.assertEqual([], adapter.partitions(subjects, {}))
+        partitions = adapter.partitions(subjects, {"publicDataPortalServiceKey": "configured"})
+        self.assertEqual(["005930"], [item.partition_key for item in partitions])
+
+    def test_public_data_stock_adapter_retains_previous_fact_on_valid_empty_response(self):
+        adapter = PublicDataPortalStockPriceAdapter(lambda *_args: {
+            "response": {
+                "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},
+                "body": {"items": {}},
+            }
+        })
+
+        observation = adapter.fetch(
+            self.public_data_job(),
+            {"publicDataPortalServiceKey": "configured"},
+        )
+
+        self.assertTrue(observation.empty_result)
+        self.assertTrue(observation.retain_previous)
+        self.assertEqual({}, observation.payload["officialDailyPrices"])
+
+    def test_official_daily_price_is_bounded_and_projected_as_reference_only_abox(self):
+        signals = {
+            "officialDailyPrices": {
+                "005930": {
+                    "symbol": "005930",
+                    "name": "삼성전자",
+                    "baseDate": "20260827",
+                    "sourceAsOf": "2026-08-27T06:30:00Z",
+                    "fetchedAt": "2026-08-28T04:00:00Z",
+                    "close": 266000,
+                    "volume": 16829395,
+                    "provider": "금융위원회·공공데이터포털",
+                    "sourceUrl": "https://www.data.go.kr/data/15094808/openapi.do",
+                    "realTime": False,
+                    "decisionEligibility": "reference-only",
+                    "ignoredProviderPayload": "must-not-enter-abox",
+                }
+            }
+        }
+        compact = compact_external_signals_for_ontology(signals, target_symbols=["005930"])
+        graph = PortfolioOntology("test")
+        add_official_daily_price_concepts(
+            graph,
+            "stock:005930",
+            Position(symbol="005930", name="삼성전자", market="KR", currency="KRW"),
+            compact,
+        )
+
+        price_rows = [item for item in graph.entities if item.kind == "price-bar"]
+        self.assertEqual(1, len(price_rows))
+        self.assertEqual("reference-only", price_rows[0].properties["decisionEligibility"])
+        self.assertFalse(price_rows[0].properties["realTime"])
+        self.assertNotIn("ignoredProviderPayload", compact["officialDailyPrices"]["005930"])
+        self.assertTrue(any(item.relation_type == "HAS_PROVENANCE" for item in graph.relations))
+
+    def test_official_daily_price_change_does_not_trigger_live_reasoning(self):
+        transition = ExternalFactTransitionService().assess(
+            "public-data.kr-stock-daily",
+            {
+                "sourceRevision": "20260826:005930:270000",
+                "payload": {"officialDailyPrices": {"005930": {"baseDate": "20260826", "close": 270000}}},
+            },
+            {"officialDailyPrices": {"005930": {"baseDate": "20260827", "close": 266000}}},
+            "20260827:005930:266000",
+        )
+
+        self.assertTrue(transition.changed)
+        self.assertFalse(transition.material)
+        self.assertEqual("official-daily-reference", transition.change_type)
+
     def test_registry_builds_only_enabled_partitions(self):
         registry = ExternalDatasetRegistry([StaticAdapter()])
         subject = ExternalSubject("NVDA", symbol="NVDA")

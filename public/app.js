@@ -5703,6 +5703,11 @@
       externalApiFetchIntervalMinutes: settingValue("externalApiFetchIntervalMinutes"),
       externalSignalCacheMaxAgeMinutes: settingValue("externalSignalCacheMaxAgeMinutes"),
       externalAlphaEnabled: settingValue("externalAlphaEnabled"),
+      externalPublicDataStockEnabled: settingValue("externalPublicDataStockEnabled"),
+      externalPublicDataTimeoutSeconds: settingValue("externalPublicDataTimeoutSeconds"),
+      externalDataPublicStockCadenceSeconds: settingValue("externalDataPublicStockCadenceSeconds"),
+      externalDataPublicStockFreshnessSeconds: settingValue("externalDataPublicStockFreshnessSeconds"),
+      externalDataPublicStockMaxPartitions: settingValue("externalDataPublicStockMaxPartitions"),
       externalAlphaRelatedSymbolsEnabled: settingValue("externalAlphaRelatedSymbolsEnabled"),
       externalAlphaRelatedMaxSymbols: settingValue("externalAlphaRelatedMaxSymbols"),
       externalYFinanceEnabled: settingValue("externalYFinanceEnabled"),
@@ -31503,6 +31508,7 @@
       settingEnabled("externalDartEnabled"),
       settingEnabled("externalSecEnabled"),
       settingEnabled("externalAlphaEnabled"),
+      settingEnabled("externalPublicDataStockEnabled"),
       settingEnabled("externalFredEnabled"),
       settingEnabled("externalCoinGeckoEnabled")
     ].filter(Boolean).length;
@@ -31545,9 +31551,9 @@
       },
       {
         tone: sourceReady ? "watch" : "hold",
-        value: sourceReady + "/7",
+        value: sourceReady + "/8",
         title: "공시·외부 원천",
-        description: "OpenDART, SEC, Alpha, FRED, CoinGecko 수집 여부를 관리합니다.",
+        description: "공식 국내 일별 시세, 공시, 미장, 거시, 크립토 수집 여부를 관리합니다.",
         type: "feed-settings-editor",
         key: "external",
         button: "외부 원천"
@@ -31574,10 +31580,11 @@
       '</div>',
       '<div class="settings-body feed-settings-body">',
       '<div class="settings-api-grid feed-settings-summary">',
-      renderSettingsApiCard("원천 준비도", sourceReady + "/7개 사용", [
+      renderSettingsApiCard("원천 준비도", sourceReady + "/8개 사용", [
         configuredChip("KIS 수급", settingEnabled("kisMarketSignalsEnabled"), configuredCount(["kisAppKey", "kisAppSecret"]) + "/2"),
         configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("공식 일별 시세", settingEnabled("externalPublicDataStockEnabled"), isConfiguredSetting("publicDataPortalServiceKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
         configuredChip("거시·크립토", settingEnabled("externalFredEnabled") || settingEnabled("externalCoinGeckoEnabled"), "보조 신호")
       ]),
@@ -31627,6 +31634,7 @@
         configuredChip("KIS 수급", settingEnabled("kisMarketSignalsEnabled"), configuredCount(["kisAppKey", "kisAppSecret"]) + "/2"),
         configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("공식 일별 시세", settingEnabled("externalPublicDataStockEnabled"), isConfiguredSetting("publicDataPortalServiceKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
         configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
@@ -31873,6 +31881,14 @@
         ]),
         renderSettingField("externalDartDocumentTextMaxChars", "공시 원문 최대 글자", "number", "6000"),
         renderSettingField("externalDartDocumentMaxPerSymbol", "종목별 중요 공시 원문 수", "number", "3"),
+        renderSettingSelect("externalPublicDataStockEnabled", "공식 국내 일별 시세 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalDataPublicStockCadenceSeconds", "공식 일별 시세 확인 주기(초)", "number", "21600"),
+        renderSettingField("externalDataPublicStockFreshnessSeconds", "공식 일별 시세 유효 기간(초)", "number", "259200"),
+        renderSettingField("externalDataPublicStockMaxPartitions", "공식 일별 시세 최대 종목", "number", "100"),
+        renderSettingField("externalPublicDataTimeoutSeconds", "공공데이터포털 요청 제한(초)", "number", "12"),
         renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }

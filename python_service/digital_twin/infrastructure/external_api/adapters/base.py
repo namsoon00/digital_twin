@@ -39,6 +39,7 @@ def empty_signals() -> Dict[str, object]:
         "cryptoFetchedAt": "",
         "cryptoLastAttemptAt": "",
         "equityQuotes": {},
+        "officialDailyPrices": {},
         "cryptoMarkets": {},
         "macro": {},
         "fxRates": {},

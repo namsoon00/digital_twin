@@ -416,6 +416,14 @@ class ExternalApiSourceTests(unittest.TestCase):
                 }
             },
             "equityQuotes": {"AAPL": {"provider": "Alpha Vantage", "price": 315}},
+            "officialDailyPrices": {
+                "005930": {
+                    "provider": "금융위원회·공공데이터포털",
+                    "baseDate": "20260714",
+                    "close": 70000,
+                    "realTime": False,
+                }
+            },
             "companyOverviews": {"AAPL": {"provider": "Alpha Vantage", "sector": "Technology"}},
             "earningsReports": {"AAPL": {"provider": "Alpha Vantage", "latestQuarter": {}}},
             "yfinanceData": {
@@ -449,6 +457,12 @@ class ExternalApiSourceTests(unittest.TestCase):
             [],
             external_signals=external_signals,
         )
+
+    def test_official_daily_price_source_is_labeled_as_reference_api(self):
+        metadata = external_api_source_metadata(self.snapshot_with_sources())
+
+        source = next(item for item in metadata["externalApiSources"] if item["provider"] == "공공데이터포털")
+        self.assertIn("금융위원회 국내 주식 공식 일별 시세·거래량", source["details"])
 
     def test_monitor_stamps_external_api_metadata_but_renderer_hides_block(self):
         snapshot = self.snapshot_with_sources()

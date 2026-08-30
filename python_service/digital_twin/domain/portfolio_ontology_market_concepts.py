@@ -28,6 +28,75 @@ def symbol_key(position: Position) -> str:
     return str(position.symbol or position.name or "").upper().strip()
 
 
+def add_official_daily_price_concepts(
+    graph: PortfolioOntology,
+    stock_id: str,
+    position: Position,
+    external_signals: Dict[str, object] = None,
+) -> None:
+    """Project the official close as reference evidence, never as a live quote."""
+
+    symbol = symbol_key(position)
+    prices = external_signals.get("officialDailyPrices") if isinstance(external_signals, dict) else {}
+    item = prices.get(symbol) if isinstance(prices, dict) else {}
+    if not isinstance(item, dict) or number(item.get("close")) <= 0:
+        return
+    base_date = str(item.get("baseDate") or "").strip()
+    source_as_of = str(item.get("sourceAsOf") or "").strip()
+    provider = str(item.get("provider") or "금융위원회·공공데이터포털").strip()
+    common = {
+        "symbol": symbol,
+        "baseDate": base_date,
+        "sourceAsOf": source_as_of,
+        "sourceFetchedAt": str(item.get("fetchedAt") or ""),
+        "sourceTimestampPresent": bool(source_as_of),
+        "sourceType": "official-daily-close",
+        "realTime": False,
+        "evidenceRole": "reference",
+        "decisionEligibility": "reference-only",
+        "dataState": "sufficient",
+        "provider": provider,
+    }
+    source_id = add_entity(graph, "data-source", symbol + ":official-daily-price", provider, {
+        "tboxClass": "DataSource",
+        "tboxClasses": ["DataSource", "Provenance"],
+        "sourceUrl": str(item.get("sourceUrl") or ""),
+        "updateCadence": str(item.get("updateCadence") or "daily"),
+        "publicationPolicy": str(item.get("publicationPolicy") or ""),
+        **common,
+    })
+    observation_id = add_entity(
+        graph,
+        "price-bar",
+        symbol + ":official-daily:" + (base_date or "latest"),
+        (position.name or symbol) + " 공식 일별 종가",
+        {
+            "tboxClass": "PriceBar",
+            "tboxClasses": ["Observation", "PriceObservation", "PriceBar"],
+            "open": number(item.get("open")),
+            "high": number(item.get("high")),
+            "low": number(item.get("low")),
+            "close": number(item.get("close")),
+            "change": number(item.get("change")),
+            "changeRate": number(item.get("changePercent")),
+            "volume": number(item.get("volume")),
+            "tradingValue": number(item.get("tradingValue")),
+            "marketCap": number(item.get("marketCap")),
+            "usageRole": str(item.get("usageRole") or "official-cross-check-and-history-backfill"),
+            **common,
+        },
+    )
+    relation_properties = {
+        "source": "public-data.kr-stock-daily",
+        "aiInfluenceLabel": "공식 일별 종가 참고",
+        "evidenceRole": "reference",
+        "decisionEligibility": "reference-only",
+        "realTime": False,
+    }
+    add_relation(graph, stock_id, observation_id, "HAS_OBSERVATION", properties=relation_properties)
+    add_relation(graph, observation_id, source_id, "HAS_PROVENANCE", properties=relation_properties)
+
+
 def add_market_evidence_profile_concepts(
     graph: PortfolioOntology,
     stock_id: str,

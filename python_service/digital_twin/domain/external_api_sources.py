@@ -16,6 +16,7 @@ PROVIDER_ALIASES = {
     "kis open api": "KIS",
     "runtime settings": "RuntimeSettings",
     "sec": "SEC EDGAR",
+    "data-go-kr-fsc": "공공데이터포털",
 }
 
 KIS_COVERAGE_LABELS = {
@@ -136,6 +137,8 @@ def _add_fx_sources(rows: "OrderedDict[str, Dict[str, object]]", signals: Dict[s
 
 
 def _add_external_signal_payload_sources(rows: "OrderedDict[str, Dict[str, object]]", signals: Dict[str, object]) -> None:
+    if _group_has_items(signals.get("officialDailyPrices")):
+        _add_source(rows, "공공데이터포털", "금융위원회 국내 주식 공식 일별 시세·거래량")
     if _group_has_items(signals.get("equityQuotes")):
         _add_source(rows, "Alpha Vantage", "해외 주식 가격·거래량(GLOBAL_QUOTE)")
     if _group_has_items(signals.get("companyOverviews")):

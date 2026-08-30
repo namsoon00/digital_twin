@@ -4,6 +4,7 @@ from typing import Dict, Iterable
 
 EXTERNAL_SIGNAL_MAP_FIELDS = {
     "equityQuotes",
+    "officialDailyPrices",
     "cryptoMarkets",
     "fxRates",
     "secFilings",
@@ -84,6 +85,7 @@ class ExternalSignalsReadModelService:
             "cryptoFetchedAt": "",
             "cryptoLastAttemptAt": "",
             "equityQuotes": {},
+            "officialDailyPrices": {},
             "cryptoMarkets": {},
             "macro": {},
             "fxRates": {},

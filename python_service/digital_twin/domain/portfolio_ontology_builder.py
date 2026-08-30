@@ -41,6 +41,7 @@ from .portfolio_ontology_runtime_concepts import (
     is_watchlist_position,
 )
 from .portfolio_ontology_market_concepts import (
+    add_official_daily_price_concepts,
     add_data_source_concept,
     add_market_evidence_profile_concepts,
     add_metric_concepts,
@@ -382,6 +383,7 @@ def build_portfolio_ontology(
         )
         add_position_pipeline_quality_concepts(graph, stock_id, position, runtime_context)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
+        add_official_daily_price_concepts(graph, stock_id, position, external_signals)
         add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_statistical_signal_concepts(graph, stock_id, symbol, runtime_context)

@@ -29,6 +29,7 @@ ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
     "equityQuotes",
+    "officialDailyPrices",
     "yfinanceData",
     "newsHeadlines",
     "dartDisclosures",
@@ -656,6 +657,19 @@ def _compact_symbol_group(
         item = source.get(raw_symbol)
         if group == "equityQuotes":
             compact = _compact_quote(item)
+        elif group == "officialDailyPrices":
+            compact = _selected(
+                item,
+                [
+                    "symbol", "name", "market", "isin", "baseDate", "sourceAsOf", "fetchedAt",
+                    "open", "high", "low", "close", "change", "changePercent", "volume",
+                    "tradingValue", "listedShares", "marketCap", "provider", "sourceUrl",
+                    "sourceType", "updateCadence", "realTime", "decisionEligibility", "usageRole",
+                    "publicationPolicy",
+                ],
+                text_limit=280,
+                depth=2,
+            )
         elif group == "yfinanceData":
             compact = _compact_yfinance(item)
         elif group == "companyOverviews":

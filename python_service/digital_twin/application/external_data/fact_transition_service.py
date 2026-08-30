@@ -100,6 +100,14 @@ class ExternalFactTransitionService:
             return FactTransition(True, True, "source-revision", fields, "new or revised source document")
         if dataset_id == "fred.macro":
             return FactTransition(True, True, "macro-observation", fields, "published macro observation changed")
+        if dataset_id == "public-data.kr-stock-daily":
+            return FactTransition(
+                True,
+                False,
+                "official-daily-reference",
+                fields,
+                "official daily close updated; retained as reference without triggering live reasoning",
+            )
         if dataset_id in {"coingecko.market", "yfinance.price", "alpha.quote"}:
             material_fields = []
             for key, before, after in numeric_pairs(previous, current_payload):

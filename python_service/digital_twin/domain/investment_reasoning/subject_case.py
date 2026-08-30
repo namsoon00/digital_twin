@@ -278,6 +278,8 @@ class SubjectDecisionCase:
     inference_generation_id: str
     synthesis: DecisionSynthesis
     candidate_set: CandidateSetSnapshot
+    source_subject_id: str = ""
+    source_subject_revision: str = ""
     stage: str = SUBJECT_CREATED
     ai_request_id: str = ""
     notification_job_id: str = ""
@@ -309,6 +311,14 @@ class SubjectDecisionCase:
             synthesis.synthesis_id,
         )
         stamp = _now()
+        subject_revisions = dict(getattr(batch_case.fact_delta, "subject_revisions", {}) or {})
+        source_subject_id = ""
+        source_subject_revision = ""
+        if synthesis.symbol and synthesis.symbol in subject_revisions:
+            source_subject_id = synthesis.symbol
+            source_subject_revision = str(subject_revisions[source_subject_id] or "")
+        elif len(subject_revisions) == 1:
+            source_subject_id, source_subject_revision = next(iter(subject_revisions.items()))
         stage = SUBJECT_READY if candidate_set.valid else SUBJECT_BLOCKED
         abstention = None
         errors: Tuple[Dict[str, object], ...] = ()
@@ -334,6 +344,8 @@ class SubjectDecisionCase:
             inference_generation_id=synthesis.inference_generation_id,
             synthesis=synthesis,
             candidate_set=candidate_set,
+            source_subject_id=str(source_subject_id or ""),
+            source_subject_revision=str(source_subject_revision or ""),
             stage=stage,
             abstention=abstention,
             errors=errors,
@@ -373,6 +385,8 @@ class SubjectDecisionCase:
             "inferenceGenerationId": self.inference_generation_id,
             "synthesis": self.synthesis.to_dict(),
             "candidateSet": self.candidate_set.to_dict(),
+            "sourceSubjectId": self.source_subject_id,
+            "sourceSubjectRevision": self.source_subject_revision,
             "stage": self.stage,
             "aiRequestId": self.ai_request_id,
             "notificationJobId": self.notification_job_id,
@@ -407,6 +421,10 @@ class SubjectDecisionCase:
             inference_generation_id=str(payload.get("inferenceGenerationId") or ""),
             synthesis=DecisionSynthesis.from_dict(payload.get("synthesis") or {}),
             candidate_set=CandidateSetSnapshot.from_dict(payload.get("candidateSet") or {}),
+            source_subject_id=str(payload.get("sourceSubjectId") or payload.get("source_subject_id") or ""),
+            source_subject_revision=str(
+                payload.get("sourceSubjectRevision") or payload.get("source_subject_revision") or ""
+            ),
             stage=str(payload.get("stage") or SUBJECT_CREATED),
             ai_request_id=str(payload.get("aiRequestId") or ""),
             notification_job_id=str(payload.get("notificationJobId") or ""),

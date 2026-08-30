@@ -73,7 +73,7 @@ def evaluate_typedb_capacity_policy(
         _integer(
             configured,
             "typedbCapacityAutoRotatePercent",
-            80,
+            75,
             50,
             100,
         ),

@@ -3157,7 +3157,12 @@ def notification_store():
 
 
 def notification_queue_store(settings: Dict[str, object] = None):
-    return stores.notification_job_store(settings or operational_read_settings())
+    read_settings = dict(settings or operational_read_settings())
+    # The list API is a read model. Rule defaults and operational schema are
+    # owned by service startup and write-side stores, not the first inbox read.
+    read_settings["_skipNotificationRuleDefaultsSeed"] = "1"
+    read_settings["_skipOperationalSchemaBootstrap"] = "1"
+    return stores.notification_job_store(read_settings)
 
 
 def notification_rule_store():

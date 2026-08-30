@@ -490,14 +490,20 @@ class ConsoleReadModelService:
         explanation = _mapping(publication.get("explanationSnapshot"))
 
         current_revision = _text(state.get("revision") or cycle.get("cycleId") or checkpoint.get("balanceFingerprint"))
-        interpreted_revision = _text(case.get("sourceAboxSnapshotId"))
+        source_abox_snapshot_id = _text(case.get("sourceAboxSnapshotId"))
+        interpreted_revision = _text(case.get("sourceSubjectRevision"))
         current_at = _text(checkpoint.get("observedAt") or state.get("observedAt"))
         interpreted_at = _text(case.get("updatedAt") or publication.get("createdAt"))
         current_epoch = _iso_timestamp(current_at)
         interpreted_epoch = _iso_timestamp(interpreted_at)
         revision_state = "unknown"
-        if current_epoch and interpreted_epoch:
+        comparison_basis = "unavailable"
+        if current_revision and interpreted_revision:
+            revision_state = "current" if current_revision == interpreted_revision else "stale"
+            comparison_basis = "subject-revision"
+        elif current_epoch and interpreted_epoch:
             revision_state = "current" if interpreted_epoch + 300 >= current_epoch else "stale"
+            comparison_basis = "observed-at-window"
 
         has_ai = bool(
             _text(judgment.get("result_id") or judgment.get("resultId"))
@@ -628,10 +634,10 @@ class ConsoleReadModelService:
             "revision": {
                 "state": revision_state,
                 "current": current_revision,
-                "interpreted": interpreted_revision,
+                "interpreted": interpreted_revision or source_abox_snapshot_id,
                 "currentObservedAt": current_at,
                 "interpretedAt": interpreted_at,
-                "comparisonBasis": "observed-at-window",
+                "comparisonBasis": comparison_basis,
             },
             "sources": [
                 {"kind": "calculation", "label": "계좌 원장·위험 시계열", "id": _text(checkpoint.get("valuationSnapshotId"))},
@@ -642,7 +648,9 @@ class ConsoleReadModelService:
                 "subjectCaseId": _text(case.get("subjectCaseId")),
                 "stage": case_status,
                 "publicationOutcome": _text(publication.get("outcomeKind")),
-                "sourceAboxSnapshotId": interpreted_revision,
+                "sourceSubjectId": _text(case.get("sourceSubjectId")),
+                "sourceSubjectRevision": interpreted_revision,
+                "sourceAboxSnapshotId": source_abox_snapshot_id,
                 "inferenceGenerationId": _text(case.get("inferenceGenerationId")),
                 "deploymentId": _text(case.get("deploymentId")),
                 "releaseFingerprint": _text(case.get("releaseFingerprint")),

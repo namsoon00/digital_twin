@@ -7,9 +7,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from digital_twin import service_manager
+from digital_twin.domain.typedb_capacity_policy import evaluate_typedb_capacity_policy
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_capacity_policy_rotates_before_legacy_eighty_percent_default(self):
+        result = evaluate_typedb_capacity_policy({
+            "typedbSizeMb": 75,
+            "typedbLimitMb": 100,
+        })
+
+        self.assertEqual(75, result["rotationPercent"])
+        self.assertTrue(result["rotationRequired"])
+
     def test_failed_typedb_candidate_is_retired_and_delivery_settings_are_restored(self):
         class FakeRegistry:
             def __init__(self):

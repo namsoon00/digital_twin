@@ -2845,7 +2845,7 @@
           "key": "typedbCapacityAutoRotatePercent",
           "label": "TypeDB 안전 재구축 기준",
           "type": "number",
-          "default": "80",
+          "default": "75",
           "unit": "%"
         },
         {

@@ -199,12 +199,19 @@
     if (!rows.length) return empty("원장 활동이 없습니다", "수량·현금 변화가 생기면 시간순으로 기록됩니다.");
     return '<section class="cws-section"><header><div><span>원장·행동</span><h2>계좌 활동</h2></div><strong>' + rows.length + '건</strong></header><div class="cws-timeline">' + rows.map(function (item) {
       var title = item.title || item.activityType || item.classification || item.action || item.entryType || item.entry_type || (item.reviewId || item.review_id ? "판단 사후 검토" : "계좌 변화");
-      var symbols = Array.isArray(item.symbols) ? item.symbols.join(", ") : "";
-      var symbol = item.symbol || item.subjectSymbol || symbols || item.key || "";
+      var symbols = Array.isArray(item.symbols) ? item.symbols : [];
+      var directSymbol = item.symbol || item.subjectSymbol || (symbols.length === 1 ? symbols[0] : "");
+      var symbol = directSymbol || symbols.join(", ") || item.key || "";
       var detail = item.summary || item.reason || item.description || item.status || item.source || (item.orderIntentCount != null ? "주문 후보 " + item.orderIntentCount + "건" : "저장된 원장 기록");
       var at = item.observedAt || item.reviewedAt || item.reviewed_at || item.occurredAt || item.occurred_at || item.createdAt || item.created_at || item.updatedAt || item.recordedAt;
       var kind = item.episodeId ? "계좌 변화" : (item.planId || item.plan_id) ? "실행 계획" : (item.reviewId || item.review_id) ? "사후 검증" : "원장";
-      return '<article><time>' + escapeHtml(clock(at)) + '</time><span><i>' + escapeHtml(kind) + '</i><strong>' + escapeHtml(title) + '</strong><em>' + escapeHtml([symbol, detail].filter(Boolean).join(" · ")) + '</em></span></article>';
+      var decisionEpisodeId = item.decisionEpisodeId || item.decision_episode_id || "";
+      var detailButton = decisionEpisodeId
+        ? '<button type="button" class="cws-timeline-detail" data-work-detail="investment-case" data-work-detail-key="' + escapeHtml(decisionEpisodeId) + '">판단 상세</button>'
+        : directSymbol
+          ? '<button type="button" class="cws-timeline-detail" data-work-detail="market-instrument" data-work-detail-key="' + escapeHtml(directSymbol) + '">종목 상세</button>'
+          : '';
+      return '<article><time>' + escapeHtml(clock(at)) + '</time><span><i>' + escapeHtml(kind) + '</i><strong>' + escapeHtml(title) + '</strong><em>' + escapeHtml([symbol, detail].filter(Boolean).join(" · ")) + '</em></span>' + detailButton + '</article>';
     }).join("") + '</div></section>';
   }
 
@@ -286,7 +293,8 @@
     if (!items.length) return empty("공급자 상태가 없습니다", "외부 데이터 수집 워커 상태를 확인하세요.");
     return '<section class="cws-section cws-section-table"><header><div><span>외부 데이터</span><h2>공급자 상태</h2></div><strong>' + items.length + '개</strong></header><div class="cws-table"><div class="cws-table-head cws-provider-columns"><span>공급자</span><span>데이터셋</span><span>상태</span><span>성공</span><span>오류</span></div>' + items.map(function (item) {
       var state = item.state === "healthy" ? "positive" : "danger";
-      return '<div class="cws-table-row cws-provider-columns"><span><strong>' + escapeHtml(item.providerId || "-") + '</strong><em>요청 ' + escapeHtml(item.requestCount || 0) + '회</em></span><span>' + escapeHtml(item.datasetId || "-") + '</span><span class="' + state + '"><strong>' + escapeHtml(item.state || "unknown") + '</strong></span><span>' + escapeHtml(clock(item.lastSuccessAt)) + '</span><span>' + escapeHtml(item.lastError || "없음") + '</span></div>';
+      var recovery = item.circuitOpenUntil ? "재시도 " + clock(item.circuitOpenUntil) : "";
+      return '<div class="cws-table-row cws-provider-columns"><span><strong>' + escapeHtml(item.providerId || "-") + '</strong><em>요청 ' + escapeHtml(item.requestCount || 0) + '회</em></span><span>' + escapeHtml(item.datasetId || "-") + '</span><span class="' + state + '"><strong>' + escapeHtml(item.state || "unknown") + '</strong><em>' + escapeHtml(recovery) + '</em></span><span>' + escapeHtml(clock(item.lastSuccessAt)) + '</span><span>' + escapeHtml(item.lastError || (recovery ? "회로 보호 중" : "없음")) + '</span></div>';
     }).join("") + '</div></section>';
   }
 
@@ -340,6 +348,10 @@
     options = options || {};
     var view = ["health", "data", "reasoning", "delivery", "governance"].indexOf(activeView) >= 0 ? activeView : "health";
     var summary = payload.summary || {};
+    var generatedAt = new Date(payload.generatedAt || "");
+    var invalidGeneratedAt = Number.isNaN(generatedAt.getTime());
+    var ageSeconds = invalidGeneratedAt ? 0 : Math.max(0, Math.floor((Date.now() - generatedAt.getTime()) / 1000));
+    var stale = invalidGeneratedAt || ageSeconds > 120;
     var content = options.loading && !payload.version
       ? '<div class="cws-loading" aria-busy="true"><span></span><strong>운영 상태를 병렬로 확인하고 있습니다.</strong></div>'
       : options.error && !payload.version
@@ -358,6 +370,7 @@
       metric("장애", (summary.critical || 0) + "개", "운영 조치", summary.critical ? "danger" : "positive"),
       metric("기준", clock(payload.generatedAt), "상태 조회 시각"),
       '</div>',
+      '<section class="cws-data-line cws-health-freshness"><span>상태 기준 <strong>' + escapeHtml(clock(payload.generatedAt)) + '</strong></span><span>신선성 <strong class="' + (stale ? "warning" : "positive") + '">' + escapeHtml(stale ? "갱신 필요" : "최신") + '</strong></span><span>경과 <strong>' + escapeHtml(ageSeconds + "초") + '</strong></span><button type="button" data-action="refresh-operations-health"' + (options.loading ? ' disabled' : '') + '>' + escapeHtml(options.loading ? "확인 중" : "새로고침") + '</button></section>',
       sectionTabs([["health", "상태", "구성요소"], ["data", "데이터", "공급자"], ["reasoning", "추론", "TypeDB·AI"], ["delivery", "전달", "알림 큐"], ["governance", "관리", "규칙·설정"]], view, "data-operations-view"),
       '<div class="cws-view" data-operations-active="' + escapeHtml(view) + '">' + content + '</div>',
       '</div>'

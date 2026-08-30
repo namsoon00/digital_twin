@@ -2284,7 +2284,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbCapacityAutoRotatePercent": value(
             "typedbCapacityAutoRotatePercent",
             "TYPEDB_CAPACITY_AUTO_ROTATE_PERCENT",
-            "80",
+            "75",
         ),
         "typedbCapacityAutoRotateWalMb": value(
             "typedbCapacityAutoRotateWalMb",

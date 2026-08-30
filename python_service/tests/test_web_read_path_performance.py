@@ -58,6 +58,18 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         self.assertEqual(1, len(payload["jobs"]))
         self.assertTrue(payload["jobs"][0]["important"])
 
+    def test_notification_queue_store_disables_read_side_bootstrap(self):
+        marker = object()
+        settings = {"notificationProcessingStaleMinutes": "2"}
+
+        with patch.object(web_server.stores, "notification_job_store", return_value=marker) as job_store:
+            self.assertIs(marker, web_server.notification_queue_store(settings))
+
+        configured = job_store.call_args.args[0]
+        self.assertEqual("1", configured["_skipNotificationRuleDefaultsSeed"])
+        self.assertEqual("1", configured["_skipOperationalSchemaBootstrap"])
+        self.assertEqual("2", configured["notificationProcessingStaleMinutes"])
+
     def test_bootstrap_app_store_uses_read_only_operational_settings(self):
         marker = object()
         settings = {"_skipOperationalSchemaBootstrap": "1"}

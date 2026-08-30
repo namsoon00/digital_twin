@@ -1,6 +1,8 @@
 import unittest
+from types import SimpleNamespace
 
 from digital_twin.application.console_read_model_service import ConsoleReadModelService
+from digital_twin.domain.investment_reasoning import DecisionSynthesis, FactDelta, SubjectDecisionCase
 
 
 class ConsolePortfolioInterpretationTest(unittest.TestCase):
@@ -63,10 +65,16 @@ class ConsolePortfolioInterpretationTest(unittest.TestCase):
         }
 
     @staticmethod
-    def subject_case(updated_at="2026-08-30T03:01:00Z", with_ai=True):
+    def subject_case(
+        updated_at="2026-08-30T03:01:00Z",
+        with_ai=True,
+        subject_revision="rebalance:current",
+    ):
         return {
             "subjectCaseId": "case:portfolio:1",
             "sourceAboxSnapshotId": "abox:1",
+            "sourceSubjectId": "portfolio:default",
+            "sourceSubjectRevision": subject_revision,
             "inferenceGenerationId": "generation:1",
             "stage": "PUBLISHED" if with_ai else "OBSERVATION",
             "updatedAt": updated_at,
@@ -111,13 +119,36 @@ class ConsolePortfolioInterpretationTest(unittest.TestCase):
         payload = ConsoleReadModelService().portfolio(
             self.lifecycle(),
             "interpretation",
-            subject_case=self.subject_case("2026-08-28T03:00:00Z"),
+            subject_case=self.subject_case("2026-08-28T03:00:00Z", subject_revision=""),
         )
 
         interpretation = payload["interpretation"]
         self.assertEqual("stale", interpretation["status"])
         self.assertEqual("stale", interpretation["revision"]["state"])
         self.assertFalse(interpretation["ai"]["current"])
+
+    def test_exact_subject_revision_takes_precedence_over_observation_time(self):
+        payload = ConsoleReadModelService().portfolio(
+            self.lifecycle(),
+            "interpretation",
+            subject_case=self.subject_case("2026-08-28T03:00:00Z"),
+        )
+
+        interpretation = payload["interpretation"]
+        self.assertEqual("ready", interpretation["status"])
+        self.assertEqual("current", interpretation["revision"]["state"])
+        self.assertEqual("subject-revision", interpretation["revision"]["comparisonBasis"])
+
+    def test_different_subject_revision_is_stale_even_when_recent(self):
+        payload = ConsoleReadModelService().portfolio(
+            self.lifecycle(),
+            "interpretation",
+            subject_case=self.subject_case(subject_revision="rebalance:old"),
+        )
+
+        interpretation = payload["interpretation"]
+        self.assertEqual("stale", interpretation["status"])
+        self.assertEqual("subject-revision", interpretation["revision"]["comparisonBasis"])
 
     def test_rebalance_includes_review_plan_without_automatic_execution(self):
         payload = ConsoleReadModelService().portfolio(
@@ -129,6 +160,44 @@ class ConsolePortfolioInterpretationTest(unittest.TestCase):
         self.assertEqual("review-required", payload["actionPlans"][0]["status"])
         self.assertEqual(1, payload["actionPlans"][0]["orderIntentCount"])
         self.assertFalse(payload["interpretation"]["ai"]["executed"])
+
+
+class PortfolioReasoningRevisionLineageTest(unittest.TestCase):
+    def test_subject_revision_is_preserved_from_request_to_subject_case(self):
+        request = SimpleNamespace(
+            source_event_ids=("event:1",),
+            account_ids=("default",),
+            symbols=(),
+            fact_types=("RebalanceState",),
+            source_observed_at="2026-08-30T03:00:00Z",
+            context={
+                "workClasses": ["PORTFOLIO"],
+                "subjectIds": ["portfolio:default"],
+                "subjectRevisions": {"portfolio:default": "rebalance:current"},
+            },
+        )
+        fact_delta = FactDelta.from_request(request)
+        batch_case = SimpleNamespace(
+            case_id="reasoning-case:1",
+            request_id="request:1",
+            deployment_id="deployment:1",
+            release_fingerprint="release:1",
+            fact_delta=fact_delta,
+        )
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:1",
+            account_id="default",
+            symbol="",
+            source_abox_snapshot_id="abox:1",
+            inference_generation_id="generation:1",
+        )
+
+        subject_case = SubjectDecisionCase.create(batch_case, synthesis, ())
+
+        self.assertEqual("portfolio:default", subject_case.source_subject_id)
+        self.assertEqual("rebalance:current", subject_case.source_subject_revision)
+        restored = SubjectDecisionCase.from_dict(subject_case.to_dict())
+        self.assertEqual("rebalance:current", restored.source_subject_revision)
 
 
 if __name__ == "__main__":

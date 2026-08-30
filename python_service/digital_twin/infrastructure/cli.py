@@ -1248,6 +1248,15 @@ def watch_v2_reasoning_engine(
             if str(worker_role or "configured").strip().lower() == "configured" and not deployment_id:
                 return 0
             sleep(1.0)
+        except Exception as error:
+            if not mysql_is_connection_lost(error):
+                raise
+            print(
+                "Independent V2 reasoning reconnecting after MySQL connection loss. reason="
+                + str(error)[:240],
+                flush=True,
+            )
+            sleep(max(1.0, float(retry_seconds or 30.0)))
         finally:
             if callable(shutdown):
                 shutdown()

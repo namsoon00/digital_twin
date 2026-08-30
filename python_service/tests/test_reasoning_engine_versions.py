@@ -310,6 +310,44 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual(2, len(attempts))
         self.assertEqual(1, runners[0].shutdown_count)
 
+    def test_v2_watch_reconnects_after_mysql_connection_loss(self):
+        from digital_twin.infrastructure.cli import watch_v2_reasoning_engine
+
+        attempts = []
+        runners = []
+
+        class Runner:
+            def __init__(self, fails):
+                self.fails = fails
+                self.shutdown_count = 0
+
+            def watch(self):
+                if self.fails:
+                    raise RuntimeError(2013, "Lost connection during idempotent ingress")
+
+            def shutdown(self):
+                self.shutdown_count += 1
+
+        def factory(_settings, worker_id=""):
+            attempts.append(worker_id)
+            runner = Runner(fails=len(attempts) == 1)
+            runners.append(runner)
+            return runner
+
+        sleeps = []
+        result = watch_v2_reasoning_engine(
+            factory,
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            worker_id="v2-reconnect-test",
+            retry_seconds=3,
+            sleep=sleeps.append,
+        )
+
+        self.assertEqual(0, result)
+        self.assertEqual([3.0], sleeps)
+        self.assertEqual(2, len(attempts))
+        self.assertEqual([1, 1], [runner.shutdown_count for runner in runners])
+
     def test_initialize_never_rewrites_an_existing_release_bundle(self):
         class Registry:
             def __init__(self):

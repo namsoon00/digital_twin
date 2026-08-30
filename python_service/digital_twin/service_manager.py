@@ -321,7 +321,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # worker restart. The active graph is rebuildable from MySQL.
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
-        "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "80"),
+        "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "75"),
         "autoRotationWalMb": str((settings or {}).get("typedbCapacityAutoRotateWalMb") or "4096"),
         "autoRotationFreeSpaceMb": str(
             (settings or {}).get("typedbCapacityAutoRotateFreeSpaceMb") or "24576"
@@ -1253,7 +1253,7 @@ def typedb_auto_rotation_needed(
     enabled = truthy(configured.get("autoRotationEnabled"))
     data_path = Path(configured.get("dataPath") or "")
     maximum_mb = int_value(configured.get("maxSizeMb"), 8192, 1)
-    threshold_percent = int_value(configured.get("autoRotationPercent"), 80, 50)
+    threshold_percent = int_value(configured.get("autoRotationPercent"), 75, 50)
     threshold_percent = min(100, threshold_percent)
     wal_trigger_mb = int_value(configured.get("autoRotationWalMb"), 4096, 0)
     free_space_trigger_mb = int_value(

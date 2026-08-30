@@ -345,6 +345,22 @@
   color: var(--ink);
 }
 
+.cws-health-freshness {
+  align-items: center;
+}
+
+.cws-health-freshness button {
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+}
+
 .cws-interpretation {
   border-top: 3px solid var(--line-strong);
 }
@@ -728,7 +744,7 @@
 
 .cws-timeline article {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 120px minmax(0, 1fr) auto;
   gap: 14px;
   min-height: 56px;
   padding: 10px 0;
@@ -774,6 +790,25 @@
   color: var(--muted);
   font-size: 10px;
   font-style: normal;
+}
+
+.cws-timeline-detail {
+  align-self: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.cws-timeline-detail:hover,
+.cws-timeline-detail:focus-visible {
+  border-color: var(--blue);
+  color: var(--blue);
 }
 
 .cws-health-list article {
@@ -1106,6 +1141,11 @@
   .cws-timeline article {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
+  }
+
+  .cws-timeline-detail {
+    width: 100%;
+    margin-top: 5px;
   }
 }
 

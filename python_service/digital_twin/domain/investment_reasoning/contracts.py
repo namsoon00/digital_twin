@@ -14,7 +14,7 @@ from ..ontology_change_impact import requested_scope_families_for_event_fact_typ
 
 
 INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v2"
-FACT_DELTA_VERSION = "investment-fact-delta-v1"
+FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v2"
@@ -77,6 +77,8 @@ class FactDelta:
     work_classes: Tuple[str, ...]
     source_observed_at: str
     lane: str
+    subject_ids: Tuple[str, ...] = ()
+    subject_revisions: Dict[str, str] = field(default_factory=dict)
     version: str = FACT_DELTA_VERSION
 
     @classmethod
@@ -84,6 +86,11 @@ class FactDelta:
         context = _mapping(getattr(request, "context", {}))
         fact_types = _texts(getattr(request, "fact_types", ()), uppercase=True)
         work_classes = _texts(context.get("workClasses") or [], uppercase=True)
+        subject_revisions = {
+            str(subject_id or "").strip(): str(revision or "").strip()
+            for subject_id, revision in _mapping(context.get("subjectRevisions")).items()
+            if str(subject_id or "").strip() and str(revision or "").strip()
+        }
         return cls(
             source_event_ids=_texts(getattr(request, "source_event_ids", ())),
             account_ids=_texts(getattr(request, "account_ids", ())),
@@ -95,13 +102,15 @@ class FactDelta:
             work_classes=work_classes,
             source_observed_at=str(getattr(request, "source_observed_at", "") or ""),
             lane=_reasoning_lane(fact_types, work_classes),
+            subject_ids=_texts(context.get("subjectIds") or subject_revisions.keys()),
+            subject_revisions=dict(sorted(subject_revisions.items())),
         )
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         for key in [
             "source_event_ids", "account_ids", "symbols", "fact_types",
-            "scope_families", "work_classes",
+            "scope_families", "work_classes", "subject_ids",
         ]:
             payload[key] = list(payload[key])
         return payload
@@ -118,6 +127,14 @@ class FactDelta:
             work_classes=_texts(payload.get("work_classes") or payload.get("workClasses"), uppercase=True),
             source_observed_at=str(payload.get("source_observed_at") or payload.get("sourceObservedAt") or ""),
             lane=str(payload.get("lane") or REASONING_LANE_CONTEXT),
+            subject_ids=_texts(payload.get("subject_ids") or payload.get("subjectIds")),
+            subject_revisions={
+                str(subject_id or "").strip(): str(revision or "").strip()
+                for subject_id, revision in _mapping(
+                    payload.get("subject_revisions") or payload.get("subjectRevisions")
+                ).items()
+                if str(subject_id or "").strip() and str(revision or "").strip()
+            },
             version=str(payload.get("version") or FACT_DELTA_VERSION),
         )
 

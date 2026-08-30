@@ -930,6 +930,8 @@ class InvestmentReasoningOrchestrator:
             "accountId": subject_case.account_id,
             "symbol": subject_case.symbol,
             "sourceAboxSnapshotId": subject_case.source_abox_snapshot_id,
+            "sourceSubjectId": subject_case.source_subject_id,
+            "sourceSubjectRevision": subject_case.source_subject_revision,
             "inferenceGenerationId": subject_case.inference_generation_id,
             "synthesisId": subject_case.synthesis.synthesis_id,
             "candidateSetId": subject_case.candidate_set.candidate_set_id,

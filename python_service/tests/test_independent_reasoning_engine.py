@@ -1597,6 +1597,133 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             registry.health["workerHeartbeats"]["delivery"]["workerId"],
         )
 
+    def test_worker_liveness_loop_refreshes_without_an_active_job(self):
+        class Registry:
+            def __init__(self):
+                self.health = {}
+                self.update_count = 0
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+                self.update_count += 1
+
+        class StopAfterOneInterval:
+            def __init__(self):
+                self.calls = 0
+
+            def wait(self, _seconds):
+                self.calls += 1
+                return self.calls > 1
+
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            object(),
+            object(),
+            registry,
+            worker_id="delivery-worker",
+            deployment_role="delivery",
+        )
+        monotonic_values = iter([100.0, 131.0])
+        with patch(
+            "digital_twin.application.independent_reasoning_engine.time.monotonic",
+            side_effect=lambda: next(monotonic_values),
+        ):
+            runner.worker_liveness_loop(
+                "ontology-v2-production",
+                StopAfterOneInterval(),
+            )
+
+        self.assertEqual(2, registry.update_count)
+        self.assertEqual(
+            "delivery-worker",
+            registry.health["workerHeartbeats"]["delivery"]["workerId"],
+        )
+
+    def test_runner_replays_transient_failures_once_per_interval(self):
+        class Queue:
+            def __init__(self):
+                self.calls = []
+
+            def replay_unresolved_failures(self, deployment_id, **kwargs):
+                self.calls.append((deployment_id, kwargs))
+                return {"status": "replayed", "replayedCount": 1}
+
+        queue = Queue()
+        runner = IndependentReasoningJobRunner(
+            queue,
+            object(),
+            object(),
+            deployment_role="delivery",
+            settings={
+                "reasoningEngineAutomaticFailureRecoveryIntervalSeconds": "600",
+                "reasoningEngineAutomaticFailureRecoveryBatchSize": "2",
+            },
+        )
+
+        with patch(
+            "digital_twin.application.independent_reasoning_engine.time.monotonic",
+            side_effect=[100.0, 101.0],
+        ):
+            first = runner.recover_transient_failures("v2-active")
+            second = runner.recover_transient_failures("v2-active")
+
+        self.assertEqual("replayed", first["status"])
+        self.assertEqual(first, second)
+        self.assertEqual(1, len(queue.calls))
+        self.assertEqual(2, queue.calls[0][1]["limit"])
+
+    def test_mysql_transient_recovery_preserves_failure_and_creates_new_job(self):
+        source = source_event("NVDA")
+
+        class Connection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, params=()):
+                self.calls.append((" ".join(sql.split()), params))
+                if sql.lstrip().startswith("SELECT * FROM reasoning_engine_jobs"):
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "job_id": "job:failed",
+                        "deployment_id": "v2-active",
+                        "source_event_id": source.event_id,
+                        "scope_key": "market:acct:NVDA",
+                        "request_json": json.dumps({"sourceEvent": source.to_dict()}),
+                        "result_json": json.dumps({"reasonCode": "typedbReadError"}),
+                        "job_status": "failed",
+                        "priority": 60,
+                        "updated_at": "2026-08-29T00:23:58Z",
+                    }])
+                return SimpleNamespace(rowcount=1)
+
+        connection = Connection()
+
+        class Store(MySQLReasoningEngineJobStore):
+            def __init__(self):
+                self.runtime_settings = {}
+                self.last_transaction_retry = {}
+
+            @contextmanager
+            def transaction(self):
+                yield connection
+
+        result = Store().replay_unresolved_failures("v2-active", limit=1)
+
+        self.assertEqual("replayed", result["status"])
+        self.assertEqual(1, result["replayedCount"])
+        self.assertTrue(result["jobIds"][0].startswith("reasoning-engine-recovery:"))
+        inserted = next(
+            params for sql, params in connection.calls
+            if "INSERT IGNORE INTO reasoning_engine_jobs" in sql
+        )
+        self.assertEqual("v2-active", inserted[1])
+        self.assertTrue(str(inserted[2]).startswith("reasoning-recovery:"))
+        recovered_event = json.loads(inserted[9])["sourceEvent"]
+        self.assertEqual(1, recovered_event["payload"]["reasoningRecovery"]["attempt"])
+        self.assertEqual("job:failed", recovered_event["payload"]["reasoningRecovery"]["sourceJobId"])
+
     def test_runner_does_not_claim_jobs_when_typedb_execution_guard_is_blocked(self):
         class Queue:
             def claim(self, *_args, **_kwargs):

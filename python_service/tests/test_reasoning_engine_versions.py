@@ -545,6 +545,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "failureCount": 61,
                     "unresolvedFailureCount": 0,
                     "resolvedFailureCount": 61,
+                    "recentFailureCount24h": 1,
                 }
 
         platform = ReasoningEnginePlatformService(
@@ -567,6 +568,92 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual([], current["reasons"])
         self.assertEqual(61, current["queue"]["failureCount"])
         self.assertEqual(0, current["queue"]["unresolvedFailureCount"])
+        self.assertEqual("clear", current["historicalDebt"]["status"])
+
+    def test_current_status_separates_old_unresolved_failure_from_current_health(self):
+        deployment = {
+            "deploymentId": "v2-active",
+            "engineVersion": "v2",
+            "status": "active",
+            "health": {"status": "ready"},
+            "releaseBundle": {"release_id": "release-v2-active"},
+        }
+
+        class Registry:
+            @staticmethod
+            def get(_deployment_id):
+                return dict(deployment)
+
+        queue = {
+            "deploymentId": "v2-active",
+            "pendingCount": 0,
+            "failureCount": 1,
+            "unresolvedFailureCount": 1,
+            "recentFailureCount24h": 0,
+            "latestUnresolvedFailureAt": "2026-01-01T00:00:00Z",
+            "unresolvedFailureReasonCounts": {"typedbReadError": 1},
+        }
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            independent_job_store=object(),
+        )
+        state = {
+            "control": {
+                "active_deployment_id": "v2-active",
+                "delivery_deployment_id": "v2-active",
+                "candidate_deployment_id": "",
+            },
+            "deployments": [deployment],
+            "independentQueue": queue,
+        }
+
+        current = platform.current_status(state)
+
+        self.assertEqual("ready", current["status"])
+        self.assertEqual([], current["reasons"])
+        self.assertEqual("attention", current["historicalDebt"]["status"])
+        self.assertEqual(1, current["historicalDebt"]["unresolvedFailureCount"])
+
+    def test_current_status_degrades_for_recent_reasoning_failure(self):
+        deployment = {
+            "deploymentId": "v2-active",
+            "engineVersion": "v2",
+            "status": "active",
+            "health": {"status": "ready"},
+            "releaseBundle": {"release_id": "release-v2-active"},
+        }
+
+        class Registry:
+            @staticmethod
+            def get(_deployment_id):
+                return dict(deployment)
+
+        queue = {
+            "deploymentId": "v2-active",
+            "pendingCount": 0,
+            "failureCount": 1,
+            "unresolvedFailureCount": 1,
+            "recentFailureCount24h": 1,
+        }
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            independent_job_store=object(),
+        )
+        state = {
+            "control": {
+                "active_deployment_id": "v2-active",
+                "delivery_deployment_id": "v2-active",
+                "candidate_deployment_id": "",
+            },
+            "deployments": [deployment],
+            "independentQueue": queue,
+        }
+
+        current = platform.current_status(state)
+
+        self.assertEqual("degraded", current["status"])
+        self.assertIn("reasoning-failures-present", current["reasons"])
+        self.assertEqual("current", current["historicalDebt"]["status"])
 
     def test_current_status_reads_completion_from_active_not_candidate(self):
         deployment = {

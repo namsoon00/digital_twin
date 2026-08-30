@@ -2318,6 +2318,158 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ),
             )
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-transient-failure-recovery")
+    def replay_unresolved_failures(
+        self,
+        deployment_id: str,
+        limit: int = 3,
+        maximum_recovery_attempts: int = 1,
+    ) -> Dict[str, object]:
+        """Create bounded recovery jobs while preserving immutable failure rows."""
+
+        allowed_reason_codes = {
+            "typedbreaderror",
+            "typedbconnectionerror",
+            "typedbconnectionlost",
+            "typedbtransactionerror",
+            "reasoningworkerinterrupted",
+            "reasoningexecutionfailed",
+        }
+        clean_deployment_id = str(deployment_id or "").strip()
+        if not clean_deployment_id:
+            return {"status": "not-configured", "replayedCount": 0, "jobIds": []}
+        replay_limit = max(1, min(10, int(limit or 3)))
+        maximum_attempts = max(0, min(2, int(maximum_recovery_attempts or 0)))
+        if maximum_attempts == 0:
+            return {"status": "disabled", "replayedCount": 0, "jobIds": []}
+        replayed_job_ids = []
+        skipped_reason_codes = {}
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM reasoning_engine_jobs WHERE deployment_id = %s "
+                "AND job_status IN ('failed', 'completed', 'excluded', 'superseded') "
+                "ORDER BY updated_at DESC, job_id DESC LIMIT 1000 FOR UPDATE",
+                (clean_deployment_id,),
+            ).fetchall() or []
+            latest_by_scope = {}
+            for raw in rows:
+                row = dict(raw or {})
+                scope_key = str(row.get("scope_key") or row.get("job_id") or "").strip()
+                if scope_key and scope_key not in latest_by_scope:
+                    latest_by_scope[scope_key] = row
+            for row in latest_by_scope.values():
+                if len(replayed_job_ids) >= replay_limit:
+                    break
+                if str(row.get("job_status") or "").lower() != "failed":
+                    continue
+                result = json_value(row.get("result_json"), {})
+                reason_code = str(
+                    result.get("reason_code")
+                    or result.get("reasonCode")
+                    or row.get("terminal_reason_code")
+                    or "unclassified"
+                ).strip()
+                normalized_reason = "".join(
+                    character for character in reason_code.lower() if character.isalnum()
+                )
+                if normalized_reason not in allowed_reason_codes:
+                    skipped_reason_codes[reason_code or "unclassified"] = int(
+                        skipped_reason_codes.get(reason_code or "unclassified") or 0
+                    ) + 1
+                    continue
+                source_event = self.stored_source_event(row)
+                if source_event is None:
+                    skipped_reason_codes["source-event-unavailable"] = int(
+                        skipped_reason_codes.get("source-event-unavailable") or 0
+                    ) + 1
+                    continue
+                source_payload = dict(source_event.payload or {})
+                prior_recovery = dict(source_payload.get("reasoningRecovery") or {})
+                recovery_attempt = int(prior_recovery.get("attempt") or 0) + 1
+                if recovery_attempt > maximum_attempts:
+                    skipped_reason_codes["maximum-recovery-attempts"] = int(
+                        skipped_reason_codes.get("maximum-recovery-attempts") or 0
+                    ) + 1
+                    continue
+                source_job_id = str(row.get("job_id") or "")
+                recovery_identity = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    "orbit-alpha:reasoning-recovery:"
+                    + clean_deployment_id
+                    + ":"
+                    + source_job_id
+                    + ":"
+                    + str(recovery_attempt),
+                ).hex
+                source_payload["reasoningRecovery"] = {
+                    "attempt": recovery_attempt,
+                    "sourceJobId": source_job_id,
+                    "sourceEventId": str(source_event.event_id or ""),
+                    "reasonCode": reason_code,
+                    "requestedAt": iso_utc(),
+                }
+                recovery_event = DomainEvent(
+                    name=source_event.name,
+                    aggregate_id=source_event.aggregate_id,
+                    schema_version=source_event.schema_version,
+                    payload=source_payload,
+                    occurred_at=source_event.occurred_at,
+                    event_id=("reasoning-recovery:" + recovery_identity)[:191],
+                    correlation_id=source_event.correlation_id or source_event.event_id,
+                )
+                material = self.queued_job_material(clean_deployment_id, recovery_event)
+                request = material["request"]
+                source_boundary = material["primary"]
+                source_boundaries = material["boundaries"]
+                recovery_job_id = "reasoning-engine-recovery:" + recovery_identity
+                stamp = iso_utc()
+                cursor = connection.execute(
+                    """
+                    INSERT IGNORE INTO reasoning_engine_jobs (
+                        job_id, deployment_id, source_event_id, source_snapshot_id,
+                        source_snapshot_at, source_boundary_json, source_payload_hash, scope_key,
+                        input_fingerprint, request_json, result_json, job_status,
+                        priority, supersedable, reasoning_lane, available_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}', %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        recovery_job_id,
+                        clean_deployment_id[:191],
+                        str(recovery_event.event_id or "")[:191],
+                        str(source_boundary.get("snapshotId") or "")[:191],
+                        str(source_boundary.get("generatedAt") or "")[:40],
+                        canonical_json(source_boundaries),
+                        payload_fingerprint(recovery_event.to_dict()),
+                        str(material["scopeKey"] or "")[:191],
+                        request.input_fingerprint[:64],
+                        material["requestJson"],
+                        "queued" if source_boundaries else "awaiting_source",
+                        max(70, int(row.get("priority") or 60)),
+                        1 if request.supersedable else 0,
+                        material["lane"],
+                        stamp,
+                        stamp,
+                        stamp,
+                    ),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+                    continue
+                self.persist_job_sources_with_connection(
+                    connection,
+                    clean_deployment_id,
+                    recovery_job_id,
+                    recovery_event,
+                    predecessor_job_ids=[source_job_id],
+                )
+                replayed_job_ids.append(recovery_job_id)
+        return {
+            "status": "replayed" if replayed_job_ids else "unchanged",
+            "deploymentId": clean_deployment_id,
+            "replayedCount": len(replayed_job_ids),
+            "jobIds": replayed_job_ids,
+            "skippedReasonCodes": skipped_reason_codes,
+        }
+
     @reasoning_queue_deadlock_retry("reasoning-engine-job-supersede")
     def supersede(self, job_id: str, reason: str) -> None:
         stamp = iso_utc()

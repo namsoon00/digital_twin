@@ -8,6 +8,13 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional
 
+from ..domain.operational_health import (
+    OPERATIONAL_HEALTH_CONTRACT_VERSION,
+    OperationalHealthSignal,
+    assess_operational_health,
+    reasoning_engine_health_signals,
+)
+
 
 CONSOLE_READ_MODEL_VERSION = "console-read-model-v2"
 
@@ -924,28 +931,6 @@ class ConsoleReadModelService:
             )
             time_series_state = self._generic_health_state(_mapping(active_deployment.get("health")) or active_deployment)
         engine_control = _mapping(engine.get("control"))
-        active_deployment_id = _text(
-            engine_control.get("activeDeploymentId")
-            or engine_control.get("active_deployment_id")
-            or engine_control.get("deliveryDeploymentId")
-            or engine_control.get("delivery_deployment_id")
-        )
-        active_engine = _mapping(engine.get("activeDeployment")) or next(
-            (item for item in _rows(engine.get("deployments")) if _text(item.get("deploymentId")) == active_deployment_id),
-            {},
-        )
-        engine_guard = _mapping(_mapping(active_engine.get("health")).get("executionGuard"))
-        engine_state = self._generic_health_state(active_engine or engine)
-        platform_status = _text(engine.get("status")).lower()
-        if platform_status in {"unavailable", "blocked", "critical"}:
-            engine_state = "critical"
-        elif platform_status == "degraded" and engine_state != "critical":
-            engine_state = "warning"
-        guard_state = _text(engine_guard.get("status")).lower()
-        if guard_state in {"failed", "error", "critical", "blocked"}:
-            engine_state = "critical"
-        elif guard_state and guard_state not in {"ready", "healthy", "ok"}:
-            engine_state = "warning"
         storage_stage = _text(storage.get("mysqlCapacityStage")).lower()
         storage_state = (
             "critical" if storage_stage in {"critical", "core-only"}
@@ -959,29 +944,41 @@ class ConsoleReadModelService:
                 "id": "monitoring",
                 "label": "계좌·시장 모니터",
                 "state": monitor_state,
+                "dimension": "freshness",
+                "impact": "user",
+                "reasonCode": "monitor-snapshot-current" if monitor_state == "healthy" else "monitor-snapshot-stale",
                 "detail": (
                     "최근 모니터링 이벤트를 읽었습니다."
                     if monitor_state == "healthy"
                     else "최근 모니터링 스냅샷이 없거나 15분 이상 갱신되지 않았습니다."
                 ),
                 "updatedAt": monitor_updated_at,
+                "action": {} if monitor_state == "healthy" else {"id": "refresh-monitoring", "label": "모니터링 갱신", "view": "health"},
             },
             {
                 "id": "external-data",
                 "label": "외부 데이터 수집",
                 "state": "healthy" if providers and not failed_providers else ("warning" if providers else "unknown"),
+                "dimension": "freshness",
+                "impact": "user",
+                "reasonCode": "external-data-ready" if providers and not failed_providers else "external-data-provider-attention",
                 "detail": f"공급자 {len(providers)}개 · 확인 필요 {len(failed_providers)}개",
                 "updatedAt": max((_text(item.get("updatedAt")) for item in providers), default=""),
+                "action": {} if providers and not failed_providers else {"id": "open-provider-status", "label": "공급자 확인", "view": "data"},
             },
             {
                 "id": "reasoning",
                 "label": "TypeDB 관계 추론",
                 "state": reasoning_state,
+                "dimension": "workload",
+                "impact": "user",
+                "reasonCode": "reasoning-queue-ready" if reasoning_state == "healthy" else "reasoning-queue-delayed",
                 "detail": (
                     f"대기 {pending}건 · 처리 {processing}건 · 배포 {_text(reasoning.get('deploymentId')) or '확인 필요'}"
                     + (f" · 최장 {reasoning_oldest_age_seconds}초" if reasoning_oldest_age_seconds else "")
                 ),
                 "updatedAt": reasoning_oldest_at,
+                "action": {} if reasoning_state == "healthy" else {"id": "open-reasoning-queue", "label": "대기열 확인", "view": "reasoning"},
             },
             {
                 "id": "ai",
@@ -991,6 +988,13 @@ class ConsoleReadModelService:
                     else "warning" if ai_effective_status == "degraded"
                     else "healthy"
                 ),
+                "dimension": "delivery",
+                "impact": "user",
+                "reasonCode": (
+                    "ai-delivery-failed" if ai_actionable_failures or ai_oldest_age_seconds > 10 * 60
+                    else "ai-delivery-degraded" if ai_effective_status == "degraded"
+                    else "ai-delivery-ready"
+                ),
                 "detail": (
                     f"대기 {int(ai_summary.get('pendingCount') or 0)}건 · 처리 {int(ai_summary.get('processingCount') or 0)}건"
                     f" · 최근 {ai_effective_window_hours}시간 실효 AI {int(ai_summary.get('effectiveAiAuthoredCount') or 0)}/{int(ai_summary.get('effectiveAiEligibleCount') or 0)}건"
@@ -999,11 +1003,18 @@ class ConsoleReadModelService:
                     + (f" · 최장 {ai_oldest_age_seconds}초" if ai_oldest_age_seconds else "")
                 ),
                 "updatedAt": ai_oldest_at or _text(ai_summary.get("effectiveAiLatestAt")),
+                "action": (
+                    {} if not ai_actionable_failures and ai_effective_status != "degraded" and ai_oldest_age_seconds <= 10 * 60
+                    else {"id": "open-ai-queue", "label": "AI 대기열 확인", "view": "delivery"}
+                ),
             },
             {
                 "id": "notifications",
                 "label": "알림 전달",
                 "state": "warning" if notification_actionable_failures else "healthy",
+                "dimension": "delivery",
+                "impact": "user",
+                "reasonCode": "notification-delivery-failed" if notification_actionable_failures else "notification-delivery-ready",
                 "detail": (
                     f"현재 대기 {int(notification_summary.get('pending') or 0) + int(notification_summary.get('awaiting_ai') or 0)}건"
                     f" · 처리 {int(notification_summary.get('processing') or 0)}건"
@@ -1014,40 +1025,75 @@ class ConsoleReadModelService:
                     + (" (" + " · ".join(suppression_parts) + ")" if suppression_parts else "")
                 ),
                 "updatedAt": "",
+                "action": {} if not notification_actionable_failures else {"id": "open-notification-queue", "label": "알림 대기열 확인", "view": "delivery"},
             },
             {
                 "id": "time-series",
                 "label": "시계열 플랫폼",
                 "state": time_series_state,
+                "dimension": "availability",
+                "impact": "user",
+                "reasonCode": "time-series-ready" if time_series_state == "healthy" else "time-series-unavailable",
                 "detail": f"활성 백엔드 {active_backend_id or '미선택'} · {_text(time_series_health.get('status')) or '상태 확인'}",
                 "updatedAt": _text(time_series_control.get("updatedAt") or time_series_control.get("updated_at")),
-            },
-            {
-                "id": "reasoning-engine",
-                "label": "추론 엔진 배포",
-                "state": engine_state,
-                "detail": f"활성 배포 {active_deployment_id or '미선택'}" + (f" · {guard_state}" if guard_state else ""),
-                "updatedAt": _text(active_engine.get("updatedAt") or active_engine.get("updated_at")),
+                "action": {} if time_series_state == "healthy" else {"id": "open-time-series-status", "label": "시계열 확인", "view": "health"},
             },
             {
                 "id": "storage",
                 "label": "운영 저장공간",
                 "state": storage_state,
+                "dimension": "capacity",
+                "impact": "operational",
+                "reasonCode": "storage-ready" if storage_state == "healthy" else "storage-capacity-attention",
                 "detail": (
                     f"MySQL {storage.get('mysqlSizeMb') or 0}MB / {storage.get('mysqlLimitMb') or 0}MB"
                     f" · 회수 가능 {storage.get('mysqlReclaimableMb') or 0}MB"
                     f" · TypeDB {storage.get('typedbSizeMb') or 0}MB"
                 ),
                 "updatedAt": "",
+                "action": {} if storage_state == "healthy" else {"id": "open-storage-maintenance", "label": "저장공간 확인", "view": "health"},
             },
         ]
-        counts = Counter(item["state"] for item in rows)
+        storage_row = rows.pop()
+        signals = [
+            OperationalHealthSignal(
+                signal_id=_text(row.get("id")),
+                label=_text(row.get("label")),
+                dimension=_text(row.get("dimension")),
+                state=_text(row.get("state")),
+                detail=_text(row.get("detail")),
+                reason_code=_text(row.get("reasonCode")),
+                updated_at=_text(row.get("updatedAt")),
+                impact=_text(row.get("impact")) or "operational",
+                action=_mapping(row.get("action")),
+            )
+            for row in rows
+        ]
+        signals.extend(reasoning_engine_health_signals(engine))
+        signals.append(OperationalHealthSignal(
+            signal_id=_text(storage_row.get("id")),
+            label=_text(storage_row.get("label")),
+            dimension=_text(storage_row.get("dimension")),
+            state=_text(storage_row.get("state")),
+            detail=_text(storage_row.get("detail")),
+            reason_code=_text(storage_row.get("reasonCode")),
+            updated_at=_text(storage_row.get("updatedAt")),
+            impact=_text(storage_row.get("impact")) or "operational",
+            action=_mapping(storage_row.get("action")),
+        ))
+        assessment = assess_operational_health(signals)
         return {
-            "version": CONSOLE_READ_MODEL_VERSION,
+            "version": OPERATIONAL_HEALTH_CONTRACT_VERSION,
             "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "state": "critical" if counts.get("critical") else ("warning" if counts.get("warning") or counts.get("unknown") else "healthy"),
-            "summary": dict(counts),
-            "components": rows,
+            "state": assessment["serviceState"],
+            "serviceState": assessment["serviceState"],
+            "attentionState": assessment["attentionState"],
+            "attentionCount": assessment["attentionCount"],
+            "historicalDebtCount": assessment["historicalDebtCount"],
+            "summary": assessment["summary"],
+            "dimensions": assessment["dimensions"],
+            "actions": assessment["actions"],
+            "components": assessment["signals"],
             "queues": {
                 "reasoning": {
                     "pending": pending,
@@ -1066,6 +1112,7 @@ class ConsoleReadModelService:
                     "activeDeployment": _mapping(engine.get("activeDeployment")),
                     "deliveryDeployment": _mapping(engine.get("deliveryDeployment")),
                     "candidateDeployment": _mapping(engine.get("candidateDeployment")),
+                    "historicalDebt": _mapping(engine.get("historicalDebt")),
                 },
             },
             "providers": providers,

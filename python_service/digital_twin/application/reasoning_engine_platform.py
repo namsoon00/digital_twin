@@ -796,6 +796,7 @@ class ReasoningEnginePlatformService:
             if "unresolvedFailureCount" in queue
             else failure_count
         )
+        recent_failure_count = int(queue.get("recentFailureCount24h") or 0)
         oldest_pending_age = int(queue.get("oldestPendingAgeSeconds") or 0)
         delivery_heartbeats = dict(delivery.get("workerHeartbeats") or {})
         delivery_heartbeat = dict(delivery_heartbeats.get("delivery") or {})
@@ -816,7 +817,7 @@ class ReasoningEnginePlatformService:
             reasons = []
             if delivery_id != active_id:
                 reasons.append("active-delivery-deployment-mismatch")
-            if unresolved_failure_count:
+            if unresolved_failure_count and recent_failure_count:
                 reasons.append("reasoning-failures-present")
             if oldest_pending_age >= self.int_setting(
                 "ontologyReasoningQueueCriticalAgeMinutes", 5, 1, 1440
@@ -882,7 +883,7 @@ class ReasoningEnginePlatformService:
                 "failureCount": failure_count,
                 "unresolvedFailureCount": unresolved_failure_count,
                 "resolvedFailureCount": int(queue.get("resolvedFailureCount") or 0),
-                "recentFailureCount24h": int(queue.get("recentFailureCount24h") or 0),
+                "recentFailureCount24h": recent_failure_count,
                 "latestUnresolvedFailureAt": str(
                     queue.get("latestUnresolvedFailureAt") or ""
                 ),
@@ -902,6 +903,23 @@ class ReasoningEnginePlatformService:
                 "endToEndP95Ms": int(queue.get("endToEndP95Ms") or 0),
                 "latestCompletedAt": str(queue.get("latestCompletedAt") or ""),
                 "jobRowCounts": dict(queue.get("jobRowCounts") or queue.get("counts") or {}),
+            },
+            "historicalDebt": {
+                "status": (
+                    "current"
+                    if unresolved_failure_count and recent_failure_count
+                    else "attention"
+                    if unresolved_failure_count
+                    else "clear"
+                ),
+                "unresolvedFailureCount": unresolved_failure_count,
+                "recentFailureCount24h": recent_failure_count,
+                "latestUnresolvedFailureAt": str(
+                    queue.get("latestUnresolvedFailureAt") or ""
+                ),
+                "reasonCounts": dict(
+                    queue.get("unresolvedFailureReasonCounts") or {}
+                ),
             },
             "marketObservationReasoningCompletion": completion,
             "queues": {

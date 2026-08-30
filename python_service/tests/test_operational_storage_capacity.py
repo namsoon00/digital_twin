@@ -9,6 +9,9 @@ from digital_twin.application.operational_storage_capacity_service import (
     OperationalStorageCapacityService,
 )
 from digital_twin.domain.events import operational_storage_capacity_changed_event
+from digital_twin.domain.operational_storage_capacity import (
+    operational_storage_capacity_read_model,
+)
 from digital_twin.domain.message_types import (
     OPERATIONAL_STORAGE_CAPACITY,
     is_operations_delivery_message_type,
@@ -52,6 +55,33 @@ class Notifier:
 
 
 class OperationalStorageCapacityTests(unittest.TestCase):
+    def test_operator_read_model_exposes_forecast_cleanup_and_protected_history(self):
+        result = operational_storage_capacity_read_model(
+            {
+                "cleanupMode": "accelerated",
+                "mysqlReclaimableMb": 6144,
+                "logSizeMb": 700,
+                "logLimitMb": 512,
+                "mysqlCapacityStage": "warning",
+            },
+            {
+                "state": "warning",
+                "checkedAt": "2026-08-30T09:00:00Z",
+                "forecastDetected": True,
+                "forecastSampleCount": 4,
+                "forecastEtaMinutes": 95,
+                "forecastThresholdMb": 24576,
+                "forecastDepletionRateMbPerMinute": 12.5,
+            },
+        )
+
+        self.assertEqual("warning", result["capacityState"])
+        self.assertTrue(result["forecast"]["available"])
+        self.assertEqual(95, result["forecast"]["etaMinutes"])
+        self.assertTrue(result["cleanupPlan"]["automatic"])
+        self.assertEqual(6332, result["cleanupPlan"]["estimatedReclaimableMb"])
+        self.assertIn("투자 결정과 판단 이력", result["cleanupPlan"]["protectedData"])
+
     def limited_snapshot(self):
         return {
             "freeMb": 60 * 1024,

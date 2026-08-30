@@ -723,11 +723,117 @@ def disabled_reasoning_worker_specs(
     }
 
 
+def reasoning_deployment_revision(deployment_id: object) -> int:
+    value = str(deployment_id or "").strip().lower()
+    marker = value.rfind("-r")
+    if marker < 0:
+        return -1
+    try:
+        return int(value[marker + 2:])
+    except ValueError:
+        return -1
+
+
+def retire_stale_reasoning_candidate(
+    settings: Dict[str, object] = None,
+    registry_factory=None,
+    settings_saver=None,
+) -> Dict[str, object]:
+    """Remove a candidate only when its revision cannot advance the active release."""
+
+    configured = dict(settings or {})
+    if registry_factory is None:
+        from .infrastructure.operational_store import reasoning_engine_registry_store
+        registry_factory = reasoning_engine_registry_store
+    if settings_saver is None:
+        from .infrastructure.settings import save_runtime_settings
+        settings_saver = save_runtime_settings
+    try:
+        registry = registry_factory(configured)
+        control = registry.control()
+        active_id = str(getattr(control, "active_deployment_id", "") or "").strip()
+        delivery_id = str(
+            getattr(control, "delivery_deployment_id", "") or active_id
+        ).strip()
+        candidate_id = str(
+            getattr(control, "candidate_deployment_id", "") or ""
+        ).strip()
+        if not candidate_id:
+            return {"status": "no-candidate", "retiredDeploymentIds": []}
+        active_revision = reasoning_deployment_revision(active_id)
+        candidate_revision = reasoning_deployment_revision(candidate_id)
+        if (
+            candidate_id in {active_id, delivery_id}
+            or active_revision < 0
+            or candidate_revision < 0
+            or candidate_revision > active_revision
+        ):
+            return {
+                "status": "candidate-current",
+                "activeDeploymentId": active_id,
+                "candidateDeploymentId": candidate_id,
+                "retiredDeploymentIds": [],
+            }
+        restored_control = registry.set_control(
+            active_id,
+            delivery_id,
+            "",
+            expected_version=int(getattr(control, "version", 0) or 0),
+        )
+        retirement = dict(
+            registry.retire_unselected("v2", [active_id, delivery_id]) or {}
+        )
+        delivery = dict(registry.get(delivery_id) or {})
+        settings_patch = {
+            "reasoningEngineV2DeploymentId": delivery_id,
+            "reasoningEngineActiveDeploymentId": active_id,
+            "reasoningEngineDeliveryDeploymentId": delivery_id,
+            "reasoningEngineCandidateDeploymentId": "",
+            "reasoningEngineCandidateReleaseId": "",
+            "reasoningEngineV2TypeDbDatabase": str(
+                delivery.get("graphStoreBinding")
+                or delivery.get("graph_store_binding")
+                or ""
+            ),
+        }
+        settings_persisted = True
+        settings_error = ""
+        try:
+            settings_saver(settings_patch)
+        except Exception as error:  # Control-plane ownership is already safely restored.
+            settings_persisted = False
+            settings_error = str(error)[:240]
+        return {
+            "status": "retired-stale-candidate",
+            "activeDeploymentId": str(
+                getattr(restored_control, "active_deployment_id", "") or active_id
+            ),
+            "deliveryDeploymentId": str(
+                getattr(restored_control, "delivery_deployment_id", "") or delivery_id
+            ),
+            "candidateDeploymentId": candidate_id,
+            "settingsPatch": settings_patch,
+            "settingsPersisted": settings_persisted,
+            "settingsError": settings_error,
+            **retirement,
+        }
+    except Exception as error:  # MySQL may still be starting when specs are first requested.
+        return {
+            "status": "candidate-reconciliation-unavailable",
+            "reason": str(error)[:240],
+            "retiredDeploymentIds": [],
+        }
+
+
 def worker_specs() -> Dict[str, Dict[str, object]]:
     try:
         settings = runtime_settings()
     except Exception:  # noqa: BLE001 - service manager should still manage Python workers.
         settings = {}
+    if truthy((settings or {}).get("reasoningEngineAutoRetireStaleCandidateEnabled", "1")):
+        candidate_reconciliation = retire_stale_reasoning_candidate(settings)
+        if candidate_reconciliation.get("status") == "retired-stale-candidate":
+            settings.update(dict(candidate_reconciliation.get("settingsPatch") or {}))
     workers = {}
     if truthy((settings or {}).get("mysqlRuntimeManaged", os.environ.get("MYSQL_RUNTIME_MANAGED", "1"))):
         workers["mysql"] = mysql_worker_spec(settings)

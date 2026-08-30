@@ -77,6 +77,79 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("", saved[0]["reasoningEngineCandidateDeploymentId"])
         self.assertEqual("ontology-active", saved[0]["reasoningEngineV2TypeDbDatabase"])
 
+    def test_stale_reasoning_candidate_is_retired_before_worker_selection(self):
+        class FakeRegistry:
+            def __init__(self):
+                self.set_control_args = None
+                self.retire_args = None
+
+            @staticmethod
+            def control():
+                return SimpleNamespace(
+                    active_deployment_id="ontology-v2-production-r88",
+                    delivery_deployment_id="ontology-v2-production-r88",
+                    candidate_deployment_id="ontology-v2-production-r75",
+                    version=12,
+                )
+
+            def set_control(self, active, delivery, candidate, expected_version=None):
+                self.set_control_args = (active, delivery, candidate, expected_version)
+                return SimpleNamespace(
+                    active_deployment_id=active,
+                    delivery_deployment_id=delivery,
+                )
+
+            def retire_unselected(self, engine_version, keep):
+                self.retire_args = (engine_version, list(keep))
+                return {"retiredDeploymentIds": ["ontology-v2-production-r75"]}
+
+            @staticmethod
+            def get(deployment_id):
+                return {
+                    "deploymentId": deployment_id,
+                    "graphStoreBinding": "ontology-production-r88",
+                }
+
+        registry = FakeRegistry()
+        saved = []
+        result = service_manager.retire_stale_reasoning_candidate(
+            {},
+            registry_factory=lambda _settings: registry,
+            settings_saver=lambda values: saved.append(values),
+        )
+
+        self.assertEqual("retired-stale-candidate", result["status"])
+        self.assertEqual(
+            (
+                "ontology-v2-production-r88",
+                "ontology-v2-production-r88",
+                "",
+                12,
+            ),
+            registry.set_control_args,
+        )
+        self.assertEqual("ontology-v2-production-r88", saved[0]["reasoningEngineV2DeploymentId"])
+
+    def test_newer_reasoning_candidate_is_preserved(self):
+        class FakeRegistry:
+            @staticmethod
+            def control():
+                return SimpleNamespace(
+                    active_deployment_id="ontology-v2-production-r88",
+                    delivery_deployment_id="ontology-v2-production-r88",
+                    candidate_deployment_id="ontology-v2-production-r89",
+                    version=12,
+                )
+
+        result = service_manager.retire_stale_reasoning_candidate(
+            {},
+            registry_factory=lambda _settings: FakeRegistry(),
+            settings_saver=lambda _values: None,
+        )
+
+        self.assertEqual("candidate-current", result["status"])
+        self.assertEqual([], result["retiredDeploymentIds"])
+
     def test_candidate_seed_fails_closed_without_parent_maintenance_token(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

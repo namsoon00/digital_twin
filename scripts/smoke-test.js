@@ -3310,7 +3310,8 @@ async function checkNormalMode(port, context) {
   const operationsHealth = await request(port, "/api/operations/health");
   assertOk(operationsHealth.statusCode === 200, "운영 상태 API 응답 코드가 200이 아닙니다: " + operationsHealth.statusCode);
   const operationsHealthPayload = JSON.parse(operationsHealth.body);
-  assertOk(operationsHealthPayload.version === "console-read-model-v2" && Array.isArray(operationsHealthPayload.components), "운영 상태 API가 구성요소 읽기 모델을 반환하지 않습니다.");
+  assertOk(operationsHealthPayload.version === "operational-health-v3" && Array.isArray(operationsHealthPayload.components), "운영 상태 API가 구성요소 읽기 모델을 반환하지 않습니다.");
+  assertOk(typeof operationsHealthPayload.serviceState === "string" && typeof operationsHealthPayload.attentionState === "string", "운영 상태 API가 현재 서비스와 운영 주의를 분리하지 않습니다.");
 
   const tossLensFull = await requestReadyFlowLens(port, "/api/flow-lens?mock=1&detail=full");
   assertOk(tossLensFull.statusCode === 200, "토스 판단 상세 API 응답 코드가 200이 아닙니다: " + tossLensFull.statusCode);

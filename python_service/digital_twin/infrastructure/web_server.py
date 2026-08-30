@@ -6168,9 +6168,21 @@ def _console_operations_health_source_payload() -> Dict[str, object]:
 
     def storage_payload():
         from ..domain.mysql_minimal_retention import mysql_minimal_retention_policy
+        from ..domain.operational_storage_capacity import operational_storage_capacity_read_model
+        from .operational_store import operational_storage_capacity_state_store
         from .operational_storage_guard import operational_storage_inventory
 
         inventory = operational_storage_inventory(settings)
+        try:
+            stored = dict(
+                operational_storage_capacity_state_store(settings).load() or {}
+            )
+            observation = dict(stored.get("operationalStorageCapacity") or {})
+        except Exception:  # Capacity inventory remains useful during state-store recovery.
+            observation = {}
+        inventory.update(
+            operational_storage_capacity_read_model(inventory, observation)
+        )
         policy = mysql_minimal_retention_policy(settings)
         inventory["retentionPolicy"] = {
             "typedbActiveHours": int(settings.get("typedbDataRetentionHours") or 72),

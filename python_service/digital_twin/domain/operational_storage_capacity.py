@@ -18,6 +18,65 @@ COMPONENT_SPECS = (
 )
 
 
+def operational_storage_capacity_read_model(
+    inventory: Mapping[str, object],
+    observation: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Combine live inventory with the durable trend observation for operators."""
+
+    current = dict(inventory or {})
+    observed = dict(observation or {})
+    reclaimable_mb = round(
+        max(0.0, _number(current.get("mysqlReclaimableMb")))
+        + max(
+            0.0,
+            _number(current.get("logSizeMb")) - _number(current.get("logLimitMb")),
+        ),
+        1,
+    )
+    cleanup_mode = str(current.get("cleanupMode") or observed.get("cleanupMode") or "normal")
+    capacity_state = str(
+        observed.get("capacityState")
+        or observed.get("state")
+        or current.get("mysqlCapacityStage")
+        or "healthy"
+    )
+    return {
+        "capacityState": capacity_state,
+        "capacityObservedAt": str(observed.get("checkedAt") or ""),
+        "forecast": {
+            "available": int(observed.get("forecastSampleCount") or 0) >= 2,
+            "detected": bool(observed.get("forecastDetected")),
+            "sampleCount": int(observed.get("forecastSampleCount") or 0),
+            "elapsedMinutes": observed.get("forecastElapsedMinutes"),
+            "depletionRateMbPerMinute": _number(
+                observed.get("forecastDepletionRateMbPerMinute")
+            ),
+            "etaMinutes": observed.get("forecastEtaMinutes"),
+            "thresholdMb": _number(observed.get("forecastThresholdMb")),
+            "projectedFreeMb": observed.get("forecastProjectedFreeMb"),
+        },
+        "cleanupPlan": {
+            "mode": cleanup_mode,
+            "automatic": cleanup_mode in {"accelerated", "emergency"},
+            "canStart": reclaimable_mb > 0 or cleanup_mode != "normal",
+            "estimatedReclaimableMb": reclaimable_mb,
+            "mysqlReclaimableMb": max(0.0, _number(current.get("mysqlReclaimableMb"))),
+            "protectedData": [
+                "투자 결정과 판단 이력",
+                "판단 후 결과와 체결 원장",
+                "현재 가설 상태",
+                "압축 전환 감사 이력",
+            ],
+            "cleanupTargets": [
+                "만료된 대용량 처리 페이로드",
+                "보존 기간이 지난 스냅샷과 시계열",
+                "중복된 전달·추론 상세 이력",
+            ],
+        },
+    }
+
+
 def _integer(value: object, fallback: int, minimum: int = 0, maximum: int = 1024 * 1024) -> int:
     try:
         parsed = int(float(str(value if value is not None else "").strip()))

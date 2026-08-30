@@ -36107,6 +36107,17 @@
       });
     });
 
+    Array.prototype.slice.call(app.querySelectorAll("[data-operations-action-view]")).forEach(function (button) {
+      button.addEventListener("click", function () {
+        var view = normalizeOperationsView(button.getAttribute("data-operations-action-view"));
+        if (view === state.activeOperationsView) return;
+        rememberRenderedPageScrollPosition();
+        state.activeOperationsView = view;
+        writeConsoleWorkspaceViewHistory("operations", "operationsView", view, "health");
+        render({ transition: "section" });
+      });
+    });
+
     var marketWatchAccount = app.querySelector("[data-market-watch-account]");
     if (marketWatchAccount) {
       marketWatchAccount.addEventListener("change", function () {

@@ -34,9 +34,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
     def test_curated_suite_stays_within_the_deliberate_size_budget(self):
         total = sum(len(_test_methods(TEST_DIR / entry["file"])) for entry in _entries())
         self.assertGreaterEqual(total, 600)
-        # Recovery watchdog, immutable decision audit, and isolated replay are
-        # independent production boundaries and each keeps its own contract.
-        self.assertLessEqual(total, 840)
+        # Recovery watchdog, immutable decision audit, isolated replay, and
+        # user-impact-separated operational health are independent production
+        # boundaries and each keeps its own contract.
+        self.assertLessEqual(total, 860)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

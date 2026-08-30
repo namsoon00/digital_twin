@@ -866,6 +866,75 @@
   font-size: 9px;
 }
 
+.cws-health-list small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.cws-health-list article > span:last-child button,
+.cws-operations-attention button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.cws-operations-attention > div,
+.cws-operations-dimensions > div {
+  display: grid;
+}
+
+.cws-operations-attention article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cws-operations-attention article:last-child {
+  border-bottom: 0;
+}
+
+.cws-operations-attention article > span {
+  display: grid;
+  gap: 3px;
+}
+
+.cws-operations-attention em,
+.cws-operations-dimensions em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.cws-operations-dimensions > div > div {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.cws-operations-dimensions > div > div:last-child {
+  border-bottom: 0;
+}
+
+.cws-operations-dimensions .healthy .cws-health-dot { background: var(--green); }
+.cws-operations-dimensions .warning .cws-health-dot,
+.cws-operations-dimensions .unknown .cws-health-dot { background: var(--amber); }
+.cws-operations-dimensions .critical .cws-health-dot { background: var(--red); }
+
 .cws-section-actions {
   display: flex;
   gap: 8px;
@@ -1136,6 +1205,10 @@
   .cws-health-list article > span:last-child {
     grid-column: 2;
     justify-items: start;
+  }
+
+  .cws-health-list article > span:last-child button {
+    width: 100%;
   }
 
   .cws-timeline article {

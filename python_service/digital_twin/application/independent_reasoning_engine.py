@@ -1622,6 +1622,12 @@ class IndependentReasoningJobRunner:
         self._last_case_expiry_at = 0.0
         self._last_case_expiry: Dict[str, object] = {"status": "not-run", "expiredCount": 0}
         self._last_worker_heartbeat_at = 0.0
+        self._worker_heartbeat_lock = threading.Lock()
+        self._last_failure_recovery_at = 0.0
+        self._last_failure_recovery: Dict[str, object] = {
+            "status": "not-run",
+            "replayedCount": 0,
+        }
         self._background_graph_next_at = {
             task["name"]: 0.0 for task in self.background_graph_tasks
         }
@@ -1772,6 +1778,7 @@ class IndependentReasoningJobRunner:
         route_reconciliation = self.reconcile_ingress_route()
         lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
         repaired = self.repair_ingress(descriptor.deployment_id)
+        self.recover_transient_failures(descriptor.deployment_id)
         stale_observations = self.supersede_stale_observations(descriptor.deployment_id)
         backlog_compaction = self.compact_backlog(descriptor.deployment_id)
         guard = self.execution_readiness()
@@ -2628,26 +2635,41 @@ class IndependentReasoningJobRunner:
     def publish_worker_heartbeat(self, deployment_id: str) -> bool:
         """Persist bounded consumer liveness without writing on every poll."""
 
-        now = time.monotonic()
-        if self._last_worker_heartbeat_at and now - self._last_worker_heartbeat_at < 30:
+        with self._worker_heartbeat_lock:
+            now = time.monotonic()
+            if self._last_worker_heartbeat_at and now - self._last_worker_heartbeat_at < 30:
+                return True
+            role = self.deployment_role if self.deployment_role not in {"", "configured"} else "configured"
+            try:
+                health = dict((self.registry.get(deployment_id) or {}).get("health") or {})
+                heartbeats = dict(health.get("workerHeartbeats") or {})
+                heartbeats[role] = {
+                    "workerId": self.worker_id,
+                    "workerRole": role,
+                    "deploymentId": str(deployment_id or ""),
+                    "updatedAt": utc_now_iso(),
+                }
+                health["workerHeartbeats"] = heartbeats
+                health["graphWriter"] = self.graph_writer_status()
+                self.registry.update_health(deployment_id, health)
+            except Exception:  # noqa: BLE001 - queue leases remain the execution authority.
+                return False
+            self._last_worker_heartbeat_at = now
             return True
-        role = self.deployment_role if self.deployment_role not in {"", "configured"} else "configured"
-        try:
-            health = dict((self.registry.get(deployment_id) or {}).get("health") or {})
-            heartbeats = dict(health.get("workerHeartbeats") or {})
-            heartbeats[role] = {
-                "workerId": self.worker_id,
-                "workerRole": role,
-                "deploymentId": str(deployment_id or ""),
-                "updatedAt": utc_now_iso(),
-            }
-            health["workerHeartbeats"] = heartbeats
-            health["graphWriter"] = self.graph_writer_status()
-            self.registry.update_health(deployment_id, health)
-        except Exception:  # noqa: BLE001 - queue leases remain the execution authority.
-            return False
-        self._last_worker_heartbeat_at = now
-        return True
+
+    def worker_liveness_loop(self, deployment_id: str, stop_event) -> None:
+        """Keep worker liveness current during long inference and maintenance turns."""
+
+        interval = _int_setting(
+            self.settings,
+            "reasoningEngineWorkerHeartbeatSeconds",
+            20,
+            5,
+            30,
+        )
+        self.publish_worker_heartbeat(deployment_id)
+        while not stop_event.wait(interval):
+            self.publish_worker_heartbeat(deployment_id)
 
     def acquire_graph_writer_ownership(self) -> Dict[str, object]:
         guard = self.graph_writer_guard
@@ -2772,12 +2794,69 @@ class IndependentReasoningJobRunner:
         events = reader(deployment_id, after_occurred_at=cutoff, limit=limit)
         return sum(1 for event in events or [] if ingress(event).get("saved"))
 
+    def recover_transient_failures(self, deployment_id: str) -> Dict[str, object]:
+        """Replay only known transient failures at a bounded cadence."""
+
+        enabled = str(
+            self.settings.get("reasoningEngineAutomaticFailureRecoveryEnabled") or "1"
+        ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+        if not enabled or self.deployment_role == "candidate":
+            return {"status": "disabled", "replayedCount": 0}
+        replay = getattr(self.queue, "replay_unresolved_failures", None)
+        if not callable(replay):
+            return {"status": "unsupported", "replayedCount": 0}
+        interval = _int_setting(
+            self.settings,
+            "reasoningEngineAutomaticFailureRecoveryIntervalSeconds",
+            600,
+            60,
+            24 * 60 * 60,
+        )
+        now = time.monotonic()
+        if self._last_failure_recovery_at and now - self._last_failure_recovery_at < interval:
+            return dict(self._last_failure_recovery)
+        self._last_failure_recovery_at = now
+        try:
+            self._last_failure_recovery = dict(replay(
+                deployment_id,
+                limit=_int_setting(
+                    self.settings,
+                    "reasoningEngineAutomaticFailureRecoveryBatchSize",
+                    3,
+                    1,
+                    10,
+                ),
+                maximum_recovery_attempts=_int_setting(
+                    self.settings,
+                    "reasoningEngineAutomaticFailureRecoveryMaxAttempts",
+                    1,
+                    0,
+                    2,
+                ),
+            ) or {})
+        except Exception as error:  # noqa: BLE001 - live reasoning continues without repair.
+            self._last_failure_recovery = {
+                "status": "error",
+                "replayedCount": 0,
+                "reason": str(error)[:180],
+            }
+        return dict(self._last_failure_recovery)
+
     def watch(self) -> None:
         interval = _int_setting(self.settings, "reasoningEngineV2IntervalSeconds", 5, 1, 300)
         ownership = self.acquire_graph_writer_ownership()
         if not bool(ownership.get("acquired")):
             self._last_background_graph_turn = self.graph_writer_deferred_result(ownership)
             return
+        descriptor = self.engine.descriptor()
+        liveness_stop = threading.Event()
+        liveness_thread = threading.Thread(
+            target=self.worker_liveness_loop,
+            args=(descriptor.deployment_id, liveness_stop),
+            daemon=True,
+            name="reasoning-worker-liveness-" + str(self.deployment_role or "configured"),
+        )
+        liveness_thread.start()
         try:
             while True:
                 result = self._run_once()
@@ -2794,4 +2873,6 @@ class IndependentReasoningJobRunner:
                 }:
                     time.sleep(interval)
         finally:
+            liveness_stop.set()
+            liveness_thread.join(timeout=2)
             self.release_graph_writer_ownership()

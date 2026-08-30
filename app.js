@@ -447,6 +447,8 @@
     portfolioReadModels: {},
     portfolioReadModelLoading: false,
     portfolioReadModelError: "",
+    portfolioReadModelLoadingByView: {},
+    portfolioReadModelErrorsByView: {},
     portfolioInterpretation: null,
     portfolioInterpretationLoading: false,
     portfolioInterpretationError: "",
@@ -3447,7 +3449,9 @@
       if (!state.serverSettingsLoaded && !state.serverSettingsLoading) loadServerSettings();
       if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
     }
-    if (active === "operations" && !state.operationsHealth && !state.operationsHealthLoading) loadOperationsHealth(false);
+    if (active === "operations" && !state.operationsHealthLoading && operationsHealthIsStale(120000)) {
+      loadOperationsHealth(Boolean(state.operationsHealth));
+    }
     if (active === "modeling" || active === "experiments") {
       if ((!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) loadInvestmentFlow(false);
       if (shouldLoadStrategyProposals() && strategyProposalsNeedLoad() && !state.strategyProposalsLoading) loadStrategyProposals(false);
@@ -6952,7 +6956,23 @@
     });
   }
 
-  function loadPortfolioReadModel(view, force) {
+  function portfolioReadModelBusy(view) {
+    return Boolean(state.portfolioReadModelLoadingByView[normalizePortfolioView(view)]);
+  }
+
+  function prefetchPortfolioReadModelNeighbor(view) {
+    if (isStaticPreviewHost()) return;
+    var order = ["summary", "positions", "rebalance", "activity"];
+    var index = order.indexOf(normalizePortfolioView(view));
+    var neighbor = order[index + 1] || order[index - 1];
+    if (!neighbor || state.portfolioReadModels[neighbor] || portfolioReadModelBusy(neighbor)) return;
+    window.setTimeout(function () {
+      loadPortfolioReadModel(neighbor, false, { prefetch: true });
+    }, 0);
+  }
+
+  function loadPortfolioReadModel(view, force, options) {
+    options = options || {};
     var normalized = normalizePortfolioView(view || state.activePortfolioView);
     if (isStaticPreviewHost()) {
       var previewPortfolio = selectConsolePortfolio(state.snapshot || {});
@@ -6985,10 +7005,15 @@
       };
       return Promise.resolve(state.portfolioReadModels[normalized]);
     }
-    if (state.portfolioReadModelLoading) return activeJsonRequests["portfolio-read-model:" + normalized] || Promise.resolve(state.portfolioReadModels[normalized]);
-    if (state.portfolioReadModels[normalized] && !force) return Promise.resolve(state.portfolioReadModels[normalized]);
+    if (portfolioReadModelBusy(normalized)) return activeJsonRequests["portfolio-read-model:" + normalized] || Promise.resolve(state.portfolioReadModels[normalized]);
+    if (state.portfolioReadModels[normalized] && !force) {
+      if (!options.prefetch) prefetchPortfolioReadModelNeighbor(normalized);
+      return Promise.resolve(state.portfolioReadModels[normalized]);
+    }
+    state.portfolioReadModelLoadingByView[normalized] = true;
     state.portfolioReadModelLoading = true;
-    state.portfolioReadModelError = "";
+    state.portfolioReadModelErrorsByView[normalized] = "";
+    if (normalized === state.activePortfolioView) state.portfolioReadModelError = "";
     var paths = {
       summary: "/api/portfolio/summary",
       positions: "/api/portfolio/positions",
@@ -7007,14 +7032,20 @@
         scheduleReadModelPoll("portfolio-read-model:" + normalized, function () { loadPortfolioReadModel(normalized, true); });
       } else {
         clearReadModelPoll("portfolio-read-model:" + normalized);
+        if (!options.prefetch) prefetchPortfolioReadModelNeighbor(normalized);
       }
       return state.portfolioReadModels[normalized];
     }).catch(function (error) {
-      state.portfolioReadModelError = error.message || "포트폴리오 원장을 읽지 못했습니다.";
+      var message = error.message || "포트폴리오 원장을 읽지 못했습니다.";
+      state.portfolioReadModelErrorsByView[normalized] = message;
+      if (normalized === state.activePortfolioView) state.portfolioReadModelError = message;
       return null;
     }).finally(function () {
-      state.portfolioReadModelLoading = false;
-      if (state.snapshot) render();
+      state.portfolioReadModelLoadingByView[normalized] = false;
+      state.portfolioReadModelLoading = Object.keys(state.portfolioReadModelLoadingByView).some(function (key) {
+        return Boolean(state.portfolioReadModelLoadingByView[key]);
+      });
+      if (state.snapshot && (!options.prefetch || normalized === state.activePortfolioView)) render();
     });
   }
 
@@ -7092,6 +7123,13 @@
       state.operationsHealthLoading = false;
       if (state.snapshot) render();
     });
+  }
+
+  function operationsHealthIsStale(maxAgeMs) {
+    if (!state.operationsHealth || !state.operationsHealth.generatedAt) return true;
+    var generated = new Date(state.operationsHealth.generatedAt).getTime();
+    if (!Number.isFinite(generated)) return true;
+    return Date.now() - generated > Math.max(30000, Number(maxAgeMs || 120000));
   }
 
   function investmentFlowPath() {
@@ -12247,7 +12285,7 @@
     if (state.activeTab === "overview" && !state.dashboardSummary && !state.dashboardSummaryLoading) {
       loadDashboardSummary(false);
     }
-    if (state.activeTab === "portfolio" && !state.portfolioReadModels[state.activePortfolioView] && !state.portfolioReadModelLoading) {
+    if (state.activeTab === "portfolio" && !state.portfolioReadModels[state.activePortfolioView] && !portfolioReadModelBusy(state.activePortfolioView)) {
       loadPortfolioReadModel(state.activePortfolioView, false);
     }
     if (state.workDetailLayer && state.workDetailLayer.type === "portfolio-interpretation" && !state.portfolioInterpretation && !state.portfolioInterpretationLoading) {
@@ -12256,8 +12294,8 @@
     if (state.activeTab === "feed" && !state.marketReadModel && !state.marketReadModelLoading) {
       loadMarketReadModel(false);
     }
-    if (state.activeTab === "operations" && !state.operationsHealth && !state.operationsHealthLoading) {
-      loadOperationsHealth(false);
+    if (state.activeTab === "operations" && !state.operationsHealthLoading && operationsHealthIsStale(120000)) {
+      loadOperationsHealth(Boolean(state.operationsHealth));
     }
     if (state.activeTab === "feed" && !state.serviceAccountsLoaded && !state.serviceAccountsLoading) {
       loadServiceAccounts();
@@ -16121,8 +16159,8 @@
     var payload = state.portfolioReadModels[view] || {};
     var body = workspace && typeof workspace.renderPortfolio === "function"
       ? workspace.renderPortfolio(payload, view, {
-          loading: state.portfolioReadModelLoading,
-          error: state.portfolioReadModelError
+          loading: portfolioReadModelBusy(view),
+          error: state.portfolioReadModelErrorsByView[view] || ""
         })
       : renderConsoleEmpty("포트폴리오 화면을 준비하지 못했습니다", "웹 자산을 새로고침하세요.");
     return '<div class="managed-page oa-console-page oa-console-page-portfolio" data-console-workspace="portfolio">' + body + '</div>';
@@ -31714,8 +31752,8 @@
           { value: "1", label: "사용" },
           { value: "0", label: "사용 안 함" }
         ]),
-        renderSettingField("typedbCapacityThrottlePercent", "TypeDB 배경 쓰기 완화 기준(%)", "number", "80"),
-        renderSettingField("typedbCapacityAutoRotatePercent", "TypeDB 안전 재구축 기준(%)", "number", "90"),
+        renderSettingField("typedbCapacityThrottlePercent", "TypeDB 배경 쓰기 완화 기준(%)", "number", "70"),
+        renderSettingField("typedbCapacityAutoRotatePercent", "TypeDB 안전 재구축 기준(%)", "number", "75"),
         renderSettingField("typedbCapacityAutoRotateCooldownMinutes", "TypeDB 자동 회전 재시도 간격(분)", "number", "60"),
         renderSettingField("ontologyAboxMaintenanceMaxReasoningDeferralSeconds", "ABox 정리 최대 유예(초)", "number", "120"),
         renderSettingField("ontologyAboxMaintenanceBusyRetrySeconds", "ABox 정리 유휴 구간 재확인(초)", "number", "10"),
@@ -35787,6 +35825,14 @@
     if (refreshNotificationJobsButton) {
       refreshNotificationJobsButton.addEventListener("click", function () {
         loadNotificationJobs();
+        render();
+      });
+    }
+
+    var refreshOperationsHealthButton = app.querySelector('[data-action="refresh-operations-health"]');
+    if (refreshOperationsHealthButton) {
+      refreshOperationsHealthButton.addEventListener("click", function () {
+        loadOperationsHealth(true);
         render();
       });
     }

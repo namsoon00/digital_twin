@@ -2,6 +2,7 @@ import json
 import unittest
 
 from digital_twin.application.flow_lens_service import position_payload
+from digital_twin.application.capital_flow_service import CapitalFlowService
 from digital_twin.application.notification_ai_gate_message import (
     _investor_text_from_relation_facts,
     compact_investor_flow_line,
@@ -48,6 +49,37 @@ def investor_coverage(fields, participant_status=None, status="available"):
 
 
 class InvestorFlowContractTests(unittest.TestCase):
+    def test_capital_flow_does_not_report_zero_holdings_without_a_position_snapshot(self):
+        impact = CapitalFlowService._portfolio_impact(
+            {"subjects": []},
+            [],
+            positions_available=False,
+        )
+
+        self.assertEqual("unavailable", impact["status"])
+        self.assertEqual("position-snapshot-unavailable", impact["reason"])
+        self.assertIsNone(impact["matchedHoldingCount"])
+        self.assertIsNone(impact["outflowExposureRatioPct"])
+
+    def test_capital_flow_reports_position_snapshot_lineage_when_available(self):
+        impact = CapitalFlowService._portfolio_impact(
+            {
+                "subjects": [{
+                    "subjectId": "000660",
+                    "direction": "outflow",
+                    "dataState": "sufficient",
+                }]
+            },
+            [{"symbol": "000660", "name": "SK하이닉스", "marketValueKrw": 16580000}],
+            positions_available=True,
+            position_snapshot_as_of="2026-08-30T01:15:22Z",
+        )
+
+        self.assertEqual("ready", impact["status"])
+        self.assertEqual("2026-08-30T01:15:22Z", impact["positionSnapshotAsOf"])
+        self.assertEqual(1, impact["matchedHoldingCount"])
+        self.assertEqual(100.0, impact["outflowExposureRatioPct"])
+
     def test_schema_tuning_makes_coverage_column_compatible_with_old_writers(self):
         class Cursor:
             def __init__(self, row=None):

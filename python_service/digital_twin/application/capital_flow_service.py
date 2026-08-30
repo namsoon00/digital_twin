@@ -31,6 +31,8 @@ class CapitalFlowService:
         as_of: str = "",
         limit: int = 10000,
         positions: Iterable[Mapping[str, object]] = (),
+        positions_available: bool = False,
+        position_snapshot_as_of: str = "",
     ) -> Dict[str, object]:
         bounded_window = int(window_days or 5)
         if bounded_window not in CAPITAL_FLOW_WINDOWS:
@@ -58,7 +60,12 @@ class CapitalFlowService:
             }
         payload["availableWindows"] = [str(days) + "D" for days in CAPITAL_FLOW_WINDOWS]
         payload["transitions"] = self._transitions(grouped, bounded_window)
-        payload["portfolioImpact"] = self._portfolio_impact(payload, positions)
+        payload["portfolioImpact"] = self._portfolio_impact(
+            payload,
+            positions,
+            positions_available=positions_available,
+            position_snapshot_as_of=position_snapshot_as_of,
+        )
         payload["storageQuality"] = self.time_series_store.capital_flow_quality(30)
         return payload
 
@@ -93,7 +100,25 @@ class CapitalFlowService:
         return transitions[:100]
 
     @staticmethod
-    def _portfolio_impact(payload: Mapping[str, object], positions: Iterable[Mapping[str, object]]) -> Dict[str, object]:
+    def _portfolio_impact(
+        payload: Mapping[str, object],
+        positions: Iterable[Mapping[str, object]],
+        *,
+        positions_available: bool = True,
+        position_snapshot_as_of: str = "",
+    ) -> Dict[str, object]:
+        if not positions_available:
+            return {
+                "status": "unavailable",
+                "reason": "position-snapshot-unavailable",
+                "positionSnapshotAsOf": "",
+                "matchedHoldingCount": None,
+                "outflowHoldingCount": None,
+                "matchedMarketValueKrw": None,
+                "outflowMarketValueKrw": None,
+                "outflowExposureRatioPct": None,
+                "items": [],
+            }
         subjects = {str(item.get("subjectId") or "").upper(): item for item in payload.get("subjects") or []}
         rows = []
         total_value = 0.0
@@ -125,6 +150,8 @@ class CapitalFlowService:
                 "dataState": flow.get("dataState"),
             })
         return {
+            "status": "ready",
+            "positionSnapshotAsOf": str(position_snapshot_as_of or ""),
             "matchedHoldingCount": len(rows),
             "outflowHoldingCount": len([item for item in rows if item.get("direction") == "outflow"]),
             "matchedMarketValueKrw": round(total_value, 2),

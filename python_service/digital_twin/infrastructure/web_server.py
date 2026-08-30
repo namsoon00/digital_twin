@@ -1704,16 +1704,19 @@ def capital_flow_api_payload(
         requested_symbols = [str(subject_id or "").upper().strip()]
     source_snapshot = dict(snapshot or {})
     toss = source_snapshot.get("toss") if isinstance(source_snapshot.get("toss"), dict) else {}
-    positions = list(toss.get("positions") or []) if isinstance(toss, dict) else []
+    positions_available = isinstance(toss.get("positions"), list)
+    positions = list(toss.get("positions") or []) if positions_available else []
     service = CapitalFlowService(store)
     payload = service.summary(
         symbols=requested_symbols,
         market=str(first_query(query, "market") or ""),
         window_days=safe_int(first_query(query, "windowDays") or first_query(query, "window"), 5, 1, 20),
         observed_after=str(first_query(query, "observedAfter") or ""),
-        as_of=str(first_query(query, "asOf") or source_snapshot.get("generatedAt") or ""),
+        as_of=str(first_query(query, "asOf") or ""),
         limit=safe_int(first_query(query, "limit"), 10000, 1, 50000),
         positions=positions,
+        positions_available=positions_available,
+        position_snapshot_as_of=str(source_snapshot.get("generatedAt") or ""),
     )
     payload["readOnly"] = True
     payload["source"] = "capital-flow-observations"

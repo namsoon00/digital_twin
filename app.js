@@ -21478,12 +21478,18 @@
     var windowDays = Number(flow.windowDays || 5);
     var statusLabel = flow.status === "ready" ? "관측 중" : (flow.status === "unavailable" ? "저장소 오류" : "수집 대기");
     var statusTone = flow.status === "ready" ? "watch" : "caution";
+    var portfolioAvailable = portfolio.status === "ready";
     var coverageText = Number(quality.subjectCount || 0) > 0
       ? Number(quality.sufficientSubjectCount || 0) + "/" + Number(quality.subjectCount || 0) + " 종목"
       : "미수집";
-    var outflowExposure = hasNumericValue(portfolio.outflowExposureRatioPct)
+    var outflowExposure = !portfolioAvailable
+      ? "계좌 자료 없음"
+      : hasNumericValue(portfolio.outflowExposureRatioPct)
       ? Number(portfolio.outflowExposureRatioPct).toFixed(1) + "%"
       : "해당 없음";
+    var outflowHoldingText = portfolioAvailable
+      ? Number(portfolio.outflowHoldingCount || 0) + "개 보유 종목"
+      : "마지막 계좌 스냅샷 확인 필요";
     var overview = markets.slice(0, 3).concat(sectors.slice(0, 4).map(function (item) {
       return Object.assign({ scopeLabel: "업종" }, item);
     }));
@@ -21499,7 +21505,7 @@
       '</div>',
       '<div class="capital-flow-quality-strip">',
       '<section><span>판단 가능</span><strong>' + escapeHtml(coverageText) + '</strong><em>필요 관측 충족</em></section>',
-      '<section><span>보유 유출 노출</span><strong>' + escapeHtml(outflowExposure) + '</strong><em>' + escapeHtml(Number(portfolio.outflowHoldingCount || 0) + "개 보유 종목") + '</em></section>',
+      '<section><span>보유 유출 노출</span><strong>' + escapeHtml(outflowExposure) + '</strong><em>' + escapeHtml(outflowHoldingText) + '</em></section>',
       '<section><span>별도 저장 관측</span><strong>' + escapeHtml(Number(storageFlow.observationCount || quality.canonicalObservationCount || 0).toLocaleString("ko-KR") + "건") + '</strong><em>결측→0 변환 ' + escapeHtml(Number(storage.missingConvertedToZeroCount || quality.missingConvertedToZeroCount || 0)) + '건</em></section>',
       '<section><span>자료 기준</span><strong>' + escapeHtml(flow.asOf ? formatClock(flow.asOf) : "미수집") + '</strong><em>' + escapeHtml(Number(storageFlow.dailyFinalCount || 0) + "건 확정") + '</em></section>',
       '</div>',

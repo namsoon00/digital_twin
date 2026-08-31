@@ -1012,6 +1012,13 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             ),
             "nativeRulePreflightEntityCount": int(execution.get("nativeRulePreflightEntityCount") or 0),
             "nativeRulePreflightRelationCount": int(execution.get("nativeRulePreflightRelationCount") or 0),
+            "matchedGraphSource": str(execution.get("matchedGraphSource") or ""),
+            "matchedGraphReuseStatus": str(
+                execution.get("matchedGraphReuseStatus") or ""
+            ),
+            "matchedGraphReuseReason": str(
+                execution.get("matchedGraphReuseReason") or ""
+            )[:220],
             "sourceAboxGenerationMode": str(execution.get("sourceAboxGenerationMode") or ""),
             "sourceAboxGenerationValid": bool(execution.get("sourceAboxGenerationValid")),
             "sourceAboxMembershipValidation": str(execution.get("sourceAboxMembershipValidation") or ""),

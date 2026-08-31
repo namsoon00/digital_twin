@@ -4265,6 +4265,7 @@ class ScopedABoxManifestMixin:
         transaction_count = 0
         deleted_identity_count = 0
         started = time.monotonic()
+        delete_queries: List[Tuple[str, int]] = []
         for type_label, variable, raw_ids in [
             ("ontology-assertion", "$r", relation_storage_ids),
             ("ontology-node", "$n", node_storage_ids),
@@ -4288,27 +4289,43 @@ class ScopedABoxManifestMixin:
                     )
                     + " delete " + variable + ";"
                 )
+                delete_queries.append((query, len(batch)))
 
-                def delete_batch():
-                    with typedb_operation_timeout(
-                        self.write_operation_timeout_seconds(),
-                        "TypeDB current-state delta delete",
-                    ):
-                        with driver.transaction(
-                            self.database,
-                            TransactionType.WRITE,
-                            options=self.write_transaction_options(),
-                        ) as tx:
+        # Relation deletes stay ahead of node deletes, but bounded query
+        # batches share a transaction. The previous one-commit-per-64-ids
+        # path spent substantially more time on transaction validation than
+        # on TypeQL execution during a normal two-symbol current-state patch.
+        transaction_query_count = self.abox_write_transaction_query_count(
+            runtime_settings()
+        )
+        for offset in range(0, len(delete_queries), transaction_query_count):
+            query_batch = delete_queries[offset: offset + transaction_query_count]
+
+            def delete_batch():
+                with typedb_operation_timeout(
+                    self.write_operation_timeout_seconds(),
+                    "TypeDB current-state delta delete",
+                ):
+                    with driver.transaction(
+                        self.database,
+                        TransactionType.WRITE,
+                        options=self.write_transaction_options(),
+                    ) as tx:
+                        for query, _identity_count in query_batch:
                             tx.query(query).resolve()
-                            tx.commit()
+                        tx.commit()
 
-                self.with_typedb_retries(delete_batch)
-                transaction_count += 1
-                deleted_identity_count += len(batch)
+            self.with_typedb_retries(delete_batch)
+            transaction_count += 1
+            deleted_identity_count += sum(
+                identity_count for _query, identity_count in query_batch
+            )
         return {
             "status": "ok",
             "deletedIdentityCount": deleted_identity_count,
+            "queryCount": len(delete_queries),
             "transactionCount": transaction_count,
+            "transactionQueryCount": transaction_query_count,
             "durationMs": int((time.monotonic() - started) * 1000),
         }
 

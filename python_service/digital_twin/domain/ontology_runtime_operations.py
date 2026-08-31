@@ -1688,6 +1688,11 @@ def build_projection_runtime_observation(
                 "entityCount": _integer(execution.get("nativeRulePreflightEntityCount")),
                 "relationCount": _integer(execution.get("nativeRulePreflightRelationCount")),
             },
+            "matchedGraphRead": {
+                "source": _text(execution.get("matchedGraphSource")),
+                "reuseStatus": _text(execution.get("matchedGraphReuseStatus")),
+                "reuseReason": _text(execution.get("matchedGraphReuseReason"))[:220],
+            },
             "replayValidation": {
                 "version": _text(replay_validation.get("version")),
                 "status": _text(replay_validation.get("status")),

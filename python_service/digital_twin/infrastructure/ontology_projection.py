@@ -4024,7 +4024,10 @@ class PortfolioOntologyProjectionRecorder:
                             ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
                             or ""
                         ),
-                        preflight_graph=persistence_graph,
+                        preflight_graph=self.native_preflight_projection_graph(
+                            persistence_graph,
+                            active_abox,
+                        ),
                         preflight_manifest_id=str(
                             (persistence_graph.worldview or {}).get("worldviewManifestId")
                             or material_snapshot_id
@@ -4283,7 +4286,10 @@ class PortfolioOntologyProjectionRecorder:
                             ((persistence_graph.worldview or {}).get("activeTBox") or {}).get("fingerprint")
                             or ""
                         ),
-                        preflight_graph=persistence_graph,
+                        preflight_graph=self.native_preflight_projection_graph(
+                            persistence_graph,
+                            result,
+                        ),
                         preflight_manifest_id=str(
                             (persistence_graph.worldview or {}).get("worldviewManifestId")
                             or material_snapshot_id
@@ -7864,6 +7870,14 @@ class PortfolioOntologyProjectionRecorder:
             relation_write_mode = str(write_plan.get("relationWriteMode") or "").strip()
             if relation_write_mode:
                 runtime_stages["aboxRelationWriteMode"] = relation_write_mode
+            delta_delete = write_plan.get("deltaDelete")
+            if isinstance(delta_delete, dict):
+                for source_key, target_key in {
+                    "durationMs": "aboxCurrentStateDeleteMs",
+                    "queryCount": "aboxCurrentStateDeleteQueryCount",
+                    "transactionCount": "aboxCurrentStateDeleteTransactionCount",
+                }.items():
+                    record(source_key, target_key, delta_delete)
         physical_verification = timing.get("changedScopeStorageIdentityVerification")
         if isinstance(physical_verification, dict):
             for source_key, target_key in {
@@ -7872,6 +7886,44 @@ class PortfolioOntologyProjectionRecorder:
                 "conflictCount": "aboxStorageIdentityConflictCount",
             }.items():
                 record(source_key, target_key, physical_verification)
+
+    def native_preflight_projection_graph(
+        self,
+        graph: PortfolioOntology,
+        persistence: Dict[str, object],
+    ) -> PortfolioOntology:
+        """Align the in-memory preflight graph with persisted physical slots.
+
+        Current-state ABox persistence maps logical snapshot ids onto bounded
+        physical slots. The repository's exact matched-evidence proof compares
+        physical storage ids, so passing the logical graph would force a
+        durable reread after every successful native query. Rebuild only that
+        persistence view; inference semantics and TypeDB rule evaluation stay
+        unchanged.
+        """
+
+        values = dict(persistence or {}) if isinstance(persistence, dict) else {}
+        physical_mode = str(
+            values.get("physicalStateMode")
+            or values.get("persistenceMode")
+            or ""
+        )
+        scope_plan = list(values.get("scopePlan") or [])
+        mapper = getattr(self.repository, "current_state_physical_graph", None)
+        if (
+            physical_mode != CURRENT_STATE_ABOX_PERSISTENCE_MODE
+            or not scope_plan
+            or not callable(mapper)
+        ):
+            return graph
+        try:
+            prepared = mapper(graph, scope_plan)
+        except Exception:  # noqa: BLE001 - exact reuse is optional and fails closed downstream.
+            return graph
+        if isinstance(prepared, PortfolioOntology):
+            prepared.worldview["nativePreflightPhysicalization"] = "current-state-scope-plan"
+            return prepared
+        return graph
 
     @staticmethod
     def inference_alignment_diagnostics(

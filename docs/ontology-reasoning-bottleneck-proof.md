@@ -400,3 +400,20 @@ relation to the active Manifest storage-id index. A partial routed projection
 is acceptable only when this exact post-match proof succeeds. Any missing row,
 Manifest mismatch, or planner-topology mismatch automatically uses the durable
 TypeDB read. Runtime metadata records the selected source and rejection reason.
+
+The first live reuse attempt exposed an identity-boundary defect: the
+projection layer passed logical scope generations while current-state
+persistence had mapped them to bounded physical slot generations. The graph
+therefore described the same facts but could never satisfy an exact physical
+storage-id proof. The recorder now rebuilds the preflight persistence view from
+the committed physical scope plan before native execution. It does not alter
+facts or evaluate rules; it makes the already validated in-memory rows use the
+same identities TypeDB committed.
+
+The same two-symbol profile spent 54.1 seconds inside the changed-scope write,
+while the measured insert queries used only 9.4 seconds. Exact stale-row
+deletion was committing once per 64 storage identities. Relation deletes still
+run before node deletes, but their bounded queries now share the configured
+transaction query budget. Runtime stages expose delete duration, query count,
+and transaction count independently, so future tuning can distinguish row
+replacement cost from inserts and inventory reads.

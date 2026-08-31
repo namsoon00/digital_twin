@@ -3,6 +3,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from digital_twin.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+from digital_twin.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
+from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     ontology_row_content_fingerprint,
@@ -17,6 +20,77 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
         self._assert_only_adjacent_relations_are_rebound()
         self._assert_inventory_keeps_legacy_rows_visible()
         self._assert_post_write_verification_reads_exact_storage_ids()
+        self._assert_current_state_delete_groups_ordered_queries()
+        self._assert_native_preflight_uses_persisted_current_state_slots()
+
+    def _assert_current_state_delete_groups_ordered_queries(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        transaction = MagicMock()
+        transaction.__enter__.return_value = transaction
+        transaction.__exit__.return_value = False
+        transaction.query.return_value.resolve.return_value = None
+        driver = MagicMock()
+        driver.transaction.return_value = transaction
+        imported = ((None, None, None, None, SimpleNamespace(WRITE="write")), None)
+
+        with patch.object(
+            repository,
+            "abox_write_transaction_query_count",
+            return_value=16,
+        ):
+            result = repository.delete_current_state_storage_ids(
+                driver,
+                imported,
+                ["node:" + str(index) for index in range(70)],
+                ["relation:" + str(index) for index in range(130)],
+            )
+
+        self.assertEqual(200, result["deletedIdentityCount"])
+        self.assertEqual(5, result["queryCount"])
+        self.assertEqual(1, result["transactionCount"])
+        self.assertEqual(1, driver.transaction.call_count)
+        self.assertEqual(5, transaction.query.call_count)
+        first_query = transaction.query.call_args_list[0].args[0]
+        last_query = transaction.query.call_args_list[-1].args[0]
+        self.assertIn("isa ontology-assertion", first_query)
+        self.assertIn("isa ontology-node", last_query)
+
+    def _assert_native_preflight_uses_persisted_current_state_slots(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        graph = PortfolioOntology(
+            "default",
+            entities=[OntologyEntity(
+                "stock:005930",
+                "삼성전자",
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "aboxScopeId": "scope:market:005930",
+                    "snapshotId": "logical-generation",
+                    "aboxSnapshotId": "logical-generation",
+                },
+            )],
+        )
+
+        prepared = recorder.native_preflight_projection_graph(graph, {
+            "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            "scopePlan": [{
+                "scopeId": "scope:market:005930",
+                "generationId": "abox-current:scope-market:a",
+                "logicalGenerationId": "logical-generation",
+            }],
+        })
+
+        self.assertIsNot(graph, prepared)
+        self.assertEqual(
+            "abox-current:scope-market:a",
+            prepared.entities[0].properties["snapshotId"],
+        )
+        self.assertEqual(
+            "current-state-scope-plan",
+            prepared.worldview["nativePreflightPhysicalization"],
+        )
 
     def _assert_polling_lifecycle_is_not_material(self):
         base = {

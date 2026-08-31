@@ -2422,20 +2422,39 @@ def build_v2_reasoning_engine(
         else {}
     )
     runtime_tbox_fingerprint = str(runtime_tbox_metadata.get("fingerprint") or "")
+    read_static_manifest = getattr(repository, "read_seed_static_manifest", None)
+    runtime_static_manifest = (
+        dict(read_static_manifest() or {})
+        if callable(read_static_manifest)
+        else {}
+    )
+    runtime_static_metadata = dict(runtime_static_manifest.get("metadata") or {})
     authored_release_matches_runtime = bool(
-        str(release_seed_artifact.get("ruleboxFingerprint") or "") == rulebox_fingerprint
-        and str(release_seed_artifact.get("tboxFingerprint") or "")
-        == runtime_tbox_fingerprint
+        str(runtime_static_manifest.get("status") or "") == "ok"
+        and str(runtime_static_metadata.get("ruleboxRulesHash") or "")
+        == str(release_seed_artifact.get("ruleboxFingerprint") or "")
+        and str(runtime_static_metadata.get("tboxFingerprint") or "")
+        == str(release_seed_artifact.get("tboxFingerprint") or "")
+        and runtime_tbox_fingerprint
+        == str(release_seed_artifact.get("tboxFingerprint") or "")
     )
     if stored_release_artifact:
+        stored_payload = dict(stored_release_artifact.get("artifact") or {})
+        stored_release_matches_runtime = bool(
+            bool(stored_release_artifact.get("valid", True))
+            and dict(stored_payload.get("releaseBundle") or {})
+            == descriptor.release_bundle.to_dict()
+            and str(stored_release_artifact.get("ruleboxFingerprint") or "")
+            == str(release_seed_artifact.get("ruleboxFingerprint") or "")
+            and str(stored_release_artifact.get("tboxFingerprint") or "")
+            == runtime_tbox_fingerprint
+            and authored_release_matches_runtime
+            and rulebox_fingerprint
+        )
         release_artifact_persistence = {
             "status": (
                 "unchanged"
-                if bool(stored_release_artifact.get("valid", True))
-                and str(stored_release_artifact.get("ruleboxFingerprint") or "")
-                == rulebox_fingerprint
-                and str(stored_release_artifact.get("tboxFingerprint") or "")
-                == runtime_tbox_fingerprint
+                if stored_release_matches_runtime
                 else "release-artifact-runtime-mismatch"
             ),
             "artifactFingerprint": str(
@@ -2444,6 +2463,10 @@ def build_v2_reasoning_engine(
             "ruleboxFingerprint": str(
                 stored_release_artifact.get("ruleboxFingerprint") or ""
             ),
+            "artifactRuleboxFingerprint": str(
+                stored_release_artifact.get("ruleboxFingerprint") or ""
+            ),
+            "runtimeRuleboxFingerprint": rulebox_fingerprint,
             "tboxFingerprint": str(
                 stored_release_artifact.get("tboxFingerprint") or ""
             ),
@@ -2452,13 +2475,19 @@ def build_v2_reasoning_engine(
         release_artifact_persistence = dict(
             save_release_artifact(descriptor.deployment_id, release_seed_artifact) or {}
         )
+        release_artifact_persistence["artifactRuleboxFingerprint"] = str(
+            release_artifact_persistence.get("ruleboxFingerprint") or ""
+        )
+        release_artifact_persistence["runtimeRuleboxFingerprint"] = rulebox_fingerprint
     elif callable(save_release_artifact):
         # A legacy active release may predate durable artifacts. Never bind its
         # old deployment identity to today's authored TBox/RuleBox.
         release_artifact_persistence = {
             "status": "legacy-release-artifact-missing",
             "artifactFingerprint": "",
-            "ruleboxFingerprint": rulebox_fingerprint,
+            "ruleboxFingerprint": "",
+            "artifactRuleboxFingerprint": "",
+            "runtimeRuleboxFingerprint": rulebox_fingerprint,
             "tboxFingerprint": runtime_tbox_fingerprint,
         }
     else:
@@ -2607,6 +2636,16 @@ def build_v2_reasoning_engine(
             ),
             "ruleboxFingerprint": str(
                 release_artifact_persistence.get("ruleboxFingerprint") or ""
+            ),
+            "artifactRuleboxFingerprint": str(
+                release_artifact_persistence.get("artifactRuleboxFingerprint")
+                or release_artifact_persistence.get("ruleboxFingerprint")
+                or ""
+            ),
+            "runtimeRuleboxFingerprint": str(
+                release_artifact_persistence.get("runtimeRuleboxFingerprint")
+                or rulebox_fingerprint
+                or ""
             ),
             "tboxFingerprint": str(
                 release_artifact_persistence.get("tboxFingerprint") or ""

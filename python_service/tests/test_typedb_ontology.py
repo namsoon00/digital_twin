@@ -1513,6 +1513,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
     def test_primary_quote_failure_remains_block_while_recovery_check_constrains(self):
         bootstrap = rulebox_rules_to_payload(default_graph_inference_rules())
+        self.assertFalse(rulebox_catalog_requires_bootstrap_repair(bootstrap))
         stored = next(
             deepcopy(item) for item in bootstrap
             if item["rule_id"] == "graph.data_quality.market_snapshot_failure_block.v1"

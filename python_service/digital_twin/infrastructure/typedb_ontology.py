@@ -16990,16 +16990,23 @@ relation ontology-assertion,
         self.clear_rulebox_snapshot_cache()
         restored_rulebox = dict(self.rulebox_snapshot() or {})
         restored_tbox = dict(self.active_tbox_metadata() or {})
-        restored_rulebox_fingerprint = str(
+        restored_runtime_rulebox_fingerprint = str(
             restored_rulebox.get("sourceRulesHash")
             or restored_rulebox.get("ruleboxRulesHash")
             or restored_rulebox.get("rulesHash")
             or ""
         ).strip()
         restored_tbox_fingerprint = str(restored_tbox.get("fingerprint") or "").strip()
+        restored_manifest = dict(self.read_seed_static_manifest() or {})
+        restored_manifest_metadata = dict(restored_manifest.get("metadata") or {})
+        restored_artifact_rulebox_fingerprint = str(
+            restored_manifest_metadata.get("ruleboxRulesHash") or ""
+        ).strip()
         ready = bool(
             str(restored_rulebox.get("status") or "") == "ok"
-            and restored_rulebox_fingerprint == expected_rulebox_fingerprint
+            and restored_runtime_rulebox_fingerprint
+            and str(restored_manifest.get("status") or "") == "ok"
+            and restored_artifact_rulebox_fingerprint == expected_rulebox_fingerprint
             and str(restored_tbox.get("status") or "") == "ok"
             and restored_tbox_fingerprint == expected_tbox_fingerprint
         )
@@ -17008,11 +17015,24 @@ relation ontology-assertion,
             "saved": ready,
             "status": "restored" if ready else "release-artifact-readback-mismatch",
             "ruleCount": len(rules_payload),
-            "ruleboxFingerprint": restored_rulebox_fingerprint,
+            # TypeDB normalizes governed rule rows on readback. Keep the exact
+            # authored artifact hash separate from the executable readback
+            # hash used by the deployment release identity.
+            "ruleboxFingerprint": restored_runtime_rulebox_fingerprint,
+            "runtimeRuleboxFingerprint": restored_runtime_rulebox_fingerprint,
+            "artifactRuleboxFingerprint": restored_artifact_rulebox_fingerprint,
+            "expectedArtifactRuleboxFingerprint": expected_rulebox_fingerprint,
             "tboxFingerprint": restored_tbox_fingerprint,
             "schemaSync": schema_sync,
             "staticWrite": static_write,
             "manifest": manifest,
+            "manifestReadback": {
+                "status": str(restored_manifest.get("status") or ""),
+                "ruleboxFingerprint": restored_artifact_rulebox_fingerprint,
+                "tboxFingerprint": str(
+                    restored_manifest_metadata.get("tboxFingerprint") or ""
+                ),
+            },
         }
 
     @coordinated_typedb_projection_write(

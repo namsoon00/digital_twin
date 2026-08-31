@@ -3547,10 +3547,11 @@ def restore_typedb_candidate_release_artifact(
                 "deploymentId": str(deployment_id or ""),
                 "reason": "The frozen artifact belongs to a different release bundle.",
             }
-        expected_rulebox = str(
-            health.get("ruleboxFingerprint")
-            or stored.get("ruleboxFingerprint")
-            or ""
+        artifact_rulebox_fingerprint = str(
+            stored.get("ruleboxFingerprint") or ""
+        ).strip()
+        expected_runtime_rulebox_fingerprint = str(
+            health.get("ruleboxFingerprint") or ""
         ).strip()
         tbox_release_id = str(
             release_bundle.get("tbox_release_id")
@@ -3563,7 +3564,7 @@ def restore_typedb_candidate_release_artifact(
             or (tbox_release_id.rsplit("@", 1)[-1] if "@" in tbox_release_id else "")
         ).strip()
         if (
-            str(stored.get("ruleboxFingerprint") or "") != expected_rulebox
+            not artifact_rulebox_fingerprint
             or str(stored.get("tboxFingerprint") or "") != expected_tbox
         ):
             return {
@@ -3591,9 +3592,21 @@ def restore_typedb_candidate_release_artifact(
                 "deploymentId": str(deployment_id or ""),
             }
         result = dict(restore(artifact) or {})
+        runtime_rulebox_fingerprint = str(
+            result.get("runtimeRuleboxFingerprint")
+            or result.get("ruleboxFingerprint")
+            or ""
+        ).strip()
         ready = bool(
             result.get("saved")
-            and str(result.get("ruleboxFingerprint") or "") == expected_rulebox
+            and str(result.get("artifactRuleboxFingerprint") or "")
+            == artifact_rulebox_fingerprint
+            and runtime_rulebox_fingerprint
+            and (
+                not expected_runtime_rulebox_fingerprint
+                or runtime_rulebox_fingerprint
+                == expected_runtime_rulebox_fingerprint
+            )
             and str(result.get("tboxFingerprint") or "") == expected_tbox
         )
         return {
@@ -3602,7 +3615,9 @@ def restore_typedb_candidate_release_artifact(
             "deploymentId": str(deployment_id or ""),
             "database": str(spec.get("typedbDatabase") or ""),
             "ruleCount": int_value(result.get("ruleCount"), 0, 0),
-            "activeRuleboxFingerprint": str(result.get("ruleboxFingerprint") or ""),
+            "activeRuleboxFingerprint": runtime_rulebox_fingerprint,
+            "artifactRuleboxFingerprint": artifact_rulebox_fingerprint,
+            "expectedRuntimeRuleboxFingerprint": expected_runtime_rulebox_fingerprint,
             "activeTboxFingerprint": str(result.get("tboxFingerprint") or ""),
             "artifactFingerprint": str(stored.get("artifactFingerprint") or ""),
             "restore": result,

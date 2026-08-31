@@ -1124,6 +1124,13 @@ class ReasoningEnginePlatformService:
                 "ruleboxFingerprint": str(
                     release_artifact_persistence.get("ruleboxFingerprint") or ""
                 ),
+                "artifactRuleboxFingerprint": str(
+                    release_artifact_persistence.get("ruleboxFingerprint") or ""
+                ),
+                # The executable fingerprint is populated after TypeDB reads
+                # back its normalized rule rows. Registration only knows the
+                # exact authored artifact identity.
+                "runtimeRuleboxFingerprint": "",
                 "tboxFingerprint": str(
                     release_artifact_persistence.get("tboxFingerprint") or ""
                 ),

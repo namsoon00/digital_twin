@@ -38,6 +38,11 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   must restore protected databases only from this artifact; using the current
   source catalog to recreate an older deployment is a semantic mutation and
   must fail closed before an expensive candidate rebuild starts.
+- Keep the authored RuleBox artifact fingerprint separate from the executable
+  TypeDB readback fingerprint. TypeDB normalizes persisted rule rows, so those
+  hashes may legitimately differ. Reconstruction verifies the authored hash
+  against the static seed manifest and the executable hash against the frozen
+  deployment runtime identity; never compare one kind to the other.
 - A new reasoning-engine version must consume durable source events through
   its own leased queue and implement the version-neutral
   `InvestmentReasoningEngine` contract. It must not call the preceding

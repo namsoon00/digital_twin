@@ -225,6 +225,34 @@ The durable release contract is therefore:
 - Candidate readback must match both the frozen RuleBox and TBox fingerprints
   before world replay, native inference validation, or cutover.
 
+RuleBox identity has two deliberately separate hashes:
+
+- The **authored artifact fingerprint** identifies the exact governed rows and
+  static graph saved at release registration. Restore compares this value with
+  the TypeDB static seed manifest.
+- The **runtime RuleBox fingerprint** identifies the normalized executable rows
+  read back from TypeDB. Release identity, comparison cohorts, and execution
+  receipts use this value.
+
+TypeDB normalization can make these hashes differ without changing meaning.
+Comparing the authored hash directly with the runtime hash incorrectly marks a
+valid restored release as corrupt. Both must be non-empty and independently
+verified at their own boundary.
+
+The same incident exposed a second permanent-startup loop: 11 governed
+statistical rules were intentionally disabled while waiting for a promoted
+model scorer, but the release repair predicate treated them as executable
+rules requiring migration. The migration path correctly left them unchanged,
+so every candidate restart repeated the same rejection. Executable readiness
+now ignores explicitly disabled audit/future-activation rules while retaining
+them in the immutable artifact.
+
+After these contracts were corrected, a real `ontology-v2-production-r89`
+candidate processed one current market-data job in 43,049 ms. The projection
+used 41,661 ms, including 22,198 ms for ABox persistence and 7,004 ms for native
+TypeDB inference. This is below the 120-second source polling interval and
+confirms that the serving-capacity fix works independently of release recovery.
+
 This removes a control-plane feedback loop as well as a latency source. A
 missing old artifact is detected immediately instead of spending many minutes
 compiling a candidate that can never satisfy the release contract. Existing

@@ -503,6 +503,12 @@ def rulebox_catalog_requires_bootstrap_repair(stored_rules: List[Dict[str, objec
         if rule.resolved_knowledge_basis.owner == "statistical-model"
     }
     for item in rules:
+        # A governed model rule may deliberately remain disabled while its
+        # scorer is awaiting promotion. It is retained for audit and future
+        # activation, but it is not part of the executable release and must
+        # not keep a candidate in an impossible migration loop.
+        if item.get("enabled") is False:
+            continue
         basis = item.get("knowledge_basis") or item.get("knowledgeBasis") or {}
         if str(basis.get("owner") or "") != "statistical-model":
             continue

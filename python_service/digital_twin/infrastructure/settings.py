@@ -446,6 +446,7 @@ TEXT_SETTING_KEYS = [
     "typedbCapacitySharedSampleMaxAgeSeconds",
     "typedbCapacityThrottlePercent",
     "typedbCapacityAutoRotateEnabled",
+    "typedbCapacityProactiveRotatePercent",
     "typedbCapacityAutoRotatePercent",
     "typedbCapacityAutoRotateWalMb",
     "typedbCapacityAutoRotateFreeSpaceMb",
@@ -2290,6 +2291,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "typedbCapacityAutoRotateEnabled",
             "TYPEDB_CAPACITY_AUTO_ROTATE_ENABLED",
             "1",
+        ),
+        "typedbCapacityProactiveRotatePercent": value(
+            "typedbCapacityProactiveRotatePercent",
+            "TYPEDB_CAPACITY_PROACTIVE_ROTATE_PERCENT",
+            "65",
         ),
         "typedbCapacityAutoRotatePercent": value(
             "typedbCapacityAutoRotatePercent",

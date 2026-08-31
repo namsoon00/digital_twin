@@ -328,7 +328,16 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # worker restart. The active graph is rebuildable from MySQL.
         "autoResetEnabled": str((settings or {}).get("typedbAutoResetEnabled") or "0"),
         "autoRotationEnabled": str((settings or {}).get("typedbCapacityAutoRotateEnabled") or "1"),
-        "autoRotationPercent": str((settings or {}).get("typedbCapacityAutoRotatePercent") or "75"),
+        # Build the replacement generation before the write-safety fence is
+        # reached. ``typedbCapacityAutoRotatePercent`` remains the hard guard
+        # used by reasoning writers; the proactive threshold only dispatches
+        # an isolated blue-green candidate.
+        "autoRotationPercent": str(
+            (settings or {}).get("typedbCapacityProactiveRotatePercent") or "65"
+        ),
+        "writeBlockPercent": str(
+            (settings or {}).get("typedbCapacityAutoRotatePercent") or "75"
+        ),
         "autoRotationWalMb": str((settings or {}).get("typedbCapacityAutoRotateWalMb") or "4096"),
         "autoRotationFreeSpaceMb": str(
             (settings or {}).get("typedbCapacityAutoRotateFreeSpaceMb") or "24576"
@@ -1190,6 +1199,14 @@ def typedb_rotation_lock_path() -> Path:
     return data_dir() / "typedb-rotation.lock"
 
 
+def typedb_auto_rotation_worker_pid_path() -> Path:
+    return data_dir() / "typedb-auto-rotation.pid"
+
+
+def typedb_auto_rotation_log_path() -> Path:
+    return data_dir() / "typedb-auto-rotation.log"
+
+
 def typedb_maintenance_lock_expired(
     payload: Dict[str, object],
     *,
@@ -1438,7 +1455,9 @@ def typedb_auto_rotation_needed(
     data_path = Path(configured.get("dataPath") or "")
     maximum_mb = int_value(configured.get("maxSizeMb"), 8192, 1)
     threshold_percent = int_value(configured.get("autoRotationPercent"), 75, 50)
-    threshold_percent = min(100, threshold_percent)
+    write_block_percent = int_value(configured.get("writeBlockPercent"), 75, 50)
+    write_block_percent = min(100, write_block_percent)
+    threshold_percent = min(write_block_percent, threshold_percent)
     wal_trigger_mb = int_value(configured.get("autoRotationWalMb"), 4096, 0)
     free_space_trigger_mb = int_value(
         configured.get("autoRotationFreeSpaceMb"),
@@ -1563,6 +1582,7 @@ def typedb_auto_rotation_needed(
             "typedbSizeMb": size_mb,
             "typedbUsagePercent": usage_percent,
             "thresholdPercent": threshold_percent,
+            "writeBlockPercent": write_block_percent,
             "maxSizeMb": maximum_mb,
             "freeSpaceMb": free_space_mb,
             "typedbWalMb": round(wal_mb, 1),
@@ -1579,6 +1599,7 @@ def typedb_auto_rotation_needed(
             "typedbSizeMb": size_mb,
             "typedbUsagePercent": usage_percent,
             "thresholdPercent": threshold_percent,
+            "writeBlockPercent": write_block_percent,
             "maxSizeMb": maximum_mb,
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
             "lastAttemptStatus": last_attempt_status,
@@ -1601,6 +1622,7 @@ def typedb_auto_rotation_needed(
             "typedbSizeMb": size_mb,
             "typedbUsagePercent": usage_percent,
             "thresholdPercent": threshold_percent,
+            "writeBlockPercent": write_block_percent,
             "maxSizeMb": maximum_mb,
             "cooldownRemainingSeconds": cooldown_remaining_seconds,
             "lastAttemptStatus": last_attempt_status,
@@ -1634,6 +1656,7 @@ def typedb_auto_rotation_needed(
         "typedbSizeMb": size_mb,
         "typedbUsagePercent": usage_percent,
         "thresholdPercent": threshold_percent,
+        "writeBlockPercent": write_block_percent,
         "maxSizeMb": maximum_mb,
         "cooldownRemainingSeconds": cooldown_remaining_seconds,
         "lastAttemptStatus": last_attempt_status,
@@ -1756,10 +1779,18 @@ def reconcile_typedb_auto_rotation_state(
     *,
     now_epoch: float = None,
 ) -> Dict[str, object]:
-    """Recover a durable ``running`` marker after its owner disappeared."""
+    """Recover a dispatched/running rotation after its owner disappeared.
+
+    A rotation used to run synchronously inside the supervisor.  If the
+    watchdog replaced that blocked supervisor, the four-hour running timeout
+    left an orphan candidate and a global maintenance fence behind.  Process
+    ownership is stronger evidence than that coarse timeout, so an ownerless
+    rotation is now failed after a short process-start grace period.
+    """
 
     marker = read_typedb_retention_marker()
-    if str(marker.get("lastAutoRotationStatus") or "").strip().lower() != "running":
+    status = str(marker.get("lastAutoRotationStatus") or "").strip().lower()
+    if status not in {"dispatching", "running"}:
         return {"status": "unchanged", "marker": marker}
     now = float(now_epoch if now_epoch is not None else time.time())
     timeout_seconds = int_value(
@@ -1776,20 +1807,44 @@ def reconcile_typedb_auto_rotation_state(
     except (TypeError, ValueError):
         activity_epoch = 0.0
     age_seconds = max(0, int(now - activity_epoch)) if activity_epoch else timeout_seconds + 1
-    if age_seconds <= timeout_seconds:
-        return {
-            "status": "running",
-            "ageSeconds": age_seconds,
-            "timeoutSeconds": timeout_seconds,
-            "marker": marker,
-        }
+    worker_pid = int_value(marker.get("lastAutoRotationWorkerPid"), 0, 0)
+    worker_live = bool(
+        worker_pid
+        and pid_exists(worker_pid)
+        and "monitor_service.py typedb-rotate" in command_for_pid(worker_pid)
+    )
+    if status == "dispatching":
+        if worker_live:
+            return {
+                "status": "dispatching",
+                "ownerPid": worker_pid,
+                "ageSeconds": age_seconds,
+                "timeoutSeconds": timeout_seconds,
+                "marker": marker,
+            }
+        if age_seconds <= 60:
+            return {
+                "status": "dispatching",
+                "ageSeconds": age_seconds,
+                "timeoutSeconds": timeout_seconds,
+                "marker": marker,
+            }
     try:
         lock = json.loads(typedb_rotation_lock_path().read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         lock = {}
     owner_pid = int_value(lock.get("pid"), 0, 0)
     lock_expired = typedb_maintenance_lock_expired(lock, now_epoch=now)
-    if owner_pid and pid_exists(owner_pid) and not lock_expired:
+    owner_live = bool(owner_pid and pid_exists(owner_pid) and not lock_expired)
+    if owner_live and age_seconds <= timeout_seconds:
+        return {
+            "status": "running",
+            "ownerPid": owner_pid,
+            "ageSeconds": age_seconds,
+            "timeoutSeconds": timeout_seconds,
+            "marker": marker,
+        }
+    if owner_live:
         refreshed = record_typedb_auto_rotation_state(
             lastAutoRotationStatus="running",
             lastAutoRotationHeartbeatAt=iso_now(),
@@ -1801,6 +1856,13 @@ def reconcile_typedb_auto_rotation_state(
             "ageSeconds": age_seconds,
             "timeoutSeconds": timeout_seconds,
             "marker": refreshed,
+        }
+    if status == "running" and age_seconds <= 60:
+        return {
+            "status": "running",
+            "ageSeconds": age_seconds,
+            "timeoutSeconds": timeout_seconds,
+            "marker": marker,
         }
     interrupted = record_typedb_auto_rotation_state(
         lastAutoRotationFinishedAt=iso_now(),
@@ -1816,6 +1878,110 @@ def reconcile_typedb_auto_rotation_state(
         "ageSeconds": age_seconds,
         "timeoutSeconds": timeout_seconds,
         "marker": interrupted,
+    }
+
+
+def typedb_auto_rotation_worker_running() -> Dict[str, object]:
+    path = typedb_auto_rotation_worker_pid_path()
+    pid = read_pid(path)
+    command = command_for_pid(pid) if pid else ""
+    running = bool(
+        pid
+        and pid_exists(pid)
+        and "monitor_service.py typedb-rotate" in command
+        and "--supervisor-owned" in command
+    )
+    if pid and not running:
+        remove_pid(path)
+    return {"running": running, "pid": pid if running else 0, "command": command if running else ""}
+
+
+def launch_supervisor_owned_typedb_rotation(rotation_reason: str) -> Dict[str, object]:
+    """Dispatch maintenance outside the supervisor heartbeat loop."""
+
+    existing = typedb_auto_rotation_worker_running()
+    if bool(existing.get("running")):
+        return {"started": False, "status": "already-running", **existing}
+
+    now = time.time()
+    reason = str(rotation_reason or "TypeDB automatic capacity rotation")[:500]
+    record_typedb_auto_rotation_state(
+        lastAutoRotationAttemptAt=iso_now(),
+        lastAutoRotationAttemptEpoch=now,
+        lastAutoRotationReason=reason,
+        lastAutoRotationStatus="dispatching",
+    )
+    log_path = typedb_auto_rotation_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    output = log_path.open("a", encoding="utf-8")
+    environment = dict(os.environ)
+    environment.update({
+        "PYTHONUNBUFFERED": "1",
+        "ORBIT_TYPEDB_AUTO_ROTATION_REASON": reason,
+    })
+    command = [
+        sys.executable,
+        str(ROOT_DIR / "python_service" / "monitor_service.py"),
+        "typedb-rotate",
+        "--force",
+        "--supervisor-owned",
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT_DIR),
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            start_new_session=True,
+        )
+    except OSError as error:
+        record_typedb_auto_rotation_state(
+            lastAutoRotationFinishedAt=iso_now(),
+            lastAutoRotationStatus="exception",
+            lastAutoRotationResult={
+                "status": "dispatch-failed",
+                "reason": str(error)[:180],
+            },
+        )
+        return {"started": False, "status": "dispatch-failed", "reason": str(error)[:180]}
+    finally:
+        output.close()
+
+    pid_path = typedb_auto_rotation_worker_pid_path()
+    pid_path.write_text(str(process.pid) + "\n", encoding="utf-8")
+    os.chmod(pid_path, 0o600)
+    record_typedb_auto_rotation_state(lastAutoRotationWorkerPid=process.pid)
+    return {
+        "started": True,
+        "status": "dispatched",
+        "pid": process.pid,
+        "log": str(log_path),
+    }
+
+
+def cleanup_orphaned_typedb_rotation(spec: Dict[str, object]) -> Dict[str, object]:
+    """Stop only a fenced candidate whose maintenance owner is gone."""
+
+    try:
+        lock = json.loads(typedb_rotation_lock_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        lock = {}
+    owner_pid = int_value(lock.get("pid"), 0, 0)
+    if owner_pid and pid_exists(owner_pid) and not typedb_maintenance_lock_expired(lock):
+        return {"cleaned": False, "reason": "rotation-owner-still-running", "ownerPid": owner_pid}
+    candidate = typedb_blue_green_stage_spec(spec)
+    cleanup_typedb_candidate(candidate, remove_data=True)
+    try:
+        typedb_rotation_lock_path().unlink()
+    except FileNotFoundError:
+        pass
+    worker = typedb_auto_rotation_worker_running()
+    return {
+        "cleaned": True,
+        "candidatePath": str(candidate.get("dataPath") or ""),
+        "workerRunning": bool(worker.get("running")),
     }
 
 
@@ -3964,11 +4130,13 @@ def supervise() -> int:
                     if typedb_spec else {}
                 )
                 if rotation_reconciliation.get("status") == "interrupted":
+                    orphan_cleanup = cleanup_orphaned_typedb_rotation(typedb_spec)
                     append_log(
                         supervisor_log_path(),
                         "typedb stale rotation state recovered as interrupted. age="
                         + str(rotation_reconciliation.get("ageSeconds") or 0)
-                        + "s",
+                        + "s cleanup="
+                        + str(bool(orphan_cleanup.get("cleaned"))).lower(),
                     )
                 decision = typedb_reset_needed(typedb_spec, ignore_auto_reset=True) if typedb_spec else {}
                 automatic = typedb_auto_rotation_needed(typedb_spec) if typedb_spec else {}
@@ -3997,13 +4165,14 @@ def supervise() -> int:
                                 "typedb automatic rotation incident record failed. "
                                 + str(incident.get("reason") or "unknown"),
                             )
-                        result = typedb_rotate(
-                            force=True,
-                            supervisor_owned=True,
-                            rotation_reason=notice,
+                        dispatch = launch_supervisor_owned_typedb_rotation(notice)
+                        outcome = str(dispatch.get("status") or "dispatch-failed")
+                        append_log(
+                            supervisor_log_path(),
+                            "typedb automatic rotation " + outcome
+                            + " pid=" + str(dispatch.get("pid") or 0)
+                            + ". " + notice,
                         )
-                        outcome = "completed" if result == 0 else "failed"
-                        append_log(supervisor_log_path(), "typedb automatic rotation " + outcome + ". " + notice)
                         last_typedb_auto_rotation_notice = outcome + "|" + notice
                         last_maintenance_at = time.monotonic()
                         continue
@@ -5017,7 +5186,22 @@ def main(argv: List[str] = None) -> int:
     if command == "typedb-maintenance":
         return typedb_maintenance(force="--force" in args[1:])
     if command == "typedb-rotate":
-        result = typedb_rotate(force="--force" in args[1:])
+        supervisor_owned = "--supervisor-owned" in args[1:]
+        try:
+            result = typedb_rotate(
+                force="--force" in args[1:],
+                supervisor_owned=supervisor_owned,
+                rotation_reason=str(
+                    os.environ.get("ORBIT_TYPEDB_AUTO_ROTATION_REASON") or ""
+                ),
+            )
+        finally:
+            if supervisor_owned:
+                pid_path = typedb_auto_rotation_worker_pid_path()
+                if read_pid(pid_path) == os.getpid():
+                    remove_pid(pid_path)
+        if supervisor_owned:
+            return result
         supervisor_result = restore_configured_supervisor()
         return result if result != 0 else supervisor_result
     if command == "supervise":

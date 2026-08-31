@@ -461,6 +461,65 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual(120, cooling["retryWindowSeconds"])
         self.assertTrue(due["needed"])
 
+    def test_proactive_rotation_starts_before_write_block_threshold(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_path = Path(temp) / "typedb-data"
+            marker = Path(temp) / "marker.json"
+            data_path.mkdir()
+            (data_path / "segment").write_bytes(b"x" * (7 * 1024 * 1024))
+            with patch.object(service_manager, "typedb_retention_marker_path", return_value=marker):
+                result = service_manager.typedb_auto_rotation_needed({
+                    "dataPath": data_path,
+                    "maxSizeMb": "10",
+                    "autoRotationEnabled": "1",
+                    "autoRotationPercent": "65",
+                    "writeBlockPercent": "75",
+                    "autoRotationWalMb": "0",
+                    "autoRotationFreeSpaceMb": "0",
+                    "blueGreenMinimumHeadroomMb": "1",
+                    "blueGreenEstimatedCandidateMaxMb": "1",
+                })
+
+        self.assertTrue(result["needed"])
+        self.assertEqual(65, result["thresholdPercent"])
+        self.assertEqual(75, result["writeBlockPercent"])
+
+    def test_supervisor_dispatches_rotation_to_independent_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pid_path = Path(temp) / "rotation.pid"
+            log_path = Path(temp) / "rotation.log"
+            process = SimpleNamespace(pid=9876)
+            with patch.object(
+                service_manager,
+                "typedb_auto_rotation_worker_running",
+                return_value={"running": False, "pid": 0},
+            ), patch.object(
+                service_manager,
+                "typedb_auto_rotation_worker_pid_path",
+                return_value=pid_path,
+            ), patch.object(
+                service_manager,
+                "typedb_auto_rotation_log_path",
+                return_value=log_path,
+            ), patch.object(
+                service_manager,
+                "record_typedb_auto_rotation_state",
+            ) as record_state, patch.object(
+                service_manager.subprocess,
+                "Popen",
+                return_value=process,
+            ) as popen:
+                result = service_manager.launch_supervisor_owned_typedb_rotation(
+                    "capacity pressure",
+                )
+                pid_text = pid_path.read_text(encoding="utf-8").strip()
+
+        self.assertTrue(result["started"])
+        self.assertEqual(9876, result["pid"])
+        self.assertIn("--supervisor-owned", popen.call_args.args[0])
+        self.assertEqual("9876", pid_text)
+        self.assertEqual("dispatching", record_state.call_args_list[0].kwargs["lastAutoRotationStatus"])
+
     def test_rotation_failure_counter_resets_only_after_success(self):
         with tempfile.TemporaryDirectory() as temp:
             marker = Path(temp) / "marker.json"
@@ -495,8 +554,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     "lastAutoRotationStatus": "running",
                 })
                 result = service_manager.reconcile_typedb_auto_rotation_state(
-                    {"autoRotationRunningTimeoutSeconds": "600"},
-                    now_epoch=1800,
+                    {"autoRotationRunningTimeoutSeconds": "14400"},
+                    now_epoch=1161,
                 )
 
         self.assertEqual("interrupted", result["status"])

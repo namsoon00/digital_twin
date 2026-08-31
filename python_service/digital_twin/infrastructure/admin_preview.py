@@ -810,6 +810,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "typedbAutoResetEnabled", "label": "TypeDB 용량 점검", "type": "toggle", "default": "0"},
                     {"key": "typedbCapacityAutoRotateEnabled", "label": "TypeDB 용량 자동 회전", "type": "toggle", "default": "1"},
                     {"key": "typedbCapacityThrottlePercent", "label": "TypeDB 배경 쓰기 완화 기준", "type": "number", "default": "70", "unit": "%"},
+                    {"key": "typedbCapacityProactiveRotatePercent", "label": "TypeDB 선제 후보 구축 기준", "type": "number", "default": "65", "unit": "%"},
                     {"key": "typedbCapacityAutoRotatePercent", "label": "TypeDB 안전 재구축 기준", "type": "number", "default": "75", "unit": "%"},
                     {"key": "typedbCapacityAutoRotateWalMb", "label": "TypeDB WAL 재구축 기준", "type": "number", "default": "4096", "unit": "MB"},
                     {"key": "typedbCapacityAutoRotateFreeSpaceMb", "label": "공용 디스크 기반 재구축 기준", "type": "number", "default": "24576", "unit": "MB"},

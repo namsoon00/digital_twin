@@ -1187,6 +1187,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "typedbCapacitySharedSampleMaxAgeSeconds",
         "typedbCapacityThrottlePercent",
         "typedbCapacityAutoRotateEnabled",
+        "typedbCapacityProactiveRotatePercent",
         "typedbCapacityAutoRotatePercent",
         "typedbCapacityAutoRotateFreeSpaceMb",
         "typedbCapacityCriticalPercent",

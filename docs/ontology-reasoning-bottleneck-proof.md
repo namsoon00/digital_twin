@@ -134,3 +134,37 @@ or reduce actions in Python.
 Adding more reasoning workers is not an acceptance strategy. The active graph
 uses a single-world writer contract, so extra workers can increase transaction
 contention while preserving the same write amplification.
+
+## Storage-Recovery Closed Loop
+
+The same 2026-08-31 incident exposed a second latency loop. Polling write
+amplification grew the TypeDB physical store to 24,566 MB and its WAL to about
+11,210 MB. At 75% of the configured 32 GB safety limit, ordinary graph writes
+correctly stopped. The queued reasoning work then appeared as an inference
+latency problem even though the immediate blocker was storage admission.
+
+The original automatic rotation ran synchronously inside the service
+supervisor. Candidate schema seeding took longer than the watchdog heartbeat
+window, so the watchdog replaced the healthy-but-blocked supervisor. That left
+the candidate server and two-hour maintenance fence orphaned. The resulting
+loop was:
+
+`unchanged writes -> WAL growth -> safety fence -> synchronous rotation -> supervisor replacement -> orphan fence -> queue growth`
+
+The recovery contract is now:
+
+- Dispatch blue-green rotation to a dedicated process. The supervisor keeps
+  emitting heartbeats and monitoring all serving workers while the candidate
+  is built.
+- Track the maintenance worker PID separately from the fencing token. A
+  dispatched or running rotation without a live owner is interrupted and its
+  isolated candidate is removed after a 60-second startup grace period.
+- Start candidate construction at the proactive 65% threshold. The 75% value
+  remains the independent write-safety fence, so normal operation has time to
+  prepare a replacement before writes must stop.
+- Keep MySQL as the durable recovery source. TypeDB remains the semantic
+  current-state and inference authority; a rotation does not move investment
+  decisions into the supervisor or Python transition detector.
+
+Never raise the safety limit or disable the storage guard to clear this state.
+That only delays the same failure and risks an unrecoverable disk-full outage.

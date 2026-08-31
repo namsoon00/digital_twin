@@ -30,6 +30,8 @@ SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
     "equityQuotes",
     "officialDailyPrices",
+    "securityMaster",
+    "corporateActions",
     "yfinanceData",
     "newsHeadlines",
     "dartDisclosures",
@@ -582,7 +584,7 @@ def _compact_company_knowledge(value: object) -> Dict[str, object]:
         text_limit=240,
         depth=1,
     )
-    for section in ("profile", "valuation", "ownership", "capital", "coverage"):
+    for section in ("identifiers", "profile", "listing", "relationships", "valuation", "ownership", "capital", "coverage"):
         compact = _bounded_value(
             source.get(section),
             text_limit=320,
@@ -643,6 +645,57 @@ def _compact_company_knowledge(value: object) -> Dict[str, object]:
     return result
 
 
+def _compact_corporate_actions(value: object) -> Dict[str, object]:
+    events = value if isinstance(value, Mapping) else {}
+
+    def event_date(event: Mapping[str, object]) -> str:
+        return max(
+            (
+                str(event.get(field) or "").strip()
+                for field in (
+                    "exerciseStartDate", "releaseDate", "issueDate", "recordDate",
+                    "cashPaymentDate", "listingDate", "baseDate",
+                )
+            ),
+            default="",
+        )
+
+    ranked = sorted(
+        ((str(event_id), dict(event)) for event_id, event in events.items() if isinstance(event, Mapping)),
+        key=lambda item: (
+            1 if str(item[1].get("eventLifecycleState") or "") in {"upcoming", "active"} else 0,
+            event_date(item[1]),
+        ),
+        reverse=True,
+    )
+    selected = []
+    seen_ids = set()
+    type_counts: Dict[str, int] = {}
+    for event_id, event in ranked:
+        event_type = str(event.get("eventType") or "corporate-action")
+        if type_counts.get(event_type, 0) >= 3:
+            continue
+        selected.append((event_id, event))
+        seen_ids.add(event_id)
+        type_counts[event_type] = type_counts.get(event_type, 0) + 1
+    for event_id, event in ranked:
+        if len(selected) >= 16:
+            break
+        if event_id not in seen_ids:
+            selected.append((event_id, event))
+            seen_ids.add(event_id)
+    return {
+        event_id: _bounded_value(
+            event,
+            text_limit=320,
+            list_limit=6,
+            map_limit=60,
+            depth=3,
+        )
+        for event_id, event in selected[:16]
+    }
+
+
 def _compact_symbol_group(
     group: str,
     value: object,
@@ -670,6 +723,19 @@ def _compact_symbol_group(
                 text_limit=280,
                 depth=2,
             )
+        elif group == "securityMaster":
+            compact = _selected(
+                item,
+                [
+                    "symbol", "name", "legalName", "market", "isin",
+                    "corporateRegistrationNumber", "baseDate", "sourceAsOf", "fetchedAt",
+                    "provider", "sourceUrl", "sourceType", "decisionEligibility", "realTime",
+                ],
+                text_limit=280,
+                depth=2,
+            )
+        elif group == "corporateActions":
+            compact = _compact_corporate_actions(item)
         elif group == "yfinanceData":
             compact = _compact_yfinance(item)
         elif group == "companyOverviews":
@@ -761,6 +827,28 @@ def _compact_crypto(value: object) -> Dict[str, object]:
     return result
 
 
+def _compact_market_indices(value: object) -> Dict[str, object]:
+    source = value if isinstance(value, Mapping) else {}
+    result = {}
+    for key in sorted(source, key=lambda item: str(item))[:12]:
+        item = source.get(key)
+        if not isinstance(item, Mapping):
+            continue
+        result[str(key).upper()] = _selected(
+            item,
+            [
+                "indexKey", "indexName", "indexCategory", "baseDate", "sourceAsOf", "fetchedAt",
+                "baseIndex", "constituentCount", "open", "high", "low", "close", "change",
+                "changePercent", "volume", "tradingValue", "marketCap", "yearHigh", "yearHighDate",
+                "yearLow", "yearLowDate", "provider", "sourceUrl", "sourceType",
+                "decisionEligibility", "realTime",
+            ],
+            text_limit=240,
+            depth=2,
+        )
+    return result
+
+
 def _compact_global_external_signals_for_ontology(
     external_signals: Mapping[str, object] = None,
 ) -> Dict[str, object]:
@@ -774,13 +862,15 @@ def _compact_global_external_signals_for_ontology(
 
     source = external_signals if isinstance(external_signals, Mapping) else {}
     result: Dict[str, object] = {}
-    for key in ["macro", "fxRates", "cryptoMarkets"]:
+    for key in ["macro", "fxRates", "cryptoMarkets", "marketIndices"]:
         if key not in source:
             continue
         if key == "macro":
             compact = _compact_macro(source.get(key))
         elif key == "fxRates":
             compact = _compact_fx_rates(source.get(key))
+        elif key == "marketIndices":
+            compact = _compact_market_indices(source.get(key))
         else:
             compact = _compact_crypto(source.get(key))
         if compact:

@@ -4,7 +4,18 @@ from ....application.external_data.registry import ExternalDatasetRegistry
 from .coingecko import CoinGeckoMarketAdapter
 from .fred import FredMacroAdapter
 from .opendart import OpenDartCompanyFactsAdapter, OpenDartDisclosureAdapter, OpenDartDocumentAdapter
-from .public_data_portal import PublicDataPortalStockPriceAdapter
+from .public_data_portal import (
+    PublicDataPortalMarketIndexAdapter,
+    PublicDataPortalSecurityMasterAdapter,
+    PublicDataPortalStockPriceAdapter,
+)
+from .public_data_portal_company import (
+    PublicDataPortalCapitalEventAdapter,
+    PublicDataPortalCompanyFinancialAdapter,
+    PublicDataPortalCompanyProfileAdapter,
+    PublicDataPortalDividendAdapter,
+    PublicDataPortalShareholderRightsAdapter,
+)
 from .sec import SecCompanyFactsAdapter, SecDocumentAdapter, SecSubmissionsAdapter
 from .yfinance import YFinanceProfileAdapter
 from .alpha_vantage import AlphaVantageQuoteAdapter
@@ -22,6 +33,13 @@ def default_external_dataset_registry(
         OpenDartDocumentAdapter(),
         OpenDartCompanyFactsAdapter(opendart_corp_code_lookup),
         PublicDataPortalStockPriceAdapter(),
+        PublicDataPortalSecurityMasterAdapter(),
+        PublicDataPortalMarketIndexAdapter(),
+        PublicDataPortalCompanyProfileAdapter(),
+        PublicDataPortalCompanyFinancialAdapter(),
+        PublicDataPortalDividendAdapter(),
+        PublicDataPortalCapitalEventAdapter(),
+        PublicDataPortalShareholderRightsAdapter(),
         SecSubmissionsAdapter(),
         SecDocumentAdapter(),
         SecCompanyFactsAdapter(),

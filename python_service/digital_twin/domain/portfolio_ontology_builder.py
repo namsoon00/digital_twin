@@ -51,6 +51,11 @@ from .portfolio_ontology_market_concepts import (
 from .portfolio_ontology_coverage import add_coverage_gap_concepts
 from .portfolio_ontology_cognitive_concepts import add_investment_brain_concepts
 from .portfolio_ontology_company_concepts import add_company_knowledge_concepts
+from .portfolio_ontology_reference_concepts import (
+    add_official_corporate_action_concepts,
+    add_official_market_index_concepts,
+    add_official_security_reference_concepts,
+)
 from .portfolio_ontology_calendar_concepts import add_investment_calendar_concepts
 from .portfolio_ontology_exposure_concepts import (
     add_instrument_profile_concepts,
@@ -384,6 +389,8 @@ def build_portfolio_ontology(
         add_position_pipeline_quality_concepts(graph, stock_id, position, runtime_context)
         add_price_level_and_liquidity_concepts(graph, stock_id, position, source, observation_profiles)
         add_official_daily_price_concepts(graph, stock_id, position, external_signals)
+        add_official_security_reference_concepts(graph, stock_id, position, external_signals)
+        add_official_market_index_concepts(graph, stock_id, position, external_signals)
         add_security_line_concepts(graph, stock_id, position, reference_observed_positions, external_signals, runtime_context)
         add_position_temporal_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_statistical_signal_concepts(graph, stock_id, symbol, runtime_context)
@@ -401,6 +408,7 @@ def build_portfolio_ontology(
         )
         add_investment_calendar_concepts(graph, stock_id, symbol, runtime_context)
         add_company_knowledge_concepts(graph, stock_id, symbol, external_signals)
+        add_official_corporate_action_concepts(graph, stock_id, position, external_signals)
         add_position_valuation_concepts(graph, stock_id, position, external_signals, runtime_context, observation_profiles)
         add_position_factor_concepts(graph, stock_id, portfolio_node_id, position, portfolio)
         add_instrument_profile_concepts(graph, stock_id, portfolio_node_id, position, runtime_context)

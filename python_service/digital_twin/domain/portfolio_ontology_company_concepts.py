@@ -18,6 +18,7 @@ from .ontology_schema import add_entity, add_relation
 COMPANY_ABOX_CONTRACT_VERSION = "company-abox-v2"
 FINANCIAL_PERIOD_LIMITS = {"annual": 3, "interim": 2, "quarterly": 3}
 MAX_EXECUTIVE_ROLES = 8
+MAX_COMPANY_RELATIONSHIPS = 12
 
 
 def _text(value: object) -> str:
@@ -85,6 +86,8 @@ def add_company_knowledge_concepts(
     company_name = _text(knowledge.get("companyName") or symbol)
     revision = _text(knowledge.get("factRevision") or "current")
     profile = knowledge.get("profile") if isinstance(knowledge.get("profile"), dict) else {}
+    identifiers = knowledge.get("identifiers") if isinstance(knowledge.get("identifiers"), dict) else {}
+    listing = knowledge.get("listing") if isinstance(knowledge.get("listing"), dict) else {}
     coverage = knowledge.get("coverage") if isinstance(knowledge.get("coverage"), dict) else {}
     provenance = knowledge.get("provenance") if isinstance(knowledge.get("provenance"), list) else []
     primary_source = _text((provenance[0] if provenance and isinstance(provenance[0], dict) else {}).get("provider") or "company-knowledge")
@@ -92,6 +95,12 @@ def add_company_knowledge_concepts(
         "tboxClass": "Company",
         "symbol": symbol,
         "companyName": company_name,
+        "corporateRegistrationNumber": _text(identifiers.get("corporateRegistrationNumber")),
+        "businessRegistrationNumber": _text(identifiers.get("businessRegistrationNumber")),
+        "fssCorporateNumber": _text(identifiers.get("fssCorporateNumber")),
+        "officialIsin": _text(identifiers.get("isin")),
+        "legalName": _text(profile.get("legalName")),
+        "englishName": _text(profile.get("englishName")),
         "ceoName": _text(profile.get("ceoName")),
         "sector": _text(profile.get("sector")),
         "industry": _text(profile.get("industry")),
@@ -104,6 +113,117 @@ def add_company_knowledge_concepts(
         "companyAboxContractVersion": COMPANY_ABOX_CONTRACT_VERSION,
     })
     add_relation(graph, stock_id, company_id, "REPRESENTS_COMPANY", weight=1.0, properties=_relation_properties(primary_source, "회사 실세계 정보"))
+
+    if listing:
+        market_name = _text(
+            listing.get("marketRegistrationName")
+            or listing.get("market")
+            or "KR"
+        )
+        market_id = add_entity(graph, "market", market_name, market_name, {
+            "tboxClass": "Market",
+            "marketName": market_name,
+            "country": "KR",
+        })
+        listing_id = add_entity(graph, "security-listing", symbol, company_name + " 공식 상장 상태", {
+            "tboxClass": "SecurityListing",
+            "tboxClasses": ["Observation", "FundamentalObservation", "SecurityListing"],
+            "symbol": symbol,
+            "isin": _text(identifiers.get("isin")),
+            **{key: value for key, value in listing.items() if value not in (None, "")},
+            "companyFactRevision": revision,
+            "source": primary_source,
+            "officialSource": bool(coverage.get("officialSource")),
+        })
+        listing_props = _relation_properties(primary_source, "공식 상장·주식 종류 정보")
+        add_relation(graph, company_id, listing_id, "HAS_LISTING", weight=1.0, properties=listing_props)
+        add_relation(graph, stock_id, listing_id, "HAS_LISTING", weight=1.0, properties=listing_props)
+        add_relation(graph, listing_id, market_id, "LISTED_ON", weight=1.0, properties=listing_props)
+        share_class_code = _text(listing.get("shareClassCode"))
+        share_class_name = _text(listing.get("shareClassName"))
+        if share_class_code or share_class_name:
+            share_class_id = add_entity(
+                graph,
+                "share-class",
+                symbol + ":" + (share_class_code or share_class_name),
+                share_class_name or share_class_code,
+                {
+                    "tboxClass": "ShareClass",
+                    "symbol": symbol,
+                    "shareClassCode": share_class_code,
+                    "shareClassName": share_class_name,
+                    "issueForm": _text(listing.get("issueForm")),
+                    "parValue": number(listing.get("parValue")),
+                },
+            )
+            add_relation(graph, stock_id, share_class_id, "HAS_SHARE_CLASS", weight=1.0, properties=listing_props)
+
+    relationships = knowledge.get("relationships") if isinstance(knowledge.get("relationships"), dict) else {}
+    affiliates = relationships.get("affiliates") if isinstance(relationships.get("affiliates"), list) else []
+    for item in affiliates[:MAX_COMPANY_RELATIONSHIPS]:
+        if not isinstance(item, Mapping):
+            continue
+        related_name = _text(item.get("companyName"))
+        related_key = _text(item.get("corporateRegistrationNumber")) or related_name
+        if not related_key or not related_name:
+            continue
+        related_id = add_entity(graph, "company", related_key, related_name, {
+            "tboxClass": "Company",
+            "companyName": related_name,
+            "corporateRegistrationNumber": _text(item.get("corporateRegistrationNumber")),
+            "listed": _text(item.get("listed")),
+            "referenceBaseDate": _text(item.get("baseDate")),
+            "source": _text(item.get("provider") or primary_source),
+        })
+        add_relation(
+            graph,
+            company_id,
+            related_id,
+            "AFFILIATED_WITH",
+            weight=0.9,
+            properties=_relation_properties(
+                _text(item.get("provider") or primary_source),
+                "공식 계열회사 관계",
+                baseDate=_text(item.get("baseDate")),
+            ),
+        )
+    subsidiaries = relationships.get("subsidiaries") if isinstance(relationships.get("subsidiaries"), list) else []
+    subsidiaries = sorted(
+        [dict(item) for item in subsidiaries if isinstance(item, Mapping)],
+        key=lambda item: (
+            _text(item.get("materialSubsidiary")) in {"Y", "예", "해당"},
+            number(item.get("totalAssets")),
+        ),
+        reverse=True,
+    )[:MAX_COMPANY_RELATIONSHIPS]
+    for item in subsidiaries:
+        related_name = _text(item.get("companyName"))
+        if not related_name:
+            continue
+        related_id = add_entity(graph, "company", "subsidiary:" + symbol + ":" + related_name, related_name, {
+            "tboxClass": "Company",
+            "companyName": related_name,
+            "establishedDate": _text(item.get("establishedDate")),
+            "headOfficeAddress": _text(item.get("address")),
+            "mainBusiness": _text(item.get("mainBusiness")),
+            "totalAssets": number(item.get("totalAssets")),
+            "referenceBaseDate": _text(item.get("baseDate")),
+            "source": _text(item.get("provider") or primary_source),
+        })
+        add_relation(
+            graph,
+            company_id,
+            related_id,
+            "CONTROLS",
+            weight=1.0,
+            properties=_relation_properties(
+                _text(item.get("provider") or primary_source),
+                "공식 연결대상 종속회사 관계",
+                baseDate=_text(item.get("baseDate")),
+                controlBasis=_text(item.get("controlBasis")),
+                materialSubsidiary=_text(item.get("materialSubsidiary")),
+            ),
+        )
 
     financials = knowledge.get("financials") if isinstance(knowledge.get("financials"), dict) else {}
     current_state_candidates = []

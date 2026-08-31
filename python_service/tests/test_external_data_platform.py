@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from digital_twin.application.external_data.collection_service import ExternalDataCollectionService
 from digital_twin.application.external_data.contracts import (
@@ -15,12 +16,26 @@ from digital_twin.application.external_data.contracts import (
     SourceObservation,
 )
 from digital_twin.application.external_data.fact_transition_service import ExternalFactTransitionService
-from digital_twin.application.external_data.read_model_service import ExternalSignalsReadModelService
+from digital_twin.application.external_data.read_model_service import (
+    ExternalSignalsReadModelService,
+    merge_external_signal_read_models,
+)
 from digital_twin.application.external_data.registry import ExternalDatasetRegistry
 from digital_twin.domain.ontology_contracts import PortfolioOntology
+from digital_twin.domain.knowledge_world_projection import build_knowledge_world_graph
+from digital_twin.domain.market_world_projection import build_market_world_graph
 from digital_twin.domain.ontology_projection_input import compact_external_signals_for_ontology
+from digital_twin.domain.ontology_schema import add_entity
+from digital_twin.domain.ontology_validator import validate_ontology
+from digital_twin.domain.ontology_worlds import knowledge_world, market_world
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_ontology_market_concepts import add_official_daily_price_concepts
+from digital_twin.domain.portfolio_ontology_company_concepts import add_company_knowledge_concepts
+from digital_twin.domain.portfolio_ontology_reference_concepts import (
+    add_official_corporate_action_concepts,
+    add_official_market_index_concepts,
+    add_official_security_reference_concepts,
+)
 from digital_twin.infrastructure.external_api.legacy_import import LegacyExternalSignalImporter
 from digital_twin.infrastructure.external_api.adapters.base import empty_signals, legacy_provider, position_for
 from digital_twin.infrastructure.external_api.adapters.opendart import (
@@ -28,7 +43,13 @@ from digital_twin.infrastructure.external_api.adapters.opendart import (
     OpenDartDisclosureAdapter,
 )
 from digital_twin.infrastructure.external_api.adapters.public_data_portal import (
+    PublicDataPortalMarketIndexAdapter,
+    PublicDataPortalSecurityMasterAdapter,
     PublicDataPortalStockPriceAdapter,
+)
+from digital_twin.infrastructure.external_api.adapters.public_data_portal_company import (
+    PublicDataPortalCapitalEventAdapter,
+    PublicDataPortalCompanyFinancialAdapter,
 )
 from digital_twin.infrastructure.external_api.adapters.sec import SecSubmissionsAdapter
 from digital_twin.infrastructure.external_api.adapters.yfinance import (
@@ -408,6 +429,266 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertTrue(transition.changed)
         self.assertFalse(transition.material)
         self.assertEqual("official-daily-reference", transition.change_type)
+
+    def test_public_data_security_master_normalizes_krx_code_and_plans_bounded_followups(self):
+        adapter = PublicDataPortalSecurityMasterAdapter(lambda *_args: {
+            "response": {
+                "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},
+                "body": {
+                    "totalCount": 1,
+                    "items": {"item": [{
+                        "basDt": "20260827",
+                        "srtnCd": "A005930",
+                        "isinCd": "KR7005930003",
+                        "itmsNm": "삼성전자",
+                        "mrktCtg": "KOSPI",
+                        "crno": "1301110006246",
+                        "corpNm": "삼성전자 주식회사",
+                    }]},
+                },
+            }
+        })
+        observation = adapter.fetch(
+            replace(self.public_data_job(), dataset_id=adapter.descriptor.dataset_id, priority=58),
+            {"publicDataPortalServiceKey": "configured"},
+        )
+
+        master = observation.payload["securityMaster"]["005930"]
+        self.assertEqual("1301110006246", master["corporateRegistrationNumber"])
+        self.assertEqual("KR7005930003", master["isin"])
+        followups = adapter.followup_requests(observation, {})
+        self.assertEqual(5, len(followups))
+        self.assertEqual(
+            {
+                "public-data.kr-capital-events",
+                "public-data.kr-company-financials",
+                "public-data.kr-company-profile",
+                "public-data.kr-dividends",
+                "public-data.kr-shareholder-rights",
+            },
+            {item.dataset_id for item in followups},
+        )
+        self.assertTrue(all(item.watermark["crno"] == "1301110006246" for item in followups))
+        collected_at = datetime.fromisoformat(observation.fetched_at.replace("Z", "+00:00"))
+        local_date = collected_at.astimezone(ZoneInfo("Asia/Seoul")).date()
+        iso_year, iso_week, _iso_day = local_date.isocalendar()
+        buckets = {item.dataset_id: item.partition_key.rsplit(":", 1)[-1] for item in followups}
+        self.assertEqual(local_date.strftime("%Y%m"), buckets["public-data.kr-company-profile"])
+        self.assertEqual(str(iso_year) + "W" + str(iso_week).zfill(2), buckets["public-data.kr-company-financials"])
+        self.assertEqual(local_date.strftime("%Y%m%d"), buckets["public-data.kr-capital-events"])
+
+    def test_public_data_market_indices_share_one_global_current_fact(self):
+        requested = []
+
+        def fetcher(url, _headers, _timeout):
+            requested.append(url)
+            index_name = "코스피" if len(requested) == 1 else "코스닥"
+            close = "3500.1" if index_name == "코스피" else "980.4"
+            return {
+                "response": {
+                    "header": {"resultCode": "00"},
+                    "body": {
+                        "totalCount": 1,
+                        "items": {"item": [{
+                            "basDt": "20260827",
+                            "idxNm": index_name,
+                            "idxCsf": "대표지수",
+                            "clpr": close,
+                            "fltRt": "1.2",
+                        }]},
+                    },
+                }
+            }
+
+        adapter = PublicDataPortalMarketIndexAdapter(fetcher)
+        partitions = adapter.partitions([], {"publicDataPortalServiceKey": "configured"})
+        self.assertEqual(["global"], [item.partition_key for item in partitions])
+
+        job = CollectionJob(
+            dataset_id=adapter.descriptor.dataset_id,
+            partition_key="global",
+            provider_id=adapter.descriptor.provider_id,
+            priority=adapter.descriptor.priority,
+            subject=partitions[0].subject,
+        )
+        result = adapter.fetch(job, {"publicDataPortalServiceKey": "configured"})
+
+        self.assertEqual("global", result.subject_key)
+        self.assertEqual({"KOSPI", "KOSDAQ"}, set(result.payload["marketIndices"]))
+        self.assertEqual(3500.1, result.payload["marketIndices"]["KOSPI"]["close"])
+        self.assertEqual(2, result.quality["indexCount"])
+        self.assertEqual("sufficient", result.quality["coverageState"])
+
+    def test_public_data_financial_adapter_normalizes_official_periods_and_archives_provider_rows(self):
+        def fetcher(url, _headers, _timeout):
+            if "getSummFinaStat" in url:
+                item = {
+                    "basDt": "20251231", "bizYear": "2025", "crno": "1301110006246",
+                    "curCd": "KRW", "fnclDcd": "FS_ifrs_ConsolidatedMember",
+                    "fnclDcdNm": "연결재무제표", "enpSaleAmt": "3000", "enpBzopPft": "300",
+                    "enpCrtmNpf": "220", "enpTastAmt": "5000", "enpTdbtAmt": "1800",
+                    "enpTcptAmt": "3200", "enpCptlAmt": "100", "fnclDebtRto": "56.25",
+                }
+            elif "getBs" in url:
+                item = {
+                    "basDt": "20251231", "bizYear": "2025", "crno": "1301110006246",
+                    "fnclDcd": "FS_ifrs_ConsolidatedMember", "fnclDcdNm": "연결재무제표",
+                    "acitId": "ifrs_CashAndCashEquivalents", "acitNm": "현금및현금성자산",
+                    "crtmAcitAmt": "700",
+                }
+            else:
+                item = {
+                    "basDt": "20251231", "bizYear": "2025", "crno": "1301110006246",
+                    "fnclDcd": "PL_ifrs_ConsolidatedMember", "fnclDcdNm": "연결재무제표",
+                    "acitId": "dart_OperatingIncomeLoss", "acitNm": "영업이익(손실)",
+                    "crtmAcitAmt": "300",
+                }
+            return {
+                "response": {
+                    "header": {"resultCode": "00"},
+                    "body": {"totalCount": 1, "items": {"item": [item]}},
+                }
+            }
+
+        adapter = PublicDataPortalCompanyFinancialAdapter(fetcher)
+        job = replace(
+            self.public_data_job(),
+            dataset_id=adapter.descriptor.dataset_id,
+            priority=adapter.descriptor.priority,
+            watermark={
+                "crno": "1301110006246",
+                "isin": "KR7005930003",
+                "companyName": "삼성전자",
+            },
+        )
+        observation = adapter.fetch(job, {"publicDataPortalServiceKey": "configured"})
+        knowledge = observation.payload["companyKnowledge"]["005930"]
+        annual = knowledge["financials"]["annual"]
+
+        self.assertEqual(1, len(annual))
+        self.assertEqual(3000.0, annual[0]["revenue"])
+        self.assertEqual(700.0, annual[0]["cash"])
+        self.assertEqual("연결재무제표", annual[0]["accountingScope"])
+        self.assertIn("sourceArchive", observation.payload)
+
+        visible = merge_external_signal_read_models({}, observation.payload)
+        self.assertIn("companyKnowledge", visible)
+        self.assertNotIn("sourceArchive", visible)
+
+    def test_public_data_capital_adapter_preserves_issuance_and_current_capital_state(self):
+        def fetcher(url, _headers, _timeout):
+            if "getItemBasiInfo" in url:
+                items = [{
+                    "basDt": "20260827", "crno": "1301110006246", "isinCd": "KR7005930003",
+                    "itmsShrtnCd": "A005930", "stckIssuCmpyNm": "삼성전자", "lstgDt": "19750611",
+                    "scrsItmsKcd": "01", "scrsItmsKcdNm": "보통주", "stckParPrc": "100",
+                    "issuStckCnt": "5969782550",
+                }]
+            elif "getStocIssuInfo" in url:
+                items = [{
+                    "basDt": "20260827", "crno": "1301110006246", "isinCd": "KR7005930003",
+                    "stckIssuCmpyNm": "삼성전자", "stckIssuDt": "20260901", "lstgDt": "20260910",
+                    "stckIssuRcd": "10", "stckIssuRcdNm": "유상증자", "issuStckCnt": "1000000",
+                    "stckIssuSqno": "1", "scrsItmsKcd": "01", "scrsItmsKcdNm": "보통주",
+                }]
+            elif "getLockUpRetu" in url:
+                items = []
+            else:
+                items = [{
+                    "basDt": "20260827", "crno": "1301110006246", "stckIssuCmpyNm": "삼성전자",
+                    "onskTisuCnt": "5969782550", "pfstTisuCnt": "0",
+                }]
+            return {
+                "response": {
+                    "header": {"resultCode": "00"},
+                    "body": {"totalCount": len(items), "items": {"item": items}},
+                }
+            }
+
+        adapter = PublicDataPortalCapitalEventAdapter(fetcher)
+        job = replace(
+            self.public_data_job(),
+            dataset_id=adapter.descriptor.dataset_id,
+            priority=adapter.descriptor.priority,
+            watermark={"crno": "1301110006246", "isin": "KR7005930003", "companyName": "삼성전자"},
+        )
+        observation = adapter.fetch(job, {"publicDataPortalServiceKey": "configured"})
+
+        actions = observation.payload["corporateActions"]["005930"]
+        knowledge = observation.payload["companyKnowledge"]["005930"]
+        self.assertTrue(any(item["tboxClass"] == "EquityIssuanceEvent" for item in actions.values()))
+        self.assertEqual(5969782550, knowledge["capital"]["sharesOutstanding"])
+        self.assertEqual("보통주", knowledge["listing"]["shareClassName"])
+
+    def test_public_data_reference_abox_keeps_identity_benchmark_company_and_event_relations(self):
+        signals = {
+            "securityMaster": {
+                "005930": {
+                    "symbol": "005930", "name": "삼성전자", "legalName": "삼성전자 주식회사",
+                    "market": "KOSPI", "isin": "KR7005930003",
+                    "corporateRegistrationNumber": "1301110006246", "baseDate": "20260827",
+                    "provider": "금융위원회·공공데이터포털",
+                }
+            },
+            "marketIndices": {
+                "KOSPI": {
+                    "indexKey": "KOSPI", "indexName": "코스피", "baseDate": "20260827",
+                    "close": 3500.1, "provider": "금융위원회·공공데이터포털",
+                }
+            },
+            "companyKnowledge": {
+                "005930": {
+                    "symbol": "005930", "companyName": "삼성전자",
+                    "identifiers": {"corporateRegistrationNumber": "1301110006246"},
+                    "relationships": {
+                        "affiliates": [{"companyName": "삼성SDI", "corporateRegistrationNumber": "affiliate-1", "baseDate": "20260827"}],
+                        "subsidiaries": [{"companyName": "Samsung Austin", "controlBasis": "지배력", "baseDate": "20260827"}],
+                    },
+                    "provenance": [{"provider": "금융위원회·공공데이터포털", "scope": "official-company-profile"}],
+                }
+            },
+            "corporateActions": {
+                "005930": {
+                    "issue": {
+                        "eventId": "issue", "eventType": "equity-issuance", "tboxClass": "EquityIssuanceEvent",
+                        "issueDate": "20260901", "eventLifecycleState": "upcoming", "issuedShareCount": 1000,
+                        "provider": "금융위원회·공공데이터포털",
+                    },
+                    "dividend": {
+                        "eventId": "dividend", "eventType": "dividend", "tboxClass": "DividendEvent",
+                        "recordDate": "20260930", "eventLifecycleState": "upcoming", "cashDividendPerCommonShare": 500,
+                        "provider": "금융위원회·공공데이터포털",
+                    },
+                }
+            },
+        }
+        compact = compact_external_signals_for_ontology(signals, target_symbols=["005930"])
+        graph = PortfolioOntology("official-reference")
+        position = Position(symbol="005930", name="삼성전자", market="KR", currency="KRW")
+        stock_id = add_entity(graph, "stock", "005930", "삼성전자", {
+            "tboxClass": "Stock",
+            "symbol": "005930",
+        })
+        add_official_security_reference_concepts(graph, stock_id, position, compact)
+        add_official_market_index_concepts(graph, stock_id, position, compact)
+        add_company_knowledge_concepts(graph, stock_id, "005930", compact)
+        add_official_corporate_action_concepts(graph, stock_id, position, compact)
+
+        classes = {item.properties.get("tboxClass") for item in graph.entities}
+        relation_types = {item.relation_type for item in graph.relations}
+        self.assertTrue({"SecurityListing", "Index", "DividendEvent", "EquityIssuanceEvent"}.issubset(classes))
+        self.assertTrue({"AFFILIATED_WITH", "CONTROLS", "USES_MARKET_BENCHMARK", "HAS_CORPORATE_ACTION"}.issubset(relation_types))
+        self.assertTrue(any(item.relation_type == "HAS_EXTERNAL_SIGNAL" for item in graph.relations))
+        validation = validate_ontology(graph)
+        self.assertEqual("valid", validation.status, [item.to_dict() for item in validation.issues])
+
+        knowledge = build_knowledge_world_graph(graph, knowledge_world("kr"))
+        knowledge_relations = {item.relation_type for item in knowledge.relations}
+        self.assertTrue({"HAS_LISTING", "AFFILIATED_WITH", "CONTROLS", "HAS_CORPORATE_ACTION"}.issubset(knowledge_relations))
+
+        market = build_market_world_graph(graph, market_world("kr"))
+        self.assertTrue(any(item.kind == "price-bar" for item in market.entities))
+        self.assertTrue(any(item.relation_type == "HAS_OBSERVATION" for item in market.relations))
 
     def test_registry_builds_only_enabled_partitions(self):
         registry = ExternalDatasetRegistry([StaticAdapter()])

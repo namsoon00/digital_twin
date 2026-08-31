@@ -139,6 +139,12 @@ def _add_fx_sources(rows: "OrderedDict[str, Dict[str, object]]", signals: Dict[s
 def _add_external_signal_payload_sources(rows: "OrderedDict[str, Dict[str, object]]", signals: Dict[str, object]) -> None:
     if _group_has_items(signals.get("officialDailyPrices")):
         _add_source(rows, "공공데이터포털", "금융위원회 국내 주식 공식 일별 시세·거래량")
+    if _group_has_items(signals.get("securityMaster")):
+        _add_source(rows, "공공데이터포털", "KRX 상장종목·ISIN·법인등록번호")
+    if _group_has_items(signals.get("marketIndices")):
+        _add_source(rows, "공공데이터포털", "KOSPI·KOSDAQ 공식 일별 지수")
+    if _group_has_items(signals.get("corporateActions")):
+        _add_source(rows, "공공데이터포털", "배당·주식발행·보호예수·주주 권리 일정")
     if _group_has_items(signals.get("equityQuotes")):
         _add_source(rows, "Alpha Vantage", "해외 주식 가격·거래량(GLOBAL_QUOTE)")
     if _group_has_items(signals.get("companyOverviews")):
@@ -181,6 +187,8 @@ def _add_external_signal_payload_sources(rows: "OrderedDict[str, Dict[str, objec
             _add_source(rows, "KIS", "국내 기업 PER·PBR·EPS·BPS·시가총액")
         if any("yfinance" in provider or "yahoo" in provider for provider in providers):
             _add_source(rows, "yfinance", "기업 프로필·재무제표·임원 보완 데이터")
+        if any("금융위원회" in provider or "공공데이터" in provider for provider in providers):
+            _add_source(rows, "공공데이터포털", "공식 기업개요·계열·종속회사·재무제표·자본구조")
 
     news = signals.get("newsHeadlines") if isinstance(signals.get("newsHeadlines"), dict) else {}
     for item in news.values():

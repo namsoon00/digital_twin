@@ -21,6 +21,7 @@ from digital_twin.domain.market_world_projection import (
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position, utc_now_iso
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
+from digital_twin.domain.ontology_world_routing import route_world_impact
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_rules_to_payload
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.typedb_ontology import (
@@ -77,6 +78,20 @@ def sample_graph(symbol="005930", source_observed_at=""):
 
 
 class OntologyWorldContractTests(unittest.TestCase):
+    def test_company_fact_changes_route_only_the_affected_instrument_knowledge_partition(self):
+        routed = route_world_impact({
+            "changedScopeFamilies": ["fundamental", "governance", "capital"],
+            "explicitTargetSymbols": ["005930"],
+            "sharedPremiseWorldId": "premise:shared:kr",
+            "portfolioWorldId": "portfolio:tenant:account",
+        })
+
+        self.assertTrue(routed["knowledge"]["required"])
+        self.assertFalse(routed["market"]["required"])
+        self.assertTrue(routed["partitions"]["instrumentPremise"]["required"])
+        self.assertEqual(1, len(routed["partitions"]["instrumentPremise"]["partitionIds"]))
+        self.assertFalse(routed["partitions"]["macroContext"]["required"])
+
     def test_portfolio_worlds_are_deterministic_and_distinct(self):
         self.assertEqual("portfolio:tenant-a:account-a", portfolio_world_id("Account A", "Tenant A"))
         self.assertNotEqual(

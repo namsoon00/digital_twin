@@ -66,6 +66,12 @@ class ExternalFactTransitionService:
         "opendart.company_facts",
         "yfinance.fundamental",
         "yfinance.analyst",
+        "public-data.kr-company-profile",
+        "public-data.kr-company-financials",
+        "public-data.kr-dividends",
+        "public-data.kr-capital-events",
+        "public-data.kr-shareholder-rights",
+        "public-data.kr-security-master",
     }
 
     DISCOVERY_DATASETS = {
@@ -100,7 +106,7 @@ class ExternalFactTransitionService:
             return FactTransition(True, True, "source-revision", fields, "new or revised source document")
         if dataset_id == "fred.macro":
             return FactTransition(True, True, "macro-observation", fields, "published macro observation changed")
-        if dataset_id == "public-data.kr-stock-daily":
+        if dataset_id in {"public-data.kr-stock-daily", "public-data.kr-market-index-daily"}:
             return FactTransition(
                 True,
                 False,

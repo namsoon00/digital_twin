@@ -36,8 +36,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         self.assertGreaterEqual(total, 600)
         # Recovery watchdog, immutable decision audit, isolated replay, and
         # user-impact-separated operational health are independent production
-        # boundaries and each keeps its own contract.
-        self.assertLessEqual(total, 860)
+        # boundaries and each keeps its own contract. Official issuer,
+        # financial, corporate-action, and market-index ingestion also keeps
+        # adapter, ABox, world-routing, and semantic validation contracts.
+        self.assertLessEqual(total, 870)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

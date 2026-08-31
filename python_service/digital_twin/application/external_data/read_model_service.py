@@ -1,10 +1,15 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable
 
+from ...domain.company_knowledge import merge_company_knowledge_rows
+
 
 EXTERNAL_SIGNAL_MAP_FIELDS = {
     "equityQuotes",
     "officialDailyPrices",
+    "securityMaster",
+    "marketIndices",
+    "corporateActions",
     "cryptoMarkets",
     "fxRates",
     "secFilings",
@@ -17,6 +22,8 @@ EXTERNAL_SIGNAL_MAP_FIELDS = {
     "companyKnowledge",
 }
 
+EXTERNAL_SIGNAL_ARCHIVE_FIELDS = {"sourceArchive"}
+
 
 def merge_dict(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
     result = dict(base or {})
@@ -25,6 +32,19 @@ def merge_dict(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str
             result[key] = merge_dict(result[key], value)
         else:
             result[key] = value
+    return result
+
+
+def merge_company_knowledge_maps(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
+    result = {
+        str(symbol or "").upper().strip(): dict(row)
+        for symbol, row in dict(base or {}).items()
+        if str(symbol or "").strip() and isinstance(row, dict)
+    }
+    for raw_symbol, row in dict(incoming or {}).items():
+        symbol = str(raw_symbol or "").upper().strip()
+        if symbol and isinstance(row, dict):
+            result[symbol] = merge_company_knowledge_rows(result.get(symbol, {}), row)
     return result
 
 
@@ -62,13 +82,15 @@ def merge_external_signal_read_models(
                 if (str(item.get("source") or ""), str(item.get("datasetId") or "")) not in replacement_sources
             ]
             result["statuses"] = existing + [dict(item) for item in value if isinstance(item, dict)]
+        elif key == "companyKnowledge" and isinstance(value, dict):
+            result[key] = merge_company_knowledge_maps(result.get(key) or {}, value)
         elif key in EXTERNAL_SIGNAL_MAP_FIELDS and isinstance(value, dict):
             result[key] = merge_dict(result.get(key) or {}, value)
         elif key == "macro" and isinstance(value, dict):
             result["macro"] = merge_dict(result.get("macro") or {}, value)
         elif key == "fetchedAt":
             result["fetchedAt"] = max_timestamp(result.get("fetchedAt"), value)
-        else:
+        elif key not in EXTERNAL_SIGNAL_ARCHIVE_FIELDS:
             result[key] = value
     return result
 
@@ -86,6 +108,9 @@ class ExternalSignalsReadModelService:
             "cryptoLastAttemptAt": "",
             "equityQuotes": {},
             "officialDailyPrices": {},
+            "securityMaster": {},
+            "marketIndices": {},
+            "corporateActions": {},
             "cryptoMarkets": {},
             "macro": {},
             "fxRates": {},
@@ -112,11 +137,13 @@ class ExternalSignalsReadModelService:
             for key, value in fragment.items():
                 if key == "statuses" and isinstance(value, list):
                     result["statuses"].extend([dict(item) for item in value if isinstance(item, dict)])
+                elif key == "companyKnowledge" and isinstance(value, dict):
+                    result[key] = merge_company_knowledge_maps(result.get(key) or {}, value)
                 elif key in EXTERNAL_SIGNAL_MAP_FIELDS and isinstance(value, dict):
                     result[key] = merge_dict(result.get(key) or {}, value)
                 elif key == "macro" and isinstance(value, dict):
                     result["macro"] = merge_dict(result.get("macro") or {}, value)
-                elif key not in {"fetchedAt", "externalDataPlatform"}:
+                elif key not in {"fetchedAt", "externalDataPlatform", *EXTERNAL_SIGNAL_ARCHIVE_FIELDS}:
                     result[key] = value
             dataset_id = str(row.get("datasetId") or "")
             if dataset_id:

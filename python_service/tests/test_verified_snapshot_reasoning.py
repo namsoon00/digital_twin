@@ -285,6 +285,77 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             event.payload["factChangeContract"]["scopeFamiliesBySymbol"]["AAPL"],
         )
 
+    def test_official_listing_change_routes_as_company_profile_only(self):
+        base_company = {
+            "AAPL": {
+                "schemaVersion": "company-knowledge-v1",
+                "symbol": "AAPL",
+                "materialRevision": "material-a",
+                "materialSectionRevisions": {
+                    "identity": "identity-a",
+                    "profile": "profile-a",
+                    "listing": "listing-a",
+                    "relationships": "relationships-a",
+                    "valuation": "valuation-a",
+                    "financials": "financials-a",
+                    "governance": "governance-a",
+                    "ownership": "ownership-a",
+                    "capital": "capital-a",
+                    "coverage": "coverage-a",
+                },
+                "listing": {"market": "NASDAQ"},
+            },
+        }
+        changed_company = copy.deepcopy(base_company)
+        changed_company["AAPL"]["materialRevision"] = "material-b"
+        changed_company["AAPL"]["materialSectionRevisions"]["listing"] = "listing-b"
+        changed_company["AAPL"]["listing"]["shareClassName"] = "Common Stock"
+
+        event = verified_monitor_snapshot_reasoning_event(
+            snapshot(external_signals={"companyKnowledge": changed_company}),
+            snapshot(external_signals={"companyKnowledge": base_company}).to_monitor_state(),
+        )
+
+        self.assertEqual(["CompanyProfile"], event.payload["factTypesBySymbol"]["AAPL"])
+        self.assertEqual(
+            ["external.companyKnowledge.listing"],
+            event.payload["changedFieldsBySymbol"]["AAPL"],
+        )
+        self.assertEqual(
+            ["profile"],
+            event.payload["factChangeContract"]["scopeFamiliesBySymbol"]["AAPL"],
+        )
+
+    def test_official_corporate_action_change_routes_capital_and_evidence(self):
+        previous = snapshot(external_signals={"corporateActions": {"AAPL": {}}})
+        current = snapshot(external_signals={
+            "corporateActions": {
+                "AAPL": {
+                    "issue-1": {
+                        "eventId": "issue-1",
+                        "eventType": "equity-issuance",
+                        "eventLifecycleState": "upcoming",
+                        "issuedShareCount": 1000,
+                    },
+                },
+            },
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(
+            ["CapitalStructureChange", "ResearchEvidence"],
+            event.payload["factTypesBySymbol"]["AAPL"],
+        )
+        self.assertEqual(
+            ["external.corporateActions"],
+            event.payload["changedFieldsBySymbol"]["AAPL"],
+        )
+        self.assertEqual(
+            ["capital", "evidence"],
+            event.payload["factChangeContract"]["scopeFamiliesBySymbol"]["AAPL"],
+        )
+
     def test_price_change_reads_company_knowledge_without_company_change_event(self):
         company = {
             "AAPL": {

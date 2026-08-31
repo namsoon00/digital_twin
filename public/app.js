@@ -5704,10 +5704,14 @@
       externalSignalCacheMaxAgeMinutes: settingValue("externalSignalCacheMaxAgeMinutes"),
       externalAlphaEnabled: settingValue("externalAlphaEnabled"),
       externalPublicDataStockEnabled: settingValue("externalPublicDataStockEnabled"),
+      externalPublicDataReferenceEnabled: settingValue("externalPublicDataReferenceEnabled"),
       externalPublicDataTimeoutSeconds: settingValue("externalPublicDataTimeoutSeconds"),
       externalDataPublicStockCadenceSeconds: settingValue("externalDataPublicStockCadenceSeconds"),
       externalDataPublicStockFreshnessSeconds: settingValue("externalDataPublicStockFreshnessSeconds"),
       externalDataPublicStockMaxPartitions: settingValue("externalDataPublicStockMaxPartitions"),
+      externalDataPublicReferenceCadenceSeconds: settingValue("externalDataPublicReferenceCadenceSeconds"),
+      externalDataPublicReferenceFreshnessSeconds: settingValue("externalDataPublicReferenceFreshnessSeconds"),
+      externalDataPublicReferenceMaxPartitions: settingValue("externalDataPublicReferenceMaxPartitions"),
       externalAlphaRelatedSymbolsEnabled: settingValue("externalAlphaRelatedSymbolsEnabled"),
       externalAlphaRelatedMaxSymbols: settingValue("externalAlphaRelatedMaxSymbols"),
       externalYFinanceEnabled: settingValue("externalYFinanceEnabled"),
@@ -31508,7 +31512,7 @@
       settingEnabled("externalDartEnabled"),
       settingEnabled("externalSecEnabled"),
       settingEnabled("externalAlphaEnabled"),
-      settingEnabled("externalPublicDataStockEnabled"),
+      settingEnabled("externalPublicDataStockEnabled") || settingEnabled("externalPublicDataReferenceEnabled"),
       settingEnabled("externalFredEnabled"),
       settingEnabled("externalCoinGeckoEnabled")
     ].filter(Boolean).length;
@@ -31585,6 +31589,7 @@
         configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("공식 일별 시세", settingEnabled("externalPublicDataStockEnabled"), isConfiguredSetting("publicDataPortalServiceKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("공식 기업·지수", settingEnabled("externalPublicDataReferenceEnabled"), isConfiguredSetting("publicDataPortalServiceKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
         configuredChip("거시·크립토", settingEnabled("externalFredEnabled") || settingEnabled("externalCoinGeckoEnabled"), "보조 신호")
       ]),
@@ -31635,6 +31640,7 @@
         configuredChip("뉴스", settingEnabled("externalNewsEnabled"), newsProviderLabel(settingValue("externalNewsProvider") || defaultSettings.externalNewsProvider)),
         configuredChip("OpenDART", settingEnabled("externalDartEnabled"), isConfiguredSetting("opendartApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("공식 일별 시세", settingEnabled("externalPublicDataStockEnabled"), isConfiguredSetting("publicDataPortalServiceKey") ? "키 저장됨" : "키 필요"),
+        configuredChip("공식 기업·지수", settingEnabled("externalPublicDataReferenceEnabled"), isConfiguredSetting("publicDataPortalServiceKey") ? "키 저장됨" : "키 필요"),
         configuredChip("SEC", settingEnabled("externalSecEnabled"), "무키"),
         configuredChip("Alpha", settingEnabled("externalAlphaEnabled"), isConfiguredSetting("alphaVantageApiKey") ? "키 저장됨" : "키 필요"),
         configuredChip("FRED", settingEnabled("externalFredEnabled"), isConfiguredSetting("fredApiKey") ? "키 저장됨" : "키 필요"),
@@ -31888,6 +31894,13 @@
         renderSettingField("externalDataPublicStockCadenceSeconds", "공식 일별 시세 확인 주기(초)", "number", "21600"),
         renderSettingField("externalDataPublicStockFreshnessSeconds", "공식 일별 시세 유효 기간(초)", "number", "259200"),
         renderSettingField("externalDataPublicStockMaxPartitions", "공식 일별 시세 최대 종목", "number", "100"),
+        renderSettingSelect("externalPublicDataReferenceEnabled", "공식 기업·재무·지수·기업행동 수집", [
+          { value: "1", label: "사용" },
+          { value: "0", label: "사용 안 함" }
+        ]),
+        renderSettingField("externalDataPublicReferenceCadenceSeconds", "공식 기준정보 확인 주기(초)", "number", "21600"),
+        renderSettingField("externalDataPublicReferenceFreshnessSeconds", "공식 기준정보 유효 기간(초)", "number", "604800"),
+        renderSettingField("externalDataPublicReferenceMaxPartitions", "공식 기준정보 최대 종목", "number", "100"),
         renderSettingField("externalPublicDataTimeoutSeconds", "공공데이터포털 요청 제한(초)", "number", "12"),
         renderSettingSelect("externalSecEnabled", "SEC EDGAR 수집", [
           { value: "1", label: "사용" },

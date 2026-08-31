@@ -32,7 +32,15 @@ MARKET_FACT_FAMILIES = {
 # accounts.  A ``link`` must be accompanied by one of these semantic
 # families, otherwise it stays local because a generic account link is not
 # reusable knowledge.
-KNOWLEDGE_FACT_FAMILIES = {"profile", "exposure", "valuation"}
+KNOWLEDGE_FACT_FAMILIES = {
+    "profile",
+    "exposure",
+    "valuation",
+    "company-valuation",
+    "fundamental",
+    "governance",
+    "capital",
+}
 
 
 def _families(values: Iterable[object]) -> Set[str]:

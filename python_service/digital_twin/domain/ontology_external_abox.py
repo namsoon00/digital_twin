@@ -989,7 +989,7 @@ def add_symbol_external_signal_concepts(
     event_time_settings = event_time_settings if isinstance(event_time_settings, dict) else {}
     for row in symbol_external_signal_items(external_signals, symbol):
         group = str(row.get("group") or "")
-        if group == "companyKnowledge":
+        if group in {"companyKnowledge", "securityMaster", "corporateActions"}:
             continue
         signal_id = add_entity(graph, "external-signal", symbol + ":" + group, group + " 외부 신호", {
             "tboxClass": "ExternalSignal",

@@ -148,7 +148,10 @@ CONTEXT_ONLY_EXTERNAL_GROUPS = {
 }
 
 COMPANY_KNOWLEDGE_SECTION_FACT_TYPES = {
+    "identity": {"CompanyProfile"},
     "profile": {"CompanyProfile"},
+    "listing": {"CompanyProfile"},
+    "relationships": {"CompanyProfile"},
     "valuation": {"ValuationObservation"},
     "financials": {"FinancialFact"},
     "governance": {"GovernanceChange"},
@@ -447,6 +450,7 @@ def _external_for_symbol(
     for group in (
         "secFilings", "equityQuotes", "yfinanceData", "newsHeadlines", "dartDisclosures",
         "earningsReports", "companyOverviews", "companyKnowledge", "researchEvidence",
+        "securityMaster", "corporateActions",
     ):
         rows = compact.get(group)
         if not isinstance(rows, Mapping) or symbol not in rows:
@@ -547,6 +551,10 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
         selected.add("FxRate")
     if groups & {"equityQuotes"}:
         selected.add("MarketQuote")
+    if groups & {"securityMaster"}:
+        selected.add("CompanyProfile")
+    if groups & {"corporateActions"}:
+        selected.update({"CapitalStructureChange", "ResearchEvidence"})
     if groups & {
         "secFilings", "newsHeadlines", "dartDisclosures", "earningsReports",
         "researchEvidence",

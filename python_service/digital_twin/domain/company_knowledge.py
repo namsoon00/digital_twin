@@ -50,6 +50,8 @@ COMPANY_VALUATION_RULE_ID_FRAGMENTS = (
 PROVIDER_PRIORITY = {
     "opendart": 100,
     "sec edgar": 100,
+    "금융위원회": 100,
+    "공공데이터포털": 100,
     "kis open api": 90,
     "alpha vantage": 70,
     "yfinance": 60,
@@ -642,10 +644,16 @@ def _material_section_revisions(payload: Mapping[str, object]) -> Dict[str, str]
 
     material = _material_revision_payload(payload)
     sections = {
+        "identity": {
+            "companyName": material.get("companyName"),
+            "identifiers": material.get("identifiers") or {},
+        },
         "profile": {
             "companyName": material.get("companyName"),
             "profile": material.get("profile") or {},
         },
+        "listing": material.get("listing") or {},
+        "relationships": material.get("relationships") or {},
         "valuation": {
             "valuation": material.get("valuation") or {},
             "valuationUnits": material.get("valuationUnits") or {},
@@ -681,7 +689,7 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
     for row in valid:
         if _nonempty(row.get("companyName")):
             result["companyName"] = row.get("companyName")
-        for section in ("profile", "valuation", "ownership", "capital"):
+        for section in ("identifiers", "profile", "listing", "valuation", "ownership", "capital"):
             incoming = row.get(section) if isinstance(row.get(section), Mapping) else {}
             current = result.get(section) if isinstance(result.get(section), Mapping) else {}
             result[section] = {
@@ -713,6 +721,31 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
                 "executives": [dict(item) for item in incoming_executives if isinstance(item, Mapping)],
             }
         result["governance"] = governance
+        incoming_relationships = row.get("relationships") if isinstance(row.get("relationships"), Mapping) else {}
+        relationships = result.get("relationships") if isinstance(result.get("relationships"), Mapping) else {}
+        for relationship_type in ("affiliates", "subsidiaries"):
+            current_rows = relationships.get(relationship_type) if isinstance(relationships.get(relationship_type), list) else []
+            incoming_rows = incoming_relationships.get(relationship_type) if isinstance(incoming_relationships.get(relationship_type), list) else []
+            by_identity = {}
+            for item in [*current_rows, *incoming_rows]:
+                if not isinstance(item, Mapping):
+                    continue
+                identity = (
+                    _clean(item.get("corporateRegistrationNumber"))
+                    or _clean(item.get("companyName")).lower()
+                )
+                if not identity:
+                    continue
+                previous = by_identity.get(identity) or {}
+                if _clean(item.get("baseDate")) >= _clean(previous.get("baseDate")):
+                    by_identity[identity] = dict(item)
+            if by_identity:
+                relationships[relationship_type] = sorted(
+                    by_identity.values(),
+                    key=lambda item: (_clean(item.get("baseDate")), _clean(item.get("companyName"))),
+                    reverse=True,
+                )[:20]
+        result["relationships"] = relationships
 
     provenance_by_key = {}
     for row in valid:
@@ -731,6 +764,12 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
     executives = (result.get("governance") or {}).get("executives") if isinstance(result.get("governance"), Mapping) else []
     valuation = result.get("valuation") if isinstance(result.get("valuation"), Mapping) else {}
     capital = result.get("capital") if isinstance(result.get("capital"), Mapping) else {}
+    relationships = result.get("relationships") if isinstance(result.get("relationships"), Mapping) else {}
+    relationship_count = sum(
+        len(relationships.get(key) or [])
+        for key in ("affiliates", "subsidiaries")
+        if isinstance(relationships.get(key), list)
+    )
     period_count = sum(len(financials.get(frequency) or []) for frequency in ("annual", "interim", "quarterly"))
     missing = []
     if not period_count:
@@ -746,6 +785,7 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
         "executives": len(executives or []),
         "valuationFields": len(valuation),
         "capitalFields": len(capital),
+        "relationshipCount": relationship_count,
         "officialSource": any(provider_priority(item.get("provider")) >= 100 for item in result["provenance"]),
         "dataState": "sufficient" if period_count >= 2 and len(valuation) >= 2 else ("partial" if result["provenance"] else "unavailable"),
         "missing": missing,

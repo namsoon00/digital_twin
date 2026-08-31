@@ -3321,9 +3321,11 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
             rows = connection.execute(
                 "SELECT * FROM time_series_projection_outbox "
                 "WHERE backend_id IN (" + placeholders + ") "
-                "AND job_status IN ('queued', 'retry') "
-                "AND (available_at = '' OR available_at <= %s) "
-                "AND (lease_until = '' OR lease_until < %s) "
+                "AND ((job_status IN ('queued', 'retry') "
+                "AND (available_at = '' OR available_at <= %s)) "
+                # Projection writes are idempotent. Reclaiming an expired
+                # processing lease closes the crash window between write and receipt.
+                "OR (job_status = 'processing' AND (lease_until = '' OR lease_until < %s))) "
                 "ORDER BY created_at, job_id LIMIT %s FOR UPDATE SKIP LOCKED",
                 (*backends, stamp, stamp, max(1, min(200, int(limit or 20)))),
             ).fetchall()

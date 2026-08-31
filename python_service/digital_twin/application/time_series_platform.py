@@ -3,6 +3,7 @@
 import hashlib
 import json
 import socket
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
@@ -168,14 +169,99 @@ class VersionedMarketTimeSeriesStore:
         self.settings = dict(settings or {})
         self.snapshot_store = snapshot_store
         self.last_feature_snapshot = None
+        self._active_resolution_lock = threading.Lock()
+        self._active_resolution_checked_at = 0.0
+        self._active_resolution = {}
 
     def control(self) -> Dict[str, object]:
         return dict(self.registry.control() or {})
 
-    def active_backend_id(self) -> str:
+    def requested_active_backend_id(self) -> str:
         control = self.control()
         requested = str(control.get("activeBackendId") or self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
-        return requested if requested in self.adapters else "mysql-primary"
+        return requested
+
+    @staticmethod
+    def healthy_status(health: Mapping[str, object]) -> bool:
+        return str(dict(health or {}).get("status") or "").strip().lower() in {"ready", "healthy"}
+
+    @staticmethod
+    def adapter_health(adapter) -> Dict[str, object]:
+        health_reader = getattr(adapter, "health", None)
+        if not callable(health_reader):
+            return {"status": "unavailable", "error": "backend-health-contract-missing"}
+        try:
+            return dict(health_reader() or {})
+        except Exception as error:  # noqa: BLE001 - backend selection must preserve the canonical fallback.
+            return {"status": "unavailable", "error": str(error)[:240]}
+
+    def active_backend_resolution(self, refresh: bool = False) -> Dict[str, object]:
+        requested = self.requested_active_backend_id()
+        now = time.monotonic()
+        try:
+            cache_seconds = max(
+                1,
+                min(60, int(float(self.settings.get("timeSeriesRuntimeHealthCacheSeconds") or 15))),
+            )
+        except (TypeError, ValueError):
+            cache_seconds = 15
+        with self._active_resolution_lock:
+            if (
+                not refresh
+                and self._active_resolution
+                and self._active_resolution.get("requestedBackendId") == requested
+                and now - self._active_resolution_checked_at < cache_seconds
+            ):
+                return dict(self._active_resolution)
+
+            resolution = {
+                "requestedBackendId": requested,
+                "effectiveBackendId": requested,
+                "failedOver": False,
+                "reason": "selected-backend-ready",
+                "checkedAt": utc_now_iso(),
+            }
+            requested_adapter = self.adapters.get(requested)
+            if requested_adapter is None:
+                resolution.update({
+                    "effectiveBackendId": "mysql-primary",
+                    "failedOver": requested != "mysql-primary",
+                    "reason": "selected-backend-not-registered",
+                })
+            elif requested != "mysql-primary" and truthy(
+                self.settings.get("timeSeriesRuntimeFailoverEnabled", "1")
+            ):
+                selected_health = self.adapter_health(requested_adapter)
+                resolution["requestedBackendHealth"] = selected_health
+                if not self.healthy_status(selected_health):
+                    resolution.update({
+                        "effectiveBackendId": "mysql-primary",
+                        "failedOver": True,
+                        "reason": "selected-backend-" + str(selected_health.get("status") or "unavailable"),
+                        "fallbackBackendHealth": self.adapter_health(self.baseline),
+                    })
+
+            self._active_resolution = resolution
+            self._active_resolution_checked_at = now
+            return dict(resolution)
+
+    def force_baseline_resolution(self, requested: str, reason: str, error: object = "") -> Dict[str, object]:
+        resolution = {
+            "requestedBackendId": str(requested or self.requested_active_backend_id()),
+            "effectiveBackendId": "mysql-primary",
+            "failedOver": True,
+            "reason": str(reason or "selected-backend-read-failed"),
+            "error": str(error or "")[:240],
+            "fallbackBackendHealth": self.adapter_health(self.baseline),
+            "checkedAt": utc_now_iso(),
+        }
+        with self._active_resolution_lock:
+            self._active_resolution = resolution
+            self._active_resolution_checked_at = time.monotonic()
+        return dict(resolution)
+
+    def active_backend_id(self) -> str:
+        return str(self.active_backend_resolution().get("effectiveBackendId") or "mysql-primary")
 
     def active_adapter(self):
         return self.adapters.get(self.active_backend_id()) or self.baseline
@@ -319,11 +405,22 @@ class VersionedMarketTimeSeriesStore:
         return result
 
     def load_capital_flow_observations(self, **kwargs):
-        adapter = self.active_adapter()
+        resolution = self.active_backend_resolution()
+        adapter = self.adapters.get(str(resolution.get("effectiveBackendId") or "")) or self.baseline
         reader = getattr(adapter, "load_capital_flow_observations", None)
         if not callable(reader):
             reader = getattr(self.baseline, "load_capital_flow_observations")
-        return reader(**kwargs)
+        try:
+            return reader(**kwargs)
+        except Exception as error:
+            if adapter is self.baseline:
+                raise
+            self.force_baseline_resolution(
+                str(resolution.get("requestedBackendId") or ""),
+                "selected-backend-capital-flow-read-failed",
+                error,
+            )
+            return self.baseline.load_capital_flow_observations(**kwargs)
 
     def capital_flow_quality(self, legacy_days: int = 30) -> Dict[str, object]:
         baseline_quality = dict(self.baseline.capital_flow_quality(legacy_days) or {})
@@ -351,14 +448,28 @@ class VersionedMarketTimeSeriesStore:
         return result
 
     def load_temporal_windows(self, account_id, symbols, definitions, as_of=""):
-        adapter = self.active_adapter()
-        windows = adapter.load_temporal_windows(account_id, symbols, definitions, as_of)
+        resolution = self.active_backend_resolution()
+        backend_id = str(resolution.get("effectiveBackendId") or "mysql-primary")
+        adapter = self.adapters.get(backend_id) or self.baseline
+        try:
+            windows = adapter.load_temporal_windows(account_id, symbols, definitions, as_of)
+        except Exception as error:
+            if adapter is self.baseline:
+                raise
+            resolution = self.force_baseline_resolution(
+                str(resolution.get("requestedBackendId") or ""),
+                "selected-backend-temporal-read-failed",
+                error,
+            )
+            backend_id = "mysql-primary"
+            adapter = self.baseline
+            windows = adapter.load_temporal_windows(account_id, symbols, definitions, as_of)
         if self.snapshot_store is not None:
             watermark = adapter.watermark() if callable(getattr(adapter, "watermark", None)) else TimeSeriesWatermark(
-                self.active_backend_id(), str(as_of or ""), status="compatibility"
+                backend_id, str(as_of or ""), status="compatibility"
             )
             snapshot = TemporalFeatureSnapshot.create(
-                backend_id=self.active_backend_id(),
+                backend_id=backend_id,
                 account_id=account_id,
                 as_of=str(as_of or watermark.observed_through or utc_now_iso()),
                 windows=windows,
@@ -370,8 +481,13 @@ class VersionedMarketTimeSeriesStore:
         return windows
 
     def summary(self, account_id="") -> Dict[str, object]:
-        active = dict(self.active_adapter().summary(account_id) or {})
-        active["activeBackendId"] = self.active_backend_id()
+        resolution = self.active_backend_resolution()
+        backend_id = str(resolution.get("effectiveBackendId") or "mysql-primary")
+        adapter = self.adapters.get(backend_id) or self.baseline
+        active = dict(adapter.summary(account_id) or {})
+        active["requestedActiveBackendId"] = str(resolution.get("requestedBackendId") or "")
+        active["activeBackendId"] = backend_id
+        active["runtimeFailover"] = resolution
         active["backendControl"] = self.control()
         return active
 

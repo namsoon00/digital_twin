@@ -2681,7 +2681,7 @@ def build_v2_reasoning_engine(
             "status": "ready",
             "mode": "typedb-direct-typeql",
             "realtimeProjectionMode": "incremental-current-state-one-pass-v1",
-            "aboxPersistenceMode": "current-state-dual-slot-v1",
+            "aboxPersistenceMode": "current-state-copy-on-write-v2",
             "sharedPremiseCriticalPath": False,
         },
     })

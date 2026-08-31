@@ -14,6 +14,7 @@ from digital_twin.domain.time_series_storage import (
     compare_feature_snapshots,
 )
 from digital_twin.infrastructure.questdb_time_series import QuestDBTimeSeriesAdapter
+from digital_twin.infrastructure.mysql_versioned_runtime import MySQLTimeSeriesProjectionOutboxStore
 
 
 class Context:
@@ -25,6 +26,23 @@ class Context:
 
     def __exit__(self, *_args):
         return False
+
+
+class RecordingConnection:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=()):
+        self.statements.append((" ".join(str(sql).split()), tuple(params or ())))
+        return SimpleNamespace(fetchall=lambda: [])
+
+
+class ClaimProbeOutbox(MySQLTimeSeriesProjectionOutboxStore):
+    def __init__(self):
+        self.connection = RecordingConnection()
+
+    def transaction(self):
+        return Context(self.connection)
 
 
 class FakeBaseline:
@@ -55,6 +73,9 @@ class FakeBaseline:
     def summary(self, account_id=""):
         return {"accountId": account_id, "granularities": []}
 
+    def health(self):
+        return {"backendId": self.backend_id, "status": "ready"}
+
     def watermark(self):
         return TimeSeriesWatermark("mysql-primary", "2026-08-15T00:00:00Z")
 
@@ -68,6 +89,11 @@ class FakeRegistry:
 
     def update_health(self, backend_id, health):
         self.health[backend_id] = health
+
+
+class ActiveQuestDBRegistry(FakeRegistry):
+    def control(self):
+        return {"activeBackendId": "questdb-shadow", "shadowBackendId": "mysql-primary"}
 
 
 class SwitchingRegistry(FakeRegistry):
@@ -165,16 +191,26 @@ class SnapshotStore:
 
 
 class SnapshotAdapter:
-    def __init__(self, backend_id, price):
+    def __init__(self, backend_id, price, health_status="ready", fail_read=False):
         self.backend_id = backend_id
         self.price = price
+        self.health_status = health_status
+        self.fail_read = fail_read
 
     def load_temporal_windows(self, account_id, symbols, definitions, as_of=""):
         del account_id, as_of
+        if self.fail_read:
+            raise RuntimeError("candidate read failed")
         return {
             symbol: {definition.key: [{"currentPrice": self.price}] for definition in definitions}
             for symbol in symbols
         }
+
+    def health(self):
+        return {"backendId": self.backend_id, "status": self.health_status}
+
+    def summary(self, account_id=""):
+        return {"accountId": account_id, "backendId": self.backend_id, "granularities": []}
 
     def watermark(self):
         return TimeSeriesWatermark(self.backend_id, "2026-08-15T00:00:00Z")
@@ -185,12 +221,27 @@ class RecordingQuestDB(QuestDBTimeSeriesAdapter):
         self.settings = {"questDbWriteBatchSize": "10"}
         self.backend_id = "questdb-shadow"
         self.lines = []
+        self.waited_tables = []
 
     def ensure_schema(self):
         return None
 
     def write_lines(self, lines):
         self.lines.extend(lines)
+
+    def wal_table_statuses(self, table_names):
+        return {
+            table_name: {
+                "suspended": False,
+                "writerTxn": 1,
+                "sequencerTxn": 1,
+                "error": "",
+            }
+            for table_name in table_names
+        }
+
+    def wait_for_wal_application(self, table_names):
+        self.waited_tables.append(sorted(table_names))
 
 
 class SchemaQuestDB(QuestDBTimeSeriesAdapter):
@@ -338,6 +389,20 @@ class TimeSeriesPlatformTests(unittest.TestCase):
 
         self.assertEqual("degraded", result["status"])
         self.assertEqual("market_observations_3m", result["suspendedTables"][0]["table"])
+        self.assert_questdb_rejects_a_write_when_target_wal_is_suspended()
+
+    def assert_questdb_rejects_a_write_when_target_wal_is_suspended(self):
+        adapter = SuspendedWalQuestDB()
+
+        with self.assertRaisesRegex(RuntimeError, "QuestDB WAL is suspended"):
+            adapter.write_observations([{
+                "account_id": "__market_data__",
+                "symbol": "MSTR",
+                "granularity": "3m",
+                "bucket_at": "2026-09-01T00:00:00Z",
+                "observed_at": "2026-09-01T00:00:00Z",
+                "current_price": 132.89,
+            }])
 
     def test_questdb_summary_preserves_healthy_granularities(self):
         result = PartialSummaryQuestDB().summary()
@@ -390,6 +455,16 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual(1, result["failedCount"])
         self.assertEqual([], outbox.completed)
         self.assertEqual("job-1", outbox.retried[0][0])
+        self.assert_projection_claim_reclaims_an_expired_processing_lease()
+
+    def assert_projection_claim_reclaims_an_expired_processing_lease(self):
+        outbox = ClaimProbeOutbox()
+
+        outbox.claim(["questdb-shadow"], "worker-1", 20, 120)
+
+        select_sql = outbox.connection.statements[0][0]
+        self.assertIn("job_status = 'processing'", select_sql)
+        self.assertIn("lease_until < %s", select_sql)
 
     def test_compatibility_read_persists_feature_snapshot_identity(self):
         baseline = FakeBaseline()
@@ -410,6 +485,52 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual(1, len(snapshots.saved))
         self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
         self.assertEqual(snapshots.saved[0].snapshot_id, store.last_feature_snapshot["snapshotId"])
+        self.assert_active_read_fails_over_to_mysql_when_selected_backend_is_degraded()
+        self.assert_active_read_fails_over_to_mysql_after_candidate_query_failure()
+
+    def assert_active_read_fails_over_to_mysql_when_selected_backend_is_degraded(self):
+        baseline = FakeBaseline()
+        candidate = SnapshotAdapter("questdb-shadow", 999, health_status="degraded")
+        snapshots = SnapshotStore()
+        store = VersionedMarketTimeSeriesStore(
+            baseline,
+            {"mysql-primary": baseline, "questdb-shadow": candidate},
+            ActiveQuestDBRegistry(),
+            FakeOutbox(),
+            {},
+            snapshot_store=snapshots,
+        )
+
+        store.load_temporal_windows(
+            "main", ["MSTR"], [SimpleNamespace(key="1D")], "2026-09-01T00:00:00Z"
+        )
+
+        self.assertEqual("mysql-primary", store.active_backend_id())
+        self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
+        self.assertTrue(store.active_backend_resolution()["failedOver"])
+
+    def assert_active_read_fails_over_to_mysql_after_candidate_query_failure(self):
+        baseline = FakeBaseline()
+        candidate = SnapshotAdapter("questdb-shadow", 999, fail_read=True)
+        snapshots = SnapshotStore()
+        store = VersionedMarketTimeSeriesStore(
+            baseline,
+            {"mysql-primary": baseline, "questdb-shadow": candidate},
+            ActiveQuestDBRegistry(),
+            FakeOutbox(),
+            {},
+            snapshot_store=snapshots,
+        )
+
+        store.load_temporal_windows(
+            "main", ["MSTR"], [SimpleNamespace(key="1D")], "2026-09-01T00:00:00Z"
+        )
+
+        self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
+        self.assertEqual(
+            "selected-backend-temporal-read-failed",
+            store.active_backend_resolution()["reason"],
+        )
 
     def test_feature_comparison_ignores_backend_label_and_timestamp_formatting(self):
         active = TemporalFeatureSnapshot.create(
@@ -469,6 +590,10 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertIn("account_id=main", market_insert)
         self.assertIn("quantity=10", market_insert)
         self.assertFalse(any(line.startswith("market_observations_1d") for line in adapter.lines))
+        self.assertEqual(
+            [["market_observations_3m", "portfolio_marks"]],
+            adapter.waited_tables,
+        )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,38 @@ from digital_twin.domain.typedb_capacity_policy import evaluate_typedb_capacity_
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def assert_typedb_runtime_health_requires_consecutive_service_failures(self):
+        first = service_manager.typedb_runtime_health_decision(
+            process_running=True,
+            startup_finalized=True,
+            probe_due=True,
+            service_ready=False,
+            consecutive_failures=0,
+            failure_threshold=2,
+        )
+        second = service_manager.typedb_runtime_health_decision(
+            process_running=True,
+            startup_finalized=True,
+            probe_due=True,
+            service_ready=False,
+            consecutive_failures=first["consecutiveFailures"],
+            failure_threshold=2,
+        )
+        recovered = service_manager.typedb_runtime_health_decision(
+            process_running=True,
+            startup_finalized=True,
+            probe_due=True,
+            service_ready=True,
+            consecutive_failures=first["consecutiveFailures"],
+            failure_threshold=2,
+        )
+
+        self.assertEqual("retry", first["action"])
+        self.assertEqual("restart", second["action"])
+        self.assertEqual({"action": "continue", "consecutiveFailures": 0}, recovered)
+
     def test_capacity_policy_rotates_before_legacy_eighty_percent_default(self):
+        self.assert_typedb_runtime_health_requires_consecutive_service_failures()
         result = evaluate_typedb_capacity_policy({
             "typedbSizeMb": 75,
             "typedbLimitMb": 100,

@@ -29,8 +29,12 @@ world manifests, current InferenceBox output, credentials, or delivery state.
 
 ## ABox Maintenance
 
-The dedicated `ontology-maintenance` worker owns physical generation cleanup.
-It follows these rules:
+The delivery reasoning process owns physical generation cleanup when the
+single TypeDB writer topology is enabled. It runs the same bounded
+`ontology-maintenance` task between reasoning turns; the standalone worker is
+used only by the legacy multi-writer topology. This avoids concurrent TypeDB
+writers while keeping retention outside investment latency. It follows these
+rules:
 
 1. An active inference transaction always finishes.
 2. When inactive generations remain above the priority threshold for more than
@@ -43,11 +47,20 @@ It follows these rules:
 5. The worker records per-world inventory and progress in MySQL. Status reads
    this durable state and does not scan TypeDB.
 
+Current-state ABox updates use copy-on-write. A changed scope is written to a
+fresh retry-stable generation and verified before the active Manifest moves.
+The hot path does not read or delete the retired generation. Unchanged scopes
+keep their physical generation, and maintenance removes generations no longer
+referenced by the active or retained rollback Manifest.
+
 Inspect it with:
 
 ```bash
 python3 python_service/service.py ontology-maintenance status
 ```
+
+The command reads the same durable maintenance state when cleanup is embedded
+in the delivery worker.
 
 ## Capacity
 
@@ -123,6 +136,12 @@ npm run python:service:restart
 npm run python:service:status
 npm run python:ontology-reasoning:status
 ```
+
+`python:service:status` reports TypeDB as `unhealthy` when the managed PID
+exists but the service port does not respond. The supervisor performs a full
+authenticated probe every 30 seconds and restarts the process after two
+consecutive runtime failures. It does not apply this restart rule while a new
+process is still completing its initial WAL/index recovery.
 
 Check that the reasoning queue is progressing, the projection circuit is
 closed, the active runtime revision matches the deployed commit, TypeDB usage

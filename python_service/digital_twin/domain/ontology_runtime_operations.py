@@ -728,6 +728,16 @@ def _stage_timings(result: Mapping[str, object]) -> Dict[str, int]:
     }
 
 
+def _runtime_modes(result: Mapping[str, object]) -> Dict[str, str]:
+    raw = result.get("runtimeModes") if isinstance(result, Mapping) else {}
+    values = dict(raw or {}) if isinstance(raw, Mapping) else {}
+    return {
+        _text(key): _text(value)
+        for key, value in values.items()
+        if _text(key) and _text(value)
+    }
+
+
 def native_replay_validation(result: Mapping[str, object] = None) -> Dict[str, object]:
     """Validate native-rule coverage without running a second rule engine.
 
@@ -1390,6 +1400,7 @@ def build_projection_runtime_observation(
     )
     relation_persistence = compact_abox_relation_persistence(values.get("relationPersistence"))
     stages = _stage_timings(values)
+    runtime_modes = _runtime_modes(values)
     native_rule_timing = native_rule_timing_profile(execution)
     raw_native_stage_timings = execution.get("typedbNativeStageTimings")
     raw_native_stage_timings = (
@@ -1721,6 +1732,7 @@ def build_projection_runtime_observation(
             "relationPersistence": relation_persistence,
             "cleanup": _cleanup_summary(values),
         },
+        "modes": runtime_modes,
         "stages": stages,
     }
     observation["slo"] = _slo_state(values, duration_ms, inference, execution, policy)

@@ -19,6 +19,9 @@ from digital_twin.domain.ontology_projection_fingerprint import (
     apply_material_graph_identity,
     material_graph_fingerprint,
 )
+from digital_twin.domain.ontology_runtime_operations import (
+    build_projection_runtime_observation,
+)
 from digital_twin.domain.portfolio import AccountSnapshot, DecisionItem, PortfolioSummary, Position
 from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOntologyProjectionRunStore
 from digital_twin.infrastructure.ontology_projection import (
@@ -113,7 +116,60 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def assert_abox_runtime_modes_are_not_coerced_into_numeric_stages(self):
+        stages = {}
+        result = {
+            "aboxPersistenceVerification": {
+                "timing": {
+                    "currentStateWriteStrategy": "copy-on-write-fresh-generation-v2",
+                    "currentStateInventoryReadMs": 0,
+                    "changedScopeWritePlan": {
+                        "relationWriteMode": "given-batch",
+                        "queryCount": 4,
+                    },
+                },
+            },
+        }
+
+        PortfolioOntologyProjectionRecorder.attach_abox_persistence_runtime_stages(
+            stages,
+            result,
+        )
+
+        self.assertEqual(0, stages["aboxCurrentStateInventoryReadMs"])
+        self.assertEqual(4, stages["aboxChangedScopeQueryCount"])
+        self.assertNotIn("aboxCurrentStateWriteStrategy", stages)
+        self.assertNotIn("aboxRelationWriteMode", stages)
+        self.assertEqual(
+            "copy-on-write-fresh-generation-v2",
+            result["runtimeModes"]["aboxCurrentStateWriteStrategy"],
+        )
+        self.assertEqual(
+            "given-batch",
+            result["runtimeModes"]["aboxRelationWriteMode"],
+        )
+
+        observation = build_projection_runtime_observation(
+            SimpleNamespace(
+                run_id="projection-run-1",
+                account_id="main",
+                started_at="2026-09-01T00:00:00Z",
+                completed_at="2026-09-01T00:00:01Z",
+                abox_snapshot_id="abox-1",
+                entity_count=0,
+                relation_count=0,
+            ),
+            {**result, "runtimeStages": stages},
+        )
+        self.assertEqual(
+            "copy-on-write-fresh-generation-v2",
+            observation["modes"]["aboxCurrentStateWriteStrategy"],
+        )
+        self.assertNotIn("aboxCurrentStateWriteStrategy", observation["stages"])
+
     def test_staged_recovery_reuses_the_active_projection_audit_owner(self):
+        self.assert_abox_runtime_modes_are_not_coerced_into_numeric_stages()
+
         class Repository:
             store_key = "typedb"
 

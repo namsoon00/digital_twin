@@ -25,6 +25,8 @@ from digital_twin.domain.ontology_rulebox_contracts import (
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_current_state import (
     CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+    LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+    copy_on_write_generation_id,
     current_state_slot_id,
 )
 from digital_twin.domain.ontology_fact_slots import build_fact_slot_projection_plan
@@ -496,6 +498,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             },
             [market_scope],
             world_id,
+            persistence_mode=LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE,
         )
         by_scope = {item["scopeId"]: item for item in physical_plan}
         self.assertEqual(
@@ -506,6 +509,69 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(
             "logical-market-2",
             by_scope[market_scope]["logicalGenerationId"],
+        )
+        legacy_physical_graph = repository.current_state_physical_graph(
+            graph,
+            physical_plan,
+        )
+        self.assertEqual(
+            LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            legacy_physical_graph.worldview["physicalStateMode"],
+        )
+        self.assertTrue(repository.is_scoped_abox_graph(legacy_physical_graph))
+        copy_on_write_plan = repository.current_state_physical_scope_plan(
+            [
+                {
+                    "scopeId": market_scope,
+                    "generationId": "logical-market-2",
+                    "fingerprint": "market-2",
+                },
+                {
+                    "scopeId": flow_scope,
+                    "generationId": "logical-flow-1",
+                    "fingerprint": "flow-1",
+                },
+            ],
+            {
+                "scopeGenerationIds": {
+                    market_scope: active_market_slot,
+                    flow_scope: active_flow_slot,
+                },
+            },
+            [market_scope],
+            world_id,
+            persistence_mode=CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            transition_id="projection-run:123",
+        )
+        copy_by_scope = {
+            item["scopeId"]: item for item in copy_on_write_plan
+        }
+        self.assertEqual(
+            copy_on_write_generation_id(
+                world_id,
+                market_scope,
+                "logical-market-2",
+                "projection-run:123",
+            ),
+            copy_by_scope[market_scope]["generationId"],
+        )
+        self.assertTrue(
+            copy_by_scope[market_scope]["generationId"].startswith(
+                "abox-current-cow:"
+            )
+        )
+        self.assertEqual(
+            active_flow_slot,
+            copy_by_scope[flow_scope]["generationId"],
+        )
+        self.assertNotEqual(
+            copy_by_scope[market_scope]["generationId"],
+            copy_on_write_generation_id(
+                world_id,
+                market_scope,
+                "logical-market-2",
+                "projection-run:124",
+            ),
         )
         legacy_active = {
             "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,

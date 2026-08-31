@@ -14,8 +14,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 
-CURRENT_STATE_ABOX_CONTRACT_VERSION = "current-abox-patch-v1"
-CURRENT_STATE_ABOX_PERSISTENCE_MODE = "current-state-dual-slot-v1"
+CURRENT_STATE_ABOX_CONTRACT_VERSION = "current-abox-copy-on-write-v2"
+LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE = "current-state-dual-slot-v1"
+CURRENT_STATE_ABOX_PERSISTENCE_MODE = "current-state-copy-on-write-v2"
+CURRENT_STATE_ABOX_PERSISTENCE_MODES = frozenset({
+    LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+    CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+})
 CURRENT_STATE_TRANSITION_STAGES = (
     "source-bound",
     "patch-applied",
@@ -67,6 +72,33 @@ def next_current_state_slot(
 
     active_slot = current_state_slot_name(active_generation_id)
     return current_state_slot_id(world_id, scope_id, "a" if active_slot != "a" else "b")
+
+
+def copy_on_write_generation_id(
+    world_id: object,
+    scope_id: object,
+    logical_generation_id: object,
+    transition_id: object,
+) -> str:
+    """Return a retry-stable physical generation for one copy-on-write patch.
+
+    The transition identity is the durable projection run when available. It
+    prevents a later return to identical market values from colliding with a
+    retained rollback generation, while giving retries of the same audited
+    transition the same storage identity.
+    """
+
+    seed = "|".join([
+        _clean(world_id),
+        _clean(scope_id),
+        _clean(logical_generation_id),
+        _clean(transition_id),
+    ])
+    return "abox-current-cow:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
+
+
+def is_current_state_persistence_mode(value: object) -> bool:
+    return _clean(value) in CURRENT_STATE_ABOX_PERSISTENCE_MODES
 
 
 @dataclass(frozen=True)
@@ -160,4 +192,3 @@ def logical_scope_generations(scope_plan: Iterable[Mapping[str, object]]) -> Dic
         if _clean(item.get("scopeId"))
         and _clean(item.get("logicalGenerationId") or item.get("generationId"))
     }
-

@@ -108,7 +108,7 @@ This is the first safe implementation step because it changes persistence
 materiality without moving investment judgement out of TypeDB. Exact source
 provenance remains in the durable source snapshot and projection audit.
 
-The next measured optimization keeps the same authority boundary while
+The first measured optimization kept the same authority boundary while
 removing redundant database work inside one writer lease:
 
 - Current-state inventory reads use a configurable batch size, defaulting to
@@ -132,6 +132,40 @@ authority. Production telemetry exposes `currentStatePostWriteVerificationMs`,
 `matchedGraphSource`, `matchedGraphReuseStatus`, and
 `matchedGraphReuseReason` so a real event can prove whether each fast path was
 used.
+
+Production evidence then showed that the dual-slot delta path still spent most
+of its ABox time reading the inactive slot and deleting its previous rows. It
+also reused almost no relations, so the comparison itself cost more than the
+write it was intended to avoid. Current-state persistence therefore uses the
+`current-state-copy-on-write-v2` contract:
+
+- A changed scope receives a retry-stable fresh physical generation derived
+  from world, scope, logical generation, and durable projection run.
+- The live path never inventories or deletes the retired physical generation.
+  It writes the complete changed scope with semantic fingerprints and verifies
+  exact Manifest/scope/generation entity and relation counts.
+- Only a fully verified candidate can move the active Manifest pointer. A
+  failed or interrupted candidate remains unreachable and is safe to retry.
+- Unchanged scopes retain their active physical generation. Retired and failed
+  generations are reclaimed later by the bounded ABox maintenance turn owned
+  by the same single TypeDB writer.
+- `currentStateWriteStrategy=copy-on-write-fresh-generation-v2`,
+  `currentStateInventoryReadMs=0`, and `currentStateDeleteMs=0` are the required
+  production proof. The legacy dual-slot path remains readable only for
+  progressive migration.
+
+This is copy-on-write at the semantic scope boundary, not an unbounded history
+policy. MySQL owns historical replay; TypeDB retains the active generation and
+one rollback Manifest while maintenance drains older physical generations.
+
+Live-account verification on 2026-09-01 KST recorded the former dual-slot
+critical path at about 92 seconds for ABox persistence. Copy-on-write target
+patches subsequently completed ABox persistence in 8.4 to 16.0 seconds; a
+two-symbol target patch completed in 10.2 seconds with 0 ms inventory read,
+0 ms retired-generation delete, and 0 delete queries. The same durable audit
+record preserved `copy-on-write-fresh-generation-v2` as a categorical runtime
+mode and completed native TypeDB inference in 8.0 seconds. These values are
+operational evidence from the live local account, not a fixed latency promise.
 
 The completed architecture should add a governed semantic-transition head in
 front of projection. Raw value changes become events such as loss-band change,
@@ -193,6 +227,12 @@ The recovery contract is now:
 
 Never raise the safety limit or disable the storage guard to clear this state.
 That only delays the same failure and risks an unrecoverable disk-full outage.
+
+The supervisor also probes authenticated TypeDB service health after startup.
+A matching PID is not sufficient: after two consecutive failed service probes,
+the managed process is restarted without deleting its data directory. Startup
+recovery remains exempt until the server has first finalized, so a legitimate
+WAL replay is not mistaken for a runtime outage.
 
 ## Deployment-Binding Recovery Invariant
 

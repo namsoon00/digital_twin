@@ -35,7 +35,7 @@ from ..domain.time_series_storage import (
 )
 
 
-QUESTDB_ADAPTER_VERSION = "questdb-time-series-adapter-v1"
+QUESTDB_ADAPTER_VERSION = "questdb-time-series-adapter-v2"
 
 GRANULARITY_TABLES = {
     "3m": "market_observations_3m",
@@ -337,6 +337,68 @@ class QuestDBTimeSeriesAdapter:
         columns = [str(item.get("name") or "") for item in payload.get("columns") or []]
         return [dict(zip(columns, values)) for values in payload.get("dataset") or []]
 
+    def wal_table_statuses(self, table_names: Iterable[str]) -> Dict[str, Dict[str, object]]:
+        requested = sorted({clean_text(table_name) for table_name in table_names or [] if clean_text(table_name)})
+        if not requested:
+            return {}
+        rows = self.query_rows(
+            "SELECT name, suspended, writerTxn AS writer_txn, sequencerTxn AS sequencer_txn, "
+            "errorTag AS error_tag, errorMessage AS error_message FROM wal_tables() WHERE name IN ("
+            + ", ".join(sql_text(table_name) for table_name in requested)
+            + ")"
+        )
+        statuses = {
+            clean_text(row.get("name")): {
+                "suspended": str(row.get("suspended") or "").strip().lower() in {"true", "1"},
+                "writerTxn": int(numeric_value(row.get("writer_txn"))),
+                "sequencerTxn": int(numeric_value(row.get("sequencer_txn"))),
+                "errorTag": clean_text(row.get("error_tag")),
+                "error": clean_text(row.get("error_message"))[:240],
+            }
+            for row in rows
+            if clean_text(row.get("name"))
+        }
+        missing = sorted(set(requested) - set(statuses))
+        if missing:
+            raise RuntimeError("QuestDB WAL status is missing tables: " + ", ".join(missing))
+        return statuses
+
+    @staticmethod
+    def assert_wal_tables_writable(statuses: Mapping[str, Mapping[str, object]]) -> None:
+        suspended = [
+            table_name + ((": " + clean_text(status.get("error"))) if clean_text(status.get("error")) else "")
+            for table_name, status in statuses.items()
+            if bool(status.get("suspended"))
+        ]
+        if suspended:
+            raise RuntimeError("QuestDB WAL is suspended: " + "; ".join(suspended))
+
+    def wait_for_wal_application(self, table_names: Iterable[str]) -> None:
+        """Do not acknowledge an ILP write until its WAL transactions are query-visible."""
+
+        statuses = self.wal_table_statuses(table_names)
+        self.assert_wal_tables_writable(statuses)
+        targets = {
+            table_name: int(status.get("sequencerTxn") or 0)
+            for table_name, status in statuses.items()
+        }
+        for table_name, target_txn in targets.items():
+            rows = self.query_rows(
+                "SELECT wait_wal_table(" + sql_text(table_name) + ", " + str(target_txn) + ") AS applied"
+            )
+            applied = str((rows[0] if rows else {}).get("applied") or "").strip().lower()
+            if applied not in {"true", "1"}:
+                raise RuntimeError("QuestDB WAL application was not confirmed: " + table_name)
+        final_statuses = self.wal_table_statuses(targets)
+        self.assert_wal_tables_writable(final_statuses)
+        lagging = [
+            table_name
+            for table_name, target_txn in targets.items()
+            if int(final_statuses[table_name].get("writerTxn") or 0) < target_txn
+        ]
+        if lagging:
+            raise RuntimeError("QuestDB WAL application is lagging: " + ", ".join(lagging))
+
     def expected_ttl_days(self) -> Dict[str, int]:
         retention_days = {
             "3m": max(1, int(float(self.settings.get("marketTimeSeriesRawRetentionDays") or 7))),
@@ -551,6 +613,18 @@ class QuestDBTimeSeriesAdapter:
         if not rows:
             return {"backendId": self.backend_id, "writtenCount": 0, "portfolioMarkCount": 0}
         self.ensure_schema()
+        touched_tables = {
+            GRANULARITY_TABLES[clean_text(source_value(row, "granularity", "observationGranularity"))]
+            for row in rows
+            if clean_text(source_value(row, "granularity", "observationGranularity")) in GRANULARITY_TABLES
+        }
+        if any(
+            clean_text(source_value(row, "account_id", "accountId")) not in {"", "__market_data__"}
+            for row in rows
+        ):
+            touched_tables.add("portfolio_marks")
+        if touched_tables:
+            self.assert_wal_tables_writable(self.wal_table_statuses(touched_tables))
         # ILP is QuestDB's ingestion path. SQL /exec remains read/schema only.
         batch_size = max(1, min(1000, int(float(self.settings.get("questDbWriteBatchSize") or 200))))
         written = 0
@@ -565,6 +639,8 @@ class QuestDBTimeSeriesAdapter:
             if mark_rows:
                 self.write_lines([self.portfolio_mark_line(row) for row in mark_rows])
                 marks += len(mark_rows)
+        if touched_tables:
+            self.wait_for_wal_application(touched_tables)
         return {
             "backendId": self.backend_id,
             "writtenCount": written,
@@ -577,8 +653,10 @@ class QuestDBTimeSeriesAdapter:
         if not rows:
             return {"backendId": self.backend_id, "writtenCount": 0, "status": "completed"}
         self.ensure_schema()
+        self.assert_wal_tables_writable(self.wal_table_statuses([CAPITAL_FLOW_TABLE]))
         lines = [self.capital_flow_line(row) for row in rows]
         self.write_lines(lines)
+        self.wait_for_wal_application([CAPITAL_FLOW_TABLE])
         return {"backendId": self.backend_id, "writtenCount": len(lines), "status": "completed"}
 
     def load_capital_flow_observations(

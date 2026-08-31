@@ -406,6 +406,12 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # A durable TypeDB may need tens of minutes to replay its WAL and
         # rebuild the type cache after a clean server restart.
         "startupWaitSeconds": str(startup_wait_seconds),
+        "runtimeHealthProbeIntervalSeconds": str(
+            (settings or {}).get("typedbRuntimeHealthProbeIntervalSeconds") or "30"
+        ),
+        "runtimeHealthFailureThreshold": str(
+            (settings or {}).get("typedbRuntimeHealthFailureThreshold") or "2"
+        ),
         # Active reasoning deployments are immutable release bundles. Startup
         # may serve their existing graph, but must not rewrite TBox/RuleBox to
         # match the current checkout. Isolated blue-green candidates override
@@ -599,6 +605,9 @@ def questdb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             "QDB_LINE_UDP_BIND_TO": "127.0.0.1:9009",
             "QDB_QWP_UDP_BIND_TO": "127.0.0.1:9007",
             "QDB_PG_NET_BIND_TO": "127.0.0.1:8812",
+            # A suspended WAL table otherwise accepts writes that remain
+            # invisible to readers while the caller sees a successful ingest.
+            "QDB_CAIRO_WAL_APPLY_SUSPENDED_WRITE_DENIED": "true",
         },
         "dataPath": data_path,
         "healthAddress": address,
@@ -2243,7 +2252,17 @@ def status_worker(spec: Dict[str, object]) -> int:
     log_path = spec["log"]
     pid = read_pid(pid_path)
     running = is_running(pid, spec)
-    print(str(spec["label"]) + ": " + ("running" if running else "stopped"))
+    health_ready = bool(
+        running
+        and (
+            not spec.get("healthAddress")
+            or tcp_ready(spec.get("healthAddress"))
+        )
+    )
+    display_status = "running" if running else "stopped"
+    if running and str(spec.get("role") or "") == "typedb" and not health_ready:
+        display_status = "unhealthy"
+    print(str(spec["label"]) + ": " + display_status)
     if spec.get("missingReason"):
         print("Unavailable: " + str(spec.get("missingReason")))
     if pid:
@@ -2251,7 +2270,7 @@ def status_worker(spec: Dict[str, object]) -> int:
     if running:
         print("Command: " + command_for_pid(pid))
         if spec.get("healthAddress"):
-            print("Health: " + ("ready" if tcp_ready(spec.get("healthAddress")) else "not-ready") + " · " + str(spec.get("healthAddress")))
+            print("Health: " + ("ready" if health_ready else "not-ready") + " · " + str(spec.get("healthAddress")))
     if str(spec.get("role") or "") == "typedb":
         storage = typedb_storage_preflight(spec)
         print(
@@ -2500,6 +2519,34 @@ def typedb_service_ready(spec: Dict[str, object]) -> bool:
     if typedb_credentials_bootstrap_pending():
         return bootstrap_typedb_credentials_after_reset(spec)
     return False
+
+
+def typedb_runtime_health_decision(
+    *,
+    process_running: bool,
+    startup_finalized: bool,
+    probe_due: bool,
+    service_ready: bool,
+    consecutive_failures: int,
+    failure_threshold: int,
+) -> Dict[str, object]:
+    """Classify a live TypeDB process by service health, not PID alone."""
+
+    failures = max(0, int(consecutive_failures or 0))
+    threshold = max(1, int(failure_threshold or 1))
+    if not process_running:
+        return {"action": "start", "consecutiveFailures": 0}
+    if not startup_finalized:
+        return {"action": "initialize", "consecutiveFailures": 0}
+    if not probe_due:
+        return {"action": "continue", "consecutiveFailures": failures}
+    if service_ready:
+        return {"action": "continue", "consecutiveFailures": 0}
+    failures += 1
+    return {
+        "action": "restart" if failures >= threshold else "retry",
+        "consecutiveFailures": failures,
+    }
 
 
 def typedb_startup_readiness_path() -> Path:
@@ -3959,7 +4006,7 @@ def stop_worker(spec: Dict[str, object]) -> int:
         append_log(log_path, "stop")
         print(str(spec["label"]) + " stopped before signal delivery. pid=" + str(pid))
         return 0
-    attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb", "typedb-stage"} else 25
+    attempts = 150 if str(spec.get("role") or "") in {"mysql", "typedb", "typedb-stage", "questdb"} else 25
     for _index in range(attempts):
         time.sleep(0.2)
         still_running = process_group_exists(process_group) if process_group else is_running(pid, spec)
@@ -4068,7 +4115,12 @@ def restart(
     if not restart_typedb:
         typedb_spec = worker_specs().get("typedb")
         typedb_pid_path = typedb_spec.get("pid") if isinstance(typedb_spec, dict) else None
-        if typedb_spec and typedb_pid_path and is_running(read_pid(typedb_pid_path), typedb_spec):
+        if (
+            typedb_spec
+            and typedb_pid_path
+            and is_running(read_pid(typedb_pid_path), typedb_spec)
+            and typedb_service_ready(typedb_spec)
+        ):
             excluded.add("typedb")
     if not restart_mysql:
         mysql_spec = worker_specs().get("mysql")
@@ -4457,6 +4509,8 @@ def supervise() -> int:
             else 0
         )
         typedb_initialization_retry_at = 0.0
+        typedb_runtime_health_probe_at = 0.0
+        typedb_runtime_health_failures = 0
         while not stopping["value"]:
             write_supervisor_heartbeat("running")
             if supervisor_maintenance_active():
@@ -4472,6 +4526,7 @@ def supervise() -> int:
             )
             if not typedb_running:
                 initialized_typedb_pid = 0
+                typedb_runtime_health_failures = 0
             elif initialized_typedb_pid != typedb_pid and time.monotonic() >= typedb_initialization_retry_at:
                 if typedb_service_ready(typedb_spec):
                     seed_ready = ensure_typedb_startup_seed_contract(typedb_spec)
@@ -4484,6 +4539,12 @@ def supervise() -> int:
                     )
                     if seed_ready and shared_world_ready:
                         initialized_typedb_pid = typedb_pid
+                        typedb_runtime_health_failures = 0
+                        typedb_runtime_health_probe_at = time.monotonic() + int_value(
+                            typedb_spec.get("runtimeHealthProbeIntervalSeconds"),
+                            30,
+                            5,
+                        )
                         mark_typedb_startup_finalized(typedb_spec, typedb_pid)
                         append_log(
                             supervisor_log_path(),
@@ -4491,6 +4552,44 @@ def supervise() -> int:
                         )
                     else:
                         typedb_initialization_retry_at = time.monotonic() + 30.0
+            elif initialized_typedb_pid == typedb_pid:
+                now_monotonic = time.monotonic()
+                probe_due = now_monotonic >= typedb_runtime_health_probe_at
+                service_ready = typedb_service_ready(typedb_spec) if probe_due else True
+                health_decision = typedb_runtime_health_decision(
+                    process_running=True,
+                    startup_finalized=True,
+                    probe_due=probe_due,
+                    service_ready=service_ready,
+                    consecutive_failures=typedb_runtime_health_failures,
+                    failure_threshold=int_value(
+                        typedb_spec.get("runtimeHealthFailureThreshold"),
+                        2,
+                        1,
+                    ),
+                )
+                typedb_runtime_health_failures = int(
+                    health_decision.get("consecutiveFailures") or 0
+                )
+                if probe_due:
+                    typedb_runtime_health_probe_at = now_monotonic + int_value(
+                        typedb_spec.get("runtimeHealthProbeIntervalSeconds"),
+                        30,
+                        5,
+                    )
+                if health_decision.get("action") == "restart":
+                    append_log(
+                        supervisor_log_path(),
+                        "typedb service unhealthy; restarting managed process pid="
+                        + str(typedb_pid)
+                        + " failures=" + str(typedb_runtime_health_failures),
+                    )
+                    stop_worker(typedb_spec)
+                    initialized_typedb_pid = 0
+                    typedb_pid = 0
+                    typedb_running = False
+                    typedb_runtime_health_failures = 0
+                    typedb_runtime_health_probe_at = 0.0
             graph_store_ready = bool(
                 typedb_spec is None
                 or (

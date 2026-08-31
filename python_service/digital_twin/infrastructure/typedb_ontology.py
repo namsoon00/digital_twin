@@ -20,6 +20,8 @@ from typing import Dict, Iterable, List, Set, Tuple
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_current_state import (
     CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+    copy_on_write_generation_id,
+    is_current_state_persistence_mode,
     next_current_state_slot,
 )
 from ..domain.model_signal_interpretation import (
@@ -3641,11 +3643,12 @@ class ScopedABoxManifestMixin:
     @staticmethod
     def is_scoped_abox_graph(graph: PortfolioOntology) -> bool:
         worldview = dict(getattr(graph, "worldview", {}) or {})
+        persistence_mode = str(worldview.get("persistenceMode") or "")
         return (
-            str(worldview.get("persistenceMode") or "") in {
-                SCOPED_ABOX_PERSISTENCE_MODE,
-                CURRENT_STATE_ABOX_PERSISTENCE_MODE,
-            }
+            (
+                persistence_mode == SCOPED_ABOX_PERSISTENCE_MODE
+                or is_current_state_persistence_mode(persistence_mode)
+            )
             and str(worldview.get("scopedAboxManifestVersion") or "") == SCOPED_ABOX_MANIFEST_VERSION
             and isinstance(worldview.get("scopePlan"), list)
         )
@@ -3653,7 +3656,9 @@ class ScopedABoxManifestMixin:
     @staticmethod
     def is_current_state_scoped_abox_graph(graph: PortfolioOntology) -> bool:
         worldview = dict(getattr(graph, "worldview", {}) or {})
-        return str(worldview.get("persistenceMode") or "") == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+        return is_current_state_persistence_mode(
+            worldview.get("persistenceMode") or worldview.get("physicalStateMode")
+        )
 
     @staticmethod
     def scoped_abox_plan(graph: PortfolioOntology) -> List[Dict[str, object]]:
@@ -3709,8 +3714,10 @@ class ScopedABoxManifestMixin:
         active_metadata: Dict[str, object],
         changed_scope_ids: Iterable[str],
         world_id: str,
+        persistence_mode: str = CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+        transition_id: str = "",
     ) -> List[Dict[str, object]]:
-        """Map logical scope generations to bounded inactive physical slots."""
+        """Map logical generations to copy-on-write or legacy physical rows."""
 
         changed = {
             str(value or "").strip()
@@ -3726,16 +3733,30 @@ class ScopedABoxManifestMixin:
                 item.get("logicalGenerationId") or item.get("generationId") or ""
             ).strip()
             active_generation_id = str(active_generations.get(scope_id) or "").strip()
-            physical_generation_id = (
-                next_current_state_slot(world_id, scope_id, active_generation_id)
-                if scope_id in changed or not active_generation_id
-                else active_generation_id
-            )
+            if scope_id in changed or not active_generation_id:
+                physical_generation_id = (
+                    copy_on_write_generation_id(
+                        world_id,
+                        scope_id,
+                        logical_generation_id,
+                        transition_id,
+                    )
+                    if str(persistence_mode or "") == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                    else next_current_state_slot(
+                        world_id,
+                        scope_id,
+                        active_generation_id,
+                    )
+                )
+            else:
+                physical_generation_id = active_generation_id
             item.update({
                 "generationId": physical_generation_id,
                 "logicalGenerationId": logical_generation_id,
                 "physicalGenerationId": physical_generation_id,
-                "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+                "physicalStateMode": str(
+                    persistence_mode or CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                ),
             })
             result.append(item)
         return sorted(result, key=lambda item: str(item.get("scopeId") or ""))
@@ -3746,6 +3767,7 @@ class ScopedABoxManifestMixin:
         active_metadata: Dict[str, object],
         current_state_mode: bool,
         migration_mode: str = "",
+        current_state_persistence_mode: str = CURRENT_STATE_ABOX_PERSISTENCE_MODE,
     ) -> List[str]:
         """Select physical writes for steady-state and progressive migration."""
 
@@ -3756,10 +3778,9 @@ class ScopedABoxManifestMixin:
             str(active.get("scopedAboxManifestVersion") or "")
             == SCOPED_ABOX_MANIFEST_VERSION
         )
-        active_current_state = (
-            str(active.get("persistenceMode") or active.get("physicalStateMode") or "")
-            == CURRENT_STATE_ABOX_PERSISTENCE_MODE
-        )
+        active_current_state = str(
+            active.get("persistenceMode") or active.get("physicalStateMode") or ""
+        ) == str(current_state_persistence_mode or CURRENT_STATE_ABOX_PERSISTENCE_MODE)
         full_current_state_migration = bool(
             current_state_mode
             and not active_current_state
@@ -3793,6 +3814,10 @@ class ScopedABoxManifestMixin:
 
         clone = copy.deepcopy(graph)
         physical_plan = [dict(item or {}) for item in physical_scope_plan or []]
+        physical_state_mode = str(
+            (physical_plan[0] if physical_plan else {}).get("physicalStateMode")
+            or CURRENT_STATE_ABOX_PERSISTENCE_MODE
+        )
         by_scope = {
             str(item.get("scopeId") or "").strip(): item
             for item in physical_plan
@@ -3821,7 +3846,7 @@ class ScopedABoxManifestMixin:
                 "scopeGenerationId": generation_id,
                 "snapshotId": generation_id,
                 "aboxSnapshotId": generation_id,
-                "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+                "physicalStateMode": physical_state_mode,
             })
             return values
 
@@ -3867,8 +3892,8 @@ class ScopedABoxManifestMixin:
             if str(item.get("scopeId") or "")
         }
         clone.worldview.update({
-            "persistenceMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
-            "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            "persistenceMode": physical_state_mode,
+            "physicalStateMode": physical_state_mode,
             "scopePlan": physical_plan,
             "logicalScopeGenerationIds": logical_generations,
             "scopeGenerationIds": physical_generations,
@@ -4441,7 +4466,14 @@ class ScopedABoxManifestMixin:
             for row in rows:
                 manifest_id = str(row.get("manifestId") or "").strip()
                 generation_id = str(row.get("snapshotId") or "").strip()
-                if not manifest_id.startswith("abox-manifest:") or not generation_id.startswith("abox-scope:"):
+                if (
+                    not manifest_id.startswith("abox-manifest:")
+                    or not generation_id.startswith((
+                        "abox-scope:",
+                        "abox-current:",
+                        "abox-current-cow:",
+                    ))
+                ):
                     continue
                 if manifest_id in protected_manifests or generation_id in protected_generations:
                     continue
@@ -6329,6 +6361,15 @@ class ScopedABoxManifestMixin:
         scope_plan = list(logical_scope_plan)
         worldview = dict(getattr(graph, "worldview", {}) or {})
         current_state_mode = self.is_current_state_scoped_abox_graph(graph)
+        current_state_persistence_mode = str(
+            worldview.get("persistenceMode")
+            or worldview.get("physicalStateMode")
+            or ""
+        ).strip()
+        copy_on_write_mode = bool(
+            current_state_mode
+            and current_state_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
+        )
         topology_migration = dict(
             (worldview.get("targetScopedManifestPatch") or {}).get("scopeTopologyMigration") or {}
         ) if isinstance(worldview.get("targetScopedManifestPatch"), dict) else {}
@@ -6514,6 +6555,7 @@ class ScopedABoxManifestMixin:
             active_before,
             current_state_mode=current_state_mode,
             migration_mode=migration_mode,
+            current_state_persistence_mode=current_state_persistence_mode,
         )
         persistence_graph = graph
         if current_state_mode:
@@ -6522,6 +6564,10 @@ class ScopedABoxManifestMixin:
                 active_before,
                 changed_scope_ids,
                 world_id,
+                persistence_mode=current_state_persistence_mode,
+                transition_id=str(
+                    worldview.get("projectionRunId") or manifest_id
+                ),
             )
             persistence_graph = self.current_state_physical_graph(graph, scope_plan)
         previous_manifest_id = str(active_before.get("worldviewManifestId") or active_before.get("aboxSnapshotId") or "").strip()
@@ -6653,27 +6699,54 @@ class ScopedABoxManifestMixin:
                     write_progress: Dict[str, object] = {}
                     timing["changedScopeWriteProgress"] = write_progress
                     if current_state_mode:
-                        inventory_started = time.monotonic()
-                        before_inventory = self.current_state_slot_inventory(
-                            driver,
-                            imported,
-                            candidate_generation_ids,
-                        )
-                        timing["currentStateInventoryReadMs"] = round(
-                            (time.monotonic() - inventory_started) * 1000,
-                            1,
-                        )
-                        delta_plan = self.current_state_delta_plan(
-                            node_rows,
-                            relation_rows,
-                            before_inventory,
-                        )
-                        delta_delete = self.delete_current_state_storage_ids(
-                            driver,
-                            imported,
-                            delta_plan.get("nodeStorageIdsToDelete") or [],
-                            delta_plan.get("relationStorageIdsToDelete") or [],
-                        )
+                        if copy_on_write_mode:
+                            # A fresh generation has no rows to compare or
+                            # delete. The complete changed scope is written
+                            # before the active Manifest can move, and retired
+                            # generations are reclaimed by the maintenance
+                            # worker after activation.
+                            before_inventory = {"nodes": {}, "relations": {}}
+                            timing["currentStateInventoryReadMs"] = 0.0
+                            delta_plan = self.current_state_delta_plan(
+                                node_rows,
+                                relation_rows,
+                                before_inventory,
+                            )
+                            delta_delete = {
+                                "status": "deferred-copy-on-write-retention",
+                                "deletedIdentityCount": 0,
+                                "queryCount": 0,
+                                "transactionCount": 0,
+                                "durationMs": 0,
+                            }
+                            timing["currentStateWriteStrategy"] = (
+                                "copy-on-write-fresh-generation-v2"
+                            )
+                        else:
+                            inventory_started = time.monotonic()
+                            before_inventory = self.current_state_slot_inventory(
+                                driver,
+                                imported,
+                                candidate_generation_ids,
+                            )
+                            timing["currentStateInventoryReadMs"] = round(
+                                (time.monotonic() - inventory_started) * 1000,
+                                1,
+                            )
+                            delta_plan = self.current_state_delta_plan(
+                                node_rows,
+                                relation_rows,
+                                before_inventory,
+                            )
+                            delta_delete = self.delete_current_state_storage_ids(
+                                driver,
+                                imported,
+                                delta_plan.get("nodeStorageIdsToDelete") or [],
+                                delta_plan.get("relationStorageIdsToDelete") or [],
+                            )
+                            timing["currentStateWriteStrategy"] = (
+                                "legacy-dual-slot-delta-v1"
+                            )
                         write_plan = self.write_persistence_rows(
                             driver,
                             imported,
@@ -6699,7 +6772,7 @@ class ScopedABoxManifestMixin:
                             "reusedRelationCount": len(delta_plan.get("reusedRelationRows") or []),
                             "expectedCountsByScope": expected_counts,
                             "reusedCountsByScope": reused_counts,
-                            "physicalStateMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+                            "physicalStateMode": current_state_persistence_mode,
                             "deltaDelete": delta_delete,
                             "changedNodeScopeIds": list(
                                 delta_plan.get("changedNodeScopeIds") or []
@@ -6749,7 +6822,7 @@ class ScopedABoxManifestMixin:
                     ]
                     expected_counts_by_scope = dict(write_plan.get("expectedCountsByScope") or {})
                     reused_counts_by_scope = dict(write_plan.get("reusedCountsByScope") or {})
-                    if current_state_mode:
+                    if current_state_mode and not copy_on_write_mode:
                         node_storage_ids_to_delete = set(
                             delta_plan.get("nodeStorageIdsToDelete") or []
                         )
@@ -6882,10 +6955,16 @@ class ScopedABoxManifestMixin:
                         "status": "ok",
                         "mode": (
                             "current-state-delta-exact-write-verification"
-                            if current_state_mode
+                            if current_state_mode and not copy_on_write_mode
+                            else "copy-on-write-manifest-scope-count"
+                            if copy_on_write_mode
                             else "manifest-scope-count"
                         ),
-                        "manifestScopedReadCount": 0 if current_state_mode else 2,
+                        "manifestScopedReadCount": (
+                            0
+                            if current_state_mode and not copy_on_write_mode
+                            else 2
+                        ),
                         "reusedStorageIdentityCount": (
                             int(write_plan.get("reusedNodeCount") or 0)
                             + int(write_plan.get("reusedRelationCount") or 0)
@@ -7002,7 +7081,7 @@ class ScopedABoxManifestMixin:
                 "logicalScopePlan": logical_scope_plan if current_state_mode else scope_plan,
                 "changedScopeIds": changed_scope_ids,
                 "physicalStateMode": (
-                    CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                    current_state_persistence_mode
                     if current_state_mode
                     else SCOPED_ABOX_PERSISTENCE_MODE
                 ),
@@ -7031,7 +7110,7 @@ class ScopedABoxManifestMixin:
                 "aboxPersistenceVerification": {
                     "status": "ok",
                     "persistenceMode": (
-                        CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                        current_state_persistence_mode
                         if current_state_mode
                         else SCOPED_ABOX_PERSISTENCE_MODE
                     ),
@@ -7081,7 +7160,7 @@ class ScopedABoxManifestMixin:
                 "scopeTopologyMigration": topology_migration,
                 "preservedActiveGeneration": bool(previous_manifest_id),
                 "physicalStateMode": (
-                    CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                    current_state_persistence_mode
                     if current_state_mode
                     else SCOPED_ABOX_PERSISTENCE_MODE
                 ),

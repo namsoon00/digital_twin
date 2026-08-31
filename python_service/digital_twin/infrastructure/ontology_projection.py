@@ -7829,9 +7829,13 @@ class PortfolioOntologyProjectionRecorder:
         runtime_stages: Dict[str, int],
         result: Dict[str, object],
     ) -> None:
-        """Expose scoped ABox sub-stage cost without changing persistence behavior."""
+        """Expose scoped ABox cost and categorical modes without mixing their types."""
         verification = result.get("aboxPersistenceVerification")
         timing = dict(verification.get("timing") or {}) if isinstance(verification, dict) else {}
+        runtime_modes = result.setdefault("runtimeModes", {})
+        if not isinstance(runtime_modes, dict):
+            runtime_modes = {}
+            result["runtimeModes"] = runtime_modes
 
         def record(source_key: str, target_key: str, source: Dict[str, object]) -> None:
             try:
@@ -7849,6 +7853,9 @@ class PortfolioOntologyProjectionRecorder:
             "totalMs": "aboxScopedPersistenceTotalMs",
         }.items():
             record(source_key, target_key, timing)
+        write_strategy = str(timing.get("currentStateWriteStrategy") or "").strip()
+        if write_strategy:
+            runtime_modes["aboxCurrentStateWriteStrategy"] = write_strategy
         write_plan = timing.get("changedScopeWritePlan")
         if isinstance(write_plan, dict):
             for source_key, target_key in {
@@ -7869,7 +7876,7 @@ class PortfolioOntologyProjectionRecorder:
                 record(source_key, target_key, write_plan)
             relation_write_mode = str(write_plan.get("relationWriteMode") or "").strip()
             if relation_write_mode:
-                runtime_stages["aboxRelationWriteMode"] = relation_write_mode
+                runtime_modes["aboxRelationWriteMode"] = relation_write_mode
             delta_delete = write_plan.get("deltaDelete")
             if isinstance(delta_delete, dict):
                 for source_key, target_key in {

@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Callable, Dict
+import time
+from typing import Callable, Dict, Optional
 
 from ..domain.context_observation_notifications import typedb_context_observation_contract
 from ..domain.message_types import INVESTMENT_INSIGHT
@@ -259,13 +260,19 @@ def ai_contract_repair_prompt(
         "publicationContractError": str(publication_error or ""),
         "rejectedNarrativeClaims": rejected[:8],
     }
-    return (
-        str(prompt or "")
-        + "\n\n이전 응답은 아래 검증 오류로 발행되지 않았다. 같은 DecisionCore만 사용해 새로운 JSON 객체 하나를 출력한다. "
-        + "가설 ID와 행동 범위를 지키고, narrativeClaims는 narrativeClaimContract.allowedEvidenceIdsBySection에 있는 ID만 연결한다. "
-        + "확인된 사실은 단정적으로, 자료 한계는 limitation으로 쓴다. 확인되지 않은 반대 사실은 만들지 않는다.\n"
-        + json.dumps(audit, ensure_ascii=False, sort_keys=True)
-    )
+    marker = "DecisionCore:\n"
+    decision_core = str(prompt or "").split(marker, 1)[1] if marker in str(prompt or "") else "{}"
+    previous = str(getattr(response, "raw_response", "") or "")[:8 * 1024]
+    return "\n".join((
+        "너는 TypeDB 투자 판단 JSON의 계약 오류만 수정한다. 도구나 파일을 사용하지 않는다.",
+        "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
+        "action은 actionEnvelope 안에서 선택하고 모든 입력 가설을 한 번씩 검토한다.",
+        "narrativeClaims는 허용된 evidence ID만 연결하며 view와 next-condition 또는 limitation을 포함한다.",
+        "검증 오류: " + json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        "이전 응답: " + previous,
+        "DecisionCore:",
+        decision_core,
+    ))
 
 
 # Compatibility name retained for existing callers and tests.
@@ -285,6 +292,7 @@ class NotificationAIJudgementOutcome:
     final_contract_error: str
     final_publication_error: str
     repair_error: str
+    execution_spans: Dict[str, object]
 
     @property
     def executed_prompt_hash(self) -> str:
@@ -318,6 +326,7 @@ class NotificationAIJudgementOutcome:
                 "publicationError": self.final_publication_error,
             },
             "claimPublication": dict(self.response.claim_validation or {}),
+            "executionSpans": dict(self.execution_spans or {}),
         }
 
 
@@ -331,26 +340,32 @@ class NotificationAIJudgementService:
         *,
         max_prompt_bytes: int = 0,
         repair_reasoning_effort: str = "low",
-        repair_timeout_seconds: int = 60,
+        repair_timeout_seconds: Optional[int] = 60,
         enforce_contract_for_typed_response: bool = True,
     ):
         self.reviewer = reviewer
         self.settings = dict(settings or {})
         self.max_prompt_bytes = int(max_prompt_bytes or 0)
         self.repair_reasoning_effort = str(repair_reasoning_effort or "low")
-        self.repair_timeout_seconds = max(5, int(repair_timeout_seconds or 60))
+        self.repair_timeout_seconds = (
+            max(5, int(repair_timeout_seconds))
+            if repair_timeout_seconds not in (None, "", 0, "0")
+            else None
+        )
         self.enforce_contract_for_typed_response = bool(enforce_contract_for_typed_response)
 
     def judge(
         self,
         context: Dict[str, object],
         *,
-        timeout_seconds: int = 0,
+        timeout_seconds: Optional[int] = None,
         profile: Dict[str, object] = None,
         decision_brief: Dict[str, object] = None,
         packet: NotificationAIInferencePacket = None,
-        timeout_provider: Callable[[], int] = None,
+        timeout_provider: Callable[[], Optional[int]] = None,
     ) -> NotificationAIJudgementOutcome:
+        total_started = time.monotonic()
+        preparation_started = total_started
         prepared_packet = packet or build_notification_ai_inference_packet(
             context,
             self.settings,
@@ -358,14 +373,19 @@ class NotificationAIJudgementService:
             profile=profile,
             decision_brief=decision_brief,
         )
-        current_timeout = int(timeout_provider() if timeout_provider else timeout_seconds or 0)
-        if current_timeout and current_timeout < 5:
+        preparation_ms = int((time.monotonic() - preparation_started) * 1000)
+        current_timeout = timeout_provider() if timeout_provider else timeout_seconds
+        current_timeout = int(current_timeout) if current_timeout not in (None, "", 0, "0") else None
+        if current_timeout is not None and current_timeout < 5:
             raise TimeoutError("notification AI delivery deadline exceeded before model execution")
         review_context = prepared_packet.bind_context(
             context,
-            timeout_seconds=current_timeout or None,
+            timeout_seconds=current_timeout,
         )
+        initial_model_started = time.monotonic()
         response = self.reviewer.review(review_context)
+        initial_model_ms = int((time.monotonic() - initial_model_started) * 1000)
+        validation_started = time.monotonic()
         ensure_packet_claim_validation(review_context, prepared_packet, response)
         enforce_contract = bool(
             self.enforce_contract_for_typed_response
@@ -379,6 +399,7 @@ class NotificationAIJudgementService:
         )
         initial_contract_error = contract_error
         initial_publication_error = publication_error
+        initial_validation_ms = int((time.monotonic() - validation_started) * 1000)
         repair_attempted = bool(
             (enforce_contract and hypothesis_comparison_needs_repair(context.get("messageType"), response))
             or contract_error
@@ -386,6 +407,8 @@ class NotificationAIJudgementService:
         )
         repair_succeeded = False
         repair_error = ""
+        repair_model_ms = 0
+        repair_validation_ms = 0
         executed_prompt = prepared_packet.prompt
         if repair_attempted:
             executed_prompt = ai_contract_repair_prompt(
@@ -394,16 +417,19 @@ class NotificationAIJudgementService:
                 contract_error,
                 publication_error,
             )
-            repair_remaining = int(timeout_provider() if timeout_provider else timeout_seconds or 0)
-            if repair_remaining and repair_remaining < 5:
+            repair_remaining = timeout_provider() if timeout_provider else timeout_seconds
+            repair_remaining = int(repair_remaining) if repair_remaining not in (None, "", 0, "0") else None
+            if repair_remaining is not None and repair_remaining < 5:
                 repair_error = "notification AI delivery deadline exceeded before contract repair"
                 repair_remaining = 5
             repair_context = prepared_packet.bind_context(
                 context,
                 timeout_seconds=(
                     min(self.repair_timeout_seconds, repair_remaining)
-                    if repair_remaining
+                    if self.repair_timeout_seconds is not None and repair_remaining is not None
                     else self.repair_timeout_seconds
+                    if self.repair_timeout_seconds is not None
+                    else repair_remaining
                 ),
             )
             repair_context["_notificationAiPreparedPrompt"] = executed_prompt
@@ -415,7 +441,10 @@ class NotificationAIJudgementService:
             try:
                 if repair_error:
                     raise TimeoutError(repair_error)
+                repair_model_started = time.monotonic()
                 response = self.reviewer.review(repair_context)
+                repair_model_ms = int((time.monotonic() - repair_model_started) * 1000)
+                repair_validation_started = time.monotonic()
                 ensure_packet_claim_validation(repair_context, prepared_packet, response)
                 enforce_contract = bool(
                     self.enforce_contract_for_typed_response
@@ -432,6 +461,7 @@ class NotificationAIJudgementService:
                     and not contract_error
                     and not publication_error
                 )
+                repair_validation_ms = int((time.monotonic() - repair_validation_started) * 1000)
             except Exception as error:  # noqa: BLE001 - caller owns retry/fallback policy.
                 repair_error = str(error)[:320]
         if enforce_contract and hypothesis_comparison_needs_repair(context.get("messageType"), response) and not contract_error:
@@ -448,4 +478,13 @@ class NotificationAIJudgementService:
             final_contract_error=contract_error,
             final_publication_error=publication_error,
             repair_error=repair_error,
+            execution_spans={
+                "preparationMs": preparation_ms,
+                "initialModelMs": initial_model_ms,
+                "initialValidationMs": initial_validation_ms,
+                "repairModelMs": repair_model_ms,
+                "repairValidationMs": repair_validation_ms,
+                "totalJudgementMs": int((time.monotonic() - total_started) * 1000),
+                "modelAttempts": list(getattr(self.reviewer, "execution_history", []) or []),
+            },
         )

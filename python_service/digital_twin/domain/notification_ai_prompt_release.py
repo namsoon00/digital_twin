@@ -8,17 +8,16 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v11"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v10"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v12"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v11"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
 AI_DECISION_RESPONSE_SCHEMA = {
     "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
-    "investmentViewAction": "선택한 예측 가설이 지지하는 검토 후보 BUY|ADD|HOLD|TRIM|SELL|AVOID; 사용자 최종 행동이 아님",
-    "investmentView": "선택한 검토 가설의 투자 매력과 위험을 비교한 한 문단; 별도 행동 명령을 쓰지 않음",
-    "executionDecision": "action을 현재 계정의 유일한 최종 행동으로 설명하고 검토 가설과 다르면 검증 가능한 이유를 명시",
-    "changeAnalysis": "이전 판단에서 실제로 달라진 점",
+    "summary": "현재 대응과 가장 중요한 이유를 쉬운 한국어 두 문장 이내로 설명",
+    "executionDecision": "현재 사용자가 할 일과 아직 하지 말아야 할 일을 한 문장으로 설명",
+    "changeAnalysis": "직전 판단 이후 실제로 달라진 사실 한 문장; 변화가 없으면 변화 없음이라고 명시",
     "evidence": ["핵심 근거 최대 3개"],
     "counterEvidence": ["반대 근거 최대 2개"],
     "narrativeClaims": [{
@@ -49,16 +48,8 @@ AI_DECISION_RESPONSE_SCHEMA = {
         "reasoning": "비교 이유",
     }],
     "selectedHypothesisId": "입력 가설 ID 하나, 입력 가설이 없으면 빈 문자열",
-    "unresolvedQuestions": ["추가 조사 질문"],
-    "epistemicSummary": "자료와 판단 한계",
+    "unresolvedQuestions": ["판단을 실제로 바꿀 수 있는 미해결 질문 최대 2개"],
     "decisionReadiness": "ready|conditional|insufficient",
-    "causalChain": [{
-        "driver": "검증된 변화",
-        "channel": "매출|비용|현금흐름|가치평가|수급|위험",
-        "expectedEffect": "행동 판단에 미치는 영향",
-        "evidenceIds": ["입력 근거 ID"],
-        "status": "supported|contested|unresolved",
-    }],
     "disagreementReason": "TypeDB 후보와 다를 때 검증 가능한 이유",
     "referenceDate": "입력 기준일",
 }
@@ -66,10 +57,11 @@ AI_DECISION_RESPONSE_SCHEMA = {
 
 BASE_AI_DECISION_INSTRUCTIONS = (
     "너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는 최종 투자 판단 AI다.",
+    "도구, 셸, 파일, 저장소, 웹을 사용하지 말고 제공된 DecisionCore만 읽어서 답한다.",
     "DecisionCore에 포함된 현재 사실, 행동 범위, 규칙, 가설, 직전 판단 변화만 사용한다.",
     "notificationIntent가 context-observation이면 TypeDB의 NO_ACTION을 바꾸지 말고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
-    "investmentViewAction은 선택 예측 가설의 검토 후보일 뿐 사용자 행동이 아니다. action만 사용자가 읽을 유일한 최종 행동이다. 정책·실행·품질 규칙은 검토 가설을 삭제하지 않고 실행을 제약하며, 두 값이 다르면 executionDecision과 disagreementReason에 검증 가능한 이유를 쓴다.",
-    "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. investmentViewAction은 선택 가설의 candidateAction과 같아야 한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId와 investmentViewAction은 빈 문자열로 둔다.",
+    "action만 사용자가 읽을 유일한 최종 행동이다. 정책·실행·품질 규칙이 선택 가설의 후보 행동을 제약하면 executionDecision과 disagreementReason에 검증 가능한 이유를 쓴다.",
+    "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
     "근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며 검증되지 않은 외부 사실을 만들지 않는다.",
     "사용자에게 보여줄 투자 관점, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
     "narrativeClaims는 section별 허용 ID만 쓰고, narrativeClaimContract.recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
@@ -84,7 +76,8 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "companyEvidence는 행동 근거로 사용할 수 있지만 background는 참고 전용이며 행동을 바꾸지 않는다.",
     "externalEvidence에서 evidenceUse=action인 항목만 행동을 바꿀 근거로 사용하고 rule-scoped-reference는 확인 항목으로만 쓴다.",
     "continuityDelta는 직전 판단 이후 변화만 뜻하며 현재 TypeDB 근거보다 우선하지 않는다.",
-    "같은 사실을 여러 필드에 반복하지 말고 근거 3개, 반대 근거 2개, 다음 확인 2개 이내로 쓴다.",
+    "같은 사실을 summary, evidence, narrativeClaims에 반복하지 않는다. summary는 결론, evidence는 근거 목록, narrativeClaims는 실제 표시 문장과 근거 ID 연결 역할만 가진다.",
+    "근거 3개, 반대 근거 2개, 다음 확인 2개 이내로 쓴다.",
     "입력에 없는 목표가, 손절가, 비중, 확률, 점수는 만들지 않는다.",
     "쉬운 한국어로 쓰고 내부 변수명과 TypeDB 식별자는 사용자 설명문에 노출하지 않는다.",
     "설명 문장 없이 응답 스키마를 따르는 JSON 객체 하나만 출력한다.",

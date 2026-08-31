@@ -3,6 +3,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict
 
@@ -83,6 +84,38 @@ def codex_cli_arguments(reasoning_effort: str = "") -> list:
     ]
 
 
+def notification_ai_runtime_dir() -> Path:
+    """Return an empty runtime outside the repository for investment judgement."""
+
+    configured = str(os.environ.get("ORBIT_NOTIFICATION_AI_RUNTIME_DIR") or "").strip()
+    path = Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "orbit-alpha-notification-ai"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def codex_process_arguments(reasoning_effort: str = "", working_directory: Path = None) -> list:
+    """Build direct Codex argv without the cross-process guard wrapper."""
+
+    executable = shutil.which("codex")
+    if not executable:
+        return []
+    runtime_dir = Path(working_directory or ROOT_DIR)
+    return [
+        executable,
+        *codex_cli_arguments(reasoning_effort),
+        "-a",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--cd",
+        str(runtime_dir),
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "-",
+    ]
+
+
 def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str:
     """Build a read-only command with the project-wide fixed model policy.
 
@@ -104,6 +137,10 @@ def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str
     except (TypeError, ValueError):
         wait_seconds = 300
     guard = Path(__file__).with_name("local_ai_process_guard.py")
+    try:
+        reserved = max(0, min(maximum - 1, int(os.environ.get("ORBIT_LOCAL_AI_INVESTMENT_RESERVED") or 1)))
+    except (TypeError, ValueError):
+        reserved = 1
     parts = [
         shlex.quote(sys.executable),
         shlex.quote(str(guard)),
@@ -113,23 +150,14 @@ def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str
         str(maximum),
         "--wait-seconds",
         str(wait_seconds),
+        "--lane",
+        "background",
+        "--reserved-priority-slots",
+        str(reserved),
         "--",
-        shlex.quote(executable),
     ]
-    for argument in codex_cli_arguments(reasoning_effort):
+    for argument in codex_process_arguments(reasoning_effort, ROOT_DIR):
         parts.append(shlex.quote(argument))
-    parts.extend([
-        "-a",
-        "never",
-        "--sandbox",
-        "read-only",
-        "--cd",
-        shlex.quote(str(ROOT_DIR)),
-        "exec",
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "-",
-    ])
     return " ".join(parts)
 
 

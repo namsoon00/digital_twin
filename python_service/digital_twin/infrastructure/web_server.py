@@ -939,7 +939,9 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "notificationAiComparisonRepairTimeoutSeconds",
         "notificationAiQueueWorkerCount",
         "localAiMaxConcurrentProcesses",
+        "localAiInvestmentReservedProcesses",
         "localAiCapacityWaitSeconds",
+        "notificationAiCapacityWaitSeconds",
         "notificationAiQueueBatchSize",
         "notificationAiQueueIntervalSeconds",
         "notificationAiQueueLeaseSeconds",
@@ -3860,6 +3862,7 @@ def _compact_notification_reasoning_trace(trace: object) -> Dict[str, object]:
                 "status", "requestId", "model", "reasoningEffort", "reviewMode",
                 "adoptionState", "actionAuthority", "validationState", "latencyMs",
                 "executed", "responseSource", "writerProvenance", "claimPublication",
+                "executionSpans",
             )
             if ai.get(key) not in (None, "", [], {})
         },

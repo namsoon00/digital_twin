@@ -1025,6 +1025,9 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
         "ORBIT_LOCAL_AI_CAPACITY_WAIT_SECONDS": str(
             (settings or {}).get("localAiCapacityWaitSeconds") or "300"
         ),
+        "ORBIT_LOCAL_AI_INVESTMENT_RESERVED": str(
+            (settings or {}).get("localAiInvestmentReservedProcesses") or "1"
+        ),
     }
     for name, spec in list(workers.items()):
         environment = dict(spec.get("env") or {})

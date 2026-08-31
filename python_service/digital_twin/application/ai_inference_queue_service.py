@@ -58,6 +58,16 @@ def _bool_setting(settings: Dict[str, object], key: str, fallback: bool = False)
     return str(value).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
 
 
+def _optional_seconds_setting(settings: Dict[str, object], key: str, fallback: int = 0):
+    raw = (settings or {}).get(key)
+    candidate = fallback if raw in (None, "") else raw
+    try:
+        value = int(float(str(candidate)))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _timestamp(value: object):
     text = str(value or "").strip()
     if not text:
@@ -355,12 +365,10 @@ class AIInferenceQueueRunner:
         self.heartbeat_seconds = _int_setting(self.settings, "notificationAiQueueHeartbeatSeconds", 10, 2, 120)
         self.max_attempts = _int_setting(self.settings, "notificationAiQueueMaxAttempts", 2, 1, 8)
         self.retry_seconds = _int_setting(self.settings, "notificationAiQueueRetrySeconds", 30, 5, 900)
-        self.delivery_deadline_seconds = _int_setting(
+        self.delivery_deadline_seconds = _optional_seconds_setting(
             self.settings,
             "notificationAiDeliveryDeadlineSeconds",
-            180,
-            15,
-            600,
+            0,
         )
         self.fallback_enabled = _bool_setting(
             self.settings,
@@ -399,12 +407,10 @@ class AIInferenceQueueRunner:
         self.comparison_repair_reasoning_effort = (
             repair_effort if repair_effort in {"low", "medium", "high", "max"} else "low"
         )
-        self.comparison_repair_timeout_seconds = _int_setting(
+        self.comparison_repair_timeout_seconds = _optional_seconds_setting(
             self.settings,
             "notificationAiComparisonRepairTimeoutSeconds",
-            60,
-            10,
-            120,
+            0,
         )
         self.judgement_service = NotificationAIJudgementService(
             reviewer,
@@ -440,6 +446,13 @@ class AIInferenceQueueRunner:
         return processed
 
     def process_request(self, request: AIInferenceRequest) -> str:
+        request_started = time.monotonic()
+        created_at = _timestamp(getattr(request, "created_at", ""))
+        queue_wait_ms = (
+            max(0, int((datetime.now(timezone.utc) - created_at).total_seconds() * 1000))
+            if created_at is not None
+            else 0
+        )
         context = dict(request.context or {})
         narrative_only = request.review_mode == "context-narrative"
         subject_case_id = str(context.get("investmentSubjectDecisionCaseId") or "")
@@ -451,6 +464,7 @@ class AIInferenceQueueRunner:
             and getattr(self.queue, "supports_atomic_subject_publication", False)
         )
         context["notificationAiReviewMode"] = request.review_mode
+        preparation_started = time.monotonic()
         try:
             if request.message_type == INVESTMENT_INSIGHT:
                 context = context_with_previous_investment_decision(
@@ -489,6 +503,7 @@ class AIInferenceQueueRunner:
             if self.fallback_enabled:
                 return self.publish_preparation_fallback(request, context, error)
             raise
+        prompt_preparation_ms = int((time.monotonic() - preparation_started) * 1000)
         executed_prompt = prompt
         prompt_bytes = len(executed_prompt.encode("utf-8"))
         prompt_hash = packet.prompt_hash
@@ -512,9 +527,12 @@ class AIInferenceQueueRunner:
         ai_attempted = False
         judgement_outcome = None
         rejected_ai_response = None
+        trace_starter = getattr(self.reviewer, "begin_trace", None)
+        if callable(trace_starter):
+            trace_starter(request.request_id)
         try:
             remaining_seconds = self.remaining_delivery_seconds(request)
-            if remaining_seconds < 5:
+            if remaining_seconds is not None and remaining_seconds < 5:
                 raise TimeoutError(
                     "notification AI delivery deadline exceeded before model execution"
                 )
@@ -650,7 +668,7 @@ class AIInferenceQueueRunner:
             "fallback": {
                 "used": bool(fallback_reason),
                 "reason": fallback_reason[:500],
-                "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
+                "deliveryDeadlineSeconds": int(self.delivery_deadline_seconds or 0),
             },
             "hypothesisComparisonRepair": {
                 "attempted": comparison_repair_attempted,
@@ -659,13 +677,30 @@ class AIInferenceQueueRunner:
                 "initialContractError": comparison_repair_initial_contract_error,
                 "contractError": comparison_repair_contract_error,
                 "reasoningEffort": self.comparison_repair_reasoning_effort,
-                "timeoutSeconds": self.comparison_repair_timeout_seconds,
+                "timeoutSeconds": int(self.comparison_repair_timeout_seconds or 0),
                 "finalState": str(response.hypothesis_comparison_state or ""),
                 "selectedHypothesisId": str(response.selected_hypothesis_id or ""),
             },
             "ontologyDecisionQuality": dict(context.get("ontologyDecisionQuality") or {}),
             "ontologyQualityGate": dict(context.get("ontologyQualityGate") or {}),
             "latencyMs": latency_ms,
+            "executionSpans": {
+                "completionPolicy": (
+                    "wait-until-complete"
+                    if self.delivery_deadline_seconds is None
+                    else "bounded"
+                ),
+                "queueWaitMs": queue_wait_ms,
+                "promptPreparationMs": prompt_preparation_ms,
+                **dict(
+                    judgement_outcome.execution_spans
+                    if judgement_outcome is not None
+                    else {
+                        "modelAttempts": list(getattr(self.reviewer, "execution_history", []) or []),
+                    }
+                ),
+                "runnerElapsedMs": int((time.monotonic() - request_started) * 1000),
+            },
         }
         sync_execution_publication_audit(
             enriched,
@@ -731,7 +766,7 @@ class AIInferenceQueueRunner:
                     "fallback": {
                         "used": True,
                         "reason": fallback_reason[:500],
-                        "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
+                        "deliveryDeadlineSeconds": int(self.delivery_deadline_seconds or 0),
                     },
                 })
                 sync_execution_publication_audit(
@@ -881,7 +916,9 @@ class AIInferenceQueueRunner:
             + str(prompt_bytes)
         )
 
-    def remaining_delivery_seconds(self, request: AIInferenceRequest) -> int:
+    def remaining_delivery_seconds(self, request: AIInferenceRequest):
+        if self.delivery_deadline_seconds is None:
+            return None
         created_at = _timestamp(getattr(request, "created_at", ""))
         if created_at is None:
             return self.delivery_deadline_seconds
@@ -936,7 +973,7 @@ class AIInferenceQueueRunner:
                 "used": True,
                 "stage": "ai-preparation",
                 "reason": fallback_reason[:500],
-                "deliveryDeadlineSeconds": self.delivery_deadline_seconds,
+                "deliveryDeadlineSeconds": int(self.delivery_deadline_seconds or 0),
             },
             "latencyMs": 0,
         }

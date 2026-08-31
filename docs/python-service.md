@@ -291,10 +291,17 @@ Configuration:
 - `NOTIFICATION_QUEUE_INTERVAL_SECONDS`: defaults to `30`.
 - `NOTIFICATION_QUEUE_BATCH_SIZE`: defaults to `10`.
 - `NOTIFICATION_SEND_GAP_SECONDS`: defaults to `1`.
-- `NOTIFICATION_AI_REASONING_EFFORT`: defaults to `low` for the latency-bounded investment notification rewrite. Research, article, disclosure, hypothesis, and model-review jobs retain `max`.
-- `NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS`: defaults to `90`. On timeout or invalid JSON, the AI lane emits the deterministic graph-backed response and labels it as relation inference rather than AI output.
+- `NOTIFICATION_AI_REASONING_EFFORT`: defaults to `high` for the investment judgement lane. Research, article, disclosure, hypothesis, and model-review jobs remain separate background work.
+- `NOTIFICATION_AI_DELIVERY_DEADLINE_SECONDS`: defaults to `0`, which means wait until the model completes. `300` or `600` may be configured only as an emergency bound. An invalid response is retried once; TypeDB fallback is published only after the retry fails.
+- `NOTIFICATION_AI_TIMEOUT_SECONDS`: defaults to `0`, so model execution is not terminated by a wall-clock timeout.
+- `NOTIFICATION_AI_CAPACITY_WAIT_SECONDS`: defaults to `0`, so a leased investment job waits for capacity until it starts or the worker is stopped.
+- `LOCAL_AI_INVESTMENT_RESERVED_PROCESSES`: defaults to `1`. Background AI cannot lease this reserved slot, while investment judgement may use both the reserved slot and any idle shared slot.
 - `python3 python_service/service.py notifications watch --lane fast`: claims every non-AI message type.
 - `python3 python_service/service.py notifications watch --lane ai --limit 1`: claims only configured investment-AI message types.
+
+Investment AI runs from an isolated temporary directory rather than the repository. This keeps the model from loading repository instructions or scanning source files while it is deciding an alert. The immutable `DecisionCore` packet is the only decision input. The execution audit records queue wait, prompt preparation, capacity wait, model execution, contract validation, optional repair, and total elapsed time. These spans are visible in the web notification detail and distinguish slow queueing from slow model inference.
+
+The realtime collector and TypeDB inference path never wait for this model. They enqueue an immutable request and continue. A heartbeat extends the AI request lease while an unlimited model call is active; service shutdown cancels the process and releases its capacity slot without leaving a stale lock.
 
 ## Async Model Review
 

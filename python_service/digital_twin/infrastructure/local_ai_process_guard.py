@@ -9,7 +9,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 try:
     import fcntl
@@ -46,28 +46,40 @@ def _try_slot(lock_dir: Path, slot_index: int) -> Tuple[int, Path]:
 def local_ai_capacity_lease(
     lock_dir: Path,
     max_concurrent: int = 2,
-    wait_seconds: float = 300,
+    wait_seconds: Optional[float] = 300,
     poll_seconds: float = 0.25,
+    lane: str = "background",
+    reserved_priority_slots: int = 1,
+    cancel_event=None,
 ) -> Iterator[Path]:
     """Lease one host-wide AI slot; flock releases automatically after a crash."""
 
     lock_dir = Path(lock_dir)
     lock_dir.mkdir(parents=True, exist_ok=True)
     maximum = max(1, min(8, int(max_concurrent or 2)))
-    deadline = time.monotonic() + max(0.0, float(wait_seconds or 0))
+    wait_value = None if wait_seconds is None else float(wait_seconds or 0)
+    deadline = None if wait_value is None or wait_value <= 0 else time.monotonic() + wait_value
+    normalized_lane = str(lane or "background").strip().lower()
+    reserved = max(0, min(maximum - 1, int(reserved_priority_slots or 0)))
+    if normalized_lane in {"investment", "investment-judgement", "priority"}:
+        slot_indexes = list(range(1, maximum + 1))
+    else:
+        slot_indexes = list(range(reserved + 1, maximum + 1)) or [maximum]
     descriptor = -1
     slot_path = None
     while descriptor < 0:
-        for slot_index in range(1, maximum + 1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise LocalAICapacityUnavailable("local AI capacity wait was cancelled")
+        for slot_index in slot_indexes:
             descriptor, candidate = _try_slot(lock_dir, slot_index)
             if descriptor >= 0:
                 slot_path = candidate
                 break
         if descriptor >= 0:
             break
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             raise LocalAICapacityUnavailable(
-                "local AI capacity remained full for " + str(round(max(0.0, float(wait_seconds or 0)), 1)) + " seconds"
+                "local AI capacity remained full for " + str(round(max(0.0, wait_value or 0), 1)) + " seconds"
             )
         time.sleep(max(0.05, min(1.0, float(poll_seconds or 0.25))))
     try:
@@ -80,10 +92,23 @@ def local_ai_capacity_lease(
                 os.close(descriptor)
 
 
-def run_guarded(command: List[str], lock_dir: Path, max_concurrent: int, wait_seconds: float) -> int:
+def run_guarded(
+    command: List[str],
+    lock_dir: Path,
+    max_concurrent: int,
+    wait_seconds: float,
+    lane: str = "background",
+    reserved_priority_slots: int = 1,
+) -> int:
     if not command:
         raise ValueError("guarded AI command is empty")
-    with local_ai_capacity_lease(lock_dir, max_concurrent=max_concurrent, wait_seconds=wait_seconds):
+    with local_ai_capacity_lease(
+        lock_dir,
+        max_concurrent=max_concurrent,
+        wait_seconds=wait_seconds,
+        lane=lane,
+        reserved_priority_slots=reserved_priority_slots,
+    ):
         parent_pid = os.getppid()
         process = subprocess.Popen(
             command,
@@ -126,6 +151,8 @@ def main(argv=None) -> int:
     parser.add_argument("--lock-dir", required=True)
     parser.add_argument("--max-concurrent", type=int, default=2)
     parser.add_argument("--wait-seconds", type=float, default=300)
+    parser.add_argument("--lane", default="background")
+    parser.add_argument("--reserved-priority-slots", type=int, default=1)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     command = list(arguments.command or [])
@@ -137,6 +164,8 @@ def main(argv=None) -> int:
             Path(arguments.lock_dir),
             max_concurrent=arguments.max_concurrent,
             wait_seconds=arguments.wait_seconds,
+            lane=arguments.lane,
+            reserved_priority_slots=arguments.reserved_priority_slots,
         )
     except (LocalAICapacityUnavailable, ValueError) as error:
         print(str(error), file=sys.stderr)

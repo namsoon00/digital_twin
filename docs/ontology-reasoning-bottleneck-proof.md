@@ -417,3 +417,14 @@ run before node deletes, but their bounded queries now share the configured
 transaction query budget. Runtime stages expose delete duration, query count,
 and transaction count independently, so future tuning can distinguish row
 replacement cost from inserts and inventory reads.
+
+A production two-symbol run after both changes completed projection and native
+inference in 98.9 seconds, down from 146.9 seconds for the previous comparable
+run. Native inference fell from 46.9 seconds to 13.2 seconds. The verified
+in-memory matched graph was used, and its TypeDB consistency read took 0.69
+seconds. ABox persistence improved from 69.0 seconds to 60.7 seconds. Its
+remaining cost is now explicit: current-state inventory took 17.5 seconds,
+four ordered stale-row delete queries shared one transaction and took 21.3
+seconds, and the changed-scope write stage took 47.1 seconds. The next
+optimization boundary is therefore TypeDB current-state replacement and commit
+cost, not native-rule evaluation or duplicate matched-graph retrieval.

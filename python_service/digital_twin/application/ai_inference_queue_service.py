@@ -79,6 +79,46 @@ def _timestamp(value: object):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict[str, object]:
+    """Classify failures without persisting provider stderr or credentials."""
+
+    lowered = str(error or "").strip().lower()
+    error_type = type(error).__name__ if isinstance(error, BaseException) else "Error"
+    if isinstance(error, NotificationAIContractError) or any(
+        token in lowered
+        for token in ("contract", "hypothesis", "candidate fingerprint", "publication")
+    ):
+        category = "contract-invalid"
+        retryable = False
+        summary = "AI response failed the investment publication contract."
+    elif isinstance(error, TimeoutError) or any(
+        token in lowered for token in ("timeout", "timed out", "deadline", "exceeded")
+    ):
+        category = "timeout"
+        retryable = True
+        summary = "AI model execution exceeded the configured time."
+    elif any(token in lowered for token in ("capacity", "slot", "lease")):
+        category = "capacity"
+        retryable = True
+        summary = "Local AI execution capacity was unavailable."
+    elif any(token in lowered for token in ("command", "process", "return code", "empty output")):
+        category = "model-process"
+        retryable = True
+        summary = "AI model process failed before returning a valid response."
+    else:
+        category = "execution"
+        retryable = True
+        summary = "AI execution failed before a valid investment decision was produced."
+    return {
+        "version": "notification-ai-failure-v1",
+        "stage": str(stage or "model-execution"),
+        "category": category,
+        "retryable": retryable,
+        "errorType": error_type,
+        "summary": summary,
+    }
+
+
 def attach_execution_writer_provenance(
     context: Dict[str, object],
     execution_audit: Dict[str, object],
@@ -499,9 +539,27 @@ class AIInferenceQueueRunner:
             context_routing = packet.context_routing
             prompt_release = packet.prompt_release
             context["_notificationAiInferencePacket"] = packet.to_audit_dict()
-        except Exception as error:  # noqa: BLE001 - TypeDB inference remains publishable without AI preparation.
+        except Exception as error:  # noqa: BLE001 - retry or retain a web-only fallback below.
+            diagnostic = ai_failure_diagnostic(error, "ai-preparation")
+            if (
+                not self.fallback_on_first_failure
+                and diagnostic["retryable"]
+                and request.attempts < self.max_attempts
+            ):
+                outcome = self.queue.retry(
+                    request,
+                    self.worker_id,
+                    diagnostic["summary"],
+                    retry_seconds=self.retry_seconds,
+                )
+                return request.request_id[:8] + " " + str(outcome.get("status") or "retry")
             if self.fallback_enabled:
-                return self.publish_preparation_fallback(request, context, error)
+                return self.publish_preparation_fallback(
+                    request,
+                    context,
+                    diagnostic["summary"],
+                    diagnostic=diagnostic,
+                )
             raise
         prompt_preparation_ms = int((time.monotonic() - preparation_started) * 1000)
         executed_prompt = prompt
@@ -582,15 +640,26 @@ class AIInferenceQueueRunner:
 
         if lease_lost.is_set():
             return request.request_id[:8] + " superseded-during-review"
+        failure_diagnostic = (
+            ai_failure_diagnostic(review_error)
+            if review_error is not None
+            else {}
+        )
         if (
             review_error is not None
             and not self.fallback_on_first_failure
-            and (self.stopping or request.attempts < self.max_attempts)
+            and (
+                self.stopping
+                or (
+                    bool(failure_diagnostic.get("retryable"))
+                    and request.attempts < self.max_attempts
+                )
+            )
         ):
             outcome = self.queue.retry(
                 request,
                 self.worker_id,
-                review_error,
+                failure_diagnostic.get("summary") or review_error,
                 retry_seconds=self.retry_seconds,
             )
             return request.request_id[:8] + " " + str(outcome.get("status") or "retry")
@@ -602,7 +671,10 @@ class AIInferenceQueueRunner:
                 if failed and self.reasoning_orchestrator is not None:
                     self.reasoning_orchestrator.ai_failed(context, str(review_error))
                 return request.request_id[:8] + (" failed" if failed else " lease-lost")
-            fallback_reason = str(review_error)
+            fallback_reason = str(
+                failure_diagnostic.get("summary")
+                or "AI execution failed before publication."
+            )
             response = preserve_verified_ai_narrative(
                 typedb_inference_fallback_response(context, review_error),
                 response,
@@ -621,6 +693,8 @@ class AIInferenceQueueRunner:
         )
         action_plan = None if narrative_only or canonical_subject_publication else self.action_plan_context(context, episode)
         enriched = context_with_validated_ai_response(context, response, self.settings)
+        if failure_diagnostic:
+            enriched["notificationAiFailure"] = dict(failure_diagnostic)
         continuity_packet = (
             dict(context.get("decisionContinuityPacket") or {})
             if isinstance(context.get("decisionContinuityPacket"), dict)
@@ -670,6 +744,7 @@ class AIInferenceQueueRunner:
                 "reason": fallback_reason[:500],
                 "deliveryDeadlineSeconds": int(self.delivery_deadline_seconds or 0),
             },
+            "failure": dict(failure_diagnostic),
             "hypothesisComparisonRepair": {
                 "attempted": comparison_repair_attempted,
                 "succeeded": comparison_repair_succeeded,
@@ -745,6 +820,10 @@ class AIInferenceQueueRunner:
                         " blocked-invalid-reasoning-contract" if failed else " lease-lost"
                     )
                 fallback_reason = str(validation_reason)
+                failure_diagnostic = ai_failure_diagnostic(
+                    NotificationAIContractError(str(validation_reason)),
+                    "reasoning-contract-validation",
+                )
                 rejected_ai_response = response
                 response = preserve_verified_ai_narrative(
                     typedb_inference_fallback_response(context, validation_reason),
@@ -759,6 +838,7 @@ class AIInferenceQueueRunner:
                 )
                 action_plan = None
                 enriched = context_with_validated_ai_response(context, response, self.settings)
+                enriched["notificationAiFailure"] = dict(failure_diagnostic)
                 execution_audit.update({
                     "status": "typedb-fallback",
                     "responseSource": str(response.source or ""),
@@ -768,6 +848,7 @@ class AIInferenceQueueRunner:
                         "reason": fallback_reason[:500],
                         "deliveryDeadlineSeconds": int(self.delivery_deadline_seconds or 0),
                     },
+                    "failure": dict(failure_diagnostic),
                 })
                 sync_execution_publication_audit(
                     enriched,
@@ -930,6 +1011,7 @@ class AIInferenceQueueRunner:
         request: AIInferenceRequest,
         context: Dict[str, object],
         reason: object,
+        diagnostic: Dict[str, object] = None,
     ) -> str:
         """Release graph inference when AI context or prompt preparation fails."""
 
@@ -952,6 +1034,10 @@ class AIInferenceQueueRunner:
         )
         enriched = context_with_validated_ai_response(context, response, self.settings)
         fallback_reason = str(reason or "AI preparation failed")
+        failure_diagnostic = dict(
+            diagnostic or ai_failure_diagnostic(reason, "ai-preparation")
+        )
+        enriched["notificationAiFailure"] = failure_diagnostic
         enriched["notificationAiExecutionAudit"] = {
             "version": "notification-ai-execution-audit-v2",
             "status": "typedb-fallback",
@@ -975,6 +1061,7 @@ class AIInferenceQueueRunner:
                 "reason": fallback_reason[:500],
                 "deliveryDeadlineSeconds": int(self.delivery_deadline_seconds or 0),
             },
+            "failure": failure_diagnostic,
             "latencyMs": 0,
         }
         sync_execution_publication_audit(

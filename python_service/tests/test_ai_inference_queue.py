@@ -369,6 +369,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("pending", delivered.status)
         self.assertEqual("completed", delivered.context["notificationAiQueue"]["status"])
         self.assertEqual("typedb-fallback", delivered.context["notificationAiExecutionAudit"]["status"])
+        self.assertEqual("timeout", delivered.context["notificationAiFailure"]["category"])
+        self.assertTrue(delivered.context["notificationAiFailure"]["retryable"])
         self.assertEqual(
             "TypeDB inference fallback",
             delivered.context["notificationAiValidatedResponse"]["source"],
@@ -421,6 +423,8 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("pending", delivered.status)
         self.assertEqual(1, orchestrator.fallback_calls)
         self.assertEqual("typedb-fallback", delivered.context["notificationAiExecutionAudit"]["status"])
+        self.assertEqual("contract-invalid", delivered.context["notificationAiFailure"]["category"])
+        self.assertFalse(delivered.context["notificationAiFailure"]["retryable"])
         self.assertFalse(delivered.context["notificationWriterProvenance"]["aiAuthored"])
         self.assertEqual("typedb", delivered.context["notificationWriterProvenance"]["decisionOwner"])
         self.assertNotIn("가설·행동 계약", delivered.context["notificationAiValidatedResponse"]["summary"])
@@ -480,6 +484,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("pending", delivered.status)
         self.assertEqual("typedb-fallback", audit["status"])
         self.assertEqual("ai-preparation", audit["fallback"]["stage"])
+        self.assertEqual("ai-preparation", audit["failure"]["stage"])
         self.assertFalse(audit["aiAttempted"])
 
     def test_result_publication_retries_storage_timeout_without_repeating_ai_review(self):

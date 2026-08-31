@@ -97,6 +97,11 @@ class DecisionContinuityPacket:
         action_rows = [dict(item) for item in self.action_observations]
         outcome_rows = [dict(item) for item in self.observed_outcomes]
         follow_up_rows = [dict(item) for item in self.follow_up_conditions]
+        verified_transitions = [
+            item for item in follow_up_rows
+            if bool(item.get("transitionVerified"))
+            and item.get("status") in {"satisfied", "invalidated", "expired"}
+        ]
         execution_feedback = dict(self.execution_feedback or {})
         lifecycle_feedback = dict(self.lifecycle_feedback or {})
         payload = {
@@ -127,7 +132,7 @@ class DecisionContinuityPacket:
                 "followUpCount": len(follow_up_rows),
                 "pendingFollowUpCount": sum(1 for item in follow_up_rows if item.get("status") == "pending"),
                 "transitionedFollowUpCount": sum(
-                    1 for item in follow_up_rows if item.get("status") in {"satisfied", "invalidated", "expired"}
+                    1 for item in verified_transitions
                 ),
                 "outcomeCount": len(outcome_rows),
                 "actionObservationCount": len(action_rows),
@@ -173,8 +178,10 @@ def build_decision_continuity_packet(
         selected_hypothesis=_mapping(selected_hypothesis),
         follow_up_conditions=_rows(follow_up_conditions or [], (
             "conditionId", "field", "operator", "threshold", "purpose", "label",
-            "onSatisfied", "currentValue", "status", "observable", "observedAt",
-            "transitionAt", "expiresAt",
+            "onSatisfied", "baselineValue", "previousValue", "currentValue",
+            "baselineObserved", "baselineMatched", "previousMatched", "currentMatched", "armed",
+            "status", "observable", "observedAt", "transitionAt", "transitionId",
+            "transitionKind", "transitionVerified", "legacyBaselineCaptured", "expiresAt",
         ), 8),
         unsupported_follow_ups=_rows(unsupported_follow_ups or [], (
             "conditionId", "field", "operator", "threshold", "purpose", "label",

@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.application.notification.admission import NotificationAdmissionPolicy
 from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
-from digital_twin.domain.notification_delivery_explanation import build_customer_delivery_explanation
 from digital_twin.domain.notification_rules import NotificationRuleDecision
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.ontology_relation_delivery import relation_delivery_diff
@@ -168,14 +167,30 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("suppress", decision["decision"])
         self.assertTrue(decision["typedbFallback"])
 
-    def test_typedb_fallback_still_sends_a_material_action_transition(self):
+    def test_typedb_fallback_never_sends_an_investment_push(self):
         context = watchlist_context()
         context["notificationAiExecutionAudit"] = {"status": "typedb-fallback"}
 
         decision = final_ai_delivery_decision(context)
 
-        self.assertEqual("send", decision["decision"])
+        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual("ai_failure_web_history", decision["suppressionReason"])
         self.assertTrue(decision["typedbFallback"])
+
+        review_only = watchlist_context(ai_kind="action-changed")
+        review_only.update({
+            "investmentSubjectDecisionCaseId": "subject-case:review-only",
+            "decisionPublication": {"outcomeKind": "REVIEW_ONLY"},
+            "notificationAiExecutionAudit": {
+                "status": "typedb-fallback",
+                "adoptionState": "typedb-fallback",
+            },
+            "notificationWriterProvenance": {"aiAuthored": False},
+        })
+        review_decision = final_ai_delivery_decision(review_only)
+
+        self.assertEqual("suppress", review_decision["decision"])
+        self.assertEqual("review_only_web_history", review_decision["suppressionReason"])
 
     def test_same_missing_data_does_not_make_readiness_label_churn_material(self):
         def relation(readiness):
@@ -212,6 +227,28 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", decision["decision"])
 
+        canonical = watchlist_context(ai_kind="action-changed")
+        canonical.update({
+            "investmentSubjectDecisionCaseId": "subject-case:final",
+            "decisionPublication": {"outcomeKind": "FINAL_DECISION"},
+            "notificationAiExecutionAudit": {
+                "status": "completed",
+                "adoptionState": "decision-and-narrative-adopted",
+            },
+            "notificationWriterProvenance": {"aiAuthored": True},
+        })
+        incomplete = final_ai_delivery_decision(canonical)
+        canonical["notificationAiValidatedResponse"].update({
+            "currentActionPlan": "현재 보유를 유지합니다.",
+            "changeAnalysis": "최종 행동이 이전 판단과 달라졌습니다.",
+            "nextChecks": ["다음 가격·수급 갱신에서 조건 유지 여부를 확인합니다."],
+        })
+        complete = final_ai_delivery_decision(canonical)
+
+        self.assertEqual("suppress", incomplete["decision"])
+        self.assertEqual("incomplete_customer_action_contract", incomplete["suppressionReason"])
+        self.assertEqual("send", complete["decision"])
+
     def test_non_material_graph_rebaseline_cannot_send_action_change(self):
         context = watchlist_context(ai_kind="action-changed")
         context["notificationAiValidatedResponse"]["action"] = "BUY"
@@ -244,6 +281,21 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("send", decision["decision"])
         self.assertEqual(1, decision["materialSourceEventCount"])
 
+        follow_up = watchlist_context()
+        follow_up["decisionTransition"] = {"kind": "unchanged", "material": False}
+        follow_up["decisionContinuityPacket"] = {"followUpConditions": [{
+            "conditionId": "follow-up:ma20",
+            "status": "satisfied",
+            "previousMatched": False,
+            "currentMatched": True,
+            "transitionVerified": True,
+            "transitionAt": "2026-08-31T06:12:00Z",
+        }]}
+        follow_up_decision = final_ai_delivery_decision(follow_up)
+
+        self.assertEqual("send", follow_up_decision["decision"])
+        self.assertEqual("verified-threshold-transition", follow_up_decision["pushValueClass"])
+
     def test_holding_and_watchlist_baseline_delivery_boundaries(self):
         context = watchlist_context()
         context["ontologyRelationContext"]["targetRole"] = "holding"
@@ -272,6 +324,8 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "decisionState": {"reviewLevel": "check"},
         })
         first_holding["ontologyRelationContext"]["actionEnvelope"]["targetRole"] = "holding"
+        first_holding["cooldownDecision"] = "new-condition"
+        first_holding["cooldownRecentSentCount"] = 0
         self.assertEqual("send", final_ai_delivery_decision(first_holding)["decision"])
 
         first_holding.update({
@@ -286,16 +340,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
             },
         })
         fallback_decision = final_ai_delivery_decision(first_holding)
-        self.assertEqual("send", fallback_decision["decision"])
+        self.assertEqual("suppress", fallback_decision["decision"])
+        self.assertEqual("ai_failure_web_history", fallback_decision["suppressionReason"])
         self.assertTrue(fallback_decision["typedbFallback"])
-        explanation = build_customer_delivery_explanation(
-            message_type="investmentInsight",
-            source_event_name="ontology.reasoning.completed",
-            context=first_holding,
-        )
-        self.assertEqual("valid", explanation["validation"]["state"])
-        self.assertEqual("initial-holding-review", explanation["primaryCause"]["code"])
-        self.assertEqual("initial-actionable", explanation["primaryCause"]["category"])
 
         first_watchlist = watchlist_context()
         first_watchlist["aiDecisionTransition"] = {

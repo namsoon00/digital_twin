@@ -11,10 +11,15 @@ from digital_twin.application.ai_inference_queue_service import NotificationAIRe
 from digital_twin.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.application.notification_decision_memory import context_with_previous_investment_decision
 from digital_twin.domain.decision_continuity import build_decision_continuity_packet
+from digital_twin.domain.decision_follow_up import (
+    evaluate_follow_up_conditions,
+    normalize_follow_up_conditions,
+)
 from digital_twin.domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
     build_notification_ai_decision_prompt,
     notification_ai_decision_brief,
+    notification_ai_execution_profile,
 )
 from digital_twin.domain.notification_ai_prompt_release import AI_DECISION_PROMPT_VERSION
 from digital_twin.domain.notifications import NotificationJob
@@ -104,6 +109,11 @@ def prior_episode():
             "purpose": "strengthen",
             "label": "8만원 회복",
             "status": "satisfied",
+            "previousMatched": False,
+            "currentMatched": True,
+            "transitionVerified": True,
+            "transitionKind": "false-to-true",
+            "transitionAt": "2026-08-16T00:55:00Z",
             "currentValue": 81000,
         }],
         "outcomes": [{
@@ -260,6 +270,25 @@ class DecisionContinuityTests(unittest.TestCase):
         self.assertEqual("ADD", prompt_payload["continuityDelta"]["previousDecision"]["action"])
         self.assertIn("continuityDelta", prompt)
 
+        settings = {
+            "notificationAiReasoningEffort": "auto",
+            "notificationAiStandardReasoningEffort": "high",
+            "notificationAiDeepReasoningEffort": "max",
+        }
+        standard = notification_ai_execution_profile(
+            {"ontologyRelationContext": {"reviewLevel": "check"}},
+            settings,
+        )
+        deep = notification_ai_execution_profile(
+            {
+                "ontologyRelationContext": {"reviewLevel": "act"},
+                "decisionTransition": {"kind": "action-changed"},
+            },
+            settings,
+        )
+        self.assertEqual("high", standard["reasoningEffort"])
+        self.assertEqual("max", deep["reasoningEffort"])
+
     def test_notification_trace_states_quantity_change_without_claiming_causality(self):
         packet = DecisionContinuityService(EpisodeStore(prior_episode()), DomainStore()).build(
             account_id="main",
@@ -272,6 +301,113 @@ class DecisionContinuityTests(unittest.TestCase):
         self.assertTrue(any("8 → 10주" in item for item in rows))
         self.assertTrue(any("단정하지 않습니다" in item for item in rows))
         self.assertTrue(any("후속 조건 성립" in item for item in rows))
+
+        baseline, unsupported = normalize_follow_up_conditions(
+            [{
+                "field": "ma20Distance",
+                "operator": "<=",
+                "threshold": 0,
+                "purpose": "weaken",
+                "label": "20일선 아래로 하락",
+            }],
+            {
+                "symbol": "000660",
+                "ma20Distance": -1.0,
+                "marketEvidenceProfile": {
+                    "profileKey": "kr-equity",
+                    "capabilities": {"pricePath": {"state": "fresh"}},
+                },
+                "updatedAt": "2026-08-31T05:00:00Z",
+            },
+            "000660",
+        )
+        self.assertFalse(unsupported)
+        self.assertEqual("pending", baseline[0]["status"])
+        self.assertFalse(baseline[0]["armed"])
+        self.assertFalse(baseline[0]["transitionVerified"])
+
+        unobserved, _ = normalize_follow_up_conditions(
+            [{"field": "ma20Distance", "operator": "<=", "threshold": 0}],
+            {
+                "symbol": "000660",
+                "marketEvidenceProfile": {
+                    "capabilities": {"pricePath": {"state": "fresh"}},
+                },
+            },
+            "000660",
+        )
+        first_true, unobserved_material = evaluate_follow_up_conditions(
+            unobserved,
+            {"ma20Distance": -0.1},
+            "2026-08-31T05:01:00Z",
+        )
+        self.assertFalse(unobserved_material)
+        self.assertEqual("pending", first_true[0]["status"])
+        self.assertFalse(first_true[0]["armed"])
+
+        tracked, _ = normalize_follow_up_conditions(
+            [{
+                "field": "ma20Distance",
+                "operator": "<=",
+                "threshold": 0,
+                "purpose": "weaken",
+                "label": "20일선 아래로 하락",
+            }],
+            {
+                "symbol": "000660",
+                "ma20Distance": 2.9,
+                "marketEvidenceProfile": {
+                    "profileKey": "kr-equity",
+                    "capabilities": {"pricePath": {"state": "fresh"}},
+                },
+            },
+            "000660",
+        )
+
+        updated, material = evaluate_follow_up_conditions(
+            tracked,
+            {"ma20Distance": 2.9},
+            "2026-08-31T06:00:00Z",
+        )
+
+        self.assertFalse(material)
+        self.assertEqual("pending", updated[0]["status"])
+        self.assertTrue(updated[0]["armed"])
+        self.assertFalse(updated[0]["currentMatched"])
+
+        still_false, first_material = evaluate_follow_up_conditions(
+            tracked,
+            {"ma20Distance": 1.2},
+            "2026-08-31T06:01:00Z",
+        )
+        transitioned, second_material = evaluate_follow_up_conditions(
+            still_false,
+            {"ma20Distance": -0.1},
+            "2026-08-31T06:02:00Z",
+        )
+
+        self.assertFalse(first_material)
+        self.assertTrue(second_material)
+        self.assertEqual("satisfied", transitioned[0]["status"])
+        self.assertTrue(transitioned[0]["transitionVerified"])
+        self.assertEqual("false-to-true", transitioned[0]["transitionKind"])
+
+        legacy_packet = build_decision_continuity_packet(
+            account_id="main",
+            symbol="000660",
+            captured_at="2026-08-31T06:03:00Z",
+            previous_decision=prior_episode(),
+            follow_up_conditions=[{
+                "conditionId": "follow-up:legacy",
+                "field": "ma20Distance",
+                "operator": "<=",
+                "threshold": 0,
+                "label": "20일선 아래로 하락",
+                "status": "satisfied",
+            }],
+        )
+        legacy_rows = decision_continuity_rows({"decisionContinuityPacket": legacy_packet})
+        self.assertFalse(any("후속 조건" in item for item in legacy_rows))
 
 
 if __name__ == "__main__":

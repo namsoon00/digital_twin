@@ -7,7 +7,7 @@ from typing import Dict, Mapping
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v7"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v8"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -58,8 +58,8 @@ def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> boo
     )
 
 
-def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -> bool:
-    """Return the admission decision shared by every delivery-stage gate."""
+def first_holding_review_candidate_is_admissible(context: Mapping[str, object]) -> bool:
+    """Allow one holding baseline to reach AI, without authorizing a push."""
 
     context = _mapping(context)
     try:
@@ -71,6 +71,70 @@ def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -
         and _text(context.get("cooldownDecision")).lower() == "new-condition"
         and recent_sent_count <= 0
     )
+
+
+def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -> bool:
+    """Authorize only the first completed, AI-authored holding decision."""
+
+    context = _mapping(context)
+    if not first_holding_review_candidate_is_admissible(context):
+        return False
+    validated = _mapping(context.get("notificationAiValidatedResponse"))
+    transition = _mapping(context.get("aiDecisionTransition"))
+    publication = _mapping(context.get("decisionPublication"))
+    execution = _mapping(context.get("notificationAiExecutionAudit"))
+    writer = _mapping(context.get("notificationWriterProvenance"))
+    outcome_kind = _text(publication.get("outcomeKind")).upper()
+    execution_status = _text(execution.get("status")).lower()
+    return bool(
+        validated.get("action")
+        and transition.get("historyAvailable") is False
+        and (not outcome_kind or outcome_kind == "FINAL_DECISION")
+        and (not execution_status or execution_status == "completed")
+        and execution_status != "typedb-fallback"
+        and (not writer or bool(writer.get("aiAuthored")))
+    )
+
+
+def _verified_follow_up_transitions(context: Mapping[str, object]):
+    packet = _mapping(_mapping(context).get("decisionContinuityPacket"))
+    return [
+        dict(item)
+        for item in packet.get("followUpConditions") or []
+        if isinstance(item, Mapping)
+        and bool(item.get("transitionVerified"))
+        and _text(item.get("transitionAt"))
+        and _text(item.get("status")).lower() in {"satisfied", "invalidated", "expired"}
+        and (
+            _text(item.get("status")).lower() == "expired"
+            or (item.get("previousMatched") is False and item.get("currentMatched") is True)
+        )
+    ]
+
+
+def _customer_action_contract_gaps(validated: Mapping[str, object]):
+    response = _mapping(validated)
+    gaps = []
+    if not _text(response.get("action")):
+        gaps.append("final-action")
+    if not _text(
+        response.get("executionDecision")
+        or response.get("currentActionPlan")
+        or response.get("investmentViewAction")
+    ):
+        gaps.append("current-action-plan")
+    if not (
+        _text(response.get("changeAnalysis") or response.get("investmentView") or response.get("summary"))
+        or _items(response.get("evidence"))
+    ):
+        gaps.append("why-now")
+    if not (
+        _text(response.get("nextActionPlan") or response.get("invalidationCondition"))
+        or _items(response.get("nextChecks"))
+        or _items(response.get("followUpConditions"))
+    ):
+        gaps.append("next-condition")
+    return gaps
 
 
 def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
@@ -85,6 +149,8 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     context = _mapping(context)
     validated = _mapping(context.get("notificationAiValidatedResponse"))
     execution_audit = _mapping(context.get("notificationAiExecutionAudit"))
+    publication = _mapping(context.get("decisionPublication"))
+    writer = _mapping(context.get("notificationWriterProvenance"))
     ai_transition = _mapping(context.get("aiDecisionTransition"))
     user_transition = _mapping(context.get("investmentNotificationTransition"))
     relation = _mapping(context.get("ontologyRelationContext"))
@@ -104,6 +170,16 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     selected_rule_id = _text(envelope.get("selectedRuleId"))
     eligible_rule_ids = {_text(item) for item in _items(readiness.get("eligibleRuleIds"))}
     selected_core_eligible = bool(selected_rule_id and selected_rule_id in eligible_rule_ids)
+    publication_outcome = _text(publication.get("outcomeKind")).upper()
+    execution_status = _text(execution_audit.get("status")).lower()
+    adoption_state = _text(execution_audit.get("adoptionState")).lower()
+    verified_follow_ups = _verified_follow_up_transitions(context)
+    canonical_subject = bool(
+        publication
+        or context.get("investmentSubjectDecisionCaseId")
+        or context.get("investmentSubjectDecisionCase")
+    )
+    action_contract_gaps = _customer_action_contract_gaps(validated)
     base = {
         "version": FINAL_AI_DELIVERY_POLICY_VERSION,
         "decision": "send",
@@ -116,48 +192,82 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "userStateTransitionKind": _text(user_transition.get("kind")).lower(),
         "userStateChanged": bool(user_transition.get("changed")),
         "selectedCoreInferenceEligible": selected_core_eligible,
-        "typedbFallback": _text(execution_audit.get("status")).lower() == "typedb-fallback",
+        "typedbFallback": execution_status == "typedb-fallback",
+        "publicationOutcome": publication_outcome,
+        "aiAdoptionState": adoption_state,
+        "verifiedFollowUpTransitionCount": len(verified_follow_ups),
+        "pushValueClass": "undetermined",
+        "customerActionContractGaps": action_contract_gaps,
     }
-    if first_holding_review_delivery_is_authorized(context):
-        base["reason"] = "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단입니다."
+    if publication_outcome in {"REVIEW_ONLY", "ABSTAIN", "ABSTAINED"}:
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "review_only_web_history",
+            "reason": "최종 투자 판단이 아닌 검토 결과는 웹 이력에만 저장합니다.",
+            "pushValueClass": "web-only-review",
+        })
         return base
     if base["typedbFallback"]:
-        fallback_material = bool(
-            graph_transition.get("material")
-            or user_transition.get("material")
-            or _text(ai_transition.get("kind")).lower() == "action-changed"
-            or material_sources
-        )
-        if not fallback_material:
-            base.update({
-                "decision": "suppress",
-                "suppressionReason": "typedb_fallback_non_material",
-                "reason": (
-                    "AI 검증 실패는 기록하되 최종 행동·판단 차단·판단 변경 원문이 "
-                    "바뀌지 않아 같은 TypeDB 참고 알림을 다시 보내지 않습니다."
-                ),
-            })
-            return base
-        base["reason"] = (
-            "AI를 기한 내 사용하지 못했지만 실질적인 TypeDB 판단 변화가 있어 "
-            "검증된 관계 추론을 먼저 발송합니다."
-        )
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "ai_failure_web_history",
+            "reason": "AI 판단 실패와 TypeDB 대체 결과는 운영·웹 이력에만 저장하고 투자 푸시로 보내지 않습니다.",
+            "pushValueClass": "web-only-ai-failure",
+        })
+        return base
+    if canonical_subject and publication_outcome != "FINAL_DECISION":
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "missing_final_decision_publication",
+            "reason": "정식 최종 판단 발행물이 없어 웹 검토 이력에만 저장합니다.",
+            "pushValueClass": "web-only-incomplete-publication",
+        })
+        return base
+    if canonical_subject and (
+        execution_status != "completed"
+        or adoption_state != "decision-and-narrative-adopted"
+        or not bool(writer.get("aiAuthored"))
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "ai_decision_not_adopted",
+            "reason": "완료되고 검증된 AI 판단이 최종 발행물에 채택되지 않아 푸시하지 않습니다.",
+            "pushValueClass": "web-only-unadopted-ai",
+        })
+        return base
+    if canonical_subject and action_contract_gaps:
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "incomplete_customer_action_contract",
+            "reason": "현재 행동·변경 이유·다음 조건 중 일부가 없어 불완전한 투자 알림을 보내지 않습니다.",
+            "pushValueClass": "web-only-incomplete-message",
+        })
+        return base
+    if not validated or not base["finalAction"] or base["finalAction"] == "NO_ACTION":
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "missing_validated_final_action",
+            "reason": "사용자가 실행·유지할 최종 행동이 검증되지 않아 푸시하지 않습니다.",
+            "pushValueClass": "web-only-missing-action",
+        })
+        return base
+    if first_holding_review_delivery_is_authorized(context):
+        base.update({
+            "reason": "보유 종목의 첫 최종 AI 판단이 완료되어 현재 행동과 다음 확인 조건을 알립니다.",
+            "pushValueClass": "first-final-holding-decision",
+        })
         return base
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False
-    if not validated:
-        return base
     if not ai_transition.get("historyAvailable"):
-        if (
-            _text(graph_transition.get("kind")).lower() == "initial"
-            and not bool(graph_transition.get("material"))
-            and base["finalAction"] == "HOLD"
-            and not holding_review_baseline_is_deliverable(context)
-        ):
+        if base["finalAction"] == "HOLD":
             base.update({
                 "decision": "suppress",
                 "suppressionReason": "initial_graph_baseline",
-                "reason": "첫 비실행 최종 판단 상태를 알림 없이 기준선으로 저장합니다.",
+                "reason": "최초 보유·관찰 상태지만 첫 판단 발송 조건을 충족하지 않아 기준선으로만 저장합니다.",
+                "pushValueClass": "web-only-initial-baseline",
             })
+            return base
+        base["pushValueClass"] = "initial-action-decision"
         return base
     if (
         _text(ai_transition.get("kind")).lower() == "action-changed"
@@ -177,6 +287,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         return base
     if transition_enabled and user_transition.get("material"):
         base["reason"] = "사용자에게 표시되는 최종 판단 상태가 변경됐습니다."
+        base["pushValueClass"] = "material-user-state-transition"
         return base
     if (
         _text(graph_transition.get("kind")).lower() == "initial"
@@ -203,9 +314,15 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         })
         return base
     if _text(ai_transition.get("kind")).lower() == "action-changed":
+        base["pushValueClass"] = "final-action-change"
+        return base
+    if verified_follow_ups:
+        base["reason"] = "직전 판단의 관찰 조건이 거짓에서 참으로 실제 전환됐습니다."
+        base["pushValueClass"] = "verified-threshold-transition"
         return base
     if material_sources:
         base["reason"] = "최종 행동은 유지됐지만 판단 변경 원문이 새로 확인됐습니다."
+        base["pushValueClass"] = "material-source-evidence"
         return base
     if (
         user_transition.get("changed")
@@ -237,4 +354,11 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
                 + "로 유지됐으며 새 판단 변경 원문이 없어 푸시하지 않습니다."
             ),
         })
+        return base
+    base.update({
+        "decision": "suppress",
+        "suppressionReason": "no_user_action_or_material_evidence_change",
+        "reason": "최종 행동과 검증된 임계값·판단 원문이 모두 유지되어 웹 판단 이력에만 저장합니다.",
+        "pushValueClass": "web-only-context-change",
+    })
     return base

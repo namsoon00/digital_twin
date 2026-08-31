@@ -275,6 +275,12 @@ def notification_ai_reviewer_from_settings(
         or os.environ.get("NOTIFICATION_AI_STANDARD_REASONING_EFFORT")
         or "high"
     ).strip().lower()
+    if reasoning_effort not in {"low", "medium", "high", "max"}:
+        reasoning_effort = str(
+            settings.get("notificationAiStandardReasoningEffort")
+            or os.environ.get("NOTIFICATION_AI_STANDARD_REASONING_EFFORT")
+            or "high"
+        ).strip().lower()
     configured_timeout = optional_timeout_seconds(
         settings.get("notificationAiTimeoutSeconds"),
         os.environ.get("NOTIFICATION_AI_TIMEOUT_SECONDS"),

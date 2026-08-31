@@ -33400,8 +33400,9 @@
         { value: "0", label: "로컬 검증만" }
       ]),
       renderSettingSelect("notificationAiReasoningEffort", "AI 추론 깊이", [
+        { value: "auto", label: "자동 (표준 높음·복합 최대, 권장)" },
         { value: "max", label: "최대" },
-        { value: "high", label: "높음 (권장)" },
+        { value: "high", label: "항상 높음" },
         { value: "medium", label: "보통" },
         { value: "low", label: "낮음" }
       ]),
@@ -33415,8 +33416,8 @@
         { value: "1", label: "1개 (권장)" }
       ]),
       renderSettingSelect("notificationAiTypeDbFallbackEnabled", "AI 실패 시 TypeDB 알림", [
-        { value: "1", label: "발송 (권장)" },
-        { value: "0", label: "발송 안 함" }
+        { value: "1", label: "웹 이력에 저장 (권장)" },
+        { value: "0", label: "실패 처리" }
       ])
     ].join(""), tone || "ai");
   }

@@ -4960,7 +4960,17 @@ def decision_continuity_rows(context: Dict[str, object], limit: int = 3) -> List
     rows: List[str] = []
     transitioned = [
         item for item in packet.get("followUpConditions") or []
-        if isinstance(item, dict) and str(item.get("status") or "") in {"satisfied", "invalidated", "expired"}
+        if isinstance(item, dict)
+        and bool(item.get("transitionVerified"))
+        and str(item.get("transitionAt") or "").strip()
+        and str(item.get("status") or "") in {"satisfied", "invalidated", "expired"}
+        and (
+            str(item.get("status") or "") == "expired"
+            or (
+                item.get("previousMatched") is False
+                and item.get("currentMatched") is True
+            )
+        )
     ]
     status_labels = {"satisfied": "성립", "invalidated": "무효화", "expired": "만료"}
     for item in transitioned[:1]:

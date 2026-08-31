@@ -757,6 +757,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 {"tracked": [], "unsupported": []},
             )
             key = "tracked" if bool(row.get("observable")) else "unsupported"
+            if (
+                str(payload.get("status") or "") in {"satisfied", "invalidated", "expired"}
+                and not bool(payload.get("transitionVerified"))
+            ):
+                payload["legacyTransitionState"] = "unverified"
             buckets[key].append(payload)
         for episode in result:
             buckets = grouped.get(episode.episode_id)
@@ -1250,28 +1255,72 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         for row in rows or []:
             payload = _json_loads(row.get("payload_json"), {})
             updated, material = evaluate_follow_up_conditions([payload], facts, observed_at)
-            if not updated or not material:
+            if not updated or updated[0] == payload:
                 continue
             condition = updated[0]
             stamp = utc_now_iso()
+            transition_at = str(condition.get("transitionAt") or "") if material else ""
             with self.connect() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE investment_decision_follow_ups
-                    SET status = %s, payload_json = %s, updated_at = %s, transitioned_at = %s
+                    SET status = %s, payload_json = %s, updated_at = %s,
+                        transitioned_at = CASE WHEN %s <> '' THEN %s ELSE transitioned_at END
                     WHERE condition_id = %s AND status = 'pending'
                     """,
                     (
                         str(condition.get("status") or "pending"),
                         json_dumps(condition),
                         stamp,
-                        str(condition.get("transitionAt") or observed_at),
+                        transition_at,
+                        transition_at,
                         str(row.get("condition_id") or ""),
                     ),
                 )
-            if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+            if material and int(getattr(cursor, "rowcount", 0) or 0) > 0:
                 transitions.append(condition)
         return transitions
+
+    def quarantine_unverified_legacy_follow_up_transitions(
+        self,
+        limit: int = 5000,
+    ) -> Dict[str, object]:
+        """Keep legacy terminal rows for audit without treating them as edges."""
+
+        maximum = max(1, min(50000, int(limit or 5000)))
+        stamp = utc_now_iso()
+        quarantined = []
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT condition_id, payload_json FROM investment_decision_follow_ups "
+                "WHERE status IN ('satisfied', 'invalidated', 'expired') "
+                "ORDER BY updated_at, condition_id LIMIT %s",
+                (maximum,),
+            ).fetchall()
+            for row in rows or []:
+                payload = _json_loads(row.get("payload_json"), {})
+                if bool(payload.get("transitionVerified")):
+                    continue
+                condition_id = str(row.get("condition_id") or "")
+                payload.update({
+                    "status": "legacy-unverified",
+                    "transitionVerified": False,
+                    "legacyTransitionState": "unverified",
+                    "legacyTransitionQuarantinedAt": stamp,
+                })
+                cursor = connection.execute(
+                    "UPDATE investment_decision_follow_ups SET status = 'legacy-unverified', "
+                    "payload_json = %s, updated_at = %s WHERE condition_id = %s "
+                    "AND status IN ('satisfied', 'invalidated', 'expired')",
+                    (json_dumps(payload), stamp, condition_id),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+                    quarantined.append(condition_id)
+        return {
+            "status": "quarantined" if quarantined else "unchanged",
+            "quarantinedCount": len(quarantined),
+            "conditionIds": quarantined,
+        }
 
     def record_outcome_observations(
         self,

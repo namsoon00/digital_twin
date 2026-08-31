@@ -269,7 +269,18 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     compatibility_databases_enabled = truthy(
         (settings or {}).get("typedbBlueGreenSeedCompatibilityDatabasesEnabled")
     )
-    database_candidates = [primary_database]
+    # The database serving the active reasoning version is a production
+    # dependency, not a compatibility database.  Keep it in the rotation
+    # inventory even when optional legacy/shadow compatibility seeding is
+    # disabled.  ``typedb_rotate`` reconciles this fallback with the durable
+    # deployment registry immediately before building a candidate.
+    active_version = active_reasoning_engine_version(settings)
+    active_version_database = (
+        (settings or {}).get("reasoningEngineV2TypeDbDatabase")
+        if active_version == "v2"
+        else (settings or {}).get("reasoningEngineV1TypeDbDatabase")
+    )
+    database_candidates = [primary_database, active_version_database]
     if compatibility_databases_enabled:
         database_candidates.extend([
             (settings or {}).get("reasoningEngineV1TypeDbDatabase"),
@@ -442,6 +453,109 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
             )
         ),
     }
+
+
+def typedb_rotation_database_inventory(
+    spec: Dict[str, object],
+    settings: Dict[str, object] = None,
+    registry_factory=None,
+) -> Dict[str, object]:
+    """Resolve every graph database protected by the deployment control plane.
+
+    Blue-green storage rotation must preserve the graph binding of the active,
+    delivery, and registered candidate deployments. Runtime settings are only
+    a fallback inventory; the durable deployment registry is authoritative.
+    Rotation therefore fails closed when a selected deployment cannot be
+    resolved instead of cutting over to a physically valid but unusable store.
+    """
+
+    configured = dict(settings or {})
+    names = []
+
+    def add_database(value: object) -> str:
+        clean = str(value or "").strip()
+        if clean and clean not in names:
+            names.append(clean)
+        return clean
+
+    add_database(spec.get("typedbDatabase"))
+    for value in list(spec.get("managedTypeDbDatabases") or []):
+        add_database(value)
+
+    if registry_factory is None:
+        from .infrastructure.operational_store import reasoning_engine_registry_store
+        registry_factory = reasoning_engine_registry_store
+
+    try:
+        registry = registry_factory(configured)
+        control = registry.control()
+
+        def control_value(field: str) -> str:
+            value = control.get(field) if isinstance(control, dict) else getattr(control, field, "")
+            return str(value or "").strip()
+
+        selected = []
+        for field in (
+            "active_deployment_id",
+            "delivery_deployment_id",
+            "candidate_deployment_id",
+        ):
+            deployment_id = control_value(field)
+            if deployment_id and deployment_id not in selected:
+                selected.append(deployment_id)
+
+        protected = []
+        unresolved = []
+        bindings = {}
+        for deployment_id in selected:
+            deployment = dict(registry.get(deployment_id) or {})
+            binding = str(
+                deployment.get("graphStoreBinding")
+                or deployment.get("graph_store_binding")
+                or ""
+            ).strip()
+            if not deployment or not binding:
+                unresolved.append(deployment_id)
+                continue
+            bindings[deployment_id] = binding
+            add_database(binding)
+            if binding not in protected:
+                protected.append(binding)
+
+        if unresolved:
+            return {
+                "status": "deployment-binding-unresolved",
+                "ready": False,
+                "databases": names,
+                "protectedDatabases": protected,
+                "selectedDeploymentIds": selected,
+                "deploymentBindings": bindings,
+                "unresolvedDeploymentIds": unresolved,
+                "reason": (
+                    "Selected reasoning deployments have no durable TypeDB graph binding: "
+                    + ", ".join(unresolved)
+                ),
+            }
+        return {
+            "status": "ready",
+            "ready": True,
+            "databases": names,
+            "protectedDatabases": protected,
+            "selectedDeploymentIds": selected,
+            "deploymentBindings": bindings,
+            "unresolvedDeploymentIds": [],
+        }
+    except Exception as error:  # The control plane is required for a safe cutover.
+        return {
+            "status": "deployment-registry-unavailable",
+            "ready": False,
+            "databases": names,
+            "protectedDatabases": [],
+            "selectedDeploymentIds": [],
+            "deploymentBindings": {},
+            "unresolvedDeploymentIds": [],
+            "reason": str(error)[:300],
+        }
 
 
 def mysql_executable() -> str:
@@ -2005,6 +2119,8 @@ def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str,
         "status": str(source.get("status") or "unknown"),
         "database": str(source.get("database") or ""),
         "validatedDatabases": list(source.get("validatedDatabases") or []),
+        "protectedDatabases": list(source.get("protectedDatabases") or []),
+        "missingProtectedDatabases": list(source.get("missingProtectedDatabases") or []),
         "validatedInferenceModes": dict(source.get("validatedInferenceModes") or {}),
         "validatedReleaseContracts": dict(source.get("validatedReleaseContracts") or {}),
         "validatedSeedContracts": seed_contracts,
@@ -4658,11 +4774,37 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             validated_release_contracts[database_name] = str(
                 release_contract.get("status") or "unknown"
             )
+        protected_databases = [
+            str(value or "").strip()
+            for value in list(candidate.get("protectedTypeDbDatabases") or [])
+            if str(value or "").strip()
+        ]
+        missing_protected_databases = [
+            database
+            for database in protected_databases
+            if database not in validated_databases
+        ]
+        if missing_protected_databases:
+            candidate["_candidateReusable"] = False
+            clear_typedb_candidate_reuse_marker(candidate)
+            return {
+                "status": "candidate-database-inventory-incomplete",
+                "reason": (
+                    "Candidate omitted deployment-bound TypeDB databases: "
+                    + ", ".join(missing_protected_databases)
+                ),
+                "candidate": candidate,
+                "validatedDatabases": validated_databases,
+                "protectedDatabases": protected_databases,
+                "missingProtectedDatabases": missing_protected_databases,
+            }
         return {
             "status": "prepared",
             "candidate": candidate,
             "candidateSizeBytes": directory_size_bytes(candidate_path),
             "validatedDatabases": validated_databases,
+            "protectedDatabases": protected_databases,
+            "missingProtectedDatabases": [],
             "validatedInferenceModes": validated_inference_modes,
             "validatedSeedContracts": validated_seed_contracts,
             "validatedReleaseContracts": validated_release_contracts,
@@ -4886,6 +5028,33 @@ def typedb_rotate(
     if not spec:
         print(json.dumps({"status": "skipped", "reason": "TypeDB worker is not configured."}, ensure_ascii=False))
         return 0
+    try:
+        inventory_settings = dict(runtime_settings(fast_operational_read=True) or {})
+    except TypeError:
+        inventory_settings = dict(runtime_settings() or {})
+    inventory = typedb_rotation_database_inventory(spec, inventory_settings)
+    if not bool(inventory.get("ready")):
+        result = {
+            "status": "candidate-database-inventory-unavailable",
+            "reason": str(inventory.get("reason") or inventory.get("status") or "unknown"),
+            "databaseInventory": inventory,
+            "activeStorePreserved": True,
+        }
+        record_typedb_auto_rotation_state(
+            lastAutoRotationAttemptAt=iso_now(),
+            lastAutoRotationAttemptEpoch=time.time(),
+            lastAutoRotationReason=str(rotation_reason or "database-inventory"),
+            lastAutoRotationStatus="candidate-database-inventory-unavailable",
+            lastAutoRotationResult=result,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 1
+    spec = {
+        **dict(spec),
+        "managedTypeDbDatabases": list(inventory.get("databases") or []),
+        "protectedTypeDbDatabases": list(inventory.get("protectedDatabases") or []),
+        "_typedbDatabaseInventory": inventory,
+    }
     decision = typedb_reset_needed(spec, ignore_auto_reset=True)
     if not force and not decision.get("needed"):
         print(json.dumps({"status": "skipped", **decision}, ensure_ascii=False, indent=2, sort_keys=True))

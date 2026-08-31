@@ -130,6 +130,24 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         )
         self.assertEqual("ontology-v2-production-r88", saved[0]["reasoningEngineV2DeploymentId"])
 
+        inventory = service_manager.typedb_rotation_database_inventory(
+            {
+                "typedbDatabase": "ontology-maintenance",
+                "managedTypeDbDatabases": ["ontology-maintenance"],
+            },
+            {"typedbBlueGreenSeedCompatibilityDatabasesEnabled": "0"},
+            registry_factory=lambda _settings: registry,
+        )
+        self.assertTrue(inventory["ready"])
+        self.assertEqual(
+            ["ontology-maintenance", "ontology-production-r88"],
+            inventory["databases"],
+        )
+        self.assertEqual(
+            ["ontology-production-r88"],
+            inventory["protectedDatabases"],
+        )
+
     def test_newer_reasoning_candidate_is_preserved(self):
         class FakeRegistry:
             @staticmethod
@@ -347,6 +365,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 "healthAddress": "127.0.0.1:1729",
                 "httpAddress": "127.0.0.1:8000",
                 "typedbDatabase": "ontology_v2",
+                "protectedTypeDbDatabases": ["ontology_v2"],
             }
             with patch.object(service_manager, "stop_worker", return_value=0), \
                     patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
@@ -377,6 +396,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 "healthAddress": "127.0.0.1:1729",
                 "httpAddress": "127.0.0.1:8000",
                 "typedbDatabase": "ontology_v2",
+                "protectedTypeDbDatabases": ["ontology_v2"],
             }
             candidate = service_manager.typedb_blue_green_stage_spec(spec)
             Path(candidate["dataPath"]).mkdir(parents=True)
@@ -408,6 +428,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual("prepared", result["status"])
         self.assertTrue(result["candidateSeedReused"])
+        self.assertEqual([], result["missingProtectedDatabases"])
         seed.assert_not_called()
 
     def test_wait_for_typedb_ready_bootstraps_only_pending_fresh_store(self):
@@ -650,6 +671,11 @@ class TypeDBServiceManagerTests(unittest.TestCase):
     def test_typedb_rotate_recovers_workers_and_alerts_when_reset_fails(self):
         spec = {"role": "typedb", "dataPath": Path("/tmp/orbit-alpha-typedb-test")}
         with patch.object(service_manager, "worker_specs", return_value={"typedb": spec}), \
+                patch.object(service_manager, "typedb_rotation_database_inventory", return_value={
+                    "ready": True,
+                    "databases": ["ontology-active"],
+                    "protectedDatabases": ["ontology-active"],
+                }), \
                 patch.object(service_manager, "typedb_reset_needed", return_value={"needed": True, "reason": "size"}), \
                 patch.object(service_manager, "acquire_typedb_rotation_lock", return_value={"acquired": True}), \
                 patch.object(service_manager, "typedb_maintenance_lock_owned", return_value=True), \
@@ -665,12 +691,12 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual(1, status)
         stop.assert_called_once_with(include_supervisor=False)
         start.assert_called_once_with()
-        incident.assert_called_once_with(
-            spec,
-            {"needed": True, "reason": "size"},
-            alert_kind="typedb-auto-rotation-failed",
-            failure_reason="reset-failed",
-        )
+        incident.assert_called_once()
+        self.assertEqual("typedb", incident.call_args.args[0]["role"])
+        self.assertEqual(["ontology-active"], incident.call_args.args[0]["protectedTypeDbDatabases"])
+        self.assertEqual({"needed": True, "reason": "size"}, incident.call_args.args[1])
+        self.assertEqual("typedb-auto-rotation-failed", incident.call_args.kwargs["alert_kind"])
+        self.assertEqual("reset-failed", incident.call_args.kwargs["failure_reason"])
         self.assertEqual("reset-failed", record_state.call_args_list[-1].kwargs["lastAutoRotationStatus"])
 
     def test_running_typedb_recovery_does_not_block_the_supervisor(self):

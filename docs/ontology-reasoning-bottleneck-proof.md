@@ -168,3 +168,31 @@ The recovery contract is now:
 
 Never raise the safety limit or disable the storage guard to clear this state.
 That only delays the same failure and risks an unrecoverable disk-full outage.
+
+## Deployment-Binding Recovery Invariant
+
+A physically healthy replacement store is not sufficient. Every deployment
+selected by the durable reasoning control plane must find its immutable graph
+database after cutover. The 2026-08-31 recovery initially rebuilt only
+`typedbDatabase` because compatibility seeding was disabled, while the active
+`ontology-v2-production-r88` deployment was bound to a different database.
+The server was ready but the delivery worker correctly deferred every job
+because its frozen release graph was absent.
+
+Storage rotation now treats the MySQL reasoning deployment registry as the
+authoritative inventory:
+
+- Resolve active, delivery, and candidate deployment IDs immediately before
+  candidate construction.
+- Add each selected deployment's `graphStoreBinding` to the candidate even
+  when optional legacy/shadow compatibility seeding is disabled.
+- Fail closed when a selected deployment or binding cannot be resolved.
+- Record protected, validated, and missing database lists in the rotation
+  receipt.
+- Refuse cutover if any protected database did not pass seed, frozen-release,
+  native-inference, world-rebuild, and driver-readiness validation.
+
+Runtime settings remain a bootstrap fallback, but they cannot remove a graph
+selected by the durable deployment registry. This separates two independent
+health checks: TypeDB process/storage readiness and reasoning-release
+readiness. Both must pass before queued investment reasoning can resume.

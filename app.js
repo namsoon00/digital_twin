@@ -5863,6 +5863,9 @@
       notificationAiTypeDbFallbackEnabled: settingValue("notificationAiTypeDbFallbackEnabled"),
       notificationAiFallbackOnFirstFailure: settingValue("notificationAiFallbackOnFirstFailure"),
       notificationAiQueueWorkerCount: settingValue("notificationAiQueueWorkerCount"),
+      localAiMaxConcurrentProcesses: settingValue("localAiMaxConcurrentProcesses"),
+      localAiInvestmentReservedProcesses: settingValue("localAiInvestmentReservedProcesses"),
+      notificationAiCapacityWaitSeconds: settingValue("notificationAiCapacityWaitSeconds"),
       modelName: settingValue("modelName"),
       modelHypothesis: settingValue("modelHypothesis"),
       alertRules: settingValue("alertRules"),
@@ -10794,6 +10797,9 @@
       "notificationAiTypeDbFallbackEnabled",
       "notificationAiFallbackOnFirstFailure",
       "notificationAiQueueWorkerCount",
+      "localAiMaxConcurrentProcesses",
+      "localAiInvestmentReservedProcesses",
+      "notificationAiCapacityWaitSeconds",
       "modelName",
       "modelHypothesis",
       "relationRuleThresholds",
@@ -26313,6 +26319,18 @@
       aiExecution.promptBytes ? formatInteger(aiExecution.promptBytes) + " bytes" : ""
     ].filter(Boolean);
     var aiExecutionBody = notificationReasoningTraceTags(aiExecutionMeta, "notification-reasoning-tags");
+    var executionSpans = aiExecution.executionSpans && typeof aiExecution.executionSpans === "object" ? aiExecution.executionSpans : {};
+    var modelAttempts = Array.isArray(executionSpans.modelAttempts) ? executionSpans.modelAttempts : [];
+    if (Object.keys(executionSpans).length) {
+      aiExecutionBody += notificationReasoningTraceTags([
+        executionSpans.completionPolicy === "wait-until-complete" ? "완료까지 대기" : "시간 제한 사용",
+        executionSpans.queueWaitMs != null ? "큐 " + formatInteger(executionSpans.queueWaitMs) + "ms" : "",
+        executionSpans.promptPreparationMs != null ? "입력 구성 " + formatInteger(executionSpans.promptPreparationMs) + "ms" : "",
+        executionSpans.initialModelMs != null ? "첫 판단 " + formatInteger(executionSpans.initialModelMs) + "ms" : "",
+        executionSpans.repairModelMs ? "계약 교정 " + formatInteger(executionSpans.repairModelMs) + "ms" : "",
+        modelAttempts.length && modelAttempts[0].capacityWaitMs != null ? "AI 슬롯 대기 " + formatInteger(modelAttempts[0].capacityWaitMs) + "ms" : ""
+      ].filter(Boolean), "notification-reasoning-tags");
+    }
     if (aiExecution.promptHash) {
       aiExecutionBody += '<code>' + escapeHtml(aiExecution.promptHash) + '</code>';
     }
@@ -26470,6 +26488,9 @@
     var execution = trace.aiExecution || {};
     var publication = ((trace.narrative || {}).publication) || execution.claimPublication || {};
     var executed = Boolean(execution.executed);
+    var spans = execution.executionSpans && typeof execution.executionSpans === "object" ? execution.executionSpans : {};
+    var attempts = Array.isArray(spans.modelAttempts) ? spans.modelAttempts : [];
+    var firstAttempt = attempts[0] || {};
     var mode = execution.reviewMode === "context-narrative" ? "참고 서술" : "투자 판단";
     var adoption = execution.adoptionState || publication.status || (executed ? "결과 확인 필요" : "실행 기록 없음");
     return '<section class="notification-ai-status-bar"><span class="tone-chip ' + (executed ? "watch" : "hold") + '">' + escapeHtml(executed ? "AI 실행됨" : "AI 실행 없음") + '</span><div><strong>' + escapeHtml(mode) + '</strong><em>' + escapeHtml([execution.model, adoption].filter(Boolean).join(" · ")) + '</em></div><span>' + escapeHtml(execution.actionAuthority === "typedb" ? "행동 권한 TypeDB" : (execution.actionAuthority ? "행동 권한 " + execution.actionAuthority : "")) + '</span></section>';
@@ -26579,6 +26600,13 @@
         runtime.contractFailureCode || ""
       ].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
       '<div><dt>모델·시간</dt><dd>' + escapeHtml([execution.model, execution.reasoningEffort, notificationPipelineDuration(execution.latencyMs)].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
+      '<div><dt>실행 단계</dt><dd>' + escapeHtml([
+        spans.completionPolicy === "wait-until-complete" ? "완료까지 대기" : "시간 제한 사용",
+        spans.queueWaitMs != null ? "큐 " + notificationPipelineDuration(spans.queueWaitMs) : "",
+        firstAttempt.capacityWaitMs != null ? "슬롯 " + notificationPipelineDuration(firstAttempt.capacityWaitMs) : "",
+        spans.initialModelMs != null ? "첫 판단 " + notificationPipelineDuration(spans.initialModelMs) : "",
+        spans.repairModelMs ? "교정 " + notificationPipelineDuration(spans.repairModelMs) : ""
+      ].filter(Boolean).join(" · ") || "기록 없음") + '</dd></div>',
       '</dl>',
       '<div class="notification-ai-publication"><strong>문장 발행 결과</strong><span>' + escapeHtml([writer.label || writer.writerKind, "AI " + Number(publication.aiClaimCount || 0) + "개", "시스템 " + Number(publication.deterministicClaimCount || 0) + "개"].filter(Boolean).join(" · ")) + '</span></div>',
       '<div class="notification-ai-publication"><strong>최종 채택 판단</strong><span>' + escapeHtml([finalDecision.actionLabel || finalDecision.action || "기록 없음", comparison.comparisonStateLabel || comparison.comparisonState, finalDecision.validationLabel || finalDecision.validationState].filter(Boolean).join(" · ")) + '</span></div>',
@@ -29261,7 +29289,7 @@
       '<label class="setting-field"><span>AI 투자판단</span><select data-model-setting="notificationAiGateEnabled"><option value="1"' + ((settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("notificationAiGateEnabled") || defaultSettings.notificationAiGateEnabled) === "0" ? " selected" : "") + '>끄기</option></select></label>',
       '<label class="setting-field"><span>병렬 AI 워커</span><select data-model-setting="notificationAiQueueWorkerCount"><option value="0"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "0" ? " selected" : "") + '>중지</option><option value="1"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "1" ? " selected" : "") + '>1개</option><option value="2"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "2" ? " selected" : "") + '>2개 (권장)</option><option value="3"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "3" ? " selected" : "") + '>3개</option><option value="4"' + ((settingValue("notificationAiQueueWorkerCount") || defaultSettings.notificationAiQueueWorkerCount) === "4" ? " selected" : "") + '>4개</option></select></label>',
       '<label class="setting-field"><span>Codex 사용</span><select data-model-setting="notificationAiUseCodex"><option value="1"' + ((settingValue("notificationAiUseCodex") || defaultSettings.notificationAiUseCodex) !== "0" ? " selected" : "") + '>사용</option><option value="0"' + ((settingValue("notificationAiUseCodex") || defaultSettings.notificationAiUseCodex) === "0" ? " selected" : "") + '>로컬 검증만</option></select></label>',
-      '<label class="setting-field"><span>타임아웃(초)</span><input data-model-setting="notificationAiTimeoutSeconds" type="number" min="30" step="10" value="' + escapeHtml(settingValue("notificationAiTimeoutSeconds") || defaultSettings.notificationAiTimeoutSeconds) + '"></label>',
+      '<label class="setting-field"><span>AI 완료 정책</span><select data-model-setting="notificationAiTimeoutSeconds"><option value="0"' + ((settingValue("notificationAiTimeoutSeconds") || defaultSettings.notificationAiTimeoutSeconds) === "0" ? " selected" : "") + '>완료까지 대기</option><option value="300"' + ((settingValue("notificationAiTimeoutSeconds") || defaultSettings.notificationAiTimeoutSeconds) === "300" ? " selected" : "") + '>비상 제한 300초</option><option value="600"' + ((settingValue("notificationAiTimeoutSeconds") || defaultSettings.notificationAiTimeoutSeconds) === "600" ? " selected" : "") + '>비상 제한 600초</option></select></label>',
       '</div>',
       '<label class="setting-field wide"><span>적용 알림 타입</span><textarea data-model-setting="notificationAiGateMessageTypes" rows="3" autocomplete="off">' + escapeHtml(settingValue("notificationAiGateMessageTypes") || defaultSettings.notificationAiGateMessageTypes) + '</textarea></label>',
       '</div>',
@@ -33378,11 +33406,13 @@
         { value: "low", label: "낮음" }
       ]),
       renderSettingSelect("notificationAiDeliveryDeadlineSeconds", "알림 AI 제한시간", [
-        { value: "60", label: "60초" },
-        { value: "90", label: "90초" },
-        { value: "120", label: "120초" },
-        { value: "180", label: "180초 (권장)" },
-        { value: "300", label: "300초" }
+        { value: "0", label: "완료까지 대기 (권장)" },
+        { value: "300", label: "비상 제한 300초" },
+        { value: "600", label: "비상 제한 600초" }
+      ]),
+      renderSettingSelect("localAiInvestmentReservedProcesses", "투자 판단 전용 슬롯", [
+        { value: "0", label: "예약 없음" },
+        { value: "1", label: "1개 (권장)" }
       ]),
       renderSettingSelect("notificationAiTypeDbFallbackEnabled", "AI 실패 시 TypeDB 알림", [
         { value: "1", label: "발송 (권장)" },

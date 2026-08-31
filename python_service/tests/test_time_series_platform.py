@@ -266,6 +266,14 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
             **dict(ttl_overrides or {}),
         }
         self.ttl_units = {**{table_name: "DAY" for table_name in self.ttl_days}, **dict(ttl_units or {})}
+        self.upsert_keys = {
+            "market_observations_3m": ("event_at", "account_id", "symbol", "granularity"),
+            "market_observations_15m": ("event_at", "account_id", "symbol", "granularity"),
+            "market_observations_1h": ("event_at", "account_id", "symbol", "granularity"),
+            "market_observations_1d": ("event_at", "account_id", "symbol", "granularity"),
+            "portfolio_marks": ("event_at", "account_id", "symbol"),
+            "capital_flow_observations": ("event_at", "subject_id", "provider", "measurement_type"),
+        }
 
     def execute(self, sql):
         normalized = " ".join(str(sql).split())
@@ -288,6 +296,17 @@ class SchemaQuestDB(QuestDBTimeSeriesAdapter):
         if normalized.startswith("CREATE TABLE IF NOT EXISTS"):
             table_name = normalized.split()[5]
             self.missing_tables.discard(table_name)
+            return {}
+        if normalized.startswith('SELECT "column" AS column_name'):
+            table_name = normalized.split("table_columns('", 1)[1].split("')", 1)[0]
+            return {
+                "columns": [{"name": "column_name"}, {"name": "upsert_key"}],
+                "dataset": [[column_name, True] for column_name in self.upsert_keys.get(table_name, ())],
+            }
+        if " DEDUP ENABLE UPSERT KEYS(" in normalized:
+            table_name = normalized.split()[2]
+            keys = normalized.split("UPSERT KEYS(", 1)[1].split(")", 1)[0]
+            self.upsert_keys[table_name] = tuple(value.strip() for value in keys.split(","))
             return {}
         if normalized == "SELECT 1 AS ready":
             return {"columns": [{"name": "ready"}], "dataset": [[1]]}
@@ -354,6 +373,11 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         create_statements = [statement for statement in adapter.statements if statement.startswith("CREATE TABLE")]
         self.assertEqual(1, len(create_statements))
         self.assertIn("CREATE TABLE IF NOT EXISTS market_observations_1h", create_statements[0])
+        self.assertIn(
+            "DEDUP UPSERT KEYS(event_at, account_id, symbol, granularity)",
+            create_statements[0],
+        )
+        self.assert_questdb_schema_repairs_drifted_logical_upsert_key()
 
     def test_questdb_schema_changes_only_drifted_ttl(self):
         adapter = SchemaQuestDB({"market_observations_1h": 30})
@@ -362,6 +386,19 @@ class TimeSeriesPlatformTests(unittest.TestCase):
 
         ttl_statements = [statement for statement in adapter.statements if " SET TTL " in statement]
         self.assertEqual(["ALTER TABLE market_observations_1h SET TTL 90 DAYS"], ttl_statements)
+
+    def assert_questdb_schema_repairs_drifted_logical_upsert_key(self):
+        adapter = SchemaQuestDB()
+        adapter.upsert_keys["market_observations_1d"] = (
+            "event_at", "account_id", "symbol", "granularity", "provider", "source_role",
+        )
+
+        adapter.ensure_schema()
+
+        self.assertIn(
+            "ALTER TABLE market_observations_1d DEDUP ENABLE UPSERT KEYS(event_at, account_id, symbol, granularity)",
+            adapter.statements,
+        )
 
     def test_questdb_schema_accepts_equivalent_week_ttl(self):
         adapter = SchemaQuestDB(
@@ -539,6 +576,7 @@ class TimeSeriesPlatformTests(unittest.TestCase):
                 "bucketAt": "2026-08-15T00:00:00Z",
                 "currentPrice": 100.123456789012,
                 "observationSource": "mysql-market-time-series",
+                "capitalFlowSourceAsOf": "2026-08-15T00:00:00Z",
             }]}},
             TimeSeriesWatermark("mysql-primary", "2026-08-15T00:00:00Z"),
         )
@@ -548,6 +586,7 @@ class TimeSeriesPlatformTests(unittest.TestCase):
                 "bucketAt": "2026-08-15T00:00:00.000000Z",
                 "currentPrice": 100.123456789013,
                 "observationSource": "questdb-market-time-series",
+                "capitalFlowSourceAsOf": "2026-08-15T00:00:00.000000Z",
             }]}},
             TimeSeriesWatermark("questdb-shadow", "2026-08-15T00:00:00Z"),
         )

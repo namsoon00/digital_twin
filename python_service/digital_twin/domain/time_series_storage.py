@@ -68,7 +68,14 @@ def semantic_feature_value(value: object, key: str = ""):
         # decimal places. Ten significant digits is strict enough for every
         # investment feature while avoiding false backend mismatches.
         return float(format(value, ".10g"))
-    if key in {"generatedAt", "updatedAt", "sourceAsOf", "bucketAt"}:
+    if key in {
+        "generatedAt",
+        "updatedAt",
+        "sourceAsOf",
+        "bucketAt",
+        "capitalFlowSourceAsOf",
+        "capitalFlowObservedAt",
+    }:
         return normalized_timestamp(value)
     return value
 

@@ -62,6 +62,14 @@ PORTFOLIO_MARK_COLUMNS = [
 ]
 
 CAPITAL_FLOW_TABLE = "capital_flow_observations"
+EXPECTED_UPSERT_KEYS = {
+    **{
+        table_name: ("event_at", "account_id", "symbol", "granularity")
+        for table_name in GRANULARITY_TABLES.values()
+    },
+    "portfolio_marks": ("event_at", "account_id", "symbol"),
+    CAPITAL_FLOW_TABLE: ("event_at", "subject_id", "provider", "measurement_type"),
+}
 CAPITAL_FLOW_NUMERIC_FIELDS = [
     ("current_price", "currentPrice"), ("market_volume", "marketVolume"),
     ("trading_value", "tradingValue"),
@@ -429,6 +437,18 @@ class QuestDBTimeSeriesAdapter:
             if clean_text(row.get("table_name"))
         }
 
+    def table_upsert_keys(self, table_name: str) -> tuple:
+        rows = self.query_rows(
+            'SELECT "column" AS column_name, upsertKey AS upsert_key FROM table_columns('
+            + sql_text(table_name)
+            + ")"
+        )
+        return tuple(
+            clean_text(row.get("column_name"))
+            for row in rows
+            if str(row.get("upsert_key") or "").strip().lower() in {"true", "1"}
+        )
+
     def ensure_schema(self) -> None:
         cache_key = (self.base_url, self.backend_id)
         if cache_key in QuestDBTimeSeriesAdapter._schema_ready:
@@ -479,7 +499,7 @@ class QuestDBTimeSeriesAdapter:
                     ma60_distance DOUBLE,
                     data_quality SYMBOL
                 ) TIMESTAMP(event_at) PARTITION BY DAY WAL
-                DEDUP UPSERT KEYS(event_at, account_id, symbol, granularity, provider, source_role)
+                DEDUP UPSERT KEYS(event_at, account_id, symbol, granularity)
                 """
             for table_name in GRANULARITY_TABLES.values():
                 if table_name not in metadata:
@@ -498,7 +518,7 @@ class QuestDBTimeSeriesAdapter:
                     current_price DOUBLE,
                     provider SYMBOL
                 ) TIMESTAMP(event_at) PARTITION BY DAY WAL
-                DEDUP UPSERT KEYS(event_at, account_id, symbol, provider)
+                DEDUP UPSERT KEYS(event_at, account_id, symbol)
                 """
                 )
             if CAPITAL_FLOW_TABLE not in metadata:
@@ -543,6 +563,14 @@ class QuestDBTimeSeriesAdapter:
                 ) TIMESTAMP(event_at) PARTITION BY DAY WAL
                 DEDUP UPSERT KEYS(event_at, subject_id, provider, measurement_type)
                 """
+                )
+            for table_name, expected_keys in EXPECTED_UPSERT_KEYS.items():
+                if self.table_upsert_keys(table_name) == expected_keys:
+                    continue
+                self.execute(
+                    "ALTER TABLE " + table_name + " DEDUP ENABLE UPSERT KEYS("
+                    + ", ".join(expected_keys)
+                    + ")"
                 )
             if set(metadata) != set(expected_ttl_days):
                 metadata = self.schema_metadata()

@@ -1628,6 +1628,20 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_release_artifacts (
+        deployment_id VARCHAR(191) PRIMARY KEY,
+        artifact_version VARCHAR(96) NOT NULL,
+        artifact_fingerprint VARCHAR(64) NOT NULL,
+        rulebox_fingerprint VARCHAR(64) NOT NULL,
+        tbox_fingerprint VARCHAR(64) NOT NULL,
+        artifact_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_reasoning_release_artifact_rulebox (rulebox_fingerprint),
+        KEY idx_reasoning_release_artifact_tbox (tbox_fingerprint)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS reasoning_engine_control (
         control_id VARCHAR(64) PRIMARY KEY,
         active_deployment_id VARCHAR(191) NOT NULL DEFAULT '',

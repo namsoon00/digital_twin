@@ -247,6 +247,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     "health": {
                         "candidateReleaseId": "release-r49@frozen",
                         "ruleboxFingerprint": "frozen-rulebox",
+                        "tboxFingerprint": "frozen-tbox",
                     },
                 }
 
@@ -257,6 +258,9 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     "rules": [{"id": "rule:new"}],
                     "sourceRulesHash": "new-rulebox",
                 }
+
+            def active_tbox_metadata(self):
+                return {"status": "ok", "fingerprint": "new-tbox"}
 
         result = service_manager.validate_typedb_candidate_release_contract(
             {
@@ -366,14 +370,21 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 "httpAddress": "127.0.0.1:8000",
                 "typedbDatabase": "ontology_v2",
                 "protectedTypeDbDatabases": ["ontology_v2"],
+                "_typedbDatabaseInventory": {
+                    "selectedDeploymentIds": ["v2-r49"],
+                    "deploymentBindings": {"v2-r49": "ontology_v2"},
+                },
             }
             with patch.object(service_manager, "stop_worker", return_value=0), \
+                    patch.object(service_manager, "stop_typedb_stage_data_path_processes", return_value=True), \
                     patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
-                    patch.object(service_manager, "ensure_typedb_seeded", return_value=True), \
-                    patch.object(service_manager, "validate_typedb_candidate_seed_contract", return_value={
+                    patch.object(service_manager, "ensure_typedb_seeded", return_value=True) as source_seed, \
+                    patch.object(service_manager, "restore_typedb_candidate_release_artifact", return_value={
                         "ready": True,
-                        "status": "ready",
-                    }), \
+                        "status": "release-artifact-ready",
+                        "activeRuleboxFingerprint": "frozen-rulebox",
+                        "activeTboxFingerprint": "frozen-tbox",
+                    }) as artifact_restore, \
                     patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
                         "ready": False,
                         "status": "release-fingerprint-mismatch",
@@ -383,6 +394,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual("candidate-release-contract-failed", result["status"])
         release_check.assert_called_once()
+        artifact_restore.assert_called_once()
+        source_seed.assert_not_called()
         rebuild.assert_not_called()
 
     def test_blue_green_candidate_reuses_release_verified_seed(self):
@@ -397,22 +410,29 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 "httpAddress": "127.0.0.1:8000",
                 "typedbDatabase": "ontology_v2",
                 "protectedTypeDbDatabases": ["ontology_v2"],
+                "_typedbDatabaseInventory": {
+                    "selectedDeploymentIds": ["v2-r49"],
+                    "deploymentBindings": {"v2-r49": "ontology_v2"},
+                },
             }
             candidate = service_manager.typedb_blue_green_stage_spec(spec)
             Path(candidate["dataPath"]).mkdir(parents=True)
             service_manager.write_typedb_candidate_reuse_marker(
                 candidate,
                 "ontology_v2",
-                {"status": "unchanged", "saved": True},
+                {
+                    "status": "release-artifact-ready",
+                    "ready": True,
+                    "seedMode": "immutable-release-artifact",
+                    "activeRuleboxFingerprint": "frozen-rulebox",
+                    "activeTboxFingerprint": "frozen-tbox",
+                },
             )
             with patch.object(service_manager, "stop_worker", return_value=0), \
                     patch.object(service_manager, "stop_typedb_stage_data_path_processes", return_value=True), \
                     patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
                     patch.object(service_manager, "ensure_typedb_seeded", return_value=True) as seed, \
-                    patch.object(service_manager, "validate_typedb_candidate_seed_contract", return_value={
-                        "ready": True,
-                        "status": "ready",
-                    }), \
+                    patch.object(service_manager, "restore_typedb_candidate_release_artifact") as artifact_restore, \
                     patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
                         "ready": True,
                         "status": "ready",
@@ -430,6 +450,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertTrue(result["candidateSeedReused"])
         self.assertEqual([], result["missingProtectedDatabases"])
         seed.assert_not_called()
+        artifact_restore.assert_not_called()
 
     def test_wait_for_typedb_ready_bootstraps_only_pending_fresh_store(self):
         with tempfile.TemporaryDirectory() as temp:

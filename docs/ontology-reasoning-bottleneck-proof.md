@@ -196,3 +196,38 @@ Runtime settings remain a bootstrap fallback, but they cannot remove a graph
 selected by the durable deployment registry. This separates two independent
 health checks: TypeDB process/storage readiness and reasoning-release
 readiness. Both must pass before queued investment reasoning can resume.
+
+## Immutable Release Reconstruction Invariant
+
+Database inventory alone does not make an old reasoning release
+reconstructable. A second 2026-08-31 rotation proved this boundary: the
+candidate correctly included the database bound to
+`ontology-v2-production-r88`, but the only available seed input was the newer
+source TBox/RuleBox. The candidate fingerprints differed from the frozen r88
+fingerprints, so cutover correctly failed. Replacing the old graph with the
+current catalog would have changed investment meaning during storage
+maintenance.
+
+The durable release contract is therefore:
+
+- Registering a V2 release stores one immutable, content-addressed seed
+  artifact in MySQL before the candidate control pointer is changed.
+- The artifact contains its release bundle, semantic-storage contract, exact
+  TBox metadata, executable RuleBox rows, language-governance nodes, and the
+  complete static relation graph.
+- A duplicate save is accepted only when the full artifact fingerprint is
+  identical. A changed payload under the same deployment ID is rejected.
+- Artifact reads recompute the content fingerprint. Corrupt, missing, or
+  release-bundle-mismatched artifacts fail closed.
+- Blue-green rotation uses the artifact path for every protected deployment
+  database and never runs the current-source seed there. Non-protected
+  bootstrap databases may still use the normal current-source seed.
+- Candidate readback must match both the frozen RuleBox and TBox fingerprints
+  before world replay, native inference validation, or cutover.
+
+This removes a control-plane feedback loop as well as a latency source. A
+missing old artifact is detected immediately instead of spending many minutes
+compiling a candidate that can never satisfy the release contract. Existing
+legacy releases remain servable but are not silently made reconstructable from
+new source; recovery requires registering and validating a new release with a
+complete artifact.

@@ -490,6 +490,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     },
                 }
                 self.control_value = EngineControlState("v2-active", "v2-active", "", 4)
+                self.release_artifacts = {}
 
             def get(self, deployment_id):
                 return self.rows.get(deployment_id, {})
@@ -508,6 +509,15 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             def update_capabilities(self, deployment_id, capabilities):
                 self.rows[deployment_id]["capabilities"] = dict(capabilities)
 
+            def save_release_artifact(self, deployment_id, artifact):
+                self.release_artifacts[deployment_id] = dict(artifact)
+                return {
+                    "status": "saved",
+                    "artifactFingerprint": "artifact-fingerprint",
+                    "ruleboxFingerprint": str(artifact.get("ruleboxFingerprint") or ""),
+                    "tboxFingerprint": str(artifact.get("tboxFingerprint") or ""),
+                }
+
         platform = ReasoningEnginePlatformService(
             Registry(),
             {"reasoningEngineShadowTypeDbDatabase": "typedb-production"},
@@ -519,6 +529,27 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertNotEqual("typedb-production", result["deployment"]["graphStoreBinding"])
         self.assertTrue(
             result["deployment"]["graphStoreBinding"].startswith("orbit_alpha_ontology_candidate_")
+        )
+        self.assertEqual("saved", result["releaseSeedArtifact"]["status"])
+        artifact = platform.registry.release_artifacts["v2-candidate"]
+        self.assertEqual("ontology-release-seed-artifact-v2", artifact["version"])
+        self.assertEqual(
+            "release-candidate",
+            artifact["releaseBundle"]["release_id"],
+        )
+        self.assertTrue(artifact["rules"])
+        self.assertTrue(artifact["graph"]["entities"])
+        from digital_twin.infrastructure.graph_store_lifecycle import (
+            ontology_seed_graph_from_artifact,
+        )
+        restored_graph = ontology_seed_graph_from_artifact(artifact)
+        self.assertEqual(
+            len(artifact["graph"]["entities"]),
+            len(restored_graph.entities),
+        )
+        self.assertEqual(
+            len(artifact["graph"]["relations"]),
+            len(restored_graph.relations),
         )
 
     def test_current_status_keeps_historical_resolved_failures_without_degrading(self):

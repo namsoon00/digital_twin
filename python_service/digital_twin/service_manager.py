@@ -19,6 +19,7 @@ from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.share_runtime import fixed_entry_url, share_credentials_environment
 from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
 from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
+from .domain.time_series_storage import canonical_json
 
 
 BASE_WORKERS = {
@@ -3252,25 +3253,32 @@ def validate_typedb_candidate_release_contract(
                 "deploymentId": deployment_id,
                 "status": str(deployment.get("status") or ""),
                 "frozenRuleboxFingerprint": frozen_fingerprint,
+                "frozenTboxFingerprint": str(
+                    health.get("tboxFingerprint") or ""
+                ).strip(),
             })
-        if not governed:
+        if not governed and not candidate_governs_database:
             return {
                 "status": "not-governed",
                 "ready": True,
                 "database": database_name,
                 "governedDeployments": [],
             }
-        missing = [item for item in governed if not item["frozenRuleboxFingerprint"]]
+        missing = [
+            item for item in governed
+            if not item["frozenRuleboxFingerprint"] or not item["frozenTboxFingerprint"]
+        ]
         if missing:
             return {
                 "status": "release-fingerprint-missing",
                 "ready": False,
                 "database": database_name,
                 "governedDeployments": governed,
-                "reason": "The active reasoning release has no frozen RuleBox fingerprint.",
+                "reason": "The active reasoning release has no frozen TBox/RuleBox fingerprint.",
             }
 
-        snapshot = dict(repository_factory(candidate_settings).rulebox_snapshot() or {})
+        repository = repository_factory(candidate_settings)
+        snapshot = dict(repository.rulebox_snapshot() or {})
         if str(snapshot.get("status") or "") != "ok" or not snapshot.get("rules"):
             return {
                 "status": "candidate-rulebox-unavailable",
@@ -3286,6 +3294,8 @@ def validate_typedb_candidate_release_contract(
             or snapshot.get("ruleboxRulesHash")
             or payload_hash(snapshot.get("rules") or [])
         ).strip()
+        candidate_tbox = dict(repository.active_tbox_metadata() or {})
+        candidate_tbox_fingerprint = str(candidate_tbox.get("fingerprint") or "").strip()
 
         # A registered release change intentionally replaces the RuleBox in a
         # fresh blue-green store.  It must match the complete source release
@@ -3335,6 +3345,9 @@ def validate_typedb_candidate_release_contract(
             frozen_candidate_fingerprint = str(
                 candidate_health.get("ruleboxFingerprint") or ""
             ).strip()
+            frozen_candidate_tbox_fingerprint = str(
+                candidate_health.get("tboxFingerprint") or ""
+            ).strip()
             from .domain.ontology_rulebox_catalog import default_graph_inference_rules
             from .domain.ontology_rulebox_governance import rulebox_rules_hash
 
@@ -3352,6 +3365,9 @@ def validate_typedb_candidate_release_contract(
             attested_rulebox_fingerprint = str(
                 seed_contract.get("activeRuleboxFingerprint") or ""
             ).strip()
+            attested_tbox_fingerprint = str(
+                seed_contract.get("activeTboxFingerprint") or ""
+            ).strip()
             attested_rule_count = int_value(seed_contract.get("ruleCount"), 0, 0)
             if not bool(seed_contract.get("ready")):
                 return {
@@ -3368,6 +3384,20 @@ def validate_typedb_candidate_release_contract(
                 }
             expected_rulebox_fingerprint = (
                 frozen_candidate_fingerprint or attested_rulebox_fingerprint
+            )
+            expected_tbox_release_id = str(
+                registered_bundle.get("tbox_release_id")
+                or registered_bundle.get("tboxReleaseId")
+                or ""
+            ).strip()
+            expected_tbox_fingerprint = (
+                frozen_candidate_tbox_fingerprint
+                or attested_tbox_fingerprint
+                or (
+                    expected_tbox_release_id.rsplit("@", 1)[-1]
+                    if "@" in expected_tbox_release_id
+                    else ""
+                )
             )
             if (
                 expected_rulebox_fingerprint
@@ -3387,14 +3417,34 @@ def validate_typedb_candidate_release_contract(
                         "frozen or source-authored RuleBox fingerprint."
                     ),
                 }
+            if (
+                not expected_tbox_fingerprint
+                or expected_tbox_fingerprint != candidate_tbox_fingerprint
+            ):
+                return {
+                    "status": "registered-candidate-tbox-fingerprint-mismatch",
+                    "ready": False,
+                    "database": database_name,
+                    "candidateDeploymentId": candidate_deployment_id,
+                    "candidateTboxFingerprint": candidate_tbox_fingerprint,
+                    "frozenTboxFingerprint": frozen_candidate_tbox_fingerprint,
+                    "attestedTboxFingerprint": attested_tbox_fingerprint,
+                    "expectedTboxFingerprint": expected_tbox_fingerprint,
+                    "reason": (
+                        "The seeded TBox differs from the registered candidate's "
+                        "frozen release bundle."
+                    ),
+                }
             return {
                 "status": "registered-candidate-ready",
                 "ready": True,
                 "database": database_name,
                 "candidateDeploymentId": candidate_deployment_id,
                 "candidateRuleboxFingerprint": candidate_fingerprint,
+                "candidateTboxFingerprint": candidate_tbox_fingerprint,
                 "sourceRuleboxFingerprint": source_rulebox_fingerprint,
                 "attestedRuleboxFingerprint": attested_rulebox_fingerprint,
+                "attestedTboxFingerprint": attested_tbox_fingerprint,
                 "attestedRuleCount": attested_rule_count,
                 "seedContract": seed_contract,
                 "governedDeployments": [{
@@ -3405,7 +3455,10 @@ def validate_typedb_candidate_release_contract(
             }
         mismatches = [
             item for item in governed
-            if item["frozenRuleboxFingerprint"] != candidate_fingerprint
+            if (
+                item["frozenRuleboxFingerprint"] != candidate_fingerprint
+                or item["frozenTboxFingerprint"] != candidate_tbox_fingerprint
+            )
         ]
         if mismatches:
             return {
@@ -3413,9 +3466,10 @@ def validate_typedb_candidate_release_contract(
                 "ready": False,
                 "database": database_name,
                 "candidateRuleboxFingerprint": candidate_fingerprint,
+                "candidateTboxFingerprint": candidate_tbox_fingerprint,
                 "governedDeployments": governed,
                 "reason": (
-                    "The candidate RuleBox differs from the frozen delivery release; "
+                    "The candidate TBox/RuleBox differs from the frozen delivery release; "
                     "register and validate a new reasoning deployment before rotating storage."
                 ),
             }
@@ -3424,6 +3478,7 @@ def validate_typedb_candidate_release_contract(
             "ready": True,
             "database": database_name,
             "candidateRuleboxFingerprint": candidate_fingerprint,
+            "candidateTboxFingerprint": candidate_tbox_fingerprint,
             "governedDeployments": governed,
         }
     except Exception as error:  # noqa: BLE001 - maintenance must fail closed.
@@ -3431,6 +3486,132 @@ def validate_typedb_candidate_release_contract(
             "status": "release-contract-error",
             "ready": False,
             "database": database_name,
+            "reason": str(error)[:300],
+        }
+
+
+def restore_typedb_candidate_release_artifact(
+    spec: Dict[str, object],
+    deployment_id: str,
+    settings_provider=None,
+    registry_factory=None,
+    repository_factory=None,
+) -> Dict[str, object]:
+    """Rebuild one protected candidate database from its frozen release artifact."""
+
+    if settings_provider is None:
+        settings_provider = runtime_settings
+    if registry_factory is None:
+        from .infrastructure.operational_store import reasoning_engine_registry_store
+        registry_factory = reasoning_engine_registry_store
+    if repository_factory is None:
+        from .infrastructure.ontology_graph_store import ontology_repository_from_settings
+        repository_factory = ontology_repository_from_settings
+    try:
+        try:
+            configured = dict(settings_provider(fast_operational_read=True) or {})
+        except TypeError:
+            configured = dict(settings_provider() or {})
+        registry = registry_factory(configured)
+        release_artifact = getattr(registry, "release_artifact", None)
+        if not callable(release_artifact):
+            return {
+                "status": "release-artifact-store-unavailable",
+                "ready": False,
+                "deploymentId": str(deployment_id or ""),
+            }
+        stored = dict(release_artifact(deployment_id) or {})
+        if stored and not bool(stored.get("valid", True)):
+            return {
+                "status": "release-artifact-corrupt",
+                "ready": False,
+                "deploymentId": str(deployment_id or ""),
+                "reason": "The frozen release artifact failed its content fingerprint check.",
+            }
+        artifact = dict(stored.get("artifact") or {})
+        if not artifact:
+            return {
+                "status": "release-artifact-missing",
+                "ready": False,
+                "deploymentId": str(deployment_id or ""),
+                "reason": "The frozen reasoning release has no reconstructable seed artifact.",
+            }
+        deployment = dict(registry.get(deployment_id) or {})
+        health = dict(deployment.get("health") or {})
+        release_bundle = dict(deployment.get("releaseBundle") or {})
+        artifact_release_bundle = dict(artifact.get("releaseBundle") or {})
+        if canonical_json(release_bundle) != canonical_json(artifact_release_bundle):
+            return {
+                "status": "release-artifact-bundle-mismatch",
+                "ready": False,
+                "deploymentId": str(deployment_id or ""),
+                "reason": "The frozen artifact belongs to a different release bundle.",
+            }
+        expected_rulebox = str(
+            health.get("ruleboxFingerprint")
+            or stored.get("ruleboxFingerprint")
+            or ""
+        ).strip()
+        tbox_release_id = str(
+            release_bundle.get("tbox_release_id")
+            or release_bundle.get("tboxReleaseId")
+            or ""
+        ).strip()
+        expected_tbox = str(
+            health.get("tboxFingerprint")
+            or stored.get("tboxFingerprint")
+            or (tbox_release_id.rsplit("@", 1)[-1] if "@" in tbox_release_id else "")
+        ).strip()
+        if (
+            str(stored.get("ruleboxFingerprint") or "") != expected_rulebox
+            or str(stored.get("tboxFingerprint") or "") != expected_tbox
+        ):
+            return {
+                "status": "release-artifact-deployment-mismatch",
+                "ready": False,
+                "deploymentId": str(deployment_id or ""),
+                "reason": "The frozen release artifact does not match deployment fingerprints.",
+            }
+        candidate_settings = {
+            **configured,
+            "ontologyTypeDbEnabled": "1",
+            "typedbAddress": str(spec.get("healthAddress") or ""),
+            "typedbHttpAddress": str(spec.get("httpAddress") or ""),
+            "typedbDatabase": str(spec.get("typedbDatabase") or ""),
+            "typedbUser": str(spec.get("typedbUser") or configured.get("typedbUser") or "admin"),
+            "typedbPassword": str(spec.get("typedbPassword") or configured.get("typedbPassword") or "password"),
+            "typedbTlsEnabled": str(spec.get("typedbTlsEnabled") or configured.get("typedbTlsEnabled") or "0"),
+        }
+        repository = repository_factory(candidate_settings)
+        restore = getattr(repository, "seed_release_artifact", None)
+        if not callable(restore):
+            return {
+                "status": "release-artifact-restore-unsupported",
+                "ready": False,
+                "deploymentId": str(deployment_id or ""),
+            }
+        result = dict(restore(artifact) or {})
+        ready = bool(
+            result.get("saved")
+            and str(result.get("ruleboxFingerprint") or "") == expected_rulebox
+            and str(result.get("tboxFingerprint") or "") == expected_tbox
+        )
+        return {
+            "status": "release-artifact-ready" if ready else str(result.get("status") or "release-artifact-restore-failed"),
+            "ready": ready,
+            "deploymentId": str(deployment_id or ""),
+            "database": str(spec.get("typedbDatabase") or ""),
+            "ruleCount": int_value(result.get("ruleCount"), 0, 0),
+            "activeRuleboxFingerprint": str(result.get("ruleboxFingerprint") or ""),
+            "activeTboxFingerprint": str(result.get("tboxFingerprint") or ""),
+            "artifactFingerprint": str(stored.get("artifactFingerprint") or ""),
+            "restore": result,
+        }
+    except Exception as error:  # noqa: BLE001 - protected release restore fails closed.
+        return {
+            "status": "release-artifact-restore-error",
+            "ready": False,
+            "deploymentId": str(deployment_id or ""),
             "reason": str(error)[:300],
         }
 
@@ -4682,17 +4863,57 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
         validated_inference_modes = {}
         validated_seed_contracts = {}
         validated_release_contracts = {}
+        seed_reuse_by_database = {}
+        inventory = dict(candidate.get("_typedbDatabaseInventory") or {})
+        deployment_bindings = dict(inventory.get("deploymentBindings") or {})
+        selected_deployment_ids = [
+            str(value or "").strip()
+            for value in list(inventory.get("selectedDeploymentIds") or [])
+            if str(value or "").strip()
+        ]
+        protected_databases = {
+            str(value or "").strip()
+            for value in list(candidate.get("protectedTypeDbDatabases") or [])
+            if str(value or "").strip()
+        }
         for database_spec in typedb_blue_green_database_specs(candidate):
             database_name = str(database_spec.get("typedbDatabase") or "")
+            protected_database = database_name in protected_databases
+            artifact_deployment_ids = [
+                deployment_id
+                for deployment_id in selected_deployment_ids
+                if str(deployment_bindings.get(deployment_id) or "").strip()
+                == database_name
+            ]
             cached_attestation = dict(
                 dict(reuse_marker.get("seedAttestations") or {}).get(database_name) or {}
             )
             if cached_attestation:
                 database_spec["_typedbSeedAttestation"] = cached_attestation
-            cached_seed_contract = (
-                validate_typedb_candidate_seed_contract(database_spec)
-                if cached_attestation else {"ready": False}
+            release_artifact_seed = bool(
+                protected_database
+                and str(cached_attestation.get("seedMode") or "")
+                == "immutable-release-artifact"
             )
+            cached_seed_contract = (
+                cached_attestation
+                if release_artifact_seed
+                else validate_typedb_candidate_seed_contract(database_spec)
+                if cached_attestation
+                else {"ready": False}
+            )
+            if release_artifact_seed:
+                database_spec["_typedbSeedContract"] = cached_seed_contract
+            if protected_database and not artifact_deployment_ids:
+                return {
+                    "status": "candidate-release-artifact-binding-missing",
+                    "database": database_name,
+                    "candidate": candidate,
+                    "reason": (
+                        "The protected TypeDB database has no selected deployment "
+                        "artifact binding."
+                    ),
+                }
             cached_release_contract = (
                 validate_typedb_candidate_release_contract(database_spec)
                 if bool(cached_seed_contract.get("ready")) else {"ready": False}
@@ -4701,19 +4922,42 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                 cached_seed_contract.get("ready")
                 and cached_release_contract.get("ready")
             )
-            if not seed_reused and not ensure_typedb_seeded(database_spec):
-                seed_failure = dict(database_spec.get("_typedbSeedFailure") or {})
-                failure_reason = str(seed_failure.get("reason") or "").strip()
-                if str(seed_failure.get("reasonCode") or "") == "typedb-graph-writer-owned":
-                    failure_reason = "후보 TypeDB 작성자 잠금이 다른 인스턴스와 충돌했습니다."
-                return {
-                    "status": "candidate-seed-failed",
-                    "reason": failure_reason or "후보 RuleBox 생성에 실패했습니다.",
-                    "database": database_name,
-                    "seedFailure": seed_failure,
-                    "candidate": candidate,
+            if not seed_reused and protected_database:
+                artifact_restore = restore_typedb_candidate_release_artifact(
+                    database_spec,
+                    artifact_deployment_ids[0],
+                )
+                if not bool(artifact_restore.get("ready")):
+                    candidate["_candidateReusable"] = False
+                    clear_typedb_candidate_reuse_marker(candidate)
+                    return {
+                        "status": "candidate-release-artifact-restore-failed",
+                        "database": database_name,
+                        "deploymentId": artifact_deployment_ids[0],
+                        "releaseArtifact": artifact_restore,
+                        "candidate": candidate,
+                    }
+                seed_contract = {
+                    **artifact_restore,
+                    "seedMode": "immutable-release-artifact",
                 }
-            seed_contract = validate_typedb_candidate_seed_contract(database_spec)
+                database_spec["_typedbSeedAttestation"] = seed_contract
+            elif not seed_reused:
+                if not ensure_typedb_seeded(database_spec):
+                    seed_failure = dict(database_spec.get("_typedbSeedFailure") or {})
+                    failure_reason = str(seed_failure.get("reason") or "").strip()
+                    if str(seed_failure.get("reasonCode") or "") == "typedb-graph-writer-owned":
+                        failure_reason = "후보 TypeDB 작성자 잠금이 다른 인스턴스와 충돌했습니다."
+                    return {
+                        "status": "candidate-seed-failed",
+                        "reason": failure_reason or "후보 RuleBox 생성에 실패했습니다.",
+                        "database": database_name,
+                        "seedFailure": seed_failure,
+                        "candidate": candidate,
+                    }
+                seed_contract = validate_typedb_candidate_seed_contract(database_spec)
+            else:
+                seed_contract = cached_seed_contract
             if not bool(seed_contract.get("ready")):
                 return {
                     "status": "candidate-seed-contract-failed",
@@ -4735,9 +4979,14 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             write_typedb_candidate_reuse_marker(
                 candidate,
                 database_name,
-                dict(database_spec.get("_typedbSeedAttestation") or cached_attestation),
+                (
+                    seed_contract
+                    if protected_database
+                    else dict(database_spec.get("_typedbSeedAttestation") or cached_attestation)
+                ),
             )
             candidate["_candidateReusable"] = True
+            seed_reuse_by_database[database_name] = seed_reused
             inference_readiness = validate_typedb_candidate_inference_runtime(
                 database_spec,
             )
@@ -4774,11 +5023,7 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             validated_release_contracts[database_name] = str(
                 release_contract.get("status") or "unknown"
             )
-        protected_databases = [
-            str(value or "").strip()
-            for value in list(candidate.get("protectedTypeDbDatabases") or [])
-            if str(value or "").strip()
-        ]
+        protected_databases = sorted(protected_databases)
         missing_protected_databases = [
             database
             for database in protected_databases
@@ -4808,7 +5053,11 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             "validatedInferenceModes": validated_inference_modes,
             "validatedSeedContracts": validated_seed_contracts,
             "validatedReleaseContracts": validated_release_contracts,
-            "candidateSeedReused": reuse_candidate,
+            "candidateSeedReused": bool(
+                validated_databases
+                and all(seed_reuse_by_database.get(database, False) for database in validated_databases)
+            ),
+            "seedReuseByDatabase": seed_reuse_by_database,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {

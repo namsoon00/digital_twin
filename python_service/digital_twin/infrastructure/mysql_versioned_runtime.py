@@ -326,6 +326,106 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
             ).fetchone()
         return self.row_payload(row) if row else {}
 
+    def save_release_artifact(
+        self,
+        deployment_id: str,
+        artifact: Mapping[str, object],
+    ) -> Dict[str, object]:
+        """Persist one immutable, fully reconstructable ontology release."""
+
+        clean_deployment_id = str(deployment_id or "").strip()
+        payload = dict(artifact or {})
+        if not clean_deployment_id or not payload:
+            raise ValueError("A deployment id and release artifact are required")
+        artifact_fingerprint = payload_fingerprint(payload)
+        artifact_version = str(payload.get("version") or "ontology-release-seed-artifact-v2")
+        rulebox_fingerprint = str(payload.get("ruleboxFingerprint") or "").strip()
+        tbox_fingerprint = str(payload.get("tboxFingerprint") or "").strip()
+        release_bundle = dict(payload.get("releaseBundle") or {})
+        if not rulebox_fingerprint or not tbox_fingerprint or not release_bundle:
+            raise ValueError("Release artifact fingerprints are required")
+        stamp = iso_utc()
+        with self.transaction() as connection:
+            deployment = connection.execute(
+                "SELECT release_bundle_json FROM reasoning_engine_deployments "
+                "WHERE deployment_id = %s FOR UPDATE",
+                (clean_deployment_id,),
+            ).fetchone() or {}
+            if not deployment:
+                raise ValueError(
+                    "Unknown reasoning engine deployment: " + clean_deployment_id
+                )
+            registered_bundle = json_value(deployment.get("release_bundle_json"), {})
+            if canonical_json(registered_bundle) != canonical_json(release_bundle):
+                raise RuntimeError(
+                    "The reasoning release artifact bundle does not match deployment "
+                    + clean_deployment_id
+                )
+            existing = connection.execute(
+                "SELECT artifact_fingerprint FROM reasoning_engine_release_artifacts "
+                "WHERE deployment_id = %s FOR UPDATE",
+                (clean_deployment_id,),
+            ).fetchone() or {}
+            existing_fingerprint = str(existing.get("artifact_fingerprint") or "")
+            if existing_fingerprint and existing_fingerprint != artifact_fingerprint:
+                raise RuntimeError(
+                    "The immutable reasoning release artifact changed for "
+                    + clean_deployment_id
+                )
+            connection.execute(
+                """
+                INSERT INTO reasoning_engine_release_artifacts (
+                    deployment_id, artifact_version, artifact_fingerprint,
+                    rulebox_fingerprint, tbox_fingerprint, artifact_json,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)
+                """,
+                (
+                    clean_deployment_id,
+                    artifact_version,
+                    artifact_fingerprint,
+                    rulebox_fingerprint,
+                    tbox_fingerprint,
+                    canonical_json(payload),
+                    stamp,
+                    stamp,
+                ),
+            )
+        return {
+            "status": "saved" if not existing_fingerprint else "unchanged",
+            "deploymentId": clean_deployment_id,
+            "artifactFingerprint": artifact_fingerprint,
+            "ruleboxFingerprint": rulebox_fingerprint,
+            "tboxFingerprint": tbox_fingerprint,
+        }
+
+    def release_artifact(self, deployment_id: str) -> Dict[str, object]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM reasoning_engine_release_artifacts WHERE deployment_id = %s",
+                (str(deployment_id or "").strip(),),
+            ).fetchone() or {}
+        artifact = json_value(row.get("artifact_json"), {})
+        if not artifact:
+            return {}
+        stored_fingerprint = str(row.get("artifact_fingerprint") or "")
+        computed_fingerprint = payload_fingerprint(artifact)
+        valid = bool(stored_fingerprint and stored_fingerprint == computed_fingerprint)
+        return {
+            "status": "ready" if valid else "corrupt",
+            "valid": valid,
+            "deploymentId": str(row.get("deployment_id") or ""),
+            "artifactVersion": str(row.get("artifact_version") or ""),
+            "artifactFingerprint": stored_fingerprint,
+            "computedArtifactFingerprint": computed_fingerprint,
+            "ruleboxFingerprint": str(row.get("rulebox_fingerprint") or ""),
+            "tboxFingerprint": str(row.get("tbox_fingerprint") or ""),
+            "artifact": artifact if valid else {},
+            "createdAt": str(row.get("created_at") or ""),
+            "updatedAt": str(row.get("updated_at") or ""),
+        }
+
     def transition(self, deployment_id: str, target_status: str) -> Dict[str, object]:
         target = engine_status(target_status)
         with self.transaction() as connection:

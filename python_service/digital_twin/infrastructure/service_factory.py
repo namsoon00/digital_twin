@@ -120,13 +120,16 @@ from ..domain.monitoring import RealtimeMonitor
 from ..domain.portfolio import account_snapshot_from_monitor_state
 from ..domain.portfolio_ontology_temporal_concepts import parse_temporal_windows
 from ..domain.reasoning_shadow import payload_hash, unpack_projection_runtime_contexts
+from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
 from ..domain.ontology_rulebox_governance import rulebox_rules_hash
 from ..domain.ontology_compiler import compile_ontology_release
 from ..domain.reasoning_engine_versions import reasoning_release_identity
 from ..domain.investment_reasoning import reasoning_rule_inventory
+from ..domain.investment_ubiquitous_language import investment_language_registry
 from ..domain.ontology_worlds import portfolio_world_id
 from .event_bus import EventBus, default_event_bus
 from .graph_store_rulebox import rulebox_rules_from_payload
+from .graph_store_lifecycle import ontology_release_seed_artifact
 from .share_notification_links import ActiveShareNotificationLinkResolver
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .opendart_calendar_source import OpenDartEarningsCalendarSource
@@ -2404,6 +2407,62 @@ def build_v2_reasoning_engine(
         or candidate_rulebox.get("ruleboxRulesHash")
         or payload_hash(candidate_rulebox.get("rules") or [])
     )
+    runtime_tbox_metadata = repository.active_tbox_metadata()
+    release_seed_artifact = ontology_release_seed_artifact(
+        default_graph_inference_rules(),
+        language_registry=investment_language_registry(configured),
+        tbox_metadata=default_tbox_metadata(),
+        release_bundle=descriptor.release_bundle.to_dict(),
+    )
+    save_release_artifact = getattr(platform.registry, "save_release_artifact", None)
+    read_release_artifact = getattr(platform.registry, "release_artifact", None)
+    stored_release_artifact = (
+        dict(read_release_artifact(descriptor.deployment_id) or {})
+        if callable(read_release_artifact)
+        else {}
+    )
+    runtime_tbox_fingerprint = str(runtime_tbox_metadata.get("fingerprint") or "")
+    authored_release_matches_runtime = bool(
+        str(release_seed_artifact.get("ruleboxFingerprint") or "") == rulebox_fingerprint
+        and str(release_seed_artifact.get("tboxFingerprint") or "")
+        == runtime_tbox_fingerprint
+    )
+    if stored_release_artifact:
+        release_artifact_persistence = {
+            "status": (
+                "unchanged"
+                if bool(stored_release_artifact.get("valid", True))
+                and str(stored_release_artifact.get("ruleboxFingerprint") or "")
+                == rulebox_fingerprint
+                and str(stored_release_artifact.get("tboxFingerprint") or "")
+                == runtime_tbox_fingerprint
+                else "release-artifact-runtime-mismatch"
+            ),
+            "artifactFingerprint": str(
+                stored_release_artifact.get("artifactFingerprint") or ""
+            ),
+            "ruleboxFingerprint": str(
+                stored_release_artifact.get("ruleboxFingerprint") or ""
+            ),
+            "tboxFingerprint": str(
+                stored_release_artifact.get("tboxFingerprint") or ""
+            ),
+        }
+    elif callable(save_release_artifact) and authored_release_matches_runtime:
+        release_artifact_persistence = dict(
+            save_release_artifact(descriptor.deployment_id, release_seed_artifact) or {}
+        )
+    elif callable(save_release_artifact):
+        # A legacy active release may predate durable artifacts. Never bind its
+        # old deployment identity to today's authored TBox/RuleBox.
+        release_artifact_persistence = {
+            "status": "legacy-release-artifact-missing",
+            "artifactFingerprint": "",
+            "ruleboxFingerprint": rulebox_fingerprint,
+            "tboxFingerprint": runtime_tbox_fingerprint,
+        }
+    else:
+        release_artifact_persistence = {"status": "unsupported"}
     release_identity = reasoning_release_identity(descriptor, rulebox_fingerprint)
     candidate_settings["_reasoningEngineReleaseFingerprint"] = str(
         release_identity.get("releaseFingerprint") or ""
@@ -2540,6 +2599,21 @@ def build_v2_reasoning_engine(
                 (rulebox_release_preflight.get("ruleCatalogMigration") or {}).get("status")
                 or ""
             ),
+        },
+        "releaseSeedArtifact": {
+            "status": str(release_artifact_persistence.get("status") or ""),
+            "artifactFingerprint": str(
+                release_artifact_persistence.get("artifactFingerprint") or ""
+            ),
+            "ruleboxFingerprint": str(
+                release_artifact_persistence.get("ruleboxFingerprint") or ""
+            ),
+            "tboxFingerprint": str(
+                release_artifact_persistence.get("tboxFingerprint") or ""
+            ),
+            "reconstructable": str(
+                release_artifact_persistence.get("status") or ""
+            ) in {"saved", "unchanged"},
         },
         "runtimeOntologyRelease": {
             "status": "ready",

@@ -102,6 +102,7 @@ from .graph_store_lifecycle import (
     active_tbox_metadata_unavailable,
     graph_box_entity_counts,
     graph_box_relation_counts,
+    ontology_seed_graph_from_artifact,
     ontology_seed_graph,
 )
 from .graph_store_payloads import (
@@ -16019,6 +16020,7 @@ relation ontology-assertion,
         self,
         graph: PortfolioOntology,
         rules_payload: List[Dict[str, object]],
+        tbox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Return the durable identity of the immutable ontology seed.
 
@@ -16038,7 +16040,9 @@ relation ontology-assertion,
             for box in expected_boxes
         }
         expected_rulebox = rulebox_runtime_metadata(rules_payload)
-        expected_tbox = default_tbox_metadata()
+        expected_tbox = normalize_tbox_metadata(
+            dict(tbox_metadata or default_tbox_metadata())
+        )
         language_registry = next(
             (
                 item
@@ -16105,8 +16109,13 @@ relation ontology-assertion,
         self,
         graph: PortfolioOntology,
         rules_payload: List[Dict[str, object]],
+        tbox_metadata: Dict[str, object] = None,
     ) -> PortfolioOntology:
-        metadata = self.seed_static_manifest_metadata(graph, rules_payload)
+        metadata = self.seed_static_manifest_metadata(
+            graph,
+            rules_payload,
+            tbox_metadata=tbox_metadata,
+        )
         return PortfolioOntology(
             "typedb-static-seed-manifest",
             entities=[OntologyEntity(
@@ -16694,6 +16703,7 @@ relation ontology-assertion,
         boxes: Iterable[str],
         rules_payload: List[Dict[str, object]] = None,
         schema_prepared: bool = False,
+        tbox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Refresh only selected immutable seed boxes through one graph write.
 
@@ -16739,6 +16749,7 @@ relation ontology-assertion,
         metadata = self.seed_static_manifest_metadata(
             graph,
             list(rules_payload or rulebox_rules_to_payload(self._last_rules or default_graph_inference_rules())),
+            tbox_metadata=tbox_metadata,
         )
         generation_ids = self.static_seed_generation_ids(metadata)
         slice_graph = self.graph_with_static_seed_generation(
@@ -16802,10 +16813,19 @@ relation ontology-assertion,
         graph: PortfolioOntology,
         rules_payload: List[Dict[str, object]],
         schema_prepared: bool = False,
+        tbox_metadata: Dict[str, object] = None,
     ) -> Dict[str, object]:
         """Atomically publish the static seed identity after a successful refresh."""
-        manifest_graph = self.seed_static_manifest_graph(graph, rules_payload)
-        metadata = self.seed_static_manifest_metadata(graph, rules_payload)
+        manifest_graph = self.seed_static_manifest_graph(
+            graph,
+            rules_payload,
+            tbox_metadata=tbox_metadata,
+        )
+        metadata = self.seed_static_manifest_metadata(
+            graph,
+            rules_payload,
+            tbox_metadata=tbox_metadata,
+        )
         if not self.address:
             return {
                 "configured": False,
@@ -16858,6 +16878,141 @@ relation ontology-assertion,
             "status": "ok",
             "graphStore": "typedb",
             "staticSeedFingerprint": metadata.get("staticSeedFingerprint"),
+        }
+
+    @coordinated_typedb_projection_write(
+        "ontology-release-artifact-seed",
+        typedb_projection_world_from_payload,
+        bootstrap_schema=True,
+    )
+    def seed_release_artifact(self, payload: Dict[str, object]) -> Dict[str, object]:
+        """Restore an immutable release from its durable static graph artifact."""
+
+        artifact = dict(payload or {})
+        if (
+            str(artifact.get("version") or "") != "ontology-release-seed-artifact-v2"
+            or str(artifact.get("semanticStorageContractVersion") or "")
+            != SEMANTIC_STORAGE_CONTRACT_VERSION
+            or not dict(artifact.get("releaseBundle") or {})
+        ):
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "unsupported-release-artifact-contract",
+                "artifactVersion": str(artifact.get("version") or ""),
+                "semanticStorageContractVersion": str(
+                    artifact.get("semanticStorageContractVersion") or ""
+                ),
+            }
+        try:
+            rules = rulebox_rules_from_payload(
+                {"rules": list(artifact.get("rules") or [])},
+                strict_governance=True,
+            )
+        except ValueError as error:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "invalid-release-artifact",
+                "reason": str(error)[:240],
+            }
+        rules_payload = rulebox_rules_to_payload(rules)
+        expected_rulebox_fingerprint = str(artifact.get("ruleboxFingerprint") or "").strip()
+        actual_rulebox_fingerprint = rulebox_rules_hash(rules_payload)
+        tbox_metadata = normalize_tbox_metadata(dict(artifact.get("tboxMetadata") or {}))
+        expected_tbox_fingerprint = str(artifact.get("tboxFingerprint") or "").strip()
+        if (
+            not expected_rulebox_fingerprint
+            or expected_rulebox_fingerprint != actual_rulebox_fingerprint
+            or not expected_tbox_fingerprint
+            or expected_tbox_fingerprint != str(tbox_metadata.get("fingerprint") or "")
+        ):
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "release-artifact-fingerprint-mismatch",
+                "expectedRuleboxFingerprint": expected_rulebox_fingerprint,
+                "actualRuleboxFingerprint": actual_rulebox_fingerprint,
+                "expectedTboxFingerprint": expected_tbox_fingerprint,
+                "actualTboxFingerprint": str(tbox_metadata.get("fingerprint") or ""),
+            }
+        graph = ontology_seed_graph_from_artifact(artifact)
+        box_counts = graph_box_entity_counts(graph)
+        missing_boxes = [
+            box for box in self.seed_static_box_names()
+            if int(box_counts.get(box) or 0) <= 0
+        ]
+        if missing_boxes:
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "release-artifact-static-box-missing",
+                "missingBoxes": missing_boxes,
+            }
+        schema_sync = self.sync_base_schema_contract()
+        if not bool(schema_sync.get("saved")):
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "release-artifact-schema-sync-failed",
+                "schemaSync": schema_sync,
+                "reason": str(schema_sync.get("reason") or "")[:240],
+            }
+        self._last_rules = list(rules)
+        static_write = self.save_static_seed_boxes(
+            graph,
+            self.seed_static_box_names(),
+            rules_payload=rules_payload,
+            schema_prepared=True,
+            tbox_metadata=tbox_metadata,
+        )
+        if not bool(static_write.get("saved")):
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "release-artifact-static-write-failed",
+                "staticWrite": static_write,
+            }
+        manifest = self.save_seed_static_manifest(
+            graph,
+            rules_payload,
+            schema_prepared=True,
+            tbox_metadata=tbox_metadata,
+        )
+        if not bool(manifest.get("saved")):
+            return {
+                "configured": True,
+                "saved": False,
+                "status": "release-artifact-manifest-write-failed",
+                "staticWrite": static_write,
+                "manifest": manifest,
+            }
+        self.clear_rulebox_snapshot_cache()
+        restored_rulebox = dict(self.rulebox_snapshot() or {})
+        restored_tbox = dict(self.active_tbox_metadata() or {})
+        restored_rulebox_fingerprint = str(
+            restored_rulebox.get("sourceRulesHash")
+            or restored_rulebox.get("ruleboxRulesHash")
+            or restored_rulebox.get("rulesHash")
+            or ""
+        ).strip()
+        restored_tbox_fingerprint = str(restored_tbox.get("fingerprint") or "").strip()
+        ready = bool(
+            str(restored_rulebox.get("status") or "") == "ok"
+            and restored_rulebox_fingerprint == expected_rulebox_fingerprint
+            and str(restored_tbox.get("status") or "") == "ok"
+            and restored_tbox_fingerprint == expected_tbox_fingerprint
+        )
+        return {
+            "configured": True,
+            "saved": ready,
+            "status": "restored" if ready else "release-artifact-readback-mismatch",
+            "ruleCount": len(rules_payload),
+            "ruleboxFingerprint": restored_rulebox_fingerprint,
+            "tboxFingerprint": restored_tbox_fingerprint,
+            "schemaSync": schema_sync,
+            "staticWrite": static_write,
+            "manifest": manifest,
         }
 
     @coordinated_typedb_projection_write(

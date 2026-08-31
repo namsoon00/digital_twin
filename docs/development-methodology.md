@@ -31,6 +31,13 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   candidate RuleBox fingerprint after its first successful comparison and
   never combine comparison history from different release fingerprints under
   one deployment ID.
+- Persist a content-addressed release seed artifact when a reasoning release is
+  registered. It must contain the exact TBox metadata, RuleBox rows, language
+  governance graph, static relations, semantic-storage contract, and release
+  bundle needed to reconstruct that deployment. Blue-green TypeDB rotation
+  must restore protected databases only from this artifact; using the current
+  source catalog to recreate an older deployment is a semantic mutation and
+  must fail closed before an expensive candidate rebuild starts.
 - A new reasoning-engine version must consume durable source events through
   its own leased queue and implement the version-neutral
   `InvestmentReasoningEngine` contract. It must not call the preceding

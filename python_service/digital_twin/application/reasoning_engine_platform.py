@@ -1083,20 +1083,67 @@ class ReasoningEnginePlatformService:
         )
         self.registry.upsert(descriptor)
         update_health = getattr(self.registry, "update_health", None)
-        if requested_graph_store and callable(update_health):
+        save_release_artifact = getattr(self.registry, "save_release_artifact", None)
+        release_artifact_persistence = {"status": "unsupported"}
+        if callable(save_release_artifact):
+            from ..domain.investment_ubiquitous_language import investment_language_registry
+            from ..domain.ontology_rulebox_catalog import default_graph_inference_rules
+            from ..domain.ontology_schema import default_tbox_metadata
+            from ..infrastructure.graph_store_lifecycle import ontology_release_seed_artifact
+
+            release_artifact = ontology_release_seed_artifact(
+                default_graph_inference_rules(),
+                language_registry=investment_language_registry(self.settings),
+                tbox_metadata=default_tbox_metadata(),
+                release_bundle=descriptor.release_bundle.to_dict(),
+            )
+            try:
+                release_artifact_persistence = dict(
+                    save_release_artifact(clean_deployment_id, release_artifact) or {}
+                )
+            except Exception as error:  # noqa: BLE001 - release registration fails closed.
+                if not existing:
+                    transition = getattr(self.registry, "transition", None)
+                    if callable(transition):
+                        try:
+                            transition(clean_deployment_id, "blocked")
+                        except Exception:  # noqa: BLE001 - preserve the original artifact error.
+                            pass
+                return {
+                    "status": "blocked",
+                    "deploymentId": clean_deployment_id,
+                    "blockers": ["immutable-release-artifact-persistence-failed"],
+                    "reason": str(error)[:300],
+                }
+        health_update = {
+            "releaseSeedArtifact": {
+                "status": str(release_artifact_persistence.get("status") or "unsupported"),
+                "artifactFingerprint": str(
+                    release_artifact_persistence.get("artifactFingerprint") or ""
+                ),
+                "ruleboxFingerprint": str(
+                    release_artifact_persistence.get("ruleboxFingerprint") or ""
+                ),
+                "tboxFingerprint": str(
+                    release_artifact_persistence.get("tboxFingerprint") or ""
+                ),
+                "reconstructable": str(
+                    release_artifact_persistence.get("status") or ""
+                ) in {"saved", "unchanged"},
+            },
+        }
+        if requested_graph_store:
             # Supplying a graph database is an explicit assertion that its
             # storage lifecycle is managed outside this release registration.
             # Preserve that bootstrap contract so a provisioning worker does
             # not redefine an already complete TypeDB schema.
-            existing_health = dict((self.registry.get(clean_deployment_id) or {}).get("health") or {})
-            update_health(clean_deployment_id, {
-                **existing_health,
-                "graphStoreProvisioning": {
-                    "mode": "reuse-existing",
-                    "database": candidate_graph_store,
-                    "source": "explicit-release-registration",
-                },
-            })
+            health_update["graphStoreProvisioning"] = {
+                "mode": "reuse-existing",
+                "database": candidate_graph_store,
+                "source": "explicit-release-registration",
+            }
+        if callable(update_health):
+            update_health(clean_deployment_id, health_update)
         if existing and str(existing.get("status") or "") == "retired":
             self.registry.transition(clean_deployment_id, "provisioning")
         next_control = self.registry.set_control(
@@ -1111,6 +1158,7 @@ class ReasoningEnginePlatformService:
             "deployment": self.registry.get(clean_deployment_id),
             "control": next_control.to_dict(),
             "controlCapabilitySync": capability_sync,
+            "releaseSeedArtifact": release_artifact_persistence,
         }
 
     @staticmethod

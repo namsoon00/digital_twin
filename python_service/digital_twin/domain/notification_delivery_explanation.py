@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 from .message_types import INVESTMENT_INSIGHT
+from .notification_ai_delivery import first_holding_review_delivery_is_authorized
 
 
 CUSTOMER_DELIVERY_EXPLANATION_VERSION = "customer-delivery-explanation-v1"
@@ -302,6 +303,28 @@ def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCau
             summary,
             label="정기 재확인",
             current_value=context.get("cooldownLastSentAgeMinutes"),
+        )
+    if first_holding_review_delivery_is_authorized(context):
+        relation = _mapping(context.get("ontologyRelationContext"))
+        subject = _mapping(relation.get("subject"))
+        envelope = _mapping(relation.get("actionEnvelope"))
+        name = _text(subject.get("name") or subject.get("symbol") or context.get("symbol"))
+        summary = "처음으로 조건 확인이 필요한 보유 판단이 완성돼 현재 보유 이유를 점검합니다."
+        if name:
+            summary = name + "에서 " + summary
+        return _cause(
+            "initial-holding-review",
+            "initial-actionable",
+            summary,
+            label="첫 보유 점검",
+            current_value=current_action or "HOLD",
+            observed_at=context.get("reasoningSourceObservedAt"),
+            source_references=[
+                envelope.get("selectedRuleId"),
+                relation.get("inferenceGenerationId"),
+                relation.get("sourceAboxSnapshotId"),
+            ],
+            basis="first-holding-review",
         )
     if not values["historyAvailable"] and current_action in ACTIONABLE_ACTIONS:
         return _cause(

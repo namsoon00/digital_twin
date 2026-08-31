@@ -243,6 +243,44 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             and str(row.get("delivered_at") or "").strip()
         }
 
+    def active_or_delivered_holding_review_exists(
+        self,
+        account_id: str,
+        symbol: str,
+    ) -> bool:
+        """Return whether the first TypeDB holding review is already underway.
+
+        Suppressed and failed rows deliberately do not count. They are audit
+        evidence, not proof that the user received the holding judgement.
+        """
+
+        account = str(account_id or "").strip()[:191]
+        instrument = str(symbol or "").upper().strip()[:64]
+        if not account or not instrument:
+            return False
+        role_paths = (
+            "$.context.ontologyRelationContext.actionEnvelope.targetRole",
+            "$.context.ontologyRelationContext.targetRole",
+        )
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 AS found
+                FROM notification_jobs
+                WHERE account_id = %s
+                  AND symbol = %s
+                  AND message_type = %s
+                  AND status IN ('pending', 'processing', 'awaiting_ai', 'done', 'sent')
+                  AND (
+                    LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, %s)), '')) = 'holding'
+                    OR LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, %s)), '')) = 'holding'
+                  )
+                LIMIT 1
+                """,
+                (account, instrument, INVESTMENT_INSIGHT, *role_paths),
+            ).fetchone()
+        return bool(row)
+
     def recent_page(
         self,
         limit: int = 40,

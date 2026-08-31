@@ -242,6 +242,70 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(1, len(result["hypothesisCandidates"]))
         context = result["hypothesisCandidates"][0]["context"]["ontologyRelationContext"]
         self.assertEqual("hypothesis:quiet", context["hypothesisSet"]["hypotheses"][0]["hypothesisId"])
+        self.assert_quiet_first_holding_review_is_recovered_until_delivery_starts()
+
+    def assert_quiet_first_holding_review_is_recovered_until_delivery_starts(self):
+        class DeliveryHistory:
+            active = False
+
+            def active_or_delivered_holding_review_exists(self, account_id, symbol):
+                self.assert_scope = (account_id, symbol)
+                return self.active
+
+        history = DeliveryHistory()
+        builder = V2GraphDecisionCandidateBuilder(
+            {},
+            SimpleNamespace(sent={}),
+            delivery_history_store=history,
+        )
+        request = independent_reasoning_request("ontology-v2-shadow", [source_event("000660")])
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-08-16T00:00:00Z",
+        )
+        relation = {
+            "accountId": "acct",
+            "targetRole": "holding",
+            "subject": {"symbol": "000660", "name": "SK하이닉스"},
+            "facts": {"currentPrice": 250000.0, "isHolding": True},
+            "decision": {"label": "보유 점검"},
+            "decisionState": {"reviewLevel": "check"},
+        }
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:first-holding",
+            account_id="acct",
+            symbol="000660",
+            source_abox_snapshot_id="abox:holding",
+            inference_generation_id="inference:holding",
+            graph_candidate_action="HOLD",
+            eligible_hypothesis_ids=("hypothesis:holding",),
+            review_level="check",
+        )
+        projection = {"acct": {"inferenceBox": {
+            "generationAligned": True,
+            "sourceAboxSnapshotId": "abox:holding",
+            "nativeTypeDbReasoningCompleted": True,
+        }}}
+
+        with patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
+            return_value={"000660": relation},
+        ), patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
+            return_value=synthesis,
+        ), patch(
+            "digital_twin.application.investment_reasoning.decision_synthesis.build_investment_insight_events_by_snapshot",
+            side_effect=lambda _snapshots, events: list(events),
+        ):
+            first = builder.build(request, [snapshot], {}, projection)
+            history.active = True
+            second = builder.build(request, [snapshot], {}, projection)
+
+        self.assertEqual(("acct", "000660"), history.assert_scope)
+        self.assertEqual(1, len(first["detected"]))
+        self.assertTrue(first["detected"][0].metadata["firstHoldingReviewCandidate"])
+        self.assertEqual([], second["detected"])
 
     def test_candidate_validation_window_starts_when_frozen_release_is_ready(self):
         class Queue:

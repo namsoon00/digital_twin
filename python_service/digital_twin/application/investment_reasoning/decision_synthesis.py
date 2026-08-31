@@ -23,6 +23,7 @@ from ...domain.ontology_inference_context import (
     relation_contexts_from_snapshot,
 )
 from ...domain.ontology_insights import build_investment_insight_events
+from ...domain.notification_ai_delivery import holding_review_baseline_is_deliverable
 from ...domain.parsing import parse_assignments
 from ...domain.portfolio import AlertEvent
 
@@ -84,6 +85,21 @@ class V2NotificationCadence:
             except Exception:  # noqa: BLE001 - retain the conservative legacy gate on storage failure.
                 pass
         return dict(getattr(self.monitor_store, "sent", {}) or {})
+
+    def holding_review_is_active_or_delivered(self, account_id: str, symbol: str) -> bool:
+        """Keep a missing first review retryable without creating steady churn."""
+
+        provider = getattr(
+            self.delivery_history_store,
+            "active_or_delivered_holding_review_exists",
+            None,
+        )
+        if not callable(provider):
+            return False
+        try:
+            return bool(provider(account_id, symbol))
+        except Exception:  # noqa: BLE001 - fail open so a useful first review is not lost.
+            return False
 
     def ready(self, events: Iterable[AlertEvent], force: bool = False):
         candidates = list(events or [])
@@ -160,6 +176,18 @@ class V2GraphDecisionCandidateBuilder:
         decision = _mapping(relation.get("decision"))
         rule = V2GraphDecisionCandidateBuilder._signal_rule(relation)
         severity = V2GraphDecisionCandidateBuilder._notification_severity(relation)
+        first_holding_review = (
+            holding_review_baseline_is_deliverable({
+                "ontologyRelationContext": dict(relation),
+                "v2DecisionSynthesis": synthesis.to_dict(),
+            })
+            and not self.cadence.holding_review_is_active_or_delivered(
+                _text(getattr(snapshot, "account_id", "")),
+                synthesis.symbol,
+            )
+        )
+        if not severity and first_holding_review:
+            severity = "WATCH"
         if not severity:
             return None
         context_observation = typedb_context_observation_contract(relation)
@@ -223,6 +251,7 @@ class V2GraphDecisionCandidateBuilder:
             ),
             "dataFreshnessRequired": True,
             "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
+            "firstHoldingReviewCandidate": first_holding_review,
         }
         if context_observation:
             metadata.update({

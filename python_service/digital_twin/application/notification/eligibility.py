@@ -15,6 +15,7 @@ from ...domain.market_hours import (
     evaluate_market_hours,
     normalize_off_hours_delivery_mode,
 )
+from ...domain.notification_ai_delivery import holding_review_baseline_is_deliverable
 from ...domain.notification_ai_context import is_graph_backed_relation_context
 from ...domain.notifications import NotificationJob
 
@@ -116,14 +117,24 @@ class NotificationDispatchEligibilityService:
         if not is_graph_backed_relation_context(relation) or "material" not in relation_diff:
             return True
         material = bool(relation_diff.get("material"))
+        first_holding_review = (
+            not material
+            and holding_review_baseline_is_deliverable(context)
+            and str(context.get("cooldownDecision") or "").strip().lower() == "new-condition"
+            and int(context.get("cooldownRecentSentCount") or 0) <= 0
+        )
         context["inferenceChangeGate"] = {
             "version": "dispatch-inference-change-v1",
-            "decision": "send" if material else "suppress",
+            "decision": "send" if material or first_holding_review else "suppress",
             "material": material,
-            "reason": str(relation_diff.get("reason") or ""),
+            "reason": (
+                "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단"
+                if first_holding_review
+                else str(relation_diff.get("reason") or "")
+            ),
         }
         job.context = context
-        if material:
+        if material or first_holding_review:
             return True
         reason = "TypeDB 관계 판단과 사용자 행동 범위가 이전 추론과 같아 AI와 알림을 다시 실행하지 않습니다."
         context["deliverySuppressionReason"] = "unchanged_graph_inference"

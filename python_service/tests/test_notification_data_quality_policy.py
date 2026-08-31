@@ -43,6 +43,7 @@ from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.application.notification.eligibility import NotificationDispatchEligibilityService
 from digital_twin.infrastructure.cli import public_settings_payload
 from digital_twin.infrastructure.notifications import NotificationResult, TelegramNotifier, notifier_for_operations
 from digital_twin.infrastructure.mysql_notification_config import (
@@ -121,6 +122,13 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(holding_decision.should_send)
         self.assertEqual("new-condition", holding_decision.state_decision)
         self.assertIn("첫 TypeDB 판단", holding_decision.state_reason)
+        holding_job.context.update(holding_decision.to_context())
+        self.assertTrue(
+            NotificationDispatchEligibilityService(queue=None).apply_inference_change_gate(
+                holding_job
+            )
+        )
+        self.assertEqual("send", holding_job.context["inferenceChangeGate"]["decision"])
 
         watchlist_job = NotificationJob.create(
             "카카오 관심 점검",

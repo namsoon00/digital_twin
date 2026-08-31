@@ -373,3 +373,30 @@ name is resolved only while an immutable release manifest is built. Release
 bootstrap regression coverage now executes manifest construction as well as
 schema synchronization, so an unresolved release-contract dependency fails in
 the curated suite instead of every candidate worker at runtime.
+
+## Current-State Read And Evidence Reuse Optimization
+
+The next production profile separated the remaining latency into two concrete
+read paths. A two-symbol execution took about 110 seconds: ABox persistence was
+28.8 seconds and native inference was 49.1 seconds, including an 11.0-second
+matched-evidence reread. A later one-symbol execution took 64.1 seconds, with
+32.4 seconds in ABox persistence and 13.2 seconds in native inference. These
+measurements show that the queue can make progress, but the 30-second ABox
+budget is not yet consistently met.
+
+The current-state inventory originally read node and relation branches
+serially. They are independent read-only queries, so the adapter now runs
+exactly those two branches concurrently for both pre-write inventory and exact
+post-write verification. TypeDB writes remain serialized under the existing
+projection coordinator. The bounded storage-id batch remains 32; a live test
+with 128 identities caused a TypeDB concurrent-transaction-close error and was
+rejected rather than retained as an apparent throughput improvement.
+
+The projection worker also used to read the matched evidence graph from TypeDB
+after direct TypeQL had already evaluated the rules, even when it still held
+the just-persisted graph under the same stable write lease. The optimized path
+reuses that graph only after comparing every matched source and required
+relation to the active Manifest storage-id index. A partial routed projection
+is acceptable only when this exact post-match proof succeeds. Any missing row,
+Manifest mismatch, or planner-topology mismatch automatically uses the durable
+TypeDB read. Runtime metadata records the selected source and rejection reason.

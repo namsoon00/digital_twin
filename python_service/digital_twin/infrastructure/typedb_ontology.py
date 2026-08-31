@@ -976,13 +976,12 @@ def typedb_projection_preflight_graph_for_execution(
     target_symbols: Iterable[str] = None,
     world_id: str = "",
 ) -> Dict[str, object]:
-    """Accept a just-persisted graph only for negative native-rule preflight.
+    """Accept a just-persisted graph as a verified native-rule input surface.
 
-    ``load_graph_for_native_matches`` remains the durable evidence source for
-    materialized matches. This helper merely avoids rereading the exact ABox
-    that the projection worker has already validated, staged, and activated
-    under the same write lease. Any identity or coverage mismatch returns no
-    graph so the caller falls back to the manifest-indexed TypeDB read.
+    The graph is valid for negative preflight after its Manifest, World, and
+    planner topology match the active TypeDB ABox. A later exact storage-id
+    check decides whether the same graph can explain materialized matches;
+    any missing physical evidence falls back to the durable TypeDB read.
     """
     if not isinstance(projection_graph, PortfolioOntology):
         return {
@@ -3959,19 +3958,17 @@ class ScopedABoxManifestMixin:
             return result
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         batch_size = self.current_state_inventory_batch_size()
-        for offset in range(0, len(generation_ids), batch_size):
-            batch = generation_ids[offset: offset + batch_size]
-            slot_filter = typedb_value_match(
-                "$item",
-                "ontology-snapshot-id",
-                batch,
-                "==",
-                "slotFilter",
-            )
-            for type_label, key in [
-                ("ontology-node", "nodes"),
-                ("ontology-assertion", "relations"),
-            ]:
+        def read_type_inventory(type_label: str, key: str):
+            type_inventory: Dict[str, Dict[str, object]] = {}
+            for offset in range(0, len(generation_ids), batch_size):
+                batch = generation_ids[offset: offset + batch_size]
+                slot_filter = typedb_value_match(
+                    "$item",
+                    "ontology-snapshot-id",
+                    batch,
+                    "==",
+                    "slotFilter",
+                )
                 base_query = (
                     "match $item isa " + type_label
                     + ', has ontology-box "ABox", '
@@ -4017,7 +4014,7 @@ class ScopedABoxManifestMixin:
                     storage_id = str(item.get("storageId") or "").strip()
                     if not storage_id:
                         continue
-                    result[key][storage_id] = {
+                    type_inventory[storage_id] = {
                         "storageId": storage_id,
                         "scopeId": str(item.get("scopeId") or ""),
                         "physicalGenerationId": str(
@@ -4025,6 +4022,24 @@ class ScopedABoxManifestMixin:
                         ),
                         "contentFingerprint": fingerprints.get(storage_id, ""),
                     }
+            return key, type_inventory
+
+        # Entity and relation inventories are independent read-only TypeDB
+        # traversals. Running exactly these two branches concurrently halves
+        # the current-state read critical path without increasing write
+        # concurrency or changing the legacy-row visibility contract.
+        inventory_types = [
+            ("ontology-node", "nodes"),
+            ("ontology-assertion", "relations"),
+        ]
+        with ThreadPoolExecutor(max_workers=len(inventory_types)) as executor:
+            futures = [
+                executor.submit(read_type_inventory, type_label, key)
+                for type_label, key in inventory_types
+            ]
+            for future in as_completed(futures):
+                key, type_inventory = future.result()
+                result[key].update(type_inventory)
         return result
 
     @staticmethod
@@ -4067,10 +4082,8 @@ class ScopedABoxManifestMixin:
             return result
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         batch_size = self.current_state_inventory_batch_size()
-        for type_label, key in [
-            ("ontology-node", "nodes"),
-            ("ontology-assertion", "relations"),
-        ]:
+        def read_type_inventory(type_label: str, key: str):
+            type_inventory: Dict[str, Dict[str, object]] = {}
             storage_ids = storage_ids_by_key[key]
             for offset in range(0, len(storage_ids), batch_size):
                 batch = storage_ids[offset: offset + batch_size]
@@ -4109,7 +4122,7 @@ class ScopedABoxManifestMixin:
                     storage_id = str(item.get("storageId") or "").strip()
                     if not storage_id:
                         continue
-                    result[key][storage_id] = {
+                    type_inventory[storage_id] = {
                         "storageId": storage_id,
                         "scopeId": str(item.get("scopeId") or ""),
                         "physicalGenerationId": str(item.get("snapshotId") or ""),
@@ -4117,6 +4130,20 @@ class ScopedABoxManifestMixin:
                             item.get("contentFingerprint") or ""
                         ),
                     }
+            return key, type_inventory
+
+        storage_types = [
+            ("ontology-node", "nodes"),
+            ("ontology-assertion", "relations"),
+        ]
+        with ThreadPoolExecutor(max_workers=len(storage_types)) as executor:
+            futures = [
+                executor.submit(read_type_inventory, type_label, key)
+                for type_label, key in storage_types
+            ]
+            for future in as_completed(futures):
+                key, type_inventory = future.result()
+                result[key].update(type_inventory)
         return result
 
     @staticmethod
@@ -12192,6 +12219,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             "typedbNativeStageTimings": dict(
                 metadata.get("typedbNativeStageTimings") or {}
             ) if isinstance(metadata.get("typedbNativeStageTimings"), dict) else {},
+            "matchedGraphSource": str(metadata.get("matchedGraphSource") or ""),
+            "matchedGraphReuseStatus": str(
+                metadata.get("matchedGraphReuseStatus") or ""
+            ),
+            "matchedGraphReuseReason": str(
+                metadata.get("matchedGraphReuseReason") or ""
+            )[:220],
             "querySource": "typedb-active-inference-generation-marker",
         }
 
@@ -21736,12 +21770,14 @@ relation ontology-assertion,
                 "status": "not-attempted",
                 "reason": "A complete verified preflight graph was not available.",
             }
-            if (
-                isinstance(preflight_graph, PortfolioOntology)
-                and preflight_incoming_relations_complete
-            ):
+            if isinstance(preflight_graph, PortfolioOntology):
                 preflight_mode = str(native_preflight.get("mode") or "")
                 if preflight_mode.startswith("projection-verified-in-memory"):
+                    # A routed projection can be partial relative to every
+                    # requested subject and still be complete for the rules
+                    # TypeDB actually matched. The exact active-Manifest
+                    # storage-id proof below is the authoritative gate and
+                    # falls back to the durable read when any row is absent.
                     matched_graph_reuse = self.projection_graph_for_native_matches(
                         preflight_graph,
                         native_match_result,
@@ -21751,7 +21787,7 @@ relation ontology-assertion,
                     if str(matched_graph_reuse.get("status") or "") == "ok":
                         graph = matched_graph_reuse.get("graph")
                         matched_graph_source = "projection-verified-in-memory"
-                else:
+                elif preflight_incoming_relations_complete:
                     preflight_evidence_read = dict(
                         (preflight_graph.worldview or {}).get("nativeEvidenceRead")
                         or {}
@@ -27552,6 +27588,9 @@ def inference_rulebox_metadata(
         "nativeRuleSelectionDeferredRuleIds",
         "typedbNativeRuleTimingProfile",
         "typedbNativeStageTimings",
+        "matchedGraphSource",
+        "matchedGraphReuseStatus",
+        "matchedGraphReuseReason",
         "worldPartitionedReasoningVersion",
         "ruleExecutionPhase",
         "sourceRuleCount",

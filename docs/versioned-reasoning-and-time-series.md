@@ -489,6 +489,16 @@ with `TYPEDB_NATIVE_RULE_DURABLE_PREFLIGHT_FALLBACK_ENABLED=0`. It can be
 enabled for diagnostics or a controlled rollback without changing inference
 semantics.
 
+After TypeDB has evaluated the selected direct TypeQL rules, the same verified
+projection graph may also supply the matched evidence graph. This is not an
+in-memory inference shortcut. The adapter compares every matched source and
+rule-referenced relation against the active Manifest's exact physical storage
+identities. A complete match avoids a second TypeDB graph traversal; one
+missing or stale identity fails closed to the durable Manifest-indexed read.
+The execution record preserves `matchedGraphSource`,
+`matchedGraphReuseStatus`, and `matchedGraphReuseReason` so a latency regression
+cannot hide behind a successful inference result.
+
 ## Projection Namespace And Incremental Proof
 
 V1, V2, and a future V3 may share MySQL infrastructure, but they must never

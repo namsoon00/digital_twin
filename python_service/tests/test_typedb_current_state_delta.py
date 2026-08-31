@@ -157,9 +157,8 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
         driver.transaction.return_value = transaction
         imported = ((None, None, None, None, SimpleNamespace(READ="read")), None)
 
-        def rows(_tx, _query, _columns, label=""):
-            suffix = "node" if rows.calls < 2 else "relation"
-            rows.calls += 1
+        def rows(_tx, query, _columns, label=""):
+            suffix = "node" if "isa ontology-node" in query else "relation"
             if label == "typedb.current-state-slot-inventory":
                 return [{
                     "storageId": "storage:" + suffix,
@@ -175,7 +174,6 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
                 }]
             self.fail("Unexpected current-state inventory query")
 
-        rows.calls = 0
         with patch.object(
             repository,
             "read_rows_in_transaction",

@@ -52,6 +52,13 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   delivery authorization remain explicit replaceable stages. Stable V1/V2/V3
   deployment IDs are separate from the mutable active/delivery/candidate
   control pointers.
+- Treat `reasoning_engine_job_sources` as the durable V2 ingress lineage, not
+  only `reasoning_engine_jobs.source_event_id`. Queue coalescing replaces a
+  job's primary source ID while carrying every predecessor into the lineage
+  table. Ingress repair must check both locations or it will recreate already
+  represented work forever. A newly registered deployment repairs only events
+  at or after its `createdAt`; its current-state ABox bootstrap owns older
+  state, while intentional historical validation belongs to the replay lane.
 - Between TypeDB hypotheses and AI judgement, persist one deterministic
   `DecisionSynthesis` per account/subject/generation. It must contain only
   graph-authored candidate, allowed and blocked actions, eligible and

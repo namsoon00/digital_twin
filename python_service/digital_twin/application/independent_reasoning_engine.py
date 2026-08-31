@@ -2801,6 +2801,23 @@ class IndependentReasoningJobRunner:
             datetime.now(timezone.utc).timestamp() - (hours * 60 * 60),
             tz=timezone.utc,
         ).isoformat().replace("+00:00", "Z")
+        # A newly registered release starts from a current-state ABox
+        # bootstrap. Replaying every source event in the generic lookback
+        # window only creates a synthetic startup backlog and cannot improve
+        # that point-in-time state. The repair lane therefore owns events
+        # created after this deployment exists; historical validation belongs
+        # to the explicit replay pipeline.
+        try:
+            deployment = dict(self.registry.get(deployment_id) or {})
+        except Exception:  # noqa: BLE001 - retain the bounded generic repair path.
+            deployment = {}
+        deployment_created_at = str(
+            deployment.get("createdAt")
+            or deployment.get("created_at")
+            or ""
+        ).strip()
+        if deployment_created_at:
+            cutoff = max(cutoff, deployment_created_at)
         events = reader(deployment_id, after_occurred_at=cutoff, limit=limit)
         return sum(1 for event in events or [] if ingress(event).get("saved"))
 

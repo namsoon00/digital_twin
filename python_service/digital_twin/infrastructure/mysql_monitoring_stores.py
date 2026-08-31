@@ -1510,7 +1510,14 @@ class MySQLEventLog(MySQLOperationalConnection):
         after_occurred_at: str = "",
         limit: int = 0,
     ) -> List[DomainEvent]:
-        """Repair recent source events missing the independent V2 inbox."""
+        """Repair recent source events missing the independent V2 inbox.
+
+        Queue compaction moves represented source identities from the job's
+        primary ``source_event_id`` into ``reasoning_engine_job_sources``.
+        Both locations are therefore part of the durable ingress boundary.
+        Ignoring the lineage table makes every coalesced predecessor look
+        unmaterialized and recreates old work on every repair pass.
+        """
 
         bounded = max(1, min(200, int(limit or 20)))
         with self.connect() as connection:
@@ -1520,19 +1527,28 @@ class MySQLEventLog(MySQLOperationalConnection):
                        events.occurred_at, events.correlation_id,
                        events.payload_json, events.event_json
                 FROM domain_events events
-                LEFT JOIN reasoning_engine_jobs jobs
-                  ON jobs.deployment_id = %s
-                 AND jobs.source_event_id = events.event_id
                 WHERE events.name = %s
                   AND events.occurred_at >= %s
-                  AND jobs.job_id IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM reasoning_engine_jobs jobs
+                    WHERE jobs.deployment_id = %s
+                      AND jobs.source_event_id = events.event_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM reasoning_engine_job_sources sources
+                    WHERE sources.deployment_id = %s
+                      AND sources.source_event_id = events.event_id
+                  )
                 ORDER BY events.occurred_at DESC, events.event_id DESC
                 LIMIT %s
                 """,
                 (
-                    str(deployment_id or ""),
                     ONTOLOGY_REASONING_REQUESTED,
                     str(after_occurred_at or "1970-01-01T00:00:00Z"),
+                    str(deployment_id or ""),
+                    str(deployment_id or ""),
                     bounded,
                 ),
             ).fetchall()

@@ -37,6 +37,7 @@ from digital_twin.infrastructure.mysql_versioned_runtime import (
     reasoning_worker_process_owner,
 )
 from digital_twin.infrastructure.mysql_monitoring_stores import (
+    MySQLEventLog,
     MySQLMarketObservationReasoningAnchorStore,
 )
 
@@ -1181,6 +1182,71 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             if "VALUES (%s, %s, %s" in sql
         }
         self.assertEqual({"event:middle", "event:new"}, inserted_event_ids)
+
+        class EventLogConnection:
+            def __init__(self):
+                self.sql = ""
+                self.params = ()
+
+            def execute(self, sql, params=()):
+                self.sql = str(sql)
+                self.params = tuple(params or ())
+                return SimpleNamespace(fetchall=lambda: [])
+
+        event_log_connection = EventLogConnection()
+
+        class Store(MySQLEventLog):
+            @contextmanager
+            def connect(self):
+                yield event_log_connection
+
+        event_log = object.__new__(Store)
+        rows = event_log.unmaterialized_reasoning_engine_events(
+            "ontology-v2-production",
+            after_occurred_at="2026-08-16T00:00:00Z",
+            limit=20,
+        )
+
+        self.assertEqual([], rows)
+        self.assertIn(
+            "FROM reasoning_engine_job_sources sources",
+            event_log_connection.sql,
+        )
+        self.assertEqual(
+            2,
+            event_log_connection.params.count("ontology-v2-production"),
+        )
+
+        captured = {}
+
+        class EventReader:
+            def unmaterialized_reasoning_engine_events(
+                self, deployment_id, after_occurred_at="", limit=0
+            ):
+                captured.update({
+                    "deploymentId": deployment_id,
+                    "afterOccurredAt": after_occurred_at,
+                    "limit": limit,
+                })
+                return []
+
+        runner = object.__new__(IndependentReasoningJobRunner)
+        runner.settings = {
+            "reasoningEngineV2IngressRepairLookbackHours": "6",
+            "reasoningEngineV2IngressRepairBatchSize": "20",
+        }
+        runner.event_reader = EventReader()
+        runner.queue = SimpleNamespace(ingress_event=lambda _event: {"saved": True})
+        runner.registry = SimpleNamespace(get=lambda _deployment_id: {
+            "createdAt": "2999-08-31T03:05:47.652708Z",
+        })
+
+        repaired = runner.repair_ingress("ontology-v2-production-r91")
+
+        self.assertEqual(0, repaired)
+        self.assertEqual("ontology-v2-production-r91", captured["deploymentId"])
+        self.assertEqual("2999-08-31T03:05:47.652708Z", captured["afterOccurredAt"])
+        self.assertEqual(20, captured["limit"])
 
     def test_mysql_queue_completion_accepts_verified_later_boundary(self):
         source = source_event("MSTR")

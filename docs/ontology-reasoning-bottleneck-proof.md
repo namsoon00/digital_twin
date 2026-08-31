@@ -259,3 +259,32 @@ compiling a candidate that can never satisfy the release contract. Existing
 legacy releases remain servable but are not silently made reconstructable from
 new source; recovery requires registering and validating a new release with a
 complete artifact.
+
+## Ingress Repair Backlog Invariant
+
+The remaining queue delay was not TypeDB compute time. V2 queue compaction
+merges multiple latest-state events into one survivor and stores every original
+event identity in `reasoning_engine_job_sources`. The recovery query checked
+only the survivor's mutable `reasoning_engine_jobs.source_event_id`. Once a
+newer event replaced that field, an already represented predecessor looked
+unmaterialized and was inserted again on every worker turn.
+
+A second amplification occurred on every new release. The generic six-hour
+repair lookback predates the release, while release registration already
+creates a current-state ABox bootstrap. The candidate therefore replayed old
+polling observations before it could validate current traffic.
+
+The permanent ingress boundary is now:
+
+- A source event is materialized when either the primary job row or its durable
+  source-lineage row represents that deployment/event pair.
+- Recovery uses indexed `NOT EXISTS` checks against both tables.
+- A deployment's live repair lower bound is the later of the bounded generic
+  lookback and the immutable deployment `createdAt`.
+- Events before release creation are handled by current-state bootstrap or the
+  explicit historical replay pipeline, never by live repair.
+
+On the affected r90 data, the legacy primary-row-only query reported 34 recent
+events as missing even though 66 recent source identities were already present
+in the lineage ledger. This false-negative boundary continuously regenerated
+work and explains why query tuning alone could not drain the queue.

@@ -288,6 +288,16 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         mark_resumed_ready.assert_called_once()
         resumed_repository.invalidate_process_base_schema_readiness()
 
+        manifest = resumed_repository.seed_static_manifest_metadata(
+            PortfolioOntology("release-preflight-test"),
+            [],
+            default_tbox_metadata(),
+        )
+        self.assertEqual(
+            default_tbox_metadata()["fingerprint"],
+            manifest["tboxFingerprint"],
+        )
+
     def test_fresh_schema_batches_use_the_configured_server_transaction_deadline(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         transaction = MagicMock()

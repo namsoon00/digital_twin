@@ -73,7 +73,7 @@ from ..domain.ontology_projection_fingerprint import (
     stable_value,
 )
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
-from ..domain.ontology_schema import default_tbox_metadata
+from ..domain.ontology_schema import default_tbox_metadata, normalize_tbox_metadata
 from ..domain.ontology_subject_fanout import evaluate_subject_fanout_comparison
 from ..domain.world_partitioned_reasoning import (
     WORLD_PARTITIONED_REASONING_VERSION,

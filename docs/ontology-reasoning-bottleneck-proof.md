@@ -316,3 +316,10 @@ Cold provisioning now has one consistent contract:
 This removes the provisioning head-of-line block. It is distinct from native
 inference latency: a release cannot enqueue or execute useful inference until
 its immutable schema and static artifact have become ready.
+
+The same live preflight exposed a missing import for TBox metadata
+normalization. That defect was invisible to syntax compilation because the
+name is resolved only while an immutable release manifest is built. Release
+bootstrap regression coverage now executes manifest construction as well as
+schema synchronization, so an unresolved release-contract dependency fails in
+the curated suite instead of every candidate worker at runtime.

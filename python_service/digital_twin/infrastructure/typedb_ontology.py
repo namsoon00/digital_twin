@@ -68,7 +68,10 @@ from ..domain.ontology_rulebox_governance import (
 from ..domain.ontology_change_impact import compact_inference_impact_plan, scope_family, scope_symbol
 from ..domain.ontology_rule_manifest import rule_dependency_reverse_index
 from ..domain.ontology_native_rule_planning import normalize_native_rule_planner_topology
-from ..domain.ontology_projection_fingerprint import material_graph_fingerprint
+from ..domain.ontology_projection_fingerprint import (
+    material_graph_fingerprint,
+    stable_value,
+)
 from ..domain.ontology_runtime_operations import native_rule_timing_profile
 from ..domain.ontology_schema import default_tbox_metadata
 from ..domain.ontology_subject_fanout import evaluate_subject_fanout_comparison
@@ -3980,19 +3983,11 @@ class ScopedABoxManifestMixin:
                     TransactionType.READ,
                     options=self.read_transaction_options(),
                 ) as tx:
-                    identity_rows = self.read_rows_in_transaction(
+                    inventory_rows = self.read_rows_in_transaction(
                         tx,
-                        base_query,
-                        ["storageId", "scopeId", "snapshotId"],
-                        label="typedb.current-state-slot-inventory",
-                    )
-                    fingerprint_rows = self.read_rows_in_transaction(
-                        tx,
-                        base_query.replace(
-                            "has ontology-snapshot-id $snapshotId; ",
-                            "has ontology-snapshot-id $snapshotId, "
-                            "has ontology-content-fingerprint $contentFingerprint; ",
-                        ),
+                        base_query
+                        + " try { $item has ontology-content-fingerprint "
+                        + "$contentFingerprint; };",
                         [
                             "storageId",
                             "scopeId",
@@ -4001,14 +3996,10 @@ class ScopedABoxManifestMixin:
                         ],
                         label="typedb.current-state-slot-content",
                     )
-                fingerprints = {
-                    str(item.get("storageId") or ""): str(
-                        item.get("contentFingerprint") or ""
-                    )
-                    for item in fingerprint_rows or []
-                    if str(item.get("storageId") or "")
-                }
-                for item in identity_rows or []:
+                # TypeQL ``try`` keeps legacy rows in the same result with an
+                # unbound fingerprint. They are conservatively rewritten once,
+                # without a second full identity query or a mixed-slot gap.
+                for item in inventory_rows or []:
                     storage_id = str(item.get("storageId") or "").strip()
                     if not storage_id:
                         continue
@@ -4018,7 +4009,9 @@ class ScopedABoxManifestMixin:
                         "physicalGenerationId": str(
                             item.get("snapshotId") or ""
                         ),
-                        "contentFingerprint": fingerprints.get(storage_id, ""),
+                        "contentFingerprint": str(
+                            item.get("contentFingerprint") or ""
+                        ),
                     }
         return result
 
@@ -4061,23 +4054,42 @@ class ScopedABoxManifestMixin:
             != str(row.get("contentFingerprint") or "")
         }
         removed_node_ids = set(existing_nodes) - set(desired_nodes)
+        changed_or_removed_node_ids = changed_node_ids | removed_node_ids
         changed_node_scopes = {
             str((desired_nodes.get(storage_id) or existing_nodes.get(storage_id) or {}).get("scopeId") or "")
-            for storage_id in changed_node_ids | removed_node_ids
+            for storage_id in changed_or_removed_node_ids
         }
         changed_node_scopes.discard("")
+
+        def relation_touches_changed_node(row: Dict[str, object]) -> bool:
+            source_storage_id = str(
+                row.get("sourceStorageId")
+                or ontology_storage_id(row, row.get("source"), "node")
+            ).strip()
+            target_storage_id = str(
+                row.get("targetStorageId")
+                or ontology_storage_id(row, row.get("target"), "node")
+            ).strip()
+            endpoint_ids = {
+                value for value in [source_storage_id, target_storage_id] if value
+            }
+            if endpoint_ids:
+                return bool(endpoint_ids.intersection(changed_or_removed_node_ids))
+            # Legacy rows without endpoint identities cannot prove adjacency.
+            # Retain scope-wide invalidation only for those compatibility rows.
+            return str(row.get("scopeId") or "") in changed_node_scopes
+
         changed_relation_ids = {
             storage_id
             for storage_id, row in desired_relations.items()
             if str((existing_relations.get(storage_id) or {}).get("contentFingerprint") or "")
             != str(row.get("contentFingerprint") or "")
-            or str(row.get("scopeId") or "") in changed_node_scopes
+            or relation_touches_changed_node(row)
         }
         removed_relation_ids = {
             storage_id
             for storage_id, row in existing_relations.items()
             if storage_id not in desired_relations
-            or str(row.get("scopeId") or "") in changed_node_scopes
         }
         node_rows_to_insert = [
             desired_nodes[storage_id]
@@ -27450,24 +27462,18 @@ def ontology_row_content_fingerprint(
     row: Dict[str, object],
     owner_kind: str,
 ) -> str:
-    """Hash semantic row content without physical generation bookkeeping."""
+    """Hash rule-visible row content without polling lifecycle metadata.
 
-    def semantic(value: object):
-        if isinstance(value, dict):
-            return {
-                str(key): semantic(item)
-                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-                if str(key) not in CURRENT_STATE_STORAGE_ONLY_KEYS
-                and str(key) not in {"contentFingerprint", "updatedAt"}
-            }
-        if isinstance(value, list):
-            return [semantic(item) for item in value]
-        return value
+    Scope and row fingerprints share one materiality boundary. Advancing only
+    an observation timestamp or market-session clock keeps the current fact
+    reusable, while discrete freshness/data states and business values remain
+    material.
+    """
 
     values = dict(row or {})
     properties = json_object(values.get("propertiesJson"))
-    payload = {
-        str(key): semantic(value)
+    payload = stable_value({
+        str(key): value
         for key, value in sorted(values.items(), key=lambda pair: str(pair[0]))
         if str(key) not in CURRENT_STATE_STORAGE_ONLY_KEYS
         and str(key) not in {
@@ -27477,8 +27483,8 @@ def ontology_row_content_fingerprint(
             "targetStorageId",
             "updatedAt",
         }
-    }
-    payload["properties"] = semantic(properties)
+    })
+    payload["properties"] = stable_value(properties)
     payload["ownerKind"] = str(owner_kind or "row")
     encoded = json.dumps(
         payload,

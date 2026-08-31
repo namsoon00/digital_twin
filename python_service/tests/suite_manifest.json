@@ -75,6 +75,7 @@
     {"file": "test_ontology_reasoning_mailbox.py", "tier": "integration", "core": true},
     {"file": "test_mysql_deadlock_retry.py", "tier": "integration", "core": true},
     {"file": "test_operational_payload_compaction.py", "tier": "contract", "core": true},
+    {"file": "test_typedb_current_state_delta.py", "tier": "contract", "core": true},
     {"file": "test_typedb_ontology.py", "tier": "integration", "core": false},
     {"file": "test_ontology_projection_audit.py", "tier": "integration", "core": false},
     {"file": "test_ontology_reasoning_queue_health.py", "tier": "integration", "core": false},

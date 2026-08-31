@@ -112,8 +112,10 @@ The next measured optimization keeps the same authority boundary while
 removing redundant database work inside one writer lease:
 
 - Current-state inventory reads use a configurable batch size, defaulting to
-  128 physical slots. Legacy rows without fingerprints still take the full,
-  fail-closed inventory path and are rewritten once.
+  32 physical slots. Production verification rejected a 128-slot batch because
+  the expanded TypeQL disjunction caused a transaction-close regression.
+  Legacy rows without fingerprints still take the full, fail-closed inventory
+  path and are rewritten once.
 - After a delta write, verification reads only the exact inserted storage IDs.
   The verified pre-write inventory, explicit delete set, and exact inserted
   rows reconstruct the expected post-write inventory without rescanning every

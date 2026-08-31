@@ -1892,7 +1892,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbABoxCurrentStateInventoryBatchSize": value(
             "typedbABoxCurrentStateInventoryBatchSize",
             "TYPEDB_ABOX_CURRENT_STATE_INVENTORY_BATCH_SIZE",
-            "128",
+            "32",
         ),
         "typedbABoxRelationBatchSize": value("typedbABoxRelationBatchSize", "TYPEDB_ABOX_RELATION_BATCH_SIZE", "1"),
         "typedbABoxDeleteBatchSize": value("typedbABoxDeleteBatchSize", "TYPEDB_ABOX_DELETE_BATCH_SIZE", "1000"),

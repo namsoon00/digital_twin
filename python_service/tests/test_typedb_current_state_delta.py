@@ -235,7 +235,7 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
             side_effect=rows,
         ) as reader, patch(
             "digital_twin.infrastructure.typedb_ontology.runtime_settings",
-            return_value={"typedbABoxCurrentStateInventoryBatchSize": "128"},
+            return_value={"typedbABoxCurrentStateInventoryBatchSize": "32"},
         ):
             inventory = repository.current_state_storage_inventory(
                 driver,

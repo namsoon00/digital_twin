@@ -4033,7 +4033,7 @@ class ScopedABoxManifestMixin:
         parsed = number_or_none(
             configured.get("typedbABoxCurrentStateInventoryBatchSize")
         )
-        return max(32, min(512, int(parsed or 128)))
+        return max(16, min(64, int(parsed or 32)))
 
     def current_state_storage_inventory(
         self,

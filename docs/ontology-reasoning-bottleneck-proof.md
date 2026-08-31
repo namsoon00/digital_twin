@@ -108,6 +108,29 @@ This is the first safe implementation step because it changes persistence
 materiality without moving investment judgement out of TypeDB. Exact source
 provenance remains in the durable source snapshot and projection audit.
 
+The next measured optimization keeps the same authority boundary while
+removing redundant database work inside one writer lease:
+
+- Current-state inventory reads use a configurable batch size, defaulting to
+  128 physical slots. Legacy rows without fingerprints still take the full,
+  fail-closed inventory path and are rewritten once.
+- After a delta write, verification reads only the exact inserted storage IDs.
+  The verified pre-write inventory, explicit delete set, and exact inserted
+  rows reconstruct the expected post-write inventory without rescanning every
+  active slot.
+- Native TypeQL still decides which rules match. Once those matches are known,
+  the just-persisted projection may replace the second matched-evidence TypeDB
+  read only when the active manifest proves that every expected source and
+  relation storage ID exists in that projection. A missing ID fails closed to
+  the durable TypeDB read.
+
+The optimization therefore removes duplicate transport and hydration work; it
+does not evaluate a rule, infer an action, or replace TypeDB as the semantic
+authority. Production telemetry exposes `currentStatePostWriteVerificationMs`,
+`matchedGraphSource`, `matchedGraphReuseStatus`, and
+`matchedGraphReuseReason` so a real event can prove whether each fast path was
+used.
+
 The completed architecture should add a governed semantic-transition head in
 front of projection. Raw value changes become events such as loss-band change,
 moving-average crossing, flow-regime change, freshness-state change, new

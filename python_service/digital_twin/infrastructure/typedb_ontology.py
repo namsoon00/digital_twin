@@ -3897,7 +3897,7 @@ class ScopedABoxManifestMixin:
                 "transactionCount": 0,
             }
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        batch_size = 32
+        batch_size = self.current_state_inventory_batch_size()
         transaction_count = 0
         started = time.monotonic()
         for offset in range(0, len(generation_ids), batch_size):
@@ -3958,7 +3958,7 @@ class ScopedABoxManifestMixin:
         if not generation_ids:
             return result
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
-        batch_size = 32
+        batch_size = self.current_state_inventory_batch_size()
         for offset in range(0, len(generation_ids), batch_size):
             batch = generation_ids[offset: offset + batch_size]
             slot_filter = typedb_value_match(
@@ -4024,6 +4024,98 @@ class ScopedABoxManifestMixin:
                             item.get("snapshotId") or ""
                         ),
                         "contentFingerprint": fingerprints.get(storage_id, ""),
+                    }
+        return result
+
+    @staticmethod
+    def current_state_inventory_batch_size(settings: Dict[str, object] = None) -> int:
+        configured = runtime_settings() if settings is None else dict(settings or {})
+        parsed = number_or_none(
+            configured.get("typedbABoxCurrentStateInventoryBatchSize")
+        )
+        return max(32, min(512, int(parsed or 128)))
+
+    def current_state_storage_inventory(
+        self,
+        driver,
+        imported,
+        node_storage_ids: Iterable[str] = None,
+        relation_storage_ids: Iterable[str] = None,
+    ) -> Dict[str, Dict[str, Dict[str, object]]]:
+        """Verify newly written current-state rows by exact storage identity.
+
+        Newly inserted rows always own a semantic content fingerprint. Legacy
+        rows are handled by ``current_state_slot_inventory`` before the delta
+        write, so this post-write read can stay exact and avoid rescanning the
+        complete physical slots a second time.
+        """
+
+        result = {"nodes": {}, "relations": {}}
+        storage_ids_by_key = {
+            "nodes": sorted({
+                str(value or "").strip()
+                for value in node_storage_ids or []
+                if str(value or "").strip()
+            }),
+            "relations": sorted({
+                str(value or "").strip()
+                for value in relation_storage_ids or []
+                if str(value or "").strip()
+            }),
+        }
+        if not any(storage_ids_by_key.values()):
+            return result
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        batch_size = self.current_state_inventory_batch_size()
+        for type_label, key in [
+            ("ontology-node", "nodes"),
+            ("ontology-assertion", "relations"),
+        ]:
+            storage_ids = storage_ids_by_key[key]
+            for offset in range(0, len(storage_ids), batch_size):
+                batch = storage_ids[offset: offset + batch_size]
+                query = (
+                    "match $item isa " + type_label
+                    + ', has ontology-box "ABox", '
+                    + "has ontology-storage-id $storageId, "
+                    + "has ontology-scope-id $scopeId, "
+                    + "has ontology-snapshot-id $snapshotId, "
+                    + "has ontology-content-fingerprint $contentFingerprint; "
+                    + typedb_value_match(
+                        "$item",
+                        "ontology-storage-id",
+                        batch,
+                        "==",
+                        "storageIdFilter",
+                    )
+                )
+                with driver.transaction(
+                    self.database,
+                    TransactionType.READ,
+                    options=self.read_transaction_options(),
+                ) as tx:
+                    rows = self.read_rows_in_transaction(
+                        tx,
+                        query,
+                        [
+                            "storageId",
+                            "scopeId",
+                            "snapshotId",
+                            "contentFingerprint",
+                        ],
+                        label="typedb.current-state-storage-verification",
+                    )
+                for item in rows or []:
+                    storage_id = str(item.get("storageId") or "").strip()
+                    if not storage_id:
+                        continue
+                    result[key][storage_id] = {
+                        "storageId": storage_id,
+                        "scopeId": str(item.get("scopeId") or ""),
+                        "physicalGenerationId": str(item.get("snapshotId") or ""),
+                        "contentFingerprint": str(
+                            item.get("contentFingerprint") or ""
+                        ),
                     }
         return result
 
@@ -6614,10 +6706,62 @@ class ScopedABoxManifestMixin:
                     expected_counts_by_scope = dict(write_plan.get("expectedCountsByScope") or {})
                     reused_counts_by_scope = dict(write_plan.get("reusedCountsByScope") or {})
                     if current_state_mode:
-                        post_inventory = self.current_state_slot_inventory(
+                        node_storage_ids_to_delete = set(
+                            delta_plan.get("nodeStorageIdsToDelete") or []
+                        )
+                        relation_storage_ids_to_delete = set(
+                            delta_plan.get("relationStorageIdsToDelete") or []
+                        )
+                        inserted_node_rows = list(
+                            delta_plan.get("nodeRowsToInsert") or []
+                        )
+                        inserted_relation_rows = list(
+                            delta_plan.get("relationRowsToInsert") or []
+                        )
+                        inserted_node_storage_ids = [
+                            ontology_storage_id(row, row.get("id"), "node")
+                            for row in inserted_node_rows
+                        ]
+                        inserted_relation_storage_ids = [
+                            ontology_storage_id(
+                                row,
+                                relation_row_id(row),
+                                "relation",
+                            )
+                            for row in inserted_relation_rows
+                        ]
+                        post_write_started = time.monotonic()
+                        inserted_inventory = self.current_state_storage_inventory(
                             driver,
                             imported,
-                            candidate_generation_ids,
+                            inserted_node_storage_ids,
+                            inserted_relation_storage_ids,
+                        )
+                        timing["currentStatePostWriteVerificationMs"] = round(
+                            (time.monotonic() - post_write_started) * 1000,
+                            1,
+                        )
+                        post_inventory = {
+                            "nodes": {
+                                storage_id: item
+                                for storage_id, item in dict(
+                                    before_inventory.get("nodes") or {}
+                                ).items()
+                                if storage_id not in node_storage_ids_to_delete
+                            },
+                            "relations": {
+                                storage_id: item
+                                for storage_id, item in dict(
+                                    before_inventory.get("relations") or {}
+                                ).items()
+                                if storage_id not in relation_storage_ids_to_delete
+                            },
+                        }
+                        post_inventory["nodes"].update(
+                            inserted_inventory.get("nodes") or {}
+                        )
+                        post_inventory["relations"].update(
+                            inserted_inventory.get("relations") or {}
                         )
                         actual_counts_by_scope: Dict[str, Dict[str, int]] = {}
                         for key, count_key in [
@@ -6693,7 +6837,7 @@ class ScopedABoxManifestMixin:
                     timing["changedScopeStorageIdentityVerification"] = {
                         "status": "ok",
                         "mode": (
-                            "current-state-content-fingerprint"
+                            "current-state-delta-exact-write-verification"
                             if current_state_mode
                             else "manifest-scope-count"
                         ),
@@ -21586,16 +21730,59 @@ relation ontology-assertion,
                 else {}
             )
             matched_graph_read_started = time.perf_counter()
-            graph = typedb_call_for_world(
-                self.load_graph_for_native_matches,
-                native_match_result,
-                execution_rules,
-                world_id=world_id,
-                **graph_load_kwargs,
-            )
+            graph = None
+            matched_graph_source = "typedb-durable-evidence-read"
+            matched_graph_reuse = {
+                "status": "not-attempted",
+                "reason": "A complete verified preflight graph was not available.",
+            }
+            if (
+                isinstance(preflight_graph, PortfolioOntology)
+                and preflight_incoming_relations_complete
+            ):
+                preflight_mode = str(native_preflight.get("mode") or "")
+                if preflight_mode.startswith("projection-verified-in-memory"):
+                    matched_graph_reuse = self.projection_graph_for_native_matches(
+                        preflight_graph,
+                        native_match_result,
+                        execution_rules,
+                        evidence_read_index=evidence_read_index,
+                    )
+                    if str(matched_graph_reuse.get("status") or "") == "ok":
+                        graph = matched_graph_reuse.get("graph")
+                        matched_graph_source = "projection-verified-in-memory"
+                else:
+                    preflight_evidence_read = dict(
+                        (preflight_graph.worldview or {}).get("nativeEvidenceRead")
+                        or {}
+                    )
+                    if str(preflight_evidence_read.get("status") or "") == "ok":
+                        graph = copy.deepcopy(preflight_graph)
+                        matched_graph_source = "durable-preflight-reuse"
+                        matched_graph_reuse = {
+                            "status": "ok",
+                            "reason": "The complete durable preflight graph already contains all selected rule relation types.",
+                        }
+            if not isinstance(graph, PortfolioOntology):
+                graph = typedb_call_for_world(
+                    self.load_graph_for_native_matches,
+                    native_match_result,
+                    execution_rules,
+                    world_id=world_id,
+                    **graph_load_kwargs,
+                )
             native_stage_timings["matchedGraphReadMs"] = int(
                 (time.perf_counter() - matched_graph_read_started) * 1000
             )
+            runtime_rulebox_metadata.update({
+                "matchedGraphSource": matched_graph_source,
+                "matchedGraphReuseStatus": str(
+                    matched_graph_reuse.get("status") or ""
+                ),
+                "matchedGraphReuseReason": str(
+                    matched_graph_reuse.get("reason") or ""
+                )[:220],
+            })
             graph.worldview.update({
                 "worldId": world_id,
                 "worldType": str(abox_metadata.get("worldType") or payload.get("worldType") or ""),
@@ -23387,6 +23574,162 @@ relation ontology-assertion,
                 properties,
             ))
         return graph
+
+    def projection_graph_for_native_matches(
+        self,
+        projection_graph: PortfolioOntology,
+        native_match_result: Dict[str, object],
+        rules: Iterable[GraphInferenceRule] = None,
+        evidence_read_index: Dict[str, object] = None,
+    ) -> Dict[str, object]:
+        """Reuse a verified projection graph only when it contains exact evidence.
+
+        TypeDB has already evaluated the direct TypeQL rules. This method does
+        not evaluate a condition; it proves that the in-memory graph contains
+        every physical ABox row the active Manifest says is needed to explain
+        those matches. Any mismatch returns ``incomplete`` so the caller uses
+        the durable TypeDB evidence read.
+        """
+
+        if not isinstance(projection_graph, PortfolioOntology):
+            return {
+                "status": "unavailable",
+                "reason": "No verified projection graph is available.",
+            }
+        verified = dict(evidence_read_index or {})
+        if str(verified.get("status") or "") != "verified":
+            return {
+                "status": "unavailable",
+                "reason": "The active Manifest evidence index is not verified.",
+            }
+        index = dict(verified.get("index") or {})
+        matches = [
+            dict(item)
+            for item in (native_match_result or {}).get("matches") or []
+            if isinstance(item, dict)
+            and str(item.get("sourceId") or "").strip()
+        ]
+        source_ids = sorted({
+            str(item.get("sourceId") or "").strip()
+            for item in matches
+        })
+        if not source_ids:
+            return {
+                "status": "unavailable",
+                "reason": "No matched TypeDB source requires an evidence graph.",
+            }
+        matched_rule_ids = {
+            str(item.get("ruleId") or "").strip()
+            for item in matches
+            if str(item.get("ruleId") or "").strip()
+        }
+        relation_types = sorted({
+            str(condition.relation_type or "").upper().strip()
+            for rule in rules or []
+            if str(rule.rule_id or "").strip() in matched_rule_ids
+            for condition in rule.conditions or []
+            if str(condition.kind or "") == "relation"
+            and str(condition.relation_type or "").strip()
+        })
+        source_storage_by_id = dict(
+            index.get("sourceStorageIdsBySourceId") or {}
+        )
+        expected_source_storage_ids = {
+            str(source_storage_by_id.get(source_id) or "").strip()
+            for source_id in source_ids
+            if str(source_storage_by_id.get(source_id) or "").strip()
+        }
+        if len(expected_source_storage_ids) != len(source_ids):
+            return {
+                "status": "incomplete",
+                "reason": "The active Manifest is missing a matched source storage identity.",
+            }
+        symbols_by_source_id = {
+            str(source_id or "").strip(): str(symbol or "").upper().strip()
+            for symbol, values in dict(index.get("sourceIdsBySymbol") or {}).items()
+            for source_id in values or []
+            if str(source_id or "").strip()
+        }
+        selected_symbols = {
+            symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
+            for source_id in source_ids
+            if symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
+        }
+        relation_storage_by_symbol_type = dict(
+            index.get("relationStorageIdsBySymbolAndType") or {}
+        )
+        expected_relation_storage_ids = {
+            str(storage_id or "").strip()
+            for symbol in selected_symbols
+            for relation_type in relation_types
+            for storage_id in list(
+                (relation_storage_by_symbol_type.get(symbol) or {}).get(
+                    relation_type,
+                    [],
+                )
+                or []
+            )
+            if str(storage_id or "").strip()
+        }
+        node_rows, relation_rows = self.graph_persistence_rows(projection_graph)
+        available_node_storage_ids = {
+            ontology_storage_id(row, row.get("id"), "node")
+            for row in node_rows
+        }
+        relation_rows_by_storage_id = {
+            ontology_storage_id(row, relation_row_id(row), "relation"): row
+            for row in relation_rows
+        }
+        missing_source_storage_ids = sorted(
+            expected_source_storage_ids - available_node_storage_ids
+        )
+        missing_relation_storage_ids = sorted(
+            expected_relation_storage_ids - set(relation_rows_by_storage_id)
+        )
+        if missing_source_storage_ids or missing_relation_storage_ids:
+            return {
+                "status": "incomplete",
+                "reason": (
+                    "The verified projection graph does not contain every active Manifest evidence row."
+                ),
+                "missingSourceStorageIds": missing_source_storage_ids[:20],
+                "missingRelationStorageIds": missing_relation_storage_ids[:20],
+            }
+        graph = copy.deepcopy(projection_graph)
+        for relation in graph.relations:
+            properties = dict(relation.properties or {})
+            row_id = relation_row_id({
+                "source": relation.source,
+                "target": relation.target,
+                "type": relation.relation_type,
+                "ontologyBox": properties.get("ontologyBox") or "ABox",
+                "worldId": properties.get("worldId") or "",
+                "snapshotId": properties.get("snapshotId")
+                or properties.get("aboxSnapshotId")
+                or "",
+                "ruleId": properties.get("ruleId") or "",
+            })
+            properties.setdefault("_relationId", row_id)
+            relation.properties = properties
+        graph.worldview["nativeEvidenceRead"] = {
+            "status": "ok",
+            "mode": "projection-verified-in-memory",
+            "source": "active-manifest+projection-write-lease",
+            "reason": "",
+            "expectedSourceCount": len(source_ids),
+            "loadedSourceCount": len(source_ids),
+            "indexedRelationStorageCount": len(
+                expected_relation_storage_ids
+            ),
+            "loadedRelationCount": len(expected_relation_storage_ids),
+            "relationReadScope": "matched-rule-types",
+        }
+        return {
+            "status": "ok",
+            "graph": graph,
+            "sourceCount": len(source_ids),
+            "relationCount": len(expected_relation_storage_ids),
+        }
 
     def load_graph_for_native_matches(
         self,

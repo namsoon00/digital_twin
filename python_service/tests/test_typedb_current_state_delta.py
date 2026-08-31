@@ -16,6 +16,7 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
         self._assert_polling_lifecycle_is_not_material()
         self._assert_only_adjacent_relations_are_rebound()
         self._assert_inventory_keeps_legacy_rows_visible()
+        self._assert_post_write_verification_reads_exact_storage_ids()
 
     def _assert_polling_lifecycle_is_not_material(self):
         base = {
@@ -199,3 +200,60 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
             "fingerprint:relation",
             inventory["relations"]["storage:relation"]["contentFingerprint"],
         )
+
+    def _assert_post_write_verification_reads_exact_storage_ids(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        transaction = MagicMock()
+        transaction.__enter__.return_value = transaction
+        transaction.__exit__.return_value = False
+        driver = MagicMock()
+        driver.transaction.return_value = transaction
+        imported = ((None, None, None, None, SimpleNamespace(READ="read")), None)
+
+        def rows(_tx, query, _columns, label=""):
+            self.assertEqual(
+                "typedb.current-state-storage-verification",
+                label,
+            )
+            if "isa ontology-node" in query:
+                return [{
+                    "storageId": "node-storage:new",
+                    "scopeId": "scope:market:005930",
+                    "snapshotId": "abox-current:scope-market:a",
+                    "contentFingerprint": "node-fingerprint:new",
+                }]
+            return [{
+                "storageId": "relation-storage:new",
+                "scopeId": "scope:market:005930",
+                "snapshotId": "abox-current:scope-market:a",
+                "contentFingerprint": "relation-fingerprint:new",
+            }]
+
+        with patch.object(
+            repository,
+            "read_rows_in_transaction",
+            side_effect=rows,
+        ) as reader, patch(
+            "digital_twin.infrastructure.typedb_ontology.runtime_settings",
+            return_value={"typedbABoxCurrentStateInventoryBatchSize": "128"},
+        ):
+            inventory = repository.current_state_storage_inventory(
+                driver,
+                imported,
+                ["node-storage:new"],
+                ["relation-storage:new"],
+            )
+
+        self.assertEqual(2, reader.call_count)
+        self.assertEqual(
+            "node-fingerprint:new",
+            inventory["nodes"]["node-storage:new"]["contentFingerprint"],
+        )
+        self.assertEqual(
+            "relation-fingerprint:new",
+            inventory["relations"]["relation-storage:new"]["contentFingerprint"],
+        )
+        for invocation in reader.call_args_list:
+            query = invocation.args[1]
+            self.assertIn("ontology-storage-id", query)
+            self.assertIn("ontology-content-fingerprint", query)

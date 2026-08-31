@@ -117,6 +117,103 @@ def governed_catalog_rule(rule_id: str) -> GraphInferenceRule:
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def _assert_verified_projection_graph_replaces_duplicate_matched_evidence_read(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        snapshot_id = "abox-current:scope-market:a"
+        common = {
+            "ontologyBox": "ABox",
+            "worldId": "portfolio:local:main",
+            "scopeId": "scope:market:005930",
+            "scopeType": "market",
+            "snapshotId": snapshot_id,
+            "aboxSnapshotId": snapshot_id,
+        }
+        graph = PortfolioOntology(
+            "projection-evidence-reuse",
+            entities=[
+                OntologyEntity(
+                    "stock:005930",
+                    "삼성전자",
+                    "stock",
+                    {**common, "symbol": "005930", "tboxClass": "Stock"},
+                ),
+                OntologyEntity(
+                    "price:005930",
+                    "삼성전자 가격",
+                    "price-observation",
+                    {**common, "symbol": "005930", "tboxClass": "PriceObservation"},
+                ),
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:005930",
+                    "price:005930",
+                    "HAS_PRICE",
+                    properties={**common, "symbol": "005930"},
+                ),
+            ],
+        )
+        node_rows, relation_rows = repository.graph_persistence_rows(graph)
+        evidence_index = native_rule_evidence_read_index_from_rows(
+            node_rows,
+            relation_rows,
+        )
+        rule = SimpleNamespace(
+            rule_id="graph.test.price.v1",
+            conditions=[SimpleNamespace(
+                kind="relation",
+                relation_type="HAS_PRICE",
+            )],
+        )
+        native_match = {
+            "matches": [{
+                "sourceId": "stock:005930",
+                "sourceLabel": "삼성전자",
+                "ruleId": rule.rule_id,
+            }],
+        }
+
+        reused = repository.projection_graph_for_native_matches(
+            graph,
+            native_match,
+            [rule],
+            evidence_read_index={
+                "status": "verified",
+                "source": "active-manifest",
+                "index": evidence_index,
+            },
+        )
+
+        self.assertEqual("ok", reused["status"])
+        reused_graph = reused["graph"]
+        self.assertEqual(
+            "projection-verified-in-memory",
+            reused_graph.worldview["nativeEvidenceRead"]["mode"],
+        )
+        self.assertTrue(
+            str(reused_graph.relations[0].properties.get("_relationId") or "")
+        )
+
+        broken_index = deepcopy(evidence_index)
+        broken_index["relationStorageIdsBySymbolAndType"]["005930"][
+            "HAS_PRICE"
+        ] = ["ontology-storage:missing"]
+        rejected = repository.projection_graph_for_native_matches(
+            graph,
+            native_match,
+            [rule],
+            evidence_read_index={
+                "status": "verified",
+                "source": "active-manifest",
+                "index": broken_index,
+            },
+        )
+        self.assertEqual("incomplete", rejected["status"])
+        self.assertIn(
+            "ontology-storage:missing",
+            rejected["missingRelationStorageIds"],
+        )
+
     def test_seed_write_does_not_claim_projection_coordinator_when_schema_bootstrap_fails(self):
         class SeedRepository:
             address = "127.0.0.1:1729"
@@ -776,6 +873,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(180000, options.transaction_timeout_millis)
 
     def test_missing_target_index_uses_only_the_explicit_active_membership_recovery(self):
+        self._assert_verified_projection_graph_replaces_duplicate_matched_evidence_read()
         allowed = {
             "status": "fallback",
             "source": "typedb-active-abox-membership-recovery",

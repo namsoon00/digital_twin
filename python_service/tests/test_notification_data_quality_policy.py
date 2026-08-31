@@ -85,6 +85,80 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("new-condition", decision.state_decision)
 
+        holding_job = NotificationJob.create(
+            "SK하이닉스 보유 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "000660",
+                "body": "SK하이닉스 보유 판단",
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "decisionTransition": {
+                        "kind": "unchanged",
+                        "material": False,
+                        "currentAction": "hold",
+                    },
+                },
+                "ontologyRelationContext": {
+                    "source": "typedbInferenceBox",
+                    "graphStoreUsed": True,
+                    "fallbackUsed": False,
+                    "targetRole": "holding",
+                    "decisionState": {"reviewLevel": "check", "dataState": "sufficient"},
+                    "actionEnvelope": {"targetRole": "holding", "preferredAction": "HOLD"},
+                },
+            },
+        )
+        holding_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(holding_job, rule),
+            rule,
+            sent_count=0,
+            previous_context={"deliverySuppressionReason": "initial_graph_baseline"},
+            job=holding_job,
+        )
+        self.assertTrue(holding_decision.should_send)
+        self.assertEqual("new-condition", holding_decision.state_decision)
+        self.assertIn("첫 TypeDB 판단", holding_decision.state_reason)
+
+        watchlist_job = NotificationJob.create(
+            "카카오 관심 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                "severity": "WATCH",
+                "symbol": "035720",
+                "body": "카카오 관심 판단",
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "decisionTransition": {
+                        "kind": "initial",
+                        "material": False,
+                        "currentAction": "hold",
+                    },
+                },
+                "ontologyRelationContext": {
+                    "source": "typedbInferenceBox",
+                    "graphStoreUsed": True,
+                    "fallbackUsed": False,
+                    "targetRole": "watchlist",
+                    "decisionState": {"reviewLevel": "check", "dataState": "sufficient"},
+                    "actionEnvelope": {"targetRole": "watchlist", "preferredAction": "HOLD"},
+                },
+            },
+        )
+        watchlist_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(watchlist_job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=watchlist_job,
+        )
+        self.assertFalse(watchlist_decision.should_send)
+        self.assertEqual("baseline", watchlist_decision.state_decision)
+        self.assertEqual("initial_graph_baseline", watchlist_decision.suppression_reason)
+
     def test_investment_insight_uses_semantic_state_cooldown_without_text_similarity(self):
         default_rule = default_notification_rule("investmentInsight")
         self.assertFalse(default_rule.similarity_enabled)

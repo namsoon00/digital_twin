@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
+from .ontology_decision_state import REVIEW_LEVEL_RANK
+
 
 FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v6"
 
@@ -20,6 +22,40 @@ def _items(value: object):
     if isinstance(value, (list, tuple, set)):
         return [item for item in value if _text(item)]
     return [_text(value)] if _text(value) else []
+
+
+def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> bool:
+    """Allow one useful first graph opinion without opening baseline floods.
+
+    A watchlist HOLD is only a quiet observation baseline. A real position at
+    ``check`` or a stronger review level is different: suppressing that first
+    TypeDB opinion means every following identical inference is classified as
+    unchanged even though the user has never received the judgement.
+    """
+
+    context = _mapping(context)
+    relation = _mapping(context.get("ontologyRelationContext"))
+    envelope = _mapping(relation.get("actionEnvelope"))
+    relation_state = _mapping(relation.get("decisionState"))
+    synthesis = _mapping(context.get("v2DecisionSynthesis"))
+    target_role = _text(
+        envelope.get("targetRole")
+        or relation.get("targetRole")
+        or synthesis.get("target_role")
+        or context.get("targetRole")
+    ).lower()
+    review_level = _text(
+        synthesis.get("review_level")
+        or relation_state.get("reviewLevel")
+        or envelope.get("reviewLevel")
+        or context.get("deliveryReviewLevel")
+    ).lower()
+    return (
+        target_role == "holding"
+        and review_level != "blocked"
+        and REVIEW_LEVEL_RANK.get(review_level, -1)
+        >= REVIEW_LEVEL_RANK["check"]
+    )
 
 
 def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
@@ -97,6 +133,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
             _text(graph_transition.get("kind")).lower() == "initial"
             and not bool(graph_transition.get("material"))
             and base["finalAction"] == "HOLD"
+            and not holding_review_baseline_is_deliverable(context)
         ):
             base.update({
                 "decision": "suppress",

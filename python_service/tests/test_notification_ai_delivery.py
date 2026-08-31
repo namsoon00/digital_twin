@@ -243,7 +243,7 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("send", decision["decision"])
         self.assertEqual(1, decision["materialSourceEventCount"])
 
-    def test_candidate_only_holding_change_is_also_suppressed(self):
+    def test_holding_and_watchlist_baseline_delivery_boundaries(self):
         context = watchlist_context()
         context["ontologyRelationContext"]["targetRole"] = "holding"
         context["ontologyRelationContext"]["actionEnvelope"]["targetRole"] = "holding"
@@ -252,6 +252,44 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("suppress", decision["decision"])
         self.assertEqual("graph_candidate_only_change", decision["suppressionReason"])
+
+        first_holding = watchlist_context()
+        first_holding["aiDecisionTransition"] = {
+            "historyAvailable": False,
+            "kind": "initial",
+            "previousAction": "",
+            "currentAction": "HOLD",
+        }
+        first_holding["decisionTransition"] = {
+            "kind": "initial",
+            "material": False,
+            "previousAction": "",
+            "currentAction": "HOLD",
+        }
+        first_holding["ontologyRelationContext"].update({
+            "targetRole": "holding",
+            "decisionState": {"reviewLevel": "check"},
+        })
+        first_holding["ontologyRelationContext"]["actionEnvelope"]["targetRole"] = "holding"
+        self.assertEqual("send", final_ai_delivery_decision(first_holding)["decision"])
+
+        first_watchlist = watchlist_context()
+        first_watchlist["aiDecisionTransition"] = {
+            "historyAvailable": False,
+            "kind": "initial",
+            "previousAction": "",
+            "currentAction": "HOLD",
+        }
+        first_watchlist["decisionTransition"] = {
+            "kind": "initial",
+            "material": False,
+            "previousAction": "",
+            "currentAction": "HOLD",
+        }
+        first_watchlist["ontologyRelationContext"]["decisionState"] = {"reviewLevel": "check"}
+        watchlist_decision = final_ai_delivery_decision(first_watchlist)
+        self.assertEqual("suppress", watchlist_decision["decision"])
+        self.assertEqual("initial_graph_baseline", watchlist_decision["suppressionReason"])
 
     def test_nearly_expired_investment_snapshot_requests_refresh_without_blocking_ai(self):
         queue = SuppressionQueue()

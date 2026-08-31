@@ -5,6 +5,7 @@ from .market_hours import evaluate_market_hours
 from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, ONTOLOGY_OBSERVATION_FOLLOWUP, SYSTEM_MESSAGE_TYPES
 from .context_observation_notifications import typedb_context_observation_contract
 from .notification_ai_context import is_graph_backed_relation_context
+from .notification_ai_delivery import holding_review_baseline_is_deliverable
 from .ontology_relation_delivery import (
     relation_delivery_diff,
     relation_delivery_metadata,
@@ -1091,6 +1092,16 @@ def apply_state_cooldown_rule(
     has_graph_transition = bool(transition)
     transition_is_material = bool(transition.get("material"))
     transition_kind = str(transition.get("kind") or "")
+    if (
+        has_graph_transition
+        and not transition_is_material
+        and decision.state_recent_sent_count <= 0
+        and holding_review_baseline_is_deliverable(job_context)
+    ):
+        decision.state_decision = "new-condition"
+        decision.state_reason = "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
     if has_graph_transition and transition_kind == "initial" and not transition_is_material:
         decision.state_decision = "baseline"
         decision.state_suppressed = True

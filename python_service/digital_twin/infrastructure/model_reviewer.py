@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Dict
 
 from ..domain.model_review import ModelReviewJob, build_model_review_prompt, local_model_review
+from .local_ai_process_guard import run_ai_prompt_command
 from .settings import ROOT_DIR, data_dir, runtime_settings
 
 
 ENFORCED_CODEX_MODEL = "gpt-5.6-sol"
 ENFORCED_CODEX_REASONING_EFFORT = "max"
 VALID_CODEX_REASONING_EFFORTS = {"low", "medium", "high", "max"}
+_CODEX_PREFLIGHT_CACHE = {}
 
 
 class ModelReviewer:
@@ -27,22 +29,18 @@ class LocalModelReviewer(ModelReviewer):
 
 
 class CommandModelReviewer(ModelReviewer):
-    def __init__(self, command: str, timeout_seconds: int = 180):
+    def __init__(self, command, timeout_seconds: int = 180, settings: Dict[str, object] = None):
         self.command = command
         self.timeout_seconds = max(30, int(timeout_seconds or 180))
+        self.settings = dict(settings or {})
 
     def review(self, job: ModelReviewJob) -> str:
         prompt = build_model_review_prompt(job)
-        completed = subprocess.run(
+        completed = run_background_ai_prompt(
             self.command,
-            input=prompt,
-            text=True,
-            shell=True,
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout_seconds,
-            env=dict(os.environ),
+            prompt,
+            self.timeout_seconds,
+            self.settings,
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:
@@ -73,6 +71,36 @@ def codex_model_label(reasoning_effort: str = "") -> str:
     return "GPT-5.6 Sol · " + normalized_codex_reasoning_effort(reasoning_effort)
 
 
+def healthy_codex_executable() -> str:
+    """Return Codex only when the installed binary can finish local startup."""
+
+    executable = shutil.which("codex")
+    if not executable:
+        return ""
+    try:
+        stat = os.stat(executable)
+        cache_key = (executable, int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return ""
+    if cache_key in _CODEX_PREFLIGHT_CACHE:
+        return executable if _CODEX_PREFLIGHT_CACHE[cache_key] else ""
+    try:
+        completed = subprocess.run(
+            [executable, "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=False,
+        )
+        healthy = bool(completed.returncode == 0 and str(completed.stdout or "").strip())
+    except (OSError, subprocess.TimeoutExpired):
+        healthy = False
+    _CODEX_PREFLIGHT_CACHE.clear()
+    _CODEX_PREFLIGHT_CACHE[cache_key] = healthy
+    return executable if healthy else ""
+
+
 def codex_cli_arguments(reasoning_effort: str = "") -> list:
     """Return the fixed model and the bounded effort selected for a workload."""
 
@@ -93,10 +121,19 @@ def notification_ai_runtime_dir() -> Path:
     return path
 
 
+def background_ai_runtime_dir() -> Path:
+    """Return an empty runtime for asynchronous extraction and review jobs."""
+
+    configured = str(os.environ.get("ORBIT_BACKGROUND_AI_RUNTIME_DIR") or "").strip()
+    path = Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "orbit-alpha-background-ai"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def codex_process_arguments(reasoning_effort: str = "", working_directory: Path = None) -> list:
     """Build direct Codex argv without the cross-process guard wrapper."""
 
-    executable = shutil.which("codex")
+    executable = healthy_codex_executable()
     if not executable:
         return []
     runtime_dir = Path(working_directory or ROOT_DIR)
@@ -116,6 +153,56 @@ def codex_process_arguments(reasoning_effort: str = "", working_directory: Path 
     ]
 
 
+def background_codex_process_arguments(reasoning_effort: str = "max") -> list:
+    return codex_process_arguments(reasoning_effort, background_ai_runtime_dir())
+
+
+def _bounded_int(value: object, fallback: int, minimum: int, maximum: int) -> int:
+    try:
+        return max(minimum, min(maximum, int(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def run_background_ai_prompt(
+    command,
+    prompt: str,
+    timeout_seconds: int,
+    settings: Dict[str, object] = None,
+):
+    configured = settings or runtime_settings()
+    maximum = _bounded_int(
+        configured.get("localAiMaxConcurrentProcesses") or os.environ.get("ORBIT_LOCAL_AI_MAX_CONCURRENT") or 2,
+        2,
+        1,
+        8,
+    )
+    reserved = _bounded_int(
+        configured.get("localAiInvestmentReservedProcesses") or os.environ.get("ORBIT_LOCAL_AI_INVESTMENT_RESERVED") or 1,
+        1,
+        0,
+        max(0, maximum - 1),
+    )
+    wait_seconds = _bounded_int(
+        configured.get("notificationAiCapacityWaitSeconds") or os.environ.get("ORBIT_LOCAL_AI_CAPACITY_WAIT_SECONDS") or 300,
+        300,
+        1,
+        900,
+    )
+    return run_ai_prompt_command(
+        command,
+        prompt,
+        lock_dir=data_dir() / "local-ai-capacity",
+        max_concurrent=maximum,
+        wait_seconds=wait_seconds,
+        lane="background",
+        reserved_priority_slots=reserved,
+        timeout_seconds=timeout_seconds,
+        cwd=background_ai_runtime_dir(),
+        env=dict(os.environ),
+    )
+
+
 def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str:
     """Build a read-only command with the project-wide fixed model policy.
 
@@ -125,7 +212,7 @@ def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str
     while asynchronous research and review keep the quality-first max policy.
     """
 
-    executable = shutil.which("codex")
+    executable = healthy_codex_executable()
     if not executable:
         return ""
     try:
@@ -166,7 +253,7 @@ def reviewer_from_settings(settings: Dict[str, str] = None) -> ModelReviewer:
     use_codex = str(settings.get("modelReviewUseCodex") or os.environ.get("MODEL_REVIEW_USE_CODEX") or "1").strip() != "0"
     timeout = int(settings.get("modelReviewTimeoutSeconds") or os.environ.get("MODEL_REVIEW_TIMEOUT_SECONDS") or 180)
     if use_codex:
-        command = codex_command()
+        command = background_codex_process_arguments()
         if command:
-            return FallbackModelReviewer(CommandModelReviewer(command, timeout))
+            return FallbackModelReviewer(CommandModelReviewer(command, timeout, settings))
     return LocalModelReviewer()

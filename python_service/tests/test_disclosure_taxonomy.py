@@ -142,7 +142,7 @@ class DisclosureTaxonomyTests(unittest.TestCase):
 
     def test_metadata_only_disclosure_skips_external_ai_command(self):
         analyzer = CommandDisclosureAnalyzer("unused-command")
-        with patch("digital_twin.infrastructure.disclosure_analyzer.subprocess.run") as run:
+        with patch("digital_twin.infrastructure.disclosure_analyzer.run_background_ai_prompt") as run:
             result = analyzer.analyze({
                 "reportName": "주요사항보고서",
                 "analysisReady": False,

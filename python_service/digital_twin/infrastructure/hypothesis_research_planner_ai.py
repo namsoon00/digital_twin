@@ -1,13 +1,11 @@
 """AI adapter for planning evidence collection around existing hypotheses."""
 
 import json
-import os
 import re
-import subprocess
 from typing import Dict
 
-from .model_reviewer import codex_command
-from .settings import ROOT_DIR, runtime_settings
+from .model_reviewer import background_codex_process_arguments, run_background_ai_prompt
+from .settings import runtime_settings
 
 
 class HypothesisResearchPlanningAdvisor:
@@ -21,23 +19,19 @@ class LocalHypothesisResearchPlanningAdvisor(HypothesisResearchPlanningAdvisor):
 
 
 class CommandHypothesisResearchPlanningAdvisor(HypothesisResearchPlanningAdvisor):
-    def __init__(self, command: str, timeout_seconds: int = 120):
-        self.command = str(command or "").strip()
+    def __init__(self, command, timeout_seconds: int = 120, settings=None):
+        self.command = command
         self.timeout_seconds = max(30, int(timeout_seconds or 120))
+        self.settings = dict(settings or {})
 
     def plan(self, context: Dict[str, object]) -> Dict[str, object]:
         if not self.command:
             return {}
-        completed = subprocess.run(
+        completed = run_background_ai_prompt(
             self.command,
-            input=hypothesis_research_planning_prompt(context),
-            text=True,
-            shell=True,
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout_seconds,
-            env=dict(os.environ),
+            hypothesis_research_planning_prompt(context),
+            self.timeout_seconds,
+            self.settings,
         )
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or completed.stdout or "hypothesis research planner failed").strip())
@@ -93,7 +87,7 @@ def hypothesis_research_planning_advisor_from_settings(settings: Dict[str, objec
         timeout = int(settings.get("investmentBrainHypothesisResearchPlannerAiTimeoutSeconds") or 120)
     except (TypeError, ValueError):
         timeout = 120
-    command = codex_command() or ""
+    command = background_codex_process_arguments()
     if command:
-        return CommandHypothesisResearchPlanningAdvisor(command, timeout)
+        return CommandHypothesisResearchPlanningAdvisor(command, timeout, settings)
     return LocalHypothesisResearchPlanningAdvisor()

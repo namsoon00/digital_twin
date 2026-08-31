@@ -1,5 +1,3 @@
-import os
-import subprocess
 from typing import Dict
 
 from ..domain.disclosure_analysis import (
@@ -9,8 +7,12 @@ from ..domain.disclosure_analysis import (
     local_disclosure_analysis,
     normalize_disclosure_analysis_output,
 )
-from .model_reviewer import codex_command, codex_model_label
-from .settings import ROOT_DIR, runtime_settings
+from .model_reviewer import (
+    background_codex_process_arguments,
+    codex_model_label,
+    run_background_ai_prompt,
+)
+from .settings import runtime_settings
 
 
 class DisclosureAnalyzer:
@@ -24,24 +26,20 @@ class LocalDisclosureAnalyzer(DisclosureAnalyzer):
 
 
 class CommandDisclosureAnalyzer(DisclosureAnalyzer):
-    def __init__(self, command: str, timeout_seconds: int = 90, source: str = "AI 분석"):
+    def __init__(self, command, timeout_seconds: int = 90, source: str = "AI 분석", settings=None):
         self.command = command
         self.timeout_seconds = max(15, int(timeout_seconds or 90))
         self.source = source
+        self.settings = dict(settings or {})
 
     def analyze(self, context: Dict[str, object]) -> DisclosureAnalysisResult:
         if not disclosure_analysis_ready(context):
             return local_disclosure_analysis(context, "메타데이터 전용")
-        completed = subprocess.run(
+        completed = run_background_ai_prompt(
             self.command,
-            input=build_disclosure_analysis_prompt(context),
-            text=True,
-            shell=True,
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout_seconds,
-            env=dict(os.environ),
+            build_disclosure_analysis_prompt(context),
+            self.timeout_seconds,
+            self.settings,
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:
@@ -78,7 +76,7 @@ def disclosure_analyzer_from_settings(settings: Dict[str, str] = None) -> Disclo
     settings = settings or runtime_settings()
     timeout = int_setting(settings, "dartDisclosureAiTimeoutSeconds", int_setting(settings, "modelReviewTimeoutSeconds", 90))
     if enabled_setting(settings, "dartDisclosureAiUseCodex", str(settings.get("modelReviewUseCodex") or "1")):
-        command = codex_command()
+        command = background_codex_process_arguments("medium")
         if command:
-            return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")"))
+            return FallbackDisclosureAnalyzer(CommandDisclosureAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")", settings))
     return LocalDisclosureAnalyzer()

@@ -1,6 +1,9 @@
+import os
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,11 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.infrastructure.disclosure_analyzer import disclosure_analyzer_from_settings  # noqa: E402
 from digital_twin.infrastructure.hypothesis_proposal_ai import hypothesis_proposal_advisor_from_settings  # noqa: E402
 from digital_twin.infrastructure.hypothesis_research_planner_ai import hypothesis_research_planning_advisor_from_settings  # noqa: E402
-from digital_twin.infrastructure.model_reviewer import reviewer_from_settings  # noqa: E402
+from digital_twin.infrastructure.model_reviewer import (  # noqa: E402
+    _CODEX_PREFLIGHT_CACHE,
+    healthy_codex_executable,
+    reviewer_from_settings,
+)
 from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings  # noqa: E402
 from digital_twin.infrastructure.local_ai_process_guard import (  # noqa: E402
     LocalAICapacityUnavailable,
     local_ai_capacity_lease,
+    run_ai_prompt_command,
 )
 from digital_twin.infrastructure.notification_ai_reviewer import (  # noqa: E402
     CommandNotificationAIReviewer,
@@ -26,14 +34,14 @@ from digital_twin.infrastructure.rule_change_candidate_ai import rule_change_can
 
 class AiModelPolicyTests(unittest.TestCase):
     def test_all_application_ai_factories_ignore_custom_commands_and_use_the_fixed_codex_policy(self):
-        fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
-        with patch("digital_twin.infrastructure.model_reviewer.codex_command", return_value=fixed_command) as model_command, \
+        fixed_command = ["codex", "--model", "gpt-5.6-sol", "exec", "-"]
+        with patch("digital_twin.infrastructure.model_reviewer.background_codex_process_arguments", return_value=fixed_command) as model_command, \
              patch("digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments", return_value=["codex", "exec", "-"]) as notification_command, \
-             patch("digital_twin.infrastructure.news_ai_analyzer.codex_command", return_value=fixed_command) as news_command, \
-             patch("digital_twin.infrastructure.disclosure_analyzer.codex_command", return_value=fixed_command) as disclosure_command, \
-             patch("digital_twin.infrastructure.rule_change_candidate_ai.codex_command", return_value=fixed_command) as rule_command, \
-             patch("digital_twin.infrastructure.hypothesis_proposal_ai.codex_command", return_value=fixed_command) as proposal_command, \
-             patch("digital_twin.infrastructure.hypothesis_research_planner_ai.codex_command", return_value=fixed_command) as planning_command:
+             patch("digital_twin.infrastructure.news_ai_analyzer.background_codex_process_arguments", return_value=fixed_command) as news_command, \
+             patch("digital_twin.infrastructure.disclosure_analyzer.background_codex_process_arguments", return_value=fixed_command) as disclosure_command, \
+             patch("digital_twin.infrastructure.rule_change_candidate_ai.background_codex_process_arguments", return_value=fixed_command) as rule_command, \
+             patch("digital_twin.infrastructure.hypothesis_proposal_ai.background_codex_process_arguments", return_value=fixed_command) as proposal_command, \
+             patch("digital_twin.infrastructure.hypothesis_research_planner_ai.background_codex_process_arguments", return_value=fixed_command) as planning_command:
             reviewer_from_settings({"modelReviewUseCodex": "1", "modelReviewCommand": "other-llm"})
             notification_reviewer = notification_ai_reviewer_from_settings({"notificationAiUseCodex": "1", "notificationAiCommand": "other-llm"})
             news_ai_analyzer_from_settings({"newsAiAnalysisUseCodex": "1", "newsAiAnalysisCommand": "other-llm"})
@@ -45,15 +53,25 @@ class AiModelPolicyTests(unittest.TestCase):
 
         for command in [
             model_command,
-            news_command,
-            disclosure_command,
             rule_command,
             proposal_command,
             planning_command,
         ]:
             command.assert_called_once_with()
+        news_command.assert_called_once_with("medium")
+        disclosure_command.assert_called_once_with("medium")
         self.assertEqual("high", notification_command.call_args_list[0].kwargs["reasoning_effort"])
         self.assertEqual("max", notification_command.call_args_list[-1].kwargs["reasoning_effort"])
+
+        _CODEX_PREFLIGHT_CACHE.clear()
+        fake_stat = type("Stat", (), {"st_mtime_ns": 1, "st_size": 2})()
+        with patch("digital_twin.infrastructure.model_reviewer.shutil.which", return_value="/tmp/codex"), \
+             patch("digital_twin.infrastructure.model_reviewer.os.stat", return_value=fake_stat), \
+             patch(
+                 "digital_twin.infrastructure.model_reviewer.subprocess.run",
+                 side_effect=subprocess.TimeoutExpired(["codex", "--version"], 5),
+             ):
+            self.assertEqual("", healthy_codex_executable())
 
     def test_notification_delivery_deadline_caps_codex_gate_wait(self):
         fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
@@ -156,6 +174,28 @@ class AiModelPolicyTests(unittest.TestCase):
                     cancel_event=cancel_event,
                 ):
                     pass
+
+            child_pid_path = lock_dir / "child.pid"
+            script = (
+                "import pathlib,subprocess,sys,time; "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+            )
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_ai_prompt_command(
+                    [sys.executable, "-c", script, str(child_pid_path)],
+                    "",
+                    lock_dir=lock_dir,
+                    max_concurrent=1,
+                    wait_seconds=1,
+                    lane="background",
+                    reserved_priority_slots=0,
+                    timeout_seconds=0.2,
+                )
+            child_pid = int(child_pid_path.read_text())
+            time.sleep(0.05)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
 
 
 if __name__ == "__main__":

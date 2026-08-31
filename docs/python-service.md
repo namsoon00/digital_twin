@@ -303,6 +303,22 @@ Investment AI runs from an isolated temporary directory rather than the reposito
 
 The realtime collector and TypeDB inference path never wait for this model. They enqueue an immutable request and continue. A heartbeat extends the AI request lease while an unlimited model call is active; service shutdown cancels the process and releases its capacity slot without leaving a stale lock.
 
+All other asynchronous Codex workloads run in a separate empty runtime and use
+the background capacity lane. They are started with direct argv, not a shell
+wrapper. A configured timeout or worker shutdown terminates the complete
+process group before releasing the slot. This prevents timed-out news,
+disclosure, hypothesis, and model-review calls from remaining as orphan Codex
+processes and exhausting the host or remote model capacity. One local slot is
+reserved for investment judgement, so background enrichment cannot block a
+portfolio alert from starting.
+
+The model response itself has no investment deadline. Before a worker accepts
+Codex as available, it does run a bounded local `codex --version` startup
+preflight. This check does not call the model; it prevents a broken or stale CLI
+binary that is stuck in the operating-system loader from occupying an unlimited
+investment slot. Upgrade the local Codex CLI and restart the managed services if
+this preflight fails.
+
 ## Async Model Review
 
 Decision-change alerts are queued in the `model_review_jobs` table inside the configured operational DB.

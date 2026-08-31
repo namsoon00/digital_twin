@@ -1,12 +1,15 @@
 import json
 import os
-import subprocess
 from typing import Dict
 
 from ..domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from ..domain.news_ai_analysis import build_news_ai_analysis_prompt, local_news_ai_analysis, normalize_ai_analysis
-from .model_reviewer import codex_command, codex_model_label
-from .settings import ROOT_DIR, runtime_settings
+from .model_reviewer import (
+    background_codex_process_arguments,
+    codex_model_label,
+    run_background_ai_prompt,
+)
+from .settings import runtime_settings
 
 
 class NewsAiAnalyzer:
@@ -40,26 +43,22 @@ def first_json_object(text: object) -> Dict[str, object]:
 
 
 class CommandNewsAiAnalyzer(NewsAiAnalyzer):
-    def __init__(self, command: str, timeout_seconds: int = 90, model_name: str = "External article AI"):
-        self.command = str(command or "").strip()
+    def __init__(self, command, timeout_seconds: int = 90, model_name: str = "External article AI", settings=None):
+        self.command = command
         self.timeout_seconds = max(1, int(timeout_seconds or 90))
         self.model_name = str(model_name or "External article AI").strip()
+        self.settings = dict(settings or {})
 
     def analyze(self, target: NewsCollectionTarget, evidence: ResearchEvidence) -> Dict[str, object]:
         return self.analyze_with_timeout(target, evidence, self.timeout_seconds)
 
     def analyze_with_timeout(self, target: NewsCollectionTarget, evidence: ResearchEvidence, timeout_seconds: int) -> Dict[str, object]:
         prompt = build_news_ai_analysis_prompt(target, evidence)
-        completed = subprocess.run(
+        completed = run_background_ai_prompt(
             self.command,
-            input=prompt,
-            text=True,
-            shell=True,
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=max(1, min(self.timeout_seconds, int(timeout_seconds or self.timeout_seconds))),
-            env=dict(os.environ),
+            prompt,
+            max(1, min(self.timeout_seconds, int(timeout_seconds or self.timeout_seconds))),
+            self.settings,
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:
@@ -99,7 +98,7 @@ def news_ai_analyzer_from_settings(settings: Dict[str, str] = None) -> NewsAiAna
     use_codex = str(configured.get("newsAiAnalysisUseCodex") or os.environ.get("NEWS_AI_ANALYSIS_USE_CODEX") or "1").strip() not in {"0", "false", "no", "off"}
     timeout = int(configured.get("newsAiAnalysisTimeoutSeconds") or os.environ.get("NEWS_AI_ANALYSIS_TIMEOUT_SECONDS") or 90)
     if use_codex:
-        command = codex_command()
+        command = background_codex_process_arguments("medium")
         if command:
-            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")"))
+            return FallbackNewsAiAnalyzer(CommandNewsAiAnalyzer(command, timeout, "Codex AI (" + codex_model_label() + ")", configured))
     return LocalNewsAiAnalyzer()

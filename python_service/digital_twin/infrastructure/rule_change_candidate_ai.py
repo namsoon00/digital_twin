@@ -1,10 +1,13 @@
 import os
-import subprocess
 from typing import Dict, List
 
 from ..domain.ontology_rulebox_governance import build_rule_change_candidate_prompt, rule_change_candidates_from_text
-from .model_reviewer import codex_command, codex_model_label
-from .settings import ROOT_DIR, runtime_settings
+from .model_reviewer import (
+    background_codex_process_arguments,
+    codex_model_label,
+    run_background_ai_prompt,
+)
+from .settings import runtime_settings
 
 
 class RuleChangeCandidateAdvisor:
@@ -28,25 +31,21 @@ class LocalRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
 
 
 class CommandRuleChangeCandidateAdvisor(RuleChangeCandidateAdvisor):
-    def __init__(self, command: str, timeout_seconds: int = 120, source: str = "AI"):
-        self.command = str(command or "").strip()
+    def __init__(self, command, timeout_seconds: int = 120, source: str = "AI", settings=None):
+        self.command = command
         self.timeout_seconds = max(30, int(timeout_seconds or 120))
         self.source = str(source or "AI")
+        self.settings = dict(settings or {})
 
     def propose(self, context: Dict[str, object]) -> List[Dict[str, object]]:
         if not self.command:
             raise RuntimeError("rule candidate AI command is not configured")
         prompt = build_rule_change_candidate_prompt(context)
-        completed = subprocess.run(
+        completed = run_background_ai_prompt(
             self.command,
-            input=prompt,
-            text=True,
-            shell=True,
-            cwd=str(ROOT_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout_seconds,
-            env=dict(os.environ),
+            prompt,
+            self.timeout_seconds,
+            self.settings,
         )
         output = completed.stdout.strip()
         if completed.returncode != 0:
@@ -99,7 +98,7 @@ def rule_change_candidate_advisor_from_settings(settings: Dict[str, str] = None)
     use_codex = str(settings.get("ontologyRuleCandidateAiUseCodex") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_USE_CODEX") or "1").strip() != "0"
     timeout = int(settings.get("ontologyRuleCandidateAiTimeoutSeconds") or os.environ.get("ONTOLOGY_RULE_CANDIDATE_AI_TIMEOUT_SECONDS") or 120)
     if use_codex:
-        command = codex_command()
+        command = background_codex_process_arguments()
         if command:
-            return FallbackRuleChangeCandidateAdvisor(CommandRuleChangeCandidateAdvisor(command, timeout, "Codex AI (" + codex_model_label() + ")"))
+            return FallbackRuleChangeCandidateAdvisor(CommandRuleChangeCandidateAdvisor(command, timeout, "Codex AI (" + codex_model_label() + ")", settings))
     return LocalRuleChangeCandidateAdvisor()

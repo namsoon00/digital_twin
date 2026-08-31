@@ -6,10 +6,11 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 try:
     import fcntl
@@ -19,6 +20,46 @@ except ImportError:  # pragma: no cover - the managed local runtime is POSIX.
 
 class LocalAICapacityUnavailable(RuntimeError):
     pass
+
+
+def terminate_process_group(process: subprocess.Popen, force: bool = False) -> None:
+    """Terminate a managed AI process and every child in its session."""
+
+    if process is None or process.poll() is not None:
+        return
+    signum = signal.SIGKILL if force else signal.SIGTERM
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signum)
+            return
+        except (OSError, ProcessLookupError):
+            pass
+    try:
+        process.kill() if force else process.terminate()
+    except (OSError, ProcessLookupError):
+        return
+
+
+@contextmanager
+def forward_termination_signals(process: subprocess.Popen):
+    """Forward worker termination to its isolated AI process group."""
+
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous_handlers = {}
+
+    def forward(signum, _frame) -> None:
+        terminate_process_group(process, force=False)
+        raise SystemExit(128 + int(signum))
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        previous_handlers[signum] = signal.signal(signum, forward)
+    try:
+        yield
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 def _try_slot(lock_dir: Path, slot_index: int) -> Tuple[int, Path]:
@@ -90,6 +131,75 @@ def local_ai_capacity_lease(
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
                 os.close(descriptor)
+
+
+def run_ai_prompt_command(
+    command: Union[List[str], str],
+    prompt: str,
+    *,
+    lock_dir: Path,
+    max_concurrent: int = 2,
+    wait_seconds: Optional[float] = 300,
+    lane: str = "background",
+    reserved_priority_slots: int = 1,
+    timeout_seconds: Optional[float] = None,
+    cwd: Optional[Path] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> subprocess.CompletedProcess:
+    """Run one prompt with capacity control and process-group cleanup.
+
+    Application adapters use direct argv. Supporting a string keeps tests and
+    compatibility callers working, but production Codex calls never need a
+    shell wrapper whose timeout could orphan the actual model process.
+    """
+
+    if not command:
+        raise ValueError("guarded AI command is empty")
+    timeout_value = None
+    if timeout_seconds not in (None, ""):
+        timeout_value = float(timeout_seconds)
+        if timeout_value <= 0:
+            timeout_value = None
+    with local_ai_capacity_lease(
+        lock_dir,
+        max_concurrent=max_concurrent,
+        wait_seconds=wait_seconds,
+        lane=lane,
+        reserved_priority_slots=reserved_priority_slots,
+    ):
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=isinstance(command, str),
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            start_new_session=os.name != "nt",
+        )
+        try:
+            with forward_termination_signals(process):
+                stdout, stderr = process.communicate(input=prompt, timeout=timeout_value)
+        except subprocess.TimeoutExpired as error:
+            terminate_process_group(process, force=False)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                terminate_process_group(process, force=True)
+                process.wait(timeout=2)
+            process.communicate()
+            raise error
+        except BaseException:
+            terminate_process_group(process, force=False)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                terminate_process_group(process, force=True)
+                process.wait(timeout=2)
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def run_guarded(

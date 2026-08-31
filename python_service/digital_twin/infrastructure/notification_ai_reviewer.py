@@ -11,7 +11,7 @@ from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
     validated_response_from_text,
 )
-from .local_ai_process_guard import local_ai_capacity_lease
+from .local_ai_process_guard import forward_termination_signals, local_ai_capacity_lease
 from .model_reviewer import (
     codex_model_label,
     codex_process_arguments,
@@ -153,10 +153,11 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
                 launch_ms = int((process_started - launch_started) * 1000)
                 self.process = process
                 try:
-                    if timeout_seconds is None:
-                        stdout, stderr = process.communicate(input=prompt)
-                    else:
-                        stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
+                    with forward_termination_signals(process):
+                        if timeout_seconds is None:
+                            stdout, stderr = process.communicate(input=prompt)
+                        else:
+                            stdout, stderr = process.communicate(input=prompt, timeout=timeout_seconds)
                 except subprocess.TimeoutExpired as error:
                     termination_reason = "configured-timeout"
                     self.terminate_process(process, force=False)
@@ -166,7 +167,14 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
                         self.terminate_process(process, force=True)
                         process.wait(timeout=2)
                     raise TimeoutError("notification AI command exceeded " + str(timeout_seconds) + " seconds") from error
-        except Exception:
+        except BaseException:
+            if process is not None and process.poll() is None:
+                self.terminate_process(process, force=False)
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.terminate_process(process, force=True)
+                    process.wait(timeout=2)
             if self.cancel_event.is_set() and termination_reason == "completed":
                 termination_reason = "cancelled"
             raise

@@ -15,7 +15,7 @@ from ...domain.market_hours import (
     evaluate_market_hours,
     normalize_off_hours_delivery_mode,
 )
-from ...domain.notification_ai_delivery import holding_review_baseline_is_deliverable
+from ...domain.notification_ai_delivery import first_holding_review_delivery_is_authorized
 from ...domain.notification_ai_context import is_graph_backed_relation_context
 from ...domain.notifications import NotificationJob
 
@@ -119,12 +119,10 @@ class NotificationDispatchEligibilityService:
         material = bool(relation_diff.get("material"))
         first_holding_review = (
             not material
-            and holding_review_baseline_is_deliverable(context)
-            and str(context.get("cooldownDecision") or "").strip().lower() == "new-condition"
-            and int(context.get("cooldownRecentSentCount") or 0) <= 0
+            and first_holding_review_delivery_is_authorized(context)
         )
         context["inferenceChangeGate"] = {
-            "version": "dispatch-inference-change-v1",
+            "version": "dispatch-inference-change-v2",
             "decision": "send" if material or first_holding_review else "suppress",
             "material": material,
             "reason": (

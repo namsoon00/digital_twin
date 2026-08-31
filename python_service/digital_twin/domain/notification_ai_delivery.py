@@ -7,7 +7,7 @@ from typing import Dict, Mapping
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v6"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v7"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -58,6 +58,21 @@ def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> boo
     )
 
 
+def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -> bool:
+    """Return the admission decision shared by every delivery-stage gate."""
+
+    context = _mapping(context)
+    try:
+        recent_sent_count = int(context.get("cooldownRecentSentCount") or 0)
+    except (TypeError, ValueError):
+        recent_sent_count = 0
+    return (
+        holding_review_baseline_is_deliverable(context)
+        and _text(context.get("cooldownDecision")).lower() == "new-condition"
+        and recent_sent_count <= 0
+    )
+
+
 def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
     """Suppress candidate churn when the final user action did not move.
 
@@ -103,6 +118,9 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "selectedCoreInferenceEligible": selected_core_eligible,
         "typedbFallback": _text(execution_audit.get("status")).lower() == "typedb-fallback",
     }
+    if first_holding_review_delivery_is_authorized(context):
+        base["reason"] = "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단입니다."
+        return base
     if base["typedbFallback"]:
         fallback_material = bool(
             graph_transition.get("material")

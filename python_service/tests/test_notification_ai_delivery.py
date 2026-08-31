@@ -273,6 +273,21 @@ class FinalAIDeliveryTests(unittest.TestCase):
         first_holding["ontologyRelationContext"]["actionEnvelope"]["targetRole"] = "holding"
         self.assertEqual("send", final_ai_delivery_decision(first_holding)["decision"])
 
+        first_holding.update({
+            "cooldownDecision": "new-condition",
+            "cooldownRecentSentCount": 0,
+            "notificationAiExecutionAudit": {"status": "typedb-fallback"},
+            "aiDecisionTransition": {
+                "historyAvailable": True,
+                "kind": "unchanged",
+                "previousAction": "HOLD",
+                "currentAction": "HOLD",
+            },
+        })
+        fallback_decision = final_ai_delivery_decision(first_holding)
+        self.assertEqual("send", fallback_decision["decision"])
+        self.assertTrue(fallback_decision["typedbFallback"])
+
         first_watchlist = watchlist_context()
         first_watchlist["aiDecisionTransition"] = {
             "historyAvailable": False,

@@ -100,8 +100,9 @@ high-frequency copy of every polling lifecycle update.
 - A changed node invalidates only relations adjacent to that node. Unrelated
   relations in the same scope remain reusable.
 - Legacy rows without a semantic fingerprint are rewritten once, then become
-  reusable. Inventory reads fetch identity and optional fingerprint in one
-  TypeQL query per row owner type.
+  reusable. Inventory keeps bounded identity and fingerprint reads separate;
+  TypeQL optional joins are not used here because their large-slot query plan
+  regressed under the production graph cardinality.
 
 This is the first safe implementation step because it changes persistence
 materiality without moving investment judgement out of TypeDB. Exact source

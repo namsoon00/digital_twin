@@ -15,7 +15,7 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
     def test_current_state_delta_preserves_semantic_rows_and_bounded_reads(self):
         self._assert_polling_lifecycle_is_not_material()
         self._assert_only_adjacent_relations_are_rebound()
-        self._assert_inventory_uses_one_read_per_owner_kind()
+        self._assert_inventory_keeps_legacy_rows_visible()
 
     def _assert_polling_lifecycle_is_not_material(self):
         base = {
@@ -147,7 +147,7 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
             delta["reusedRelationRows"][0]["source"],
         )
 
-    def _assert_inventory_uses_one_read_per_owner_kind(self):
+    def _assert_inventory_keeps_legacy_rows_visible(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         transaction = MagicMock()
         transaction.__enter__.return_value = transaction
@@ -157,16 +157,22 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
         imported = ((None, None, None, None, SimpleNamespace(READ="read")), None)
 
         def rows(_tx, _query, _columns, label=""):
+            suffix = "node" if rows.calls < 2 else "relation"
+            rows.calls += 1
+            if label == "typedb.current-state-slot-inventory":
+                return [{
+                    "storageId": "storage:" + suffix,
+                    "scopeId": "scope:market:005930",
+                    "snapshotId": "abox-current:scope-market:a",
+                }]
             if label == "typedb.current-state-slot-content":
-                suffix = "node" if rows.calls == 0 else "relation"
-                rows.calls += 1
                 return [{
                     "storageId": "storage:" + suffix,
                     "scopeId": "scope:market:005930",
                     "snapshotId": "abox-current:scope-market:a",
                     "contentFingerprint": "fingerprint:" + suffix,
                 }]
-            self.fail("Legacy inventory fallback must not run for current rows")
+            self.fail("Unexpected current-state inventory query")
 
         rows.calls = 0
         with patch.object(
@@ -180,10 +186,9 @@ class TypeDBCurrentStateDeltaContractTests(unittest.TestCase):
                 ["abox-current:scope-market:a"],
             )
 
-        self.assertEqual(2, reader.call_count)
+        self.assertEqual(4, reader.call_count)
         self.assertTrue(all(
-            "try { $item has ontology-content-fingerprint $contentFingerprint; };"
-            in invocation.args[1]
+            " try {" not in invocation.args[1]
             for invocation in reader.call_args_list
         ))
         self.assertEqual(

@@ -3983,11 +3983,19 @@ class ScopedABoxManifestMixin:
                     TransactionType.READ,
                     options=self.read_transaction_options(),
                 ) as tx:
-                    inventory_rows = self.read_rows_in_transaction(
+                    identity_rows = self.read_rows_in_transaction(
                         tx,
-                        base_query
-                        + " try { $item has ontology-content-fingerprint "
-                        + "$contentFingerprint; };",
+                        base_query,
+                        ["storageId", "scopeId", "snapshotId"],
+                        label="typedb.current-state-slot-inventory",
+                    )
+                    fingerprint_rows = self.read_rows_in_transaction(
+                        tx,
+                        base_query.replace(
+                            "has ontology-snapshot-id $snapshotId; ",
+                            "has ontology-snapshot-id $snapshotId, "
+                            "has ontology-content-fingerprint $contentFingerprint; ",
+                        ),
                         [
                             "storageId",
                             "scopeId",
@@ -3996,10 +4004,14 @@ class ScopedABoxManifestMixin:
                         ],
                         label="typedb.current-state-slot-content",
                     )
-                # TypeQL ``try`` keeps legacy rows in the same result with an
-                # unbound fingerprint. They are conservatively rewritten once,
-                # without a second full identity query or a mixed-slot gap.
-                for item in inventory_rows or []:
+                fingerprints = {
+                    str(item.get("storageId") or ""): str(
+                        item.get("contentFingerprint") or ""
+                    )
+                    for item in fingerprint_rows or []
+                    if str(item.get("storageId") or "")
+                }
+                for item in identity_rows or []:
                     storage_id = str(item.get("storageId") or "").strip()
                     if not storage_id:
                         continue
@@ -4009,9 +4021,7 @@ class ScopedABoxManifestMixin:
                         "physicalGenerationId": str(
                             item.get("snapshotId") or ""
                         ),
-                        "contentFingerprint": str(
-                            item.get("contentFingerprint") or ""
-                        ),
+                        "contentFingerprint": fingerprints.get(storage_id, ""),
                     }
         return result
 

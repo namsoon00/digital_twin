@@ -790,7 +790,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(readiness["ready"])
         self.assertEqual([], readiness["blockers"])
 
-    def test_independent_v2_gate_can_approve_only_a_drained_historical_queue_wait(self):
+    def test_independent_v2_gate_uses_current_queue_age_for_historical_wait_recovery(self):
         class Registry:
             def get(self, deployment_id):
                 return {
@@ -801,8 +801,9 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 }
 
         class Jobs:
-            def __init__(self, pending_count=0):
+            def __init__(self, pending_count=0, oldest_pending_age_seconds=0):
                 self.pending_count = pending_count
+                self.oldest_pending_age_seconds = oldest_pending_age_seconds
 
             def summary(self, deployment_id, lookback=200):
                 del deployment_id, lookback
@@ -818,7 +819,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "queueWaitP95Ms": 180000,
                     "latestCompletedAt": "2099-01-01T00:00:00Z",
                     "pendingCount": self.pending_count,
-                    "oldestPendingAgeSeconds": 0,
+                    "oldestPendingAgeSeconds": self.oldest_pending_age_seconds,
                 }
 
         platform = ReasoningEnginePlatformService(
@@ -837,19 +838,36 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(approved["ready"])
         self.assertTrue(approved["recoveredQueueWaitOverrideApplied"])
         self.assertIn(
-            "historical-queue-wait-slo-breached-but-current-queue-drained",
+            "historical-queue-wait-slo-breached-but-current-queue-within-slo",
             approved["warnings"],
         )
 
-        active_backlog = ReasoningEnginePlatformService(
+        live_healthy_backlog = ReasoningEnginePlatformService(
             Registry(),
             {"reasoningEngineV2IndependentEnabled": "1"},
-            independent_job_store=Jobs(pending_count=1),
+            independent_job_store=Jobs(
+                pending_count=1,
+                oldest_pending_age_seconds=30,
+            ),
         ).promotion_readiness(
             "ontology-v2-shadow",
             allow_recovered_queue_wait=True,
         )
-        self.assertIn("candidate-queue-wait-slo-breached", active_backlog["blockers"])
+        self.assertTrue(live_healthy_backlog["ready"])
+        self.assertTrue(live_healthy_backlog["recoveredQueueWaitOverrideApplied"])
+
+        stale_backlog = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(
+                pending_count=1,
+                oldest_pending_age_seconds=61,
+            ),
+        ).promotion_readiness(
+            "ontology-v2-shadow",
+            allow_recovered_queue_wait=True,
+        )
+        self.assertIn("candidate-queue-wait-slo-breached", stale_backlog["blockers"])
 
     def test_independent_v2_gate_uses_decision_synthesis_not_notification_novelty(self):
         class Registry:

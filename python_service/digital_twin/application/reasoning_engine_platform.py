@@ -1367,16 +1367,20 @@ class ReasoningEnginePlatformService:
         )
         pending_count = int(summary.get("pendingCount") or 0)
         oldest_pending_age_seconds = int(summary.get("oldestPendingAgeSeconds") or 0)
+        current_queue_within_slo = bool(
+            pending_count == 0
+            or oldest_pending_age_seconds
+            <= max(1, maximum_queue_wait_p95 // 1000)
+        )
         recovered_queue_wait = bool(
             allow_recovered_queue_wait
             and queue_wait_p95 > maximum_queue_wait_p95
-            and pending_count == 0
-            and oldest_pending_age_seconds == 0
+            and current_queue_within_slo
         )
         if queue_wait_p95 > maximum_queue_wait_p95 and not recovered_queue_wait:
             blockers.append("candidate-queue-wait-slo-breached")
         elif recovered_queue_wait:
-            warnings.append("historical-queue-wait-slo-breached-but-current-queue-drained")
+            warnings.append("historical-queue-wait-slo-breached-but-current-queue-within-slo")
         end_to_end_p95 = int(
             summary.get("endToEndP95Ms")
             or candidate_p95 + queue_wait_p95
@@ -1397,7 +1401,7 @@ class ReasoningEnginePlatformService:
         ):
             blockers.append("candidate-end-to-end-latency-slo-breached")
         elif recovered_end_to_end:
-            warnings.append("historical-end-to-end-slo-breached-but-current-queue-drained")
+            warnings.append("historical-end-to-end-slo-breached-but-current-path-within-slo")
 
         latest = self.timestamp(summary.get("latestCompletedAt"))
         maximum_age = self.int_setting(

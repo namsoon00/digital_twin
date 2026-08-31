@@ -289,6 +289,13 @@ events as missing even though 66 recent source identities were already present
 in the lineage ledger. This false-negative boundary continuously regenerated
 work and explains why query tuning alone could not drain the queue.
 
+Candidate promotion must also distinguish historical recovery delay from the
+live queue. A continuously collected market feed may never reach exactly zero
+pending rows even after recovery. The explicit recovery override therefore
+accepts an old queue-wait P95 only when the oldest currently pending row is
+inside the configured queue-wait SLO; a currently stale row still blocks
+promotion. Historical delay remains a visible warning and is never rewritten.
+
 ## Cold Schema Bootstrap Invariant
 
 After ingress replay was bounded, a new isolated release still appeared to

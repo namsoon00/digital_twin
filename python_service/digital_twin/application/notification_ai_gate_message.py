@@ -3941,7 +3941,12 @@ def compact_current_flow_rows(context: Dict[str, object]) -> List[str]:
     current_price = _number(facts.get("currentPrice"))
     currency = str(facts.get("currency") or ("USD" if str(facts.get("market") or "").upper() == "US" else "KRW"))
     current = price_money(current_price, currency) if current_price > 0 else _plain_value(context, "현재가")
-    pnl = "" if is_watchlist_context(context or {}) else (_plain_value(context, "수익률") or _plain_value(context, "손익"))
+    pnl = ""
+    if not is_watchlist_context(context or {}):
+        if facts.get("profitLossRate") not in (None, ""):
+            pnl = signed_pct(_number(facts.get("profitLossRate")))
+        else:
+            pnl = _plain_value(context, "수익률") or _plain_value(context, "손익")
     trend = _plain_value(context, "추세") or _compact_trend_from_facts(context)
     rows = []
     if current:

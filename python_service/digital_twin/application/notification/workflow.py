@@ -671,8 +671,6 @@ class NotificationQueueRunner:
         if str(job.message_type or "") != INVESTMENT_INSIGHT:
             return True
         context = dict(job.context or {})
-        if is_typedb_context_observation_notification(context):
-            return True
         decision = final_ai_delivery_decision(context)
         context["finalAiDeliveryGate"] = decision
         job.context = context

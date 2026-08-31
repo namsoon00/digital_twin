@@ -649,26 +649,42 @@ class InvestmentReasoningOrchestrator:
         self,
         case_id: str,
         reason: str = "TypeDB reference-only market observation validated.",
+        subject_symbols: Iterable[str] = (),
     ) -> ReasoningCase:
-        """Validate an informational graph observation without asking AI to act."""
+        """Validate informational subjects without changing actionable peers."""
 
         reasoning_case = self.required(case_id)
-        if reasoning_case.stage == CASE_VALIDATED:
-            return reasoning_case
         inference = reasoning_case.inference_result
         if not inference or not inference.trace_complete:
             raise ValueError("TypeDB context observation requires a complete inference trace.")
         if not reasoning_case.decision_syntheses:
             raise ValueError("TypeDB context observation requires a decision synthesis.")
+        requested_symbols = {
+            str(symbol or "").strip().upper()
+            for symbol in subject_symbols or ()
+            if str(symbol or "").strip()
+        }
+        selected_syntheses = [
+            synthesis
+            for synthesis in reasoning_case.decision_syntheses
+            if not requested_symbols or synthesis.symbol in requested_symbols
+        ]
+        if not selected_syntheses:
+            raise ValueError("TypeDB context observation subjects were not found in the decision synthesis.")
         if any(
             synthesis.graph_candidate_action != "NO_ACTION"
             or synthesis.eligible_hypothesis_ids
-            for synthesis in reasoning_case.decision_syntheses
+            for synthesis in selected_syntheses
         ):
             raise ValueError("Actionable or hypothesis-backed synthesis cannot use the context observation path.")
         if reasoning_case.stage not in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
             raise ValueError("Context observation cannot be validated from stage " + reasoning_case.stage + ".")
+        selected_symbols = {synthesis.symbol for synthesis in selected_syntheses}
         for subject_case in self.subject_cases.for_batch(reasoning_case.case_id):
+            if subject_case.symbol not in selected_symbols:
+                continue
+            if subject_case.publication is not None:
+                continue
             subject_case.mark(SUBJECT_OBSERVATION)
             subject_case.publication = publication_for_subject_case(
                 subject_case,

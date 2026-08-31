@@ -6,14 +6,26 @@ from digital_twin.application.investment_reasoning.orchestrator import (
 )
 from digital_twin.domain.investment_reasoning.subject_case import (
     ABSTAIN,
+    OBSERVATION,
     SUBJECT_ABSTAINED,
+    SUBJECT_OBSERVATION,
     SUBJECT_READY,
 )
+from digital_twin.domain.investment_reasoning import CASE_DECISION_SYNTHESIZED
 
 
 class Repository:
+    def __init__(self, item=None):
+        self.item = item
+
     def save(self, value):
+        self.item = value
         return value
+
+    def get(self, case_id):
+        if self.item is not None and self.item.case_id == case_id:
+            return self.item
+        return None
 
 
 class Candidate:
@@ -80,6 +92,60 @@ class SubjectDecisionRecoveryTests(unittest.TestCase):
         })
         self.assertEqual(SUBJECT_ABSTAINED, stale_case.stage)
         self.assertEqual("delivered", stale_case.delivery_state)
+
+        observation = StaleCase()
+        observation.subject_case_id = "subject:mstr"
+        observation.batch_case_id = "case:mixed"
+        observation.symbol = "MSTR"
+        actionable = StaleCase()
+        actionable.subject_case_id = "subject:nvda"
+        actionable.batch_case_id = "case:mixed"
+        actionable.symbol = "NVDA"
+
+        class MixedSubjectStore:
+            def __init__(self, values):
+                self.values = values
+
+            def get(self, subject_case_id):
+                return next((item for item in self.values if item.subject_case_id == subject_case_id), None)
+
+            def for_batch(self, batch_case_id):
+                return [item for item in self.values if item.batch_case_id == batch_case_id]
+
+            def save(self, subject_case):
+                return subject_case
+
+        reasoning_case = SimpleNamespace(
+            case_id="case:mixed",
+            stage=CASE_DECISION_SYNTHESIZED,
+            inference_result=SimpleNamespace(trace_complete=True),
+            decision_syntheses=(
+                SimpleNamespace(
+                    symbol="MSTR",
+                    graph_candidate_action="NO_ACTION",
+                    eligible_hypothesis_ids=(),
+                ),
+                SimpleNamespace(
+                    symbol="NVDA",
+                    graph_candidate_action="HOLD",
+                    eligible_hypothesis_ids=("hypothesis:nvda",),
+                ),
+            ),
+        )
+        orchestrator = InvestmentReasoningOrchestrator(
+            Repository(reasoning_case),
+            subject_case_repository=MixedSubjectStore([observation, actionable]),
+        )
+
+        orchestrator.context_observation_validated(
+            reasoning_case.case_id,
+            subject_symbols=["MSTR"],
+        )
+
+        self.assertEqual(SUBJECT_OBSERVATION, observation.stage)
+        self.assertEqual(OBSERVATION, observation.publication.outcome_kind)
+        self.assertEqual(SUBJECT_READY, actionable.stage)
+        self.assertIsNone(actionable.publication)
 
 
 if __name__ == "__main__":

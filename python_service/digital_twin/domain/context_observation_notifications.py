@@ -7,8 +7,9 @@ from typing import Dict, Iterable, List, Mapping
 from .notification_ai_context import is_graph_backed_relation_context
 
 
-CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v1"
+CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
+CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v1"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -138,6 +139,12 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
         "market": _text(subject.get("market") or facts.get("market")).upper(),
         "graphSource": _text(relation.get("source")),
         "graphStore": _text(relation.get("graphStore") or graph.get("graphStore")),
+        "knowledgeOwner": _text(
+            _mapping(selected_row.get("knowledgeBasis")).get("owner")
+        ),
+        "theoryFamily": _text(
+            _mapping(selected_row.get("knowledgeBasis")).get("theoryFamily")
+        ),
         "sourceAboxSnapshotId": _text(
             relation.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId")
         ),
@@ -244,3 +251,93 @@ def context_observation_evidence_presentation(value: object) -> Dict[str, object
         "documentVerified": True,
         "analysisReady": True,
     }
+
+
+def context_observation_delivery_decision(value: object) -> Dict[str, object]:
+    """Allow a reference-only push only when a material change is auditable.
+
+    A semantic relation such as benchmark beta is useful graph context, but a
+    newly materialized relation is not by itself useful enough for a customer
+    push.  A concrete source event, verified follow-up transition, verified
+    disclosure, or TypeDB notification-intent rule must also be present.
+    """
+
+    payload = _mapping(value)
+    contract = typedb_context_observation_contract(payload)
+    if not contract:
+        return {}
+    publication = _mapping(payload.get("decisionPublication"))
+    outcome = _text(publication.get("outcomeKind")).upper()
+    insight = _mapping(payload.get("ontologyInsight"))
+    semantic = _mapping(insight.get("semanticComponents"))
+    material_source_keys = sorted({
+        _text(item)
+        for item in (
+            semantic.get("materialSourceEventKeys")
+            or insight.get("materialSourceEventKeys")
+            or payload.get("materialSourceEventKeys")
+            or []
+        )
+        if _text(item)
+    })
+    continuity = _mapping(payload.get("decisionContinuityPacket"))
+    verified_follow_ups = [
+        _mapping(item)
+        for item in continuity.get("followUpConditions") or []
+        if isinstance(item, Mapping)
+        and item.get("transitionVerified") is True
+        and _text(item.get("transitionAt"))
+        and _text(item.get("status")).lower()
+        in {"satisfied", "invalidated", "expired"}
+    ]
+    relation = _relation_context(payload)
+    notification_intent_rule_ids = sorted({
+        _text(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId"))
+        for row in _rule_rows(relation)
+        if _text(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId"))
+        and _text(_mapping(row.get("knowledgeBasis") or row.get("knowledge_basis")).get("owner"))
+        == "notification-policy"
+        and row.get("matched") is not False
+    })
+    verified_evidence = context_observation_evidence_presentation(payload)
+    authorization_sources = []
+    if material_source_keys:
+        authorization_sources.append("material-source-event")
+    if verified_follow_ups:
+        authorization_sources.append("verified-follow-up-transition")
+    if verified_evidence:
+        authorization_sources.append("verified-source-document")
+    if notification_intent_rule_ids:
+        authorization_sources.append("typedb-notification-intent")
+
+    decision = {
+        "version": CONTEXT_OBSERVATION_DELIVERY_VERSION,
+        "decision": "suppress",
+        "reason": (
+            "참고 관계만 새로 성립했고 사용자에게 알릴 새 원문이나 검증된 조건 전환이 없어 "
+            "웹 관계 이력에만 저장합니다."
+        ),
+        "suppressionReason": "context_observation_web_history",
+        "pushValueClass": "web-only-context-observation",
+        "publicationOutcome": outcome,
+        "selectedRuleId": contract.get("selectedRuleId"),
+        "authorizationSources": authorization_sources,
+        "materialSourceEventCount": len(material_source_keys),
+        "verifiedFollowUpTransitionCount": len(verified_follow_ups),
+        "notificationIntentRuleIds": notification_intent_rule_ids,
+        "verifiedEvidenceId": _text(verified_evidence.get("evidenceId")),
+    }
+    if outcome != "OBSERVATION":
+        decision.update({
+            "reason": "검증된 참고 관찰 발행물이 없어 투자 푸시로 보내지 않습니다.",
+            "suppressionReason": "missing_context_observation_publication",
+        })
+        return decision
+    if authorization_sources:
+        decision.update({
+            "decision": "send",
+            "reason": "검증된 참고 관찰에 사용자에게 알릴 구체적인 새 근거가 연결됐습니다.",
+            "suppressionReason": "",
+            "pushValueClass": "material-context-observation",
+        })
+    return decision

@@ -1389,21 +1389,36 @@ class V2ReasoningEngine:
                 reasoning_case.case_id,
                 decision_syntheses,
             )
-            if (
-                ready_events
-                and detected_events
-                and all(
-                    is_typedb_context_observation_notification(getattr(event, "metadata", {}) or {})
-                    for event in detected_events
+            events_by_symbol = {}
+            for event in detected_events:
+                symbol = str(getattr(event, "symbol", "") or "").strip().upper()
+                if symbol:
+                    events_by_symbol.setdefault(symbol, []).append(event)
+            ready_observation_symbols = {
+                str(getattr(event, "symbol", "") or "").strip().upper()
+                for event in ready_events
+                if str(getattr(event, "symbol", "") or "").strip()
+                and is_typedb_context_observation_notification(
+                    getattr(event, "metadata", {}) or {}
                 )
+            }
+            context_observation_symbols = sorted(
+                symbol
+                for symbol, events in events_by_symbol.items()
+                if symbol in ready_observation_symbols
+                and events
                 and all(
-                    is_typedb_context_observation_notification(getattr(event, "metadata", {}) or {})
-                    for event in ready_events
+                    is_typedb_context_observation_notification(
+                        getattr(event, "metadata", {}) or {}
+                    )
+                    for event in events
                 )
-            ):
+            )
+            if context_observation_symbols:
                 reasoning_case = self.reasoning_orchestrator.context_observation_validated(
                     reasoning_case.case_id,
                     "TypeDB가 참고용 시장 상태 변화를 검증했으며 투자 행동 판단은 생성하지 않았습니다.",
+                    context_observation_symbols,
                 )
             self.reasoning_orchestrator.attach_case_context(
                 reasoning_case.case_id,

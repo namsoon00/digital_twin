@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.application.notification_ai_gate_message import compact_current_flow_rows
 from digital_twin.application.notification.admission import NotificationAdmissionPolicy
 from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
 from digital_twin.domain.notification_rules import NotificationRuleDecision
@@ -80,6 +81,67 @@ def graph_risk_context(material=True):
                 "dataState": "sufficient",
             },
             "actionEnvelope": {"preferredAction": "TRIM"},
+        },
+    }
+
+
+def context_observation_context(outcome="OBSERVATION", material_sources=None):
+    rule = {
+        "ruleId": "graph.benchmark.beta.context.v1",
+        "label": "벤치마크 베타 점검",
+        "matched": True,
+        "knowledgeBasis": {
+            "owner": "ontology-semantic",
+            "ruleKind": "context-observation",
+            "decisionEligibility": "reference-only",
+            "requiresHypothesis": False,
+        },
+    }
+    return {
+        "messageType": "investmentInsight",
+        "symbol": "MSTR",
+        "rawLines": "현재가: $132.38\n수익률: +46.0%",
+        "decisionPublication": {"outcomeKind": outcome},
+        "notificationAiValidatedResponse": {"action": "NO_ACTION"},
+        "notificationAiExecutionAudit": {
+            "status": "completed",
+            "adoptionState": "narrative-adopted-action-not-applicable",
+        },
+        "ontologyInsight": {
+            "semanticComponents": {
+                "materialSourceEventKeys": list(material_sources or []),
+            },
+        },
+        "ontologyRelationContext": {
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "sourceAboxSnapshotId": "abox:mstr:1",
+            "inferenceGenerationId": "generation:mstr:1",
+            "generationAligned": True,
+            "subject": {"symbol": "MSTR", "market": "US"},
+            "facts": {
+                "symbol": "MSTR",
+                "market": "US",
+                "currency": "USD",
+                "currentPrice": 132.38,
+                "averagePrice": 90.884491,
+                "profitLossRate": 45.65741394944153,
+            },
+            "activeRules": [rule],
+            "matchedRules": [rule],
+            "decision": {
+                "selectedRuleId": rule["ruleId"],
+                "basis": "typedbInferenceBox",
+            },
+            "graphStoreInference": {
+                "graphStore": "typedb",
+                "sourceAboxSnapshotId": "abox:mstr:1",
+                "inferenceGenerationId": "generation:mstr:1",
+                "relations": [rule],
+                "traces": [{"id": "trace:mstr:1", **rule}],
+            },
         },
     }
 
@@ -191,6 +253,46 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("suppress", review_decision["decision"])
         self.assertEqual("review_only_web_history", review_decision["suppressionReason"])
+
+        baseline = final_ai_delivery_decision(context_observation_context())
+        self.assertEqual("suppress", baseline["decision"])
+        self.assertEqual("context_observation_web_history", baseline["suppressionReason"])
+        self.assertEqual([], baseline["authorizationSources"])
+
+        material = final_ai_delivery_decision(
+            context_observation_context(material_sources=["news:MSTR:material-1"])
+        )
+        self.assertEqual("send", material["decision"])
+        self.assertEqual("material-context-observation", material["pushValueClass"])
+        self.assertEqual(["material-source-event"], material["authorizationSources"])
+
+        queue = SuppressionQueue()
+        runner = NotificationQueueRunner(
+            queue,
+            account_repository=None,
+            notifier_factory=lambda account: None,
+        )
+        observation_job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context_observation_context(outcome="ABSTAIN"),
+        )
+        self.assertFalse(runner.apply_final_ai_delivery_gate(observation_job))
+        self.assertEqual(
+            "review_only_web_history",
+            observation_job.context["deliverySuppressionReason"],
+        )
+        self.assertEqual(
+            "suppress",
+            observation_job.context["finalAiDeliveryGate"]["decision"],
+        )
+        self.assertTrue(queue.reason)
+
+        rows = compact_current_flow_rows(context_observation_context())
+        self.assertIn("현재가 $132.38", rows)
+        self.assertIn("수익률 +45.7%", rows)
+        self.assertNotIn("수익률 +46.0%", rows)
 
     def test_same_missing_data_does_not_make_readiness_label_churn_material(self):
         def relation(readiness):

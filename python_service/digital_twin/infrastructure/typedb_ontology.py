@@ -10223,10 +10223,27 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             return
         # A blue-green candidate is created from an empty storage directory.
         # Probing types that cannot exist yet only spends the full driver
-        # timeout and can poison the first connection. Bootstrap the bounded
-        # base contract directly; retries can still resume from inspected text.
+        # timeout and can poison the first connection. Bootstrap a database
+        # created by this process directly. If the database already existed,
+        # a previous bootstrap may have persisted only some batches, so read
+        # that partial schema and resume from the first missing definition.
         schema_text = ""
         if self._fresh_candidate_rebuild:
+            if not self._database_created_in_process:
+                # Fail closed when an existing candidate cannot be inspected.
+                # Retrying from a blank schema would redefine completed
+                # batches, hide the original connectivity problem, and turn a
+                # bounded restart into another long bootstrap loop.
+                schema_text = self.typedb_schema_text(driver)
+                schema_type_names = set(re.findall(
+                    r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
+                    schema_text,
+                    flags=re.MULTILINE,
+                ))
+                if self.base_schema_type_names().issubset(schema_type_names):
+                    self._base_schema_ready_fingerprint = schema_fingerprint
+                    self.mark_process_base_schema_ready(schema_fingerprint)
+                    return
             if self.http_address:
                 self.synchronize_base_schema_batches_http(
                     schema_text,

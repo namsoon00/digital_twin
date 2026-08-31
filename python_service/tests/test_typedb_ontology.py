@@ -254,6 +254,40 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         mark_ready.assert_called_once()
         repository.invalidate_process_base_schema_readiness()
 
+        resumed_repository = TypeDBOntologyGraphRepository(
+            "typedb-fresh-candidate.test:1729",
+            database="partial_candidate_bootstrap_test",
+            fresh_candidate_rebuild=True,
+        )
+        resumed_repository.invalidate_process_base_schema_readiness()
+        resumed_repository._database_created_in_process = False
+        partial_schema = "define\nattribute already-persisted, value string;\n"
+
+        with patch.object(
+            resumed_repository,
+            "typedb_schema_text",
+            return_value=partial_schema,
+        ) as inspect_partial_schema, patch.object(
+            resumed_repository,
+            "synchronize_base_schema_batches",
+            return_value={"queryCount": 1},
+        ) as resume_synchronize, patch.object(
+            resumed_repository,
+            "mark_process_base_schema_ready",
+        ) as mark_resumed_ready:
+            resumed_repository.ensure_schema(object(), imported)
+
+        inspect_partial_schema.assert_called_once()
+        resume_synchronize.assert_called_once()
+        self.assertEqual(partial_schema, resume_synchronize.call_args.args[2])
+        self.assertEqual(64, resume_synchronize.call_args.kwargs["batch_size"])
+        self.assertEqual(
+            900.0,
+            resume_synchronize.call_args.kwargs["operation_timeout_seconds"],
+        )
+        mark_resumed_ready.assert_called_once()
+        resumed_repository.invalidate_process_base_schema_readiness()
+
     def test_fresh_schema_batches_use_the_configured_server_transaction_deadline(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         transaction = MagicMock()

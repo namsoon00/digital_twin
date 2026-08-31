@@ -2215,7 +2215,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbFreshSchemaBootstrapBatchSize": value(
             "typedbFreshSchemaBootstrapBatchSize",
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE",
-            "512",
+            "64",
         ),
         "typedbFreshSchemaBootstrapTimeoutSeconds": value(
             "typedbFreshSchemaBootstrapTimeoutSeconds",

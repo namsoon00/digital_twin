@@ -288,3 +288,31 @@ On the affected r90 data, the legacy primary-row-only query reported 34 recent
 events as missing even though 66 recent source identities were already present
 in the lineage ledger. This false-negative boundary continuously regenerated
 work and explains why query tuning alone could not drain the queue.
+
+## Cold Schema Bootstrap Invariant
+
+After ingress replay was bounded, a new isolated release still appeared to
+stall before inference. The TypeDB adapter already defined 64 schema
+definitions as the safe cold-bootstrap batch, but runtime settings and both
+service-manager fallbacks supplied 512. One oversized HTTP schema request could
+therefore hold a socket for the full 900-second operation timeout. Restarting
+the worker did not recover: fresh-candidate mode always planned from an empty
+schema and attempted to redefine batches that the interrupted request had
+already persisted.
+
+Cold provisioning now has one consistent contract:
+
+- The adapter, settings loader, managed-process specification, and subprocess
+  environment all default to 64 definitions per schema transaction.
+- A database created in the current process is known empty and avoids the
+  expensive initial schema listing.
+- A candidate database found after restart is treated as partially durable.
+  Its schema is read once and the bootstrap plan contains only missing
+  definitions.
+- Failure to inspect an existing candidate fails closed. It never falls back
+  to a blank plan that can produce duplicate definitions and another long
+  timeout.
+
+This removes the provisioning head-of-line block. It is distinct from native
+inference latency: a release cannot enqueue or execute useful inference until
+its immutable schema and static artifact have become ready.

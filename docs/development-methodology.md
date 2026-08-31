@@ -302,6 +302,13 @@ active deployment and read-side graph binding together. A switched-out engine
 must fail closed before consuming another request even if its old process is
 still shutting down.
 
+Fresh TypeDB release databases must bootstrap the base schema in bounded
+64-definition batches. A database created by the current process skips schema
+inspection; an existing candidate database must inspect its partial schema and
+resume only missing definitions. If that inspection fails, provisioning fails
+closed instead of retrying from an empty schema. Runtime settings and service
+manager fallbacks must use the same batch-size default as the TypeDB adapter.
+
 Compatibility modules:
 
 - `config.py`, `analytics.py`, `models.py`, `monitor.py`, `providers.py`, `notifiers.py`, and `scheduler.py` should remain thin re-export/factory modules only.

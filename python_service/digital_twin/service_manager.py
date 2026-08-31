@@ -419,7 +419,7 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "900"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
         "freshSchemaBootstrapBatchSize": str(
-            (settings or {}).get("typedbFreshSchemaBootstrapBatchSize") or "512"
+            (settings or {}).get("typedbFreshSchemaBootstrapBatchSize") or "64"
         ),
         "freshSchemaBootstrapTimeoutSeconds": str(
             (settings or {}).get("typedbFreshSchemaBootstrapTimeoutSeconds") or "900"
@@ -2658,7 +2658,7 @@ def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
         environment.update({
             "TYPEDB_FRESH_CANDIDATE_REBUILD": "1",
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE": str(
-                spec.get("freshSchemaBootstrapBatchSize") or "512"
+                spec.get("freshSchemaBootstrapBatchSize") or "64"
             ),
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS": str(
                 spec.get("freshSchemaBootstrapTimeoutSeconds") or "900"

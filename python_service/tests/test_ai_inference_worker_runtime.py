@@ -114,6 +114,8 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
         self.assertNotIn("ontology-reasoning", specs)
         self.assertIn("reasoning-engine-delivery", specs)
         self.assertIn("reasoning-engine-shadow", specs)
+        self.assertNotIn("--worker-id", specs["reasoning-engine-delivery"]["command"])
+        self.assertNotIn("--worker-id", specs["reasoning-engine-shadow"]["command"])
 
     def test_service_manager_finds_configured_out_ai_workers_with_pid_files(self):
         active_specs = service_manager.notification_ai_worker_specs(1)

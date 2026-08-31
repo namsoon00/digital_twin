@@ -105,7 +105,7 @@ BASE_WORKERS = {
         "log": data_dir() / "python-reasoning-delivery.log",
         "command": [
             sys.executable, "-u", "python_service/service.py", "reasoning-engine",
-            "v2-watch", "--role", "delivery", "--worker-id", "delivery",
+            "v2-watch", "--role", "delivery",
         ],
         "needle": "python_service/service.py reasoning-engine v2-watch --role delivery",
     },
@@ -115,7 +115,7 @@ BASE_WORKERS = {
         "log": data_dir() / "python-reasoning-shadow.log",
         "command": [
             sys.executable, "-u", "python_service/service.py", "reasoning-engine",
-            "v2-watch", "--role", "candidate", "--worker-id", "candidate",
+            "v2-watch", "--role", "candidate",
         ],
         "needle": "python_service/service.py reasoning-engine v2-watch --role candidate",
         "needles": [

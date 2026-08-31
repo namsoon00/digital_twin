@@ -303,11 +303,17 @@ must fail closed before consuming another request even if its old process is
 still shutting down.
 
 Fresh TypeDB release databases must bootstrap the base schema in bounded
-64-definition batches. A database created by the current process skips schema
+16-definition batches with a 60-second transaction deadline. A database created
+by the current process skips schema
 inspection; an existing candidate database must inspect its partial schema and
 resume only missing definitions. If that inspection fails, provisioning fails
 closed instead of retrying from an empty schema. Runtime settings and service
 manager fallbacks must use the same batch-size default as the TypeDB adapter.
+Once the serving TypeDB process completes startup seeding, persist readiness
+against its PID, process start time, command, storage path, and address. A
+supervisor reload must trust that exact process generation instead of demoting
+it when a workload probe briefly times out during schema compilation. Starting
+or stopping a different TypeDB generation invalidates the persisted readiness.
 
 Compatibility modules:
 

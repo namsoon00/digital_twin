@@ -2215,12 +2215,12 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "typedbFreshSchemaBootstrapBatchSize": value(
             "typedbFreshSchemaBootstrapBatchSize",
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE",
-            "64",
+            "16",
         ),
         "typedbFreshSchemaBootstrapTimeoutSeconds": value(
             "typedbFreshSchemaBootstrapTimeoutSeconds",
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS",
-            "900",
+            "60",
         ),
         "typedbWriteOperationTimeoutSeconds": value("typedbWriteOperationTimeoutSeconds", "TYPEDB_WRITE_OPERATION_TIMEOUT_SECONDS", "120"),
         "typedbNativeRuleExecutionEnabled": value(

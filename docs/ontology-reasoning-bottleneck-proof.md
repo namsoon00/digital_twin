@@ -292,26 +292,44 @@ work and explains why query tuning alone could not drain the queue.
 ## Cold Schema Bootstrap Invariant
 
 After ingress replay was bounded, a new isolated release still appeared to
-stall before inference. The TypeDB adapter already defined 64 schema
-definitions as the safe cold-bootstrap batch, but runtime settings and both
-service-manager fallbacks supplied 512. One oversized HTTP schema request could
+stall before inference. The TypeDB adapter initially defined 64 schema
+definitions as the cold-bootstrap batch, but runtime settings and both
+service-manager fallbacks supplied 512. One oversized schema transaction could
 therefore hold a socket for the full 900-second operation timeout. Restarting
 the worker did not recover: fresh-candidate mode always planned from an empty
 schema and attempted to redefine batches that the interrupted request had
 already persisted.
 
+The current v13 schema contains more than 1,800 definitions. A live isolated
+release proved that even a 64-definition transaction can monopolize TypeDB's
+schema compiler long enough for a one-second readiness probe to time out. A
+supervisor reload then forgot that the unchanged serving TypeDB process had
+already completed startup, treated the transient probe failure as unfinished
+startup, and stopped every graph-dependent worker. The server continued the
+abandoned schema transaction and held the schema lock, so the replacement
+candidate blocked behind it. This formed a second control-plane loop:
+
+`candidate schema compile -> transient probe timeout -> supervisor demotion -> worker termination -> abandoned schema lock -> candidate retry`
+
 Cold provisioning now has one consistent contract:
 
 - The adapter, settings loader, managed-process specification, and subprocess
-  environment all default to 64 definitions per schema transaction.
+  environment all default to 16 definitions per schema transaction and a
+  60-second per-transaction deadline. The complete release seed keeps its
+  independent end-to-end provisioning budget.
 - A database created in the current process is known empty and avoids the
   expensive initial schema listing.
 - A candidate database found after restart is treated as partially durable.
-  Its schema is read once and the bootstrap plan contains only missing
-  definitions.
+  Its schema is read once under the same bounded deadline and the bootstrap
+  plan contains only missing definitions.
 - Failure to inspect an existing candidate fails closed. It never falls back
   to a blank plan that can produce duplicate definitions and another long
   timeout.
+- Serving-process startup readiness is persisted against a hash of PID,
+  process start time, command, address, and storage path. A supervisor reload
+  restores readiness only for that exact process generation, so a transient
+  workload-probe timeout cannot demote or kill its graph workers. A real TypeDB
+  replacement or stop invalidates the marker.
 
 This removes the provisioning head-of-line block. It is distinct from native
 inference latency: a release cannot enqueue or execute useful inference until

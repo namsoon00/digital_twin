@@ -1760,13 +1760,14 @@ DEFAULT_TYPEDB_NATIVE_RULE_TARGET_PARALLELISM = 1
 # before any durable schema existed. Keep each commit large enough to avoid
 # transaction chatter but bounded well below the monolithic compiler input.
 # TypeDB recompiles the affected schema graph for each definition transaction.
-# A 128-definition cold-start batch can exceed the driver keep-alive, while a
-# 24-definition plan repeats that global compilation enough to stall a fresh
-# candidate. Sixty-four stays below the observed oversized-query boundary and
-# cuts the cold schema to a resumable middle ground.
+# The v13 storage schema crossed 1,800 definitions. A live cold-start proved
+# that even 64 definitions can monopolize TypeDB's schema compiler long enough
+# for health probes to time out. Fresh candidates use smaller transactions and
+# a separate per-transaction deadline; the complete seed still owns its larger
+# end-to-end provisioning budget.
 DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE = 64
-DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE = 64
-DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS = 900.0
+DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE = 16
+DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS = 60.0
 TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES = {
     "currentPrice": "ontology-current-price",
     "averagePrice": "ontology-average-price",
@@ -8720,7 +8721,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # storage identity verification.
         self._fresh_candidate_rebuild = bool(fresh_candidate_rebuild)
         self._fresh_schema_bootstrap_batch_size = max(
-            DEFAULT_TYPEDB_BASE_SCHEMA_BOOTSTRAP_BATCH_SIZE,
+            1,
             min(
                 2048,
                 int(
@@ -8730,7 +8731,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             ),
         )
         self._fresh_schema_bootstrap_timeout_seconds = max(
-            self._schema_operation_timeout_seconds,
+            1.0,
             min(
                 1800.0,
                 float(
@@ -10234,7 +10235,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 # Retrying from a blank schema would redefine completed
                 # batches, hide the original connectivity problem, and turn a
                 # bounded restart into another long bootstrap loop.
-                schema_text = self.typedb_schema_text(driver)
+                with typedb_operation_timeout(
+                    self._fresh_schema_bootstrap_timeout_seconds,
+                    "TypeDB partial candidate schema inspection",
+                ):
+                    schema_text = self.typedb_schema_text(driver)
                 schema_type_names = set(re.findall(
                     r"^\s*(?:attribute|entity|relation)\s+([A-Za-z_][A-Za-z0-9_-]*)\b",
                     schema_text,

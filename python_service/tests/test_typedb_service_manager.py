@@ -727,6 +727,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             "pid": Path("/tmp/orbit-alpha-running-typedb.pid"),
             "log": Path("/tmp/orbit-alpha-running-typedb.log"),
             "command": ["typedb", "server"],
+            "healthAddress": "127.0.0.1:1729",
+            "dataPath": "/tmp/orbit-alpha-typedb-data",
         }
         with patch.object(service_manager, "read_pid", return_value=123), patch.object(
             service_manager,
@@ -743,6 +745,29 @@ class TypeDBServiceManagerTests(unittest.TestCase):
             self.assertEqual(0, service_manager.start_worker(spec, wait_for_ready=False))
 
         blocking_wait.assert_not_called()
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(
+            service_manager,
+            "data_dir",
+            return_value=Path(temp),
+        ), patch.object(
+            service_manager,
+            "typedb_process_generation",
+            return_value="generation-1",
+        ):
+            saved = service_manager.mark_typedb_startup_finalized(spec, 123)
+            self.assertTrue(saved["saved"])
+            self.assertTrue(service_manager.typedb_startup_is_finalized(spec, 123))
+
+            with patch.object(
+                service_manager,
+                "typedb_process_generation",
+                return_value="generation-2",
+            ):
+                self.assertFalse(service_manager.typedb_startup_is_finalized(spec, 123))
+
+            service_manager.clear_typedb_startup_readiness()
+            self.assertFalse(service_manager.typedb_startup_readiness_path().exists())
 
     def test_candidate_retry_removes_only_incomplete_checkpoint_workdirs(self):
         with tempfile.TemporaryDirectory() as temp:

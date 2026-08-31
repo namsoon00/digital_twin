@@ -1,3 +1,4 @@
+import hashlib
 import os
 import signal
 import shutil
@@ -419,10 +420,10 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "seedTimeoutSeconds": str((settings or {}).get("typedbSeedTimeoutSeconds") or os.environ.get("TYPEDB_SEED_TIMEOUT_SECONDS") or "900"),
         "seedRetryCount": str((settings or {}).get("typedbSeedRetryCount") or os.environ.get("TYPEDB_SEED_RETRY_COUNT") or "2"),
         "freshSchemaBootstrapBatchSize": str(
-            (settings or {}).get("typedbFreshSchemaBootstrapBatchSize") or "64"
+            (settings or {}).get("typedbFreshSchemaBootstrapBatchSize") or "16"
         ),
         "freshSchemaBootstrapTimeoutSeconds": str(
-            (settings or {}).get("typedbFreshSchemaBootstrapTimeoutSeconds") or "900"
+            (settings or {}).get("typedbFreshSchemaBootstrapTimeoutSeconds") or "60"
         ),
         "sharedWorldProjectionRebuildTimeoutSeconds": str(
             (settings or {}).get("typedbSharedWorldProjectionRebuildTimeoutSeconds")
@@ -2498,6 +2499,75 @@ def typedb_service_ready(spec: Dict[str, object]) -> bool:
     return False
 
 
+def typedb_startup_readiness_path() -> Path:
+    return data_dir() / "typedb-startup-readiness.json"
+
+
+def typedb_process_generation(pid: int) -> str:
+    """Identify one server process across supervisor reloads and PID reuse."""
+    if not pid or not pid_exists(pid):
+        return ""
+    try:
+        started_at = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    command = command_for_pid(pid)
+    if not started_at or not command:
+        return ""
+    return hashlib.sha256(
+        (str(pid) + "|" + started_at + "|" + command).encode("utf-8")
+    ).hexdigest()
+
+
+def mark_typedb_startup_finalized(spec: Dict[str, object], pid: int) -> Dict[str, object]:
+    generation = typedb_process_generation(pid)
+    if not generation:
+        return {"saved": False, "reason": "typedb-process-generation-unavailable"}
+    payload = {
+        "version": "typedb-startup-readiness-v1",
+        "pid": int(pid),
+        "processGeneration": generation,
+        "healthAddress": str(spec.get("healthAddress") or spec.get("typedbAddress") or ""),
+        "dataPath": str(spec.get("dataPath") or ""),
+        "finalizedAt": iso_now(),
+    }
+    path = typedb_startup_readiness_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    return {"saved": True, **payload}
+
+
+def typedb_startup_is_finalized(spec: Dict[str, object], pid: int) -> bool:
+    try:
+        payload = json.loads(typedb_startup_readiness_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return bool(
+        str(payload.get("version") or "") == "typedb-startup-readiness-v1"
+        and int(payload.get("pid") or 0) == int(pid or 0)
+        and str(payload.get("processGeneration") or "") == typedb_process_generation(pid)
+        and str(payload.get("healthAddress") or "")
+        == str(spec.get("healthAddress") or spec.get("typedbAddress") or "")
+        and str(payload.get("dataPath") or "") == str(spec.get("dataPath") or "")
+    )
+
+
+def clear_typedb_startup_readiness() -> None:
+    try:
+        typedb_startup_readiness_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
 def typedb_credentials_bootstrap_pending() -> bool:
     return bool(read_typedb_retention_marker().get("credentialsBootstrapPending"))
 
@@ -2658,13 +2728,13 @@ def typedb_subprocess_environment(spec: Dict[str, object]) -> Dict[str, str]:
         environment.update({
             "TYPEDB_FRESH_CANDIDATE_REBUILD": "1",
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_BATCH_SIZE": str(
-                spec.get("freshSchemaBootstrapBatchSize") or "64"
+                spec.get("freshSchemaBootstrapBatchSize") or "16"
             ),
             "TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS": str(
-                spec.get("freshSchemaBootstrapTimeoutSeconds") or "900"
+                spec.get("freshSchemaBootstrapTimeoutSeconds") or "60"
             ),
             "TYPEDB_SCHEMA_OPERATION_TIMEOUT_SECONDS": str(max(
-                int_value(spec.get("freshSchemaBootstrapTimeoutSeconds"), 900, 1),
+                int_value(spec.get("freshSchemaBootstrapTimeoutSeconds"), 60, 1),
                 int_value(spec.get("schemaOperationTimeoutSeconds"), 120, 1),
             )),
             "TYPEDB_NATIVE_RULE_EXECUTION_ENABLED": "1",
@@ -3738,12 +3808,14 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
         if role == "typedb":
             if not wait_for_ready:
                 if typedb_service_ready(spec):
+                    mark_typedb_startup_finalized(spec, existing)
                     return status_worker(spec)
                 append_log(log_path, "recovery in progress")
                 print(str(spec["label"]) + " recovery is still in progress.")
                 return 0
             if not wait_for_typedb_ready(spec):
                 return 1
+            mark_typedb_startup_finalized(spec, existing)
             # A healthy TypeDB server may be serving an ABox staging write.
             # Seeding is only required after this manager starts a new server;
             # repeating it on every generic worker restart can interrupt that
@@ -3775,6 +3847,7 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
             print(str(spec["label"]) + " data directory initialization failed.")
             return 1
     if str(spec.get("role") or "") == "typedb":
+        clear_typedb_startup_readiness()
         storage = typedb_storage_preflight(spec)
         if not storage.get("ready"):
             message = "storage preflight blocked. " + str(storage.get("reason") or "TypeDB storage is not ready.")
@@ -3832,6 +3905,7 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
             and not ensure_typedb_shared_world_projection_rebuilt(spec)
         ):
             return 1
+        mark_typedb_startup_finalized(spec, process.pid)
     elif role in {"mysql", "questdb", "web"}:
         if not wait_for_tcp_service(spec):
             print(str(spec["label"]) + " did not become ready at " + str(spec.get("healthAddress") or ""))
@@ -3848,6 +3922,8 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
 def stop_worker(spec: Dict[str, object]) -> int:
     pid_path = spec["pid"]
     log_path = spec["log"]
+    if str(spec.get("role") or "").strip() == "typedb":
+        clear_typedb_startup_readiness()
     pid = read_pid(pid_path)
     if not pid:
         print(str(spec["label"]) + " is not running.")
@@ -4025,6 +4101,9 @@ def restart(
             typedb_spec = worker_specs().get("typedb")
             if isinstance(typedb_spec, dict):
                 recover_typedb_scoped_write_lease_after_worker_restart(typedb_spec)
+                preserved_pid = read_pid(typedb_spec.get("pid"))
+                if preserved_pid and is_running(preserved_pid, typedb_spec):
+                    mark_typedb_startup_finalized(typedb_spec, preserved_pid)
         return start(excluded_roles=excluded)
     finally:
         if pause_supervisor:
@@ -4361,7 +4440,19 @@ def supervise() -> int:
         last_typedb_capacity_notice = ""
         last_typedb_auto_rotation_notice = ""
         unavailable_optional_workers = {}
-        initialized_typedb_pid = 0
+        initial_specs = worker_specs()
+        initial_typedb_spec = initial_specs.get("typedb")
+        initial_typedb_pid = (
+            read_pid(initial_typedb_spec["pid"])
+            if isinstance(initial_typedb_spec, dict) else 0
+        )
+        initialized_typedb_pid = (
+            initial_typedb_pid
+            if initial_typedb_pid
+            and is_running(initial_typedb_pid, initial_typedb_spec)
+            and typedb_startup_is_finalized(initial_typedb_spec, initial_typedb_pid)
+            else 0
+        )
         typedb_initialization_retry_at = 0.0
         while not stopping["value"]:
             write_supervisor_heartbeat("running")
@@ -4390,6 +4481,7 @@ def supervise() -> int:
                     )
                     if seed_ready and shared_world_ready:
                         initialized_typedb_pid = typedb_pid
+                        mark_typedb_startup_finalized(typedb_spec, typedb_pid)
                         append_log(
                             supervisor_log_path(),
                             "typedb startup finalized pid=" + str(typedb_pid),

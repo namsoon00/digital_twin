@@ -14,6 +14,7 @@ from digital_twin.domain.investment_brain import (
     InvestmentQuestion,
     canonical_investment_timestamp,
     decision_episode_from_context,
+    hypothesis_comparison_audit,
     hypothesis_set_from_relation_context,
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
@@ -431,6 +432,35 @@ class FakeResearchOrchestrator:
 
 
 class InvestmentBrainTest(unittest.TestCase):
+    def test_hypothesis_review_attestation_binds_all_input_evidence(self):
+        candidate = {
+            "hypothesisId": "hypothesis:review-all",
+            "templateId": "template:review-all",
+            "supportingRuleIds": ["rule:review-all"],
+            "supportingEvidenceIds": ["evidence:support:1", "evidence:support:2"],
+            "counterEvidenceIds": ["evidence:counter:1"],
+        }
+        audit = hypothesis_comparison_audit(
+            [candidate],
+            [{
+                "hypothesisId": "hypothesis:review-all",
+                "evidenceReviewStatus": "all-input-evidence-reviewed",
+                "verdict": "supported",
+                "reasoning": "입력된 지지 근거와 반대 근거를 모두 비교했습니다.",
+            }],
+            "hypothesis:review-all",
+        )
+
+        self.assertEqual("completed", audit.comparison_state)
+        self.assertEqual(
+            ["evidence:support:1", "evidence:support:2"],
+            audit.reviews[0].reviewed_supporting_evidence_ids,
+        )
+        self.assertEqual(
+            ["evidence:counter:1"],
+            audit.reviews[0].reviewed_counter_evidence_ids,
+        )
+
     def test_learning_review_never_combines_different_families_or_horizons(self):
         episodes = []
         definitions = [

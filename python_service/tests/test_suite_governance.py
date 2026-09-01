@@ -39,7 +39,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # boundaries and each keeps its own contract. Official issuer,
         # financial, corporate-action, and market-index ingestion also keeps
         # adapter, ABox, world-routing, and semantic validation contracts.
-        self.assertLessEqual(total, 870)
+        # Notification AI single-flight additionally protects semantic join,
+        # material replacement, terminal suppression, and publish races.
+        self.assertLessEqual(total, 876)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

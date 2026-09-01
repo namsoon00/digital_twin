@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.ai_inference_queue_service import (
     AIInferenceQueueRunner,
+    NotificationAIRequestEnqueuer,
     ai_response_contract_error,
     preserve_verified_ai_narrative,
     typedb_inference_fallback_response,
@@ -226,7 +227,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.notifications.upsert_job(job)
         return job
 
-    def test_latest_request_supersedes_running_subject_and_claim_is_exclusive(self):
+    def test_same_semantic_request_joins_running_subject_without_cancelling_ai(self):
         first_job = self.create_job(100, "generation-1")
         first = AIInferenceRequest.create(first_job, first_job.context)
         self.queue.enqueue(first_job, first)
@@ -234,14 +235,47 @@ class AIInferenceQueueTests(unittest.TestCase):
 
         second_job = self.create_job(101, "generation-2")
         second = AIInferenceRequest.create(second_job, second_job.context)
-        self.queue.enqueue(second_job, second)
+        outcome = self.queue.enqueue(second_job, second)
 
-        self.assertFalse(self.queue.is_current(first.request_id, "worker-1"))
+        self.assertEqual("coalesced-active", outcome["status"])
+        self.assertTrue(self.queue.is_current(first.request_id, "worker-1"))
         claimed = self.queue.claim("worker-1", 1, 60)
-        self.assertEqual([second.request_id], [item.request_id for item in claimed])
+        self.assertEqual([], claimed)
         self.assertEqual([], self.queue.claim("worker-2", 1, 60))
-        self.assertEqual("superseded", self.notifications.get(first_job.job_id).status)
-        self.assertEqual("awaiting_ai", self.notifications.get(second_job.job_id).status)
+        self.assertEqual("awaiting_ai", self.notifications.get(first_job.job_id).status)
+        self.assertEqual("superseded", self.notifications.get(second_job.job_id).status)
+
+    def test_material_action_change_replaces_running_subject(self):
+        first_job = self.create_job(100, "generation-1")
+        first_job.context["ontologyRelationContext"]["actionEnvelope"] = {
+            "executionAction": "HOLD",
+            "allowedActions": ["HOLD", "TRIM"],
+        }
+        self.notifications.upsert_job(first_job)
+        first = AIInferenceRequest.create(first_job, first_job.context)
+        self.queue.enqueue(first_job, first)
+        self.assertEqual(first.request_id, self.queue.claim("worker-1", 1, 60)[0].request_id)
+
+        second_job = self.create_job(99, "generation-2")
+        second_job.context["ontologyRelationContext"]["actionEnvelope"] = {
+            "executionAction": "TRIM",
+            "allowedActions": ["HOLD", "TRIM"],
+        }
+        second_job.context["decisionTransition"] = {
+            "material": True,
+            "kind": "action-changed",
+            "currentAction": "TRIM",
+        }
+        self.notifications.upsert_job(second_job)
+        second = AIInferenceRequest.create(second_job, second_job.context)
+        outcome = self.queue.enqueue(second_job, second)
+
+        self.assertEqual("awaiting-ai", outcome["status"])
+        self.assertFalse(self.queue.is_current(first.request_id, "worker-1"))
+        self.assertEqual(
+            [second.request_id],
+            [item.request_id for item in self.queue.claim("worker-1", 1, 60)],
+        )
 
     def test_identical_context_is_coalesced_without_second_ai_request(self):
         first_job = self.create_job()
@@ -304,7 +338,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("investment-ai-decision-brief-v4", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v1", prompt_audit["decisionCore"]["schemaVersion"])
         self.assertEqual("notification-ai-context-route-v2", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v12", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-judge-v13", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])
@@ -320,6 +354,106 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("ai-authored", effective[0])
         self.assertEqual(1, int(effective[1]))
         self.assertEqual(1, int(effective[2]))
+
+    def test_completion_after_source_supersession_is_not_recorded_as_failure(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context)
+        self.queue.enqueue(job, request)
+        claimed = self.queue.claim("worker-race", 1, 60)[0]
+        mysql_execute(
+            self.seed,
+            "UPDATE notification_jobs SET status = 'superseded' WHERE job_id = %s",
+            (job.job_id,),
+        )
+        result = AIInferenceResult.create(
+            claimed,
+            {"action": "HOLD"},
+            source="test",
+            validation_state="ready",
+            latency_ms=1,
+            prompt_bytes=16,
+        )
+
+        self.assertFalse(
+            self.queue.complete(claimed, "worker-race", result, claimed.context)
+        )
+        status = mysql_fetchone(
+            self.seed,
+            "SELECT status, last_error FROM ai_inference_requests WHERE request_id = %s",
+            (claimed.request_id,),
+        )
+        self.assertEqual("superseded", status[0])
+        self.assertEqual("", status[1])
+        result_count = mysql_fetchone(
+            self.seed,
+            "SELECT COUNT(*) FROM ai_inference_results WHERE request_id = %s",
+            (claimed.request_id,),
+        )
+        self.assertEqual(0, int(result_count[0]))
+
+    def test_claim_reclassifies_historical_publish_race_after_source_retention(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context)
+        self.queue.enqueue(job, request)
+        mysql_execute(
+            self.seed,
+            """
+            UPDATE ai_inference_requests
+            SET status = 'failed', last_error = %s
+            WHERE request_id = %s
+            """,
+            (
+                "source notification is no longer awaiting AI: " + job.job_id,
+                request.request_id,
+            ),
+        )
+        mysql_execute(
+            self.seed,
+            "DELETE FROM notification_jobs WHERE job_id = %s",
+            (job.job_id,),
+        )
+
+        self.assertEqual([], self.queue.claim("worker-history", 1, 60))
+        status = mysql_fetchone(
+            self.seed,
+            "SELECT status, last_error FROM ai_inference_requests WHERE request_id = %s",
+            (request.request_id,),
+        )
+        self.assertEqual("superseded", status[0])
+        self.assertEqual("", status[1])
+
+    def test_terminal_subject_is_suppressed_before_ai_queueing(self):
+        class Queue:
+            suppressed = []
+
+            def suppress_source_notification(self, job_id, reason):
+                self.suppressed.append((job_id, reason))
+                return True
+
+            def enqueue(self, *_args):
+                raise AssertionError("terminal subject must not enter the AI queue")
+
+        class Orchestrator:
+            def capture_ai_context(self, _case_id, context):
+                return {
+                    **dict(context),
+                    "investmentSubjectDecisionCaseId": "subject:terminal",
+                    "investmentSubjectDecisionCase": {
+                        "subjectCaseId": "subject:terminal",
+                        "stage": "ABSTAINED",
+                    },
+                }
+
+        queue = Queue()
+        job = self.create_job()
+        job.context["investmentSubjectDecisionCaseId"] = "subject:terminal"
+        outcome = NotificationAIRequestEnqueuer(
+            queue,
+            reasoning_orchestrator=Orchestrator(),
+        ).enqueue(job)
+
+        self.assertEqual("suppressed-terminal-subject", outcome["status"])
+        self.assertEqual(job.job_id, queue.suppressed[0][0])
 
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()

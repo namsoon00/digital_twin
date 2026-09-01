@@ -2848,13 +2848,36 @@ def hypothesis_comparison_audit(
     reviews: List[HypothesisReview] = []
     for hypothesis_id, candidate in candidate_by_id.items():
         review = review_by_id.get(hypothesis_id, {})
+        reviewed_all_input_evidence = str(
+            review.get("evidenceReviewStatus")
+            or review.get("evidence_review_status")
+            or ""
+        ).strip().lower() == "all-input-evidence-reviewed"
+        candidate_support = (
+            candidate.get("supportingEvidenceIds")
+            or candidate.get("supporting_evidence_ids")
+            or []
+        )
+        candidate_counter = (
+            candidate.get("counterEvidenceIds")
+            or candidate.get("counter_evidence_ids")
+            or []
+        )
         supporting, invalid_supporting = bounded_hypothesis_evidence_ids(
-            review.get("supportingEvidenceIds") or review.get("supporting_evidence_ids") or [],
-            candidate.get("supportingEvidenceIds") or candidate.get("supporting_evidence_ids") or [],
+            candidate_support if reviewed_all_input_evidence else (
+                review.get("supportingEvidenceIds")
+                or review.get("supporting_evidence_ids")
+                or []
+            ),
+            candidate_support,
         )
         counter, invalid_counter = bounded_hypothesis_evidence_ids(
-            review.get("counterEvidenceIds") or review.get("counter_evidence_ids") or [],
-            candidate.get("counterEvidenceIds") or candidate.get("counter_evidence_ids") or [],
+            candidate_counter if reviewed_all_input_evidence else (
+                review.get("counterEvidenceIds")
+                or review.get("counter_evidence_ids")
+                or []
+            ),
+            candidate_counter,
         )
         invalid_evidence_ids.extend(invalid_supporting)
         invalid_evidence_ids.extend(invalid_counter)

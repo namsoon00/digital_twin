@@ -289,7 +289,7 @@ Infrastructure:
 - `python_service/digital_twin/infrastructure/event_bus.py`: synchronous event bus with operational event-log default
 - `python_service/digital_twin/infrastructure/model_review_queue.py`: async model-review queue interface fed by decision-change events
 - `python_service/digital_twin/infrastructure/model_reviewer.py`: Codex/LLM command adapter with local fallback
-- `python_service/digital_twin/infrastructure/mysql_ai_inference_queue.py`: latest-wins AI request/result outbox with subject heads, leases, heartbeat, retries, and atomic notification release
+- `python_service/digital_twin/infrastructure/mysql_ai_inference_queue.py`: subject single-flight AI request/result outbox with semantic coalescing, material-change replacement, leases, heartbeat, retries, and atomic notification release
 - `python_service/digital_twin/infrastructure/investment_research_gateway.py`: hypothesis-scoped composite gateway over existing official/market APIs and full-text news research
 - `python_service/digital_twin/infrastructure/ontology_projection.py`: snapshot-to-ontology projection recorder that saves graph-store projections and quality samples without making monitoring application services own graph persistence details
 - `python_service/digital_twin/infrastructure/ontology_graph_store.py`: graph-store composition root; runtime code should import this factory instead of constructing the database adapter directly

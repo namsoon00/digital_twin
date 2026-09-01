@@ -267,6 +267,7 @@ def ai_contract_repair_prompt(
         "너는 TypeDB 투자 판단 JSON의 계약 오류만 수정한다. 도구나 파일을 사용하지 않는다.",
         "아래 DecisionCore 밖의 사실을 만들지 말고 JSON 객체 하나만 출력한다.",
         "action은 actionEnvelope 안에서 선택하고 모든 입력 가설을 한 번씩 검토한다.",
+        "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
         "narrativeClaims는 허용된 evidence ID만 연결하며 view와 next-condition 또는 limitation을 포함한다.",
         "검증 오류: " + json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         "이전 응답: " + previous,
@@ -377,7 +378,7 @@ class NotificationAIJudgementService:
         current_timeout = timeout_provider() if timeout_provider else timeout_seconds
         current_timeout = int(current_timeout) if current_timeout not in (None, "", 0, "0") else None
         if current_timeout is not None and current_timeout < 5:
-            raise TimeoutError("notification AI delivery deadline exceeded before model execution")
+            raise TimeoutError("notification AI execution budget exhausted before model execution")
         review_context = prepared_packet.bind_context(
             context,
             timeout_seconds=current_timeout,
@@ -420,7 +421,7 @@ class NotificationAIJudgementService:
             repair_remaining = timeout_provider() if timeout_provider else timeout_seconds
             repair_remaining = int(repair_remaining) if repair_remaining not in (None, "", 0, "0") else None
             if repair_remaining is not None and repair_remaining < 5:
-                repair_error = "notification AI delivery deadline exceeded before contract repair"
+                repair_error = "notification AI execution budget exhausted before contract repair"
                 repair_remaining = 5
             repair_context = prepared_packet.bind_context(
                 context,

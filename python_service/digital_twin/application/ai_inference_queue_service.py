@@ -14,6 +14,14 @@ from ..domain.ai_inference_queue import (
     notification_ai_review_mode,
 )
 from ..domain.investment_brain import decision_episode_from_context
+from ..domain.investment_reasoning.subject_case import (
+    SUBJECT_ABSTAINED,
+    SUBJECT_BLOCKED,
+    SUBJECT_OBSERVATION,
+    SUBJECT_PUBLISHED,
+    SUBJECT_REVIEW_ONLY,
+    SUBJECT_SUPPRESSED,
+)
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
@@ -331,6 +339,31 @@ class NotificationAIRequestEnqueuer:
                 context,
             )
             subject_case_id = str(context.get("investmentSubjectDecisionCaseId") or subject_case_id)
+            captured_subject = (
+                dict(context.get("investmentSubjectDecisionCase") or {})
+                if isinstance(context.get("investmentSubjectDecisionCase"), dict)
+                else {}
+            )
+            terminal_stages = {
+                SUBJECT_ABSTAINED,
+                SUBJECT_BLOCKED,
+                SUBJECT_OBSERVATION,
+                SUBJECT_PUBLISHED,
+                SUBJECT_REVIEW_ONLY,
+                SUBJECT_SUPPRESSED,
+            }
+            captured_stage = str(captured_subject.get("stage") or "").strip().upper()
+            if captured_stage in terminal_stages:
+                reason = "종료된 투자 판단 건은 새 AI 판단 요청을 만들지 않습니다: " + captured_stage
+                suppress = getattr(self.queue, "suppress_source_notification", None)
+                if callable(suppress):
+                    suppress(job.job_id, reason)
+                return {
+                    "status": "suppressed-terminal-subject",
+                    "notificationJobId": job.job_id,
+                    "subjectCaseId": subject_case_id,
+                    "subjectStage": captured_stage,
+                }
         quality_snapshot = build_ontology_decision_quality_snapshot(context)
         if quality_snapshot:
             context["ontologyDecisionQuality"] = quality_snapshot
@@ -360,11 +393,10 @@ class NotificationAIRequestEnqueuer:
                     str(outcome.get("requestId") or request.request_id),
                     request.notification_job_id,
                 )
-            elif status == "coalesced-identical":
-                self.reasoning_orchestrator.ai_queued(
+            elif status in {"coalesced-identical", "coalesced-active"}:
+                self.reasoning_orchestrator.case_superseded(
                     subject_case_id or reasoning_case_id,
-                    str(outcome.get("requestId") or request.request_id),
-                    request.notification_job_id,
+                    "An identical or semantically equivalent AI request already owns this subject decision.",
                 )
             elif status == "superseded":
                 self.reasoning_orchestrator.case_superseded(
@@ -410,6 +442,13 @@ class AIInferenceQueueRunner:
             "notificationAiDeliveryDeadlineSeconds",
             0,
         )
+        self.attempt_watchdog_seconds = _int_setting(
+            self.settings,
+            "notificationAiAttemptWatchdogSeconds",
+            300,
+            60,
+            1800,
+        )
         self.fallback_enabled = _bool_setting(
             self.settings,
             "notificationAiTypeDbFallbackEnabled",
@@ -437,7 +476,7 @@ class AIInferenceQueueRunner:
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
-            24 * 1024,
+            14 * 1024,
             12 * 1024,
             24 * 1024,
         )
@@ -450,7 +489,7 @@ class AIInferenceQueueRunner:
         self.comparison_repair_timeout_seconds = _optional_seconds_setting(
             self.settings,
             "notificationAiComparisonRepairTimeoutSeconds",
-            0,
+            60,
         )
         self.judgement_service = NotificationAIJudgementService(
             reviewer,
@@ -524,11 +563,16 @@ class AIInferenceQueueRunner:
                 context["notificationAiExecutionProfile"] = execution_profile
             execution_profile["reasoningEffort"] = request.reasoning_effort
             decision_brief = notification_ai_decision_brief(context, self.settings, execution_profile)
+            attempt_prompt_limit = (
+                min(self.max_prompt_bytes, 12 * 1024)
+                if request.attempts > 1
+                else self.max_prompt_bytes
+            )
             packet = build_notification_ai_inference_packet(
                 context,
                 self.settings,
                 max_prompt_bytes=min(
-                    self.max_prompt_bytes,
+                    attempt_prompt_limit,
                     int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
                 ),
                 profile=execution_profile,
@@ -589,16 +633,16 @@ class AIInferenceQueueRunner:
         if callable(trace_starter):
             trace_starter(request.request_id)
         try:
-            remaining_seconds = self.remaining_delivery_seconds(request)
+            remaining_seconds = self.remaining_execution_seconds(request, request_started)
             if remaining_seconds is not None and remaining_seconds < 5:
                 raise TimeoutError(
-                    "notification AI delivery deadline exceeded before model execution"
+                    "notification AI attempt watchdog exhausted before model execution"
                 )
             ai_attempted = True
             judgement_outcome = self.judgement_service.judge(
                 context,
                 timeout_seconds=remaining_seconds,
-                timeout_provider=lambda: self.remaining_delivery_seconds(request),
+                timeout_provider=lambda: self.remaining_execution_seconds(request, request_started),
                 profile=execution_profile,
                 decision_brief=decision_brief,
                 packet=packet,
@@ -1005,6 +1049,18 @@ class AIInferenceQueueRunner:
             return self.delivery_deadline_seconds
         elapsed = max(0, int((datetime.now(timezone.utc) - created_at).total_seconds()))
         return max(0, self.delivery_deadline_seconds - elapsed)
+
+    def remaining_execution_seconds(
+        self,
+        request: AIInferenceRequest,
+        attempt_started_monotonic: float,
+    ) -> int:
+        elapsed = max(0, int(time.monotonic() - float(attempt_started_monotonic)))
+        remaining = max(0, self.attempt_watchdog_seconds - elapsed)
+        delivery_remaining = self.remaining_delivery_seconds(request)
+        if delivery_remaining is not None:
+            remaining = min(remaining, delivery_remaining)
+        return remaining
 
     def publish_preparation_fallback(
         self,

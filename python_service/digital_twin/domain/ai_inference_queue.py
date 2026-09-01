@@ -12,7 +12,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Dict
+from typing import Dict, Iterable, Mapping
 
 from .notification_ai_gate_contracts import NOTIFICATION_AI_GATE_VERSION
 from .context_observation_notifications import typedb_context_observation_contract
@@ -41,6 +41,157 @@ def _clean(value: object) -> str:
 def _canonical_hash(value: object) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _items(value: object) -> list:
+    return list(value or []) if isinstance(value, (list, tuple, set)) else []
+
+
+def _texts(values: Iterable[object]) -> list:
+    return sorted({_clean(value) for value in values or [] if _clean(value)})
+
+
+def _rule_ids(values: object) -> list:
+    return _texts(
+        _mapping(item).get("ruleId")
+        or _mapping(item).get("sourceRuleId")
+        or _mapping(item).get("id")
+        for item in _items(values)
+    )
+
+
+def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str, object]:
+    """Return the semantic fields that justify replacing active AI work.
+
+    Polling provenance, prices and generation-specific instance IDs are
+    intentionally absent. A new quote for the same decision contract should
+    not cancel a model process that is already comparing the same rules and
+    hypothesis families. Action, eligibility, rule, evidence-event or causal
+    family changes remain material and receive a fresh request.
+    """
+
+    values = dict(context or {})
+    relation = _mapping(values.get("ontologyRelationContext"))
+    insight = _mapping(values.get("ontologyInsight"))
+    relation_diff = _mapping(values.get("ontologyRelationDiff"))
+    transition = (
+        _mapping(values.get("decisionTransition"))
+        or _mapping(relation_diff.get("decisionTransition"))
+        or _mapping(relation.get("decisionTransition"))
+    )
+    decision = _mapping(relation.get("decision"))
+    execution_plan = _mapping(relation.get("executionPlan"))
+    brain = _mapping(relation.get("investmentBrain"))
+    envelope = (
+        _mapping(relation.get("actionEnvelope"))
+        or _mapping(execution_plan.get("actionEnvelope"))
+        or _mapping(decision.get("actionEnvelope"))
+        or _mapping(brain.get("actionEnvelope"))
+    )
+    selection = (
+        _mapping(envelope.get("coreInferenceSelection"))
+        or _mapping(relation.get("coreInferenceSelection"))
+    )
+    readiness = (
+        _mapping(envelope.get("dataReadiness"))
+        or _mapping(relation.get("dataReadiness"))
+    )
+    hypothesis_set = (
+        _mapping(brain.get("hypothesisSet"))
+        or _mapping(relation.get("hypothesisSet"))
+    )
+    hypothesis_families = []
+    for item in _items(hypothesis_set.get("hypotheses")):
+        row = _mapping(item)
+        family_key = _clean(
+            row.get("familyId")
+            or row.get("causalSignature")
+            or row.get("templateId")
+            or row.get("hypothesisContractId")
+        )
+        if not family_key:
+            continue
+        hypothesis_families.append({
+            "family": family_key,
+            "template": _clean(row.get("templateId")),
+            "action": _clean(row.get("candidateAction")).upper(),
+            "rules": _texts(row.get("supportingRuleIds") or []),
+            # Evidence entity IDs are generation-scoped and therefore change
+            # on every quote refresh. Cardinality preserves a material change
+            # in the comparison shape without treating polling IDs as meaning.
+            "supportingEvidenceCount": len(_texts(row.get("supportingEvidenceIds") or [])),
+            "counterEvidenceCount": len(_texts(row.get("counterEvidenceIds") or [])),
+        })
+    hypothesis_families.sort(
+        key=lambda item: (item["family"], item["template"], item["action"])
+    )
+    source_events = _texts(
+        values.get("materialSourceEventKeys")
+        or insight.get("materialSourceEventKeys")
+        or _mapping(insight.get("semanticComponents")).get("materialSourceEventKeys")
+        or relation.get("materialSourceEventKeys")
+        or []
+    )
+    return {
+        "reviewMode": notification_ai_review_mode(values),
+        "targetRole": _clean(relation.get("targetRole")),
+        "reviewLevel": _clean(relation.get("reviewLevel")),
+        "dataState": _clean(relation.get("dataState")),
+        "conflictState": _clean(relation.get("conflictState")),
+        "judgementBlocked": bool(envelope.get("judgementBlocked")),
+        "executionAction": _clean(
+            envelope.get("executionAction")
+            or envelope.get("preferredAction")
+            or transition.get("currentAction")
+        ).upper(),
+        "allowedActions": _texts(
+            envelope.get("aiAllowedActions")
+            or envelope.get("allowedActions")
+            or relation.get("allowedActions")
+            or []
+        ),
+        "blockedActions": _texts(
+            envelope.get("blockedActions")
+            or relation.get("blockedActions")
+            or []
+        ),
+        "selectedRuleId": _clean(
+            selection.get("selectedRuleId")
+            or envelope.get("selectedRuleId")
+            or decision.get("selectedRuleId")
+        ),
+        "drivingRuleIds": _texts(envelope.get("drivingRuleIds") or []),
+        "eligibleRuleIds": _texts(readiness.get("eligibleRuleIds") or []),
+        "activeRuleIds": _rule_ids(relation.get("activeRules")),
+        "hypothesisFamilies": hypothesis_families,
+        "materialSourceEventKeys": source_events,
+        "transition": {
+            "kind": _clean(transition.get("kind")),
+            "currentAction": _clean(transition.get("currentAction")).upper(),
+            "currentStatus": _clean(transition.get("currentStatus")),
+            "currentDataReadiness": _clean(transition.get("currentDataReadiness")),
+            "judgementBlocked": bool(transition.get("currentJudgementBlocked")),
+        } if bool(transition.get("material")) else {},
+    }
+
+
+def notification_ai_material_fingerprint(context: Mapping[str, object]) -> str:
+    return _canonical_hash(notification_ai_material_contract(context))
+
+
+def notification_ai_can_join_active(
+    active_context: Mapping[str, object],
+    incoming_context: Mapping[str, object],
+) -> bool:
+    incoming = dict(incoming_context or {})
+    transition = (
+        _mapping(incoming.get("decisionTransition"))
+        or _mapping(_mapping(incoming.get("ontologyRelationDiff")).get("decisionTransition"))
+        or _mapping(_mapping(incoming.get("ontologyRelationContext")).get("decisionTransition"))
+    )
+    if bool(transition.get("material")):
+        return False
+    return notification_ai_material_fingerprint(active_context) == notification_ai_material_fingerprint(incoming)
 
 
 def notification_ai_subject(context: Dict[str, object]) -> Dict[str, str]:

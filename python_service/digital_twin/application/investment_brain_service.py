@@ -66,7 +66,7 @@ class InvestmentBrainService:
         self.ai_judgement_service = NotificationAIJudgementService(
             reviewer,
             self.settings,
-            max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 24 * 1024),
+            max_prompt_bytes=int(self.settings.get("notificationAiQueueMaxPromptBytes") or 14 * 1024),
             repair_reasoning_effort=str(
                 self.settings.get("notificationAiComparisonRepairReasoningEffort") or "low"
             ),

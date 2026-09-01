@@ -1,4 +1,4 @@
-"""MySQL-backed, latest-wins queue for notification AI inference."""
+"""MySQL-backed, per-subject single-flight queue for notification AI inference."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from ..domain.ai_inference_queue import (
     AI_INFERENCE_SUPERSEDED,
     AIInferenceRequest,
     AIInferenceResult,
+    notification_ai_can_join_active,
+    notification_ai_material_fingerprint,
 )
 from ..domain.events import (
     AI_INFERENCE_COMPLETED as AI_INFERENCE_COMPLETED_EVENT,
@@ -295,7 +297,14 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             latest = None
             if latest_id:
                 latest = connection.execute(
-                    "SELECT * FROM ai_inference_requests WHERE request_id = %s FOR UPDATE",
+                    """
+                    SELECT request.*, notification.payload_json AS notification_payload_json,
+                           notification.text AS notification_text
+                    FROM ai_inference_requests request
+                    LEFT JOIN notification_jobs notification
+                      ON notification.job_id = request.notification_job_id
+                    WHERE request.request_id = %s FOR UPDATE
+                    """,
                     (latest_id,),
                 ).fetchone()
 
@@ -324,6 +333,40 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                         "subjectKey": request.subject_key,
                         "existing": True,
                     }
+
+            if (
+                latest
+                and _clean(latest.get("status")) == AI_INFERENCE_PROCESSING
+                and notification_ai_can_join_active(
+                    self.request_from_row(latest).context,
+                    request.context,
+                )
+            ):
+                reason = (
+                    "같은 계정·종목의 동일한 판단 의미를 AI가 이미 검토 중이어서 "
+                    "새 시세 조회를 진행 중인 요청에 합쳤습니다."
+                )
+                self.set_notification_status_with_connection(
+                    connection,
+                    job.job_id,
+                    AI_INFERENCE_SUPERSEDED,
+                    reason,
+                    {
+                        "notificationAiQueue": {
+                            "status": "coalesced-active",
+                            "requestId": latest_id,
+                            "subjectKey": request.subject_key,
+                            "materialFingerprint": notification_ai_material_fingerprint(request.context),
+                        }
+                    },
+                )
+                return {
+                    "status": "coalesced-active",
+                    "requestId": latest_id,
+                    "notificationJobId": job.job_id,
+                    "subjectKey": request.subject_key,
+                    "existing": True,
+                }
 
             self.insert_request_with_connection(connection, request)
             if latest:
@@ -493,6 +536,26 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         lease_expires = _timestamp_after(bounded_lease)
         claimed: List[AIInferenceRequest] = []
         with self.transaction() as connection:
+            # Older workers could record a normal supersession race as a hard
+            # AI failure after the source notification had already moved on.
+            # Reclassify those rows before computing current queue health.
+            connection.execute(
+                """
+                UPDATE ai_inference_requests
+                SET status = %s, completed_at = CASE
+                        WHEN completed_at = '' THEN %s ELSE completed_at END,
+                    updated_at = %s, last_error = ''
+                WHERE status = %s
+                  AND last_error LIKE %s
+                """,
+                (
+                    AI_INFERENCE_SUPERSEDED,
+                    stamp,
+                    stamp,
+                    AI_INFERENCE_FAILED,
+                    "source notification is no longer awaiting AI:%",
+                ),
+            )
             expired = connection.execute(
                 """
                 SELECT request_id, subject_key FROM ai_inference_requests
@@ -682,11 +745,16 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "SELECT status, lease_owner FROM ai_inference_requests WHERE request_id = %s FOR UPDATE",
                 (request.request_id,),
             ).fetchone()
+            source = connection.execute(
+                "SELECT status FROM notification_jobs WHERE job_id = %s FOR UPDATE",
+                (request.notification_job_id,),
+            ).fetchone()
             publishable = bool(
                 current
                 and _clean(current.get("status")) == AI_INFERENCE_PROCESSING
                 and _clean(current.get("lease_owner")) == _clean(worker_id)
                 and _clean(head.get("latest_request_id") if head else "") == request.request_id
+                and _clean(source.get("status") if source else "") == "awaiting_ai"
             )
             if not publishable:
                 if current and _clean(current.get("status")) == AI_INFERENCE_PROCESSING:
@@ -804,7 +872,15 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 only_if_statuses=("awaiting_ai",),
             )
             if not updated:
-                raise RuntimeError("source notification is no longer awaiting AI: " + request.notification_job_id)
+                connection.execute(
+                    """
+                    UPDATE ai_inference_requests SET status = %s, lease_owner = '',
+                        lease_expires_at = '', completed_at = %s, updated_at = %s,
+                        last_error = '' WHERE request_id = %s
+                    """,
+                    (AI_INFERENCE_SUPERSEDED, stamp, stamp, request.request_id),
+                )
+                return False
             insert_domain_event_with_connection(
                 connection,
                 ai_inference_event(
@@ -820,6 +896,17 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 ),
             )
         return True
+
+    def suppress_source_notification(self, notification_job_id: str, reason: object) -> bool:
+        with self.transaction() as connection:
+            return self.set_notification_status_with_connection(
+                connection,
+                notification_job_id,
+                "suppressed",
+                _clean(reason)[:1000],
+                {"notificationAiQueue": {"status": "suppressed-terminal-subject"}},
+                only_if_statuses=("pending", "processing", "failed", "awaiting_ai"),
+            )
 
     def fail(self, request: AIInferenceRequest, worker_id: str, reason: object) -> bool:
         stamp = utc_now()

@@ -8,8 +8,8 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v12"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v11"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v13"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v12"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
@@ -42,8 +42,7 @@ AI_DECISION_RESPONSE_SCHEMA = {
         "templateId": "입력 template ID",
         "claim": "입력 가설",
         "stance": "risk|support|uncertain|context",
-        "supportingEvidenceIds": ["입력 근거 ID"],
-        "counterEvidenceIds": ["입력 반대 근거 ID"],
+        "evidenceReviewStatus": "모든 입력 근거와 반대 근거를 검토했으면 all-input-evidence-reviewed",
         "verdict": "supported|weakened|rejected|unresolved",
         "reasoning": "비교 이유",
     }],
@@ -62,7 +61,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "notificationIntent가 context-observation이면 TypeDB의 NO_ACTION을 바꾸지 말고, 매수·매도 판단 대신 확인된 관계 변화와 다음 관찰 조건만 설명한다.",
     "action만 사용자가 읽을 유일한 최종 행동이다. 정책·실행·품질 규칙이 선택 가설의 후보 행동을 제약하면 executionDecision과 disagreementReason에 검증 가능한 이유를 쓴다.",
     "모든 입력 가설을 정확히 한 번씩 검토하고 selectedHypothesisId는 입력 가설 ID 중 하나만 사용한다. 입력 가설이 없으면 hypotheses는 빈 배열, selectedHypothesisId는 빈 문자열로 둔다.",
-    "근거 ID는 해당 입력 가설에 실제 연결된 ID만 사용하며 검증되지 않은 외부 사실을 만들지 않는다.",
+    "각 입력 가설의 모든 근거와 반대 근거를 검토한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 입력 근거 ID를 응답에 다시 복사하지 않는다.",
     "사용자에게 보여줄 투자 관점, 변화, 근거, 반대 근거, 다음 조건과 자료 한계는 narrativeClaims에도 기록하고 DecisionCore.evidenceLedger의 실제 ID를 연결한다.",
     "narrativeClaims는 section별 허용 ID만 쓰고, narrativeClaimContract.recommendedEvidenceIdsBySection을 우선 사용한다. view는 관측·전이 근거를 하나 이상, next-condition은 재관측 가능한 근거를 포함한다.",
     "TypeDB 규칙을 인용할 때 narrativeClaimContract.evidenceBundlesByInference에 연결된 관찰 사실 ID도 함께 인용한다. 규칙 이름만으로 현재 상태나 다음 조건을 단정하지 않는다.",

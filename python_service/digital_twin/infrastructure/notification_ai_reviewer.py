@@ -296,10 +296,10 @@ def notification_ai_reviewer_from_settings(
             settings.get("notificationAiDeepPromptMaxBytes")
             or os.environ.get("NOTIFICATION_AI_DEEP_PROMPT_MAX_BYTES")
             or settings.get("notificationAiQueueMaxPromptBytes")
-            or 20 * 1024
+            or 14 * 1024
         )
     except (TypeError, ValueError):
-        max_prompt_bytes = 20 * 1024
+        max_prompt_bytes = 14 * 1024
     if use_codex:
         runtime_dir = notification_ai_runtime_dir()
         command = codex_process_arguments(reasoning_effort=reasoning_effort, working_directory=runtime_dir)

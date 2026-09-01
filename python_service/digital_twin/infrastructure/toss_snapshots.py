@@ -1223,8 +1223,10 @@ class TossProvider:
                 profit_loss = market_value - cost_basis
                 profit_loss_rate = ((current_price - position.average_price) / position.average_price) * 100
                 profit_loss_krw = profit_loss if str(position.currency or quote.get("currency") or "").upper() == "KRW" else 0.0
+        ma5 = number(indicator_source.get("ma5")) or position.ma5
         ma20 = number(indicator_source.get("ma20")) or position.ma20
         ma60 = number(indicator_source.get("ma60")) or position.ma60
+        ma5_distance = pct_distance(current_price, ma5) if current_price and ma5 else number(indicator_source.get("ma5Distance")) or position.ma5_distance
         ma20_distance = pct_distance(current_price, ma20) if current_price and ma20 else number(indicator_source.get("ma20Distance")) or position.ma20_distance
         ma60_distance = pct_distance(current_price, ma60) if current_price and ma60 else number(indicator_source.get("ma60Distance")) or position.ma60_distance
         quote_change_rate = quote.get("changeRate")
@@ -1338,13 +1340,14 @@ class TossProvider:
             trading_value=trading_value,
             volume=volume,
             volume_ratio=volume_ratio,
-            ma5=number(indicator_source.get("ma5")) or position.ma5,
+            ma5=ma5,
             ma20=ma20,
             ma60=ma60,
             ma120=number(indicator_source.get("ma120")) or position.ma120,
             ma200=number(indicator_source.get("ma200")) or position.ma200,
             ma20_slope=number(indicator_source.get("ma20Slope")) or position.ma20_slope,
             ma60_slope=number(indicator_source.get("ma60Slope")) or position.ma60_slope,
+            ma5_distance=ma5_distance,
             ma20_distance=ma20_distance,
             ma60_distance=ma60_distance,
         )

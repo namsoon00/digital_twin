@@ -182,6 +182,8 @@ TRADE_EXECUTION_RULE_IDS = frozenset({
 
 NOTIFICATION_POLICY_RULE_IDS = frozenset({
     "graph.materiality.alert_candidate.v1",
+    "graph.notification.loss_policy_threshold.v1",
+    "graph.notification.profit_policy_threshold.v1",
 })
 
 

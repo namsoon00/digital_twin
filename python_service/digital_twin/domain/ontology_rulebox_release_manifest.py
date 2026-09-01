@@ -9,7 +9,7 @@ boundary prevents infrastructure code from becoming a second RuleBox.
 from typing import Dict, FrozenSet
 
 
-RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v3"
+RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v4"
 
 DEPRECATED_TYPEDB_RULE_IDS: FrozenSet[str] = frozenset({
     "shadow.market_psychology.state.v1",

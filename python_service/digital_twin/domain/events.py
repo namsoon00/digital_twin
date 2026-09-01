@@ -51,6 +51,7 @@ HYPOTHESIS_DEVELOPMENT_DEPLOYED = "investment_hypothesis.development_deployed"
 ONTOLOGY_REASONING_REQUESTED = "ontology.reasoning_requested"
 ONTOLOGY_REASONING_COMPLETED = "ontology.reasoning_completed"
 ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED = "ontology.reasoning_queue_health_changed"
+INVESTMENT_ALERT_COVERAGE_CHANGED = "investment.alert_coverage_changed"
 ONTOLOGY_RULEBOX_DEPLOYMENT_CHANGED = "ontology.rulebox_deployment_changed"
 OPERATIONAL_STORAGE_CAPACITY_CHANGED = "operations.storage_capacity_changed"
 INVESTMENT_CALENDAR_EVENT_SAVED = "investment_calendar.event_saved"
@@ -1707,6 +1708,15 @@ def ontology_reasoning_queue_health_changed_event(health: Dict[str, object]) -> 
     return DomainEvent(
         name=ONTOLOGY_REASONING_QUEUE_HEALTH_CHANGED,
         aggregate_id="ontology-reasoning-queue",
+        payload=payload,
+    )
+
+
+def investment_alert_coverage_changed_event(health: Dict[str, object]) -> DomainEvent:
+    payload = dict(health or {})
+    return DomainEvent(
+        name=INVESTMENT_ALERT_COVERAGE_CHANGED,
+        aggregate_id=str(payload.get("deploymentId") or "investment-alert-coverage"),
         payload=payload,
     )
 

@@ -1,6 +1,7 @@
 from typing import Dict
 
 from .mysql_monitoring import MySQLMonitorAccountJobStore
+from .mysql_investment_alert_coverage import MySQLInvestmentAlertCoverageStore
 from .mysql_operational import (
     MySQLAccountRegistry,
     MySQLAIInferenceQueueStore,
@@ -272,6 +273,10 @@ def reasoning_shadow_job_store(settings: Dict[str, str] = None):
 def market_observation_reasoning_anchor_store(settings: Dict[str, str] = None):
     configured = configured_settings(settings)
     return MySQLMarketObservationReasoningAnchorStore(configured)
+
+
+def investment_alert_coverage_store(settings: Dict[str, str] = None):
+    return MySQLInvestmentAlertCoverageStore(configured_settings(settings))
 
 
 def symbol_universe_store(settings: Dict[str, str] = None):

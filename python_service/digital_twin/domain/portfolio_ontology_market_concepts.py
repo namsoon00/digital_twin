@@ -835,8 +835,9 @@ def add_price_level_and_liquidity_concepts(
         })
         add_relation(graph, stock_id, stale_id, "HAS_DATA_QUALITY", weight=1.0, properties={"source": source, "polarity": "blocking", "evidenceRole": "blocking", "reviewLevel": "blocked", "dataState": "unavailable", "aiInfluenceLabel": "시세 신선도 저하"})
     def technical_distance(level: float, explicit_distance: float) -> float:
-        calculated = pct_distance_safe(current_price, level) if current_price and level else 0.0
-        return calculated if calculated else number(explicit_distance)
+        if current_price and level:
+            return pct_distance_safe(current_price, level)
+        return number(explicit_distance)
 
     ma5_distance = technical_distance(number(position.ma5), getattr(position, "ma5_distance", 0.0))
     ma20_distance = technical_distance(number(position.ma20), position.ma20_distance)

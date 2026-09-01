@@ -31,6 +31,7 @@ class OntologyDiagnosticsService:
         inference_detail_outbox=None,
         maintenance_state_store=None,
         runtime_identity_provider=None,
+        alert_coverage_provider=None,
     ):
         self.ontology_repository = ontology_repository
         self.settings = settings or {}
@@ -44,6 +45,7 @@ class OntologyDiagnosticsService:
         self.inference_detail_outbox = inference_detail_outbox
         self.maintenance_state_store = maintenance_state_store
         self.runtime_identity_provider = runtime_identity_provider
+        self.alert_coverage_provider = alert_coverage_provider
 
     def status(
         self,
@@ -71,6 +73,7 @@ class OntologyDiagnosticsService:
         )
         decision_performance = self.decision_performance_boundary(clean_symbols)
         notification_boundary = self.notification_boundary()
+        alert_coverage = self.alert_coverage_boundary()
         runtime_observability = self.runtime_observation_boundary(clean_world_id)
         shared_world_projection = self.shared_world_projection_boundary()
         inference_detail_readback = self.inference_detail_readback_boundary()
@@ -213,6 +216,7 @@ class OntologyDiagnosticsService:
             "ruleboxQuality": self.rulebox_quality_boundary(rulebox, inference, decision_performance),
             "latestEvents": self.latest_events(),
             "notificationBoundary": notification_boundary,
+            "investmentAlertCoverage": alert_coverage,
             "alertPipeline": self.alert_pipeline_boundary(inference, notification_boundary),
             "strategyProposalBoundary": self.strategy_proposal_boundary(),
             "decisionPerformanceBoundary": decision_performance,
@@ -1290,6 +1294,40 @@ class OntologyDiagnosticsService:
                 "monitoring.alerts_detected and notification jobs are expected to be recorded in one operational DB transaction.",
                 "A non-zero jobsForLatestAlert confirms the event-to-outbox boundary for the latest alert event.",
             ],
+        }
+
+    def alert_coverage_boundary(self) -> Dict[str, object]:
+        """Expose event-to-terminal-outcome coverage without changing decisions."""
+
+        if not callable(self.alert_coverage_provider):
+            return {
+                "status": "unavailable",
+                "reason": "Investment alert coverage projection is not configured.",
+            }
+        try:
+            summary = dict(self.alert_coverage_provider() or {})
+        except Exception as error:  # noqa: BLE001 - diagnostics must remain non-fatal.
+            return {"status": "error", "reason": str(error)[:180]}
+        health = dict(summary.get("health") or {})
+        state = str(health.get("state") or "unknown").strip().lower()
+        status = "ok" if state == "healthy" else ("error" if state == "critical" else state)
+        return {
+            "status": status,
+            "state": state,
+            "reason": str(health.get("reason") or ""),
+            "deploymentId": str(summary.get("deploymentId") or ""),
+            "lookbackHours": int(summary.get("lookbackHours") or 0),
+            "materialEventCount": int(health.get("materialEventCount") or 0),
+            "terminalEventCount": int(health.get("terminalEventCount") or 0),
+            "terminalCoveragePct": float(health.get("terminalCoveragePct") or 0),
+            "overdueEventCount": int(health.get("overdueEventCount") or 0),
+            "failedEventCount": int(health.get("failedEventCount") or 0),
+            "candidateEventCount": int(health.get("candidateEventCount") or 0),
+            "deliveredCandidateCount": int(health.get("deliveredCandidateCount") or 0),
+            "policyStarvation": bool(health.get("policyStarvation")),
+            "stateCounts": dict(summary.get("stateCounts") or {}),
+            "latest": list(summary.get("latest") or [])[:20],
+            "checkedAt": str(summary.get("checkedAt") or ""),
         }
 
     def strategy_proposal_boundary(self) -> Dict[str, object]:

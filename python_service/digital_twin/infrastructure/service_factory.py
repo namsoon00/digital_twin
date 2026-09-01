@@ -17,6 +17,10 @@ from ..application.ontology_reasoning_queue_health_service import (
     OntologyReasoningQueueHealthNotificationEnqueuer,
     OntologyReasoningQueueHealthService,
 )
+from ..application.investment_alert_coverage_service import (
+    InvestmentAlertCoverageNotificationEnqueuer,
+    InvestmentAlertCoverageService,
+)
 from ..application.operational_storage_capacity_service import (
     OperationalStorageCapacityNotificationEnqueuer,
     OperationalStorageCapacityService,
@@ -822,6 +826,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     ai_request_enqueuer = None
     reasoning_orchestrator = None
     news_digest_reconciler = None
+    alert_coverage_reconciler = None
     if not dry_run:
         reasoning_orchestrator = InvestmentReasoningOrchestrator(
             stores.investment_reasoning_case_store(settings),
@@ -855,6 +860,33 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
             ),
             cursor_store=stores.news_digest_reconciliation_state_store(settings),
         )
+        coverage_queue = stores.notification_job_store(settings)
+        coverage_registry = stores.reasoning_engine_registry_store(settings)
+
+        def coverage_deployment_id():
+            control = coverage_registry.control()
+            return str(
+                control.delivery_deployment_id
+                or control.active_deployment_id
+                or ""
+            )
+
+        coverage_service = InvestmentAlertCoverageService(
+            stores.investment_alert_coverage_store(settings),
+            coverage_deployment_id,
+            settings,
+        )
+        coverage_enqueuer = InvestmentAlertCoverageNotificationEnqueuer(
+            coverage_queue
+        )
+
+        def reconcile_alert_coverage():
+            payload, event = coverage_service.run_once()
+            if event is not None:
+                coverage_enqueuer.handle(event)
+            return payload
+
+        alert_coverage_reconciler = reconcile_alert_coverage
 
     return NotificationQueueRunner(
         queue=stores.notification_job_store(settings),
@@ -885,6 +917,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         ai_request_enqueuer=ai_request_enqueuer,
         reasoning_orchestrator=reasoning_orchestrator,
         news_digest_reconciler=news_digest_reconciler,
+        alert_coverage_reconciler=alert_coverage_reconciler,
         fresh_data_recheck_requester=request_fresh_data_recheck,
         link_base_resolver=ActiveShareNotificationLinkResolver(),
     )

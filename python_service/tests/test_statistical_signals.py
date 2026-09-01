@@ -339,7 +339,7 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertTrue(all((item.get("statisticalSignalContract") or {}).get("signalTypes") for item in predictive))
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
-        self.assertEqual(45, len(migration["not-applicable"]))
+        self.assertEqual(47, len(migration["not-applicable"]))
         self.assertEqual(74, len(migration["model-signal-production"]))
         self.assertEqual([], migration.get("shadow-signal-required") or [])
         flow_rule = next(

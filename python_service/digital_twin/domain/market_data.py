@@ -766,6 +766,7 @@ def normalize_position(item: Dict[str, object]) -> Position:
         ma200=first_number(item, ["ma200", "movingAverage200", "sma200"]),
         ma20_slope=first_number(item, ["ma20Slope", "ma20_slope", "movingAverage20Slope"]),
         ma60_slope=first_number(item, ["ma60Slope", "ma60_slope", "movingAverage60Slope"]),
+        ma5_distance=first_number(item, ["ma5Distance", "ma5_distance"]),
         ma20_distance=first_number(item, ["ma20Distance", "ma20_distance"]),
         ma60_distance=first_number(item, ["ma60Distance", "ma60_distance"]),
         sector=str(item.get("sector") or info["sector"]),

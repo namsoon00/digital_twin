@@ -12,6 +12,7 @@ from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
 FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v9"
+PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v1"
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -116,6 +117,80 @@ def _verified_follow_up_transitions(context: Mapping[str, object]):
     ]
 
 
+def verified_follow_up_transitions(context: Mapping[str, object]):
+    """Return only persisted follow-up conditions with a verified edge transition."""
+
+    return _verified_follow_up_transitions(context)
+
+
+def _material_source_event_keys(context: Mapping[str, object]):
+    values = _mapping(context)
+    insight = _mapping(values.get("ontologyInsight"))
+    semantic = _mapping(insight.get("semanticComponents"))
+    return _items(
+        semantic.get("materialSourceEventKeys")
+        or insight.get("materialSourceEventKeys")
+        or values.get("materialSourceEventKeys")
+        or []
+    )
+
+
+def pre_ai_deferred_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
+    """Resolve an unchanged graph candidate after decision continuity is loaded.
+
+    Admission cannot evaluate previous-decision follow-up conditions because the
+    continuity packet is attached later. This policy closes that ordering gap:
+    a verified condition edge or a new material source may still reach AI, while
+    a genuinely unchanged candidate becomes a terminal web-only record.
+    """
+
+    values = _mapping(context)
+    gate = _mapping(values.get("preDecisionDeliveryGate"))
+    reason_code = _text(gate.get("reasonCode"))
+    base = {
+        "version": PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION,
+        "decision": "proceed",
+        "reasonCode": reason_code,
+        "verifiedFollowUpTransitionCount": 0,
+        "materialSourceEventCount": 0,
+    }
+    if reason_code != "unchanged_graph_inference":
+        base["reason"] = "AI 전 종결 대상이 아닙니다."
+        return base
+
+    follow_ups = verified_follow_up_transitions(values)
+    material_sources = _material_source_event_keys(values)
+    graph_transition = _mapping(values.get("decisionTransition")) or _mapping(
+        _mapping(values.get("ontologyRelationDiff")).get("decisionTransition")
+    )
+    material_graph_transition = bool(graph_transition.get("material"))
+    base.update({
+        "verifiedFollowUpTransitionCount": len(follow_ups),
+        "materialSourceEventCount": len(material_sources),
+        "materialGraphTransition": material_graph_transition,
+    })
+    if follow_ups:
+        base.update({
+            "reason": "직전 판단의 확인 조건이 거짓에서 참으로 전환되어 AI 재판단을 진행합니다.",
+            "pushValueClass": "verified-threshold-transition",
+        })
+        return base
+    if material_sources or material_graph_transition:
+        base.update({
+            "reason": "새 중요 원문 또는 실질 그래프 전이가 있어 AI 재판단을 진행합니다.",
+            "pushValueClass": "material-decision-evidence",
+        })
+        return base
+
+    base.update({
+        "decision": "suppress",
+        "suppressionReason": "unchanged_graph_without_decision_value",
+        "reason": "직전 판단의 조건 전이와 새 중요 근거가 없어 웹 이력에만 저장합니다.",
+        "pushValueClass": "web-only-unchanged-graph",
+    })
+    return base
+
+
 def _customer_action_contract_gaps(validated: Mapping[str, object]):
     response = _mapping(validated)
     gaps = []
@@ -163,12 +238,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         _mapping(context.get("ontologyRelationDiff")).get("decisionTransition")
     )
     semantic = _mapping(_mapping(context.get("ontologyInsight")).get("semanticComponents"))
-    material_sources = _items(
-        semantic.get("materialSourceEventKeys")
-        or _mapping(context.get("ontologyInsight")).get("materialSourceEventKeys")
-        or context.get("materialSourceEventKeys")
-        or []
-    )
+    material_sources = _material_source_event_keys(context)
     target_role = _text(envelope.get("targetRole") or relation.get("targetRole")).lower()
     readiness = _mapping(envelope.get("dataReadiness"))
     selected_rule_id = _text(envelope.get("selectedRuleId"))

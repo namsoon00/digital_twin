@@ -370,6 +370,11 @@ def _rule_kind(rule: object) -> str:
 def _theory_family(rule: object, rule_kind: str) -> str:
     rule_id = _rule_id(rule)
     action_group = _action_group(rule)
+    if rule_kind == "context-observation" and (
+        rule_id.startswith("graph.notification.")
+        or action_group == "alertreview"
+    ):
+        return "notification-materiality"
     if rule_kind == "data-quality-gate":
         return "data-provenance"
     if rule_kind == "execution-gate":

@@ -41,9 +41,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # adapter, ABox, world-routing, and semantic validation contracts.
         # Notification AI single-flight additionally protects semantic join,
         # material replacement, terminal suppression, and publish races.
-        # Outcome-contract storage width and terminal-source queue health are
-        # separate persistence boundaries discovered by live AI publication.
-        self.assertLessEqual(total, 881)
+        # Outcome-contract storage width, terminal-source queue health, and
+        # material-event-to-alert coverage are separate production boundaries.
+        self.assertLessEqual(total, 892)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

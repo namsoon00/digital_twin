@@ -15,7 +15,10 @@ from digital_twin.domain.notification_rules import (
     evaluate_notification_rule,
     notification_state_group_key,
 )
-from digital_twin.domain.notification_rule_evaluator import similarity_bypass_match
+from digital_twin.domain.notification_rule_evaluator import (
+    similarity_bypass_match,
+    typedb_profit_loss_delivery_reason,
+)
 from digital_twin.domain.notification_rule_models import SimilarityBypassCondition
 from digital_twin.domain.data_freshness import (
     evaluate_notification_data_freshness,
@@ -53,6 +56,36 @@ from digital_twin.infrastructure.mysql_notification_config import (
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def test_typedb_profit_loss_conditions_report_both_improvement_and_worsening(self):
+        def job(action_group, change_state):
+            return NotificationJob.create(
+                "손익 조건 변화",
+                account_id="main",
+                message_type="investmentInsight",
+                context={
+                    "symbol": "MSTR",
+                    "ontologyInsight": {"changeState": change_state},
+                    "ontologyRelationContext": {
+                        "source": "typedbInferenceBox",
+                        "graphStoreUsed": True,
+                        "fallbackUsed": False,
+                        "decision": {
+                            "basis": "typedbInferenceBox",
+                            "actionGroup": action_group,
+                        },
+                        "decisionState": {
+                            "reviewLevel": "check",
+                            "dataState": "sufficient",
+                        },
+                    },
+                },
+            )
+
+        self.assertIn("개선", typedb_profit_loss_delivery_reason(job("lossControl", "improving")))
+        self.assertIn("악화", typedb_profit_loss_delivery_reason(job("lossControl", "worsening")))
+        self.assertIn("개선", typedb_profit_loss_delivery_reason(job("profitTake", "improving")))
+        self.assertIn("악화", typedb_profit_loss_delivery_reason(job("profitTake", "worsening")))
+
     def test_actionable_transition_does_not_wait_for_initial_baseline_confirmation(self):
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(

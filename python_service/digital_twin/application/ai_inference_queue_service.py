@@ -33,6 +33,7 @@ from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
 )
 from ..domain.notification_ai_inference_packet import build_notification_ai_inference_packet
+from ..domain.notification_ai_delivery import pre_ai_deferred_delivery_decision
 from ..domain.notification_narrative import narrative_fingerprint
 from ..domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
 from ..domain.notifications import NotificationJob
@@ -374,6 +375,31 @@ class NotificationAIRequestEnqueuer:
                     "subjectCaseId": subject_case_id,
                     "subjectStage": captured_stage,
                 }
+        deferred_delivery = pre_ai_deferred_delivery_decision(context)
+        context["preAiDeferredDeliveryDecision"] = deferred_delivery
+        if deferred_delivery.get("decision") == "suppress":
+            reason = str(
+                deferred_delivery.get("reason")
+                or "직전 판단 대비 새 결정 가치가 없어 알림을 보내지 않습니다."
+            )
+            suppress = getattr(self.queue, "suppress_source_notification", None)
+            if callable(suppress):
+                suppress(job.job_id, reason)
+            if decision_case_id and self.reasoning_orchestrator is not None and not narrative_only:
+                self.reasoning_orchestrator.notification_suppressed(
+                    {
+                        **context,
+                        "jobId": job.job_id,
+                        "notificationJobId": job.job_id,
+                    },
+                    reason,
+                )
+            return {
+                "status": "suppressed-no-decision-value",
+                "notificationJobId": job.job_id,
+                "subjectCaseId": subject_case_id,
+                "reason": reason,
+            }
         quality_snapshot = build_ontology_decision_quality_snapshot(context)
         if quality_snapshot:
             context["ontologyDecisionQuality"] = quality_snapshot

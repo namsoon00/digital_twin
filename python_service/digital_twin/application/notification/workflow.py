@@ -393,6 +393,7 @@ class NotificationQueueRunner:
         ai_request_enqueuer=None,
         reasoning_orchestrator=None,
         news_digest_reconciler=None,
+        alert_coverage_reconciler=None,
         fresh_data_recheck_requester=None,
         link_base_resolver: Callable = None,
     ):
@@ -416,6 +417,7 @@ class NotificationQueueRunner:
         self.ai_request_enqueuer = ai_request_enqueuer
         self.reasoning_orchestrator = reasoning_orchestrator
         self.news_digest_reconciler = news_digest_reconciler
+        self.alert_coverage_reconciler = alert_coverage_reconciler
         self.fresh_data_recheck_requester = fresh_data_recheck_requester
         self.rendering_service = NotificationRenderingService(
             template_renderer=template_renderer,
@@ -440,6 +442,7 @@ class NotificationQueueRunner:
             freshness_enabled=self.dispatch_freshness_enabled,
         )
         self.last_news_digest_reconciliation: Dict[str, object] = {}
+        self.last_alert_coverage_reconciliation: Dict[str, object] = {}
         self.last_run_details = []
         self.active_job = None
         self.active_job_stage = ""
@@ -467,6 +470,16 @@ class NotificationQueueRunner:
             self.active_job_index = -1
 
     def _run_once(self, limit: int = 10) -> int:
+        if self.alert_coverage_reconciler:
+            try:
+                self.last_alert_coverage_reconciliation = dict(
+                    self.alert_coverage_reconciler() or {}
+                )
+            except Exception as error:  # Coverage telemetry must not block customer delivery.
+                self.last_alert_coverage_reconciliation = {
+                    "status": "error",
+                    "reason": str(error)[:220],
+                }
         if self.news_digest_reconciler:
             self.last_news_digest_reconciliation = dict(self.news_digest_reconciler.run_once() or {})
         # Load account configuration before claiming durable jobs. A storage
@@ -642,7 +655,11 @@ class NotificationQueueRunner:
         if self.reasoning_orchestrator is None:
             return
         try:
-            self.reasoning_orchestrator.notification_published(dict(job.context or {}))
+            self.reasoning_orchestrator.notification_published({
+                **dict(job.context or {}),
+                "jobId": job.job_id,
+                "notificationJobId": job.job_id,
+            })
         except Exception:  # noqa: BLE001 - delivery completion remains authoritative.
             return
 
@@ -651,7 +668,11 @@ class NotificationQueueRunner:
             return
         try:
             self.reasoning_orchestrator.notification_suppressed(
-                dict(job.context or {}),
+                {
+                    **dict(job.context or {}),
+                    "jobId": job.job_id,
+                    "notificationJobId": job.job_id,
+                },
                 str(reason or "notification suppressed"),
             )
         except Exception:  # noqa: BLE001 - queue disposition remains authoritative.

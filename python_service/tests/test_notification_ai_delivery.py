@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.application.notification_ai_gate_message import compact_current_flow_rows
 from digital_twin.application.notification.admission import NotificationAdmissionPolicy
-from digital_twin.domain.notification_ai_delivery import final_ai_delivery_decision
+from digital_twin.domain.notification_ai_delivery import (
+    final_ai_delivery_decision,
+    pre_ai_deferred_delivery_decision,
+)
 from digital_twin.domain.notification_rules import NotificationRuleDecision
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.ontology_relation_delivery import relation_delivery_diff
@@ -147,6 +150,38 @@ def context_observation_context(outcome="OBSERVATION", material_sources=None):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
+    def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
+        policy = NotificationAdmissionPolicy()
+        context = graph_risk_context(material=False)
+        context["investmentSubjectDecisionCaseId"] = "subject-case:unchanged"
+        job = NotificationJob.create(
+            "test",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+        decision = NotificationRuleDecision(
+            message_type="investmentInsight",
+            enabled=True,
+            should_send=False,
+            delivery_state="suppressed",
+            gate_state="blocked",
+            gate_reason="그래프 판단이 직전과 같습니다.",
+            suppression_reason="unchanged_graph_inference",
+            state_suppressed=True,
+            state_decision="unchanged-inference",
+            state_reason="그래프 판단이 직전과 같습니다.",
+        )
+
+        outcome = policy.apply_result(job, decision)
+
+        self.assertTrue(outcome.accepted)
+        self.assertEqual("pending", job.status)
+        self.assertEqual(
+            "unchanged_graph_inference",
+            job.context["preDecisionDeliveryGate"]["reasonCode"],
+        )
+
     def test_repeat_cooldown_is_deferred_until_after_subject_decision(self):
         policy = NotificationAdmissionPolicy()
         context = graph_risk_context(material=True)
@@ -397,6 +432,36 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", follow_up_decision["decision"])
         self.assertEqual("verified-threshold-transition", follow_up_decision["pushValueClass"])
+
+    def test_pre_ai_unchanged_gate_requires_verified_transition_or_material_evidence(self):
+        unchanged = {
+            "preDecisionDeliveryGate": {"reasonCode": "unchanged_graph_inference"},
+            "decisionContinuityPacket": {"followUpConditions": []},
+            "decisionTransition": {"kind": "unchanged", "material": False},
+        }
+
+        suppressed = pre_ai_deferred_delivery_decision(unchanged)
+
+        self.assertEqual("suppress", suppressed["decision"])
+        self.assertEqual(
+            "unchanged_graph_without_decision_value",
+            suppressed["suppressionReason"],
+        )
+
+        verified = dict(unchanged)
+        verified["decisionContinuityPacket"] = {"followUpConditions": [{
+            "conditionId": "follow-up:price",
+            "status": "satisfied",
+            "previousMatched": False,
+            "currentMatched": True,
+            "transitionVerified": True,
+            "transitionAt": "2026-09-01T00:00:00Z",
+        }]}
+
+        proceeded = pre_ai_deferred_delivery_decision(verified)
+
+        self.assertEqual("proceed", proceeded["decision"])
+        self.assertEqual("verified-threshold-transition", proceeded["pushValueClass"])
 
     def test_holding_and_watchlist_baseline_delivery_boundaries(self):
         context = watchlist_context()

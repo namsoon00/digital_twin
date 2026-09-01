@@ -704,6 +704,13 @@ class InvestmentReasoningOrchestrator:
         subject_case_id = self.subject_case_id_from_context(context)
         if subject_case_id:
             subject_case = self.required_subject(subject_case_id, context)
+            notification_job_id = str(
+                _mapping(context).get("notificationJobId")
+                or _mapping(context).get("jobId")
+                or ""
+            ).strip()
+            if notification_job_id and not subject_case.notification_job_id:
+                subject_case.notification_job_id = notification_job_id
             if subject_case.final_decision is not None or (
                 subject_case.publication is not None
                 and subject_case.publication.outcome_kind == FINAL_DECISION

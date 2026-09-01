@@ -63,6 +63,7 @@ class MonitoringPositionContextMixin:
             ma60=number(item.get("ma60")),
             ma20_slope=number(item.get("ma20_slope") if "ma20_slope" in item else item.get("ma20Slope")),
             ma60_slope=number(item.get("ma60_slope") if "ma60_slope" in item else item.get("ma60Slope")),
+            ma5_distance=number(item.get("ma5_distance") if "ma5_distance" in item else item.get("ma5Distance")),
             ma20_distance=number(item.get("ma20_distance") if "ma20_distance" in item else item.get("ma20Distance")),
             ma60_distance=number(item.get("ma60_distance") if "ma60_distance" in item else item.get("ma60Distance")),
             sector=str(item.get("sector") or "기타"),

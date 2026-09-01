@@ -19,6 +19,7 @@ DEFAULT_LARGE_DOMAIN_EVENT_KEEP_COUNT = 20
 DEFAULT_DELIVERED_NOTIFICATION_KEEP_COUNT = 30
 DEFAULT_SENT_ARTICLE_DELIVERY_LEDGER_RETENTION_DAYS = 365
 DEFAULT_NEWS_NOTIFICATION_ADMISSION_RETENTION_DAYS = 90
+DEFAULT_INVESTMENT_ALERT_COVERAGE_RETENTION_DAYS = 30
 # The event log is a transport/audit trail, not the canonical store for the
 # same snapshot, evidence claim, or delivered notification. These payloads
 # can be large, so retain a bounded operator window per high-volume event.
@@ -84,6 +85,8 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "investment_decision_follow_ups",
     "investment_decision_outcomes",
     "investment_decision_outcome_targets",
+    "investment_alert_coverage",
+    "investment_alert_coverage_health",
     "investment_hypothesis_proposal_requests",
     "mysql_retention_runs",
     "investment_hypothesis_lifecycle_states",
@@ -1220,6 +1223,19 @@ def apply_mysql_operational_history_retention(
         )
         deleted_by_table["ontology_inference_detail_outbox"] = inference_detail_deleted
         deleted_by_policy["time:ontology_inference_detail_outbox"] = inference_detail_deleted
+
+        alert_coverage_cutoff = (
+            (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            - timedelta(days=DEFAULT_INVESTMENT_ALERT_COVERAGE_RETENTION_DAYS)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        alert_coverage_deleted = _delete_stale_rows(
+            connection,
+            MySQLRetentionTarget("investment_alert_coverage", "event_at"),
+            alert_coverage_cutoff,
+            batch_size,
+        )
+        deleted_by_table["investment_alert_coverage"] = alert_coverage_deleted
+        deleted_by_policy["time:investment_alert_coverage"] = alert_coverage_deleted
 
         time_series_deleted = 0
         for granularity, series_cutoff in time_series_cutoffs.items():

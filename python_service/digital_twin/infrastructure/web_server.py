@@ -1071,6 +1071,13 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "ontologyReasoningQueueConsecutiveObservations",
         "ontologyReasoningQueueNoProgressMinutes",
         "ontologyReasoningQueueAlertReminderMinutes",
+        "investmentAlertCoverageEnabled",
+        "investmentAlertCoverageReconcileSeconds",
+        "investmentAlertCoverageLookbackHours",
+        "investmentAlertCoverageDeadlineSeconds",
+        "investmentAlertCoverageStarvationMinCandidates",
+        "investmentAlertCoverageConsecutiveObservations",
+        "investmentAlertCoverageReminderMinutes",
         "ontologyProjectionAuditStaleAfterSeconds",
         "ontologyReasoningMaintenanceEnabled",
         "ontologyReasoningMaintenanceIntervalSeconds",
@@ -2010,6 +2017,7 @@ def ontology_diagnostics_source_payload(
         inference_detail_outbox=stores.ontology_inference_detail_outbox_store(settings),
         maintenance_state_store=stores.ontology_maintenance_state_store(settings),
         runtime_identity_provider=runtime_identity,
+        alert_coverage_provider=lambda: stores.investment_alert_coverage_store(settings).summary(),
     ).status(symbols=symbols, limit=limit, world_id=world_id)
 
 
@@ -2808,6 +2816,7 @@ def ontology_audit_payload(query: Dict[str, List[str]], requested_section: str =
                 inference_detail_outbox=stores.ontology_inference_detail_outbox_store(settings),
                 maintenance_state_store=stores.ontology_maintenance_state_store(settings),
                 runtime_identity_provider=runtime_identity,
+                alert_coverage_provider=lambda: stores.investment_alert_coverage_store(settings).summary(),
             ).status(
                 symbols=symbols,
                 limit=min(300, max(80, limit)),

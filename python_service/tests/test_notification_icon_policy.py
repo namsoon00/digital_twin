@@ -33,6 +33,7 @@ EXPECTED_BASE_ICONS = {
     "holdingTiming": "⚖️",
     "ontologyInferenceMissing": "⚠️",
     "ontologyReasoningQueue": "⏳",
+    "investmentAlertCoverage": "🧾",
     "operationalStorageCapacity": "💾",
     "monitorHeartbeat": "💓",
     "monitorConnection": "🔌",

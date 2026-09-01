@@ -143,6 +143,7 @@ REASONING_EXPLANATION_SKIP_TYPES = {
     ONTOLOGY_LAB_EXPERIMENT,
     OPERATOR_REASONING_REPORT,
     "ontologyReasoningQueue",
+    "investmentAlertCoverage",
 }
 
 CUSTOMER_FACING_MESSAGE_TYPES = {
@@ -210,6 +211,10 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     "ontologyReasoningQueue": {
         "template": DEFAULT_TEMPLATE,
         "description": "온톨로지 추론 요청 대기 지연 운영 알림",
+    },
+    "investmentAlertCoverage": {
+        "template": DEFAULT_TEMPLATE,
+        "description": "중요 사건에서 투자 알림 종료 상태까지의 커버리지 운영 알림",
     },
     "operationalStorageCapacity": {
         "template": DEFAULT_TEMPLATE,

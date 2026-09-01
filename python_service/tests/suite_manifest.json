@@ -6,6 +6,8 @@
     {"file": "test_investment_domain_architecture.py", "tier": "unit", "core": true},
     {"file": "test_investment_domain_boundaries.py", "tier": "unit", "core": true},
     {"file": "test_investment_product_readiness.py", "tier": "unit", "core": true},
+    {"file": "test_investment_alert_coverage.py", "tier": "unit", "core": true},
+    {"file": "test_investment_alert_coverage_service.py", "tier": "unit", "core": true},
     {"file": "test_investment_brain.py", "tier": "unit", "core": true},
     {"file": "test_decision_continuity.py", "tier": "unit", "core": true},
     {"file": "test_decision_audit_entries.py", "tier": "unit", "core": true},

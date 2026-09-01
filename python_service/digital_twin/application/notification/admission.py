@@ -312,6 +312,12 @@ class NotificationAdmissionPolicy:
                     or decision.gate_reason
                     or "같은 판단 상태가 이어져 AI 판단 저장 후 알림 발송을 억제합니다."
                 )
+            elif reason_code == "unchanged_graph_inference":
+                reason = str(
+                    decision.state_reason
+                    or decision.gate_reason
+                    or "직전 판단의 후속 조건 전이를 확인한 뒤 AI 재판단 여부를 결정합니다."
+                )
             else:
                 reason = str(
                     decision.similarity_reason
@@ -354,7 +360,11 @@ class NotificationAdmissionPolicy:
         context = dict(job.context or {})
         return bool(
             str(job.message_type or "") == INVESTMENT_INSIGHT
-            and str(suppression_reason or "") in {"state_cooldown", "similar_repeat"}
+            and str(suppression_reason or "") in {
+                "state_cooldown",
+                "similar_repeat",
+                "unchanged_graph_inference",
+            }
             and str(context.get("investmentSubjectDecisionCaseId") or "").strip()
             and not context.get("notificationAiValidatedResponse")
             and context.get("requiresAiJudgement") is not False

@@ -471,6 +471,59 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("suppressed-terminal-subject", outcome["status"])
         self.assertEqual(job.job_id, queue.suppressed[0][0])
 
+    def test_unchanged_graph_without_follow_up_transition_stops_before_ai_queueing(self):
+        class Queue:
+            suppressed = []
+
+            def suppress_source_notification(self, job_id, reason):
+                self.suppressed.append((job_id, reason))
+                return True
+
+            def enqueue(self, *_args):
+                raise AssertionError("unchanged graph without decision value must not enter AI")
+
+        class Orchestrator:
+            suppression_context = {}
+
+            def capture_ai_context(self, _case_id, context):
+                return {
+                    **dict(context),
+                    "investmentSubjectDecisionCaseId": "subject:unchanged",
+                    "investmentSubjectDecisionCase": {
+                        "subjectCaseId": "subject:unchanged",
+                        "stage": "AI_CONTEXT_CAPTURED",
+                    },
+                }
+
+            def notification_suppressed(self, context, _reason):
+                self.suppression_context = dict(context)
+
+        queue = Queue()
+        orchestrator = Orchestrator()
+        job = self.create_job()
+        job.context.update({
+            "investmentSubjectDecisionCaseId": "subject:unchanged",
+            "preDecisionDeliveryGate": {
+                "reasonCode": "unchanged_graph_inference",
+            },
+            "decisionContinuityPacket": {
+                "contractVersion": "decision-continuity-packet-v2",
+                "accountId": "main",
+                "symbol": "005930",
+                "followUpConditions": [],
+            },
+            "decisionTransition": {"kind": "unchanged", "material": False},
+        })
+
+        outcome = NotificationAIRequestEnqueuer(
+            queue,
+            reasoning_orchestrator=orchestrator,
+        ).enqueue(job)
+
+        self.assertEqual("suppressed-no-decision-value", outcome["status"])
+        self.assertEqual(job.job_id, queue.suppressed[0][0])
+        self.assertEqual(job.job_id, orchestrator.suppression_context["notificationJobId"])
+
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()
         job.context["ontologyRelationContext"]["sourceAboxSnapshotId"] = "abox:timeout-fallback"

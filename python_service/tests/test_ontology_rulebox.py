@@ -112,7 +112,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         executable = default_graph_inference_rules()
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(106, sum(item.enabled for item in executable))
+        self.assertEqual(108, sum(item.enabled for item in executable))
         self.assertEqual(63, sum(
             item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
             and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"
@@ -191,6 +191,18 @@ class OntologyRuleBoxTests(unittest.TestCase):
             and item.allowed_actions == ["TRIM", "HOLD"]
             for item in profit_harvest.derivations
         ))
+        for rule_id, action_group in (
+            ("graph.notification.loss_policy_threshold.v1", "lossControl"),
+            ("graph.notification.profit_policy_threshold.v1", "profitTake"),
+        ):
+            threshold_rule = rules_by_id[rule_id]
+            self.assertEqual("notification-policy", threshold_rule.resolved_knowledge_basis.owner)
+            self.assertEqual("context-observation", threshold_rule.resolved_knowledge_basis.rule_kind)
+            self.assertEqual("reference-only", threshold_rule.resolved_knowledge_basis.decision_eligibility)
+            self.assertFalse(threshold_rule.resolved_knowledge_basis.requires_hypothesis)
+            self.assertTrue(all(not item.candidate_action for item in threshold_rule.derivations))
+            self.assertEqual(action_group, threshold_rule.derivations[0].action_group)
+            self.assertEqual("CREATES_NOTIFICATION_INTENT", threshold_rule.derivations[0].relation_type)
         rulebox_rules_from_payload(
             {"rules": rulebox_rules_to_payload(rules)},
             strict_governance=True,
@@ -273,6 +285,41 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
         portfolio = portfolio_summary([position], account_cash=200000)
         return build_portfolio_ontology([position], portfolio, portfolio_id="rulebox-test")
+
+    def test_moving_average_distances_are_derived_from_current_price(self):
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            quantity=1,
+            average_price=80,
+            current_price=90,
+            market_value=90,
+            profit_loss=10,
+            profit_loss_rate=12.5,
+            ma5=100,
+            ma20=90,
+            ma60=75,
+            ma5_distance=0,
+            ma20_distance=7,
+            ma60_distance=0,
+        )
+        portfolio = portfolio_summary([position], account_cash=10)
+        graph = build_portfolio_ontology([position], portfolio, portfolio_id="ma-distance-test")
+        stock = next(item for item in graph.entities if item.entity_id == "stock:MSTR")
+        levels = {
+            (item.properties or {}).get("levelType"): (item.properties or {}).get("distancePct")
+            for item in graph.entities
+            if item.kind == "key-level"
+        }
+
+        self.assertAlmostEqual(-10.0, stock.properties["ma5Distance"])
+        self.assertAlmostEqual(0.0, stock.properties["ma20Distance"])
+        self.assertAlmostEqual(20.0, stock.properties["ma60Distance"])
+        self.assertAlmostEqual(-10.0, levels["ma5"])
+        self.assertAlmostEqual(0.0, levels["ma20"])
+        self.assertAlmostEqual(20.0, levels["ma60"])
 
     def test_sk_hynix_security_lines_materialize_cross_listing_and_leveraged_flow(self):
         position = Position(
@@ -1304,6 +1351,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         )
 
         self.assertIn("graph.materiality.alert_candidate.v1", rule_ids)
+        self.assertIn("graph.notification.loss_policy_threshold.v1", rule_ids)
+        self.assertIn("graph.notification.profit_policy_threshold.v1", rule_ids)
         self.assertIn("graph.loss_smart_money.defense.v1", rule_ids)
         self.assertIn("graph.investor_flow.smart_money_accumulation.v1", rule_ids)
         self.assertIn("graph.investor_flow.retail_dip_buying_risk.v1", rule_ids)

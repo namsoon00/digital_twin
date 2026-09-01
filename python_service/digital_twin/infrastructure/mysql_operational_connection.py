@@ -1066,6 +1066,60 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_alert_coverage (
+        coverage_id VARCHAR(64) PRIMARY KEY,
+        deployment_id VARCHAR(191) NOT NULL,
+        source_event_id VARCHAR(191) NOT NULL,
+        root_source_event_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_event_name VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        material TINYINT NOT NULL DEFAULT 0,
+        material_reason VARCHAR(500) NOT NULL DEFAULT '',
+        coverage_state VARCHAR(32) NOT NULL DEFAULT 'RECEIVED',
+        terminal TINYINT NOT NULL DEFAULT 0,
+        reason_code VARCHAR(96) NOT NULL DEFAULT '',
+        reason VARCHAR(500) NOT NULL DEFAULT '',
+        survivor_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        reasoning_case_id VARCHAR(191) NOT NULL DEFAULT '',
+        subject_case_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        candidate_present TINYINT NOT NULL DEFAULT 0,
+        notification_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        notification_status VARCHAR(32) NOT NULL DEFAULT '',
+        event_at VARCHAR(40) NOT NULL DEFAULT '',
+        reasoning_completed_at VARCHAR(40) NOT NULL DEFAULT '',
+        terminal_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_investment_alert_coverage_scope (
+            deployment_id, source_event_id, account_id, symbol
+        ),
+        KEY idx_investment_alert_coverage_material_state (
+            deployment_id, material, coverage_state, event_at
+        ),
+        KEY idx_investment_alert_coverage_terminal_time (
+            deployment_id, terminal, event_at
+        ),
+        KEY idx_investment_alert_coverage_notification (notification_job_id),
+        KEY idx_investment_alert_coverage_subject (subject_case_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_alert_coverage_health (
+        deployment_id VARCHAR(191) PRIMARY KEY,
+        health_state VARCHAR(32) NOT NULL DEFAULT 'healthy',
+        incident_id VARCHAR(191) NOT NULL DEFAULT '',
+        consecutive_observations INT NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_investment_alert_coverage_health_state (health_state, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monitor_snapshot_history (
         account_id VARCHAR(191) NOT NULL,
         generated_at VARCHAR(40) NOT NULL DEFAULT '',

@@ -46,6 +46,7 @@ from .portfolio_ontology_market_concepts import (
     add_market_evidence_profile_concepts,
     add_metric_concepts,
     add_price_level_and_liquidity_concepts,
+    pct_distance_safe,
     symbol_key,
 )
 from .portfolio_ontology_coverage import add_coverage_gap_concepts
@@ -271,6 +272,17 @@ def build_portfolio_ontology(
         trading_snapshot = trading_value_snapshot(position.current_price, position.volume, position.trading_value)
         observation_profiles = position_observation_profiles(position, runtime_context)
         quote_observation = profile_for_domain(observation_profiles, "quote")
+        current_price = number(position.current_price)
+
+        def moving_average_distance(level: object, explicit: object) -> float:
+            average = number(level)
+            if current_price and average:
+                return pct_distance_safe(current_price, average)
+            return number(explicit)
+
+        ma5_distance = moving_average_distance(position.ma5, getattr(position, "ma5_distance", 0.0))
+        ma20_distance = moving_average_distance(position.ma20, position.ma20_distance)
+        ma60_distance = moving_average_distance(position.ma60, position.ma60_distance)
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
@@ -279,7 +291,7 @@ def build_portfolio_ontology(
             "source": source,
             "positionRole": source,
             "targetPositionRole": source,
-            "currentPrice": number(position.current_price),
+            "currentPrice": current_price,
             "averagePrice": number(position.average_price),
             "quantity": number(position.quantity),
             "sellableQuantity": number(position.sellable_quantity),
@@ -308,9 +320,9 @@ def build_portfolio_ontology(
             "ma5": number(position.ma5),
             "ma20": number(position.ma20),
             "ma60": number(position.ma60),
-            "ma5Distance": number(getattr(position, "ma5_distance", 0.0)),
-            "ma20Distance": number(position.ma20_distance),
-            "ma60Distance": number(position.ma60_distance),
+            "ma5Distance": ma5_distance,
+            "ma20Distance": ma20_distance,
+            "ma60Distance": ma60_distance,
             "ma20Slope": number(position.ma20_slope),
             "ma60Slope": number(position.ma60_slope),
             "volume": number(position.volume),

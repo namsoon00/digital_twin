@@ -1971,6 +1971,7 @@ class KISMarketSignalProvider:
             market_value = position.quantity * merged_price
 
         data_quality = combine_quality(position.data_quality, signal.get("dataQuality"))
+        ma5_distance = pct_distance(merged_price, position.ma5) if merged_price and position.ma5 else position.ma5_distance
         ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
         ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance
         quote_source = position.quote_source if preserve_fresh_quote else append_source(position.quote_source, str(signal.get("quoteSource") or ""))
@@ -2017,6 +2018,7 @@ class KISMarketSignalProvider:
             individual_sell_volume=merged_investor_value("individualSellVolume", individual_sell_volume, position.individual_sell_volume),
             individual_net_volume=merged_investor_value("individualNetVolume", individual_net_volume, position.individual_net_volume),
             individual_net_amount=merged_investor_value("individualNetAmount", individual_net_amount, position.individual_net_amount),
+            ma5_distance=ma5_distance,
             ma20_distance=ma20_distance,
             ma60_distance=ma60_distance,
         )

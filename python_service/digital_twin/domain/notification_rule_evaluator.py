@@ -416,8 +416,12 @@ def typedb_profit_loss_delivery_reason(
         return "TypeDB 손익 관리 조건이 새로 성립"
     if change_state == "worsening" and "lossControl" in relevant_groups:
         return "TypeDB 손실 관리 조건과 손익 악화가 함께 확인"
+    if change_state == "improving" and "lossControl" in relevant_groups:
+        return "TypeDB 손실 관리 조건에서 손익이 1%p 이상 개선"
     if change_state == "improving" and "profitTake" in relevant_groups:
         return "TypeDB 수익 보호 조건과 손익 개선이 함께 확인"
+    if change_state == "worsening" and "profitTake" in relevant_groups:
+        return "TypeDB 수익 보호 조건에서 손익이 1%p 이상 악화"
     return ""
 
 

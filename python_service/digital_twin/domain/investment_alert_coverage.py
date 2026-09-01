@@ -144,6 +144,26 @@ def derive_coverage_outcome(values: Mapping[str, object]) -> Dict[str, object]:
     if notification_status in {"pending", "processing", "awaiting_ai", "retry"}:
         return {"state": DELIVERY_PENDING, "terminal": False, "reasonCode": "notification-pending"}
 
+    subject_delivery_state = _text(facts.get("subjectDeliveryState")).lower()
+    if subject_delivery_state == "delivered":
+        return {"state": DELIVERED, "terminal": True, "reasonCode": "subject-delivery-delivered"}
+    if subject_delivery_state == "suppressed":
+        return {
+            "state": SUPPRESSED,
+            "terminal": True,
+            "reasonCode": "subject-delivery-suppressed",
+            "reason": _text(facts.get("subjectDeliveryReason")),
+        }
+    if subject_delivery_state == "superseded":
+        return {"state": SUPERSEDED, "terminal": True, "reasonCode": "subject-delivery-superseded"}
+    if subject_delivery_state == "failed":
+        return {
+            "state": FAILED,
+            "terminal": True,
+            "reasonCode": "subject-delivery-failed",
+            "reason": _text(facts.get("subjectDeliveryReason")),
+        }
+
     subject_stage = _text(facts.get("subjectStage")).upper()
     if subject_stage in SUBJECT_TERMINAL_STATES:
         state = SUBJECT_TERMINAL_STATES[subject_stage]
@@ -156,6 +176,17 @@ def derive_coverage_outcome(values: Mapping[str, object]) -> Dict[str, object]:
         if bool(facts.get("publicationDelivered")):
             return {"state": DELIVERED, "terminal": True, "reasonCode": "publication-delivered"}
         return {"state": DELIVERY_PENDING, "terminal": False, "reasonCode": "publication-pending-delivery"}
+
+    ai_request_status = _text(facts.get("aiRequestStatus")).lower()
+    if ai_request_status == "superseded":
+        return {"state": SUPERSEDED, "terminal": True, "reasonCode": "ai-request-superseded"}
+    if ai_request_status == "failed":
+        return {
+            "state": FAILED,
+            "terminal": True,
+            "reasonCode": "ai-request-failed",
+            "reason": _text(facts.get("aiRequestError")),
+        }
     if subject_stage in {
         "CREATED", "READY", "AI_PENDING", "AI_COMPLETED", "VALIDATED",
     }:

@@ -71,6 +71,34 @@ class SubjectStore:
 
 
 class SubjectDecisionRecoveryTests(unittest.TestCase):
+    def test_batch_context_suppression_resolves_and_closes_the_scoped_subject(self):
+        subject = StaleCase()
+        subject.subject_case_id = "subject:scoped"
+        subject.batch_case_id = "case:batch"
+        subject.account_id = "default"
+        subject.symbol = "000660"
+        subject.final_decision = object()
+
+        class ScopedSubjectStore(SubjectStore):
+            def for_batch(self, batch_case_id):
+                return [subject] if batch_case_id == subject.batch_case_id else []
+
+        store = ScopedSubjectStore(subject)
+        orchestrator = InvestmentReasoningOrchestrator(
+            Repository(),
+            subject_case_repository=store,
+        )
+
+        orchestrator.notification_suppressed({
+            "investmentReasoningCaseId": "case:batch",
+            "accountId": "default",
+            "rawSymbol": "000660",
+            "notificationJobId": "notification:1",
+        }, "unchanged graph")
+
+        self.assertEqual("suppressed", subject.delivery_state)
+        self.assertEqual("notification:1", subject.notification_job_id)
+
     def test_stale_ready_candidate_becomes_explicit_abstention(self):
         stale_case = StaleCase()
         store = SubjectStore(stale_case)

@@ -657,6 +657,7 @@ class NotificationQueueRunner:
         try:
             self.reasoning_orchestrator.notification_published({
                 **dict(job.context or {}),
+                "accountId": job.account_id,
                 "jobId": job.job_id,
                 "notificationJobId": job.job_id,
             })
@@ -670,6 +671,7 @@ class NotificationQueueRunner:
             self.reasoning_orchestrator.notification_suppressed(
                 {
                     **dict(job.context or {}),
+                    "accountId": job.account_id,
                     "jobId": job.job_id,
                     "notificationJobId": job.job_id,
                 },

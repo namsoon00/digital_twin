@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import time
 from typing import Dict, Iterable, Mapping, Optional
 
 from ...domain.investment_reasoning import (
@@ -199,7 +200,7 @@ class InvestmentReasoningOrchestrator:
         self.decision_episode_store = decision_episode_store
         self.hypothesis_proposal_request_store = hypothesis_proposal_request_store
         self.subject_cases = subject_case_repository or _EphemeralSubjectDecisionCaseStore()
-        self._stale_recovery_checked = False
+        self._stale_recovery_checked_at = None
 
     def _persist(self, reasoning_case: ReasoningCase) -> ReasoningCase:
         return self.repository.save(reasoning_case)
@@ -218,9 +219,13 @@ class InvestmentReasoningOrchestrator:
         return self.subject_cases.save(subject_case)
 
     def start(self, request, release_identity: Mapping[str, object] = None) -> ReasoningCase:
-        if not self._stale_recovery_checked:
+        monotonic_now = time.monotonic()
+        if (
+            self._stale_recovery_checked_at is None
+            or monotonic_now - self._stale_recovery_checked_at >= 300
+        ):
             self.recover_stale_subject_cases()
-            self._stale_recovery_checked = True
+            self._stale_recovery_checked_at = monotonic_now
         existing = self.repository.get_by_request(str(getattr(request, "request_id", "") or ""))
         if existing:
             return existing
@@ -488,6 +493,12 @@ class InvestmentReasoningOrchestrator:
         connection=None,
     ) -> Optional[SubjectDecisionCase]:
         subject_case_id = self.subject_case_id_from_context(context)
+        case_id = self.case_id_from_context(context)
+        if not subject_case_id and case_id:
+            try:
+                subject_case_id = self.required_subject(case_id, context).subject_case_id
+            except ValueError:
+                subject_case_id = ""
         if not subject_case_id:
             return None
         subject_case = self.required_subject(subject_case_id, context)
@@ -702,6 +713,12 @@ class InvestmentReasoningOrchestrator:
         disposition: str = CASE_SUPPRESSED,
     ) -> Optional[ReasoningCase]:
         subject_case_id = self.subject_case_id_from_context(context)
+        case_id = self.case_id_from_context(context)
+        if not subject_case_id and case_id:
+            try:
+                subject_case_id = self.required_subject(case_id, context).subject_case_id
+            except ValueError:
+                subject_case_id = ""
         if subject_case_id:
             subject_case = self.required_subject(subject_case_id, context)
             notification_job_id = str(
@@ -731,7 +748,6 @@ class InvestmentReasoningOrchestrator:
                 subject_case.mark_delivery("suppressed", reason)
                 self._persist_subject(subject_case)
             return subject_case
-        case_id = self.case_id_from_context(context)
         if not case_id:
             return None
         reasoning_case = self.required(case_id)

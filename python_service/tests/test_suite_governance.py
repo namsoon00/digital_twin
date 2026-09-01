@@ -43,7 +43,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # material replacement, terminal suppression, and publish races.
         # Outcome-contract storage width, terminal-source queue health, and
         # material-event-to-alert coverage are separate production boundaries.
-        self.assertLessEqual(total, 892)
+        # Durable post-retention outcomes and batch-to-subject suppression
+        # resolution protect two additional alert-coverage failure modes.
+        self.assertLessEqual(total, 895)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

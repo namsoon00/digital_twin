@@ -114,7 +114,8 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                     """
                     SELECT subject_case_id, batch_case_id, account_id, symbol,
                            inference_generation_id, candidate_fingerprint,
-                           stage, outcome_kind, notification_job_id, payload_json,
+                           stage, outcome_kind, ai_request_id,
+                           notification_job_id, payload_json,
                            created_at, updated_at, completed_at
                     FROM investment_subject_decision_cases
                     WHERE batch_case_id IN (""" + placeholders + ")",
@@ -128,6 +129,23 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                 ): dict(row)
                 for row in subject_rows or []
             }
+            ai_request_ids = {
+                _text(row.get("ai_request_id"))
+                for row in subject_rows or []
+                if _text(row.get("ai_request_id"))
+            }
+            ai_requests = {}
+            if ai_request_ids:
+                placeholders = ",".join(["%s"] * len(ai_request_ids))
+                request_rows = connection.execute(
+                    "SELECT request_id, status, last_error, updated_at "
+                    "FROM ai_inference_requests WHERE request_id IN (" + placeholders + ")",
+                    tuple(sorted(ai_request_ids)),
+                ).fetchall()
+                ai_requests = {
+                    _text(item.get("request_id")): dict(item)
+                    for item in request_rows or []
+                }
 
             notification_rows = connection.execute(
                 """
@@ -199,6 +217,10 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                         material = False
                         material_reason = "internal-reasoning-shard"
                     subject = subjects.get((reasoning_case_id, account_id, symbol)) or {}
+                    if not candidate:
+                        # A batch can include subjects unrelated to this source
+                        # row. Only its own candidate may determine delivery.
+                        subject = {}
                     subject_payload = _mapping(subject.get("payload_json"))
                     subject_case_id = _text(subject.get("subject_case_id"))
                     notification_job_id = _text(subject.get("notification_job_id"))
@@ -215,11 +237,16 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                         or notification_context.get("suppressionReason")
                     )
                     publication = _mapping(subject_payload.get("publication"))
+                    ai_request = ai_requests.get(_text(subject.get("ai_request_id"))) or {}
                     outcome = derive_coverage_outcome({
                         "notificationStatus": notification.get("status"),
                         "notificationError": notification.get("last_error"),
                         "suppressionReason": suppression_reason,
                         "subjectStage": subject.get("stage"),
+                        "subjectDeliveryState": subject_payload.get("deliveryState"),
+                        "subjectDeliveryReason": subject_payload.get("deliveryReason"),
+                        "aiRequestStatus": ai_request.get("status"),
+                        "aiRequestError": ai_request.get("last_error"),
                         "publicationDelivered": bool(publication.get("deliveredAt")),
                         "reasoningJobStatus": row.get("job_status"),
                         "reasoningResultStatus": result.get("status"),
@@ -255,6 +282,8 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                         "candidateEventKey": _text((candidate or {}).get("key")),
                         "subjectStage": _text(subject.get("stage")),
                         "subjectOutcomeKind": _text(subject.get("outcome_kind")),
+                        "subjectDeliveryState": _text(subject_payload.get("deliveryState")),
+                        "aiRequestStatus": _text(ai_request.get("status")),
                         "notificationStatus": _text(notification.get("status")),
                         "suppressionReason": suppression_reason,
                         "representationMode": _text(row.get("representation_mode")),

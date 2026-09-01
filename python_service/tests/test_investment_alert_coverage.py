@@ -65,6 +65,28 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
         })["state"])
         self.assertEqual(FAILED, derive_coverage_outcome({"reasoningJobStatus": "failed"})["state"])
 
+    def test_durable_subject_and_ai_states_survive_notification_job_retention(self):
+        suppressed = derive_coverage_outcome({
+            "subjectStage": "VALIDATED",
+            "subjectDeliveryState": "suppressed",
+            "subjectDeliveryReason": "final action unchanged",
+        })
+        superseded = derive_coverage_outcome({
+            "subjectStage": "AI_PENDING",
+            "aiRequestStatus": "superseded",
+        })
+
+        self.assertEqual(SUPPRESSED, suppressed["state"])
+        self.assertTrue(suppressed["terminal"])
+        self.assertEqual("SUPERSEDED", superseded["state"])
+        self.assertTrue(superseded["terminal"])
+
+        recovered_failure = derive_coverage_outcome({
+            "subjectStage": "ABSTAINED",
+            "aiRequestStatus": "failed",
+        })
+        self.assertEqual(REVIEW_ONLY, recovered_failure["state"])
+
     def test_health_detects_overdue_material_event_without_alert_quota(self):
         now = datetime(2026, 9, 1, 4, 0, tzinfo=timezone.utc)
         health = evaluate_alert_coverage_health([{

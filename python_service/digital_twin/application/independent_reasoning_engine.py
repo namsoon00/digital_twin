@@ -85,7 +85,25 @@ def projection_retry_policy(projection: object) -> Dict[str, object]:
         if isinstance(values.get("nativeRuleFailure"), Mapping)
         else {}
     )
-    retryable = bool(values.get("retryable") or failure.get("retryable"))
+    status = str(values.get("status") or "").strip().lower()
+    failure_status = str(failure.get("status") or "").strip().lower()
+    retryable_statuses = {
+        "target-scope-repair-required",
+        "blocked-pending-abox-activation",
+        "pending-abox-activation",
+        "inference-failed-rolled-back",
+        "inference-finalization-pending",
+        "incomplete-native-coverage",
+        "not-evaluated",
+    }
+    retryable = bool(
+        values.get("retryable")
+        or failure.get("retryable")
+        or status in retryable_statuses
+        or failure_status in retryable_statuses
+        or status.startswith("deferred-")
+        or failure_status.startswith("deferred-")
+    )
     retry_after = int(
         values.get("recommendedRetryAfterSeconds")
         or failure.get("recommendedRetryAfterSeconds")
@@ -104,6 +122,7 @@ def projection_retry_policy(projection: object) -> Dict[str, object]:
             values.get("reasonCode")
             or values.get("failureReasonCode")
             or failure.get("reasonCode")
+            or (status if retryable else "")
             or ""
         ),
         "failureStage": str(
@@ -1781,6 +1800,35 @@ class IndependentReasoningJobRunner:
         finally:
             self.release_graph_writer_ownership()
 
+    def run_watch_turn(self) -> Dict[str, object]:
+        """Run one live reasoning turn under a short-lived graph writer lock.
+
+        A watch process is intentionally long-lived, but TypeDB writes are not.
+        Keeping the OS lock for the complete watch lifetime prevents projection,
+        maintenance, and administrative recovery from ever taking a turn while
+        the worker is idle.  One turn owns both inference and its due background
+        projection so their ordering remains deterministic, then releases the
+        lock before the polling sleep.
+        """
+
+        ownership = self.acquire_graph_writer_ownership()
+        if not bool(ownership.get("acquired")):
+            deferred = self.graph_writer_deferred_result(ownership)
+            self._last_background_graph_turn = dict(deferred)
+            return deferred
+        try:
+            result = self._run_once()
+            if result.get("status") != "inactive-control-binding":
+                self.run_background_graph_turn()
+            return result
+        finally:
+            self.release_graph_writer_ownership()
+            if getattr(self, "_last_published_graph_writer_acquired", False):
+                self.publish_worker_heartbeat(
+                    self.engine.descriptor().deployment_id,
+                    force=True,
+                )
+
     def _run_once(self) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
@@ -2657,12 +2705,16 @@ class IndependentReasoningJobRunner:
             "deploymentId": str(deployment_id or ""),
         }
 
-    def publish_worker_heartbeat(self, deployment_id: str) -> bool:
+    def publish_worker_heartbeat(self, deployment_id: str, force: bool = False) -> bool:
         """Persist bounded consumer liveness without writing on every poll."""
 
         with self._worker_heartbeat_lock:
             now = time.monotonic()
-            if self._last_worker_heartbeat_at and now - self._last_worker_heartbeat_at < 30:
+            if (
+                not force
+                and self._last_worker_heartbeat_at
+                and now - self._last_worker_heartbeat_at < 30
+            ):
                 return True
             role = self.deployment_role if self.deployment_role not in {"", "configured"} else "configured"
             try:
@@ -2675,11 +2727,15 @@ class IndependentReasoningJobRunner:
                     "updatedAt": utc_now_iso(),
                 }
                 health["workerHeartbeats"] = heartbeats
-                health["graphWriter"] = self.graph_writer_status()
+                graph_writer = self.graph_writer_status()
+                health["graphWriter"] = graph_writer
                 self.registry.update_health(deployment_id, health)
             except Exception:  # noqa: BLE001 - queue leases remain the execution authority.
                 return False
             self._last_worker_heartbeat_at = now
+            self._last_published_graph_writer_acquired = bool(
+                graph_writer.get("acquired")
+            )
             return True
 
     def worker_liveness_loop(self, deployment_id: str, stop_event) -> None:
@@ -2886,10 +2942,6 @@ class IndependentReasoningJobRunner:
 
     def watch(self) -> None:
         interval = _int_setting(self.settings, "reasoningEngineV2IntervalSeconds", 5, 1, 300)
-        ownership = self.acquire_graph_writer_ownership()
-        if not bool(ownership.get("acquired")):
-            self._last_background_graph_turn = self.graph_writer_deferred_result(ownership)
-            return
         descriptor = self.engine.descriptor()
         liveness_stop = threading.Event()
         liveness_thread = threading.Thread(
@@ -2901,10 +2953,9 @@ class IndependentReasoningJobRunner:
         liveness_thread.start()
         try:
             while True:
-                result = self._run_once()
+                result = self.run_watch_turn()
                 if result.get("status") == "inactive-control-binding":
                     return
-                self.run_background_graph_turn()
                 if result.get("status") == "idle":
                     time.sleep(interval)
                 elif result.get("status") in {
@@ -2917,4 +2968,3 @@ class IndependentReasoningJobRunner:
         finally:
             liveness_stop.set()
             liveness_thread.join(timeout=2)
-            self.release_graph_writer_ownership()

@@ -13,6 +13,7 @@ from digital_twin.domain.ontology_change_impact import (
     scope_family,
     scope_delta,
     scope_symbol,
+    unpack_semantic_dependency_fingerprints,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from digital_twin.domain.ontology_scopes import (
@@ -396,13 +397,15 @@ class OntologyChangeImpactTests(unittest.TestCase):
             DEPENDENCY_FINGERPRINT_VERSION,
             second_market["semanticDependencyFingerprintVersion"],
         )
+        first_dependencies = unpack_semantic_dependency_fingerprints(first_market)
+        second_dependencies = unpack_semantic_dependency_fingerprints(second_market)
         self.assertEqual(
-            first_market["semanticDependencyFingerprints"]["kind:price-metric"],
-            second_market["semanticDependencyFingerprints"]["kind:price-metric"],
+            first_dependencies["kind:price-metric"],
+            second_dependencies["kind:price-metric"],
         )
         self.assertNotEqual(
-            first_market["semanticDependencyFingerprints"]["kind:price-metric:field:currentprice"],
-            second_market["semanticDependencyFingerprints"]["kind:price-metric:field:currentprice"],
+            first_dependencies["kind:price-metric:field:currentprice"],
+            second_dependencies["kind:price-metric:field:currentprice"],
         )
 
     def test_changed_relation_scope_uses_its_symbol_context_without_global_impact(self):

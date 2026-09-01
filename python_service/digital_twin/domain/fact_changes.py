@@ -62,7 +62,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v6-event-class-routing"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v7-domain-dependency-routing"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -156,6 +156,22 @@ FIELD_DEPENDENCY_ALIASES = {
     "institutionsellvolume": {"institutionsellvolume", "institutionnetvolume", "smartmoneynetvolume"},
     "institutionnetvolume": {"institutionnetvolume", "smartmoneynetvolume"},
     "volume": {"volume", "volumeratio"},
+}
+
+# External market facts are not properties of the target stock. Crypto market
+# transitions are stored as shared crypto-market signals plus per-instrument
+# crypto exposure facts, so their authoritative dependency boundary must name
+# those domain objects directly. Routing them through ``kind:stock:field:*``
+# makes a valid shared-market change impossible to match in the ABox.
+FIELD_DOMAIN_DEPENDENCY_KEYS = {
+    "cryptomarkets": {
+        "kind:crypto-market-signal",
+        "kind:crypto-exposure",
+    },
+    "cryptomarkettransition": {
+        "kind:crypto-market-signal",
+        "kind:crypto-exposure",
+    },
 }
 
 QUALITY_STATE_FIELDS = {
@@ -254,7 +270,11 @@ def dependency_keys_for_changed_fields(fields: Iterable[object]) -> List[str]:
     keys: Set[str] = set()
     for field in fields or []:
         token = _field_token(field)
-        if not token or token in {"marketobservationfollowup", "cryptomarkettransition"}:
+        if not token or token == "marketobservationfollowup":
+            continue
+        domain_keys = FIELD_DOMAIN_DEPENDENCY_KEYS.get(token)
+        if domain_keys:
+            keys.update(domain_keys)
             continue
         aliases = FIELD_DEPENDENCY_ALIASES.get(token, {token})
         keys.update("kind:stock:field:" + alias for alias in aliases if alias)

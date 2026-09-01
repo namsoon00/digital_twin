@@ -13,6 +13,7 @@ from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
 from digital_twin.domain.reasoning_source_facts import investment_calendar_source_fact
 from digital_twin.domain.reasoning_source_facts import reasoning_source_facts_runtime_eligibility
+from digital_twin.domain.ontology_change_impact import unpack_semantic_dependency_fingerprints
 from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.domain.ontology_projection_audit import compact_reasoning_request_context
 from digital_twin.domain.ontology_execution_trace import reasoning_stage_records
@@ -146,7 +147,8 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
         identity = apply_scoped_abox_identity(graph, account_id="default")
         event_scopes = [
             item for item in identity["scopePlan"]
-            if "kind:earnings-calendar-event" in (item.get("semanticDependencyFingerprints") or {})
+            if "kind:earnings-calendar-event"
+            in unpack_semantic_dependency_fingerprints(item)
         ]
         self.assertTrue(event_scopes)
 

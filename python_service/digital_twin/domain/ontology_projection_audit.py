@@ -439,6 +439,9 @@ def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -
             continue
         semantic_fingerprints = item.get("semanticFingerprints")
         semantic_dependency_fingerprints = item.get("semanticDependencyFingerprints")
+        semantic_dependency_fingerprints_packed = str(
+            item.get("semanticDependencyFingerprintsPacked") or ""
+        ).strip()
         dependencies = item.get("dependencyScopeIds")
         rows.append({
             "scopeId": scope_id,
@@ -457,11 +460,20 @@ def inference_reuse_scope_plan(scope_plan: Iterable[object], limit: int = 260) -
             "semanticDependencyFingerprintVersion": str(
                 item.get("semanticDependencyFingerprintVersion") or ""
             ).strip(),
-            "semanticDependencyFingerprints": {
-                str(key or "").strip(): str(value or "").strip()
-                for key, value in dict(semantic_dependency_fingerprints or {}).items()
-                if str(key or "").strip() and str(value or "").strip()
-            },
+            "semanticDependencyFingerprintsPacked": semantic_dependency_fingerprints_packed,
+            **(
+                {
+                    "semanticDependencyFingerprints": {
+                        str(key or "").strip(): str(value or "").strip()
+                        for key, value in dict(
+                            semantic_dependency_fingerprints or {}
+                        ).items()
+                        if str(key or "").strip() and str(value or "").strip()
+                    }
+                }
+                if isinstance(semantic_dependency_fingerprints, Mapping)
+                else {}
+            ),
             "generationId": str(item.get("generationId") or "").strip(),
             "fingerprint": str(item.get("fingerprint") or "").strip(),
             "baseFingerprint": str(item.get("baseFingerprint") or "").strip(),

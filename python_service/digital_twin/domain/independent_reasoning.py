@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
+from .fact_changes import FACT_CHANGE_CONTRACT_VERSION, fact_change_contract
 from .ontology_execution_units import revision_vector_for_change
 from .semantic_fact_plane import semantic_change_set
 
@@ -40,6 +41,47 @@ def _canonical_json(value: object) -> str:
 
 def _hash(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def canonical_fact_change_contract(payload: Mapping[str, object]) -> Dict[str, object]:
+    """Rebuild routing provenance from immutable source-event facts.
+
+    Dependency identities are a versioned domain contract, not an investment
+    conclusion. Recomputing them lets a replayed source event pick up a fixed
+    routing contract without mutating its facts, timestamps, or revisions.
+    """
+    values = dict(payload or {})
+    stored = values.get("factChangeContract")
+    stored_contract = dict(stored or {}) if isinstance(stored, Mapping) else {}
+    fact_types = list(_texts(values.get("factTypes") or []))
+    raw_by_symbol = values.get("factTypesBySymbol")
+    raw_fields = values.get("changedFieldsBySymbol")
+    by_symbol = dict(raw_by_symbol or {}) if isinstance(raw_by_symbol, Mapping) else {}
+    fields = dict(raw_fields or {}) if isinstance(raw_fields, Mapping) else {}
+    if not fact_types and not by_symbol:
+        return stored_contract
+    changed_tokens = {
+        "".join(character for character in str(field or "").lower() if character.isalnum())
+        for changed in fields.values()
+        for field in (changed or [])
+    }
+    stored_dependency_keys = set(_texts(stored_contract.get("dependencyKeys") or []))
+    requires_domain_routing_upgrade = bool(
+        {"externalcryptomarkets", "cryptomarkettransition"} & changed_tokens
+        or "kind:stock:field:cryptomarkets" in stored_dependency_keys
+    )
+    if (
+        stored_contract
+        and str(stored_contract.get("version") or "") == FACT_CHANGE_CONTRACT_VERSION
+        and not requires_domain_routing_upgrade
+    ):
+        return stored_contract
+    if stored_contract and not requires_domain_routing_upgrade:
+        # Older providers may carry an explicit authoritative contract for a
+        # transport name that the current generic classifier does not know.
+        # Preserve it unless a declared migration applies.
+        return stored_contract
+    return fact_change_contract(fact_types, by_symbol, fields)
 
 
 def _event(value: object) -> DomainEvent:
@@ -252,14 +294,14 @@ def merge_reasoning_events(events: Iterable[object]) -> DomainEvent:
         if values:
             payload[key] = values
 
-    contracts = [
-        dict((event.payload or {}).get("factChangeContract") or {})
-        for event in ordered
-        if isinstance((event.payload or {}).get("factChangeContract"), Mapping)
-    ]
+    contracts = []
+    for event in ordered:
+        contract = canonical_fact_change_contract(event.payload or {})
+        if contract:
+            contracts.append(contract)
     if contracts:
         merged_contract = deepcopy(contracts[-1])
-        merged_contract["version"] = str(merged_contract.get("version") or "fact-change-contract-v3")
+        merged_contract["version"] = FACT_CHANGE_CONTRACT_VERSION
         merged_contract["status"] = (
             "ready" if len(contracts) == len(ordered)
             and all(str(value.get("status") or "") == "ready" for value in contracts)
@@ -496,7 +538,7 @@ def independent_reasoning_request(
                 source_facts.append(dict(source_fact))
             if len(source_facts) >= 100:
                 break
-        contract = payload.get("factChangeContract")
+        contract = canonical_fact_change_contract(payload)
         if not isinstance(contract, Mapping):
             authoritative_fact_boundary = False
             authoritative_dependency_boundary = False

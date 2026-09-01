@@ -406,6 +406,19 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertNotIn("MSFT", event.payload["symbols"])
         self.assertEqual(["BTC", "MSTR"], event.payload["verifiedSourceSnapshot"]["cryptoTransitionTargetSymbols"])
         self.assertEqual("down", event.payload["verifiedSourceSnapshot"]["cryptoTransitions"][0]["direction"])
+        contract = event.payload["factChangeContract"]
+        self.assertEqual(
+            ["kind:crypto-exposure", "kind:crypto-market-signal"],
+            contract["dependencyKeysBySymbol"]["BTC"],
+        )
+        self.assertEqual(
+            ["kind:crypto-exposure", "kind:crypto-market-signal"],
+            contract["dependencyKeysBySymbol"]["MSTR"],
+        )
+        self.assertNotIn(
+            "kind:stock:field:cryptomarkets",
+            contract["dependencyKeys"],
+        )
 
     def test_missing_crypto_baseline_bootstraps_an_existing_threshold_move_once(self):
         previous = snapshot(external_signals={

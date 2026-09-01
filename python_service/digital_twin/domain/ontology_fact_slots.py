@@ -11,7 +11,11 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable, Mapping, Set
 
-from .ontology_change_impact import scope_family, scope_symbol
+from .ontology_change_impact import (
+    scope_family,
+    scope_symbol,
+    unpack_semantic_dependency_fingerprints,
+)
 
 
 FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v3-semantic-dependency-routing"
@@ -541,7 +545,7 @@ def select_fact_slot_scope_ids(
             else dependency_keys
         )
         scope_dependency_keys = _family_values(
-            dict(item.get("semanticDependencyFingerprints") or {}).keys()
+            unpack_semantic_dependency_fingerprints(item).keys()
         )
         return bool(
             applicable_dependency_keys
@@ -590,7 +594,7 @@ def select_fact_slot_scope_ids(
             else dependency_keys
         )
         scope_dependency_keys = _family_values(
-            dict(item.get("semanticDependencyFingerprints") or {}).keys()
+            unpack_semantic_dependency_fingerprints(item).keys()
         )
         dependency_match = bool(
             dependency_boundary_authoritative

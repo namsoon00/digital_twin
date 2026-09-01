@@ -72,6 +72,41 @@ def reasoning_queue_deadlock_retry(operation: str):
     return decorate
 
 
+def reasoning_failure_recovery_allowed(
+    reason_code: object,
+    result: Mapping[str, object],
+) -> bool:
+    """Allow bounded replay only for failures whose cause can recover in place."""
+
+    normalized_reason = "".join(
+        character
+        for character in str(reason_code or "").strip().lower()
+        if character.isalnum()
+    )
+    if normalized_reason in {
+        "typedbreaderror",
+        "typedbconnectionerror",
+        "typedbconnectionlost",
+        "typedbtransactionerror",
+        "reasoningworkerinterrupted",
+        "reasoningexecutionfailed",
+    }:
+        return True
+    if normalized_reason != "reasoningexecutionblocked":
+        return False
+    recoverable_statuses = {
+        "target-scope-repair-required",
+        "blocked-pending-abox-activation",
+        "pending-abox-activation",
+    }
+    projection_statuses = {
+        str(item.get("status") or "").strip().lower()
+        for item in dict((result or {}).get("projection_results") or {}).values()
+        if isinstance(item, Mapping)
+    }
+    return bool(projection_statuses.intersection(recoverable_statuses))
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -2427,14 +2462,6 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
     ) -> Dict[str, object]:
         """Create bounded recovery jobs while preserving immutable failure rows."""
 
-        allowed_reason_codes = {
-            "typedbreaderror",
-            "typedbconnectionerror",
-            "typedbconnectionlost",
-            "typedbtransactionerror",
-            "reasoningworkerinterrupted",
-            "reasoningexecutionfailed",
-        }
         clean_deployment_id = str(deployment_id or "").strip()
         if not clean_deployment_id:
             return {"status": "not-configured", "replayedCount": 0, "jobIds": []}
@@ -2469,10 +2496,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     or row.get("terminal_reason_code")
                     or "unclassified"
                 ).strip()
-                normalized_reason = "".join(
-                    character for character in reason_code.lower() if character.isalnum()
-                )
-                if normalized_reason not in allowed_reason_codes:
+                if not reasoning_failure_recovery_allowed(reason_code, result):
                     skipped_reason_codes[reason_code or "unclassified"] = int(
                         skipped_reason_codes.get(reason_code or "unclassified") or 0
                     ) + 1

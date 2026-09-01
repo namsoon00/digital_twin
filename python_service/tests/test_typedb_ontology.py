@@ -72,6 +72,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     TYPEDB_PROMOTED_TEXT_ATTRIBUTES,
     node_boxes,
     native_rule_evidence_read_index_from_rows,
+    native_rule_matched_evidence_storage_plan,
     native_rule_manifest_index_required,
     merge_native_rule_evidence_read_index,
     normalize_native_rule_evidence_read_index,
@@ -82,6 +83,7 @@ from digital_twin.infrastructure.typedb_ontology import (
     typedb_literal_for_attribute,
     typeql_has,
     typedb_repository_from_settings,
+    typedb_rule_schema_capability_contract,
     typedb_inferencebox_graph,
     typedb_native_any_group_check_query,
     typedb_native_indexed_evidence_match_query,
@@ -119,6 +121,109 @@ def governed_catalog_rule(rule_id: str) -> GraphInferenceRule:
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def _assert_matched_evidence_plan_narrows_relation_type_by_target_kind_and_field(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        common = {
+            "ontologyBox": "ABox",
+            "worldId": "portfolio:local:main",
+            "scopeId": "scope:market:005930",
+            "scopeType": "market",
+            "snapshotId": "abox-current:scope-market:a",
+            "aboxSnapshotId": "abox-current:scope-market:a",
+        }
+        graph = PortfolioOntology(
+            "exact-evidence-plan",
+            entities=[
+                OntologyEntity(
+                    "stock:005930",
+                    "삼성전자",
+                    "stock",
+                    {**common, "symbol": "005930", "tboxClass": "Stock"},
+                ),
+                OntologyEntity(
+                    "fact:005930:price",
+                    "현재가 변화",
+                    "fact-change",
+                    {**common, "symbol": "005930", "field": "currentPrice"},
+                ),
+                OntologyEntity(
+                    "fact:005930:volume",
+                    "거래량 변화",
+                    "fact-change",
+                    {**common, "symbol": "005930", "field": "volume"},
+                ),
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:005930",
+                    "fact:005930:price",
+                    "HAS_OBSERVATION",
+                    properties={**common, "symbol": "005930", "field": "currentPrice"},
+                ),
+                OntologyRelation(
+                    "stock:005930",
+                    "fact:005930:volume",
+                    "HAS_OBSERVATION",
+                    properties={**common, "symbol": "005930", "field": "volume"},
+                ),
+            ],
+        )
+        node_rows, relation_rows = repository.graph_persistence_rows(graph)
+        index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
+        rule = SimpleNamespace(
+            rule_id="graph.test.current-price.v1",
+            conditions=[SimpleNamespace(
+                condition_id="current-price-change",
+                kind="relation",
+                relation_type="HAS_OBSERVATION",
+                target_kind="fact-change",
+                target_property_filters={"field": "currentPrice"},
+                relation_property_filters={},
+                role="required",
+            )],
+        )
+        native_match = {
+            "matches": [{
+                "sourceId": "stock:005930",
+                "sourceLabel": "삼성전자",
+                "ruleId": rule.rule_id,
+            }],
+        }
+        verified = {
+            "status": "verified",
+            "source": "active-manifest",
+            "index": index,
+        }
+
+        plan = native_rule_matched_evidence_storage_plan(
+            native_match,
+            [rule],
+            verified,
+        )
+
+        self.assertEqual("ok", plan["status"])
+        self.assertEqual(2, plan["candidateRelationStorageCount"])
+        self.assertEqual(1, plan["selectedEvidenceStorageCount"])
+        self.assertEqual(50.0, plan["evidenceNarrowingPct"])
+        self.assertEqual(1, plan["exactSelectorConditionCount"])
+        self.assertEqual(0, plan["fallbackConditionCount"])
+        reused = repository.projection_graph_for_native_matches(
+            graph,
+            native_match,
+            [rule],
+            evidence_read_index=verified,
+        )
+        self.assertEqual("ok", reused["status"])
+        self.assertEqual(1, len(reused["graph"].relations))
+        self.assertEqual(
+            "fact:005930:price",
+            reused["graph"].relations[0].target,
+        )
+        self.assertEqual(
+            "matched-rule-exact-evidence",
+            reused["graph"].worldview["nativeEvidenceRead"]["relationReadScope"],
+        )
+
     def _assert_verified_projection_graph_replaces_duplicate_matched_evidence_read(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         snapshot_id = "abox-current:scope-market:a"
@@ -285,7 +390,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             sorted({symbol for item in slow_work for symbol in item["candidateSymbols"]}),
         )
 
-    def test_promoted_schema_migration_adds_only_missing_company_attributes(self):
+    def test_promoted_schema_migration_adds_only_rule_query_capabilities(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         queries = []
 
@@ -311,15 +416,80 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "define\n"
             "attribute ontology-current-price, value double;\n"
             "entity ontology-node @abstract, owns ontology-current-price;\n"
+            "entity ontology-context-observation-data @abstract, sub ontology-node;\n"
         )
         imported = ((object, object, object, object, SimpleNamespace(SCHEMA="schema")), None)
 
         repository.migrate_promoted_schema(FakeDriver(), imported, existing)
 
-        self.assertIn("attribute ontology-company-revenue, value double;", queries[0])
-        self.assertIn("owns ontology-company-revenue", queries[0])
+        self.assertIn("attribute ontology-model-decision-eligibility, value string;", queries[0])
+        self.assertRegex(
+            queries[0],
+            r"ontology-context-observation-data[^;]*owns ontology-model-decision-eligibility",
+        )
+        self.assertNotIn("ontology-company-revenue", queries[0])
         self.assertNotIn("attribute ontology-current-price, value double;", queries[0])
         self.assertEqual("commit", queries[1])
+        self._assert_matched_evidence_plan_narrows_relation_type_by_target_kind_and_field()
+        self._assert_slim_schema_keeps_only_lifecycle_capabilities_on_universal_root()
+        self._assert_rule_capability_contract_is_smaller_than_legacy_promoted_surface()
+        self._assert_semantic_node_insert_only_promotes_active_rule_fields()
+
+    def _assert_slim_schema_keeps_only_lifecycle_capabilities_on_universal_root(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        schema = repository.schema_query()
+        root = re.search(
+            r"entity ontology-node @abstract,(.*?)plays ontology-assertion:target;",
+            schema,
+            re.DOTALL,
+        ).group(1)
+
+        self.assertLessEqual(root.count("owns ontology-"), 24)
+        self.assertIn("owns ontology-storage-id @unique", root)
+        self.assertNotIn("owns ontology-current-price", root)
+        self.assertIn("entity ontology-context-observation-data @abstract, sub ontology-node", schema)
+        self.assertIn("owns ontology-model-decision-eligibility", schema)
+        self.assertRegex(
+            schema,
+            r"entity ontology-class-external-observation[^;]*owns ontology-group",
+        )
+
+    def _assert_rule_capability_contract_is_smaller_than_legacy_promoted_surface(self):
+        contract = typedb_rule_schema_capability_contract()
+        promoted = set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values()) | set(
+            TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values()
+        )
+
+        self.assertGreaterEqual(len(contract["ruleIds"]), 100)
+        self.assertLess(len(contract["directQueryAttributes"]), len(promoted) // 2)
+        self.assertIn("ontology-profit-loss-rate", contract["subjectAttributes"])
+        self.assertIn(
+            "ontology-model-decision-eligibility",
+            contract["contextAttributes"]["observation-data"],
+        )
+
+    def _assert_semantic_node_insert_only_promotes_active_rule_fields(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        query = repository.node_insert_query({
+            "id": "stock:005930",
+            "nodeType": "ontology-entity",
+            "kind": "stock",
+            "tboxClass": "Stock",
+            "symbol": "005930",
+            "profitLossRate": -9.4,
+            "ma5Distance": 1.2,
+            "currentPrice": 70000,
+            "propertiesJson": json.dumps({
+                "profitLossRate": -9.4,
+                "ma5Distance": 1.2,
+                "currentPrice": 70000,
+            }),
+        }, "2026-09-02T00:00:00Z")
+
+        self.assertIn("has ontology-profit-loss-rate -9.4", query)
+        self.assertIn("has ontology-ma5-distance 1.2", query)
+        self.assertNotIn("has ontology-current-price", query)
+        self.assertIn("currentPrice", query)
 
     def test_fresh_candidate_bootstraps_without_schema_inspection(self):
         repository = TypeDBOntologyGraphRepository(

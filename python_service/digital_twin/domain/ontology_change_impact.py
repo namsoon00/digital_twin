@@ -8,8 +8,11 @@ investment conclusion in Python.
 
 from __future__ import annotations
 
+import base64
 from collections import defaultdict
+import json
 import re
+import zlib
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from .fact_changes import scope_families_for_fact_types
@@ -22,8 +25,66 @@ from .fact_changes import scope_families_for_fact_types
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
 CHANGE_IMPACT_VERSION = "abox-change-impact-v15-model-input-routing"
-DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
+LEGACY_DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
+DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v4-packed"
 DYNAMIC_INFERENCE_PREFLIGHT_VERSION = "dynamic-inference-preflight-v1"
+
+
+def pack_semantic_dependency_fingerprints(
+    values: Mapping[str, object],
+) -> str:
+    """Pack one scope's exact dependency map without changing its meaning."""
+
+    normalized = {
+        _clean(key): _clean(fingerprint)
+        for key, fingerprint in dict(values or {}).items()
+        if _clean(key) and _clean(fingerprint)
+    }
+    if not normalized:
+        return ""
+    raw = json.dumps(
+        normalized,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(zlib.compress(raw, level=6)).decode("ascii")
+
+
+def unpack_semantic_dependency_fingerprints(
+    item: Mapping[str, object],
+) -> Dict[str, str]:
+    """Read current packed and legacy dependency-fingerprint contracts."""
+
+    if not isinstance(item, Mapping):
+        return {}
+    version = _clean(item.get("semanticDependencyFingerprintVersion"))
+    legacy = item.get("semanticDependencyFingerprints")
+    if isinstance(legacy, Mapping) and version in {
+        "",
+        LEGACY_DEPENDENCY_FINGERPRINT_VERSION,
+        DEPENDENCY_FINGERPRINT_VERSION,
+    }:
+        return {
+            _clean(key): _clean(fingerprint)
+            for key, fingerprint in dict(legacy).items()
+            if _clean(key) and _clean(fingerprint)
+        }
+    packed = _clean(item.get("semanticDependencyFingerprintsPacked"))
+    if not packed or version != DEPENDENCY_FINGERPRINT_VERSION:
+        return {}
+    try:
+        decoded = zlib.decompress(base64.urlsafe_b64decode(packed.encode("ascii")))
+        values = json.loads(decoded.decode("utf-8"))
+    except (ValueError, TypeError, zlib.error, json.JSONDecodeError):
+        return {}
+    if not isinstance(values, Mapping):
+        return {}
+    return {
+        _clean(key): _clean(fingerprint)
+        for key, fingerprint in dict(values).items()
+        if _clean(key) and _clean(fingerprint)
+    }
 
 SYMBOL_SCOPE_FAMILIES = {
     "state",
@@ -700,18 +761,7 @@ def _semantic_fingerprints(item: Mapping[str, object]) -> Dict[str, str]:
 
 
 def _semantic_dependency_fingerprints(item: Mapping[str, object]) -> Dict[str, str]:
-    if _clean(item.get("semanticDependencyFingerprintVersion")) != DEPENDENCY_FINGERPRINT_VERSION:
-        return {}
-    raw = (
-        dict(item.get("semanticDependencyFingerprints") or {})
-        if isinstance(item, Mapping)
-        else {}
-    )
-    return {
-        _clean(key): _clean(fingerprint)
-        for key, fingerprint in raw.items()
-        if _clean(key) and _clean(fingerprint)
-    }
+    return unpack_semantic_dependency_fingerprints(item)
 
 
 def _semantic_scope_changes(
@@ -1918,6 +1968,12 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             or len(set(candidate_rule_ids) | set(deferred_rule_ids)) == enabled_rule_count
         )
     )
+    semantic_family_changes = list(
+        dict(delta.get("semanticChangedFamiliesByScope") or {}).items()
+    )[:bounded]
+    semantic_dependency_changes = list(
+        dict(delta.get("semanticChangedDependencyKeysByScope") or {}).items()
+    )[:bounded]
     return {
         "version": str(values.get("version") or CHANGE_IMPACT_VERSION),
         "globalImpact": bool(values.get("globalImpact")),
@@ -2084,14 +2140,20 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "directChangedScopeFamilies": list(delta.get("directChangedScopeFamilies") or [])[:bounded],
             "semanticChangedFamiliesByScope": {
                 str(scope_id or ""): list(families or [])[:bounded]
-                for scope_id, families in dict(delta.get("semanticChangedFamiliesByScope") or {}).items()
+                for scope_id, families in semantic_family_changes
                 if str(scope_id or "").strip()
             },
             "semanticChangedDependencyKeysByScope": {
                 str(scope_id or ""): list(keys or [])[:bounded]
-                for scope_id, keys in dict(delta.get("semanticChangedDependencyKeysByScope") or {}).items()
+                for scope_id, keys in semantic_dependency_changes
                 if str(scope_id or "").strip()
             },
+            "semanticChangedFamilyScopeCount": len(
+                dict(delta.get("semanticChangedFamiliesByScope") or {})
+            ),
+            "semanticChangedDependencyScopeCount": len(
+                dict(delta.get("semanticChangedDependencyKeysByScope") or {})
+            ),
             "directChangedDependencyKeys": list(delta.get("directChangedDependencyKeys") or [])[:bounded],
             "dependencyFingerprintCoverageComplete": bool(delta.get("dependencyFingerprintCoverageComplete")),
             "dependencyFingerprintMissingScopeIds": list(delta.get("dependencyFingerprintMissingScopeIds") or [])[:bounded],

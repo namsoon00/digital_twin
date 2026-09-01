@@ -52,6 +52,28 @@ Expected healthy metadata includes `reasoningMode=typedb-native-rule-materialize
 
 After a cold TypeDB restart, static TBox and RuleBox seeding must finish before workers start. Rule execution then uses direct TypeQL immediately; there is no function compilation or prewarm gate. An incomplete direct query preserves the prior verified ABox/InferenceBox and must never publish a partial investment judgement.
 
+### Incremental reasoning and recovery contract
+
+- A source change must route to the semantic fact families that actually exist in the ABox. For example, a BTC/ETH move routes to `kind:crypto-market-signal` and `kind:crypto-exposure`; it must not be represented as a synthetic stock field such as `kind:stock:field:cryptomarkets`.
+- The fact-change contract is versioned. Replayed durable events are upgraded to the current routing contract before affected scopes are selected, so an event written by an older worker cannot remain permanently blocked after the projection contract changes.
+- Dependency matching fails closed. A dependency key with no matching ABox scope is a repairable projection failure, not a valid empty inference result.
+- `projectionStatus=valid|repairable` failures may be retried after the contract or projection is repaired. Terminal semantic failures remain terminal and are not retried forever.
+- `TypeDB execution succeeded + zero matched rules` is a valid no-match result and creates no investment alert. A query, projection, or dependency-routing failure is an operational error and must never be reported as a no-match.
+- The reasoning worker acquires the graph-writer lease for one watch turn and releases it immediately afterward. An idle worker must not monopolize the writer lease or block schema maintenance, blue-green validation, or recovery replay.
+- Worker heartbeats publish both writer acquisition and writer release. The web status therefore reports the current lease state instead of the last active turn.
+- A blue-green candidate cleanup accepts only a `typedb-stage` specification whose data path ends in `-candidate`. It must refuse an active production specification even when called manually.
+
+The active Manifest stores exact semantic dependency fingerprints in a packed, versioned representation. The adapter expands them at the read boundary, keeps exact storage-ID indexes for rule evidence reads, and prunes unrelated graph payload before TypeQL evaluation. This reduces metadata transfer without weakening exact dependency matching or auditability.
+
+Operational diagnosis should distinguish these outcomes:
+
+| Outcome | Meaning | Delivery behavior |
+| --- | --- | --- |
+| projection/inference `status=ok`, matched rule count > 0 | TypeDB produced an actionable relation context | Continue through candidate, AI, cooldown, and novelty policy |
+| projection/inference `status=ok`, matched rule count = 0 | Current facts do not satisfy an affected rule | Complete successfully without an investment alert |
+| dependency key has no ABox scope | Producer/ontology contract mismatch | Mark repairable, replay after contract repair |
+| TypeQL/projection failure | Investment meaning is unavailable | Fail closed and emit operational diagnostics only |
+
 ## DDD Boundaries
 
 The Python service now follows a conservative DDD layout:

@@ -14,8 +14,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
-from functools import wraps
-from typing import Dict, Iterable, List, Set, Tuple
+from functools import lru_cache, wraps
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_current_state import (
@@ -38,13 +38,21 @@ from ..domain.model_signal_interpretation import (
 )
 from ..domain.ontology_semantics import (
     SEMANTIC_STORAGE_CONTRACT_VERSION,
+    class_for_kind,
     entity_semantic_type,
+    primary_tbox_class,
     relation_semantic_type,
     semantic_class_types,
     semantic_relation_types,
     semantic_storage_type_names,
     semantic_typeql_schema,
+    typedb_class_type,
+    typedb_context_fallback_type,
+    typedb_context_type,
+    typedb_relation_type,
 )
+from ..domain.ontology_schema_capabilities import rule_schema_capability_manifest
+from ..domain.ontology_tbox import CLASS_DEFS, tbox_class_def
 from ..domain.investment_ubiquitous_language import investment_language_registry
 from ..domain.ontology_inference_materializer import (
     evidence_relation_index,
@@ -482,7 +490,8 @@ def typedb_native_rule_planner_topology_for_execution(
     }
 
 
-NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION = "native-rule-evidence-read-index-v2"
+NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION = "native-rule-evidence-read-index-v3"
+NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION = "native-rule-evidence-read-index-v2"
 NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION = "native-rule-evidence-read-index-v1"
 NATIVE_RULE_EVIDENCE_READ_INDEX_BATCH_SIZE = 48
 # This is a TypeDB query-shape guard, not an investment threshold. Field-index
@@ -504,11 +513,15 @@ def native_rule_evidence_read_index_from_rows(
     retrieve the same evidence without a costly active-scope pointer join.
     """
     subjects_by_id: Dict[str, str] = {}
+    nodes_by_id: Dict[str, Dict[str, object]] = {}
     source_storage_ids_by_source_id: Dict[str, str] = {}
     source_ids_by_symbol: Dict[str, List[str]] = {}
     for row in node_rows or []:
         if str(row.get("ontologyBox") or "ABox") != "ABox":
             continue
+        node_id = str(row.get("id") or "").strip()
+        if node_id:
+            nodes_by_id[node_id] = row
         # BTC/ETH use the same native RuleBox execution path as stocks but
         # are materialized as crypto-asset sources. Do not make their direct
         # market rules fall back to an unbounded TypeDB topology scan.
@@ -534,25 +547,61 @@ def native_rule_evidence_read_index_from_rows(
         symbol: {}
         for symbol in source_ids_by_symbol
     }
+    relation_storage_ids_by_symbol_type_field: Dict[str, Dict[str, Dict[str, set]]] = {
+        symbol: {}
+        for symbol in source_ids_by_symbol
+    }
+    relation_storage_ids_by_symbol_type_target_kind: Dict[str, Dict[str, Dict[str, set]]] = {
+        symbol: {}
+        for symbol in source_ids_by_symbol
+    }
     for row in relation_rows or []:
         if str(row.get("ontologyBox") or "ABox") != "ABox":
             continue
         source_id = str(row.get("source") or "").strip()
         target_id = str(row.get("target") or "").strip()
+        source_symbol = subjects_by_id.get(source_id, "")
+        target_symbol = subjects_by_id.get(target_id, "")
         candidates = {
-            subjects_by_id.get(source_id, ""),
-            subjects_by_id.get(target_id, ""),
+            source_symbol,
+            target_symbol,
             str(row.get("symbol") or "").upper().strip(),
         }
         relation_storage_id = ontology_storage_id(row, relation_row_id(row), "relation")
         relation_type = str(row.get("type") or row.get("relationType") or "").upper().strip()
         for symbol in candidates:
             if symbol and symbol in relation_storage_ids_by_symbol:
+                evidence_node_id = target_id
+                if target_symbol == symbol and source_symbol != symbol:
+                    evidence_node_id = source_id
+                evidence_node = dict(nodes_by_id.get(evidence_node_id) or {})
+                evidence_properties = json_object(evidence_node.get("propertiesJson"))
+                relation_properties = json_object(row.get("propertiesJson"))
+                evidence_field = str(
+                    evidence_node.get("field")
+                    or evidence_properties.get("field")
+                    or row.get("field")
+                    or relation_properties.get("field")
+                    or ""
+                ).strip()
+                evidence_target_kind = str(
+                    evidence_node.get("kind")
+                    or evidence_properties.get("kind")
+                    or ""
+                ).strip()
                 relation_storage_ids_by_symbol[symbol].add(relation_storage_id)
                 if relation_type:
                     relation_storage_ids_by_symbol_and_type[symbol].setdefault(relation_type, set()).add(
                         relation_storage_id
                     )
+                    if evidence_field:
+                        relation_storage_ids_by_symbol_type_field[symbol].setdefault(
+                            relation_type, {}
+                        ).setdefault(evidence_field, set()).add(relation_storage_id)
+                    if evidence_target_kind:
+                        relation_storage_ids_by_symbol_type_target_kind[symbol].setdefault(
+                            relation_type, {}
+                        ).setdefault(evidence_target_kind, set()).add(relation_storage_id)
 
     payload = {
         "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
@@ -579,6 +628,30 @@ def native_rule_evidence_read_index_from_rows(
             }
             for symbol in sorted(source_ids_by_symbol)
         },
+        "relationStorageIdsBySymbolAndTypeAndField": {
+            symbol: {
+                relation_type: {
+                    field: sorted(storage_ids)
+                    for field, storage_ids in sorted(fields.items())
+                }
+                for relation_type, fields in sorted(
+                    relation_storage_ids_by_symbol_type_field.get(symbol, {}).items()
+                )
+            }
+            for symbol in sorted(source_ids_by_symbol)
+        },
+        "relationStorageIdsBySymbolAndTypeAndTargetKind": {
+            symbol: {
+                relation_type: {
+                    target_kind: sorted(storage_ids)
+                    for target_kind, storage_ids in sorted(target_kinds.items())
+                }
+                for relation_type, target_kinds in sorted(
+                    relation_storage_ids_by_symbol_type_target_kind.get(symbol, {}).items()
+                )
+            }
+            for symbol in sorted(source_ids_by_symbol)
+        },
     }
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return {
@@ -592,6 +665,8 @@ def native_rule_evidence_read_index_from_components(
     source_storage_ids_by_source_id: Dict[str, object],
     relation_storage_ids_by_symbol: Dict[str, Iterable[str]],
     relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, Iterable[str]]] = None,
+    relation_storage_ids_by_symbol_type_field: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = None,
+    relation_storage_ids_by_symbol_type_target_kind: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = None,
 ) -> Dict[str, object]:
     """Build the canonical persisted evidence index from verified components."""
     sources = {
@@ -639,6 +714,32 @@ def native_rule_evidence_read_index_from_components(
         }
         for symbol in sources
     }
+    def normalized_selector_index(values: Dict[str, object]) -> Dict[str, object]:
+        return {
+            symbol: {
+                str(relation_type or "").upper().strip(): {
+                    str(selector or "").strip(): sorted({
+                        str(storage_id or "").strip()
+                        for storage_id in storage_ids or []
+                        if str(storage_id or "").strip()
+                    })
+                    for selector, storage_ids in sorted(dict(selectors or {}).items())
+                    if str(selector or "").strip()
+                }
+                for relation_type, selectors in sorted(
+                    dict((values or {}).get(symbol) or {}).items()
+                )
+                if str(relation_type or "").strip()
+            }
+            for symbol in sources
+        }
+
+    field_relation_ids = normalized_selector_index(
+        relation_storage_ids_by_symbol_type_field or {}
+    )
+    target_kind_relation_ids = normalized_selector_index(
+        relation_storage_ids_by_symbol_type_target_kind or {}
+    )
     payload = {
         "version": NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
         "complete": True,
@@ -647,6 +748,8 @@ def native_rule_evidence_read_index_from_components(
         "sourceStorageIdsBySourceId": storage_ids,
         "relationStorageIdsBySymbol": relation_ids,
         "relationStorageIdsBySymbolAndType": typed_relation_ids,
+        "relationStorageIdsBySymbolAndTypeAndField": field_relation_ids,
+        "relationStorageIdsBySymbolAndTypeAndTargetKind": target_kind_relation_ids,
     }
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return {
@@ -720,6 +823,8 @@ def merge_native_rule_evidence_read_index(
     storage_ids_by_source_id: Dict[str, object] = {}
     relation_ids_by_symbol: Dict[str, Iterable[str]] = {}
     typed_relation_ids_by_symbol: Dict[str, Dict[str, Iterable[str]]] = {}
+    field_relation_ids_by_symbol: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = {}
+    target_kind_relation_ids_by_symbol: Dict[str, Dict[str, Dict[str, Iterable[str]]]] = {}
     for symbol, expected_ids in expected_sources.items():
         selected = incoming if symbol in replacements else active
         actual_ids = sorted({str(item or "").strip() for item in selected.get("sourceIdsBySymbol", {}).get(symbol, []) or [] if str(item or "").strip()})
@@ -749,11 +854,19 @@ def merge_native_rule_evidence_read_index(
         typed_relation_ids_by_symbol[symbol] = dict(
             (selected.get("relationStorageIdsBySymbolAndType") or {}).get(symbol) or {}
         )
+        field_relation_ids_by_symbol[symbol] = dict(
+            (selected.get("relationStorageIdsBySymbolAndTypeAndField") or {}).get(symbol) or {}
+        )
+        target_kind_relation_ids_by_symbol[symbol] = dict(
+            (selected.get("relationStorageIdsBySymbolAndTypeAndTargetKind") or {}).get(symbol) or {}
+        )
     index = native_rule_evidence_read_index_from_components(
         source_ids_by_symbol,
         storage_ids_by_source_id,
         relation_ids_by_symbol,
         typed_relation_ids_by_symbol,
+        field_relation_ids_by_symbol,
+        target_kind_relation_ids_by_symbol,
     )
     verified = normalize_native_rule_evidence_read_index(index, merged_topology_normalized)
     if str(verified.get("status") or "") != "ok":
@@ -786,6 +899,7 @@ def normalize_native_rule_evidence_read_index(
     index_version = str(raw.get("version") or "")
     if index_version not in {
         NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
         NATIVE_RULE_EVIDENCE_READ_INDEX_LEGACY_VERSION,
     }:
         return {"status": "invalid", "reason": "Native rule evidence read index version is unsupported."}
@@ -799,10 +913,42 @@ def normalize_native_rule_evidence_read_index(
         if isinstance(raw.get("relationStorageIdsBySymbolAndType"), dict)
         else {}
     )
+    raw_relation_ids_by_type_field = (
+        raw.get("relationStorageIdsBySymbolAndTypeAndField")
+        if isinstance(raw.get("relationStorageIdsBySymbolAndTypeAndField"), dict)
+        else {}
+    )
+    raw_relation_ids_by_type_target_kind = (
+        raw.get("relationStorageIdsBySymbolAndTypeAndTargetKind")
+        if isinstance(raw.get("relationStorageIdsBySymbolAndTypeAndTargetKind"), dict)
+        else {}
+    )
     source_ids_by_symbol: Dict[str, List[str]] = {}
     source_storage_ids_by_source_id: Dict[str, str] = {}
     relation_storage_ids_by_symbol: Dict[str, List[str]] = {}
     relation_storage_ids_by_symbol_and_type: Dict[str, Dict[str, List[str]]] = {}
+    relation_storage_ids_by_symbol_type_field: Dict[str, Dict[str, Dict[str, List[str]]]] = {}
+    relation_storage_ids_by_symbol_type_target_kind: Dict[str, Dict[str, Dict[str, List[str]]]] = {}
+
+    def normalized_selector_index(
+        raw_values: Dict[str, object],
+        symbol: str,
+    ) -> Dict[str, Dict[str, List[str]]]:
+        result: Dict[str, Dict[str, List[str]]] = {}
+        for raw_relation_type, raw_selectors in dict(raw_values.get(symbol) or {}).items():
+            relation_type = str(raw_relation_type or "").upper().strip()
+            selectors = {
+                str(selector or "").strip(): sorted({
+                    str(storage_id or "").strip()
+                    for storage_id in storage_ids or []
+                    if str(storage_id or "").strip()
+                })
+                for selector, storage_ids in dict(raw_selectors or {}).items()
+                if str(selector or "").strip()
+            }
+            if relation_type and selectors:
+                result[relation_type] = selectors
+        return result
     for raw_symbol, raw_ids in raw_sources.items():
         symbol = str(raw_symbol or "").upper().strip()
         ids = sorted({str(item or "").strip() for item in raw_ids or [] if str(item or "").strip()})
@@ -830,6 +976,14 @@ def normalize_native_rule_evidence_read_index(
             if relation_type and storage_ids:
                 typed_relation_ids[relation_type] = storage_ids
         relation_storage_ids_by_symbol_and_type[symbol] = typed_relation_ids
+        relation_storage_ids_by_symbol_type_field[symbol] = normalized_selector_index(
+            raw_relation_ids_by_type_field,
+            symbol,
+        )
+        relation_storage_ids_by_symbol_type_target_kind[symbol] = normalized_selector_index(
+            raw_relation_ids_by_type_target_kind,
+            symbol,
+        )
     payload = {
         "version": index_version,
         "complete": True,
@@ -847,9 +1001,21 @@ def normalize_native_rule_evidence_read_index(
             for symbol in sorted(source_ids_by_symbol)
         },
     }
-    if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION:
+    if index_version in {
+        NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+        NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
+    }:
         payload["relationStorageIdsBySymbolAndType"] = {
             symbol: relation_storage_ids_by_symbol_and_type[symbol]
+            for symbol in sorted(source_ids_by_symbol)
+        }
+    if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION:
+        payload["relationStorageIdsBySymbolAndTypeAndField"] = {
+            symbol: relation_storage_ids_by_symbol_type_field[symbol]
+            for symbol in sorted(source_ids_by_symbol)
+        }
+        payload["relationStorageIdsBySymbolAndTypeAndTargetKind"] = {
+            symbol: relation_storage_ids_by_symbol_type_target_kind[symbol]
             for symbol in sorted(source_ids_by_symbol)
         }
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -903,6 +1069,17 @@ def normalize_native_rule_evidence_read_index(
         },
         "relationStorageIdsBySymbolAndType": {
             symbol: dict(relation_storage_ids_by_symbol_and_type.get(symbol, {}))
+            for symbol in selected_symbols
+        } if index_version in {
+            NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION,
+            NATIVE_RULE_EVIDENCE_READ_INDEX_TYPED_VERSION,
+        } else {},
+        "relationStorageIdsBySymbolAndTypeAndField": {
+            symbol: dict(relation_storage_ids_by_symbol_type_field.get(symbol, {}))
+            for symbol in selected_symbols
+        } if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION else {},
+        "relationStorageIdsBySymbolAndTypeAndTargetKind": {
+            symbol: dict(relation_storage_ids_by_symbol_type_target_kind.get(symbol, {}))
             for symbol in selected_symbols
         } if index_version == NATIVE_RULE_EVIDENCE_READ_INDEX_VERSION else {},
     }
@@ -968,6 +1145,196 @@ def typedb_native_rule_evidence_read_allows_active_membership_recovery(
             and str(value.get("source") or "") == "typedb-active-abox-membership-recovery"
         )
     )
+
+
+def native_rule_matched_evidence_storage_plan(
+    native_match_result: Dict[str, object],
+    rules: Iterable[GraphInferenceRule] = None,
+    evidence_read_index: Dict[str, object] = None,
+    include_all_rule_relation_types: bool = False,
+) -> Dict[str, object]:
+    """Select exact ABox evidence rows for TypeDB-matched rules.
+
+    TypeDB has already decided whether each rule matches. This planner only
+    maps the matched rule's authored relation, target-kind, and field
+    contracts to immutable Manifest storage IDs. It cannot add a match or
+    change an investment action; it prevents explanation materialization from
+    rereading every relation of the same broad type for the stock.
+    """
+    evidence = dict(evidence_read_index or {}) if isinstance(evidence_read_index, dict) else {}
+    index = dict(evidence.get("index") or {}) if str(evidence.get("status") or "") == "verified" else {}
+    matches = [
+        dict(item)
+        for item in (native_match_result or {}).get("matches") or []
+        if isinstance(item, dict) and str(item.get("sourceId") or "").strip()
+    ]
+    rules_by_id = {
+        str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "").strip(): rule
+        for rule in rules or []
+        if str(getattr(rule, "rule_id", "") or (rule.get("rule_id") if isinstance(rule, dict) else "") or "").strip()
+    }
+    source_symbols_by_source_id = {
+        str(source_id or "").strip(): str(symbol or "").upper().strip()
+        for symbol, source_ids in dict(index.get("sourceIdsBySymbol") or {}).items()
+        for source_id in source_ids or []
+        if str(source_id or "").strip() and str(symbol or "").strip()
+    }
+    by_type = dict(index.get("relationStorageIdsBySymbolAndType") or {})
+    by_field = dict(index.get("relationStorageIdsBySymbolAndTypeAndField") or {})
+    by_target_kind = dict(
+        index.get("relationStorageIdsBySymbolAndTypeAndTargetKind") or {}
+    )
+
+    def equality_values(filters: Dict[str, object], key: str) -> List[str]:
+        expected = dict(filters or {}).get(key)
+        if isinstance(expected, dict):
+            operator = str(expected.get("operator") or "==").strip().lower()
+            if operator not in {"==", "in", "one-of", "one_of"}:
+                return []
+            expected = expected.get("value")
+        if isinstance(expected, (list, tuple, set)):
+            return sorted({str(item or "").strip() for item in expected if str(item or "").strip()})
+        value = str(expected or "").strip()
+        return [value] if value else []
+
+    selected_storage_ids: set = set()
+    candidate_storage_ids: set = set()
+    selected_relation_types: set = set()
+    exact_condition_count = 0
+    fallback_condition_count = 0
+    relation_condition_count = 0
+    fallback_conditions: List[str] = []
+    all_rule_ids = sorted(rules_by_id)
+    for match in matches:
+        source_id = str(match.get("sourceId") or "").strip()
+        symbol = source_symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
+        requested_rule_ids = all_rule_ids if include_all_rule_relation_types else [
+            str(match.get("ruleId") or "").strip()
+        ]
+        for rule_id in requested_rule_ids:
+            rule = rules_by_id.get(rule_id)
+            if not rule:
+                continue
+            conditions = (
+                list(getattr(rule, "conditions", []) or [])
+                if not isinstance(rule, dict)
+                else list(rule.get("conditions") or [])
+            )
+            for raw_condition in conditions:
+                condition = (
+                    raw_condition.to_dict()
+                    if hasattr(raw_condition, "to_dict")
+                    else dict(vars(raw_condition))
+                    if hasattr(raw_condition, "__dict__")
+                    else dict(raw_condition or {})
+                )
+                if str(condition.get("kind") or "") != "relation":
+                    continue
+                if normalized_condition_role(condition) == "not":
+                    continue
+                relation_type = str(
+                    condition.get("relation_type")
+                    or condition.get("relationType")
+                    or ""
+                ).upper().strip()
+                if not relation_type:
+                    continue
+                relation_condition_count += 1
+                selected_relation_types.add(relation_type)
+                base_ids = {
+                    str(storage_id or "").strip()
+                    for storage_id in dict(by_type.get(symbol) or {}).get(relation_type, []) or []
+                    if str(storage_id or "").strip()
+                }
+                candidate_storage_ids.update(base_ids)
+                condition_ids = set(base_ids)
+                selector_used = False
+                selector_missing = False
+                target_filters = dict(
+                    condition.get("target_property_filters")
+                    or condition.get("targetPropertyFilters")
+                    or {}
+                )
+                relation_filters = dict(
+                    condition.get("relation_property_filters")
+                    or condition.get("relationPropertyFilters")
+                    or {}
+                )
+                field_values = sorted(set(
+                    equality_values(target_filters, "field")
+                    + equality_values(relation_filters, "field")
+                ))
+                if field_values:
+                    field_ids = {
+                        str(storage_id or "").strip()
+                        for field in field_values
+                        for storage_id in dict(
+                            dict(by_field.get(symbol) or {}).get(relation_type) or {}
+                        ).get(field, []) or []
+                        if str(storage_id or "").strip()
+                    }
+                    if field_ids:
+                        condition_ids.intersection_update(field_ids)
+                        selector_used = True
+                    else:
+                        selector_missing = True
+                target_kind = str(
+                    condition.get("target_kind")
+                    or condition.get("targetKind")
+                    or ""
+                ).strip()
+                if target_kind:
+                    kind_ids = {
+                        str(storage_id or "").strip()
+                        for storage_id in dict(
+                            dict(by_target_kind.get(symbol) or {}).get(relation_type) or {}
+                        ).get(target_kind, []) or []
+                        if str(storage_id or "").strip()
+                    }
+                    if kind_ids:
+                        condition_ids.intersection_update(kind_ids)
+                        selector_used = True
+                    else:
+                        selector_missing = True
+                if selector_missing:
+                    # A legacy or partially repaired Manifest may not have
+                    # every selector index. Keep any selector that was proved
+                    # exact; otherwise fall back to the bounded relation-type
+                    # slice for this condition.
+                    if not selector_used:
+                        condition_ids = set(base_ids)
+                    fallback_condition_count += 1
+                    fallback_conditions.append(rule_id + ":" + str(condition.get("condition_id") or condition.get("conditionId") or relation_type))
+                elif selector_used:
+                    exact_condition_count += 1
+                else:
+                    fallback_condition_count += 1
+                selected_storage_ids.update(condition_ids)
+    candidate_count = len(candidate_storage_ids)
+    selected_count = len(selected_storage_ids)
+    return {
+        "status": "ok" if index else "not-available",
+        "source": "typedb-matched-rule-evidence-contract",
+        "relationStorageIds": sorted(selected_storage_ids),
+        "relationTypes": sorted(selected_relation_types),
+        "candidateRelationStorageCount": candidate_count,
+        "selectedEvidenceStorageCount": selected_count,
+        "evidenceNarrowingPct": round(
+            max(0.0, (1.0 - (selected_count / candidate_count)) * 100.0),
+            1,
+        ) if candidate_count else 0.0,
+        "relationConditionCount": relation_condition_count,
+        "exactSelectorConditionCount": exact_condition_count,
+        "fallbackConditionCount": fallback_condition_count,
+        "fallbackConditions": sorted(set(fallback_conditions))[:40],
+        "relationReadScope": (
+            "matched-rule-exact-evidence"
+            if exact_condition_count and not fallback_condition_count
+            else "matched-rule-exact-evidence-with-type-fallback"
+            if exact_condition_count
+            else "matched-rule-types"
+        ),
+    }
 
 
 def typedb_projection_preflight_graph_for_execution(
@@ -2239,6 +2606,205 @@ TYPEDB_NUMERIC_ATTRIBUTES = {
     "ontology-pe-ratio",
     "ontology-beta",
 } | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values())
+
+
+# Only identity and lifecycle attributes belong on the universal node root.
+# Investment facts queried by the active RuleBox are owned by narrow bounded-
+# context roots below.  This prevents every one of the hundreds of semantic
+# classes from inheriting every promoted display attribute at TypeDB startup.
+TYPEDB_COMMON_NODE_ATTRIBUTES = {
+    "ontology-id",
+    "ontology-storage-id",
+    "ontology-content-fingerprint",
+    "ontology-label",
+    "ontology-kind",
+    "ontology-box",
+    "ontology-symbol",
+    "ontology-rule-id",
+    "ontology-account-id",
+    "ontology-tenant-id",
+    "ontology-world-id",
+    "ontology-world-type",
+    "ontology-snapshot-id",
+    "ontology-scope-id",
+    "ontology-scope-type",
+    "ontology-manifest-id",
+    "ontology-tbox-class",
+    "ontology-semantic-type",
+    "ontology-updated-at",
+    "ontology-json",
+}
+
+
+@lru_cache(maxsize=1)
+def typedb_rule_schema_capability_contract() -> Dict[str, object]:
+    """Compile the physical TypeDB capability surface from the active rules."""
+    manifest = rule_schema_capability_manifest(default_graph_inference_rules())
+    contexts = sorted({item.bounded_context for item in CLASS_DEFS if item.bounded_context})
+    subject_attributes = {
+        typedb_subject_attribute(field)
+        for field in manifest.subject_fields
+        if typedb_subject_attribute(field)
+    }
+    context_attributes: Dict[str, Set[str]] = {
+        context: set(subject_attributes) - TYPEDB_COMMON_NODE_ATTRIBUTES
+        for context in contexts
+    }
+    for context, fields in manifest.target_fields_by_context.items():
+        target = context_attributes.setdefault(context, set(subject_attributes))
+        target.update(
+            typedb_target_attribute(field)
+            for field in fields
+            if typedb_target_attribute(field)
+        )
+    context_attributes = {
+        context: set(attributes) - TYPEDB_COMMON_NODE_ATTRIBUTES
+        for context, attributes in context_attributes.items()
+    }
+    all_rule_attributes = set(subject_attributes)
+    for attributes in context_attributes.values():
+        all_rule_attributes.update(attributes)
+    physical_classes: Set[str] = set()
+    physical_relations: Set[str] = set()
+    for rule in default_graph_inference_rules():
+        if getattr(rule, "enabled", True) is False:
+            continue
+        source_class = class_for_kind(getattr(rule, "source_kind", ""))
+        if source_class:
+            physical_classes.add(source_class)
+        for condition in getattr(rule, "conditions", []) or []:
+            relation_type = str(getattr(condition, "relation_type", "") or "").upper().strip()
+            if relation_type:
+                physical_relations.add(relation_type)
+            target_class = class_for_kind(getattr(condition, "target_kind", ""))
+            if target_class:
+                physical_classes.add(target_class)
+            tbox_filter = dict(getattr(condition, "target_property_filters", {}) or {}).get("tboxClass")
+            for value in tbox_filter if isinstance(tbox_filter, (list, tuple, set)) else [tbox_filter]:
+                if str(value or "").strip() in semantic_class_types():
+                    physical_classes.add(str(value).strip())
+        for derivation in getattr(rule, "derivations", []) or []:
+            relation_type = str(getattr(derivation, "relation_type", "") or "").upper().strip()
+            if relation_type:
+                physical_relations.add(relation_type)
+            tbox_class = str(getattr(derivation, "tbox_class", "") or "").strip()
+            if tbox_class in semantic_class_types():
+                physical_classes.add(tbox_class)
+
+    pending_classes = list(physical_classes)
+    while pending_classes:
+        definition = tbox_class_def(pending_classes.pop())
+        parent = str(definition.parent or "").strip() if definition else ""
+        if parent and parent in semantic_class_types() and parent not in physical_classes:
+            physical_classes.add(parent)
+            pending_classes.append(parent)
+    return {
+        **manifest.to_dict(),
+        "storageContractVersion": SEMANTIC_STORAGE_CONTRACT_VERSION,
+        "commonAttributes": sorted(TYPEDB_COMMON_NODE_ATTRIBUTES),
+        "subjectAttributes": sorted(subject_attributes),
+        "contextAttributes": {
+            context: sorted(attributes)
+            for context, attributes in sorted(context_attributes.items())
+        },
+        "directQueryAttributes": sorted(all_rule_attributes | TYPEDB_COMMON_NODE_ATTRIBUTES),
+        "physicalClassNames": sorted(physical_classes),
+        "physicalClassTypes": sorted(typedb_class_type(item) for item in physical_classes),
+        "physicalRelationNames": sorted(physical_relations),
+        "physicalRelationTypes": sorted(typedb_relation_type(item) for item in physical_relations),
+    }
+
+
+def typedb_node_allowed_attributes(properties: Dict[str, object], kind: object = "") -> Optional[Set[str]]:
+    """Return direct attributes for a semantic class; ``None`` means fallback."""
+    class_name = primary_tbox_class(properties) or ""
+    definition = tbox_class_def(class_name) if class_name else None
+    if definition is None:
+        # Generic compatibility rows are rare and do not have semantic
+        # descendants.  Their physical fallback types retain every declared
+        # attribute so old operational payloads remain writable.
+        return None
+    contract = typedb_rule_schema_capability_contract()
+    context_attributes = dict(contract.get("contextAttributes") or {})
+    return TYPEDB_COMMON_NODE_ATTRIBUTES | set(
+        context_attributes.get(definition.bounded_context) or []
+    )
+
+
+def typedb_entity_storage_type(
+    properties: Dict[str, object] = None,
+    kind: object = "",
+    fallback: str = "ontology-entity",
+) -> str:
+    class_name = primary_tbox_class(properties) or class_for_kind(kind)
+    definition = tbox_class_def(class_name) if class_name else None
+    if definition is None:
+        return str(fallback or "ontology-entity")
+    physical_classes = set(
+        typedb_rule_schema_capability_contract().get("physicalClassNames") or []
+    )
+    if class_name in physical_classes:
+        return typedb_class_type(class_name)
+    return typedb_context_fallback_type(definition.bounded_context)
+
+
+def typedb_relation_storage_type(
+    relation_type: object,
+    fallback: str = "ontology-assertion",
+) -> str:
+    normalized = str(relation_type or "").upper().strip()
+    physical_relations = set(
+        typedb_rule_schema_capability_contract().get("physicalRelationNames") or []
+    )
+    return typedb_relation_type(normalized) if normalized in physical_relations else fallback
+
+
+def slim_typeql_node_schema(schema: str) -> str:
+    """Replace the universal capability fan-out with bounded-context roots."""
+    pattern = re.compile(
+        r"entity ontology-node @abstract,\s*(?P<body>.*?)"
+        r"\s*plays ontology-assertion:target;\s*\n\s*"
+        r"entity ontology-entity, sub ontology-node;\s*\n"
+        r"entity ontology-evidence, sub ontology-node;\s*\n"
+        r"entity ontology-belief, sub ontology-node;\s*\n"
+        r"entity ontology-opinion, sub ontology-node;\s*\n"
+        r"entity ontology-reasoning-card, sub ontology-node;",
+        re.DOTALL,
+    )
+    match = pattern.search(str(schema or ""))
+    if match is None:
+        raise ValueError("The TypeDB ontology-node schema block is unavailable.")
+    all_owned = set(re.findall(r"owns\s+(ontology-[a-z0-9-]+)", match.group("body")))
+    common = sorted(all_owned & TYPEDB_COMMON_NODE_ATTRIBUTES)
+    fallback_only = sorted(all_owned - TYPEDB_COMMON_NODE_ATTRIBUTES)
+
+    def ownership(attributes: Iterable[str], unique_storage: bool = False) -> str:
+        rows = []
+        for attribute in attributes:
+            annotation = " @unique" if unique_storage and attribute == "ontology-storage-id" else ""
+            rows.append("    owns " + attribute + annotation)
+        return ",\n".join(rows)
+
+    root = (
+        "entity ontology-node @abstract,\n"
+        + ownership(common, unique_storage=True)
+        + ",\n    plays ontology-assertion:source,\n"
+        + "    plays ontology-assertion:target;"
+    )
+    fallback_ownership = ownership(fallback_only)
+    fallbacks = []
+    for node_type in (
+        "ontology-entity",
+        "ontology-evidence",
+        "ontology-belief",
+        "ontology-opinion",
+        "ontology-reasoning-card",
+    ):
+        clause = "entity " + node_type + ", sub ontology-node"
+        if fallback_ownership:
+            clause += ",\n" + fallback_ownership
+        fallbacks.append(clause + ";")
+    return schema[:match.start()] + root + "\n" + "\n".join(fallbacks) + schema[match.end():]
 
 
 class ScopedABoxManifestMixin:
@@ -3688,11 +4254,23 @@ class ScopedABoxManifestMixin:
                 "semanticDependencyFingerprintVersion": str(
                     item.get("semanticDependencyFingerprintVersion") or ""
                 ).strip(),
-                "semanticDependencyFingerprints": {
-                    str(key or "").strip(): str(fingerprint or "").strip()
-                    for key, fingerprint in dict(item.get("semanticDependencyFingerprints") or {}).items()
-                    if str(key or "").strip() and str(fingerprint or "").strip()
-                },
+                "semanticDependencyFingerprintsPacked": str(
+                    item.get("semanticDependencyFingerprintsPacked") or ""
+                ).strip(),
+                **(
+                    {
+                        "semanticDependencyFingerprints": {
+                            str(key or "").strip(): str(fingerprint or "").strip()
+                            for key, fingerprint in dict(
+                                item.get("semanticDependencyFingerprints") or {}
+                            ).items()
+                            if str(key or "").strip()
+                            and str(fingerprint or "").strip()
+                        }
+                    }
+                    if isinstance(item.get("semanticDependencyFingerprints"), dict)
+                    else {}
+                ),
                 "fingerprint": str(item.get("fingerprint") or ""),
                 "baseFingerprint": str(item.get("baseFingerprint") or ""),
                 "dependencyScopeIds": [
@@ -5104,7 +5682,7 @@ class ScopedABoxManifestMixin:
         node_queries = self.batched_node_insert_queries(
             node_rows_to_insert,
             utc_now(),
-            int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 100),
+            self.abox_node_batch_size(settings),
             self.write_query_max_bytes(settings),
         )
         relation_batch_size = self.abox_relation_batch_size(settings)
@@ -5142,17 +5720,27 @@ class ScopedABoxManifestMixin:
                 return
 
             def write_batch():
-                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox write batch"):
-                    with driver.transaction(
-                        self.database,
-                        TransactionType.WRITE,
-                        options=self.write_transaction_options(),
-                    ) as tx:
-                        for query in query_batch:
-                            query_started = time.monotonic()
-                            tx.query(query).resolve()
-                            query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
-                        tx.commit()
+                # TypeDB 3.12 can close one long-lived gRPC driver after a
+                # large world replay has opened hundreds of sequential write
+                # transactions. Keep each bounded commit on a fresh local
+                # driver; the outer driver remains available for the final
+                # scope verification and control-plane swap.
+                write_driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(write_driver)
+                    with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox write batch"):
+                        with write_driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            for query in query_batch:
+                                query_started = time.monotonic()
+                                tx.query(query).resolve()
+                                query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
+                            tx.commit()
+                finally:
+                    self.close_driver(write_driver)
 
             self.with_typedb_retries(write_batch)
 
@@ -5182,20 +5770,25 @@ class ScopedABoxManifestMixin:
                 return
 
             def write_given_transaction():
-                with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox given relation batch"):
-                    with driver.transaction(
-                        self.database,
-                        TransactionType.WRITE,
-                        options=self.write_transaction_options(),
-                    ) as tx:
-                        for plan in plans:
-                            query_started = time.monotonic()
-                            tx.query(
-                                str(plan.get("query") or ""),
-                                given_rows=list(plan.get("givenRows") or []),
-                            ).resolve()
-                            query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
-                        tx.commit()
+                write_driver = self.open_driver(imported)
+                try:
+                    self.ensure_database(write_driver)
+                    with typedb_operation_timeout(self.write_operation_timeout_seconds(), "TypeDB scoped ABox given relation batch"):
+                        with write_driver.transaction(
+                            self.database,
+                            TransactionType.WRITE,
+                            options=self.write_transaction_options(),
+                        ) as tx:
+                            for plan in plans:
+                                query_started = time.monotonic()
+                                tx.query(
+                                    str(plan.get("query") or ""),
+                                    given_rows=list(plan.get("givenRows") or []),
+                                ).resolve()
+                                query_durations_ms.append(round((time.monotonic() - query_started) * 1000, 1))
+                            tx.commit()
+                finally:
+                    self.close_driver(write_driver)
 
             self.with_typedb_retries(write_given_transaction)
 
@@ -9993,7 +10586,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         text = str(schema_text or "")
         if "ontology-node" not in text:
             return False
-        promoted = set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values()) | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values())
+        promoted = set(
+            typedb_rule_schema_capability_contract().get("directQueryAttributes") or []
+        )
         return any(
             attribute not in text or not re.search(r"\bowns\s+" + re.escape(attribute) + r"\b", text)
             for attribute in promoted
@@ -10004,24 +10599,33 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
 
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
         text = str(schema_text or "")
-        numeric = set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.values())
-        string = set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.values())
-        missing_types = sorted(attribute for attribute in numeric | string if attribute not in text)
-        missing_ownership = sorted(
-            attribute
-            for attribute in numeric | string
-            if not re.search(r"\bowns\s+" + re.escape(attribute) + r"\b", text)
-        )
+        numeric = set(TYPEDB_NUMERIC_ATTRIBUTES)
+        string = set(TYPEDB_STRING_ATTRIBUTES)
+        contract = typedb_rule_schema_capability_contract()
+        direct = set(contract.get("directQueryAttributes") or [])
+        missing_types = sorted(attribute for attribute in direct if attribute not in text)
         definitions = [
             "attribute " + attribute + ", value " + ("double" if attribute in numeric else "string") + ";"
             for attribute in missing_types
         ]
-        if missing_ownership:
-            definitions.append(
-                "ontology-node "
-                + ", ".join("owns " + attribute for attribute in missing_ownership)
-                + ";"
+        common_missing = sorted(
+            attribute for attribute in TYPEDB_COMMON_NODE_ATTRIBUTES
+            if attribute in direct
+            and not re.search(r"ontology-node[\s\S]*?\bowns\s+" + re.escape(attribute) + r"\b", text)
+        )
+        if common_missing:
+            definitions.append("ontology-node " + ", ".join("owns " + item for item in common_missing) + ";")
+        for context, attributes in sorted(dict(contract.get("contextAttributes") or {}).items()):
+            context_type = typedb_context_type(context)
+            missing = sorted(
+                attribute for attribute in attributes
+                if not re.search(
+                    re.escape(context_type) + r"[^;]*\bowns\s+" + re.escape(attribute) + r"\b",
+                    text,
+                )
             )
+            if missing and context_type in text:
+                definitions.append(context_type + " " + ", ".join("owns " + item for item in missing) + ";")
         if not definitions:
             return
         query = "define\n" + "\n".join(definitions)
@@ -10044,7 +10648,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             str(schema_text or ""),
             flags=re.MULTILINE,
         ))
-        return not semantic_storage_type_names().issubset(type_names)
+        contract = typedb_rule_schema_capability_contract()
+        desired = semantic_storage_type_names(
+            contract.get("physicalClassNames") or [],
+            contract.get("physicalRelationNames") or [],
+        )
+        return not desired.issubset(type_names)
 
     def migrate_ontology_semantic_schema(self, driver, imported, schema_text: str) -> None:
         _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
@@ -10053,7 +10662,11 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             str(schema_text or ""),
             flags=re.MULTILINE,
         ))
-        missing = semantic_storage_type_names() - existing
+        contract = typedb_rule_schema_capability_contract()
+        missing = semantic_storage_type_names(
+            contract.get("physicalClassNames") or [],
+            contract.get("physicalRelationNames") or [],
+        ) - existing
         definitions = []
         if "ontology-semantic-type" in missing:
             definitions.extend([
@@ -10062,7 +10675,12 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                 "ontology-assertion owns ontology-semantic-type;",
             ])
             missing.discard("ontology-semantic-type")
-        semantic_definitions = semantic_typeql_schema(missing)
+        semantic_definitions = semantic_typeql_schema(
+            missing,
+            context_attribute_ownership=contract.get("contextAttributes") or {},
+            physical_class_names=contract.get("physicalClassNames") or [],
+            physical_relation_names=contract.get("physicalRelationNames") or [],
+        )
         if semantic_definitions:
             definitions.append(semantic_definitions.replace("define\n", "", 1))
         if not definitions:
@@ -13029,6 +13647,18 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         # settings are capped at twenty-four for the same reason.
         return max(1, min(24, int(parsed)))
 
+    def abox_node_batch_size(self, settings: Dict[str, object] = None) -> int:
+        """Keep one native TypeQL insert plan below the transport idle edge."""
+
+        raw = dict(settings or runtime_settings()).get("typedbABoxNodeBatchSize")
+        parsed = number_or_none(raw)
+        if parsed is None:
+            parsed = 10
+        # Independent inserts in one TypeQL query still share one planner
+        # graph. Ten keeps large shared-world replays responsive while the
+        # transaction grouping above amortises commit overhead.
+        return max(1, min(10, int(parsed)))
+
     def abox_relation_batch_size(self, settings: Dict[str, object] = None) -> int:
         configured_settings = runtime_settings() if settings is None else settings
         raw = dict(configured_settings or {}).get("typedbABoxRelationBatchSize")
@@ -15486,7 +16116,14 @@ relation ontology-assertion,
                 ownership + "\n    plays ontology-assertion:source,",
                 1,
             )
-        return schema + "\n\n" + semantic_typeql_schema().replace("define\n", "", 1).strip()
+        schema = slim_typeql_node_schema(schema)
+        capability_contract = typedb_rule_schema_capability_contract()
+        semantic_schema = semantic_typeql_schema(
+            context_attribute_ownership=capability_contract.get("contextAttributes") or {},
+            physical_class_names=capability_contract.get("physicalClassNames") or [],
+            physical_relation_names=capability_contract.get("physicalRelationNames") or [],
+        )
+        return schema + "\n\n" + semantic_schema.replace("define\n", "", 1).strip()
 
     def delete_queries(self, boxes: Iterable[str]) -> List[str]:
         queries = []
@@ -15601,7 +16238,7 @@ relation ontology-assertion,
         updated_at = utc_now()
         node_rows, relation_rows = self.graph_persistence_rows(graph)
         settings = runtime_settings()
-        node_batch_size = int(number_or_none(settings.get("typedbABoxNodeBatchSize")) or 100)
+        node_batch_size = self.abox_node_batch_size(settings)
         relation_batch_size = self.abox_relation_batch_size(settings)
         max_query_bytes = self.write_query_max_bytes(settings)
         return [
@@ -15850,71 +16487,86 @@ relation ontology-assertion,
             "tboxClass": row.get("tboxClass"),
             "tboxClasses": row.get("tboxClasses") or [],
         }
-        node_type = entity_semantic_type(
+        node_type = typedb_entity_storage_type(
             semantic_properties,
             row.get("kind"),
             fallback=str(row.get("nodeType") or "ontology-entity"),
         )
+        allowed_attributes = typedb_node_allowed_attributes(
+            semantic_properties,
+            row.get("kind"),
+        )
+
+        def node_has(attribute: str, value: object, numeric: bool = False) -> str:
+            if allowed_attributes is not None and attribute not in allowed_attributes:
+                return ""
+            return typeql_has(attribute, value, numeric=numeric)
+
+        def node_has_bool(attribute: str, value: object) -> str:
+            if allowed_attributes is not None and attribute not in allowed_attributes:
+                return ""
+            return typeql_has_bool_string(attribute, value)
+
         node_id = str(row.get("id") or "")
         return (
             str(variable or "$n") + " isa " + node_type
             + ", has ontology-id " + typedb_string(node_id)
             + ", has ontology-storage-id " + typedb_string(ontology_storage_id(row, node_id, "node"))
-            + typeql_has(
+            + node_has(
                 "ontology-content-fingerprint",
                 row.get("contentFingerprint")
                 or ontology_row_content_fingerprint(row, "node"),
             )
-            + typeql_has("ontology-label", row.get("label"))
-            + typeql_has("ontology-kind", row.get("kind"))
-            + typeql_has("ontology-box", row.get("ontologyBox") or "ABox")
-            + typeql_has("ontology-symbol", row.get("symbol"))
-            + typeql_has("ontology-rule-id", row.get("ruleId"))
-            + typeql_has("ontology-account-id", row.get("accountId"))
-            + typeql_has("ontology-tenant-id", row.get("tenantId"))
-            + typeql_has("ontology-world-id", row.get("worldId"))
-            + typeql_has("ontology-world-type", row.get("worldType"))
-            + typeql_has("ontology-snapshot-id", row.get("snapshotId") or row.get("aboxSnapshotId"))
-            + typeql_has("ontology-scope-id", row.get("scopeId"))
-            + typeql_has("ontology-scope-type", row.get("scopeType"))
-            + typeql_has("ontology-manifest-id", row.get("manifestId"))
-            + typeql_has("ontology-tbox-class", row.get("tboxClass"))
-            + typeql_has("ontology-semantic-type", node_type)
-            + typeql_has("ontology-relation-type", row.get("relationTypeName"))
-            + typeql_has("ontology-updated-at", updated_at)
-            + typeql_has("ontology-json", row.get("propertiesJson"))
-            + typeql_has("ontology-source-value", row.get("sourceValue"))
-            + typeql_has("ontology-field", row.get("field"))
-            + typeql_has("ontology-level-type", row.get("levelType"))
-            + typeql_has("ontology-data-scope", row.get("dataScope"))
-            + typeql_has("ontology-domain-scope", row.get("domainScope"))
-            + typeql_has("ontology-relation-scope", row.get("relationScope"))
-            + typeql_has("ontology-group", row.get("group"))
-            + typeql_has("ontology-polarity", row.get("polarity"))
-            + typeql_has("ontology-evidence-role", row.get("evidenceRole"))
-            + typeql_has("ontology-review-level", row.get("reviewLevel"))
-            + typeql_has("ontology-data-state", row.get("dataState"))
-            + typeql_has("ontology-change-state", row.get("changeState"))
-            + typeql_has("ontology-conflict-state", row.get("conflictState"))
-            + typeql_has("ontology-validation-state", row.get("validationState"))
-            + typeql_has("ontology-event-type", row.get("eventType"))
-            + typeql_has_bool_string("ontology-materiality-passed", row.get("materialityPassed"))
-            + typeql_has("ontology-value-number", row.get("valueNumber"), numeric=True)
-            + typeql_has("ontology-profit-loss-rate", row.get("profitLossRate"), numeric=True)
-            + typeql_has_bool_string("ontology-allow-add-on-strength", row.get("allowAddOnStrength"))
-            + typeql_has_bool_string("ontology-trim-on-trend-break", row.get("trimOnTrendBreak"))
-            + typeql_has_bool_string("ontology-avoid-averaging-down", row.get("avoidAveragingDown"))
-            + typeql_has("ontology-impact-polarity", row.get("impactPolarity"))
-            + typeql_has_bool_string("ontology-needs-review", row.get("needsReview"))
-            + typeql_has("ontology-read-scope", row.get("readScope"))
-            + typeql_has("ontology-pe-ratio", row.get("peRatio"), numeric=True)
-            + typeql_has("ontology-beta", row.get("beta"), numeric=True)
+            + node_has("ontology-label", row.get("label"))
+            + node_has("ontology-kind", row.get("kind"))
+            + node_has("ontology-box", row.get("ontologyBox") or "ABox")
+            + node_has("ontology-symbol", row.get("symbol"))
+            + node_has("ontology-rule-id", row.get("ruleId"))
+            + node_has("ontology-account-id", row.get("accountId"))
+            + node_has("ontology-tenant-id", row.get("tenantId"))
+            + node_has("ontology-world-id", row.get("worldId"))
+            + node_has("ontology-world-type", row.get("worldType"))
+            + node_has("ontology-snapshot-id", row.get("snapshotId") or row.get("aboxSnapshotId"))
+            + node_has("ontology-scope-id", row.get("scopeId"))
+            + node_has("ontology-scope-type", row.get("scopeType"))
+            + node_has("ontology-manifest-id", row.get("manifestId"))
+            + node_has("ontology-tbox-class", row.get("tboxClass"))
+            + node_has("ontology-semantic-type", node_type)
+            + node_has("ontology-relation-type", row.get("relationTypeName"))
+            + node_has("ontology-updated-at", updated_at)
+            + node_has("ontology-json", row.get("propertiesJson"))
+            + node_has("ontology-source-value", row.get("sourceValue"))
+            + node_has("ontology-field", row.get("field"))
+            + node_has("ontology-level-type", row.get("levelType"))
+            + node_has("ontology-data-scope", row.get("dataScope"))
+            + node_has("ontology-domain-scope", row.get("domainScope"))
+            + node_has("ontology-relation-scope", row.get("relationScope"))
+            + node_has("ontology-group", row.get("group"))
+            + node_has("ontology-polarity", row.get("polarity"))
+            + node_has("ontology-evidence-role", row.get("evidenceRole"))
+            + node_has("ontology-review-level", row.get("reviewLevel"))
+            + node_has("ontology-data-state", row.get("dataState"))
+            + node_has("ontology-change-state", row.get("changeState"))
+            + node_has("ontology-conflict-state", row.get("conflictState"))
+            + node_has("ontology-validation-state", row.get("validationState"))
+            + node_has("ontology-event-type", row.get("eventType"))
+            + node_has_bool("ontology-materiality-passed", row.get("materialityPassed"))
+            + node_has("ontology-value-number", row.get("valueNumber"), numeric=True)
+            + node_has("ontology-profit-loss-rate", row.get("profitLossRate"), numeric=True)
+            + node_has_bool("ontology-allow-add-on-strength", row.get("allowAddOnStrength"))
+            + node_has_bool("ontology-trim-on-trend-break", row.get("trimOnTrendBreak"))
+            + node_has_bool("ontology-avoid-averaging-down", row.get("avoidAveragingDown"))
+            + node_has("ontology-impact-polarity", row.get("impactPolarity"))
+            + node_has_bool("ontology-needs-review", row.get("needsReview"))
+            + node_has("ontology-read-scope", row.get("readScope"))
+            + node_has("ontology-pe-ratio", row.get("peRatio"), numeric=True)
+            + node_has("ontology-beta", row.get("beta"), numeric=True)
             + "".join(
-                typeql_has(attribute, promoted_node_value(row, properties, field), numeric=True)
+                node_has(attribute, promoted_node_value(row, properties, field), numeric=True)
                 for field, attribute in TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.items()
             )
             + "".join(
-                typeql_has(attribute, promoted_node_text_value(row, properties, field))
+                node_has(attribute, promoted_node_text_value(row, properties, field))
                 for field, attribute in TYPEDB_PROMOTED_TEXT_ATTRIBUTES.items()
             )
         )
@@ -15970,7 +16622,7 @@ relation ontology-assertion,
         target_variable: str,
     ) -> str:
         relation_id = relation_row_id(row)
-        relation_type = relation_semantic_type(row.get("type"))
+        relation_type = typedb_relation_storage_type(row.get("type"))
         return (
             str(relation_variable or "$r")
             + " isa " + relation_type + ", links (source: "
@@ -16219,7 +16871,7 @@ relation ontology-assertion,
         grouped: Dict[tuple, List[tuple]] = {}
         for row in items:
             fields = self.given_relation_row_values(row)
-            relation_type = relation_semantic_type(row.get("type"))
+            relation_type = typedb_relation_storage_type(row.get("type"))
             signature = tuple((name, attribute, value_type) for name, attribute, value_type, _value in fields)
             grouped.setdefault((relation_type, signature), []).append((row, fields))
 
@@ -19248,7 +19900,7 @@ relation ontology-assertion,
                     for rule in hydration_rules
                     for condition in typedb_rule_condition_payloads(rule)
                     if str(condition.get("kind") or "") == "relation"
-                    and normalized_condition_role(condition) == "required"
+                    and normalized_condition_role(condition) != "not"
                     and str(condition.get("relation_type") or condition.get("relationType") or "").strip()
                 })
                 if indexed_relation_types:
@@ -20130,7 +20782,16 @@ relation ontology-assertion,
                 ),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                 "ruleContext": rule_context,
-                "evidenceFieldIndex": evidence_index_hydration,
+                "evidenceFieldIndex": {
+                    key: value
+                    for key, value in dict(evidence_index_hydration or {}).items()
+                    if key != "evidence"
+                },
+                # Internal hand-off only: the TypeDB evaluator may have added
+                # a legacy field index needed by exact evidence grounding.
+                # The lifecycle caller removes this before diagnostics or API
+                # payloads are persisted.
+                "_materializationEvidenceReadIndex": evidence_read_index,
             }
         except Exception as error:  # noqa: BLE001 - run_rulebox reports and can use compatibility fallback.
             return {
@@ -20404,6 +21065,12 @@ relation ontology-assertion,
                     "executedRules": [],
                     "skippedRules": [],
                 }
+            sample_materialization_evidence_index = dict(
+                native_result.pop(
+                    "_materializationEvidenceReadIndex",
+                    evidence_read_index,
+                ) or {}
+            )
             stage_timings["nativeRuleQueriesMs"] = int((time.perf_counter() - native_started) * 1000)
             native_status = str(native_result.get("status") or "error")
             sample_reason = str(native_result.get("reason") or "")[:220]
@@ -20525,7 +21192,9 @@ relation ontology-assertion,
                         native_result,
                         rules,
                         world_id=world_id,
-                        **({"evidence_read_index": evidence_read_index} if scoped_active_abox else {}),
+                        **({
+                            "evidence_read_index": sample_materialization_evidence_index,
+                        } if scoped_active_abox else {}),
                     )
                     stage_timings["matchedGraphReadMs"] = int((time.perf_counter() - graph_started) * 1000)
                     graph.worldview.update({
@@ -21677,6 +22346,12 @@ relation ontology-assertion,
             native_rule_timing = native_rule_timing_profile(native_match_result)
             native_rule_timing["wallClockMs"] = native_stage_timings["nativeRuleQueriesMs"]
             evidence_field_index = dict(native_match_result.get("evidenceFieldIndex") or {})
+            materialization_evidence_read_index = dict(
+                native_match_result.pop(
+                    "_materializationEvidenceReadIndex",
+                    evidence_read_index,
+                ) or {}
+            )
             native_execution_plan = dict(native_match_result.get("executionPlan") or {})
             model_signal_bridge_execution = dict(
                 native_match_result.get("modelSignalBridgeExecution") or {}
@@ -21824,7 +22499,7 @@ relation ontology-assertion,
                 scoped_active_abox
                 and native_matches
                 and not typedb_native_rule_evidence_read_allows_active_membership_recovery(
-                    evidence_read_index
+                    materialization_evidence_read_index
                 )
             ):
                 return {
@@ -21855,7 +22530,7 @@ relation ontology-assertion,
                     **runtime_rulebox_metadata,
                 }
             graph_load_kwargs = (
-                {"evidence_read_index": evidence_read_index}
+                {"evidence_read_index": materialization_evidence_read_index}
                 if scoped_active_abox
                 else {}
             )
@@ -21878,7 +22553,7 @@ relation ontology-assertion,
                         preflight_graph,
                         native_match_result,
                         execution_rules,
-                        evidence_read_index=evidence_read_index,
+                        evidence_read_index=materialization_evidence_read_index,
                     )
                     if str(matched_graph_reuse.get("status") or "") == "ok":
                         graph = matched_graph_reuse.get("graph")
@@ -21950,6 +22625,18 @@ relation ontology-assertion,
                 "nativeEvidenceReadMode": str(native_evidence_read.get("mode") or ""),
                 "nativeEvidenceReadLoadedSourceCount": int(number_or_none(native_evidence_read.get("loadedSourceCount")) or 0),
                 "nativeEvidenceReadLoadedRelationCount": int(number_or_none(native_evidence_read.get("loadedRelationCount")) or 0),
+                "nativeEvidenceReadCandidateRelationCount": int(
+                    number_or_none(native_evidence_read.get("candidateRelationStorageCount")) or 0
+                ),
+                "nativeEvidenceReadSelectedRelationCount": int(
+                    number_or_none(native_evidence_read.get("selectedEvidenceStorageCount")) or 0
+                ),
+                "nativeEvidenceReadNarrowingPct": float(
+                    number_or_none(native_evidence_read.get("evidenceNarrowingPct")) or 0.0
+                ),
+                "nativeEvidenceReadFallbackConditionCount": int(
+                    number_or_none(native_evidence_read.get("evidenceFallbackConditionCount")) or 0
+                ),
                 "nativeEvidenceReadReason": str(native_evidence_read.get("reason") or "")[:220],
             })
             if native_matches and str(native_evidence_read.get("status") or "") != "ok":
@@ -23750,19 +24437,12 @@ relation ontology-assertion,
                 "status": "unavailable",
                 "reason": "No matched TypeDB source requires an evidence graph.",
             }
-        matched_rule_ids = {
-            str(item.get("ruleId") or "").strip()
-            for item in matches
-            if str(item.get("ruleId") or "").strip()
-        }
-        relation_types = sorted({
-            str(condition.relation_type or "").upper().strip()
-            for rule in rules or []
-            if str(rule.rule_id or "").strip() in matched_rule_ids
-            for condition in rule.conditions or []
-            if str(condition.kind or "") == "relation"
-            and str(condition.relation_type or "").strip()
-        })
+        evidence_plan = native_rule_matched_evidence_storage_plan(
+            native_match_result,
+            rules,
+            verified,
+        )
+        relation_types = list(evidence_plan.get("relationTypes") or [])
         source_storage_by_id = dict(
             index.get("sourceStorageIdsBySourceId") or {}
         )
@@ -23776,31 +24456,9 @@ relation ontology-assertion,
                 "status": "incomplete",
                 "reason": "The active Manifest is missing a matched source storage identity.",
             }
-        symbols_by_source_id = {
-            str(source_id or "").strip(): str(symbol or "").upper().strip()
-            for symbol, values in dict(index.get("sourceIdsBySymbol") or {}).items()
-            for source_id in values or []
-            if str(source_id or "").strip()
-        }
-        selected_symbols = {
-            symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
-            for source_id in source_ids
-            if symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
-        }
-        relation_storage_by_symbol_type = dict(
-            index.get("relationStorageIdsBySymbolAndType") or {}
-        )
         expected_relation_storage_ids = {
             str(storage_id or "").strip()
-            for symbol in selected_symbols
-            for relation_type in relation_types
-            for storage_id in list(
-                (relation_storage_by_symbol_type.get(symbol) or {}).get(
-                    relation_type,
-                    [],
-                )
-                or []
-            )
+            for storage_id in evidence_plan.get("relationStorageIds") or []
             if str(storage_id or "").strip()
         }
         node_rows, relation_rows = self.graph_persistence_rows(projection_graph)
@@ -23811,6 +24469,10 @@ relation ontology-assertion,
         relation_rows_by_storage_id = {
             ontology_storage_id(row, relation_row_id(row), "relation"): row
             for row in relation_rows
+        }
+        relation_storage_id_by_row_id = {
+            relation_row_id(row): storage_id
+            for storage_id, row in relation_rows_by_storage_id.items()
         }
         missing_source_storage_ids = sorted(
             expected_source_storage_ids - available_node_storage_ids
@@ -23828,6 +24490,8 @@ relation ontology-assertion,
                 "missingRelationStorageIds": missing_relation_storage_ids[:20],
             }
         graph = copy.deepcopy(projection_graph)
+        selected_relations: List[OntologyRelation] = []
+        selected_endpoint_ids = set(source_ids)
         for relation in graph.relations:
             properties = dict(relation.properties or {})
             row_id = relation_row_id({
@@ -23843,6 +24507,26 @@ relation ontology-assertion,
             })
             properties.setdefault("_relationId", row_id)
             relation.properties = properties
+            storage_id = str(relation_storage_id_by_row_id.get(row_id) or "")
+            if storage_id in expected_relation_storage_ids:
+                selected_relations.append(relation)
+                selected_endpoint_ids.update([relation.source, relation.target])
+        if len(selected_relations) != len(expected_relation_storage_ids):
+            return {
+                "status": "incomplete",
+                "reason": "The projection graph cannot materialize every selected exact evidence relation.",
+                "expectedRelationCount": len(expected_relation_storage_ids),
+                "availableRelationCount": len(selected_relations),
+            }
+        graph.relations = selected_relations
+        graph.entities = [
+            entity for entity in graph.entities
+            if str(entity.entity_id or "") in selected_endpoint_ids
+        ]
+        graph.evidence = []
+        graph.beliefs = []
+        graph.opinions = []
+        graph.reasoning_cards = []
         graph.worldview["nativeEvidenceRead"] = {
             "status": "ok",
             "mode": "projection-verified-in-memory",
@@ -23854,7 +24538,17 @@ relation ontology-assertion,
                 expected_relation_storage_ids
             ),
             "loadedRelationCount": len(expected_relation_storage_ids),
-            "relationReadScope": "matched-rule-types",
+            "relationReadScope": str(evidence_plan.get("relationReadScope") or "matched-rule-types"),
+            "candidateRelationStorageCount": int(
+                evidence_plan.get("candidateRelationStorageCount") or 0
+            ),
+            "selectedEvidenceStorageCount": int(
+                evidence_plan.get("selectedEvidenceStorageCount") or 0
+            ),
+            "evidenceNarrowingPct": float(evidence_plan.get("evidenceNarrowingPct") or 0.0),
+            "evidenceFallbackConditionCount": int(
+                evidence_plan.get("fallbackConditionCount") or 0
+            ),
         }
         return {
             "status": "ok",
@@ -23891,6 +24585,14 @@ relation ontology-assertion,
         evidence_index = dict(evidence_read_index or {}) if isinstance(evidence_read_index, dict) else {}
         indexed_read = str(evidence_index.get("status") or "") == "verified"
         index_payload = dict(evidence_index.get("index") or {}) if indexed_read else {}
+        evidence_plan = native_rule_matched_evidence_storage_plan(
+            native_match_result,
+            rules,
+            evidence_index,
+            include_all_rule_relation_types=include_all_rule_relation_types,
+        )
+        if indexed_read and str(evidence_plan.get("status") or "") == "ok":
+            evidence_relation_types = list(evidence_plan.get("relationTypes") or [])
         source_storage_ids_by_source_id = {
             str(source_id or "").strip(): str(storage_id or "").strip()
             for source_id, storage_id in dict(index_payload.get("sourceStorageIdsBySourceId") or {}).items()
@@ -23910,6 +24612,18 @@ relation ontology-assertion,
             "source": str(evidence_index.get("source") or "") if indexed_read else "legacy-query",
             "expectedSourceCount": len(source_ids),
             "indexedRelationStorageCount": 0,
+            "candidateRelationStorageCount": int(
+                evidence_plan.get("candidateRelationStorageCount") or 0
+            ),
+            "selectedEvidenceStorageCount": int(
+                evidence_plan.get("selectedEvidenceStorageCount") or 0
+            ),
+            "evidenceNarrowingPct": float(
+                evidence_plan.get("evidenceNarrowingPct") or 0.0
+            ),
+            "evidenceFallbackConditionCount": int(
+                evidence_plan.get("fallbackConditionCount") or 0
+            ),
             "reason": "",
         }
         if indexed_read:
@@ -23935,34 +24649,23 @@ relation ontology-assertion,
                         "status": "error",
                         "reason": "Manifest-indexed source evidence lookup failed: " + str(error)[:180],
                     })
-            selected_symbols = {
-                source_symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
-                for source_id in source_ids
-            }
             relation_storage_ids_by_symbol_type = dict(
                 index_payload.get("relationStorageIdsBySymbolAndType") or {}
             )
             has_type_index = bool(relation_storage_ids_by_symbol_type)
             if has_type_index and evidence_relation_types:
-                # The v2 manifest index records exactly which physical ABox
-                # rows belong to each relation type.  Read only the relation
-                # evidence the matched TypeDB rules can consume; the legacy
-                # index retains the broader per-symbol fallback below.
-                relation_storage_ids = sorted({
-                    str(storage_id or "").strip()
-                    for symbol in selected_symbols
-                    if str(symbol or "").strip()
-                    for relation_type in evidence_relation_types
-                    for storage_id in list(
-                        (relation_storage_ids_by_symbol_type.get(symbol) or {}).get(relation_type, []) or []
-                    )
-                    if str(storage_id or "").strip()
-                })
-                evidence_read["relationReadScope"] = "matched-rule-types"
+                relation_storage_ids = list(evidence_plan.get("relationStorageIds") or [])
+                evidence_read["relationReadScope"] = str(
+                    evidence_plan.get("relationReadScope") or "matched-rule-types"
+                )
             elif has_type_index:
                 relation_storage_ids = []
                 evidence_read["relationReadScope"] = "no-relation-conditions"
             else:
+                selected_symbols = {
+                    source_symbols_by_source_id.get(source_id) or symbol_from_subject(source_id)
+                    for source_id in source_ids
+                }
                 relation_storage_ids = sorted({
                     str(storage_id or "").strip()
                     for symbol in selected_symbols
@@ -25584,12 +26287,12 @@ def typedb_filter_operator(filter_key: str, expected: object, default_operator: 
 
 def typedb_entity_match_type(kind: object) -> str:
     """Use the stored semantic subtype to keep TypeDB read plans bounded."""
-    return entity_semantic_type({}, kind, fallback="ontology-node")
+    return typedb_entity_storage_type({}, kind, fallback="ontology-node")
 
 
 def typedb_relation_match_type(relation_type: object) -> str:
     """Use the stored semantic relation subtype when the TBox defines it."""
-    return relation_semantic_type(relation_type, fallback="ontology-assertion")
+    return typedb_relation_storage_type(relation_type, fallback="ontology-assertion")
 
 
 def typedb_condition_pattern(

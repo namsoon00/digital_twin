@@ -11,6 +11,7 @@ from digital_twin.application.independent_reasoning_engine import (
     ScopedTypeDBInferenceExecutor,
     V2ReasoningEngine,
     compact_projection_result,
+    projection_retry_policy,
     reasoning_job_runtime_eligibility,
 )
 from digital_twin.application.investment_reasoning.decision_synthesis import (
@@ -34,6 +35,7 @@ from digital_twin.domain.reasoning_engine_versions import (
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
 from digital_twin.infrastructure.mysql_versioned_runtime import (
     MySQLReasoningEngineJobStore,
+    reasoning_failure_recovery_allowed,
     reasoning_worker_process_owner,
 )
 from digital_twin.infrastructure.mysql_monitoring_stores import (
@@ -138,7 +140,41 @@ class FakeCycleRecorder:
 
 
 class IndependentReasoningEngineTests(unittest.TestCase):
+    def _assert_target_scope_repair_is_retryable_without_duplicate_flag(self):
+        policy = projection_retry_policy({
+            "status": "target-scope-repair-required",
+            "recommendedRetryAfterSeconds": 60,
+            "reason": "Target-scoped Manifest patch could not be applied safely.",
+        })
+
+        self.assertTrue(policy["retryable"])
+        self.assertEqual(60, policy["retryAfterSeconds"])
+        self.assertEqual("target-scope-repair-required", policy["reasonCode"])
+
+    def _assert_failure_recovery_allows_only_repairable_blocked_results(self):
+        self.assertTrue(reasoning_failure_recovery_allowed(
+            "reasoning-execution-blocked",
+            {
+                "projection_results": {
+                    "default": {"status": "target-scope-repair-required"},
+                },
+            },
+        ))
+        self.assertFalse(reasoning_failure_recovery_allowed(
+            "reasoning-execution-blocked",
+            {
+                "projection_results": {
+                    "default": {"status": "candidate-validation-failed"},
+                },
+            },
+        ))
+
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
+        self._assert_target_scope_repair_is_retryable_without_duplicate_flag()
+        self._assert_failure_recovery_allows_only_repairable_blocked_results()
+        self._assert_replayed_crypto_event_upgrades_stale_dependency_contract()
+        self._assert_live_watch_turn_releases_graph_writer_before_polling_sleep()
+        self._assert_live_watch_turn_refreshes_published_writer_state_after_release()
         monitor = SimpleNamespace(sent={})
         builder = V2GraphDecisionCandidateBuilder({}, monitor)
         request = independent_reasoning_request("ontology-v2-shadow", [source_event()])
@@ -456,6 +492,39 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(
             "market-revision:42",
             change["factSlices"][0]["revisionVector"]["revisions"]["market-observation"],
+        )
+
+    def _assert_replayed_crypto_event_upgrades_stale_dependency_contract(self):
+        event = source_event("BTC", ["MarketQuote"])
+        event.payload.update({
+            "factTypesBySymbol": {"BTC": ["MarketQuote"]},
+            "changedFieldsBySymbol": {
+                "BTC": ["external.cryptoMarkets", "cryptoMarketTransition"],
+            },
+            "factChangeContract": {
+                "version": "fact-change-contract-v6-event-class-routing",
+                "status": "ready",
+                "scopeFamilies": ["market"],
+                "scopeFamiliesBySymbol": {"BTC": ["market"]},
+                "dependencyKeys": ["kind:stock:field:cryptomarkets"],
+                "dependencyKeysBySymbol": {
+                    "BTC": ["kind:stock:field:cryptomarkets"],
+                },
+                "dependencyKeysComplete": True,
+                "dependencyKeysCompleteBySymbol": {"BTC": True},
+            },
+        })
+
+        request = independent_reasoning_request("ontology-v2", [event])
+
+        self.assertTrue(request.context["eventDependencyBoundaryAuthoritative"])
+        self.assertEqual(
+            ["kind:crypto-exposure", "kind:crypto-market-signal"],
+            request.context["requestedDependencyKeysBySymbol"]["BTC"],
+        )
+        self.assertNotIn(
+            "kind:stock:field:cryptomarkets",
+            request.context["requestedDependencyKeys"],
         )
 
     def test_incremental_current_state_executor_skips_shared_premise_critical_path(self):
@@ -2057,6 +2126,93 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(2, first["releasedCount"])
         self.assertEqual(first, second)
         self.assertEqual(1, len(queue.calls))
+
+    def _assert_live_watch_turn_releases_graph_writer_before_polling_sleep(self):
+        class Guard:
+            def __init__(self):
+                self.acquired = False
+                self.acquire_count = 0
+                self.release_count = 0
+
+            def acquire(self):
+                self.acquired = True
+                self.acquire_count += 1
+                return {"acquired": True, "status": "acquired"}
+
+            def release(self):
+                self.acquired = False
+                self.release_count += 1
+                return {"released": True, "status": "released"}
+
+        guard = Guard()
+        runner = IndependentReasoningJobRunner(
+            SimpleNamespace(),
+            SimpleNamespace(),
+            SimpleNamespace(),
+            graph_writer_guard=guard,
+        )
+        background_turns = []
+        runner._run_once = lambda: {"status": "idle", "processedCount": 0}
+        runner.run_background_graph_turn = (
+            lambda: background_turns.append("ran") or {"status": "not-due"}
+        )
+
+        result = runner.run_watch_turn()
+
+        self.assertEqual("idle", result["status"])
+        self.assertEqual(1, guard.acquire_count)
+        self.assertEqual(1, guard.release_count)
+        self.assertFalse(guard.acquired)
+        self.assertEqual(["ran"], background_turns)
+
+    def _assert_live_watch_turn_refreshes_published_writer_state_after_release(self):
+        class Guard:
+            def __init__(self):
+                self.acquired = False
+
+            def acquire(self):
+                self.acquired = True
+                return {"acquired": True, "status": "acquired"}
+
+            def release(self):
+                self.acquired = False
+                return {"released": True, "status": "released"}
+
+            def status(self):
+                return {"acquired": self.acquired, "depth": int(self.acquired)}
+
+        class Registry:
+            def __init__(self):
+                self.health = {"graphWriter": {"acquired": True}}
+
+            def get(self, deployment_id):
+                del deployment_id
+                return {"health": dict(self.health)}
+
+            def update_health(self, deployment_id, health):
+                del deployment_id
+                self.health = dict(health)
+
+        class Engine:
+            def descriptor(self):
+                return SimpleNamespace(deployment_id="ontology-v2")
+
+        guard = Guard()
+        registry = Registry()
+        runner = IndependentReasoningJobRunner(
+            SimpleNamespace(),
+            Engine(),
+            registry,
+            graph_writer_guard=guard,
+        )
+        runner._run_once = lambda: {"status": "idle", "processedCount": 0}
+        runner.run_background_graph_turn = lambda: {"status": "not-due"}
+        runner._last_published_graph_writer_acquired = True
+
+        runner.run_watch_turn()
+
+        self.assertFalse(registry.health["graphWriter"]["acquired"])
+        self.assertFalse(runner._last_published_graph_writer_acquired)
 
     def test_runner_applies_configured_stale_observation_age(self):
         class Queue:

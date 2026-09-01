@@ -21,9 +21,11 @@ from .ontology_change_impact import (
     family_for_entity,
     family_for_relation,
     macro_scope_id,
+    pack_semantic_dependency_fingerprints,
     scope_family,
     scope_symbol,
     symbol_scope_id,
+    unpack_semantic_dependency_fingerprints,
 )
 from .ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology
 from .ontology_fact_slots import select_fact_slot_scope_ids
@@ -1098,7 +1100,7 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
     graph: PortfolioOntology,
     scope_ids: Iterable[str],
     support_relations: Iterable[Mapping[str, object]] = (),
-) -> tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]:
+) -> tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, str]], Dict[str, str]]:
     """Build persistence and semantic scope hashes from one normalized pass.
 
     A scoped projection needs two views of the same ABox rows: the complete
@@ -1356,7 +1358,9 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
         for scope_id, groups in semantic_groups_by_scope.items()
     }
     semantic_dependency_fingerprints = {
-        scope_id: _fingerprint_semantic_groups(groups)
+        scope_id: pack_semantic_dependency_fingerprints(
+            _fingerprint_semantic_groups(groups)
+        )
         for scope_id, groups in dependency_groups_by_scope.items()
     }
     return payloads, semantic_fingerprints, semantic_dependency_fingerprints
@@ -1618,7 +1622,9 @@ def apply_scoped_abox_identity(
             "impactScopeFamilies": sorted(scope_impact_families.get(scope_id) or {scope_family(scope_id)}),
             "semanticFingerprints": dict(sorted(semantic_fingerprints.get(scope_id, {}).items())),
             "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
-            "semanticDependencyFingerprints": dict(sorted(semantic_dependency_fingerprints.get(scope_id, {}).items())),
+            "semanticDependencyFingerprintsPacked": str(
+                semantic_dependency_fingerprints.get(scope_id) or ""
+            ),
             "fingerprint": fingerprint,
             "baseFingerprint": base_fingerprints[scope_id],
             "dependencyScopeIds": dependencies,
@@ -2080,8 +2086,12 @@ def select_target_scoped_manifest_patch(
         incoming_item: Mapping[str, object],
         key: str,
     ) -> List[str]:
-        before = dict(active_item.get(key) or {})
-        after = dict(incoming_item.get(key) or {})
+        if key == "semanticDependencyFingerprints":
+            before = unpack_semantic_dependency_fingerprints(active_item)
+            after = unpack_semantic_dependency_fingerprints(incoming_item)
+        else:
+            before = dict(active_item.get(key) or {})
+            after = dict(incoming_item.get(key) or {})
         return sorted({
             _clean(value)
             for value in set(before) | set(after)

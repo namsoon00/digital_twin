@@ -1909,7 +1909,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
             "1",
         ),
         "kisRealtimeWebSocketIncludeConfiguredInReasoning": value("kisRealtimeWebSocketIncludeConfiguredInReasoning", "KIS_REALTIME_WEBSOCKET_INCLUDE_CONFIGURED_IN_REASONING", "0"),
-        "typedbABoxNodeBatchSize": value("typedbABoxNodeBatchSize", "TYPEDB_ABOX_NODE_BATCH_SIZE", "100"),
+        "typedbABoxNodeBatchSize": value("typedbABoxNodeBatchSize", "TYPEDB_ABOX_NODE_BATCH_SIZE", "10"),
         "typedbABoxCurrentStateInventoryBatchSize": value(
             "typedbABoxCurrentStateInventoryBatchSize",
             "TYPEDB_ABOX_CURRENT_STATE_INVENTORY_BATCH_SIZE",

@@ -198,6 +198,10 @@ Implementation notes:
 - InferenceBox writes are generation-scoped. A failed materialization must not delete the last usable generation, and a successful materialization should prune old generations according to retention settings.
 - Legacy names that include `RuleBox` may still appear in API routes, tests, or UI labels as a compatibility management surface for editing rule JSON. New development should document and describe the runtime concept as TypeDB direct TypeQL rules.
 - A feature is not complete until tests verify the ABox facts, direct TypeQL query/materialization metadata, InferenceBox context, AI prompt payload, and blocked diagnostic path.
+- A changed source field must map to the semantic fact families stored in TypeDB, not to a producer-specific pseudo field. Keep that mapping in the versioned fact-change contract and include replay migration tests for historical durable events.
+- Treat an empty successful TypeDB inference separately from an execution failure. Empty success is a valid non-alert; a missing dependency scope, failed projection, or failed query is a repairable/terminal operational state and must not silently become `no signal`.
+- Long-lived workers may hold the graph-writer lease only while executing one projection turn. Release it before sleeping or polling, and publish the released state in the worker heartbeat.
+- Active and candidate TypeDB data paths are separate safety domains. Cleanup code must validate both the candidate role and the `-candidate` path suffix before stopping processes or removing data.
 
 Anti-patterns to avoid:
 

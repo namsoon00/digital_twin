@@ -391,6 +391,13 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "blueGreenProcessNice": str(
             (settings or {}).get("typedbBlueGreenProcessNice") or "10"
         ),
+        # Schema capability compilation is latency-sensitive and already
+        # fenced by the blue-green resource guard. Keep the short-lived build
+        # process at normal priority; the older background priority could turn
+        # a cold schema commit into a multi-minute outage rehearsal.
+        "blueGreenSchemaBuildProcessNice": str(
+            (settings or {}).get("typedbBlueGreenSchemaBuildProcessNice") or "0"
+        ),
         # TypeDB rebuilds its inherited-capability cache on startup. Running
         # that production dependency at background priority can stretch one
         # restart into a long inference outage even while the host is idle.
@@ -1115,7 +1122,23 @@ def command_for_pid(pid: int) -> str:
 
 def is_worker_command(command: str, spec: Dict[str, object]) -> bool:
     needles = spec.get("needles") if isinstance(spec.get("needles"), (list, tuple, set)) else [spec.get("needle")]
-    return any(str(needle or "") in command for needle in needles if str(needle or ""))
+    if not any(str(needle or "") in command for needle in needles if str(needle or "")):
+        return False
+    if str(spec.get("role") or "").strip() in {"typedb", "typedb-stage"}:
+        raw_data_path = str(spec.get("dataPath") or "").strip()
+        if raw_data_path:
+            expected_data_path = str(Path(raw_data_path).resolve())
+            if expected_data_path not in command:
+                return False
+        expected_address = str(
+            spec.get("healthAddress") or spec.get("typedbAddress") or ""
+        ).strip()
+        if (
+            expected_address
+            and "--server.listen-address " + expected_address not in command
+        ):
+            return False
+    return True
 
 
 def pid_exists(pid: int) -> bool:
@@ -4950,7 +4973,7 @@ def typedb_blue_green_stage_spec(spec: Dict[str, object]) -> Dict[str, object]:
         **dict(spec or {}),
         "label": "TypeDB ontology graph store candidate",
         "role": "typedb-stage",
-        "processNice": str(spec.get("blueGreenProcessNice") or "10"),
+        "processNice": str(spec.get("blueGreenSchemaBuildProcessNice") or "0"),
         "pid": candidate_pid,
         "log": candidate_log,
         "needle": "typedb_server_bin",
@@ -5212,6 +5235,20 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             )
             candidate["_candidateReusable"] = True
             seed_reuse_by_database[database_name] = seed_reused
+            if not seed_reused:
+                # A cold schema seed exercises TypeDB's most expensive
+                # capability-cache path. Reopen the committed generation
+                # before replaying operational worlds so validation never
+                # inherits a stale transport or an in-flight cache build.
+                if not restart_typedb_stage_for_schema_retry(
+                    candidate,
+                    "post-seed capability cache warmup",
+                ):
+                    return {
+                        "status": "candidate-post-seed-restart-failed",
+                        "database": database_name,
+                        "candidate": candidate,
+                    }
             inference_readiness = validate_typedb_candidate_inference_runtime(
                 database_spec,
             )
@@ -5294,12 +5331,17 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
 
 def cleanup_typedb_candidate(candidate: Dict[str, object], remove_data: bool = True) -> None:
     if candidate:
+        role = str(candidate.get("role") or "").strip()
+        data_path = Path(candidate.get("dataPath") or "")
+        if role != "typedb-stage" or not data_path.name.endswith("-candidate"):
+            raise ValueError(
+                "Refusing candidate cleanup for a non-staged TypeDB specification."
+            )
         stop_worker(candidate)
         owners_stopped = stop_typedb_stage_data_path_processes(candidate)
         if remove_data:
-            path = Path(candidate.get("dataPath") or "")
-            if owners_stopped and path.exists():
-                shutil.rmtree(path)
+            if owners_stopped and data_path.exists():
+                shutil.rmtree(data_path)
             clear_typedb_candidate_reuse_marker(candidate)
 
 

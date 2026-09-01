@@ -11,6 +11,40 @@ from digital_twin.domain.typedb_capacity_policy import evaluate_typedb_capacity_
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def _assert_candidate_cleanup_rejects_active_typedb_specification(self):
+        with tempfile.TemporaryDirectory() as temp:
+            active_path = Path(temp) / "typedb-data"
+            active_path.mkdir()
+            active = {
+                "role": "typedb",
+                "dataPath": active_path,
+                "pid": Path(temp) / "typedb.pid",
+            }
+            with patch.object(service_manager, "stop_worker") as stop_worker:
+                with self.assertRaisesRegex(ValueError, "non-staged TypeDB"):
+                    service_manager.cleanup_typedb_candidate(active)
+
+            stop_worker.assert_not_called()
+            self.assertTrue(active_path.exists())
+
+    def _assert_candidate_pid_never_matches_active_typedb_process(self):
+        candidate = {
+            "label": "TypeDB candidate",
+            "role": "typedb-stage",
+            "needle": "typedb_server_bin",
+            "dataPath": "/workspace/data/typedb-data-candidate",
+            "healthAddress": "127.0.0.1:1730",
+        }
+        active_command = (
+            "/opt/typedb/typedb_server_bin "
+            "--server.listen-address 127.0.0.1:1729 "
+            "--storage.data-directory /workspace/data/typedb-data"
+        )
+
+        self.assertFalse(
+            service_manager.is_worker_command(active_command, candidate)
+        )
+
     def assert_typedb_runtime_health_requires_consecutive_service_failures(self):
         first = service_manager.typedb_runtime_health_decision(
             process_running=True,
@@ -55,6 +89,7 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("30", typedb_spec["runtimeHealthProbeIntervalSeconds"])
         self.assertEqual("10", typedb_spec["runtimeHealthFailureThreshold"])
         self.assertEqual("0", typedb_spec["processNice"])
+        self.assertEqual("0", typedb_spec["blueGreenSchemaBuildProcessNice"])
         result = evaluate_typedb_capacity_policy({
             "typedbSizeMb": 75,
             "typedbLimitMb": 100,
@@ -62,6 +97,9 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual(75, result["rotationPercent"])
         self.assertTrue(result["rotationRequired"])
+        self._assert_candidate_cleanup_rejects_active_typedb_specification()
+        self._assert_candidate_pid_never_matches_active_typedb_process()
+        self._assert_fresh_blue_green_candidate_restarts_after_schema_seed()
 
     def test_failed_typedb_candidate_is_retired_and_delivery_settings_are_restored(self):
         class FakeRegistry:
@@ -494,6 +532,51 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual([], result["missingProtectedDatabases"])
         seed.assert_not_called()
         artifact_restore.assert_not_called()
+
+    def _assert_fresh_blue_green_candidate_restarts_after_schema_seed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = {
+                "label": "TypeDB ontology graph store",
+                "role": "typedb",
+                "pid": Path(temp) / "typedb.pid",
+                "log": Path(temp) / "typedb.log",
+                "dataPath": Path(temp) / "typedb-data",
+                "healthAddress": "127.0.0.1:1729",
+                "httpAddress": "127.0.0.1:8000",
+                "typedbDatabase": "ontology_v2",
+                "protectedTypeDbDatabases": [],
+            }
+            candidate = service_manager.typedb_blue_green_stage_spec(spec)
+            self.assertEqual("0", candidate["processNice"])
+            with patch.object(service_manager, "stop_worker", return_value=0), \
+                    patch.object(service_manager, "stop_typedb_stage_data_path_processes", return_value=True), \
+                    patch.object(service_manager, "launch_typedb_stage_process", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_seeded", return_value=True), \
+                    patch.object(service_manager, "validate_typedb_candidate_seed_contract", return_value={
+                        "ready": True,
+                        "status": "ready",
+                    }), \
+                    patch.object(service_manager, "validate_typedb_candidate_release_contract", return_value={
+                        "ready": True,
+                        "status": "ready",
+                    }), \
+                    patch.object(service_manager, "write_typedb_candidate_reuse_marker"), \
+                    patch.object(service_manager, "restart_typedb_stage_for_schema_retry", return_value=True) as restart, \
+                    patch.object(service_manager, "validate_typedb_candidate_inference_runtime", return_value={
+                        "ready": True,
+                        "mode": "native",
+                    }), \
+                    patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt", return_value=True), \
+                    patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
+                    patch.object(service_manager, "typedb_driver_ready", return_value=True):
+                result = service_manager.prepare_typedb_blue_green_candidate(spec)
+
+        self.assertEqual("prepared", result["status"])
+        self.assertFalse(result["candidateSeedReused"])
+        restart.assert_called_once_with(
+            result["candidate"],
+            "post-seed capability cache warmup",
+        )
 
     def test_wait_for_typedb_ready_bootstraps_only_pending_fresh_store(self):
         with tempfile.TemporaryDirectory() as temp:

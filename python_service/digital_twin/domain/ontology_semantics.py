@@ -20,7 +20,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Set, Tuple
 from .ontology_tbox import CLASS_DEFS, RELATION_DEFS, tbox_class_def
 
 
-SEMANTIC_STORAGE_CONTRACT_VERSION = "typedb-semantic-storage-v2"
+SEMANTIC_STORAGE_CONTRACT_VERSION = "typedb-semantic-storage-v3-slim-capabilities"
 
 
 def _slug(value: object) -> str:
@@ -36,6 +36,14 @@ def typedb_class_type(class_name: object) -> str:
 
 def typedb_relation_type(relation_name: object) -> str:
     return "ontology-relation-" + _slug(relation_name)
+
+
+def typedb_context_type(context_name: object) -> str:
+    return "ontology-context-" + _slug(context_name)
+
+
+def typedb_context_fallback_type(context_name: object) -> str:
+    return typedb_context_type(context_name) + "-node"
 
 
 @lru_cache(maxsize=1)
@@ -121,7 +129,12 @@ def relation_semantic_type(relation_type: object, fallback: str = "ontology-asse
     return semantic_relation_types().get(str(relation_type or "").upper().strip(), fallback)
 
 
-def semantic_typeql_schema(missing_type_names: Iterable[str] = None) -> str:
+def semantic_typeql_schema(
+    missing_type_names: Iterable[str] = None,
+    context_attribute_ownership: Mapping[str, Iterable[str]] = None,
+    physical_class_names: Iterable[str] = None,
+    physical_relation_names: Iterable[str] = None,
+) -> str:
     """Generate additive TypeQL definitions for logical TBox concepts.
 
     A physical class follows its logical TBox parent when the parent exists.
@@ -133,13 +146,84 @@ def semantic_typeql_schema(missing_type_names: Iterable[str] = None) -> str:
     requested = {str(item or "").strip() for item in (missing_type_names or []) if str(item or "").strip()}
     include_all = not requested
     statements: List[str] = []
+    context_attributes = {
+        str(context or ""): tuple(sorted({str(attribute or "") for attribute in attributes if str(attribute or "")}))
+        for context, attributes in dict(context_attribute_ownership or {}).items()
+        if str(context or "")
+    }
+    contexts = sorted({definition.bounded_context for definition in CLASS_DEFS if definition.bounded_context})
+    requested_classes = {
+        str(item or "").strip()
+        for item in physical_class_names or []
+        if str(item or "").strip() in semantic_class_types()
+    }
+    if requested_classes:
+        pending = list(requested_classes)
+        while pending:
+            definition = tbox_class_def(pending.pop())
+            parent = str(definition.parent or "").strip() if definition else ""
+            if parent and parent in semantic_class_types() and parent not in requested_classes:
+                requested_classes.add(parent)
+                pending.append(parent)
+    requested_relations = {
+        str(item or "").upper().strip()
+        for item in physical_relation_names or []
+        if str(item or "").upper().strip() in semantic_relation_types()
+    }
+    include_context_roots = include_all or any(
+        item.startswith("ontology-class-") or item.startswith("ontology-context-")
+        for item in requested
+    )
+    for context in contexts:
+        context_type = typedb_context_type(context)
+        if not include_context_roots and context_type not in requested:
+            continue
+        ownership = "".join(", owns " + attribute for attribute in context_attributes.get(context, ()))
+        statements.append(
+            "entity " + context_type + " @abstract, sub ontology-node" + ownership + ";"
+        )
+        statements.append(
+            "entity " + typedb_context_fallback_type(context) + ", sub " + context_type + ";"
+        )
     for definition in CLASS_DEFS:
+        if requested_classes and definition.name not in requested_classes:
+            continue
         name = typedb_class_type(definition.name)
         if not include_all and name not in requested:
             continue
-        parent = typedb_class_type(definition.parent) if definition.parent and definition.parent in semantic_class_types() else "ontology-entity"
-        statements.append("entity " + name + ", sub " + parent + ";")
+        parent = (
+            typedb_class_type(definition.parent)
+            if definition.parent and definition.parent in semantic_class_types()
+            else typedb_context_type(definition.bounded_context)
+        )
+        # Logical inheritance may cross bounded contexts. TypeDB has one
+        # physical supertype, so a child cannot also inherit the capability
+        # root for its newer context. Add only the context capabilities not
+        # already supplied by its logical ancestors; this preserves the TBox
+        # hierarchy without restoring the former universal capability fan-out.
+        inherited_attributes = set()
+        ancestor_name = str(definition.parent or "").strip()
+        if not ancestor_name or ancestor_name not in semantic_class_types():
+            inherited_attributes.update(
+                context_attributes.get(definition.bounded_context, ())
+            )
+        while ancestor_name and ancestor_name in semantic_class_types():
+            ancestor = tbox_class_def(ancestor_name)
+            if ancestor is None:
+                break
+            inherited_attributes.update(
+                context_attributes.get(ancestor.bounded_context, ())
+            )
+            ancestor_name = str(ancestor.parent or "").strip()
+        direct_attributes = sorted(
+            set(context_attributes.get(definition.bounded_context, ()))
+            - inherited_attributes
+        )
+        ownership = "".join(", owns " + attribute for attribute in direct_attributes)
+        statements.append("entity " + name + ", sub " + parent + ownership + ";")
     for definition in RELATION_DEFS:
+        if requested_relations and definition.name.upper() not in requested_relations:
+            continue
         name = typedb_relation_type(definition.name)
         if not include_all and name not in requested:
             continue
@@ -147,8 +231,28 @@ def semantic_typeql_schema(missing_type_names: Iterable[str] = None) -> str:
     return "define\n" + "\n".join(statements) if statements else ""
 
 
-def semantic_storage_type_names() -> Set[str]:
-    return set(semantic_class_types().values()) | set(semantic_relation_types().values()) | {"ontology-semantic-type"}
+def semantic_storage_type_names(
+    physical_class_names: Iterable[str] = None,
+    physical_relation_names: Iterable[str] = None,
+) -> Set[str]:
+    classes = {
+        str(item or "").strip()
+        for item in physical_class_names or semantic_class_types()
+        if str(item or "").strip() in semantic_class_types()
+    }
+    relations = {
+        str(item or "").upper().strip()
+        for item in physical_relation_names or semantic_relation_types()
+        if str(item or "").upper().strip() in semantic_relation_types()
+    }
+    contexts = {definition.bounded_context for definition in CLASS_DEFS}
+    return (
+        {semantic_class_types()[item] for item in classes}
+        | {semantic_relation_types()[item] for item in relations}
+        | {typedb_context_type(context) for context in contexts}
+        | {typedb_context_fallback_type(context) for context in contexts}
+        | {"ontology-semantic-type"}
+    )
 
 
 def _ancestor_classes(class_name: str) -> Set[str]:

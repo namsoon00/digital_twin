@@ -373,7 +373,52 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["selectedScopeIds"],
         )
 
+    def _assert_crypto_dependency_selects_shared_market_and_symbol_exposure(self):
+        plan = build_fact_slot_projection_plan(
+            ["BTC", "MSTR"],
+            ["market", "macro-crypto", "exposure"],
+            requested_dependency_keys=[
+                "kind:crypto-market-signal",
+                "kind:crypto-exposure",
+            ],
+            requested_dependency_keys_by_symbol={
+                "BTC": ["kind:crypto-market-signal", "kind:crypto-exposure"],
+                "MSTR": ["kind:crypto-market-signal", "kind:crypto-exposure"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+        scopes = {
+            "macro:crypto": {
+                "scopeFamily": "macro-crypto",
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-market-signal": "btc-v2",
+                },
+            },
+            "symbol:MSTR:exposure": {
+                "scopeFamily": "exposure",
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-exposure": "mstr-v2",
+                },
+            },
+            "symbol:MSTR:market": {
+                "scopeFamily": "market",
+                "semanticDependencyFingerprints": {
+                    "kind:price-bar": "price-v1",
+                },
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertTrue(selection["enabled"])
+        self.assertEqual("applied", selection["status"])
+        self.assertEqual(
+            ["macro:crypto", "symbol:MSTR:exposure"],
+            selection["selectedScopeIds"],
+        )
+
     def test_authoritative_valuation_event_ignores_cross_family_impact_metadata(self):
+        self._assert_crypto_dependency_selects_shared_market_and_symbol_exposure()
         plan = build_fact_slot_projection_plan(
             ["005930"],
             ["company-valuation"],

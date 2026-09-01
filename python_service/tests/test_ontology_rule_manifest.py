@@ -7,6 +7,9 @@ from digital_twin.domain.ontology_rule_manifest import (
     rule_assessment_scope,
     validate_rule_domain_manifests,
 )
+from digital_twin.domain.ontology_schema_capabilities import (
+    rule_schema_capability_manifest,
+)
 from digital_twin.domain.ontology_rulebox_contracts import GraphRuleCondition
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 
@@ -128,6 +131,20 @@ class OntologyRuleManifestTests(unittest.TestCase):
         self.assertEqual("sector", payload["field"])
         self.assertEqual("==", payload["operator"])
         self.assertEqual("technology", payload["value"])
+        self._assert_physical_schema_manifest_contains_every_active_rule_query_field()
+
+    def _assert_physical_schema_manifest_contains_every_active_rule_query_field(self):
+        rules = default_graph_inference_rules()
+        manifest = rule_schema_capability_manifest(rules)
+
+        active_rule_ids = {
+            rule.rule_id for rule in rules if rule.enabled is not False
+        }
+        self.assertEqual(active_rule_ids, set(manifest.rule_ids))
+        self.assertIn("profitLossRate", manifest.subject_fields)
+        self.assertIn("ma5Distance", manifest.subject_fields)
+        self.assertIn("decisionEligibility", manifest.target_fields_by_context["observation-data"])
+        self.assertEqual(64, len(manifest.fingerprint))
 
 
 if __name__ == "__main__":

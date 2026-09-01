@@ -606,6 +606,26 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(1, notification_summary["suppression_categories"]["unchanged_decision"])
         self.assertEqual(1, notification_summary["suppression_categories"]["duplicate_or_cooldown"])
 
+    def test_terminal_source_notification_removes_failed_ai_request_from_actionable_health(self):
+        job = self.create_job()
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        self.queue.enqueue(job, request)
+        claimed = self.queue.claim("worker-failure-health", 1, 60)[0]
+        self.assertTrue(self.queue.fail(claimed, "worker-failure-health", "projection failed"))
+
+        failed = self.queue.summary()
+        self.assertEqual(1, failed["failedCount"])
+        self.assertEqual(1, failed["actionableFailedCount"])
+
+        self.notifications.mark_suppressed(
+            self.notifications.get(job.job_id),
+            "종료된 투자 판단 건은 새 AI 판단 요청을 만들지 않습니다.",
+        )
+
+        terminal = self.queue.summary()
+        self.assertEqual(1, terminal["historicalFailedCount"])
+        self.assertEqual(0, terminal["actionableFailedCount"])
+
     def test_prompt_preparation_failure_releases_typedb_fallback(self):
         job = self.create_job()
         job.context["notificationAiExecutionProfile"] = {

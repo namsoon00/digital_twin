@@ -2651,7 +2651,7 @@ MYSQL_SCHEMA = [
         horizon_minutes INT NOT NULL DEFAULT 0,
         target_at VARCHAR(40) NOT NULL DEFAULT '',
         maximum_delay_minutes INT NOT NULL DEFAULT 0,
-        contract_fingerprint VARCHAR(64) NOT NULL DEFAULT '',
+        contract_fingerprint VARCHAR(96) NOT NULL DEFAULT '',
         status VARCHAR(32) NOT NULL DEFAULT 'pending',
         exclusion_reason VARCHAR(191) NOT NULL DEFAULT '',
         outcome_id VARCHAR(191) NOT NULL DEFAULT '',

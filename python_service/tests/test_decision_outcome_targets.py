@@ -12,6 +12,10 @@ from digital_twin.application.investment_reasoning.episode_projection import (
 from digital_twin.infrastructure.mysql_investment_decision_episodes import (
     MySQLInvestmentDecisionEpisodeStore,
 )
+from digital_twin.infrastructure.mysql_schema_tuning import (
+    MYSQL_OPERATIONAL_COLUMN_WIDTHS,
+    ensure_mysql_column_widths,
+)
 
 
 class RecordingConnection:
@@ -85,6 +89,38 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         store = object.__new__(MySQLInvestmentDecisionEpisodeStore)
         store.runtime_settings = {}
         return store
+
+    def test_schema_tuning_widens_legacy_contract_fingerprint_column(self):
+        class Cursor:
+            def __init__(self, row=None):
+                self.row = row
+
+            def fetchone(self):
+                return self.row
+
+        class Connection:
+            def __init__(self):
+                self.statements = []
+
+            def execute(self, sql, params=()):
+                self.statements.append((sql, params))
+                if sql.startswith("SHOW COLUMNS"):
+                    return Cursor({"Field": "contract_fingerprint", "Type": "varchar(64)"})
+                return Cursor()
+
+        connection = Connection()
+
+        widened = ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS)
+
+        self.assertEqual(
+            ["investment_decision_outcome_targets.contract_fingerprint"],
+            widened,
+        )
+        self.assertIn(
+            "MODIFY COLUMN `contract_fingerprint` VARCHAR(96)",
+            connection.statements[-1][0],
+        )
+        self.assertEqual(71, len(outcome_contract_fingerprint(predictive_contract())))
 
     def test_predictive_decision_creates_one_durable_target_per_horizon(self):
         connection = RecordingConnection()

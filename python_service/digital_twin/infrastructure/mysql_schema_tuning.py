@@ -70,6 +70,26 @@ class MySQLColumnCompatibilityDefinition:
 
 
 @dataclass(frozen=True)
+class MySQLColumnWidthDefinition:
+    """A character column whose legacy schema may be too narrow."""
+
+    table: str
+    name: str
+    minimum_character_length: int
+    definition_sql: str
+
+    def alter_sql(self) -> str:
+        return (
+            "ALTER TABLE "
+            + quote_identifier(self.table)
+            + " MODIFY COLUMN "
+            + quote_identifier(self.name)
+            + " "
+            + self.definition_sql
+        )
+
+
+@dataclass(frozen=True)
 class MySQLColumnRetirementDefinition:
     """A no-longer-used column that can be removed after its replacement ships."""
 
@@ -900,6 +920,18 @@ MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY: Dict[str, Sequence[MySQLColumnCompatibil
 }
 
 
+MYSQL_OPERATIONAL_COLUMN_WIDTHS: Dict[str, Sequence[MySQLColumnWidthDefinition]] = {
+    "investment_decision_outcome_targets": (
+        MySQLColumnWidthDefinition(
+            "investment_decision_outcome_targets",
+            "contract_fingerprint",
+            71,
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+    ),
+}
+
+
 # The delivery system now stores only categorical conditions and state-based
 # cooldowns. These former aggregate score columns have no remaining readers.
 MYSQL_OPERATIONAL_RETIRED_COLUMNS: Dict[str, Sequence[MySQLColumnRetirementDefinition]] = {
@@ -988,6 +1020,20 @@ def mysql_column_is_nullable(connection, table: str, column_name: str) -> bool:
     return len(row) > 2 and str(row[2] or "").upper() == "YES"
 
 
+def mysql_column_character_length(connection, table: str, column_name: str) -> int:
+    cursor = _execute(connection, "SHOW COLUMNS FROM " + quote_identifier(table) + " LIKE %s", (column_name,))
+    row = cursor.fetchone()
+    if not row:
+        return 0
+    column_type = (
+        str(row.get("Type") or row.get("TYPE") or "")
+        if isinstance(row, Mapping)
+        else str(row[1] or "") if len(row) > 1 else ""
+    )
+    match = re.match(r"^(?:var)?char\((\d+)\)", column_type.strip().lower())
+    return int(match.group(1)) if match else 0
+
+
 def ensure_mysql_columns(
     connection,
     column_map: Mapping[str, Sequence[MySQLColumnDefinition]],
@@ -1023,6 +1069,23 @@ def ensure_mysql_column_compatibility(
             _execute(connection, definition.alter_sql())
             modified.append(definition.table + "." + definition.name)
     return modified
+
+
+def ensure_mysql_column_widths(
+    connection,
+    column_map: Mapping[str, Sequence[MySQLColumnWidthDefinition]],
+) -> List[str]:
+    widened: List[str] = []
+    for table, definitions in column_map.items():
+        for definition in definitions:
+            if not mysql_column_exists(connection, table, definition.name):
+                continue
+            current_length = mysql_column_character_length(connection, table, definition.name)
+            if current_length >= definition.minimum_character_length:
+                continue
+            _execute(connection, definition.alter_sql())
+            widened.append(definition.table + "." + definition.name)
+    return widened
 
 
 def retire_mysql_columns(
@@ -1192,6 +1255,7 @@ def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, ob
         "columns": columns,
         "primaryKeys": primary_keys,
         "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
+        "widenedColumns": ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS),
         "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
         "retiredUniqueIndexes": retired_unique_indexes,
         "indexes": ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES),

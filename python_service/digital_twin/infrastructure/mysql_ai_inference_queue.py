@@ -1099,8 +1099,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 """
             ).fetchall()
             active_failure_row = connection.execute(
-                "SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_at "
-                "FROM ai_inference_requests WHERE status = %s AND updated_at >= %s",
+                "SELECT COUNT(*) AS count, MIN(request.updated_at) AS oldest_at "
+                "FROM ai_inference_requests request "
+                "JOIN notification_jobs notification "
+                "ON notification.job_id = request.notification_job_id "
+                "WHERE request.status = %s AND request.updated_at >= %s "
+                "AND notification.status = 'failed'",
                 (AI_INFERENCE_FAILED, active_cutoff),
             ).fetchone()
             effectiveness_row = connection.execute(

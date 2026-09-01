@@ -602,6 +602,37 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("reuse-existing", selection["mode"])
         self.assertEqual("v2-retired-ready", selection["sourceDeploymentId"])
 
+        class PrunedWarmRegistry:
+            @staticmethod
+            def list():
+                return [
+                    {
+                        "deploymentId": "v2-retired-pruned",
+                        "status": "retired",
+                        "graphStoreBinding": "typedb-pruned-standby",
+                        "health": {
+                            "runtimeOntologyRelease": {
+                                "status": "ready",
+                                "warmed": True,
+                                "ruleCount": 119,
+                            },
+                            "graphStorePruned": {
+                                "status": "quarantined",
+                            },
+                        },
+                    },
+                ]
+
+        pruned_platform = ReasoningEnginePlatformService(PrunedWarmRegistry())
+        selection = pruned_platform.candidate_graph_database_selection(
+            "v2-candidate",
+            "release-candidate",
+            ["typedb-production"],
+        )
+
+        self.assertNotEqual("typedb-pruned-standby", selection["database"])
+        self.assertEqual("create-isolated", selection["mode"])
+
         class FailedLatestRegistry:
             @staticmethod
             def list():

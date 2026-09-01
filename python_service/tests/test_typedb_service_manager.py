@@ -43,6 +43,18 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
     def test_capacity_policy_rotates_before_legacy_eighty_percent_default(self):
         self.assert_typedb_runtime_health_requires_consecutive_service_failures()
+        with patch.dict(
+            os.environ,
+            {
+                "TYPEDB_RUNTIME_HEALTH_PROBE_INTERVAL_SECONDS": "",
+                "TYPEDB_RUNTIME_HEALTH_FAILURE_THRESHOLD": "",
+            },
+            clear=False,
+        ):
+            typedb_spec = service_manager.typedb_worker_spec({})
+        self.assertEqual("30", typedb_spec["runtimeHealthProbeIntervalSeconds"])
+        self.assertEqual("10", typedb_spec["runtimeHealthFailureThreshold"])
+        self.assertEqual("0", typedb_spec["processNice"])
         result = evaluate_typedb_capacity_policy({
             "typedbSizeMb": 75,
             "typedbLimitMb": 100,

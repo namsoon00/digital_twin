@@ -499,3 +499,28 @@ engine compatibility version was advanced to
 under the lossy selection contract from being reused. Regression coverage
 uses the production loss and profit policy rule IDs with a market-family MSTR
 event and requires both rules to enter the candidate set.
+
+## Runtime Health Grace Window
+
+A live blue-green provisioning run also exposed an operational feedback loop.
+The durable TypeDB server became ready after WAL recovery, but two 30-second
+driver probes overlapped schema and planner pressure. The supervisor treated
+those transient query failures as a dead server, restarted the 22 GB store,
+and created another multi-minute alert gap. Process disappearance still causes
+immediate recovery, while a live TypeDB process now receives ten consecutive
+30-second service probes before restart. Both values can be overridden through
+`TYPEDB_RUNTIME_HEALTH_PROBE_INTERVAL_SECONDS` and
+`TYPEDB_RUNTIME_HEALTH_FAILURE_THRESHOLD`. The production TypeDB process also
+defaults to normal scheduling priority because startup rebuilds the inherited
+schema-capability cache; blue-green staging remains lower priority so it cannot
+starve live delivery. The macOS supervisor LaunchAgent is also `Standard`:
+using `Background` on the parent silently applies Darwin background QoS to
+TypeDB even when its own `processNice` is zero. Individual collectors retain
+their explicit background nice value.
+
+Retired release stores can be quarantined or deleted after their rollback
+window. The deployment health then records `graphStorePruned.status` as
+`quarantined`, `deleted`, or `missing`. Candidate registration excludes those
+bindings even when an older warmup result still says `ready`, preventing a
+large retired store from silently re-entering the next release and every
+subsequent TypeDB startup.

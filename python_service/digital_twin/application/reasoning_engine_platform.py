@@ -117,6 +117,13 @@ class ReasoningEnginePlatformService:
             if str(item.get("status") or "").strip().lower() != "retired":
                 continue
             health = dict(item.get("health") or {})
+            pruned_store = dict(health.get("graphStorePruned") or {})
+            if str(pruned_store.get("status") or "").strip().lower() in {
+                "deleted",
+                "missing",
+                "quarantined",
+            }:
+                continue
             runtime_release = dict(health.get("runtimeOntologyRelease") or {})
             if (
                 str(runtime_release.get("status") or "").strip().lower() != "ready"

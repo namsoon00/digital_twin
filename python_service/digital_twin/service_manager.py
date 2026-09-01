@@ -391,7 +391,14 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "blueGreenProcessNice": str(
             (settings or {}).get("typedbBlueGreenProcessNice") or "10"
         ),
-        "processNice": str((settings or {}).get("typedbProcessNice") or "5"),
+        # TypeDB rebuilds its inherited-capability cache on startup. Running
+        # that production dependency at background priority can stretch one
+        # restart into a long inference outage even while the host is idle.
+        "processNice": str(
+            (settings or {}).get("typedbProcessNice")
+            or os.environ.get("TYPEDB_PROCESS_NICE")
+            or "0"
+        ),
         "blueGreenSeedCompatibilityDatabasesEnabled": (
             "1" if compatibility_databases_enabled else "0"
         ),
@@ -407,10 +414,14 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         # rebuild the type cache after a clean server restart.
         "startupWaitSeconds": str(startup_wait_seconds),
         "runtimeHealthProbeIntervalSeconds": str(
-            (settings or {}).get("typedbRuntimeHealthProbeIntervalSeconds") or "30"
+            (settings or {}).get("typedbRuntimeHealthProbeIntervalSeconds")
+            or os.environ.get("TYPEDB_RUNTIME_HEALTH_PROBE_INTERVAL_SECONDS")
+            or "30"
         ),
         "runtimeHealthFailureThreshold": str(
-            (settings or {}).get("typedbRuntimeHealthFailureThreshold") or "2"
+            (settings or {}).get("typedbRuntimeHealthFailureThreshold")
+            or os.environ.get("TYPEDB_RUNTIME_HEALTH_FAILURE_THRESHOLD")
+            or "10"
         ),
         # Active reasoning deployments are immutable release bundles. Startup
         # may serve their existing graph, but must not rewrite TBox/RuleBox to
@@ -4856,7 +4867,12 @@ def install_supervisor() -> int:
         "RunAtLoad": True,
         "KeepAlive": True,
         "ExitTimeOut": 180,
-        "ProcessType": "Background",
+        # This parent launches TypeDB as well as background Python workers.
+        # Darwin background QoS would otherwise be inherited by every child,
+        # including TypeDB. Per-worker `processNice` already throttles ordinary
+        # collectors, while the production graph store stays at normal
+        # priority for schema-cache rebuilds.
+        "ProcessType": "Standard",
         "SoftResourceLimits": {"NumberOfFiles": 65536},
         "HardResourceLimits": {"NumberOfFiles": 65536},
         "EnvironmentVariables": {

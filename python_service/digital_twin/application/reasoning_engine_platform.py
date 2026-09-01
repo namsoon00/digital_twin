@@ -79,17 +79,25 @@ class ReasoningEnginePlatformService:
                 ).strip()
                 if binding:
                     occupied.add(binding)
-        configured = str(
-            self.settings.get("reasoningEngineCandidateTypeDbDatabase")
-            or self.settings.get("reasoningEngineShadowTypeDbDatabase")
-            or ""
-        ).strip()
-        if configured and configured not in occupied:
-            return configured
         digest = hashlib.sha256(
             (str(deployment_id or "") + "|" + str(release_id or "")).encode("utf-8")
         ).hexdigest()[:16]
-        return "orbit_alpha_ontology_candidate_" + digest
+        candidate = "orbit_alpha_ontology_candidate_" + digest
+        if candidate not in occupied:
+            return candidate
+        # A deployment/release pair is immutable. If stale control-plane data
+        # already occupies the deterministic binding, derive another isolated
+        # name instead of reusing a prior candidate database.
+        collision_digest = hashlib.sha256(
+            (
+                str(deployment_id or "")
+                + "|"
+                + str(release_id or "")
+                + "|"
+                + "|".join(sorted(occupied))
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        return "orbit_alpha_ontology_candidate_" + collision_digest
 
     def candidate_graph_isolation(self, control=None) -> Dict[str, object]:
         selected = control or self.registry.control()

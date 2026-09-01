@@ -552,6 +552,26 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             len(restored_graph.relations),
         )
 
+    def test_candidate_database_name_does_not_reuse_fixed_shadow_storage(self):
+        class Registry:
+            @staticmethod
+            def list():
+                return []
+
+        platform = ReasoningEnginePlatformService(
+            Registry(),
+            {"reasoningEngineShadowTypeDbDatabase": "stale-fixed-shadow"},
+        )
+
+        database = platform.isolated_candidate_graph_database(
+            "v2-candidate",
+            "release-candidate",
+            [],
+        )
+
+        self.assertNotEqual("stale-fixed-shadow", database)
+        self.assertTrue(database.startswith("orbit_alpha_ontology_candidate_"))
+
     def test_current_status_keeps_historical_resolved_failures_without_degrading(self):
         deployment = {
             "deploymentId": "v2-active",

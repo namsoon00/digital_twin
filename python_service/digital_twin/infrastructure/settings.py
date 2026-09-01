@@ -987,7 +987,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiQueueRetrySeconds": "30",
     "notificationAiQueueStorageRetryAttempts": "3",
     "notificationAiQueueStorageRetryBackoffMilliseconds": "250",
-    "notificationAiQueueMaxPromptBytes": "15360",
+    "notificationAiQueueMaxPromptBytes": "16384",
     "notificationAiQueueRetentionHours": "24",
     "modelName": "나의 매수/매도 모델",
     "modelHypothesis": "손익, 가격 흐름, 수급, 가치, 뉴스와 반대 근거를 상태로 나눠 행동 조건을 결정한다.",

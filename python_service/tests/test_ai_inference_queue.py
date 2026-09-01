@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from digital_twin.application.ai_inference_queue_service import (
     AIInferenceQueueRunner,
@@ -14,6 +15,7 @@ from digital_twin.application.ai_inference_queue_service import (
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
+from digital_twin.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
 from digital_twin.domain.notifications import NotificationJob
 from mysql_fixtures import (
     TestAIInferenceQueueStore,
@@ -634,6 +636,51 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("ai-preparation", audit["fallback"]["stage"])
         self.assertEqual("ai-preparation", audit["failure"]["stage"])
         self.assertFalse(audit["aiAttempted"])
+
+    def test_prompt_budget_expands_once_before_fallback(self):
+        job = self.create_job()
+        job.context["notificationAiExecutionProfile"] = {
+            "name": "standard",
+            "reasoningEffort": "high",
+            "maxPromptBytes": 15 * 1024,
+        }
+        self.notifications.upsert_job(job)
+        request = AIInferenceRequest.create(job, job.context, reasoning_effort="high")
+        self.queue.enqueue(job, request)
+        attempted_limits = []
+
+        def build_with_first_budget_failure(*args, **kwargs):
+            attempted_limits.append(kwargs["max_prompt_bytes"])
+            if len(attempted_limits) == 1:
+                raise ValueError(
+                    "AI decision core cannot preserve TypeDB hypotheses within 8193 bytes "
+                    "(minimum contract requires 8635 bytes)"
+                )
+            return build_notification_ai_inference_packet(*args, **kwargs)
+
+        runner = AIInferenceQueueRunner(
+            self.queue,
+            FakeReviewer(),
+            {
+                "notificationAiTypeDbFallbackEnabled": "1",
+                "notificationAiQueueMaxPromptBytes": str(16 * 1024),
+            },
+            worker_id="worker-prompt-expansion",
+        )
+        with patch(
+            "digital_twin.application.ai_inference_queue_service.build_notification_ai_inference_packet",
+            side_effect=build_with_first_budget_failure,
+        ):
+            self.assertEqual(1, runner.run_once(limit=1))
+
+        delivered = self.notifications.get(job.job_id)
+        self.assertEqual([15 * 1024, 16 * 1024], attempted_limits)
+        self.assertEqual("pending", delivered.status)
+        self.assertEqual("completed", delivered.context["notificationAiQueue"]["status"])
+        self.assertEqual(
+            16 * 1024,
+            delivered.context["notificationAiExecutionAudit"]["executionProfile"]["effectiveMaxPromptBytes"],
+        )
 
     def test_result_publication_retries_storage_timeout_without_repeating_ai_review(self):
         job = self.create_job()

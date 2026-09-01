@@ -486,7 +486,7 @@ class AIInferenceQueueRunner:
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
-            15 * 1024,
+            16 * 1024,
             12 * 1024,
             24 * 1024,
         )
@@ -578,16 +578,34 @@ class AIInferenceQueueRunner:
                 if request.attempts > 1
                 else self.max_prompt_bytes
             )
-            packet = build_notification_ai_inference_packet(
-                context,
-                self.settings,
-                max_prompt_bytes=min(
-                    attempt_prompt_limit,
-                    int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
-                ),
-                profile=execution_profile,
-                decision_brief=decision_brief,
+            preferred_prompt_limit = min(
+                attempt_prompt_limit,
+                int(execution_profile.get("maxPromptBytes") or self.max_prompt_bytes),
             )
+            packet = None
+            packet_error = None
+            prompt_limits = []
+            for value in (preferred_prompt_limit, 15 * 1024, self.max_prompt_bytes):
+                bounded = min(self.max_prompt_bytes, max(12 * 1024, int(value or 0)))
+                if bounded not in prompt_limits:
+                    prompt_limits.append(bounded)
+            for prompt_limit in prompt_limits:
+                try:
+                    packet = build_notification_ai_inference_packet(
+                        context,
+                        self.settings,
+                        max_prompt_bytes=prompt_limit,
+                        profile=execution_profile,
+                        decision_brief=decision_brief,
+                    )
+                    execution_profile["effectiveMaxPromptBytes"] = prompt_limit
+                    break
+                except Exception as error:  # noqa: BLE001 - only budget errors may expand.
+                    packet_error = error
+                    if ai_failure_diagnostic(error, "ai-preparation")["category"] != "prompt-contract-budget":
+                        raise
+            if packet is None:
+                raise packet_error or RuntimeError("AI inference packet preparation failed")
             prompt = packet.prompt
             decision_core = packet.decision_core
             context_routing = packet.context_routing
@@ -611,7 +629,7 @@ class AIInferenceQueueRunner:
                 return self.publish_preparation_fallback(
                     request,
                     context,
-                    diagnostic["summary"],
+                    diagnostic.get("safeDetail") or diagnostic["summary"],
                     diagnostic=diagnostic,
                 )
             raise

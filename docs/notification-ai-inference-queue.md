@@ -75,8 +75,10 @@ notification_jobs: pending
 
 The delivery deadline may remain disabled because inference is asynchronous.
 The attempt watchdog is different: it bounds one local model process so a hung
-execution cannot hold a worker forever. The normal packet uses a 15 KiB cap.
-A retry uses a 12 KiB minimum-contract packet that keeps action, hypothesis
+execution cannot hold a worker forever. The normal packet targets 15 KiB and
+may expand to a 16 KiB hard cap only when the minimum decision contract does
+not fit. A retry starts with a 12 KiB minimum-contract packet and uses the same
+bounded expansion path. The compact packet keeps action, hypothesis
 identity, rules, evidence IDs, current facts, continuity, and valuation while
 the unabridged decision brief remains in the immutable audit store.
 

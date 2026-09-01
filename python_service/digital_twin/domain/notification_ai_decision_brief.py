@@ -174,7 +174,7 @@ def notification_ai_execution_profile(
             "high",
         )
         prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 15 * 1024, 12 * 1024, 16 * 1024)
-    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 15 * 1024, 12 * 1024, 24 * 1024)
+    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 16 * 1024, 12 * 1024, 24 * 1024)
     return {
         "version": "notification-ai-execution-profile-v3",
         "name": profile,

@@ -811,8 +811,127 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
     if _json_bytes(fitted) <= budget:
         fitted["routingAudit"]["status"] = "decision-contract-compacted"
         return fitted
+
+    # A retry deliberately runs with a smaller prompt. Preserve the complete
+    # hypothesis identity surface while reducing verbose current-state blocks
+    # to the fields required to compare action, evidence, continuity, and
+    # valuation. The full decision brief remains in the immutable audit store.
+    facts = _mapping(fitted.get("facts"))
+    fitted["facts"] = _selected(facts, CORE_FACT_KEYS)
+    decision = _mapping(fitted.get("decision"))
+    fitted["decision"] = {
+        **_selected(
+            decision,
+            (
+                "previousAction", "precomputedActionCandidate",
+                "investmentOpinionStatus", "executionReadinessStatus",
+                "recommendedPlanStatus",
+            ),
+        ),
+        "typeDbDecision": _selected(
+            decision.get("typeDbDecision"),
+            ("primaryAction", "judgementBlocked", "selectedRuleId"),
+        ),
+        "actionEnvelope": _selected(
+            decision.get("actionEnvelope"),
+            (
+                "status", "executionAction", "executionDisposition",
+                "judgementBlocked", "selectedRuleId", "drivingRuleIds",
+                "executionConstraintRuleIds", "dataQualityRuleIds", "targetRole",
+            ),
+        ),
+        "transition": _selected(
+            decision.get("transition"),
+            ("kind", "changed", "material", "previousAction", "currentAction", "summary"),
+        ),
+        "readiness": _selected(
+            decision.get("readiness"),
+            (
+                "status", "state", "evaluated", "eligibleHypothesisCount",
+                "eligibleFamilyCount", "selectedCoreInferenceEligible",
+            ),
+        ),
+    }
+    continuity = _mapping(fitted.get("continuityDelta"))
+    previous = _mapping(continuity.get("previousDecision"))
+    fitted["continuityDelta"] = {
+        "status": continuity.get("status"),
+        "previousDecision": {
+            **_selected(previous, ("action", "decisionReadiness", "decidedAt")),
+            "summary": _sentence_text(previous.get("summary"), 96),
+        },
+        "previousSelectedHypothesisId": continuity.get("previousSelectedHypothesisId"),
+        "followUpConditions": [{
+            **_selected(
+                item,
+                ("field", "operator", "threshold", "purpose", "status"),
+            ),
+            "onSatisfied": _sentence_text(item.get("onSatisfied"), 80),
+        } for item in list(continuity.get("followUpConditions") or [])[:1]
+          if isinstance(item, dict)],
+    }
+    company = _mapping(fitted.get("companyEvidence"))
+    fitted["companyEvidence"] = {
+        **_selected(
+            company,
+            ("symbol", "companyName", "profile", "valuation", "coverage"),
+        ),
+    }
+    hypothesis_set = _mapping(fitted.get("hypothesisSet"))
+    fitted["hypothesisSet"] = {
+        **_selected(
+            hypothesis_set,
+            (
+                "hypothesisSetId", "questionId", "subjectSymbol",
+                "inferenceGenerationId", "scopeVersion", "comparisonRequired",
+                "minimumComparisonCount", "requiredMinimumComparisonCount",
+                "decisionEvidenceSummary",
+            ),
+        ),
+        "hypotheses": [
+            {
+                **_selected(
+                    item,
+                    (
+                        "hypothesisId", "templateId", "familyId", "stance",
+                        "candidateAction", "horizon", "supportingRuleIds",
+                        "supportingEvidenceIds", "counterEvidenceIds",
+                    ),
+                ),
+                "claim": _sentence_text(item.get("claim"), 80),
+            }
+            for item in list(hypothesis_set.get("hypotheses") or [])
+            if isinstance(item, dict)
+        ],
+    }
+    fitted["rules"] = list(fitted.get("rules") or [])[:3]
+    fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
+    fitted["decisionDrivers"] = list(fitted.get("decisionDrivers") or [])[:2]
+    fitted["dataLimits"] = list(fitted.get("dataLimits") or [])[:2]
+    fitted["evidenceLedger"] = [
+        _selected(
+            item,
+            (
+                "evidenceId", "role", "kind", "label", "sourceAsOf",
+                "ruleIds", "hypothesisIds", "judgementEligible",
+            ),
+        )
+        for item in list(fitted.get("evidenceLedger") or [])[:3]
+        if isinstance(item, dict)
+    ]
+    fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
+        fitted["evidenceLedger"]
+    )
+    fitted["routingAudit"] = {
+        "version": _mapping(fitted.get("routingAudit")).get("version"),
+        "status": "minimum-decision-contract",
+    }
+    if _json_bytes(fitted) <= budget:
+        return fitted
     raise ValueError(
         "AI decision core cannot preserve TypeDB hypotheses within "
         + str(budget)
-        + " bytes"
+        + " bytes (minimum contract requires "
+        + str(_json_bytes(fitted))
+        + " bytes)"
     )

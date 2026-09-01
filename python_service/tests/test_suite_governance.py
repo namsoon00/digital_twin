@@ -41,7 +41,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # adapter, ABox, world-routing, and semantic validation contracts.
         # Notification AI single-flight additionally protects semantic join,
         # material replacement, terminal suppression, and publish races.
-        self.assertLessEqual(total, 876)
+        self.assertLessEqual(total, 878)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

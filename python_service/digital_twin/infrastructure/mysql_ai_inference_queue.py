@@ -78,6 +78,10 @@ def ai_contract_failure_code(reason: object) -> str:
     text = _clean(reason).lower()
     if not text:
         return ""
+    if ("prompt" in text or "decision core" in text) and any(
+        token in text for token in ("budget", "bytes", "hard limit", "cannot preserve")
+    ):
+        return "prompt-contract-budget"
     if "required verified narrative sections" in text:
         return "missing-narrative-sections"
     if "counter" in text and ("evidence" in text or "hypothesis" in text):

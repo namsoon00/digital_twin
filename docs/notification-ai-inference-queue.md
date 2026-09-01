@@ -75,7 +75,10 @@ notification_jobs: pending
 
 The delivery deadline may remain disabled because inference is asynchronous.
 The attempt watchdog is different: it bounds one local model process so a hung
-execution cannot hold a worker forever. A retry uses the compact prompt budget.
+execution cannot hold a worker forever. The normal packet uses a 15 KiB cap.
+A retry uses a 12 KiB minimum-contract packet that keeps action, hypothesis
+identity, rules, evidence IDs, current facts, continuity, and valuation while
+the unabridged decision brief remains in the immutable audit store.
 
 Use `npm run python:ai-inference:status` to inspect queue state. The realtime
 status API also exposes `aiInferenceQueue` separately from delivery jobs.

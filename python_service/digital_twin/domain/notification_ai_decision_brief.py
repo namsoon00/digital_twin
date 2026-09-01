@@ -167,14 +167,14 @@ def notification_ai_execution_profile(
             fixed_effort or settings.get("notificationAiDeepReasoningEffort"),
             "max",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 14 * 1024, 12 * 1024, 16 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiDeepPromptMaxBytes", 15 * 1024, 12 * 1024, 16 * 1024)
     else:
         effort = _reasoning_effort(
             fixed_effort or settings.get("notificationAiStandardReasoningEffort"),
             "high",
         )
-        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 14 * 1024, 12 * 1024, 16 * 1024)
-    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 14 * 1024, 12 * 1024, 24 * 1024)
+        prompt_bytes = _int_setting(settings, "notificationAiStandardPromptMaxBytes", 15 * 1024, 12 * 1024, 16 * 1024)
+    queue_limit = _int_setting(settings, "notificationAiQueueMaxPromptBytes", 15 * 1024, 12 * 1024, 24 * 1024)
     return {
         "version": "notification-ai-execution-profile-v3",
         "name": profile,

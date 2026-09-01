@@ -9,6 +9,12 @@ from digital_twin.domain.notification_ai_gate_validation import validated_respon
 from digital_twin.domain.notification_ai_inference_packet import (
     build_notification_ai_inference_packet,
 )
+from digital_twin.domain.notification_ai_context_router import (
+    fit_notification_ai_decision_core,
+)
+from digital_twin.domain.notification_narrative import (
+    narrative_claim_evidence_contract,
+)
 from digital_twin.domain.notifications import NotificationJob
 
 
@@ -80,6 +86,99 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def test_retry_budget_preserves_minimum_contract_for_large_live_shape(self):
+        ledger = [
+            {
+                "evidenceId": "evidence:" + str(index),
+                "role": "risk" if index % 2 else "support",
+                "kind": "relation",
+                "label": "실제 관계 근거 " + str(index),
+                "source": "typedb",
+                "ruleIds": ["rule:" + str(index % 4)],
+                "hypothesisIds": [],
+                "judgementEligible": True,
+            }
+            for index in range(32)
+        ]
+        core = {
+            "schemaVersion": "investment-ai-decision-core-v1",
+            "notificationIntent": "investment-judgement",
+            "subject": {"symbol": "NVDA", "name": "NVIDIA", "market": "US"},
+            "question": {
+                "questionId": "question:1",
+                "intent": "investment-decision",
+                "horizon": "multi-horizon",
+                "text": "현재 행동을 바꿀 만큼 중요한 변화가 있는가?",
+            },
+            "facts": {
+                **{key: float(index) for index, key in enumerate((
+                    "currentPrice", "averagePrice", "profitLossRate", "quantity",
+                    "marketValue", "volume", "volumeRatio", "timeAdjustedVolumeRatio",
+                    "ma5", "ma20", "ma60", "ma5Distance", "ma20Distance",
+                    "ma60Distance", "priceChangeRate",
+                ), 1)},
+                "currency": "USD",
+                "market": "US",
+                "marketEvidenceProfile": {"capabilities": {str(index): "fresh" for index in range(20)}},
+            },
+            "decision": {
+                "previousAction": "HOLD",
+                "typeDbDecision": {"primaryAction": "HOLD", "judgementBlocked": False},
+                "actionEnvelope": {
+                    "status": "ACTIONABLE",
+                    "executionAction": "HOLD",
+                    "drivingRuleIds": ["rule:1", "rule:2"],
+                    "targetRole": "holding",
+                },
+                "transition": {"kind": "initial", "currentAction": "HOLD", "summary": "기준 상태"},
+                "readiness": {"status": "evaluated", "state": "sufficient", "evaluated": True},
+            },
+            "continuityDelta": {
+                "status": "available",
+                "previousDecision": {
+                    "action": "HOLD",
+                    "decisionReadiness": "conditional",
+                    "summary": "이전 판단의 상세 설명 " * 300,
+                },
+                "followUpConditions": [
+                    {"field": "ma20Distance", "operator": ">", "threshold": 0, "onSatisfied": "재검토 " * 20},
+                    {"field": "volumeRatio", "operator": ">", "threshold": 1, "onSatisfied": "확인 " * 20},
+                ],
+            },
+            "companyEvidence": {
+                "symbol": "NVDA",
+                "companyName": "NVIDIA",
+                "profile": {"sector": "Technology", "industry": "Semiconductors"},
+                "valuation": {"peRatio": 28, "forwardPE": 15, "trailingEPS": 8},
+                "latestFinancials": {
+                    "annual": [{"period": "2026", "revenue": 100, "netIncome": 50}],
+                    "quarterly": [{"period": "2026Q1", "revenue": 30, "netIncome": 15}],
+                },
+                "coverage": {"dataState": "sufficient", "officialSource": True},
+            },
+            "hypothesisSet": {
+                "hypothesisSetId": "hypothesis-set:1",
+                "questionId": "question:1",
+                "subjectSymbol": "NVDA",
+                "comparisonRequired": False,
+                "hypotheses": [],
+            },
+            "rules": [{"ruleId": "rule:" + str(index), "label": "규칙 " + str(index)} for index in range(8)],
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+            "dataLimits": ["자료 제한 " * 20],
+            "routingAudit": {"version": "notification-ai-context-route-v2", "status": "routed"},
+        }
+
+        fitted = fit_notification_ai_decision_core(core, 6 * 1024 + 1)
+
+        rendered_bytes = len(json.dumps(fitted, ensure_ascii=False, separators=(",", ":")).encode())
+        self.assertLessEqual(rendered_bytes, 6 * 1024 + 1)
+        self.assertEqual("minimum-decision-contract", fitted["routingAudit"]["status"])
+        self.assertEqual("HOLD", fitted["decision"]["actionEnvelope"]["executionAction"])
+        self.assertEqual(1.0, fitted["facts"]["currentPrice"])
+        self.assertLessEqual(len(fitted["evidenceLedger"]), 3)
+
     def test_packet_is_stable_and_declares_section_evidence(self):
         first = build_notification_ai_inference_packet(investment_context(), {})
         second = build_notification_ai_inference_packet(investment_context(), {})

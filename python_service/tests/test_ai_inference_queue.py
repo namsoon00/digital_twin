@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from digital_twin.application.ai_inference_queue_service import (
     AIInferenceQueueRunner,
     NotificationAIRequestEnqueuer,
+    ai_failure_diagnostic,
     ai_response_contract_error,
     preserve_verified_ai_narrative,
     typedb_inference_fallback_response,
@@ -83,6 +84,19 @@ class RecordingDecisionStore:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
+    def test_prompt_budget_failure_is_non_retryable_and_safe_to_persist(self):
+        diagnostic = ai_failure_diagnostic(
+            ValueError(
+                "AI decision core cannot preserve TypeDB hypotheses within 6145 bytes "
+                "(minimum contract requires 6923 bytes)"
+            ),
+            "ai-preparation",
+        )
+
+        self.assertEqual("prompt-contract-budget", diagnostic["category"])
+        self.assertFalse(diagnostic["retryable"])
+        self.assertIn("6145 bytes", diagnostic["safeDetail"])
+
     def test_verified_ai_narrative_survives_action_contract_fallback(self):
         reviewed = NotificationAIValidatedResponse(
             action="BUY",

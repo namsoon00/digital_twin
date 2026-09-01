@@ -92,7 +92,14 @@ def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict
 
     lowered = str(error or "").strip().lower()
     error_type = type(error).__name__ if isinstance(error, BaseException) else "Error"
-    if isinstance(error, NotificationAIContractError) or any(
+    if stage == "ai-preparation" and any(
+        token in lowered
+        for token in ("cannot preserve", "prompt exceeded", "hard limit", "bytes")
+    ):
+        category = "prompt-contract-budget"
+        retryable = False
+        summary = "AI prompt could not preserve its minimum decision contract within the configured budget."
+    elif isinstance(error, NotificationAIContractError) or any(
         token in lowered
         for token in ("contract", "hypothesis", "candidate fingerprint", "publication")
     ):
@@ -117,7 +124,7 @@ def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict
         category = "execution"
         retryable = True
         summary = "AI execution failed before a valid investment decision was produced."
-    return {
+    diagnostic = {
         "version": "notification-ai-failure-v1",
         "stage": str(stage or "model-execution"),
         "category": category,
@@ -125,6 +132,9 @@ def ai_failure_diagnostic(error: object, stage: str = "model-execution") -> Dict
         "errorType": error_type,
         "summary": summary,
     }
+    if category == "prompt-contract-budget":
+        diagnostic["safeDetail"] = str(error or "")[:320]
+    return diagnostic
 
 
 def attach_execution_writer_provenance(
@@ -476,7 +486,7 @@ class AIInferenceQueueRunner:
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
-            14 * 1024,
+            15 * 1024,
             12 * 1024,
             24 * 1024,
         )
@@ -593,7 +603,7 @@ class AIInferenceQueueRunner:
                 outcome = self.queue.retry(
                     request,
                     self.worker_id,
-                    diagnostic["summary"],
+                    diagnostic.get("safeDetail") or diagnostic["summary"],
                     retry_seconds=self.retry_seconds,
                 )
                 return request.request_id[:8] + " " + str(outcome.get("status") or "retry")

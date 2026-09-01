@@ -479,3 +479,23 @@ four ordered stale-row delete queries shared one transaction and took 21.3
 seconds, and the changed-scope write stage took 47.1 seconds. The next
 optimization boundary is therefore TypeDB current-state replacement and commit
 cost, not native-rule evaluation or duplicate matched-graph retrieval.
+
+## Exact Dependency Routing Across Fact Families
+
+A live MSTR replay exposed a correctness defect in incremental rule selection.
+The verified monitor snapshot reported an exact
+`kind:stock:field:profitlossrate` change, but its broad source families were
+`market`, `flow`, and `temporal`. The account-owned profit and loss notification
+rules declare `position` and `profile` families. The router compared those
+coarse families before checking the exact dependency key, so both rules were
+deferred even though the changed field matched their contract exactly.
+
+An authoritative dependency boundary now takes precedence over coarse fact
+families. Exact dependency keys are compared across every eligible condition;
+family matching remains the conservative fallback for incomplete boundaries,
+conditions without exact keys, and conservative conditions. The native rule
+engine compatibility version was advanced to
+`typedb-direct-typeql-rule-engine-v2`, preventing prior result slots produced
+under the lossy selection contract from being reused. Regression coverage
+uses the production loss and profit policy rule IDs with a market-family MSTR
+event and requires both rules to enter the candidate set.

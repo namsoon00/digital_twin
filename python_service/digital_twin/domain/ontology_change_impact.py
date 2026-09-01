@@ -925,17 +925,23 @@ def _rule_may_depend_on(
     families = {str(value or "") for value in profile.get("scopeFamilies") or []}
     if not changed_families or "unknown" in families or "state" in changed_families:
         return True
-    if not _families_intersect(families, changed_families):
-        return False
+    family_intersects = _families_intersect(families, changed_families)
     if not dependency_fingerprint_coverage_complete:
-        return True
+        return family_intersects
     changed_keys = {str(value or "") for value in changed_dependency_keys or [] if _clean(value)}
     if not changed_keys:
         return False
+
+    # A complete dependency boundary is more precise than its coarse fact
+    # family. One provider snapshot can carry account-owned values such as
+    # profitLossRate while the source event is broadly classified as market
+    # or temporal. Requiring the family labels to match first would silently
+    # skip the exact TypeDB rule even though its dependency key changed.
+    # Evaluate exact keys across every eligible condition, and retain the
+    # family match only for conditions that have no exact dependency identity.
     conditions = [
         item for item in profile.get("conditionProfiles") or []
         if isinstance(item, Mapping)
-        and _families_intersect(item.get("scopeFamilies") or [], changed_families)
         and (
             capability == "either"
             or capability == "trigger" and bool(item.get("canTriggerEvaluation", True))
@@ -945,14 +951,19 @@ def _rule_may_depend_on(
     if not conditions:
         return False
     for condition in conditions:
-        if bool(condition.get("conservative")):
+        condition_family_intersects = _families_intersect(
+            condition.get("scopeFamilies") or [], changed_families,
+        )
+        if bool(condition.get("conservative")) and condition_family_intersects:
             return True
         dependency_keys = {
             str(value or "")
             for value in condition.get("dependencyKeys") or []
             if _clean(value)
         }
-        if not dependency_keys or dependency_keys & changed_keys:
+        if dependency_keys & changed_keys:
+            return True
+        if not dependency_keys and condition_family_intersects:
             return True
     return False
 
@@ -1105,7 +1116,10 @@ def build_dynamic_inference_preflight(
     ] if provenance_complete else list(profiles)
     exact_candidate_profiles = [
         profile
-        for profile in family_candidate_profiles
+        # The exact dependency boundary can intentionally cross the coarse
+        # family boundary (for example profitLossRate delivered by a market
+        # snapshot). Do not pre-filter it with the lossy family candidate set.
+        for profile in profiles
         if _rule_may_depend_on(
             profile,
             event_families,

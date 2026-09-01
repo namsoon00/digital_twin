@@ -130,6 +130,51 @@ class OntologyChangeImpactTests(unittest.TestCase):
             plan["candidateRuleCount"], plan["familyCandidateRuleCount"],
         )
 
+        # A market-data snapshot also carries account-owned P/L fields. The
+        # exact dependency key must route the portfolio rule even when the
+        # event's coarse family remains ``market``.
+        cross_family_plan = build_dynamic_inference_preflight(
+            rules=[{
+                "ruleId": "graph.test.profit-policy-threshold.v1",
+                "enabled": True,
+                "conditions": [{
+                    "conditionId": "profit-threshold",
+                    "kind": "subject_property",
+                    "field": "profitLossRate",
+                }],
+            }],
+            target_symbols=["MSTR"],
+            requested_fact_families=["market"],
+            requested_dependency_keys=["kind:stock:field:profitlossrate"],
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+
+        self.assertTrue(cross_family_plan["exactDependencyRoutingUsed"])
+        self.assertEqual(
+            ["graph.test.profit-policy-threshold.v1"],
+            cross_family_plan["candidateRuleIds"],
+        )
+
+        production_cross_family_plan = build_dynamic_inference_preflight(
+            rules=default_graph_inference_rules(),
+            target_symbols=["MSTR"],
+            requested_fact_families=["market"],
+            requested_dependency_keys=["kind:stock:field:profitlossrate"],
+            event_fact_boundary_authoritative=True,
+            event_dependency_boundary_authoritative=True,
+            prior_result_slots_reusable=True,
+        )
+        self.assertIn(
+            "graph.notification.loss_policy_threshold.v1",
+            production_cross_family_plan["candidateRuleIds"],
+        )
+        self.assertIn(
+            "graph.notification.profit_policy_threshold.v1",
+            production_cross_family_plan["candidateRuleIds"],
+        )
+
     def scope_graph(self):
         return PortfolioOntology(
             "main",

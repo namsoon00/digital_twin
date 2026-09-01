@@ -60,12 +60,33 @@ class ReasoningEnginePlatformService:
         release_id: str,
         protected_bindings: Iterable[str],
     ) -> str:
+        return str(self.candidate_graph_database_selection(
+            deployment_id,
+            release_id,
+            protected_bindings,
+        ).get("database") or "")
+
+    def candidate_graph_database_selection(
+        self,
+        deployment_id: str,
+        release_id: str,
+        protected_bindings: Iterable[str],
+    ) -> Dict[str, object]:
+        """Select an isolated warm store before allocating a cold database.
+
+        A retired delivery database has already paid the TypeDB schema compile
+        cost and is the natural blue-green standby. A binding is reusable only
+        when its latest deployment completed ontology warmup; an older healthy
+        row cannot make a later failed provisioning attempt look reusable.
+        """
+
         protected = {str(item or "").strip() for item in protected_bindings if str(item or "").strip()}
         occupied = set(protected)
+        deployments = []
         list_deployments = getattr(self.registry, "list", None)
         if callable(list_deployments):
-            for row in list_deployments() or []:
-                item = dict(row or {})
+            deployments = [dict(row or {}) for row in list_deployments() or []]
+            for item in deployments:
                 if str(item.get("deploymentId") or item.get("deployment_id") or "").strip() == str(
                     deployment_id or ""
                 ).strip():
@@ -79,12 +100,53 @@ class ReasoningEnginePlatformService:
                 ).strip()
                 if binding:
                     occupied.add(binding)
+
+        latest_by_binding = {}
+        for index, item in enumerate(deployments):
+            binding = str(
+                item.get("graphStoreBinding")
+                or item.get("graph_store_binding")
+                or ""
+            ).strip()
+            if binding:
+                latest_by_binding[binding] = (index, item)
+        warm_candidates = []
+        for binding, (index, item) in latest_by_binding.items():
+            if binding in occupied:
+                continue
+            if str(item.get("status") or "").strip().lower() != "retired":
+                continue
+            health = dict(item.get("health") or {})
+            runtime_release = dict(health.get("runtimeOntologyRelease") or {})
+            if (
+                str(runtime_release.get("status") or "").strip().lower() != "ready"
+                or not bool(runtime_release.get("warmed"))
+                or int(runtime_release.get("ruleCount") or 0) <= 0
+            ):
+                continue
+            warm_candidates.append((index, binding, item))
+        if warm_candidates:
+            _, binding, source = max(warm_candidates, key=lambda value: value[0])
+            return {
+                "database": binding,
+                "mode": "reuse-existing",
+                "source": "verified-retired-delivery-store",
+                "sourceDeploymentId": str(
+                    source.get("deploymentId") or source.get("deployment_id") or ""
+                ),
+            }
+
         digest = hashlib.sha256(
             (str(deployment_id or "") + "|" + str(release_id or "")).encode("utf-8")
         ).hexdigest()[:16]
         candidate = "orbit_alpha_ontology_candidate_" + digest
         if candidate not in occupied:
-            return candidate
+            return {
+                "database": candidate,
+                "mode": "create-isolated",
+                "source": "immutable-release-database",
+                "sourceDeploymentId": "",
+            }
         # A deployment/release pair is immutable. If stale control-plane data
         # already occupies the deterministic binding, derive another isolated
         # name instead of reusing a prior candidate database.
@@ -97,7 +159,12 @@ class ReasoningEnginePlatformService:
                 + "|".join(sorted(occupied))
             ).encode("utf-8")
         ).hexdigest()[:16]
-        return "orbit_alpha_ontology_candidate_" + collision_digest
+        return {
+            "database": "orbit_alpha_ontology_candidate_" + collision_digest,
+            "mode": "create-isolated",
+            "source": "immutable-release-database-collision",
+            "sourceDeploymentId": "",
+        }
 
     def candidate_graph_isolation(self, control=None) -> Dict[str, object]:
         selected = control or self.registry.control()
@@ -1057,11 +1124,21 @@ class ReasoningEnginePlatformService:
                 "graphStoreBinding": requested_graph_store,
                 "protectedGraphStoreBindings": sorted(protected_graph_stores),
             }
-        candidate_graph_store = requested_graph_store or self.isolated_candidate_graph_database(
-            clean_deployment_id,
-            clean_release_id,
-            protected_graph_stores,
+        graph_store_selection = (
+            {
+                "database": requested_graph_store,
+                "mode": "reuse-existing",
+                "source": "explicit-release-registration",
+                "sourceDeploymentId": "",
+            }
+            if requested_graph_store
+            else self.candidate_graph_database_selection(
+                clean_deployment_id,
+                clean_release_id,
+                protected_graph_stores,
+            )
         )
+        candidate_graph_store = str(graph_store_selection.get("database") or "")
         inherited_time_series = str(
             active_row.get("timeSeriesBackendId")
             or active_row.get("time_series_backend_id")
@@ -1147,15 +1224,17 @@ class ReasoningEnginePlatformService:
                 ) in {"saved", "unchanged"},
             },
         }
-        if requested_graph_store:
-            # Supplying a graph database is an explicit assertion that its
-            # storage lifecycle is managed outside this release registration.
-            # Preserve that bootstrap contract so a provisioning worker does
-            # not redefine an already complete TypeDB schema.
+        if str(graph_store_selection.get("mode") or "") == "reuse-existing":
+            # Reusing a verified retired delivery store preserves its complete
+            # base schema. The immutable release artifact still replaces the
+            # release-specific TBox/RuleBox generations before validation.
             health_update["graphStoreProvisioning"] = {
                 "mode": "reuse-existing",
                 "database": candidate_graph_store,
-                "source": "explicit-release-registration",
+                "source": str(graph_store_selection.get("source") or ""),
+                "sourceDeploymentId": str(
+                    graph_store_selection.get("sourceDeploymentId") or ""
+                ),
             }
         if callable(update_health):
             update_health(clean_deployment_id, health_update)

@@ -572,6 +572,71 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertNotEqual("stale-fixed-shadow", database)
         self.assertTrue(database.startswith("orbit_alpha_ontology_candidate_"))
 
+        class WarmRegistry:
+            @staticmethod
+            def list():
+                return [
+                    {
+                        "deploymentId": "v2-retired-ready",
+                        "status": "retired",
+                        "graphStoreBinding": "typedb-warm-standby",
+                        "health": {
+                            "runtimeOntologyRelease": {
+                                "status": "ready",
+                                "warmed": True,
+                                "ruleCount": 119,
+                            },
+                        },
+                    },
+                ]
+
+        warm_platform = ReasoningEnginePlatformService(WarmRegistry())
+
+        selection = warm_platform.candidate_graph_database_selection(
+            "v2-candidate",
+            "release-candidate",
+            ["typedb-production"],
+        )
+
+        self.assertEqual("typedb-warm-standby", selection["database"])
+        self.assertEqual("reuse-existing", selection["mode"])
+        self.assertEqual("v2-retired-ready", selection["sourceDeploymentId"])
+
+        class FailedLatestRegistry:
+            @staticmethod
+            def list():
+                return [
+                    {
+                        "deploymentId": "v2-retired-ready",
+                        "status": "retired",
+                        "graphStoreBinding": "typedb-stale-standby",
+                        "health": {
+                            "runtimeOntologyRelease": {
+                                "status": "ready",
+                                "warmed": True,
+                                "ruleCount": 119,
+                            },
+                        },
+                    },
+                    {
+                        "deploymentId": "v2-retired-failed",
+                        "status": "retired",
+                        "graphStoreBinding": "typedb-stale-standby",
+                        "health": {},
+                    },
+                ]
+
+        failed_latest_platform = ReasoningEnginePlatformService(FailedLatestRegistry())
+
+        selection = failed_latest_platform.candidate_graph_database_selection(
+            "v2-candidate",
+            "release-candidate",
+            ["typedb-production"],
+        )
+
+        self.assertNotEqual("typedb-stale-standby", selection["database"])
+        self.assertEqual("create-isolated", selection["mode"])
+
     def test_current_status_keeps_historical_resolved_failures_without_degrading(self):
         deployment = {
             "deploymentId": "v2-active",

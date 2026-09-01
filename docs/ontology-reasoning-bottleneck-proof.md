@@ -385,6 +385,17 @@ candidate blocked behind it. This formed a second control-plane loop:
 
 Cold provisioning now has one consistent contract:
 
+- A rolling release first reuses the most recent isolated retired delivery
+  database whose latest deployment health proves a complete, warmed ontology
+  release. This preserves the compiled base schema and turns the normal
+  blue-green path into release-artifact replacement plus current-state replay.
+  A database is not reusable merely because an older deployment on the same
+  binding was healthy: the latest deployment for that binding must itself be
+  `retired`, `ready`, warmed, and have a non-empty runtime rule catalog.
+- A failed or incomplete candidate therefore poisons only its own binding for
+  automatic reuse. The next release chooses another verified warm standby or
+  allocates an immutable isolated database. Fixed shadow database names are
+  never trusted without this deployment-health proof.
 - The adapter, settings loader, managed-process specification, and subprocess
   environment all default to 16 definitions per schema transaction and a
   60-second per-transaction deadline. The complete release seed keeps its

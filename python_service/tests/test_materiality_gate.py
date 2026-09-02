@@ -214,6 +214,34 @@ class MaterialityGateTests(unittest.TestCase):
         self.assertEqual("reference-transition", assessment.change_state)
         self.assertIn("source-validity-state-change", assessment.matched_conditions)
 
+        previous = {
+            "symbol": "NVDA",
+            "currentPrice": 200,
+            "dataQuality": "actual",
+            "freshnessStatus": "realtime",
+            "sourceTimestampState": "websocket-received",
+            "latencyStatus": "live-transport",
+            "marketSession": "open",
+            "realTime": True,
+        }
+        current = {
+            **previous,
+            "dataQuality": "partial",
+            "freshnessStatus": "reference-only",
+            "sourceTimestampState": "provider-reference",
+            "latencyStatus": "delayed",
+            "realTime": False,
+        }
+
+        change = market_fact_change(previous, current)
+        assessment = market_change_materiality("NVDA", previous, current, change, {})
+
+        self.assertFalse(assessment.passed)
+        self.assertEqual("normal", assessment.grade)
+        self.assertEqual("reference-transition", assessment.change_state)
+        self.assertEqual("data-quality", assessment.facts["routingLane"])
+        self.assertIn("데이터 품질", assessment.reason)
+
     def test_news_collection_requests_reasoning_only_for_eligible_evidence_set_changes(self):
         weak = ResearchEvidence(
             "weak",

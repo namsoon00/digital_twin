@@ -225,12 +225,13 @@ class InvestmentAlertCoverageNotificationEnqueuer:
             "• 제한시간 초과: " + str(int(payload.get("overdueEventCount") or 0)) + "건",
             "• 처리 실패: " + str(int(payload.get("failedEventCount") or 0)) + "건",
             "• 판단 후보: " + str(int(payload.get("candidateEventCount") or 0))
-            + "건 · 전달 " + str(int(payload.get("deliveredCandidateCount") or 0)) + "건",
+            + "건 · 발송 가치 " + str(int(payload.get("deliveryEligibleCandidateCount") or 0))
+            + "건 · 전달 " + str(int(payload.get("deliveredEligibleCandidateCount") or 0)) + "건",
             "• 이유: " + _text(payload.get("reason")),
             "• 확인시각: " + _text(payload.get("checkedAt")),
         ]
         if payload.get("policyStarvation"):
-            lines.insert(-2, "• 정책 점검: 중요 후보가 연속 종료됐지만 사용자 전달 결과가 없습니다.")
+            lines.insert(-2, "• 정책 점검: 발송 가치가 확인된 후보가 연속 종료됐지만 전달 결과가 없습니다.")
         context = {
             **payload,
             "title": title,

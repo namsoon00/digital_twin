@@ -199,6 +199,11 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
             "abstention": abstention.to_dict() if abstention else {},
             "publication": publication.to_dict() if publication else {},
             "notificationJobId": subject_case.notification_job_id,
+            "deliveryState": getattr(subject_case, "delivery_state", "not-requested"),
+            "deliveryReason": getattr(subject_case, "delivery_reason", ""),
+            "deliveryEligible": getattr(subject_case, "delivery_eligible", None),
+            "deliveryReasonCode": getattr(subject_case, "delivery_reason_code", ""),
+            "deliveryValueClass": getattr(subject_case, "delivery_value_class", ""),
             "createdAt": subject_case.updated_at or subject_case.created_at,
         }
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

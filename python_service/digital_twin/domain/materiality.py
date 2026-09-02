@@ -400,16 +400,22 @@ def market_change_materiality(
         "institution-flow-pressure",
         "institution-flow-pressure-cleared",
     } & set(matched)
+    data_quality_only = bool(
+        {"data-state-change", "source-validity-state-change"} & set(matched)
+    ) and not directional and not confirmation
     if stateful_transition_policy and bool(signal_transition_result.get("immediate")):
         review_level = "immediate"
     elif "ma60-cross" in matched or (directional and confirmation):
         review_level = "act"
-    elif directional or confirmation or "data-state-change" in matched or "source-validity-state-change" in matched:
+    elif directional or confirmation:
         review_level = "check"
     else:
         review_level = "normal"
     passed = review_level in {"check", "act", "immediate"}
-    if price_change > 0:
+    if data_quality_only:
+        change_state = "reference-transition"
+        evidence_role = "context"
+    elif price_change > 0:
         change_state = "improving"
         evidence_role = "support"
     elif price_change < 0:
@@ -424,12 +430,16 @@ def market_change_materiality(
         or source_state in {"stale", "last-close", "reference-only", "unavailable", "no-tick"}
     ) else "sufficient"
     reason = (
-        "가격·추세 또는 수급 상태 전이가 지속성 기준을 통과해 다시 확인합니다."
-        if passed
+        "데이터 공급·신선도 변화만 확인되어 데이터 품질 이력에 기록하고 투자 재추론은 만들지 않습니다."
+        if data_quality_only
         else (
+            "가격·추세 또는 수급 상태 전이가 지속성 기준을 통과해 다시 확인합니다."
+            if passed
+            else (
             "새 상태 후보를 관찰 중이며 지속성 기준을 아직 충족하지 않아 TypeDB 재추론 요청은 만들지 않습니다."
             if pending_transitions
             else "값은 갱신됐지만 기존 상태가 유지되고 확정 전이가 없어 TypeDB 재추론 요청은 만들지 않습니다."
+            )
         )
     )
     return MaterialityAssessment(
@@ -454,6 +464,7 @@ def market_change_materiality(
             ),
             "confirmedSignalTransitions": confirmed_transitions[:20],
             "pendingSignalTransitionCount": len(pending_transitions),
+            "routingLane": "data-quality" if data_quality_only else "investment-reasoning",
             **flow_pressure_facts,
         },
         data_state=data_state,

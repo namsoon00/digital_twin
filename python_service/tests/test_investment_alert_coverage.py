@@ -14,6 +14,7 @@ from digital_twin.domain.investment_alert_coverage import (
     REVIEW_ONLY,
     SUPPRESSED,
     SUPERSEDED,
+    derive_delivery_eligibility,
     derive_coverage_outcome,
     evaluate_alert_coverage_health,
     material_event_assessment,
@@ -65,9 +66,9 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
             "candidatePresent": True,
         })["state"])
         self.assertEqual(FAILED, derive_coverage_outcome({"reasoningJobStatus": "failed"})["state"])
-        replaced = derive_coverage_outcome({"reasoningJobStatus": "superseded"})
-        self.assertEqual(SUPERSEDED, replaced["state"])
-        self.assertTrue(replaced["terminal"])
+        superseded = derive_coverage_outcome({"reasoningJobStatus": "superseded"})
+        self.assertEqual(SUPERSEDED, superseded["state"])
+        self.assertTrue(superseded["terminal"])
 
     def test_durable_subject_and_ai_states_survive_notification_job_retention(self):
         suppressed = derive_coverage_outcome({
@@ -118,6 +119,7 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
             "terminal": True,
             "state": SUPPRESSED,
             "candidatePresent": True,
+            "pushEligible": True,
             "eventAt": now.isoformat(),
         } for index in range(8)]
 
@@ -137,6 +139,55 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
         )
         self.assertEqual("healthy", delivered["state"])
         self.assertFalse(delivered["policyStarvation"])
+
+        for row in rows:
+            row["state"] = SUPPRESSED
+            row["pushEligible"] = False
+        web_only = evaluate_alert_coverage_health(
+            rows,
+            now=now,
+            starvation_min_candidates=8,
+        )
+        self.assertEqual("healthy", web_only["state"])
+        self.assertFalse(web_only["policyStarvation"])
+        self.assertEqual(0, web_only["deliveryEligibleCandidateCount"])
+
+        delivered = derive_delivery_eligibility({
+            "candidatePresent": True,
+            "notificationStatus": "done",
+        })
+        web_only = derive_delivery_eligibility({
+            "candidatePresent": True,
+            "finalAiDeliveryGate": {
+                "decision": "suppress",
+                "suppressionReason": "review_only_web_history",
+                "pushValueClass": "web-only-review",
+            },
+        })
+        authorized = derive_delivery_eligibility({
+            "candidatePresent": True,
+            "finalAiDeliveryGate": {
+                "decision": "send",
+                "pushValueClass": "material-source-evidence",
+            },
+        })
+        retained_delivery = derive_delivery_eligibility({
+            "candidatePresent": True,
+            "subjectDeliveryState": "delivered",
+        })
+        explicit_transition = derive_delivery_eligibility({
+            "candidatePresent": True,
+            "notificationStatus": "suppressed",
+            "subjectOutcomeKind": "FINAL_DECISION",
+            "cooldownDecision": "meaningful-change",
+        })
+
+        self.assertTrue(delivered["eligible"])
+        self.assertFalse(web_only["eligible"])
+        self.assertTrue(authorized["eligible"])
+        self.assertTrue(retained_delivery["eligible"])
+        self.assertTrue(explicit_transition["eligible"])
+        self.assertEqual("material-source-evidence", authorized["pushValueClass"])
 
 
 if __name__ == "__main__":

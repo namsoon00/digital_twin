@@ -9,6 +9,7 @@ from typing import Dict, Iterable, Mapping
 from ..domain.investment_alert_coverage import (
     ALERT_COVERAGE_CONTRACT_VERSION,
     derive_coverage_outcome,
+    derive_delivery_eligibility,
     evaluate_alert_coverage_health,
     material_event_assessment,
 )
@@ -254,6 +255,23 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                         "reasonCode": result.get("reason_code"),
                         "reason": result.get("reason") or row.get("last_error"),
                     })
+                    eligibility = derive_delivery_eligibility({
+                        "candidatePresent": candidate_present,
+                        "notificationStatus": notification.get("status"),
+                        "subjectStage": subject.get("stage"),
+                        "subjectOutcomeKind": subject.get("outcome_kind"),
+                        "subjectDeliveryState": subject_payload.get("deliveryState"),
+                        "subjectDeliveryEligible": subject_payload.get("deliveryEligible"),
+                        "subjectDeliveryReasonCode": subject_payload.get("deliveryReasonCode"),
+                        "subjectDeliveryValueClass": subject_payload.get("deliveryValueClass"),
+                        "publicationDelivered": bool(publication.get("deliveredAt")),
+                        "suppressionReason": suppression_reason,
+                        "cooldownDecision": notification_context.get("cooldownDecision"),
+                        "finalAiDeliveryGate": notification_context.get("finalAiDeliveryGate"),
+                        "preAiDeferredDeliveryDecision": notification_context.get(
+                            "preAiDeferredDeliveryDecision"
+                        ),
+                    })
                     source_event_id = _text(row.get("source_event_id"))
                     coverage_id = _coverage_id(
                         clean_deployment, source_event_id, account_id, symbol
@@ -283,9 +301,17 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                         "subjectStage": _text(subject.get("stage")),
                         "subjectOutcomeKind": _text(subject.get("outcome_kind")),
                         "subjectDeliveryState": _text(subject_payload.get("deliveryState")),
+                        "subjectDeliveryReason": _text(subject_payload.get("deliveryReason")),
+                        "subjectDeliveryEligible": subject_payload.get("deliveryEligible"),
+                        "subjectDeliveryReasonCode": _text(subject_payload.get("deliveryReasonCode")),
+                        "subjectDeliveryValueClass": _text(subject_payload.get("deliveryValueClass")),
                         "aiRequestStatus": _text(ai_request.get("status")),
                         "notificationStatus": _text(notification.get("status")),
                         "suppressionReason": suppression_reason,
+                        "pushEligible": bool(eligibility.get("eligible")),
+                        "pushEligibilityDetermined": bool(eligibility.get("determined")),
+                        "pushEligibilityReasonCode": _text(eligibility.get("reasonCode")),
+                        "pushValueClass": _text(eligibility.get("pushValueClass")),
                         "representationMode": _text(row.get("representation_mode")),
                     }
                     values.append((
@@ -402,7 +428,7 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
                            material, material_reason, coverage_state, terminal,
                            reason_code, reason, candidate_present,
                            notification_job_id, notification_status,
-                           event_at, created_at, updated_at
+                           event_at, created_at, updated_at, payload_json
                     FROM investment_alert_coverage
                     WHERE deployment_id = %s AND event_at >= %s
                     ORDER BY event_at DESC, coverage_id DESC
@@ -421,6 +447,14 @@ class MySQLInvestmentAlertCoverageStore(MySQLOperationalConnection):
             "reasonCode": _text(row.get("reason_code")),
             "reason": _text(row.get("reason")),
             "candidatePresent": bool(row.get("candidate_present")),
+            "pushEligible": bool(_mapping(row.get("payload_json")).get("pushEligible")),
+            "pushEligibilityDetermined": bool(
+                _mapping(row.get("payload_json")).get("pushEligibilityDetermined")
+            ),
+            "pushEligibilityReasonCode": _text(
+                _mapping(row.get("payload_json")).get("pushEligibilityReasonCode")
+            ),
+            "pushValueClass": _text(_mapping(row.get("payload_json")).get("pushValueClass")),
             "notificationJobId": _text(row.get("notification_job_id")),
             "notificationStatus": _text(row.get("notification_status")),
             "eventAt": _text(row.get("event_at")),

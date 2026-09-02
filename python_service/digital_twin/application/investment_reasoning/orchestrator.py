@@ -52,6 +52,7 @@ from ...domain.investment_reasoning.subject_case import (
     SUBJECT_SUPPRESSED,
     SUBJECT_VALIDATED,
 )
+from ...domain.investment_alert_coverage import derive_delivery_eligibility
 from .episode_projection import (
     decision_episode_from_subject_case,
     decision_episode_outcome_contract_readiness,
@@ -81,6 +82,32 @@ def _customer_notification_reasons(values: Iterable[object]) -> list:
             continue
         rows.append(normalized)
     return rows[:5]
+
+
+def _mark_subject_delivery(
+    subject_case: SubjectDecisionCase,
+    state: str,
+    reason: str = "",
+    context: Mapping[str, object] = None,
+) -> None:
+    values = _mapping(context)
+    publication = subject_case.publication
+    eligibility = derive_delivery_eligibility({
+        **values,
+        "candidatePresent": True,
+        "notificationStatus": state,
+        "subjectStage": subject_case.stage,
+        "subjectOutcomeKind": publication.outcome_kind if publication else "",
+        "subjectDeliveryState": state,
+    })
+    subject_case.mark_delivery(state, reason)
+    subject_case.delivery_eligible = (
+        bool(eligibility.get("eligible"))
+        if bool(eligibility.get("determined"))
+        else None
+    )
+    subject_case.delivery_reason_code = str(eligibility.get("reasonCode") or "")
+    subject_case.delivery_value_class = str(eligibility.get("pushValueClass") or "")
 
 
 class _EphemeralSubjectDecisionCaseStore:
@@ -647,7 +674,7 @@ class InvestmentReasoningOrchestrator:
                 delivered_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 version=publication.version,
             )
-        subject_case.mark_delivery("delivered")
+        _mark_subject_delivery(subject_case, "delivered", context=context)
         if (
             subject_case.publication is not None
             and subject_case.publication.outcome_kind == FINAL_DECISION
@@ -732,7 +759,7 @@ class InvestmentReasoningOrchestrator:
                 subject_case.publication is not None
                 and subject_case.publication.outcome_kind == FINAL_DECISION
             ):
-                subject_case.mark_delivery("suppressed", reason)
+                _mark_subject_delivery(subject_case, "suppressed", reason, context)
                 self._persist_subject(subject_case)
                 return subject_case
             if subject_case.stage not in {
@@ -745,7 +772,7 @@ class InvestmentReasoningOrchestrator:
                     SUPPRESSED,
                     explanation_snapshot={"reason": str(reason or "")},
                 )
-                subject_case.mark_delivery("suppressed", reason)
+                _mark_subject_delivery(subject_case, "suppressed", reason, context)
                 self._persist_subject(subject_case)
             return subject_case
         if not case_id:

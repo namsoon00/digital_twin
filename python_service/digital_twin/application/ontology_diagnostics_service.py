@@ -1324,6 +1324,15 @@ class OntologyDiagnosticsService:
             "failedEventCount": int(health.get("failedEventCount") or 0),
             "candidateEventCount": int(health.get("candidateEventCount") or 0),
             "deliveredCandidateCount": int(health.get("deliveredCandidateCount") or 0),
+            "deliveryEligibleCandidateCount": int(
+                health.get("deliveryEligibleCandidateCount") or 0
+            ),
+            "deliveredEligibleCandidateCount": int(
+                health.get("deliveredEligibleCandidateCount") or 0
+            ),
+            "terminalEligibleNonDeliveryCandidateCount": int(
+                health.get("terminalEligibleNonDeliveryCandidateCount") or 0
+            ),
             "policyStarvation": bool(health.get("policyStarvation")),
             "stateCounts": dict(summary.get("stateCounts") or {}),
             "latest": list(summary.get("latest") or [])[:20],

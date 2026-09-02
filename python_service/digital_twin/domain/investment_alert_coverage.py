@@ -49,6 +49,12 @@ SUBJECT_TERMINAL_STATES = {
     "BLOCKED": BLOCKED,
 }
 
+EXPLICIT_PUSH_AUTHORIZATIONS = {
+    "meaningful-change",
+    "scheduled-summary",
+    "typedb-profit-loss-change",
+}
+
 
 def _text(value: object) -> str:
     return " ".join(str(value or "").strip().split())
@@ -116,6 +122,110 @@ def material_event_assessment(
     if matched:
         return False, _text(matched[0].get("reason")) or "materiality-not-passed"
     return False, "no-materiality-contract"
+
+
+def derive_delivery_eligibility(values: Mapping[str, object]) -> Dict[str, object]:
+    """Classify whether a graph candidate had enough value to attempt a push.
+
+    Candidate creation proves that TypeDB evaluated a subject. It does not mean
+    that the result was user-facing: observations, baselines and review-only
+    outcomes intentionally remain in web history. Coverage must only diagnose
+    delivery starvation after a durable delivery gate authorized a push.
+    """
+
+    facts = _mapping(values)
+    if not bool(facts.get("candidatePresent")):
+        return {
+            "eligible": False,
+            "determined": True,
+            "reasonCode": "no-candidate",
+            "pushValueClass": "",
+        }
+
+    stored_eligible = facts.get("subjectDeliveryEligible")
+    if isinstance(stored_eligible, bool):
+        return {
+            "eligible": stored_eligible,
+            "determined": True,
+            "reasonCode": _text(facts.get("subjectDeliveryReasonCode"))
+            or ("durable-delivery-authorized" if stored_eligible else "durable-web-only"),
+            "pushValueClass": _text(facts.get("subjectDeliveryValueClass")),
+        }
+
+    notification_status = _text(facts.get("notificationStatus")).lower()
+    subject_delivery_state = _text(facts.get("subjectDeliveryState")).lower()
+    final_gate = _mapping(facts.get("finalAiDeliveryGate"))
+    final_decision = _text(final_gate.get("decision")).lower()
+    push_value_class = _text(final_gate.get("pushValueClass"))
+    if final_decision == "send":
+        return {
+            "eligible": True,
+            "determined": True,
+            "reasonCode": "final-ai-delivery-authorized",
+            "pushValueClass": push_value_class,
+        }
+    if (
+        notification_status in {"done", "sent", "delivered"}
+        or subject_delivery_state == "delivered"
+        or bool(facts.get("publicationDelivered"))
+    ):
+        return {
+            "eligible": True,
+            "determined": True,
+            "reasonCode": "notification-delivered",
+            "pushValueClass": push_value_class
+            or _text(facts.get("pushValueClass"))
+            or "delivered-candidate",
+        }
+    if final_decision == "suppress":
+        return {
+            "eligible": False,
+            "determined": True,
+            "reasonCode": _text(final_gate.get("suppressionReason")) or "final-ai-web-only",
+            "pushValueClass": push_value_class,
+        }
+
+    cooldown_decision = _text(facts.get("cooldownDecision")).lower()
+    subject_outcome = _text(facts.get("subjectOutcomeKind")).upper()
+    if (
+        cooldown_decision in EXPLICIT_PUSH_AUTHORIZATIONS
+        and subject_outcome not in {"ABSTAIN", "ABSTAINED", "REVIEW_ONLY", "OBSERVATION"}
+    ):
+        return {
+            "eligible": True,
+            "determined": True,
+            "reasonCode": "explicit-delivery-authorization",
+            "pushValueClass": cooldown_decision,
+        }
+
+    pre_ai_gate = _mapping(facts.get("preAiDeferredDeliveryDecision"))
+    if _text(pre_ai_gate.get("decision")).lower() == "suppress":
+        return {
+            "eligible": False,
+            "determined": True,
+            "reasonCode": _text(pre_ai_gate.get("suppressionReason")) or "pre-ai-web-only",
+            "pushValueClass": _text(pre_ai_gate.get("pushValueClass")),
+        }
+
+    subject_stage = _text(facts.get("subjectStage")).upper()
+    if (
+        notification_status in {"suppressed", "superseded"}
+        or subject_delivery_state in {"suppressed", "superseded"}
+        or subject_stage in SUBJECT_TERMINAL_STATES
+    ):
+        return {
+            "eligible": False,
+            "determined": True,
+            "reasonCode": _text(facts.get("suppressionReason")) or "terminal-web-only",
+            "pushValueClass": "",
+        }
+
+    return {
+        "eligible": False,
+        "determined": False,
+        "reasonCode": "delivery-eligibility-pending",
+        "pushValueClass": "",
+    }
 
 
 def derive_coverage_outcome(values: Mapping[str, object]) -> Dict[str, object]:
@@ -194,6 +304,12 @@ def derive_coverage_outcome(values: Mapping[str, object]) -> Dict[str, object]:
 
     reasoning_status = _text(facts.get("reasoningJobStatus")).lower()
     result_status = _text(facts.get("reasoningResultStatus")).lower()
+    if reasoning_status == "superseded":
+        return {
+            "state": SUPERSEDED,
+            "terminal": True,
+            "reasonCode": "reasoning-superseded",
+        }
     if reasoning_status in {"failed", "excluded"} or result_status in {"failed", "blocked", "error"}:
         return {
             "state": FAILED if reasoning_status == "failed" or result_status in {"failed", "error"} else BLOCKED,
@@ -277,15 +393,24 @@ def evaluate_alert_coverage_health(
     failures = [item for item in material if _text(item.get("state")).upper() == FAILED]
     candidates = [item for item in material if bool(item.get("candidatePresent"))]
     delivered = [item for item in candidates if _text(item.get("state")).upper() == DELIVERED]
+    eligible_candidates = [item for item in candidates if bool(item.get("pushEligible"))]
+    eligible_delivered = [
+        item for item in eligible_candidates
+        if _text(item.get("state")).upper() == DELIVERED
+    ]
     starvation_states = {SUPPRESSED, SUPERSEDED, REVIEW_ONLY, REFERENCE_ONLY, BLOCKED}
     terminal_non_delivery = [
         item for item in candidates
         if _text(item.get("state")).upper() in starvation_states
     ]
+    terminal_eligible_non_delivery = [
+        item for item in eligible_candidates
+        if _text(item.get("state")).upper() in starvation_states
+    ]
     starvation = bool(
-        len(candidates) >= max(1, int(starvation_min_candidates or 8))
-        and not delivered
-        and len(terminal_non_delivery) == len(candidates)
+        len(eligible_candidates) >= max(1, int(starvation_min_candidates or 8))
+        and not eligible_delivered
+        and len(terminal_eligible_non_delivery) == len(eligible_candidates)
     )
     terminal_pct = round((len(terminal) / len(material) * 100.0), 1) if material else 100.0
     if failures:
@@ -296,7 +421,7 @@ def evaluate_alert_coverage_health(
         reason = "중요 사건이 제한 시간 안에 최종 처리 상태에 도달하지 못했습니다."
     elif starvation:
         state = "warning"
-        reason = "중요 판단 후보가 연속 생성됐지만 사용자 전달 결과가 한 건도 없습니다."
+        reason = "발송 가치가 확인된 판단 후보가 연속 생성됐지만 사용자 전달 결과가 없습니다."
     else:
         state = "healthy"
         reason = "중요 사건이 모두 전달 또는 설명 가능한 종료 상태에 도달했습니다."
@@ -312,6 +437,9 @@ def evaluate_alert_coverage_health(
         "candidateEventCount": len(candidates),
         "deliveredCandidateCount": len(delivered),
         "terminalNonDeliveryCandidateCount": len(terminal_non_delivery),
+        "deliveryEligibleCandidateCount": len(eligible_candidates),
+        "deliveredEligibleCandidateCount": len(eligible_delivered),
+        "terminalEligibleNonDeliveryCandidateCount": len(terminal_eligible_non_delivery),
         "policyStarvation": starvation,
         "deadlineSeconds": max(1, int(deadline_seconds or 300)),
         "overdueCoverageIds": [_text(item.get("coverageId")) for item in overdue[:20]],

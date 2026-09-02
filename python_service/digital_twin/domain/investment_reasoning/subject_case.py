@@ -11,7 +11,7 @@ from typing import Dict, Iterable, Mapping, Optional, Tuple
 from .contracts import AIJudgmentResult, DecisionSynthesis, FinalDecision, HypothesisRecord
 
 
-SUBJECT_CASE_VERSION = "investment-subject-decision-case-v2"
+SUBJECT_CASE_VERSION = "investment-subject-decision-case-v3"
 CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v1"
 PUBLICATION_VERSION = "investment-decision-publication-v1"
 
@@ -289,6 +289,9 @@ class SubjectDecisionCase:
     publication: Optional[DecisionPublication] = None
     delivery_state: str = "not-requested"
     delivery_reason: str = ""
+    delivery_eligible: Optional[bool] = None
+    delivery_reason_code: str = ""
+    delivery_value_class: str = ""
     delivery_updated_at: str = ""
     errors: Tuple[Dict[str, object], ...] = ()
     created_at: str = field(default_factory=_now)
@@ -409,6 +412,9 @@ class SubjectDecisionCase:
             "publication": self.publication.to_dict() if self.publication else {},
             "deliveryState": self.delivery_state,
             "deliveryReason": self.delivery_reason,
+            "deliveryEligible": self.delivery_eligible,
+            "deliveryReasonCode": self.delivery_reason_code,
+            "deliveryValueClass": self.delivery_value_class,
             "deliveryUpdatedAt": self.delivery_updated_at,
             "errors": [dict(item) for item in self.errors],
             "createdAt": self.created_at,
@@ -425,6 +431,9 @@ class SubjectDecisionCase:
         decision = payload.get("finalDecision") or {}
         abstention = payload.get("abstention") or {}
         publication = payload.get("publication") or {}
+        delivery_eligible = payload.get("deliveryEligible")
+        if not isinstance(delivery_eligible, bool):
+            delivery_eligible = None
         return cls(
             subject_case_id=str(payload.get("subjectCaseId") or ""),
             batch_case_id=str(payload.get("batchCaseId") or ""),
@@ -450,6 +459,9 @@ class SubjectDecisionCase:
             publication=DecisionPublication.from_dict(publication) if publication else None,
             delivery_state=str(payload.get("deliveryState") or "not-requested"),
             delivery_reason=str(payload.get("deliveryReason") or ""),
+            delivery_eligible=delivery_eligible,
+            delivery_reason_code=str(payload.get("deliveryReasonCode") or ""),
+            delivery_value_class=str(payload.get("deliveryValueClass") or ""),
             delivery_updated_at=str(payload.get("deliveryUpdatedAt") or ""),
             errors=tuple(dict(item) for item in payload.get("errors") or [] if isinstance(item, Mapping)),
             created_at=str(payload.get("createdAt") or _now()),

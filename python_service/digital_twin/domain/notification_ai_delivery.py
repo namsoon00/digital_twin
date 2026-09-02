@@ -11,7 +11,7 @@ from .context_observation_notifications import (
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v10"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v11"
 PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v1"
 
 EXPLICIT_DELIVERY_AUTHORIZATIONS = {
@@ -121,7 +121,6 @@ def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -
     if not first_holding_review_candidate_is_admissible(context):
         return False
     validated = _mapping(context.get("notificationAiValidatedResponse"))
-    transition = _mapping(context.get("aiDecisionTransition"))
     publication = _mapping(context.get("decisionPublication"))
     execution = _mapping(context.get("notificationAiExecutionAudit"))
     writer = _mapping(context.get("notificationWriterProvenance"))
@@ -129,7 +128,6 @@ def first_holding_review_delivery_is_authorized(context: Mapping[str, object]) -
     execution_status = _text(execution.get("status")).lower()
     return bool(
         validated.get("action")
-        and transition.get("historyAvailable") is False
         and (not outcome_kind or outcome_kind == "FINAL_DECISION")
         and (not execution_status or execution_status == "completed")
         and execution_status != "typedb-fallback"

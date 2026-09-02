@@ -88,9 +88,9 @@ def position_observation_profiles(
         flow["reason"] = "별도 수급 기준시각이 없어 시세 기준시각을 사용합니다."
         flow["source"] = position.quote_source or "position-flow"
     return {
-        "quote": observation_profile(quote, market_decision, "quote", market),
-        "trend": observation_profile(trend, market_decision, "trend", market),
-        "flow": observation_profile(flow, market_decision, "flow", market),
+        "quote": observation_profile(quote, market_decision, "quote", market, checked_at),
+        "trend": observation_profile(trend, market_decision, "trend", market, checked_at),
+        "flow": observation_profile(flow, market_decision, "flow", market, checked_at),
         "static": static_observation_profile(market_decision, market),
     }
 
@@ -143,25 +143,51 @@ def observation_profile(
     market_session: Dict[str, object],
     domain: str,
     market: str,
+    checked_at: datetime = None,
 ) -> Dict[str, object]:
-    status = str((record or {}).get("status") or "unknown")
+    raw_status = str((record or {}).get("status") or "unknown").strip().lower()
     session_status = str((market_session or {}).get("status") or "unknown")
     source_as_of = str((record or {}).get("sourceAsOf") or "")
     source_fetched_at = str((record or {}).get("sourceFetchedAt") or "")
     timestamp_present = bool(source_as_of)
-    evidence_usable = status == "fresh" and session_status == "open" and timestamp_present
+    fetched_at = parse_datetime(source_fetched_at)
+    fetched_age_minutes = None
+    if fetched_at is not None:
+        current = checked_at or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        fetched_age_minutes = max(
+            0.0,
+            (current.astimezone(timezone.utc) - fetched_at.astimezone(timezone.utc)).total_seconds() / 60.0,
+        )
+    try:
+        max_age_minutes = max(1, int(float((record or {}).get("maxAgeMinutes") or 0)))
+    except (TypeError, ValueError):
+        max_age_minutes = 1
+    closed_market_reference = (
+        session_status in {"closed", "closed_exception"}
+        and raw_status in {"last-close", "market-closed-reference"}
+        and timestamp_present
+        and fetched_age_minutes is not None
+        and fetched_age_minutes <= max_age_minutes
+    )
+    status = "fresh" if closed_market_reference else raw_status
+    evidence_usable = status == "fresh" and timestamp_present
     if not timestamp_present:
         gate_reason = "원천 기준시각이 없어 투자 판단 근거로 사용할 수 없습니다."
     elif status != "fresh":
         gate_reason = str((record or {}).get("reason") or "신선도 기준 미충족")
+    elif closed_market_reference:
+        gate_reason = "최근 조회한 장 마감 기준값으로 판단에 사용하며 실시간 체결 신호로 보지 않습니다."
     elif session_status != "open":
-        gate_reason = str((market_session or {}).get("reason") or "현재 거래 세션이 닫혀 있습니다.")
+        gate_reason = "장 시간은 참고 정보이며 원천 시각과 신선도 기준을 통과한 근거는 판단에 사용합니다."
     else:
         gate_reason = "원천 기준시각과 거래 세션 기준을 통과했습니다."
     return {
         "observationDomain": domain,
         "freshnessRequired": True,
         "freshnessStatus": status,
+        "freshnessReferenceState": "last-close" if closed_market_reference else "",
         "freshnessReason": str((record or {}).get("reason") or ""),
         "freshnessGateReason": gate_reason,
         "freshnessAgeMinutes": (record or {}).get("ageMinutes"),

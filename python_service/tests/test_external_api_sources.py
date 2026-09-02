@@ -293,6 +293,29 @@ class ExternalApiSourceTests(unittest.TestCase):
         self.assertIn("신선한 현재가", merged.quote_message)
         self.assertAlmostEqual(8.19, merged.ma60_distance, places=2)
 
+        closed_reference = normalize_position({
+            "symbol": "035420",
+            "name": "NAVER",
+            "market": "KR",
+            "currency": "KRW",
+            "currentPrice": 207500,
+            "quoteSource": "KIS Open API",
+            "dataQuality": "actual",
+            "sourceAsOf": "2026-07-24T06:30:00Z",
+            "sourceFetchedAt": "2026-07-26T23:50:13Z",
+            "freshnessStatus": "last-close",
+            "freshnessReason": "장 마감 기준값",
+        })
+        profile = position_observation_profiles(
+            closed_reference,
+            {"asOf": "2026-07-26T23:55:00Z"},
+        )["quote"]
+
+        self.assertTrue(profile["judgementEvidenceUsable"])
+        self.assertEqual("fresh", profile["freshnessStatus"])
+        self.assertEqual("last-close", profile["freshnessReferenceState"])
+        self.assertIn("실시간 체결 신호", profile["freshnessGateReason"])
+
     def test_kis_rest_price_does_not_replace_fresh_toss_quote_without_websocket_tick(self):
         provider = KISMarketSignalProvider(
             settings={"kisMarketSignalsEnabled": "0"},

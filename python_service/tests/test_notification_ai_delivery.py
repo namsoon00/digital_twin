@@ -486,9 +486,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         first_holding = watchlist_context()
         first_holding["aiDecisionTransition"] = {
-            "historyAvailable": False,
-            "kind": "initial",
-            "previousAction": "",
+            "historyAvailable": True,
+            "kind": "unchanged",
+            "previousAction": "HOLD",
             "currentAction": "HOLD",
         }
         first_holding["decisionTransition"] = {
@@ -504,7 +504,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
         first_holding["ontologyRelationContext"]["actionEnvelope"]["targetRole"] = "holding"
         first_holding["cooldownDecision"] = "new-condition"
         first_holding["cooldownRecentSentCount"] = 0
-        self.assertEqual("send", final_ai_delivery_decision(first_holding)["decision"])
+        first_decision = final_ai_delivery_decision(first_holding)
+        self.assertEqual("send", first_decision["decision"])
+        self.assertEqual("first-final-holding-decision", first_decision["pushValueClass"])
 
         first_holding.update({
             "cooldownDecision": "new-condition",

@@ -11,8 +11,23 @@ from .context_observation_notifications import (
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v9"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v10"
 PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v1"
+
+EXPLICIT_DELIVERY_AUTHORIZATIONS = {
+    "typedb-profit-loss-change": (
+        "profit-loss-threshold-transition",
+        "손익 관리 조건 변화가 확인되어 현재 판단을 다시 알립니다.",
+    ),
+    "meaningful-change": (
+        "material-observation-transition",
+        "사용자가 확인해야 할 가격·수급·관계 조건 변화가 확인됐습니다.",
+    ),
+    "scheduled-summary": (
+        "scheduled-state-summary",
+        "설정한 재확인 시간이 지나 현재 판단을 다시 알립니다.",
+    ),
+}
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -27,6 +42,27 @@ def _items(value: object):
     if isinstance(value, (list, tuple, set)):
         return [item for item in value if _text(item)]
     return [_text(value)] if _text(value) else []
+
+
+def explicit_delivery_authorization(context: Mapping[str, object]) -> Dict[str, str]:
+    """Return a delivery authorization already granted by admission policy.
+
+    Cooldown and material-change admission run before TypeDB/AI delivery gates.
+    A later unchanged-state gate must not revoke an explicit threshold,
+    observation, or scheduled-review authorization. It may still enforce data,
+    publication, and AI validation contracts.
+    """
+
+    decision = _text(_mapping(context).get("cooldownDecision")).lower()
+    authorization = EXPLICIT_DELIVERY_AUTHORIZATIONS.get(decision)
+    if not authorization:
+        return {}
+    value_class, reason = authorization
+    return {
+        "decision": decision,
+        "pushValueClass": value_class,
+        "reason": reason,
+    }
 
 
 def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> bool:
@@ -339,6 +375,14 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         base.update({
             "reason": "보유 종목의 첫 최종 AI 판단이 완료되어 현재 행동과 다음 확인 조건을 알립니다.",
             "pushValueClass": "first-final-holding-decision",
+        })
+        return base
+    explicit_authorization = explicit_delivery_authorization(context)
+    if explicit_authorization:
+        base.update({
+            "reason": explicit_authorization["reason"],
+            "pushValueClass": explicit_authorization["pushValueClass"],
+            "deliveryAuthorization": explicit_authorization["decision"],
         })
         return base
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False

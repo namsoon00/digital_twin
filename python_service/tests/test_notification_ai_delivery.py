@@ -385,6 +385,17 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("suppress", incomplete["decision"])
         self.assertEqual("incomplete_customer_action_contract", incomplete["suppressionReason"])
         self.assertEqual("send", complete["decision"])
+        self.assert_explicit_profit_loss_authorization_survives_unchanged_ai_action()
+
+    def assert_explicit_profit_loss_authorization_survives_unchanged_ai_action(self):
+        context = watchlist_context()
+        context["cooldownDecision"] = "typedb-profit-loss-change"
+
+        decision = final_ai_delivery_decision(context)
+
+        self.assertEqual("send", decision["decision"])
+        self.assertEqual("profit-loss-threshold-transition", decision["pushValueClass"])
+        self.assertEqual("typedb-profit-loss-change", decision["deliveryAuthorization"])
 
     def test_non_material_graph_rebaseline_cannot_send_action_change(self):
         context = watchlist_context(ai_kind="action-changed")

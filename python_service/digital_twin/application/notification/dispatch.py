@@ -48,6 +48,8 @@ class NotificationDispatchService:
             raise
         provider = str(getattr(delivery, "label", "") or "")
         reason = str(getattr(delivery, "reason", "") or "")
+        receipt_metadata = dict(getattr(delivery, "metadata", {}) or {})
+        receipt_metadata["messageBytes"] = len(str(message or "").encode("utf-8"))
         context = dict(job.context or {})
         context["deliveryProvider"] = provider
         if reason:
@@ -63,6 +65,7 @@ class NotificationDispatchService:
                 delivered,
                 provider=provider,
                 reason=reason,
+                metadata=receipt_metadata,
             )
         if not delivered:
             raise RuntimeError(reason or "notification delivery failed")

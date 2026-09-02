@@ -15,7 +15,10 @@ from ...domain.market_hours import (
     evaluate_market_hours,
     normalize_off_hours_delivery_mode,
 )
-from ...domain.notification_ai_delivery import first_holding_review_candidate_is_admissible
+from ...domain.notification_ai_delivery import (
+    explicit_delivery_authorization,
+    first_holding_review_candidate_is_admissible,
+)
 from ...domain.notification_ai_context import is_graph_backed_relation_context
 from ...domain.notifications import NotificationJob
 
@@ -117,22 +120,27 @@ class NotificationDispatchEligibilityService:
         if not is_graph_backed_relation_context(relation) or "material" not in relation_diff:
             return True
         material = bool(relation_diff.get("material"))
+        explicit_authorization = explicit_delivery_authorization(context)
         first_holding_review = (
             not material
             and first_holding_review_candidate_is_admissible(context)
         )
         context["inferenceChangeGate"] = {
-            "version": "dispatch-inference-change-v2",
-            "decision": "send" if material or first_holding_review else "suppress",
+            "version": "dispatch-inference-change-v3",
+            "decision": "send" if material or first_holding_review or explicit_authorization else "suppress",
             "material": material,
+            "deliveryAuthorization": explicit_authorization.get("decision", ""),
             "reason": (
-                "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단"
-                if first_holding_review
-                else str(relation_diff.get("reason") or "")
+                explicit_authorization.get("reason")
+                or (
+                    "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단"
+                    if first_holding_review
+                    else str(relation_diff.get("reason") or "")
+                )
             ),
         }
         job.context = context
-        if material or first_holding_review:
+        if material or first_holding_review or explicit_authorization:
             return True
         reason = "TypeDB 관계 판단과 사용자 행동 범위가 이전 추론과 같아 AI와 알림을 다시 실행하지 않습니다."
         context["deliverySuppressionReason"] = "unchanged_graph_inference"

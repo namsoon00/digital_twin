@@ -13422,17 +13422,22 @@ class PythonServiceTests(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"ok": true}'
+                return b'{"ok": true, "result": {"message_id": 123, "chat": {"id": "chat"}}}'
 
         def fake_urlopen(request, timeout=0):
             sent_payloads.append(json.loads(request.data.decode("utf-8")))
             return FakeResponse()
 
         notifier = TelegramNotifier("token", "chat")
-        with mock.patch("digital_twin.infrastructure.notifications.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch(
+            "digital_twin.infrastructure.notification.transport.urllib.request.urlopen",
+            side_effect=fake_urlopen,
+        ):
             result = notifier.send("<b>[관찰] 이동평균 변화</b>\n<code>AAPL</code>")
 
         self.assertTrue(result.delivered)
+        self.assertTrue(result.metadata["receiptVerified"])
+        self.assertEqual(["123"], result.metadata["messageIds"])
         self.assertEqual("HTML", sent_payloads[0]["parse_mode"])
         self.assertEqual("<b>[관찰] 이동평균 변화</b>\n<code>AAPL</code>", sent_payloads[0]["text"])
 

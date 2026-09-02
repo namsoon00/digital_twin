@@ -46,6 +46,7 @@ from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.strategy_alerts import StrategyAlertMixin
 from digital_twin.domain.portfolio import utc_now_iso
 from digital_twin.application.notification_service import NotificationQueueRunner
+from digital_twin.application.notification.dispatch import NotificationDispatchService
 from digital_twin.application.notification.eligibility import NotificationDispatchEligibilityService
 from digital_twin.infrastructure.cli import public_settings_payload
 from digital_twin.infrastructure.notifications import NotificationResult, TelegramNotifier, notifier_for_operations
@@ -56,6 +57,57 @@ from digital_twin.infrastructure.mysql_notification_config import (
 
 
 class NotificationDataQualityPolicyTests(unittest.TestCase):
+    def assert_dispatch_persists_verified_transport_receipt(self):
+        completed = {}
+
+        class Queue:
+            def start_delivery_attempt(self, *_args, **_kwargs):
+                return "attempt-1"
+
+            def complete_delivery_attempt(
+                self,
+                _job,
+                _attempt_id,
+                delivered,
+                provider="",
+                reason="",
+                metadata=None,
+            ):
+                completed.update({
+                    "delivered": delivered,
+                    "provider": provider,
+                    "reason": reason,
+                    "metadata": dict(metadata or {}),
+                })
+
+        service = NotificationDispatchService(
+            Queue(),
+            notifier_factory=lambda _account: SimpleNamespace(
+                send=lambda _message: NotificationResult(
+                    True,
+                    "Telegram",
+                    metadata={
+                        "receiptVerified": True,
+                        "destinationVerified": True,
+                        "messageIds": ["321"],
+                    },
+                )
+            ),
+        )
+        job = NotificationJob.create(
+            "실제 알림",
+            account_id="main",
+            message_type="newsDigest",
+        )
+
+        service.deliver(job, {"main": object()}, job.text)
+
+        self.assertTrue(completed["delivered"])
+        self.assertEqual("Telegram", completed["provider"])
+        self.assertTrue(completed["metadata"]["receiptVerified"])
+        self.assertEqual(["321"], completed["metadata"]["messageIds"])
+        self.assertEqual(len("실제 알림".encode("utf-8")), completed["metadata"]["messageBytes"])
+
     def test_typedb_profit_loss_conditions_report_both_improvement_and_worsening(self):
         def job(action_group, change_state):
             return NotificationJob.create(
@@ -163,6 +215,30 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         )
         self.assertEqual("send", holding_job.context["inferenceChangeGate"]["decision"])
 
+        profit_loss_job = NotificationJob.create(
+            "SK하이닉스 손익 조건 변화",
+            account_id="main",
+            message_type="investmentInsight",
+            context={
+                **holding_job.context,
+                "cooldownDecision": "typedb-profit-loss-change",
+                "cooldownReason": "TypeDB 손익 관리 조건이 새로 성립",
+                "ontologyRelationDiff": {
+                    "material": False,
+                    "decisionTransition": {"kind": "unchanged", "material": False},
+                },
+            },
+        )
+        self.assertTrue(
+            NotificationDispatchEligibilityService(queue=None).apply_inference_change_gate(
+                profit_loss_job
+            )
+        )
+        self.assertEqual(
+            "typedb-profit-loss-change",
+            profit_loss_job.context["inferenceChangeGate"]["deliveryAuthorization"],
+        )
+
         watchlist_job = NotificationJob.create(
             "카카오 관심 점검",
             account_id="main",
@@ -199,6 +275,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(watchlist_decision.should_send)
         self.assertEqual("baseline", watchlist_decision.state_decision)
         self.assertEqual("initial_graph_baseline", watchlist_decision.suppression_reason)
+        self.assert_dispatch_persists_verified_transport_receipt()
 
     def test_investment_insight_uses_semantic_state_cooldown_without_text_similarity(self):
         default_rule = default_notification_rule("investmentInsight")

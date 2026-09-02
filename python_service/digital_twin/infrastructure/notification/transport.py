@@ -1,5 +1,6 @@
 """Console and Telegram channel transports."""
 
+import hashlib
 import json
 import re
 import urllib.error
@@ -59,11 +60,19 @@ def telegram_message_chunks(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> I
 
 
 class NotificationResult:
-    def __init__(self, delivered: bool, label: str, reason: str = "", queued: int = 0):
+    def __init__(
+        self,
+        delivered: bool,
+        label: str,
+        reason: str = "",
+        queued: int = 0,
+        metadata: Dict[str, object] = None,
+    ):
         self.delivered = delivered
         self.label = label
         self.reason = reason
         self.queued = queued
+        self.metadata = dict(metadata or {})
 
 
 class ConsoleNotifier:
@@ -102,8 +111,43 @@ class TelegramNotifier:
                 state=TELEGRAM_API_GUARD_STATE,
                 rate_limit_seconds=0,
             )
-            if isinstance(response_payload, dict) and response_payload.get("ok") is False:
-                return NotificationResult(False, self.label, str(response_payload.get("description") or "발송 실패"))
+            if not isinstance(response_payload, dict) or response_payload.get("ok") is not True:
+                description = (
+                    response_payload.get("description")
+                    if isinstance(response_payload, dict)
+                    else ""
+                )
+                return NotificationResult(False, self.label, str(description or "발송 실패"))
+            receipt = response_payload.get("result")
+            receipt = receipt if isinstance(receipt, dict) else {}
+            receipt_chat = receipt.get("chat")
+            receipt_chat = receipt_chat if isinstance(receipt_chat, dict) else {}
+            message_id = receipt.get("message_id")
+            returned_chat_id = str(receipt_chat.get("id") or "").strip()
+            configured_chat_id = str(self.chat_id or "").strip()
+            if message_id in (None, "") or not returned_chat_id:
+                return NotificationResult(
+                    False,
+                    self.label,
+                    "Telegram API가 메시지 생성 영수증을 반환하지 않았습니다.",
+                )
+            if returned_chat_id != configured_chat_id:
+                return NotificationResult(
+                    False,
+                    self.label,
+                    "Telegram API 응답의 수신 대상이 설정 계정과 일치하지 않습니다.",
+                )
+            return NotificationResult(
+                True,
+                self.label,
+                metadata={
+                    "receiptVerified": True,
+                    "destinationVerified": True,
+                    "chatFingerprint": hashlib.sha256(returned_chat_id.encode("utf-8")).hexdigest()[:16],
+                    "messageIds": [str(message_id)],
+                    "chunkCount": 1,
+                },
+            )
         except urllib.error.HTTPError as error:
             detail = ""
             try:
@@ -127,7 +171,7 @@ class TelegramNotifier:
                 reason = str(error) + ((" · " + detail) if detail else "")
                 return NotificationResult(False, self.label, reason)
             return NotificationResult(False, self.label, str(error))
-        return NotificationResult(True, self.label)
+        return NotificationResult(False, self.label, "Telegram 발송 결과를 확인하지 못했습니다.")
 
     def send(self, text: str) -> NotificationResult:
         if not self.bot_token or not self.chat_id:
@@ -135,12 +179,21 @@ class TelegramNotifier:
         if len(str(text or "")) > TELEGRAM_MESSAGE_LIMIT:
             chunks = list(telegram_message_chunks(telegram_plain_text(text)))
             total = len(chunks)
+            message_ids = []
+            receipt_metadata: Dict[str, object] = {}
             for index, chunk in enumerate(chunks, start=1):
                 label = ("(" + str(index) + "/" + str(total) + ")\n") if total > 1 else ""
                 result = self.post_message({"chat_id": self.chat_id, "text": label + chunk})
                 if not result.delivered:
                     return result
-            return NotificationResult(True, self.label)
+                receipt_metadata.update(result.metadata)
+                message_ids.extend(result.metadata.get("messageIds") or [])
+            receipt_metadata.update({
+                "messageIds": message_ids,
+                "chunkCount": total,
+                "receiptVerified": bool(message_ids) and len(message_ids) == total,
+            })
+            return NotificationResult(True, self.label, metadata=receipt_metadata)
         payload: Dict[str, object] = {"chat_id": self.chat_id, "text": text}
         if uses_telegram_html(text):
             payload["parse_mode"] = "HTML"

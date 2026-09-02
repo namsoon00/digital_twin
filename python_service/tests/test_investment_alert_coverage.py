@@ -13,6 +13,7 @@ from digital_twin.domain.investment_alert_coverage import (
     REFERENCE_ONLY,
     REVIEW_ONLY,
     SUPPRESSED,
+    SUPERSEDED,
     derive_coverage_outcome,
     evaluate_alert_coverage_health,
     material_event_assessment,
@@ -64,6 +65,9 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
             "candidatePresent": True,
         })["state"])
         self.assertEqual(FAILED, derive_coverage_outcome({"reasoningJobStatus": "failed"})["state"])
+        replaced = derive_coverage_outcome({"reasoningJobStatus": "superseded"})
+        self.assertEqual(SUPERSEDED, replaced["state"])
+        self.assertTrue(replaced["terminal"])
 
     def test_durable_subject_and_ai_states_survive_notification_job_retention(self):
         suppressed = derive_coverage_outcome({

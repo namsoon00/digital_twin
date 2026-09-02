@@ -201,6 +201,12 @@ def derive_coverage_outcome(values: Mapping[str, object]) -> Dict[str, object]:
             "reasonCode": _text(facts.get("reasonCode")) or "reasoning-" + (result_status or reasoning_status),
             "reason": _text(facts.get("reason")),
         }
+    if reasoning_status == "superseded" or result_status == "superseded":
+        return {
+            "state": SUPERSEDED,
+            "terminal": True,
+            "reasonCode": "reasoning-superseded",
+        }
     if reasoning_status == "completed":
         if bool(facts.get("candidatePresent")):
             return {"state": CANDIDATE, "terminal": False, "reasonCode": "candidate-without-subject-outcome"}

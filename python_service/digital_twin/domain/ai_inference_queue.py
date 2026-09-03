@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, Mapping
 
 from .notification_ai_gate_contracts import NOTIFICATION_AI_GATE_VERSION
-from .context_observation_notifications import typedb_context_observation_contract
+from .context_observation_notifications import typedb_narrative_only_contract
 from .notifications import NotificationJob
 from .portfolio import utc_now_iso
 
@@ -255,7 +255,7 @@ def notification_ai_review_mode(context: Dict[str, object]) -> str:
     configured = _clean(_mapping(context).get("notificationAiReviewMode")).lower()
     if configured in {AI_REVIEW_MODE_INVESTMENT_JUDGEMENT, AI_REVIEW_MODE_CONTEXT_NARRATIVE}:
         return configured
-    if typedb_context_observation_contract(context):
+    if typedb_narrative_only_contract(context):
         return AI_REVIEW_MODE_CONTEXT_NARRATIVE
     return AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
 

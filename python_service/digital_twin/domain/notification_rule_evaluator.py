@@ -390,6 +390,66 @@ def typedb_action_groups(context: Dict[str, object]) -> List[str]:
     return groups
 
 
+def typedb_notification_severity(context: Dict[str, object]) -> str:
+    relation = relation_context_from_notification_context(context or {})
+    decision = relation.get("decision") if isinstance(relation.get("decision"), dict) else {}
+    plan = relation.get("executionPlan") if isinstance(relation.get("executionPlan"), dict) else {}
+    severity = str(
+        plan.get("notificationSeverity")
+        or decision.get("notificationSeverity")
+        or context.get("severity")
+        or ""
+    ).strip().upper()
+    return severity if severity in {"ALERT", "WATCH"} else ""
+
+
+def apply_delivery_cadence(
+    decision: NotificationRuleDecision,
+    tier: str,
+    minutes: int,
+    reason: str,
+) -> None:
+    decision.delivery_cadence_tier = str(tier or "web-only")
+    decision.delivery_cadence_minutes = max(0, int(minutes or 0))
+    decision.delivery_cadence_reason = str(reason or "")
+
+
+def delivery_cadence_allows(
+    decision: NotificationRuleDecision,
+    tier: str,
+    minutes: int,
+    reason: str,
+) -> bool:
+    apply_delivery_cadence(decision, tier, minutes, reason)
+    if decision.state_recent_sent_count > 0 and not decision.state_last_sent_at:
+        decision.state_decision = "in-flight"
+        decision.state_suppressed = True
+        decision.state_reason = "같은 대상의 앞선 투자 인사이트가 AI 판단 또는 발송 대기 중입니다."
+        decision.mark_suppressed("in_flight_duplicate", decision.state_reason)
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return False
+    if (
+        decision.state_recent_sent_count > 0
+        and decision.state_last_sent_at
+        and decision.delivery_cadence_minutes > 0
+        and decision.state_last_sent_age_minutes < decision.delivery_cadence_minutes
+    ):
+        decision.state_decision = "cooldown"
+        decision.state_suppressed = True
+        decision.state_reason = (
+            reason
+            + ": 마지막 발송 후 "
+            + str(decision.state_last_sent_age_minutes)
+            + "분, 이 변화의 재알림 간격 "
+            + str(decision.delivery_cadence_minutes)
+            + "분"
+        )
+        decision.mark_suppressed("state_cooldown", decision.state_reason)
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return False
+    return True
+
+
 def typedb_profit_loss_delivery_reason(
     job: NotificationJob = None,
     previous_context: Dict[str, object] = None,
@@ -1096,51 +1156,26 @@ def apply_state_cooldown_rule(
     has_graph_transition = bool(transition)
     transition_is_material = bool(transition.get("material"))
     transition_kind = str(transition.get("kind") or "")
-    if (
-        has_graph_transition
-        and not transition_is_material
-        and decision.state_recent_sent_count <= 0
-        and holding_review_baseline_is_deliverable(job_context)
-    ):
-        decision.state_decision = "new-condition"
-        decision.state_reason = "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단"
-        decision.reasons.append("상태 정책: " + decision.state_reason)
-        return decision
-    if has_graph_transition and transition_kind == "initial" and not transition_is_material:
-        decision.state_decision = "baseline"
-        decision.state_suppressed = True
-        decision.state_reason = "최초 비실행 TypeDB 관계 상태를 알림·AI 실행 없이 기준선으로 저장"
-        decision.reasons.append("상태 정책: " + decision.state_reason)
-        decision.mark_suppressed("initial_graph_baseline", decision.state_reason)
-        return decision
-    if has_graph_transition and not transition_is_material:
-        decision.state_decision = "unchanged-inference"
-        decision.state_suppressed = True
-        decision.state_reason = "TypeDB 관계 판단과 사용자 행동 범위가 같아 AI와 알림을 다시 실행하지 않습니다."
-        decision.reasons.append("상태 정책: " + decision.state_reason)
-        decision.mark_suppressed("unchanged_graph_inference", decision.state_reason)
-        return decision
-    if has_graph_transition and transition_is_material and transition_kind != "initial" and decision.state_recent_sent_count > 0:
-        decision.state_decision = "meaningful-change"
-        decision.state_reason = "실행 판단 전이: " + str(transition.get("summary") or "현재 실행 범위가 바뀌었습니다.")
-        decision.similarity_bypassed = True
-        decision.similarity_bypass_reason = decision.state_reason
-        decision.reasons.append("상태 정책: " + decision.state_reason)
-        return decision
-    # For graph-backed alerts, a raw P&L or moving-average fluctuation must
-    # not bypass the cooldown when the TypeDB action envelope stayed the same.
-    if apply_typedb_profit_loss_delivery(
-        decision,
+    immediate_minutes = clamp_int(
+        config.immediate_cooldown_minutes,
+        0,
+        10080,
+        10,
+    )
+    material_minutes = clamp_int(
+        config.material_cooldown_minutes,
+        0,
+        10080,
+        60,
+    )
+    severity = typedb_notification_severity(job_context)
+
+    typedb_profit_loss_reason = typedb_profit_loss_delivery_reason(
         job,
         previous_context=previous_context,
         allow_without_previous=decision.state_recent_sent_count <= 0,
-    ):
-        return decision
-    if decision.state_recent_sent_count <= 0:
-        decision.state_decision = "new-condition"
-        decision.state_reason = "처음 확인된 상태"
-        decision.reasons.append("상태 정책: " + decision.state_reason)
-        return decision
+    )
+    matched_bypass = None
     if job is not None:
         for condition in config.similarity_bypass_conditions or []:
             if not condition.enabled:
@@ -1152,17 +1187,86 @@ def apply_state_cooldown_rule(
                 decision=decision,
             )
             if matched:
-                decision.state_decision = "meaningful-change"
-                if condition.condition_type in {"profit_loss_improved_gte", "ma60_crossed_above"}:
-                    change_label = "의미 있는 회복"
-                else:
-                    change_label = "의미 있는 변화"
-                decision.state_reason = change_label + ": " + reason
-                decision.similarity_bypassed = True
-                decision.similarity_bypass_reason = reason
-                decision.reasons.append("상태 정책: " + decision.state_reason)
-                return decision
+                matched_bypass = (condition, reason)
+                break
+
+    material_reason = ""
+    material_tier = ""
+    material_decision = "meaningful-change"
+    if typedb_profit_loss_reason:
+        material_reason = typedb_profit_loss_reason
+        material_tier = "immediate"
+        material_decision = "typedb-profit-loss-change"
+    elif matched_bypass:
+        condition, bypass_reason = matched_bypass
+        material_reason = bypass_reason
+        material_tier = (
+            "material"
+            if condition.condition_id in DATA_QUALITY_REPEAT_BYPASS_IDS
+            or condition.condition_type in {"list_new_items_gte", "baseline_age_gte"}
+            else "immediate"
+        )
+    elif has_graph_transition and transition_is_material and transition_kind != "initial":
+        material_reason = "실행 판단 전이: " + str(
+            transition.get("summary") or "현재 실행 범위가 바뀌었습니다."
+        )
+        material_tier = "immediate" if severity == "ALERT" else "material"
+
+    if material_reason and decision.state_recent_sent_count <= 0:
+        material_decision = "new-condition"
+
+    if material_reason:
+        cadence_minutes = immediate_minutes if material_tier == "immediate" else material_minutes
+        if not delivery_cadence_allows(
+            decision,
+            material_tier,
+            cadence_minutes,
+            material_reason,
+        ):
+            return decision
+        decision.state_decision = material_decision
+        decision.state_reason = material_reason
+        decision.similarity_bypassed = True
+        decision.similarity_bypass_reason = material_reason
+        decision.state_suppressed = False
+        decision.should_send = True
+        decision.delivery_state = "send"
+        decision.gate_state = "eligible"
+        decision.suppression_reason = ""
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
+
+    if (
+        has_graph_transition
+        and not transition_is_material
+        and decision.state_recent_sent_count <= 0
+        and holding_review_baseline_is_deliverable(job_context)
+    ):
+        apply_delivery_cadence(
+            decision,
+            "material",
+            material_minutes,
+            "보유 종목의 첫 TypeDB 판단",
+        )
+        decision.state_decision = "new-condition"
+        decision.state_reason = "보유 종목에서 조건 확인이 필요한 첫 TypeDB 판단"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
+    if has_graph_transition and transition_kind == "initial" and not transition_is_material:
+        apply_delivery_cadence(
+            decision,
+            "web-only",
+            0,
+            "최초 비실행 관계는 기준선으로만 저장",
+        )
+        decision.state_decision = "baseline"
+        decision.state_suppressed = True
+        decision.state_reason = "최초 비실행 TypeDB 관계 상태를 알림·AI 실행 없이 기준선으로 저장"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        decision.mark_suppressed("initial_graph_baseline", decision.state_reason)
+        return decision
     if decision.state_recent_sent_count > 0 and not decision.state_last_sent_at:
+        apply_delivery_cadence(decision, "web-only", 0, "앞선 알림 처리 중")
         decision.state_decision = "in-flight"
         decision.state_suppressed = True
         decision.state_reason = "같은 대상의 앞선 투자 인사이트가 AI 판단 또는 발송 대기 중입니다."
@@ -1174,12 +1278,43 @@ def apply_state_cooldown_rule(
         decision.reasons.append("상태 정책: " + decision.state_reason)
         return decision
     if decision.state_cooldown_minutes and decision.state_last_sent_age_minutes >= decision.state_cooldown_minutes:
+        apply_delivery_cadence(
+            decision,
+            "summary",
+            decision.state_cooldown_minutes,
+            "같은 상태의 정기 재확인",
+        )
         decision.state_decision = "scheduled-summary"
         decision.state_reason = "지속 상태 요약 " + str(decision.state_cooldown_minutes) + "분 경과"
         decision.similarity_bypassed = True
         decision.similarity_bypass_reason = decision.state_reason
         decision.reasons.append("상태 정책: " + decision.state_reason)
         return decision
+    if has_graph_transition and not transition_is_material:
+        apply_delivery_cadence(
+            decision,
+            "web-only",
+            0,
+            "TypeDB 관계 판단과 사용자 행동 범위가 동일",
+        )
+        decision.state_decision = "unchanged-inference"
+        decision.state_suppressed = True
+        decision.state_reason = "TypeDB 관계 판단과 사용자 행동 범위가 같고 재확인 시간 전이라 웹 이력에만 저장합니다."
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        decision.mark_suppressed("unchanged_graph_inference", decision.state_reason)
+        return decision
+    if decision.state_recent_sent_count <= 0:
+        apply_delivery_cadence(decision, "material", material_minutes, "처음 확인된 상태")
+        decision.state_decision = "new-condition"
+        decision.state_reason = "처음 확인된 상태"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        return decision
+    apply_delivery_cadence(
+        decision,
+        "web-only",
+        0,
+        "같은 상태가 재확인 시간 전까지 지속",
+    )
     decision.state_decision = "cooldown"
     decision.state_suppressed = True
     decision.state_reason = (

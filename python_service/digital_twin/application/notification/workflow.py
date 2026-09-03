@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from ...domain.context_observation_notifications import (
     is_typedb_context_observation_notification,
-    typedb_context_observation_contract,
+    typedb_narrative_only_contract,
 )
 from ...domain.disclosure_analysis import local_disclosure_analysis
 from ...domain.investment_brain import decision_episode_from_context
@@ -683,7 +683,7 @@ class NotificationQueueRunner:
     def should_defer_ai_inference(self, job: NotificationJob) -> bool:
         if self.dry_run or self.ai_request_enqueuer is None:
             return False
-        observation = typedb_context_observation_contract(job.context or {})
+        observation = typedb_narrative_only_contract(job.context or {})
         if observation and not bool(observation.get("requiresAiNarrative")):
             return False
         if not ai_gate_enabled_for_message_type(job.message_type, self.settings):

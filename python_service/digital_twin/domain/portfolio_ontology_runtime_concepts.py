@@ -507,7 +507,29 @@ def add_operational_world_concepts(
         "tboxClass": "CooldownPolicy",
         "fallbackMinutes": number(settings.get("notificationCooldownMinutes")) or 10,
         "legacyAlertCadence": safe_setting_value("alertCadenceMinutes", settings.get("alertCadenceMinutes") or ""),
+        "configurationSource": "notification_rules",
+        "decisionBoundary": "delivery-only",
     })
+    for tier_key, tier_label, tier_basis in (
+        ("immediate", "즉시 변화", "손익·행동·주요 기준선 전환"),
+        ("material", "중요 근거", "새 원문·공시 또는 중요 TypeDB 관계 전이"),
+        ("summary", "정기 요약", "같은 판단 상태의 설정 주기 재확인"),
+        ("web-only", "웹 기록", "새 사용자 행동 가치가 없는 참고·반복 상태"),
+    ):
+        tier_id = add_entity(graph, "delivery-cadence-tier", tier_key, tier_label, {
+            "tboxClass": "DeliveryCadenceTier",
+            "cadenceTier": tier_key,
+            "basis": tier_basis,
+            "configurationSource": "notification_rules",
+            "decisionBoundary": "delivery-only",
+        })
+        add_relation(
+            graph,
+            cooldown_policy_id,
+            tier_id,
+            "HAS_DELIVERY_CADENCE_TIER",
+            properties={"source": "operational-ontology"},
+        )
     suppression_policy_id = add_entity(graph, "suppression-policy", "duplicate-insight", "중복 인사이트 억제 정책", {
         "tboxClass": "SuppressionPolicy",
         "basis": "same-subject-same-insight-type-without-material-relation-change",

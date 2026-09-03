@@ -803,6 +803,8 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.similarity_bypassed)
 
     def test_action_change_bypasses_investment_insight_cooldown(self):
+        self._assert_profit_loss_change_is_checked_before_unchanged_graph_suppression()
+        self._assert_unchanged_graph_emits_scheduled_summary_after_summary_cooldown()
         rule = default_notification_rule("investmentInsight")
         job = NotificationJob.create(
             "판단 액션 변경",
@@ -837,6 +839,111 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("meaningful-change", decision.state_decision)
         self.assertIn("권장 대응 변경", decision.state_reason)
+
+    def _assert_profit_loss_change_is_checked_before_unchanged_graph_suppression(self):
+        rule = default_notification_rule("investmentInsight")
+        context = {
+            "severity": "WATCH",
+            "symbol": "000660",
+            "profitLossRate": -12.2,
+            "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
+            "sourceSignalTypes": ["holdingTiming"],
+            "ontologyRelationDiff": {
+                "material": False,
+                "decisionTransition": {"kind": "unchanged", "material": False},
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "sourceAboxSnapshotId": "abox:hynix:2",
+                "inferenceGenerationId": "generation:hynix:2",
+                "generationAligned": True,
+                "decision": {"basis": "typedbInferenceBox", "actionGroup": "lossControl"},
+                "decisionState": {"reviewLevel": "act", "dataState": "sufficient"},
+                "actionEnvelope": {"preferredAction": "TRIM"},
+            },
+        }
+        job = NotificationJob.create(
+            "손실 변화 점검",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+        decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(job, rule),
+            rule,
+            sent_count=1,
+            previous_context={**context, "profitLossRate": -10.9},
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=11,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("immediate", decision.delivery_cadence_tier)
+        self.assertEqual(10, decision.delivery_cadence_minutes)
+        self.assertNotEqual("unchanged-inference", decision.state_decision)
+
+        pending_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(job, rule),
+            rule,
+            sent_count=1,
+            previous_context={**context, "profitLossRate": -10.9},
+            last_sent_at="",
+            last_sent_age_minutes=0,
+            job=job,
+        )
+        self.assertFalse(pending_decision.should_send)
+        self.assertEqual("in-flight", pending_decision.state_decision)
+        self.assertEqual("in_flight_duplicate", pending_decision.suppression_reason)
+
+    def _assert_unchanged_graph_emits_scheduled_summary_after_summary_cooldown(self):
+        rule = default_notification_rule("investmentInsight")
+        context = {
+            "severity": "WATCH",
+            "symbol": "MSTR",
+            "profitLossRate": 2.0,
+            "ontologyInsight": {"subject": "MSTR", "dispatchInsightType": "holdingPositionCommon"},
+            "sourceSignalTypes": ["holdingTiming"],
+            "ontologyRelationDiff": {
+                "material": False,
+                "decisionTransition": {"kind": "unchanged", "material": False},
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "sourceAboxSnapshotId": "abox:mstr:2",
+                "inferenceGenerationId": "generation:mstr:2",
+                "generationAligned": True,
+                "decision": {"basis": "typedbInferenceBox", "actionGroup": "positionReview"},
+                "decisionState": {"reviewLevel": "check", "dataState": "sufficient"},
+                "actionEnvelope": {"preferredAction": "HOLD", "targetRole": "holding"},
+            },
+        }
+        job = NotificationJob.create(
+            "보유 상태 재확인",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+        decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(job, rule),
+            rule,
+            sent_count=1,
+            previous_context=dict(context),
+            last_sent_at=utc_now_iso(),
+            last_sent_age_minutes=361,
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("scheduled-summary", decision.state_decision)
+        self.assertEqual("summary", decision.delivery_cadence_tier)
+        self.assertEqual(360, decision.delivery_cadence_minutes)
 
 if __name__ == "__main__":
     unittest.main()

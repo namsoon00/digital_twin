@@ -663,6 +663,16 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
     "notification_rules": (
         MySQLColumnDefinition(
             "notification_rules",
+            "immediate_cooldown_minutes",
+            "INT NOT NULL DEFAULT 10",
+        ),
+        MySQLColumnDefinition(
+            "notification_rules",
+            "material_cooldown_minutes",
+            "INT NOT NULL DEFAULT 60",
+        ),
+        MySQLColumnDefinition(
+            "notification_rules",
             "off_hours_delivery_mode",
             "VARCHAR(32) NOT NULL DEFAULT 'important_only'",
         ),

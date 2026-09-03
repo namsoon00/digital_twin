@@ -1176,6 +1176,8 @@ MYSQL_SCHEMA = [
         similarity_bypass_conditions_json LONGTEXT NOT NULL,
         similarity_fields_json LONGTEXT NOT NULL,
         state_cooldown_enabled TINYINT NOT NULL DEFAULT 0,
+        immediate_cooldown_minutes INT NOT NULL DEFAULT 10,
+        material_cooldown_minutes INT NOT NULL DEFAULT 60,
         state_cooldown_minutes INT NOT NULL DEFAULT 0,
         market_hours_enabled TINYINT NOT NULL DEFAULT 0,
         market_hours_markets_json LONGTEXT NOT NULL,

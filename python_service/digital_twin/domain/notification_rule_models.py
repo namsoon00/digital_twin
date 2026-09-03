@@ -109,6 +109,14 @@ def default_state_cooldown_minutes(message_type: str) -> int:
     return 360 if default_state_cooldown_enabled(message_type) else 0
 
 
+def default_immediate_cooldown_minutes(message_type: str) -> int:
+    return 10 if default_state_cooldown_enabled(message_type) else 0
+
+
+def default_material_cooldown_minutes(message_type: str) -> int:
+    return 60 if default_state_cooldown_enabled(message_type) else 0
+
+
 @dataclass
 class NotificationRuleCondition:
     """A named observation used in delivery diagnostics, never a score input."""
@@ -288,6 +296,8 @@ class NotificationRuleConfig:
     similarity_bypass_conditions: List[SimilarityBypassCondition] = dataclass_field(default_factory=list)
     similarity_fields: List[str] = dataclass_field(default_factory=lambda: list(DEFAULT_SIMILARITY_FIELDS))
     state_cooldown_enabled: bool = False
+    immediate_cooldown_minutes: int = 0
+    material_cooldown_minutes: int = 0
     state_cooldown_minutes: int = 0
     market_hours_enabled: bool = False
     market_hours_markets: List[str] = dataclass_field(default_factory=list)
@@ -355,6 +365,18 @@ class NotificationRuleConfig:
                 payload.get("stateCooldownEnabled", payload.get("state_cooldown_enabled")),
                 default_state_cooldown_enabled(message_type),
             ),
+            immediate_cooldown_minutes=clamp_int(
+                payload.get("immediateCooldownMinutes", payload.get("immediate_cooldown_minutes")),
+                0,
+                10080,
+                default_immediate_cooldown_minutes(message_type),
+            ),
+            material_cooldown_minutes=clamp_int(
+                payload.get("materialCooldownMinutes", payload.get("material_cooldown_minutes")),
+                0,
+                10080,
+                default_material_cooldown_minutes(message_type),
+            ),
             state_cooldown_minutes=clamp_int(
                 payload.get("stateCooldownMinutes", payload.get("state_cooldown_minutes")),
                 0,
@@ -383,6 +405,8 @@ class NotificationRuleConfig:
             "similarityBypassConditions": [condition.to_dict() for condition in self.similarity_bypass_conditions],
             "similarityFields": list(self.similarity_fields or []),
             "stateCooldownEnabled": bool(self.state_cooldown_enabled),
+            "immediateCooldownMinutes": int(self.immediate_cooldown_minutes or 0),
+            "materialCooldownMinutes": int(self.material_cooldown_minutes or 0),
             "stateCooldownMinutes": int(self.state_cooldown_minutes or 0),
             "marketHoursEnabled": bool(self.market_hours_enabled),
             "marketHoursMarkets": list(self.market_hours_markets or []),
@@ -420,6 +444,9 @@ class NotificationRuleDecision:
     similarity_reason: str = ""
     suppression_reason: str = ""
     state_cooldown_enabled: bool = False
+    delivery_cadence_tier: str = ""
+    delivery_cadence_minutes: int = 0
+    delivery_cadence_reason: str = ""
     state_cooldown_minutes: int = 0
     state_recent_sent_count: int = 0
     state_last_sent_at: str = ""
@@ -497,9 +524,10 @@ class NotificationRuleDecision:
                 "reason": self.state_reason,
                 "status": "released" if self.should_send else "suppressed",
                 "previousValue": self.state_last_sent_age_minutes,
-                "threshold": self.state_cooldown_minutes,
+                "threshold": self.delivery_cadence_minutes or self.state_cooldown_minutes,
                 "unit": "minutes",
                 "source": "notification-state-policy",
+                "deliveryCadenceTier": self.delivery_cadence_tier,
             })
         if self.similarity_bypassed and self.similarity_bypass_reason:
             trigger_ledger.append({
@@ -546,6 +574,9 @@ class NotificationRuleDecision:
             "repeatReason": self.similarity_reason,
             "deliverySuppressionReason": self.suppression_reason,
             "cooldownEnabled": bool(self.state_cooldown_enabled),
+            "deliveryCadenceTier": self.delivery_cadence_tier,
+            "deliveryCadenceMinutes": self.delivery_cadence_minutes,
+            "deliveryCadenceReason": self.delivery_cadence_reason,
             "cooldownMinutes": self.state_cooldown_minutes,
             "cooldownRecentSentCount": self.state_recent_sent_count,
             "cooldownLastSentAt": self.state_last_sent_at,
@@ -618,6 +649,8 @@ def default_notification_rule(message_type: str) -> NotificationRuleConfig:
         ],
         similarity_fields=similarity_fields,
         state_cooldown_enabled=default_state_cooldown_enabled(key),
+        immediate_cooldown_minutes=default_immediate_cooldown_minutes(key),
+        material_cooldown_minutes=default_material_cooldown_minutes(key),
         state_cooldown_minutes=default_state_cooldown_minutes(key),
         market_hours_enabled=default_market_hours_enabled(key),
         market_hours_markets=default_market_hours_markets(key),

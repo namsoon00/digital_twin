@@ -52,6 +52,35 @@ AI validation and existing context enrichers are invoked by the workflow as
 existing collaborators. Their investment semantics are intentionally unchanged
 by this notification refactor.
 
+### Delivery Cadence
+
+Investment delivery uses four explicit classes. The class is delivery policy,
+not investment evidence, and can only consume TypeDB-authored action authority,
+notification severity, relation transitions, source-event identity, and stored
+decision continuity.
+
+- `immediate`: loss/profit, final action, or major threshold transitions. The
+  default repeat floor is 10 minutes.
+- `material`: a new important source document or material TypeDB relation
+  transition. The default repeat floor is 60 minutes.
+- `summary`: an unchanged but still active state. The default review interval
+  is 360 minutes.
+- `web-only`: reference or unchanged state with no user decision value. It is
+  retained for audit without interrupting the user.
+
+The admin notification rule stores all three time intervals. A verified
+immediate or material change is evaluated before unchanged-relation
+suppression, and an unchanged relation becomes eligible for a scheduled summary
+after the configured interval. This prevents a stable TypeDB fingerprint from
+silencing a position forever.
+
+TypeDB action authority also splits publication paths. `originate` may enter
+the AI investment-judgement contract. `modify` and `observe` enter a narrative
+review path that may explain a verified risk or constraint but must publish
+`NO_ACTION`; it cannot synthesize HOLD, BUY, TRIM, or SELL. If optional AI prose
+fails, a materially authorized review may still deliver TypeDB facts without a
+fabricated investment action.
+
 ### Infrastructure
 
 `infrastructure/notification/` owns adapters:
@@ -71,10 +100,11 @@ The old `application/notification_service.py` and
    the source event and reasoning identities into `NotificationSourceTrace`.
 3. The MySQL adapter evaluates admission policy and atomically stores the job
    plus `received` and `eligibility_checked` events.
-4. The worker claims the job. Cooldown or similar-message results may suppress
-   delivery, while closed-market and stale-data findings are recorded without
-   blocking AI or delivery. AI-gated jobs enter `awaiting_decision` and persist
-   the final DecisionEpisode.
+4. The worker claims the job. TypeDB action authority routes it to investment
+   judgement or actionless review, then the cadence policy applies immediate,
+   material, summary, or web-only delivery. Closed-market and stale-data
+   findings are recorded without blocking AI or delivery. Actionable AI-gated
+   jobs enter `awaiting_decision` and persist the final DecisionEpisode.
 5. Dispatch eligibility is checked after the decision is stored. Market-hours
    and freshness are rechecked as advisories; stale investment data may request
    an asynchronous refresh while the current notification continues. The

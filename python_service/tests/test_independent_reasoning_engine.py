@@ -170,6 +170,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         ))
 
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
+        self._assert_non_originating_hypothesis_routes_to_review_observation()
         self._assert_target_scope_repair_is_retryable_without_duplicate_flag()
         self._assert_failure_recovery_allows_only_repairable_blocked_results()
         self._assert_replayed_crypto_event_upgrades_stale_dependency_contract()
@@ -228,6 +229,67 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertFalse(
             second["judgmentReady"][0].metadata["preDecisionDeliveryCadence"]["eligible"]
         )
+
+    def _assert_non_originating_hypothesis_routes_to_review_observation(self):
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-08-16T00:00:00Z",
+        )
+        rule = {
+            "ruleId": "graph.disclosure.financing_or_dilution.risk.v1",
+            "matched": True,
+            "knowledgeBasis": {
+                "ruleKind": "predictive-hypothesis",
+                "decisionEligibility": "conditional",
+                "requiresHypothesis": True,
+            },
+        }
+        relation = {
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "sourceAboxSnapshotId": "abox:review",
+            "inferenceGenerationId": "generation:review",
+            "generationAligned": True,
+            "subject": {"symbol": "MSTR", "name": "Strategy", "market": "US"},
+            "facts": {"currentPrice": 100.0, "source": "holding"},
+            "decision": {
+                "selectedRuleId": rule["ruleId"],
+                "notificationSeverity": "WATCH",
+                "label": "공시 위험 점검",
+                "basis": "typedbInferenceBox",
+            },
+            "activeRules": [rule],
+            "matchedRules": [rule],
+            "graphStoreInference": {
+                "graphStore": "typedb",
+                "sourceAboxSnapshotId": "abox:review",
+                "inferenceGenerationId": "generation:review",
+                "relations": [rule],
+                "traces": [{"traceId": "trace:review", **rule}],
+            },
+        }
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:review",
+            account_id="acct",
+            symbol="MSTR",
+            source_abox_snapshot_id="abox:review",
+            inference_generation_id="generation:review",
+            graph_candidate_action="HOLD",
+            eligible_hypothesis_ids=("hypothesis:review",),
+            action_authority="modify",
+            review_level="check",
+        )
+
+        event = builder._base_event(snapshot, relation, synthesis)
+
+        self.assertIsNotNone(event)
+        self.assertEqual("typedb-review-observation", event.metadata["notificationDecisionMode"])
+        self.assertFalse(event.metadata["requiresAiJudgement"])
+        self.assertEqual("NO_ACTION", event.metadata["contextObservationDecision"]["action"])
 
     def test_quiet_typedb_context_still_captures_hypotheses_and_synthesis(self):
         builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))

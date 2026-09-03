@@ -75,6 +75,8 @@ def rule_from_row(row) -> NotificationRuleConfig:
         "similarityBypassConditions": similarity_bypass_conditions if isinstance(similarity_bypass_conditions, list) else [],
         "similarityFields": similarity_fields if isinstance(similarity_fields, list) else [],
         "stateCooldownEnabled": bool(row["state_cooldown_enabled"]) if "state_cooldown_enabled" in row_keys else None,
+        "immediateCooldownMinutes": row["immediate_cooldown_minutes"] if "immediate_cooldown_minutes" in row_keys else None,
+        "materialCooldownMinutes": row["material_cooldown_minutes"] if "material_cooldown_minutes" in row_keys else None,
         "stateCooldownMinutes": row["state_cooldown_minutes"] if "state_cooldown_minutes" in row_keys else None,
         "marketHoursEnabled": bool(row["market_hours_enabled"]) if "market_hours_enabled" in row_keys else None,
         "marketHoursMarkets": market_hours_markets if isinstance(market_hours_markets, list) else [],

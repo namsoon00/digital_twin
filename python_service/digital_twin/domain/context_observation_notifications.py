@@ -9,7 +9,17 @@ from .notification_ai_context import is_graph_backed_relation_context
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
-CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v1"
+CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v2"
+REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v1"
+REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
+REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v2"
+
+DELIVERY_POLICY_BLOCKING_DECISIONS = {
+    "baseline",
+    "cooldown",
+    "in-flight",
+    "unchanged-inference",
+}
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -18,6 +28,15 @@ def _mapping(value: object) -> Dict[str, object]:
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _delivery_policy_block_reason(payload: Mapping[str, object]) -> str:
+    decision = _text(payload.get("cooldownDecision")).lower()
+    if payload.get("cooldownSuppressed") is True or decision in DELIVERY_POLICY_BLOCKING_DECISIONS:
+        return _text(payload.get("cooldownReason")) or (
+            "같은 상태의 재알림 간격이 지나지 않아 웹 이력에만 저장합니다."
+        )
+    return ""
 
 
 def _relation_context(value: object) -> Dict[str, object]:
@@ -156,6 +175,70 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
 
 def is_typedb_context_observation_notification(value: object) -> bool:
     return bool(typedb_context_observation_contract(value))
+
+
+def typedb_review_observation_contract(value: object) -> Dict[str, object]:
+    """Return an actionless contract for TypeDB hypotheses that cannot act alone.
+
+    A risk or constraint hypothesis can be useful enough to notify, but it may
+    not manufacture HOLD/BUY/SELL.  The persisted synthesis action authority is
+    the boundary: only ``originate`` may enter the investment-judgement path.
+    """
+
+    payload = _mapping(value)
+    relation = _relation_context(payload)
+    if not is_graph_backed_relation_context(relation):
+        return {}
+    synthesis = _mapping(payload.get("v2DecisionSynthesis"))
+    if not synthesis:
+        synthesis = _mapping(_mapping(payload.get("metadata")).get("v2DecisionSynthesis"))
+    action_authority = _text(
+        synthesis.get("action_authority") or synthesis.get("actionAuthority")
+    ).lower()
+    if action_authority not in {"modify", "observe"}:
+        return {}
+    selected_rule_id = _text(
+        synthesis.get("selected_rule_id")
+        or synthesis.get("selectedRuleId")
+        or _mapping(relation.get("decision")).get("selectedRuleId")
+    )
+    eligible_hypothesis_ids = [
+        _text(item)
+        for item in (
+            synthesis.get("eligible_hypothesis_ids")
+            or synthesis.get("eligibleHypothesisIds")
+            or []
+        )
+        if _text(item)
+    ]
+    if not selected_rule_id or not eligible_hypothesis_ids:
+        return {}
+    subject = _mapping(relation.get("subject"))
+    facts = _mapping(relation.get("facts"))
+    return {
+        "schemaVersion": REVIEW_OBSERVATION_NOTIFICATION_VERSION,
+        "status": "eligible",
+        "decisionMode": REVIEW_OBSERVATION_DECISION_MODE,
+        "messageClass": "typedb-risk-or-constraint-review",
+        "selectedRuleId": selected_rule_id,
+        "ruleKind": "review-observation",
+        "decisionEligibility": "review-only",
+        "requiresHypothesis": True,
+        "requiresAiJudgement": False,
+        "requiresAiNarrative": True,
+        "actionAuthority": action_authority,
+        "action": "NO_ACTION",
+        "validationState": "review-only",
+        "symbol": _text(subject.get("symbol") or facts.get("symbol")).upper(),
+        "market": _text(subject.get("market") or facts.get("market")).upper(),
+        "eligibleHypothesisIds": eligible_hypothesis_ids,
+        "graphSource": _text(relation.get("source")),
+        "graphStore": _text(relation.get("graphStore")),
+    }
+
+
+def typedb_narrative_only_contract(value: object) -> Dict[str, object]:
+    return typedb_context_observation_contract(value) or typedb_review_observation_contract(value)
 
 
 def context_observation_evidence_presentation(value: object) -> Dict[str, object]:
@@ -333,11 +416,91 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
             "suppressionReason": "missing_context_observation_publication",
         })
         return decision
+    delivery_policy_block_reason = _delivery_policy_block_reason(payload)
+    if delivery_policy_block_reason:
+        decision.update({
+            "reason": delivery_policy_block_reason,
+            "suppressionReason": "context_observation_delivery_cooldown",
+        })
+        return decision
     if authorization_sources:
         decision.update({
             "decision": "send",
             "reason": "검증된 참고 관찰에 사용자에게 알릴 구체적인 새 근거가 연결됐습니다.",
             "suppressionReason": "",
             "pushValueClass": "material-context-observation",
+        })
+    return decision
+
+
+def review_observation_delivery_decision(value: object) -> Dict[str, object]:
+    """Deliver a non-originating hypothesis as review evidence, never an action."""
+
+    payload = _mapping(value)
+    contract = typedb_review_observation_contract(payload)
+    if not contract:
+        return {}
+    publication = _mapping(payload.get("decisionPublication"))
+    outcome = _text(publication.get("outcomeKind")).upper()
+    cooldown_decision = _text(payload.get("cooldownDecision")).lower()
+    relation_transition = _mapping(payload.get("decisionTransition")) or _mapping(
+        _mapping(payload.get("ontologyRelationDiff")).get("decisionTransition")
+    )
+    insight = _mapping(payload.get("ontologyInsight"))
+    semantic = _mapping(insight.get("semanticComponents"))
+    material_source_keys = sorted({
+        _text(item)
+        for item in (
+            semantic.get("materialSourceEventKeys")
+            or insight.get("materialSourceEventKeys")
+            or payload.get("materialSourceEventKeys")
+            or []
+        )
+        if _text(item)
+    })
+    authorization_sources = []
+    if cooldown_decision in {
+        "new-condition",
+        "meaningful-change",
+        "typedb-profit-loss-change",
+        "scheduled-summary",
+    }:
+        authorization_sources.append("delivery-cadence:" + cooldown_decision)
+    if bool(relation_transition.get("material")):
+        authorization_sources.append("material-relation-transition")
+    if material_source_keys:
+        authorization_sources.append("material-source-event")
+
+    decision = {
+        "version": REVIEW_OBSERVATION_DELIVERY_VERSION,
+        "decision": "suppress",
+        "reason": "행동 권한이 없는 관계 검토가 반복되어 웹 이력에만 저장합니다.",
+        "suppressionReason": "review_observation_web_history",
+        "pushValueClass": "web-only-review-observation",
+        "publicationOutcome": outcome,
+        "selectedRuleId": contract.get("selectedRuleId"),
+        "authorizationSources": authorization_sources,
+        "materialSourceEventCount": len(material_source_keys),
+        "actionAuthority": contract.get("actionAuthority"),
+    }
+    if outcome != "REVIEW_ONLY":
+        decision.update({
+            "reason": "검증된 관계 검토 발행물이 없어 사용자 알림으로 보내지 않습니다.",
+            "suppressionReason": "missing_review_observation_publication",
+        })
+        return decision
+    delivery_policy_block_reason = _delivery_policy_block_reason(payload)
+    if delivery_policy_block_reason:
+        decision.update({
+            "reason": delivery_policy_block_reason,
+            "suppressionReason": "review_observation_delivery_cooldown",
+        })
+        return decision
+    if authorization_sources:
+        decision.update({
+            "decision": "send",
+            "reason": "TypeDB가 매매 결론 없이 다시 확인할 위험·제약 관계를 검증했습니다.",
+            "suppressionReason": "",
+            "pushValueClass": "material-review-observation",
         })
     return decision

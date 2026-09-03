@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping
 
-from ...domain.context_observation_notifications import typedb_context_observation_contract
+from ...domain.context_observation_notifications import (
+    typedb_context_observation_contract,
+    typedb_review_observation_contract,
+)
 from ...domain.data_freshness import freshness_from_snapshot_subject
 from ...domain.independent_reasoning import IndependentReasoningRequest
 from ...domain.investment_reasoning import decision_synthesis_from_relation_context
@@ -190,17 +193,23 @@ class V2GraphDecisionCandidateBuilder:
             severity = "WATCH"
         if not severity:
             return None
-        context_observation = typedb_context_observation_contract(relation)
-        if not context_observation and not synthesis.eligible_hypothesis_ids:
+        contract_payload = {
+            "ontologyRelationContext": dict(relation),
+            "v2DecisionSynthesis": synthesis.to_dict(),
+        }
+        context_observation = typedb_context_observation_contract(contract_payload)
+        review_observation = typedb_review_observation_contract(contract_payload)
+        narrative_observation = context_observation or review_observation
+        if not narrative_observation and not synthesis.eligible_hypothesis_ids:
             return None
         symbol = synthesis.symbol
         name = _text(subject.get("name")) or symbol
-        action = "NO_ACTION" if context_observation else synthesis.graph_candidate_action or "NO_ACTION"
+        action = "NO_ACTION" if narrative_observation else synthesis.graph_candidate_action or "NO_ACTION"
         label = _text(decision.get("label")) or action
-        if context_observation:
+        if narrative_observation:
             lines = [
-                "TypeDB 시장 관찰: " + label,
-                "투자 행동: 매수·매도 판단이 아닌 참고 정보",
+                "TypeDB 관계 검토: " + label,
+                "투자 행동: 이 관계만으로 매수·매도 판단을 만들지 않음",
             ]
         else:
             lines = [
@@ -215,13 +224,13 @@ class V2GraphDecisionCandidateBuilder:
         if current_price:
             lines.append("현재가: " + current_price)
         price_change = _float_text(facts.get("priceChangeRate"))
-        if context_observation and price_change:
+        if narrative_observation and price_change:
             lines.append("24시간 변동: " + price_change + "%")
         provider = _text(facts.get("quoteSource"))
-        if context_observation and provider:
+        if narrative_observation and provider:
             lines.append("데이터 출처: " + provider)
         profit_loss = _float_text(facts.get("profitLossRate"))
-        if profit_loss and not context_observation:
+        if profit_loss and not narrative_observation:
             lines.append("수익률: " + profit_loss + "%")
         if synthesis.missing_data:
             lines.append("판단 한계: " + ", ".join(synthesis.missing_data[:4]))
@@ -233,6 +242,8 @@ class V2GraphDecisionCandidateBuilder:
             "validationState": (
                 "reference-only"
                 if context_observation
+                else "review-only"
+                if review_observation
                 else "blocked" if synthesis.judgement_blocked else "conditional"
             ),
             "sourceAboxSnapshotId": synthesis.source_abox_snapshot_id,
@@ -253,10 +264,10 @@ class V2GraphDecisionCandidateBuilder:
             "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
             "firstHoldingReviewCandidate": first_holding_review,
         }
-        if context_observation:
+        if narrative_observation:
             metadata.update({
-                "contextObservationDecision": context_observation,
-                "notificationDecisionMode": context_observation["decisionMode"],
+                "contextObservationDecision": narrative_observation,
+                "notificationDecisionMode": narrative_observation["decisionMode"],
                 "requiresAiJudgement": False,
             })
         return AlertEvent(
@@ -278,7 +289,7 @@ class V2GraphDecisionCandidateBuilder:
                     "설정: TypeDB 참고 관찰 규칙의 시장 상태가 변경될 때",
                     "감지: " + label + " · 투자 행동 판단 없음",
                 ]
-                if context_observation
+                if narrative_observation
                 else [
                     "설정: TypeDB 규칙이 행동 대안과 근거 가설을 생성할 때",
                     "감지: " + label + " · 검증 가능 가설 " + str(len(synthesis.eligible_hypothesis_ids)) + "개",

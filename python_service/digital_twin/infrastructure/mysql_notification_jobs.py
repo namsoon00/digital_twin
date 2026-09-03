@@ -1662,7 +1662,16 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             similarity_minutes = 0
         else:
             similarity_minutes = int(rule.similarity_window_minutes or 0)
-        state_minutes = int(rule.state_cooldown_minutes or 0) + 60 if rule.state_cooldown_enabled and int(rule.state_cooldown_minutes or 0) else 0
+        state_minutes = (
+            max(
+                int(rule.immediate_cooldown_minutes or 0),
+                int(rule.material_cooldown_minutes or 0),
+                int(rule.state_cooldown_minutes or 0),
+            )
+            + 60
+            if rule.state_cooldown_enabled
+            else 0
+        )
         history_minutes = max(similarity_minutes, state_minutes)
         if not history_minutes or not fingerprint:
             return 0, {}, ""
@@ -1728,7 +1737,11 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         history_minutes = max(
             60,
             int(rule.similarity_window_minutes or 0),
-            int(rule.state_cooldown_minutes or 0) + 60 if rule.state_cooldown_enabled else 0,
+            max(
+                int(rule.immediate_cooldown_minutes or 0),
+                int(rule.material_cooldown_minutes or 0),
+                int(rule.state_cooldown_minutes or 0),
+            ) + 60 if rule.state_cooldown_enabled else 0,
         )
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=history_minutes)
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")

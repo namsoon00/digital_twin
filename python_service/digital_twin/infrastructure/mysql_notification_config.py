@@ -244,10 +244,11 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     message_type, enabled, conditions_json,
                     similarity_enabled, similarity_window_minutes,
                     similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled,
+                    immediate_cooldown_minutes, material_cooldown_minutes,
                     state_cooldown_minutes, market_hours_enabled, market_hours_markets_json,
                     off_hours_delivery_mode, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     message_type,
@@ -258,6 +259,8 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     json_dumps([condition.to_dict() for condition in rule.similarity_bypass_conditions]),
                     json_dumps(rule.similarity_fields),
                     1 if rule.state_cooldown_enabled else 0,
+                    int(rule.immediate_cooldown_minutes),
+                    int(rule.material_cooldown_minutes),
                     int(rule.state_cooldown_minutes),
                     1 if rule.market_hours_enabled else 0,
                     json_dumps(rule.market_hours_markets),
@@ -506,15 +509,18 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     message_type, enabled, conditions_json,
                     similarity_enabled, similarity_window_minutes,
                     similarity_bypass_conditions_json, similarity_fields_json, state_cooldown_enabled,
+                    immediate_cooldown_minutes, material_cooldown_minutes,
                     state_cooldown_minutes, market_hours_enabled, market_hours_markets_json,
                     off_hours_delivery_mode, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), conditions_json = VALUES(conditions_json), similarity_enabled = VALUES(similarity_enabled),
                     similarity_window_minutes = VALUES(similarity_window_minutes),
                     similarity_bypass_conditions_json = VALUES(similarity_bypass_conditions_json),
                     similarity_fields_json = VALUES(similarity_fields_json),
                     state_cooldown_enabled = VALUES(state_cooldown_enabled),
+                    immediate_cooldown_minutes = VALUES(immediate_cooldown_minutes),
+                    material_cooldown_minutes = VALUES(material_cooldown_minutes),
                     state_cooldown_minutes = VALUES(state_cooldown_minutes),
                     market_hours_enabled = VALUES(market_hours_enabled),
                     market_hours_markets_json = VALUES(market_hours_markets_json),
@@ -530,6 +536,8 @@ class MySQLNotificationRuleStore(MySQLOperationalConnection):
                     json_dumps([condition.to_dict() for condition in normalized.similarity_bypass_conditions]),
                     json_dumps(normalized.similarity_fields),
                     1 if normalized.state_cooldown_enabled else 0,
+                    int(normalized.immediate_cooldown_minutes),
+                    int(normalized.material_cooldown_minutes),
                     int(normalized.state_cooldown_minutes),
                     1 if normalized.market_hours_enabled else 0,
                     json_dumps(normalized.market_hours_markets),

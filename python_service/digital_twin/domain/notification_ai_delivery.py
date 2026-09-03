@@ -6,12 +6,14 @@ from typing import Dict, Mapping
 
 from .context_observation_notifications import (
     context_observation_delivery_decision,
+    review_observation_delivery_decision,
     typedb_context_observation_contract,
+    typedb_review_observation_contract,
 )
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v11"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v12"
 PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v1"
 
 EXPLICIT_DELIVERY_AUTHORIZATIONS = {
@@ -307,6 +309,26 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "pushValueClass": "undetermined",
         "customerActionContractGaps": action_contract_gaps,
     }
+    if typedb_context_observation_contract(context) and publication_outcome == "OBSERVATION":
+        observation_decision = context_observation_delivery_decision(context)
+        base.update({
+            key: value
+            for key, value in observation_decision.items()
+            if key not in {"version", "publicationOutcome"}
+        })
+        base["contextObservationDeliveryVersion"] = observation_decision.get("version")
+        base["contextObservationSelectedRuleId"] = observation_decision.get("selectedRuleId")
+        return base
+    if typedb_review_observation_contract(context) and publication_outcome == "REVIEW_ONLY":
+        review_decision = review_observation_delivery_decision(context)
+        base.update({
+            key: value
+            for key, value in review_decision.items()
+            if key not in {"version", "publicationOutcome"}
+        })
+        base["reviewObservationDeliveryVersion"] = review_decision.get("version")
+        base["reviewObservationSelectedRuleId"] = review_decision.get("selectedRuleId")
+        return base
     if publication_outcome in {"REVIEW_ONLY", "ABSTAIN", "ABSTAINED"}:
         base.update({
             "decision": "suppress",
@@ -322,16 +344,6 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
             "reason": "AI 판단 실패와 TypeDB 대체 결과는 운영·웹 이력에만 저장하고 투자 푸시로 보내지 않습니다.",
             "pushValueClass": "web-only-ai-failure",
         })
-        return base
-    if typedb_context_observation_contract(context):
-        observation_decision = context_observation_delivery_decision(context)
-        base.update({
-            key: value
-            for key, value in observation_decision.items()
-            if key not in {"version", "publicationOutcome"}
-        })
-        base["contextObservationDeliveryVersion"] = observation_decision.get("version")
-        base["contextObservationSelectedRuleId"] = observation_decision.get("selectedRuleId")
         return base
     if canonical_subject and publication_outcome != "FINAL_DECISION":
         base.update({

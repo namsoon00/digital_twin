@@ -733,6 +733,48 @@ class InvestmentReasoningOrchestrator:
         self._persist(reasoning_case)
         return reasoning_case
 
+    def review_observation_validated(
+        self,
+        case_id: str,
+        reason: str = "TypeDB hypothesis is review-only and cannot originate an action.",
+        subject_symbols: Iterable[str] = (),
+    ) -> ReasoningCase:
+        """Publish a risk/constraint hypothesis without inventing an action."""
+
+        reasoning_case = self.required(case_id)
+        inference = reasoning_case.inference_result
+        if not inference or not inference.trace_complete:
+            raise ValueError("TypeDB review observation requires a complete inference trace.")
+        requested_symbols = {
+            str(symbol or "").strip().upper()
+            for symbol in subject_symbols or ()
+            if str(symbol or "").strip()
+        }
+        selected_syntheses = [
+            synthesis
+            for synthesis in reasoning_case.decision_syntheses
+            if not requested_symbols or synthesis.symbol in requested_symbols
+        ]
+        if not selected_syntheses:
+            raise ValueError("TypeDB review observation subjects were not found in the decision synthesis.")
+        if any(synthesis.action_authority == "originate" for synthesis in selected_syntheses):
+            raise ValueError("Action-originating synthesis cannot use the review-only path.")
+        if reasoning_case.stage not in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
+            raise ValueError("Review observation cannot be validated from stage " + reasoning_case.stage + ".")
+        selected_symbols = {synthesis.symbol for synthesis in selected_syntheses}
+        for subject_case in self.subject_cases.for_batch(reasoning_case.case_id):
+            if subject_case.symbol not in selected_symbols or subject_case.publication is not None:
+                continue
+            subject_case.mark(SUBJECT_REVIEW_ONLY, reason)
+            subject_case.publication = publication_for_subject_case(
+                subject_case,
+                REVIEW_ONLY,
+                explanation_snapshot={"reason": str(reason or "")},
+            )
+            self._persist_subject(subject_case)
+        self._persist(reasoning_case)
+        return reasoning_case
+
     def notification_suppressed(
         self,
         context: Mapping[str, object],

@@ -149,6 +149,38 @@ def context_observation_context(outcome="OBSERVATION", material_sources=None):
     }
 
 
+def review_observation_context(outcome="REVIEW_ONLY"):
+    context = context_observation_context(outcome=outcome)
+    rule = context["ontologyRelationContext"]["activeRules"][0]
+    rule["knowledgeBasis"] = {
+        "owner": "statistical-model",
+        "ruleKind": "predictive-hypothesis",
+        "decisionEligibility": "conditional",
+        "requiresHypothesis": True,
+    }
+    context["ontologyRelationContext"]["matchedRules"] = [rule]
+    context["ontologyRelationContext"]["graphStoreInference"]["relations"] = [rule]
+    context["ontologyRelationContext"]["graphStoreInference"]["traces"] = [
+        {"id": "trace:mstr:risk", **rule}
+    ]
+    context["v2DecisionSynthesis"] = {
+        "selected_rule_id": rule["ruleId"],
+        "eligible_hypothesis_ids": ["hypothesis:mstr:risk"],
+        "action_authority": "modify",
+    }
+    context["contextObservationDecision"] = {
+        "decisionMode": "typedb-review-observation",
+    }
+    context["notificationDecisionMode"] = "typedb-review-observation"
+    context["cooldownDecision"] = "new-condition"
+    context["deliveryCadenceTier"] = "material"
+    context["notificationAiExecutionAudit"] = {
+        "status": "typedb-fallback",
+        "adoptionState": "typedb-fallback",
+    }
+    return context
+
+
 class FinalAIDeliveryTests(unittest.TestCase):
     def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
         policy = NotificationAdmissionPolicy()
@@ -274,6 +306,25 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("ai_failure_web_history", decision["suppressionReason"])
         self.assertTrue(decision["typedbFallback"])
 
+        actionless_review = final_ai_delivery_decision(review_observation_context())
+        self.assertEqual("send", actionless_review["decision"])
+        self.assertEqual("material-review-observation", actionless_review["pushValueClass"])
+        self.assertEqual("NO_ACTION", actionless_review.get("finalAction"))
+        self.assertTrue(actionless_review["typedbFallback"])
+
+        review_in_cooldown = review_observation_context()
+        review_in_cooldown.update({
+            "cooldownDecision": "cooldown",
+            "cooldownSuppressed": True,
+            "cooldownReason": "중요 근거 재알림 간격 60분 전입니다.",
+        })
+        blocked_review = final_ai_delivery_decision(review_in_cooldown)
+        self.assertEqual("suppress", blocked_review["decision"])
+        self.assertEqual(
+            "review_observation_delivery_cooldown",
+            blocked_review["suppressionReason"],
+        )
+
         review_only = watchlist_context(ai_kind="action-changed")
         review_only.update({
             "investmentSubjectDecisionCaseId": "subject-case:review-only",
@@ -300,6 +351,20 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("send", material["decision"])
         self.assertEqual("material-context-observation", material["pushValueClass"])
         self.assertEqual(["material-source-event"], material["authorizationSources"])
+
+        material_in_cooldown = context_observation_context(
+            material_sources=["news:MSTR:material-1"]
+        )
+        material_in_cooldown.update({
+            "cooldownDecision": "cooldown",
+            "cooldownSuppressed": True,
+        })
+        blocked_material = final_ai_delivery_decision(material_in_cooldown)
+        self.assertEqual("suppress", blocked_material["decision"])
+        self.assertEqual(
+            "context_observation_delivery_cooldown",
+            blocked_material["suppressionReason"],
+        )
 
         queue = SuppressionQueue()
         runner = NotificationQueueRunner(

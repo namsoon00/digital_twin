@@ -667,6 +667,56 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
+    def release_worker_leases(self, worker_id: str, reason: object = "") -> Dict[str, object]:
+        """Return only this managed worker's in-flight requests to the queue."""
+
+        worker = _clean(worker_id)
+        if not worker:
+            return {"status": "unchanged", "releasedCount": 0}
+        stamp = utc_now()
+        released = 0
+        superseded = 0
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT request_id, subject_key FROM ai_inference_requests "
+                "WHERE status = %s AND lease_owner = %s FOR UPDATE",
+                (AI_INFERENCE_PROCESSING, worker),
+            ).fetchall()
+            for row in rows or []:
+                request_id = _clean(row.get("request_id"))
+                head = connection.execute(
+                    "SELECT latest_request_id FROM ai_inference_subject_heads "
+                    "WHERE subject_key = %s FOR UPDATE",
+                    (_clean(row.get("subject_key")),),
+                ).fetchone()
+                is_latest = _clean(head.get("latest_request_id") if head else "") == request_id
+                target_status = AI_INFERENCE_RETRY if is_latest else AI_INFERENCE_SUPERSEDED
+                cursor = connection.execute(
+                    "UPDATE ai_inference_requests SET status = %s, available_at = %s, "
+                    "lease_owner = '', lease_expires_at = '', heartbeat_at = '', "
+                    "last_error = %s, completed_at = %s, updated_at = %s "
+                    "WHERE request_id = %s AND status = %s AND lease_owner = %s",
+                    (
+                        target_status,
+                        stamp if is_latest else "",
+                        _clean(reason)[:500],
+                        "" if is_latest else stamp,
+                        stamp,
+                        request_id,
+                        AI_INFERENCE_PROCESSING,
+                        worker,
+                    ),
+                )
+                changed = int(getattr(cursor, "rowcount", 0) or 0)
+                released += changed if is_latest else 0
+                superseded += changed if not is_latest else 0
+        return {
+            "status": "released" if released or superseded else "unchanged",
+            "releasedCount": released,
+            "supersededCount": superseded,
+            "workerId": worker,
+        }
+
     def is_current(self, request_id: str, worker_id: str = "") -> bool:
         clauses = ["request.request_id = %s", "request.status = %s"]
         params: List[object] = [_clean(request_id), AI_INFERENCE_PROCESSING]

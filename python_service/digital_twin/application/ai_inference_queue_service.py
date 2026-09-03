@@ -503,7 +503,8 @@ class AIInferenceQueueRunner:
         self.continuity_service = continuity_service
         self.action_planning_service = action_planning_service
         self.reasoning_orchestrator = reasoning_orchestrator
-        self.worker_id = str(worker_id or "notification-ai-" + uuid.uuid4().hex[:10])
+        self.worker_label = str(worker_id or "notification-ai")
+        self.worker_id = self.worker_label + ":" + uuid.uuid4().hex[:10]
         self.lease_seconds = _int_setting(self.settings, "notificationAiQueueLeaseSeconds", 360, 60, 3600)
         self.heartbeat_seconds = _int_setting(self.settings, "notificationAiQueueHeartbeatSeconds", 10, 2, 120)
         self.max_attempts = _int_setting(self.settings, "notificationAiQueueMaxAttempts", 2, 1, 8)
@@ -571,12 +572,21 @@ class AIInferenceQueueRunner:
         )
         self.last_run_details = []
         self.stopping = False
+        self.stop_recovery = {}
 
     def stop(self) -> None:
         self.stopping = True
         stopper = getattr(self.reviewer, "stop", None)
         if callable(stopper):
             stopper()
+        release = getattr(self.queue, "release_worker_leases", None)
+        if callable(release):
+            try:
+                self.stop_recovery = dict(
+                    release(self.worker_id, "managed AI worker stopped") or {}
+                )
+            except Exception as error:  # noqa: BLE001 - shutdown must still complete.
+                self.stop_recovery = {"status": "failed", "reason": str(error)[:240]}
 
     def run_once(self, limit: int = 1) -> int:
         self.last_run_details = []

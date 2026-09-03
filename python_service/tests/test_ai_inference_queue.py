@@ -211,6 +211,7 @@ class AIInferenceQueueTests(unittest.TestCase):
 
     def setUp(self):
         for table in (
+            "ai_inference_execution_audits",
             "ai_inference_results",
             "ai_inference_requests",
             "notification_jobs",
@@ -247,19 +248,23 @@ class AIInferenceQueueTests(unittest.TestCase):
         first_job = self.create_job(100, "generation-1")
         first = AIInferenceRequest.create(first_job, first_job.context)
         self.queue.enqueue(first_job, first)
-        self.assertEqual(first.request_id, self.queue.claim("worker-1", 1, 60)[0].request_id)
+        runner = AIInferenceQueueRunner(self.queue, FakeReviewer(), worker_id="worker-1")
+        self.assertEqual(first.request_id, self.queue.claim(runner.worker_id, 1, 60)[0].request_id)
 
         second_job = self.create_job(101, "generation-2")
         second = AIInferenceRequest.create(second_job, second_job.context)
         outcome = self.queue.enqueue(second_job, second)
 
         self.assertEqual("coalesced-active", outcome["status"])
-        self.assertTrue(self.queue.is_current(first.request_id, "worker-1"))
-        claimed = self.queue.claim("worker-1", 1, 60)
+        self.assertTrue(self.queue.is_current(first.request_id, runner.worker_id))
+        claimed = self.queue.claim(runner.worker_id, 1, 60)
         self.assertEqual([], claimed)
         self.assertEqual([], self.queue.claim("worker-2", 1, 60))
         self.assertEqual("awaiting_ai", self.notifications.get(first_job.job_id).status)
         self.assertEqual("superseded", self.notifications.get(second_job.job_id).status)
+        runner.stop()
+        self.assertEqual("retry", self.queue.get(first.request_id).status)
+        self.assertEqual(1, runner.stop_recovery["releasedCount"])
 
     def test_material_action_change_replaces_running_subject(self):
         first_job = self.create_job(100, "generation-1")

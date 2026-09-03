@@ -732,7 +732,7 @@ class AIInferenceQueueScheduler:
         install_stop_handlers(self.stop)
         print(
             "Python notification AI inference worker started. worker="
-            + str(getattr(self.runner, "worker_id", "unknown"))
+            + str(getattr(self.runner, "worker_label", getattr(self.runner, "worker_id", "unknown")))
             + " interval="
             + str(self.interval_seconds)
             + "s"

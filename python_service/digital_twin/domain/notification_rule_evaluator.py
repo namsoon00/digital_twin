@@ -915,6 +915,11 @@ def similarity_bypass_match(
         minimum = numeric_value(condition.value)
         if current is None or previous is None or minimum is None:
             return False, ""
+        # The message renders P/L to one decimal place. Compare the same
+        # visible values so a displayed 1.0%p move is not silently rejected
+        # because the raw values differ by 0.98%p.
+        current = round(current, 1)
+        previous = round(previous, 1)
         delta = current - previous
         if delta <= -minimum:
             return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"
@@ -925,6 +930,8 @@ def similarity_bypass_match(
         minimum = numeric_value(condition.value)
         if current is None or previous is None or minimum is None:
             return False, ""
+        current = round(current, 1)
+        previous = round(previous, 1)
         delta = current - previous
         if delta >= minimum:
             return True, label + " " + format_rule_number(previous) + "% -> " + format_rule_number(current) + "%"

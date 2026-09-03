@@ -74,6 +74,10 @@ suppression, and an unchanged relation becomes eligible for a scheduled summary
 after the configured interval. This prevents a stable TypeDB fingerprint from
 silencing a position forever.
 
+Profit/loss transitions are compared at the same one-decimal precision shown
+in the customer message. This prevents a visible `1.0%p` move from being
+silently rejected because hidden raw decimals differ by slightly less.
+
 TypeDB action authority also splits publication paths. `originate` may enter
 the AI investment-judgement contract. `modify` and `observe` enter a narrative
 review path that may explain a verified risk or constraint but must publish

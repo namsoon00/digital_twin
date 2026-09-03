@@ -845,7 +845,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         context = {
             "severity": "WATCH",
             "symbol": "000660",
-            "profitLossRate": -12.2,
+            "profitLossRate": -11.8,
             "ontologyInsight": {"subject": "000660", "dispatchInsightType": "riskManagement"},
             "sourceSignalTypes": ["holdingTiming"],
             "ontologyRelationDiff": {
@@ -875,7 +875,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             evaluate_notification_rule(job, rule),
             rule,
             sent_count=1,
-            previous_context={**context, "profitLossRate": -10.9},
+            previous_context={**context, "profitLossRate": -10.82},
             last_sent_at=utc_now_iso(),
             last_sent_age_minutes=11,
             job=job,
@@ -890,7 +890,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
             evaluate_notification_rule(job, rule),
             rule,
             sent_count=1,
-            previous_context={**context, "profitLossRate": -10.9},
+            previous_context={**context, "profitLossRate": -10.82},
             last_sent_at="",
             last_sent_age_minutes=0,
             job=job,

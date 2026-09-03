@@ -191,6 +191,8 @@ TypeDB가 한 번 만든 관계가 다음 세대에서 어떻게 바뀌었는지
 6. 알림 비교기는 새 관계, 근거 강화, 근거 약화, 관계 해제, 근거 만료를 의미 변화로 취급한다. 같은 경로 유지와 생성 ID 교체만 있는 경우에는 웹 이력에 남기고 반복 푸시는 억제한다.
 
 관계 해제는 단순히 현재 조회 결과가 비었다는 이유로 만들지 않는다. `status=ok`, `nativeTypeDbReasoningUsed=true`, `generationAligned=true`, 현재 `inferenceGenerationId`, 명시적인 `targetSymbols` 범위가 모두 있어야 이전 경로의 부재를 해제로 확정한다. TypeDB 오류, 부분 조회, 대상 범위 누락에서는 이전 상태를 보존한다.
+
+`invalidationMode=typedb-rule-not-materialized`의 `invalidationConditionIds`는 현재 경로의 의존 조건이다. 해당 조건이 현재 `matchedConditionIds`에 있다는 이유로 관계를 해제하지 않는다. 정상 세대에서 경로 자체가 더 이상 물질화되지 않았을 때만 해제로 전환하며, 해제된 경로가 다시 물질화되면 새 관찰 상태로 복구한다.
 - bounded context 사이의 의미 관계를 설명하는 audit trail.
 
 새 투자 사실이 필요하면 projection에 직접 상태를 추가하지 말고, 먼저 소유 context의 aggregate/event/repository에 사실을 남긴 뒤 projection 변환을 확장한다.

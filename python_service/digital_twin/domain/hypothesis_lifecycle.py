@@ -758,6 +758,17 @@ def snapshot_expiry_reason(snapshot: HypothesisLifecycleSnapshot, now: str = "")
 
 def snapshot_invalidation_reason(snapshot: HypothesisLifecycleSnapshot) -> str:
     policy = HypothesisLifecyclePolicy.from_dict(snapshot.policy)
+    mode = _text(policy.invalidation_mode).lower()
+    # ``typedb-rule-not-materialized`` means that the path is invalidated when
+    # it disappears from a healthy, explicitly scoped TypeDB generation.  The
+    # condition IDs describe dependencies whose continued presence keeps the
+    # path alive; seeing them in ``matchedConditionIds`` is therefore evidence
+    # for validity, not an invalidation trigger.  Absence is reconciled by
+    # ``record_for_absent_snapshot`` after the caller proves target coverage.
+    # A future condition-matched mode may opt into active-path invalidation,
+    # but the current production modes do not carry that semantic.
+    if "condition-matched" not in mode:
+        return ""
     matched = set(snapshot.matched_condition_ids or [])
     invalidation = [item for item in policy.invalidation_condition_ids if item in matched]
     if not invalidation:
@@ -896,6 +907,11 @@ def record_for_snapshot(
         reason = "TypeDB 가설 경로가 정상 추론 세대에서 관찰되었습니다."
     else:
         state, reason = state_for_delta(previous, delta)
+    if previous and previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES and state == previous.state:
+        # Evidence churn cannot turn an already terminal path into another
+        # material transition. A genuine recovery changes the state to
+        # ``observed``; continued absence is handled without entering here.
+        material_change = False
     record = HypothesisLifecycleRecord(
         lifecycle_key=snapshot.lifecycle_key,
         lifecycle_id=snapshot.lifecycle_id,

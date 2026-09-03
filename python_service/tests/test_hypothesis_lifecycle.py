@@ -448,10 +448,21 @@ class HypothesisLifecycleTests(unittest.TestCase):
         self.assertEqual("NO_ACTION", resolved_context["decision"]["candidateAction"])
         self.assertEqual([], resolved_context["activeRules"])
 
-        unaligned_snapshot = account_snapshot("generation-4", aligned="false")
+        recovered_snapshot = account_snapshot("generation-4", targets=["AAPL"])
+        with mock.patch(
+            "digital_twin.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot",
+            return_value={"AAPL": relation_context("generation-4")},
+        ):
+            recovered_result = service.observe_snapshot(recovered_snapshot)
+        recovered_transition = recovered_result["bySymbol"]["AAPL"]["transitions"][0]
+        self.assertEqual("invalidated", recovered_transition["previousState"])
+        self.assertEqual("observed", recovered_transition["currentState"])
+        self.assertEqual("observed", next(iter(store.records.values())).state)
+
+        unaligned_snapshot = account_snapshot("generation-5", aligned="false")
         result = service.observe_snapshot(unaligned_snapshot)
         self.assertEqual("skipped-unhealthy-inference", result["status"])
-        self.assertEqual("invalidated", next(iter(store.records.values())).state)
+        self.assertEqual("observed", next(iter(store.records.values())).state)
 
     def test_service_reconciles_only_explicit_target_symbols(self):
         store = MemoryLifecycleStore()

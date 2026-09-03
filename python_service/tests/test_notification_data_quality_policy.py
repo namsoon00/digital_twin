@@ -358,6 +358,64 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertEqual("", decision.suppression_reason)
         self.assertIn("참고용 관계 변화", decision.gate_reason)
 
+        rule_id = "graph.notification.profit_policy_threshold.v1"
+        context = self._typedb_relation_context({
+            "severity": "WATCH",
+            "symbol": "MSTR",
+            "ontologyRelationDiff": {
+                "material": False,
+                "decisionTransition": {
+                    "kind": "initial",
+                    "material": False,
+                    "currentAction": "hold",
+                },
+            },
+            "ontologyRelationContext": {
+                "source": "typedbInferenceBox",
+                "graphStore": "typedb",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "targetRole": "holding",
+                "subject": {"symbol": "MSTR", "market": "US"},
+                "facts": {"symbol": "MSTR", "market": "US", "profitLossRate": 36.6},
+                "decisionState": {"reviewLevel": "check", "dataState": "sufficient"},
+                "actionEnvelope": {"targetRole": "holding", "preferredAction": "HOLD"},
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "actionGroup": "profitTake",
+                    "selectedRuleId": rule_id,
+                },
+                "activeRules": [{
+                    "ruleId": rule_id,
+                    "label": "수익 정책 기준 관찰",
+                    "knowledgeBasis": {
+                        "ruleKind": "context-observation",
+                        "decisionEligibility": "reference-only",
+                        "requiresHypothesis": False,
+                    },
+                }],
+            },
+        })
+        job = NotificationJob.create(
+            "MSTR 자료 변화 관찰",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=context,
+        )
+        rule = default_notification_rule(INVESTMENT_INSIGHT)
+
+        decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=job,
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual("baseline", decision.state_decision)
+        self.assertEqual("initial_graph_baseline", decision.suppression_reason)
+
     def test_blocked_action_judgement_remains_suppressed(self):
         context = self._typedb_relation_context({
             "messageType": INVESTMENT_INSIGHT,

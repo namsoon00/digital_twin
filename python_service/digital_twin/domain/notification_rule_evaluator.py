@@ -1177,6 +1177,30 @@ def apply_state_cooldown_rule(
     )
     severity = typedb_notification_severity(job_context)
 
+    # Store a first non-actionable TypeDB relation as a baseline before any
+    # threshold cooldown bypass is considered.  Profit/loss threshold rules
+    # are useful context, but without an action-eligible hypothesis they must
+    # not become a customer push on their first observation.
+    if (
+        has_graph_transition
+        and transition_kind == "initial"
+        and not transition_is_material
+        and decision.state_recent_sent_count <= 0
+        and not holding_review_baseline_is_deliverable(job_context)
+    ):
+        apply_delivery_cadence(
+            decision,
+            "web-only",
+            0,
+            "최초 비실행 관계는 기준선으로만 저장",
+        )
+        decision.state_decision = "baseline"
+        decision.state_suppressed = True
+        decision.state_reason = "최초 비실행 TypeDB 관계 상태를 알림·AI 실행 없이 기준선으로 저장"
+        decision.reasons.append("상태 정책: " + decision.state_reason)
+        decision.mark_suppressed("initial_graph_baseline", decision.state_reason)
+        return decision
+
     typedb_profit_loss_reason = typedb_profit_loss_delivery_reason(
         job,
         previous_context=previous_context,

@@ -339,7 +339,7 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertTrue(all((item.get("statisticalSignalContract") or {}).get("signalTypes") for item in predictive))
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
-        self.assertEqual(47, len(migration["not-applicable"]))
+        self.assertEqual(48, len(migration["not-applicable"]))
         self.assertEqual(74, len(migration["model-signal-production"]))
         self.assertEqual([], migration.get("shadow-signal-required") or [])
         flow_rule = next(
@@ -377,6 +377,31 @@ class StatisticalSignalTests(unittest.TestCase):
                 signal_conditions[0].target_kind,
             )
             self.assertIn("원시 임계치", rule.prompt_hint)
+
+        governed = {rule.rule_id: rule for rule in governed_graph_inference_rules()}
+        production = {rule.rule_id: rule for rule in default_graph_inference_rules()}
+        momentum = governed["graph.profit_momentum.hold_add_review.v1"]
+        conditions = {item.condition_id: item for item in momentum.conditions}
+
+        self.assertEqual(-3, conditions["ma5-shallow-pullback"].value)
+        self.assertEqual("<", conditions["ma5-below"].operator)
+        self.assertEqual(0, conditions["ma20-positive"].value)
+        self.assertEqual(0, conditions["ma60-positive"].value)
+        self.assertEqual(1, momentum.any_condition_min_count)
+        self.assertEqual(
+            "HAS_INSTRUMENT_PROFILE",
+            conditions["instrument-profile-allows-strength-add"].relation_type,
+        )
+
+        compiled_conditions = production["graph.profit_momentum.hold_add_review.v1"].conditions
+        self.assertEqual(
+            1,
+            len([item for item in compiled_conditions if item.relation_type == "HAS_MODEL_SIGNAL"]),
+        )
+        guard = production["graph.position.concentration.guard.v1"]
+        self.assertEqual("policy-constraint", guard.resolved_knowledge_basis.rule_kind)
+        self.assertFalse(any(item.relation_type == "HAS_MODEL_SIGNAL" for item in guard.conditions))
+        self.assertTrue(any("ADD" in item.blocked_actions for item in guard.derivations))
 
     def test_every_converted_rule_preserves_its_original_change_routing_contract(self):
         governed = {

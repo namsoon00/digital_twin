@@ -112,7 +112,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
         executable = default_graph_inference_rules()
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(108, sum(item.enabled for item in executable))
+        self.assertEqual(109, sum(item.enabled for item in executable))
         self.assertEqual(63, sum(
             item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
             and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"

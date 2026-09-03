@@ -77,6 +77,13 @@ def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> boo
     """
 
     context = _mapping(context)
+    # A reference-only relation can explain the current context, but it does
+    # not own an investment action.  Treating it as the first holding opinion
+    # lets threshold observations bypass the initial-baseline guard and
+    # produces a push that says only "자료 변화 관찰".  Keep those rows in web
+    # history until an action-eligible TypeDB hypothesis exists.
+    if typedb_context_observation_contract(context) or typedb_review_observation_contract(context):
+        return False
     relation = _mapping(context.get("ontologyRelationContext"))
     envelope = _mapping(relation.get("actionEnvelope"))
     relation_state = _mapping(relation.get("decisionState"))

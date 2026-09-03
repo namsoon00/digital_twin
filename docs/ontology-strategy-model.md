@@ -190,6 +190,10 @@ TypeDB가 한 번 만든 관계가 다음 세대에서 어떻게 바뀌었는지
 5. 선택 가능한 투자 가설이 사라진 경우에도 정상 세대의 `invalidated` 또는 `expired` 전이가 증명되면 `NO_ACTION` 관계 관찰 후보를 만든다. 이 경로는 관계 해제 사실만 전달하며 `BUY`, `HOLD`, `SELL`을 만들 수 없다.
 6. 알림 비교기는 새 관계, 근거 강화, 근거 약화, 관계 해제, 근거 만료를 의미 변화로 취급한다. 같은 경로 유지와 생성 ID 교체만 있는 경우에는 웹 이력에 남기고 반복 푸시는 억제한다.
 
+첫 TypeDB 결과가 손익 구간, 데이터 상태, 뉴스 존재 여부처럼 `reference-only` 또는 `review-only` 관계뿐이면 해당 결과는 웹 기준선으로만 저장한다. 이 상태는 투자 행동을 소유하는 가설이 아니므로 보유 종목이어도 푸시와 AI 투자 판단을 만들지 않는다. 이후 `originate` 권한을 가진 투자 가설이 성립하거나, 기존 가설의 행동·무효화 조건이 실질적으로 바뀌어야 투자 판단 알림 후보가 된다.
+
+수익 중인 보유 종목은 무조건 매도하지 않는다. 현재가가 20일·60일 평균 위에 있고 5일 평균에서 3% 이내로 짧게 조정되며 가격 또는 거래 확인이 붙으면 `graph.profit_momentum.hold_add_review.v1`이 보유와 소액 추가매수 후보를 비교한다. 계정의 종목 비중 한도를 넘은 경우에는 별도 정책 제약 `graph.position.concentration.guard.v1`이 추가매수를 차단하고, 보유 유지와 분할 리밸런싱에 필요한 수량·현금·상관 위험 확인을 요구한다. 가격 가설과 계좌 정책을 한 규칙에 섞지 않으므로, 추세는 좋지만 비중이 큰 종목을 "상승하니 매도" 또는 "상승하니 추가매수"로 단순화하지 않는다.
+
 관계 해제는 단순히 현재 조회 결과가 비었다는 이유로 만들지 않는다. `status=ok`, `nativeTypeDbReasoningUsed=true`, `generationAligned=true`, 현재 `inferenceGenerationId`, 명시적인 `targetSymbols` 범위가 모두 있어야 이전 경로의 부재를 해제로 확정한다. TypeDB 오류, 부분 조회, 대상 범위 누락에서는 이전 상태를 보존한다.
 
 `invalidationMode=typedb-rule-not-materialized`의 `invalidationConditionIds`는 현재 경로의 의존 조건이다. 해당 조건이 현재 `matchedConditionIds`에 있다는 이유로 관계를 해제하지 않는다. 정상 세대에서 경로 자체가 더 이상 물질화되지 않았을 때만 해제로 전환하며, 해제된 경로가 다시 물질화되면 새 관찰 상태로 복구한다.
@@ -329,6 +333,8 @@ AI가 만든 신규 가설은 `hypothesis_development_cases`에서 제안 계보
 과거·피어 표본이 부족하면 종목 유형별 초기 밴드를 `bootstrap-prior`로 표시할 수 있지만 `multipleEvidenceBacked=false`, `valuationConfidence=insufficient`, `valuationInputState=partial`을 유지한다. 사용자가 초안을 승인해도 이 상태에서는 `valuationDecisionEligible`로 승격할 수 없다.
 
 모든 밸류에이션 ABox에는 `fairValueLow`, `fairValueBase`, `fairValueHigh`, 세 시나리오의 안전마진, `epsPeriod`, `multiplePeriod`, `valuationAsOf`, `valuationFreshnessStatus`, `valuationDataState`, `valuationReliabilityState`, `valuationDecisionEligible`을 저장한다. 추가로 `ValuationModelVersion`, `ValuationInputObservation`, `EarningsScenarioObservation`, `MultipleBandObservation`, `ValuationCalculationTrace`를 만들고 원천 관측 -> 시나리오/배수 -> 계산 추적 -> 적정가 결과를 관계로 연결한다. ADR은 원본 본주 EPS, ADR 비율, 환율, 환산 EPS를 계산 추적에 함께 남긴다. 분기 EPS와 연간 PER를 섞는 계산은 허용하지 않는다. TypeDB 저평가·고평가 규칙은 자료 상태가 `sufficient`이고, 검증 상태가 `ready`이며, 오래되지 않은 적정가만 사용한다. 저평가 후보는 기준 시나리오 안전마진 15% 이상이면서 보수적 시나리오 안전마진도 0% 이상이어야 한다.
+
+밸류에이션 입력은 정규화된 실제 값이 존재하면 이전 수집 단계의 `missingInputs` 표기를 제거한다. 예를 들어 예상 EPS와 현재 PER가 들어왔는데도 이를 부족 데이터로 표시해서는 안 된다. 목표 PER나 검증 가능한 적정가처럼 실제로 없는 항목만 남기고, EPS만 있는 잠정 계산은 `provisional` 상태를 유지한다.
 
 검증 가능한 모델이 둘 이상이면 `ValuationConsensus` ABox가 기준 적정가 차이를 비교한다. 모델 간 차이가 합의 가격의 35%를 넘으면 `valuationConsensusStatus=conflict`로 저장하고 해당 사이클의 밸류에이션 매매 추론을 막는다. 모델별 결과와 부족 데이터는 그대로 남겨 사용자가 어느 가정이 충돌했는지 확인할 수 있게 한다.
 

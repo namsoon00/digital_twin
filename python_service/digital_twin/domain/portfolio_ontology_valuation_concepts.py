@@ -182,6 +182,40 @@ def value_for(row: Dict[str, object], *keys: str) -> float:
     return 0.0
 
 
+def remaining_missing_inputs(
+    missing: Iterable[object],
+    *,
+    current_price: float = 0.0,
+    fair_value: float = 0.0,
+    expected_eps: float = 0.0,
+    target_per: float = 0.0,
+    current_per: float = 0.0,
+    pbr: float = 0.0,
+) -> List[str]:
+    """Remove stale missing-input labels once the normalized value exists."""
+
+    available_aliases = set()
+    if current_price:
+        available_aliases.update({"currentprice", "현재가"})
+    if fair_value:
+        available_aliases.update({"fairvalue", "fairvalueprice", "적정가"})
+    if expected_eps:
+        available_aliases.update({"expectedeps", "예상eps"})
+    if target_per:
+        available_aliases.update({"targetper", "목표per", "기준per"})
+    if current_per:
+        available_aliases.update({"per", "peratio", "currentper", "현재per"})
+    if pbr:
+        available_aliases.update({"pbr", "현재pbr"})
+    unresolved = []
+    for item in missing:
+        label = str(item or "").strip()
+        normalized = label.replace(" ", "").replace("_", "").casefold()
+        if label and normalized not in available_aliases:
+            unresolved.append(label)
+    return unique_missing(unresolved)
+
+
 def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, object]:
     current_price = value_for(row, "currentPrice", "price") or number(position.current_price)
     reference_only = bool(row.get("valuationReferenceOnly"))
@@ -268,6 +302,15 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
             per_status = "missing"
             per_reason = per_reason or "EPS 또는 PER가 없어 PER 기준 적정가를 계산하지 못했습니다."
             preferred_metric = preferred_metric or "적정가 입력 또는 외부 PER/EPS"
+    missing = remaining_missing_inputs(
+        missing,
+        current_price=current_price,
+        fair_value=fair_value,
+        expected_eps=expected_eps,
+        target_per=target_per,
+        current_per=current_per,
+        pbr=pbr,
+    )
     provider_text = str(row.get("sourceProvider") or row.get("provider") or "").casefold()
     raw_source = str(row.get("valuationSourceType") or "").strip().lower()
     if raw_source:
@@ -334,7 +377,7 @@ def valuation_values(row: Dict[str, object], position: Position) -> Dict[str, ob
         "minimumMarginOfSafetyPct": value_for(row, "minimumMarginOfSafetyPct") or 15.0,
         "valuationMethod": method,
         "formula": formula,
-        "missingInputs": unique_missing(missing),
+        "missingInputs": missing,
         "perValuationStatus": per_status,
         "perValuationReason": per_reason,
         "preferredValuationMetric": preferred_metric,

@@ -155,6 +155,7 @@ PORTFOLIO_POLICY_RULE_IDS = frozenset({
     "graph.portfolio.reentry.review.v1",
     "graph.portfolio.repeated_loss_add.guard.v1",
     "graph.portfolio.risk_policy.review.v1",
+    "graph.position.concentration.guard.v1",
     "graph.strategy_profile.aggressive_recovery_room.v1",
     "graph.strategy_profile.loss_tolerance_breach.v1",
 })

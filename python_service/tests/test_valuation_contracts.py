@@ -205,6 +205,31 @@ class ValuationContractTests(unittest.TestCase):
         self.assertIn("사용 EPS 1,110원", message)
         self.assertIn("기준 PER 26배", message)
 
+        position = Position(
+            symbol="MSTR",
+            name="Strategy",
+            market="US",
+            currency="USD",
+            current_price=124.14,
+        )
+
+        values = valuation_values(
+            {
+                "currentPrice": 124.14,
+                "expectedEPS": 3.07,
+                "peRatio": 40.44,
+                "missingInputs": ["expectedEPS", "현재 PER", "targetPER", "fairValue"],
+            },
+            position,
+        )
+
+        self.assertEqual(3.07, values["expectedEPS"])
+        self.assertEqual(40.44, values["peRatio"])
+        self.assertNotIn("expectedEPS", values["missingInputs"])
+        self.assertNotIn("현재 PER", values["missingInputs"])
+        self.assertIn("targetPER", values["missingInputs"])
+        self.assertIn("fairValue", values["missingInputs"])
+
     def test_bitcoin_proxy_without_treasury_inputs_has_no_fair_value(self):
         position = Position(symbol="MSTR", name="Strategy", market="US", currency="USD", current_price=100)
         rows = ai_valuation_proposal_rows(

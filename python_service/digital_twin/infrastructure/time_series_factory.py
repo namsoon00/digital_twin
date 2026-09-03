@@ -47,18 +47,30 @@ def initialize_time_series_registry(settings, adapters=None):
             )
         registry.upsert(descriptor)
     control = registry.control()
-    active = str(configured.get("timeSeriesActiveBackendId") or control.get("activeBackendId") or "mysql-primary")
+    # The registry is the runtime source of truth. Settings only bootstrap an
+    # empty control row; otherwise a restart would undo failover or candidate state.
+    has_runtime_control = bool(str(control.get("activeBackendId") or "").strip())
+    active = str(
+        control.get("activeBackendId")
+        if has_runtime_control else configured.get("timeSeriesActiveBackendId") or "mysql-primary"
+    )
     if active not in adapters:
         active = "mysql-primary"
-    shadow = str(configured.get("timeSeriesShadowBackendId") or control.get("shadowBackendId") or "")
+    shadow = str(
+        control.get("shadowBackendId")
+        if has_runtime_control else configured.get("timeSeriesShadowBackendId") or ""
+    )
     if shadow not in adapters or shadow == active:
         shadow = ""
+    candidate = str(control.get("candidateBackendId") or "") if has_runtime_control else shadow
+    if candidate not in adapters or candidate == active:
+        candidate = ""
     if (
         str(control.get("activeBackendId") or "") != active
         or str(control.get("shadowBackendId") or "") != shadow
-        or str(control.get("candidateBackendId") or "") != shadow
+        or str(control.get("candidateBackendId") or "") != candidate
     ):
-        registry.set_control(active, shadow, shadow)
+        registry.set_control(active, shadow, candidate)
     return registry
 
 

@@ -51,6 +51,72 @@ def _texts(values: Iterable[object]) -> list:
     return sorted({_clean(value) for value in values or [] if _clean(value)})
 
 
+def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[str, object]:
+    """Return whether AI has a complete TypeDB action contract to judge.
+
+    Legacy/non-investment payloads remain eligible. V2 investment payloads
+    must name at least one eligible hypothesis and an allowed graph action;
+    otherwise invoking the model can only fabricate or violate authority.
+    """
+
+    values = dict(context or {})
+    subject = _mapping(values.get("investmentSubjectDecisionCase"))
+    synthesis = (
+        _mapping(values.get("v2DecisionSynthesis"))
+        or _mapping(subject.get("synthesis"))
+        or _mapping(_mapping(values.get("ontologyRelationContext")).get("decisionSynthesis"))
+    )
+    if not synthesis:
+        return {"eligible": True, "reasonCode": "legacy-contract", "reason": "No V2 action contract is present."}
+    hypothesis_ids = _texts(
+        synthesis.get("eligible_hypothesis_ids")
+        or synthesis.get("eligibleHypothesisIds")
+        or _mapping(subject.get("candidateSet")).get("eligibleHypothesisIds")
+        or []
+    )
+    allowed_actions = [
+        value.upper() for value in _texts(
+            synthesis.get("allowed_actions")
+            or synthesis.get("allowedActions")
+            or _mapping(subject.get("candidateSet")).get("allowedActions")
+            or []
+        )
+    ]
+    candidate_action = _clean(
+        synthesis.get("graph_candidate_action") or synthesis.get("graphCandidateAction")
+    ).upper()
+    judgement_blocked = bool(
+        synthesis.get("judgement_blocked") or synthesis.get("judgementBlocked")
+    )
+    if judgement_blocked:
+        reason_code = "judgement-blocked"
+    elif not hypothesis_ids:
+        reason_code = "no-eligible-hypothesis"
+    elif not allowed_actions:
+        reason_code = "no-allowed-action"
+    elif candidate_action in {"", "NO_ACTION"}:
+        reason_code = "no-graph-action"
+    elif candidate_action not in allowed_actions:
+        reason_code = "graph-action-outside-envelope"
+    else:
+        reason_code = "eligible"
+    return {
+        "eligible": reason_code == "eligible",
+        "reasonCode": reason_code,
+        "reason": {
+            "judgement-blocked": "TypeDB marked the subject as judgement blocked.",
+            "no-eligible-hypothesis": "No eligible hypothesis can support an AI action judgement.",
+            "no-allowed-action": "TypeDB did not authorize an investment action for AI selection.",
+            "no-graph-action": "TypeDB produced an observation without an action candidate.",
+            "graph-action-outside-envelope": "The graph candidate is outside the allowed action envelope.",
+            "eligible": "The TypeDB hypothesis and action envelope are complete.",
+        }.get(reason_code, reason_code),
+        "candidateAction": candidate_action,
+        "allowedActions": allowed_actions,
+        "eligibleHypothesisIds": hypothesis_ids,
+    }
+
+
 def _rule_ids(values: object) -> list:
     return _texts(
         _mapping(item).get("ruleId")

@@ -7,6 +7,7 @@ from digital_twin.application.time_series_platform import (
     TimeSeriesBackendPlatformService,
     TimeSeriesProjectionRunner,
     VersionedMarketTimeSeriesStore,
+    backend_runtime_resolution,
 )
 from digital_twin.domain.time_series_storage import (
     TemporalFeatureSnapshot,
@@ -134,12 +135,37 @@ class SwitchingRegistry(FakeRegistry):
         return list(self.rows.values())
 
 
+class HealthRegistry(SwitchingRegistry):
+    def __init__(self, active="mysql-primary", quest_health=None):
+        super().__init__()
+        self.control_row.update({
+            "activeBackendId": active,
+            "shadowBackendId": "mysql-primary" if active == "questdb-shadow" else "questdb-shadow",
+            "candidateBackendId": "mysql-primary" if active == "questdb-shadow" else "questdb-shadow",
+        })
+        self.rows["mysql-primary"]["status"] = "candidate" if active == "questdb-shadow" else "active"
+        self.rows["mysql-primary"]["health"] = {"status": "ready"}
+        self.rows["questdb-shadow"]["status"] = "active" if active == "questdb-shadow" else "candidate"
+        self.rows["questdb-shadow"]["health"] = dict(quest_health or {})
+
+    def update_health(self, backend_id, health):
+        self.rows[backend_id]["health"] = dict(health or {})
+
+    def failover_active(self, expected_active, fallback):
+        if self.control_row["activeBackendId"] != expected_active:
+            raise RuntimeError("active changed")
+        self.rows[expected_active]["status"] = "candidate"
+        self.rows[fallback]["status"] = "active"
+        return self.set_control(fallback, expected_active, expected_active, self.control_row["version"])
+
+
 class FakeOutbox:
     def __init__(self, jobs=None):
         self.enqueued = []
         self.jobs = list(jobs or [])
         self.completed = []
         self.retried = []
+        self.cancelled = []
 
     def transaction(self):
         return Context()
@@ -149,8 +175,10 @@ class FakeOutbox:
         return True
 
     def claim(self, backend_ids, worker_id, limit, lease_seconds):
-        del backend_ids, worker_id, limit, lease_seconds
-        result, self.jobs = self.jobs, []
+        del worker_id, limit, lease_seconds
+        allowed = set(backend_ids or [])
+        result = [job for job in self.jobs if job.get("backendId") in allowed]
+        self.jobs = [job for job in self.jobs if job.get("backendId") not in allowed]
         return result
 
     def complete(self, job_id):
@@ -161,6 +189,12 @@ class FakeOutbox:
 
     def summary(self):
         return {"backends": []}
+
+    def cancel_backend_pending(self, backend_id, reason):
+        self.cancelled.append((backend_id, reason))
+        count = len(self.jobs)
+        self.jobs = []
+        return count
 
 
 class FakeAdapter:
@@ -484,7 +518,10 @@ class TimeSeriesPlatformTests(unittest.TestCase):
             {"questdb-shadow": FakeAdapter(fail=True)},
             outbox,
             FakeRegistry(),
-            {"timeSeriesProjectionMaxAttempts": "5"},
+            {
+                "timeSeriesProjectionMaxAttempts": "5",
+                "timeSeriesProjectionCircuitEnabled": "0",
+            },
         )
 
         result = runner.run_once()
@@ -493,6 +530,65 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual([], outbox.completed)
         self.assertEqual("job-1", outbox.retried[0][0])
         self.assert_projection_claim_reclaims_an_expired_processing_lease()
+        self.assert_unhealthy_replica_opens_projection_circuit_before_enqueue()
+        self.assert_runner_atomically_fails_over_after_durable_failure_threshold()
+
+    def assert_unhealthy_replica_opens_projection_circuit_before_enqueue(self):
+        baseline = FakeBaseline()
+        outbox = FakeOutbox()
+        registry = HealthRegistry(quest_health={"status": "unavailable"})
+        store = VersionedMarketTimeSeriesStore(
+            baseline,
+            {"mysql-primary": baseline, "questdb-shadow": FakeAdapter()},
+            registry,
+            outbox,
+            {
+                "timeSeriesShadowWritesEnabled": "1",
+                "timeSeriesQuestDbEnabled": "1",
+                "timeSeriesProjectionCircuitEnabled": "1",
+            },
+        )
+
+        queued = store.enqueue_rows(baseline.rows)
+
+        self.assertEqual(0, queued)
+        self.assertEqual([], outbox.enqueued)
+
+    def assert_runner_atomically_fails_over_after_durable_failure_threshold(self):
+        baseline = FakeBaseline()
+        failing = FakeAdapter(fail=True)
+        registry = HealthRegistry(
+            active="questdb-shadow",
+            quest_health={
+                "status": "unavailable",
+                "consecutiveFailureCount": 1,
+                "firstFailureAt": "2026-09-01T00:00:00Z",
+            },
+        )
+        outbox = FakeOutbox([{
+            "jobId": "job-cancelled",
+            "backendId": "questdb-shadow",
+            "operation": "write-observations",
+            "payload": {"observations": [{"symbol": "005930"}]},
+        }])
+        runner = TimeSeriesProjectionRunner(
+            {"mysql-primary": baseline, "questdb-shadow": failing},
+            outbox,
+            registry,
+            {
+                "timeSeriesProjectionCircuitEnabled": "1",
+                "timeSeriesAutoFailoverEnabled": "1",
+                "timeSeriesAutoFailoverFailureCount": "2",
+            },
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("failed-over", result["autoFailover"]["status"])
+        self.assertEqual("mysql-primary", registry.control()["activeBackendId"])
+        self.assertEqual(["questdb-shadow"], result["circuitOpenBackends"])
+        self.assertEqual(1, result["autoFailover"]["cancelledProjectionCount"])
+        self.assertEqual(0, result["claimedCount"])
 
     def assert_projection_claim_reclaims_an_expired_processing_lease(self):
         outbox = ClaimProbeOutbox()
@@ -545,6 +641,9 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual("mysql-primary", store.active_backend_id())
         self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
         self.assertTrue(store.active_backend_resolution()["failedOver"])
+        self.assertEqual("questdb-shadow", snapshots.saved[0].watermark.requested_backend_id)
+        self.assertEqual("mysql-primary", snapshots.saved[0].watermark.effective_backend_id)
+        self.assertIn("degraded", snapshots.saved[0].watermark.failover_reason)
 
     def assert_active_read_fails_over_to_mysql_after_candidate_query_failure(self):
         baseline = FakeBaseline()
@@ -568,6 +667,13 @@ class TimeSeriesPlatformTests(unittest.TestCase):
             "selected-backend-temporal-read-failed",
             store.active_backend_resolution()["reason"],
         )
+        direct_resolution = backend_runtime_resolution(
+            {"activeBackendId": "mysql-primary"},
+            [{"backendId": "mysql-primary"}],
+            {"mysql-primary": {"status": "ready"}},
+        )
+        self.assertFalse(direct_resolution["failedOver"])
+        self.assertEqual({}, direct_resolution["fallbackBackendHealth"])
 
     def test_feature_comparison_ignores_backend_label_and_timestamp_formatting(self):
         active = TemporalFeatureSnapshot.create(

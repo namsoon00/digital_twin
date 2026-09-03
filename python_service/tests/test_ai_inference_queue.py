@@ -358,6 +358,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])
+        trace = self.queue.trace_for_notification(job.job_id)
+        self.assertTrue(trace["executionAuditRetained"])
+        self.assertEqual(prompt_audit["promptHash"], trace["executionAudit"]["promptHash"])
+        self.assertEqual("gpt-5.6-sol", trace["executionAudit"]["model"])
         self.assertTrue(prompt_audit["contextRouting"]["fullDecisionBriefRetainedForAudit"])
         self.assertEqual("deepResearch", prompt_audit["executionProfile"]["name"])
         self.assertEqual(64, len(prompt_audit["promptHash"]))
@@ -470,6 +474,7 @@ class AIInferenceQueueTests(unittest.TestCase):
 
         self.assertEqual("suppressed-terminal-subject", outcome["status"])
         self.assertEqual(job.job_id, queue.suppressed[0][0])
+        self.assert_incomplete_v2_action_contract_publishes_typedb_without_ai_request()
 
     def test_unchanged_graph_without_follow_up_transition_stops_before_ai_queueing(self):
         class Queue:
@@ -523,6 +528,54 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("suppressed-no-decision-value", outcome["status"])
         self.assertEqual(job.job_id, queue.suppressed[0][0])
         self.assertEqual(job.job_id, orchestrator.suppression_context["notificationJobId"])
+
+    def assert_incomplete_v2_action_contract_publishes_typedb_without_ai_request(self):
+        class Queue:
+            released = []
+
+            def release_source_notification_without_ai(self, job_id, context, reason):
+                self.released.append((job_id, dict(context), reason))
+                return True
+
+            def enqueue(self, *_args):
+                raise AssertionError("an actionless TypeDB observation must not enter AI")
+
+        class Orchestrator:
+            completed = []
+
+            def capture_ai_context(self, _case_id, context):
+                return dict(context)
+
+            def complete_without_ai(self, case_id, reason, source=""):
+                self.completed.append((case_id, reason, source))
+
+        queue = Queue()
+        orchestrator = Orchestrator()
+        job = self.create_job()
+        job.context.update({
+            "investmentReasoningCaseId": "case:no-action",
+            "investmentSubjectDecisionCaseId": "subject:no-action",
+            "investmentSubjectDecisionCase": {
+                "subjectCaseId": "subject:no-action",
+                "stage": "READY",
+            },
+            "v2DecisionSynthesis": {
+                "graph_candidate_action": "HOLD",
+                "eligible_hypothesis_ids": [],
+                "allowed_actions": [],
+            },
+        })
+
+        outcome = NotificationAIRequestEnqueuer(
+            queue,
+            reasoning_orchestrator=orchestrator,
+        ).enqueue(job)
+
+        self.assertEqual("typedb-direct-no-action-authority", outcome["status"])
+        self.assertEqual("no-eligible-hypothesis", outcome["reasonCode"])
+        self.assertEqual(job.job_id, queue.released[0][0])
+        self.assertIn("notificationAiValidatedResponse", queue.released[0][1])
+        self.assertEqual("typedb-direct", orchestrator.completed[0][2])
 
     def test_ai_timeout_releases_typedb_fallback_without_retry(self):
         job = self.create_job()

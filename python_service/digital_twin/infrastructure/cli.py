@@ -1136,16 +1136,7 @@ def time_series_platform_command(args) -> int:
     registry = initialize_time_series_registry(configured, adapters)
     runner = build_time_series_projection_runner(configured, worker_id=getattr(args, "worker_id", ""))
     if args.time_series_action == "status":
-        health = {}
-        for backend_id, adapter in adapters.items():
-            health[backend_id] = adapter.health()
-            registry.update_health(backend_id, health[backend_id])
-        print(json.dumps({
-            "control": registry.control(),
-            "deployments": registry.list(),
-            "health": health,
-            "queue": runner.outbox.summary(),
-        }, ensure_ascii=False))
+        print(json.dumps(build_time_series_backend_platform(configured).status(), ensure_ascii=False))
         return 0
     if args.time_series_action == "project-once":
         print(json.dumps(runner.run_once(), ensure_ascii=False))

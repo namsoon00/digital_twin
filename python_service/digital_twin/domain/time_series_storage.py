@@ -156,6 +156,10 @@ class TimeSeriesWatermark:
     source_event_id: str = ""
     sequence: int = 0
     status: str = "ready"
+    requested_backend_id: str = ""
+    effective_backend_id: str = ""
+    failover_reason: str = ""
+    health_checked_at: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

@@ -23,6 +23,26 @@ class _NotificationListStore:
 
 
 class WebReadPathPerformanceTests(unittest.TestCase):
+    def assert_stale_cache_cannot_preserve_an_embedded_fresh_claim(self):
+        class Cache:
+            @staticmethod
+            def get_or_refresh(*_args, **_kwargs):
+                return {
+                    "payload": {"status": "ok", "dataFreshness": {"status": "fresh"}},
+                    "stale": True,
+                    "ageSeconds": 181,
+                    "refreshing": True,
+                    "lastSuccessAt": "2026-09-03T00:00:00Z",
+                    "lastError": "dependency timeout",
+                }
+
+        payload = web_server.cached_api_payload(Cache(), "key", lambda: {})
+
+        self.assertEqual("stale", payload["dataFreshness"]["status"])
+        self.assertEqual("fresh", payload["dataFreshness"]["sourceStatus"])
+        self.assertEqual("stale", payload["effectiveFreshness"]["status"])
+        self.assertTrue(payload["readCache"]["stale"])
+
     def test_notification_list_reads_runtime_settings_once(self):
         job = NotificationJob(
             job_id="job-1",
@@ -103,6 +123,7 @@ class WebReadPathPerformanceTests(unittest.TestCase):
             },
             {call[0] for call in calls},
         )
+        self.assert_stale_cache_cannot_preserve_an_embedded_fresh_claim()
 
     def test_ontology_catalog_builds_storage_service_only_inside_cache_loader(self):
         marker = {"status": "warming"}

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import gzip
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Mapping, Optional
 
@@ -808,6 +811,43 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 in {"decision-and-narrative-adopted", "narrative-adopted-action-not-applicable"}
             )
 
+            if execution_audit:
+                audit_payload = {
+                    "version": "ai-inference-execution-artifact-v1",
+                    "requestId": request.request_id,
+                    "notificationJobId": request.notification_job_id,
+                    "contextHash": request.context_hash,
+                    "executionAudit": execution_audit,
+                    "replayManifest": dict(
+                        (notification_context or {}).get("notificationAiReplayManifest") or {}
+                    ),
+                }
+                audit_json = json_dumps(audit_payload)
+                artifact_fingerprint = hashlib.sha256(audit_json.encode("utf-8")).hexdigest()
+                existing_audit = connection.execute(
+                    "SELECT artifact_fingerprint FROM ai_inference_execution_audits "
+                    "WHERE request_id = %s FOR UPDATE",
+                    (request.request_id,),
+                ).fetchone()
+                if existing_audit and _clean(existing_audit.get("artifact_fingerprint")) != artifact_fingerprint:
+                    raise ValueError("Immutable AI execution audit fingerprint mismatch: " + request.request_id)
+                if not existing_audit:
+                    connection.execute(
+                        "INSERT INTO ai_inference_execution_audits ("
+                        "request_id, notification_job_id, artifact_fingerprint, prompt_hash, model, "
+                        "reasoning_effort, artifact_gzip, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            request.request_id,
+                            request.notification_job_id,
+                            artifact_fingerprint,
+                            _clean(execution_audit.get("promptHash")),
+                            request.model,
+                            request.reasoning_effort,
+                            gzip.compress(audit_json.encode("utf-8"), compresslevel=6),
+                            stamp,
+                        ),
+                    )
+
             connection.execute(
                 """
                 INSERT INTO ai_inference_results (
@@ -910,6 +950,31 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 _clean(reason)[:1000],
                 {"notificationAiQueue": {"status": "suppressed-terminal-subject"}},
                 only_if_statuses=("pending", "processing", "failed", "awaiting_ai"),
+            )
+
+    def release_source_notification_without_ai(
+        self,
+        notification_job_id: str,
+        context: Mapping[str, object],
+        reason: object,
+    ) -> bool:
+        """Return a claimed source notification to delivery without creating AI work."""
+
+        direct_context = dict(context or {})
+        direct_context["notificationAiQueue"] = {
+            "status": "not-requested",
+            "reason": _clean(reason)[:500],
+            "completedAt": utc_now(),
+        }
+        with self.transaction() as connection:
+            return self.set_notification_status_with_connection(
+                connection,
+                notification_job_id,
+                "pending",
+                "",
+                replacement_context=direct_context,
+                only_if_statuses=("pending", "processing", "failed", "awaiting_ai"),
+                attempts_delta=-1,
             )
 
     def fail(self, request: AIInferenceRequest, worker_id: str, reason: object) -> bool:
@@ -1025,19 +1090,37 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                        result.publication_contract_passed, result.contract_failure_code,
                        result.latency_ms, result.prompt_bytes,
                        result.response_json, result.created_at AS result_created_at
+                       ,audit.artifact_fingerprint, audit.artifact_gzip,
+                       audit.created_at AS audit_created_at
                 FROM ai_inference_requests request
                 LEFT JOIN ai_inference_results result
                   ON result.request_id = request.request_id
+                LEFT JOIN ai_inference_execution_audits audit
+                  ON audit.request_id = request.request_id
                 WHERE request.notification_job_id = %s
                 ORDER BY request.created_at DESC, request.request_id DESC
                 LIMIT 1
                 """,
                 (_clean(notification_job_id),),
             ).fetchone()
+            if not row:
+                row = connection.execute(
+                    "SELECT request_id, notification_job_id, artifact_fingerprint, artifact_gzip, "
+                    "created_at AS audit_created_at FROM ai_inference_execution_audits "
+                    "WHERE notification_job_id = %s ORDER BY created_at DESC, request_id DESC LIMIT 1",
+                    (_clean(notification_job_id),),
+                ).fetchone()
         if not row:
             return {}
         queue_context = _json_loads(row.get("context_json"), {})
         response = _json_loads(row.get("response_json"), {})
+        execution_artifact = {}
+        compressed_artifact = row.get("artifact_gzip")
+        if compressed_artifact:
+            try:
+                execution_artifact = json.loads(gzip.decompress(bytes(compressed_artifact)).decode("utf-8"))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                execution_artifact = {"status": "corrupt"}
         return {
             "requestId": _clean(row.get("request_id")),
             "notificationJobId": _clean(row.get("notification_job_id")),
@@ -1070,6 +1153,11 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "promptBytes": int(row.get("prompt_bytes") or 0),
             "resultCreatedAt": _clean(row.get("result_created_at")),
             "response": response,
+            "executionAuditRetained": bool(execution_artifact),
+            "executionAuditFingerprint": _clean(row.get("artifact_fingerprint")),
+            "executionAuditCreatedAt": _clean(row.get("audit_created_at")),
+            "executionAudit": dict(execution_artifact.get("executionAudit") or {}),
+            "replayManifest": dict(execution_artifact.get("replayManifest") or {}),
         }
 
     def summary(self) -> Dict[str, object]:
@@ -1151,7 +1239,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "effectiveAiLatestAt": _clean(effectiveness_row.get("latest_at")),
             "effectiveAiStatus": (
                 "critical" if eligible_count >= 10 and authored_count == 0
-                else "degraded" if eligible_count and authored_count * 2 < eligible_count
+                else "critical" if eligible_count >= 10 and authored_count * 2 <= eligible_count
+                else "degraded" if eligible_count and authored_count < eligible_count
                 else "healthy"
             ),
         }

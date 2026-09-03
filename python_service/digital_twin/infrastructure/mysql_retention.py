@@ -63,6 +63,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "ai_inference_subject_heads",
     "ai_inference_requests",
     "ai_inference_results",
+    "ai_inference_execution_audits",
     "news_article_enrichment_revisions",
     "news_article_enrichment_heads",
     "news_event_episodes",
@@ -293,6 +294,10 @@ def operational_inference_detail_outbox_retention_hours(settings: Mapping[str, o
 
 def operational_ai_inference_queue_retention_hours(settings: Mapping[str, object] = None) -> int:
     return _int_setting(settings or {}, "notificationAiQueueRetentionHours", 24, 1, 24 * 30)
+
+
+def operational_ai_inference_audit_retention_days(settings: Mapping[str, object] = None) -> int:
+    return _int_setting(settings or {}, "notificationAiAuditRetentionDays", 30, 1, 365)
 
 
 def operational_large_domain_event_keep_count(settings: Mapping[str, object] = None) -> int:
@@ -1116,6 +1121,18 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["ai_inference_results"] = ai_inference_deleted["results"]
         deleted_by_policy["terminal:ai_inference_requests"] = ai_inference_deleted["requests"]
         deleted_by_policy["time:ai_inference_results"] = ai_inference_deleted["results"]
+        ai_audit_cutoff = (
+            (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            - timedelta(days=operational_ai_inference_audit_retention_days(configured))
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        ai_audit_deleted = _delete_one_batch(
+            connection,
+            "DELETE FROM `ai_inference_execution_audits` WHERE `created_at` < %s "
+            "ORDER BY `created_at`, `request_id` LIMIT %s",
+            (ai_audit_cutoff, batch_size),
+        )
+        deleted_by_table["ai_inference_execution_audits"] = ai_audit_deleted
+        deleted_by_policy["time:ai_inference_execution_audits"] = ai_audit_deleted
         news_analysis_deleted = _delete_completed_news_analysis_work_rows(
             connection,
             ai_inference_cutoff,

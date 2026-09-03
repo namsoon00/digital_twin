@@ -296,6 +296,44 @@ class MySQLTimeSeriesBackendRegistryStore(MySQLOperationalConnection):
             )
         return self.control()
 
+    def failover_active(self, expected_active_backend_id: str, fallback_backend_id: str) -> Dict[str, object]:
+        """Atomically demote an unavailable active backend and activate its fallback."""
+
+        expected = str(expected_active_backend_id or "").strip()
+        fallback = str(fallback_backend_id or "").strip()
+        stamp = iso_utc()
+        with self.transaction() as connection:
+            control = connection.execute(
+                "SELECT * FROM time_series_backend_control WHERE control_id = 'global' FOR UPDATE"
+            ).fetchone() or {}
+            active = str(control.get("active_backend_id") or "")
+            if active != expected:
+                raise RuntimeError("Time-series active backend changed concurrently")
+            rows = connection.execute(
+                "SELECT backend_id FROM time_series_backend_deployments "
+                "WHERE backend_id IN (%s, %s) FOR UPDATE",
+                (expected, fallback),
+            ).fetchall()
+            known = {str(row.get("backend_id") or "") for row in rows or []}
+            if expected not in known or fallback not in known:
+                raise ValueError("Time-series failover backend is not registered")
+            connection.execute(
+                "UPDATE time_series_backend_deployments SET deployment_status = 'candidate', updated_at = %s "
+                "WHERE backend_id = %s",
+                (stamp, expected),
+            )
+            connection.execute(
+                "UPDATE time_series_backend_deployments SET deployment_status = 'active', updated_at = %s "
+                "WHERE backend_id = %s",
+                (stamp, fallback),
+            )
+            connection.execute(
+                "UPDATE time_series_backend_control SET active_backend_id = %s, shadow_backend_id = %s, "
+                "candidate_backend_id = %s, version = version + 1, updated_at = %s WHERE control_id = 'global'",
+                (fallback, expected, expected, stamp),
+            )
+        return self.control()
+
     @staticmethod
     def row_payload(row: Mapping[str, object]) -> Dict[str, object]:
         values = dict(row or {})
@@ -3394,6 +3432,18 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
                 ),
             )
 
+    def cancel_backend_pending(self, backend_id: str, reason: str) -> int:
+        """Discard replayable replica work after the canonical read path fails over."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE time_series_projection_outbox SET job_status = 'cancelled', payload_json = '{}', "
+                "lease_owner = '', lease_until = '', available_at = '', last_error = %s, updated_at = %s "
+                "WHERE backend_id = %s AND job_status IN ('queued', 'retry', 'processing')",
+                (str(reason or "projection-cancelled")[:255], iso_utc(), str(backend_id or "")),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
     def retry(self, job_id: str, error: str, max_attempts: int = 8) -> Dict[str, object]:
         with self.transaction() as connection:
             row = connection.execute(
@@ -3407,7 +3457,9 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
                 """
                 UPDATE time_series_projection_outbox
                 SET job_status = %s, attempt_count = %s, lease_owner = '', lease_until = '',
-                    available_at = %s, last_error = %s, updated_at = %s
+                    available_at = %s, last_error = %s,
+                    payload_json = CASE WHEN %s = 1 THEN '{}' ELSE payload_json END,
+                    updated_at = %s
                 WHERE job_id = %s
                 """,
                 (
@@ -3415,11 +3467,24 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
                     attempts,
                     "" if terminal else iso_utc(utc_now() + timedelta(seconds=delay)),
                     str(error or "")[:255],
+                    1 if terminal else 0,
                     iso_utc(),
                     str(job_id or ""),
                 ),
             )
         return {"jobId": str(job_id or ""), "attemptCount": attempts, "terminal": terminal}
+
+    def compact_terminal_payloads(self, limit: int = 5000) -> int:
+        """Drop replay payloads from terminal replica jobs; MySQL remains canonical."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE time_series_projection_outbox SET payload_json = '{}', updated_at = %s "
+                "WHERE job_status IN ('failed', 'cancelled') AND payload_json <> '{}' "
+                "ORDER BY updated_at, job_id LIMIT %s",
+                (iso_utc(), max(1, min(20000, int(limit or 5000)))),
+            )
+        return int(getattr(cursor, "rowcount", 0) or 0)
 
     def summary(self) -> Dict[str, object]:
         with self.connect() as connection:

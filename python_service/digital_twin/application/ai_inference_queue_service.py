@@ -11,6 +11,7 @@ from typing import Dict
 from ..domain.ai_inference_queue import (
     AIInferenceRequest,
     AIInferenceResult,
+    notification_ai_action_eligibility,
     notification_ai_review_mode,
 )
 from ..domain.investment_brain import decision_episode_from_context
@@ -375,6 +376,40 @@ class NotificationAIRequestEnqueuer:
                     "subjectCaseId": subject_case_id,
                     "subjectStage": captured_stage,
                 }
+        action_eligibility = notification_ai_action_eligibility(context)
+        context["notificationAiActionEligibility"] = action_eligibility
+        if job.message_type == INVESTMENT_INSIGHT and not narrative_only and not action_eligibility.get("eligible"):
+            reason = str(action_eligibility.get("reason") or "TypeDB action contract is incomplete.")
+            response = local_validated_ai_response(context, source="TypeDB direct publication")
+            response.summary = (
+                "TypeDB가 확인한 관계 변화는 전달하지만, 실행 가능한 가설과 허용 행동이 완성되지 않아 "
+                "AI 매매 판단은 요청하지 않았습니다."
+            )
+            response.investment_view = response.summary
+            response.validation_warnings.append(reason)
+            context = context_with_validated_ai_response(context, response, self.settings)
+            context["notificationAiBypass"] = {
+                "status": "typedb-direct",
+                "reasonCode": str(action_eligibility.get("reasonCode") or ""),
+                "reason": reason,
+                "completedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+            release = getattr(self.queue, "release_source_notification_without_ai", None)
+            if not callable(release):
+                raise RuntimeError("AI queue does not support direct TypeDB publication")
+            released = bool(release(job.job_id, context, reason))
+            if released and reasoning_case_id and self.reasoning_orchestrator is not None:
+                self.reasoning_orchestrator.complete_without_ai(
+                    reasoning_case_id,
+                    reason,
+                    source="typedb-direct",
+                )
+            return {
+                "status": "typedb-direct-no-action-authority" if released else "typedb-direct-release-lost",
+                "notificationJobId": job.job_id,
+                "subjectCaseId": subject_case_id,
+                "reasonCode": str(action_eligibility.get("reasonCode") or ""),
+            }
         deferred_delivery = pre_ai_deferred_delivery_decision(context)
         context["preAiDeferredDeliveryDecision"] = deferred_delivery
         if deferred_delivery.get("decision") == "suppress":

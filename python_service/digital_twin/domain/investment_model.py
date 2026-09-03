@@ -59,8 +59,14 @@ def _backend_label(adapter_name: object, backend_id: object) -> str:
 def _time_series_binding(active: Mapping[str, object], platform_value: object) -> Dict[str, object]:
     platform = _mapping(platform_value)
     control = _mapping(platform.get("control"))
+    runtime = _mapping(platform.get("runtimeResolution"))
     declared_backend_id = _text(active.get("timeSeriesBackendId"))
-    active_backend_id = _text(control.get("activeBackendId"))
+    requested_backend_id = _text(
+        runtime.get("requestedBackendId") or control.get("activeBackendId")
+    )
+    effective_backend_id = _text(
+        runtime.get("effectiveBackendId") or requested_backend_id
+    )
     deployments = [
         _mapping(item)
         for item in platform.get("deployments") or []
@@ -68,17 +74,21 @@ def _time_series_binding(active: Mapping[str, object], platform_value: object) -
     ]
     deployment = next((
         item for item in deployments
-        if _text(item.get("backendId")) == active_backend_id
+        if _text(item.get("backendId")) == effective_backend_id
     ), {})
-    health = _mapping(deployment.get("health"))
-    resolved_backend_id = active_backend_id or declared_backend_id
+    health = (
+        _mapping(_mapping(platform.get("health")).get(effective_backend_id))
+        or _mapping(deployment.get("health"))
+    )
+    resolved_backend_id = effective_backend_id or declared_backend_id
     alignment_state = (
         "aligned"
-        if active_backend_id and declared_backend_id and active_backend_id == declared_backend_id
+        if effective_backend_id and declared_backend_id and effective_backend_id == declared_backend_id
         else "mismatch"
-        if active_backend_id and declared_backend_id
+        if effective_backend_id and declared_backend_id
         else "unknown"
     )
+    health_state = _text(health.get("status"))
     return {
         "timeSeries": resolved_backend_id,
         "timeSeriesLabel": _backend_label(deployment.get("adapterName"), resolved_backend_id),
@@ -86,9 +96,14 @@ def _time_series_binding(active: Mapping[str, object], platform_value: object) -
         "timeSeriesStatus": _text(deployment.get("status")),
         "timeSeriesHealth": _text(health.get("status")),
         "timeSeriesDeclared": declared_backend_id,
+        "timeSeriesRequested": requested_backend_id,
+        "timeSeriesEffective": effective_backend_id,
+        "timeSeriesFailedOver": bool(runtime.get("failedOver")),
+        "timeSeriesFailoverReason": _text(runtime.get("reason")),
         "timeSeriesAlignmentState": alignment_state,
         "timeSeriesAligned": alignment_state == "aligned",
-        "timeSeriesSource": "platform-control" if active_backend_id else "reasoning-release",
+        "timeSeriesOperational": health_state.lower() in {"ready", "healthy"} if health_state else None,
+        "timeSeriesSource": "platform-runtime-resolution" if effective_backend_id else "reasoning-release",
     }
 
 
@@ -156,6 +171,21 @@ def investment_model_projection(
             and _mapping(active_health.get("capabilities")).get("productionDelivery") is True
             and _text(active_rule_readiness.get("status")) == "ready"
         )
+    time_series_binding = _time_series_binding(active, time_series_value)
+    if _mapping(time_series_value):
+        if not time_series_binding.get("timeSeriesAligned"):
+            blockers.append("time-series-backend-mismatch")
+        if time_series_binding.get("timeSeriesOperational") is False:
+            blockers.append("time-series-backend-unhealthy")
+        blockers = sorted(set(blockers))
+        promotion_ready = promotion_ready and not any(
+            blocker.startswith("time-series-backend-") for blocker in blockers
+        )
+    deployed_tbox = _mapping(catalog.get("deployedTBox"))
+    if deployed_tbox and _text(deployed_tbox.get("alignment")) != "aligned":
+        blockers.append("tbox-deployment-" + (_text(deployed_tbox.get("alignment")) or "unavailable"))
+        blockers = sorted(set(blockers))
+        promotion_ready = False
     release_fingerprint = _text(
         active_health.get("releaseFingerprint")
         or active_health.get("candidateReleaseFingerprint")
@@ -195,7 +225,6 @@ def investment_model_projection(
         comparison=comparison,
         settings=settings,
     )
-    time_series_binding = _time_series_binding(active, time_series_value)
     return {
         "version": INVESTMENT_MODEL_VERSION,
         "status": status,
@@ -272,6 +301,9 @@ def investment_model_projection(
                 or promotion_health.get("ruleInventoryReleaseReady")
                 or inventory.get("releaseReady")
             ),
+            "tboxAlignment": _text(deployed_tbox.get("alignment")) or "unknown",
+            "tboxSourceFingerprint": _text(deployed_tbox.get("sourceFingerprint")),
+            "tboxDeployedFingerprint": _text(deployed_tbox.get("deployedFingerprint")),
         },
         "productReadiness": product_readiness,
         "candidate": {

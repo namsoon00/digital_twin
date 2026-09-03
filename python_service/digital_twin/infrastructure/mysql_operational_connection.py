@@ -1348,6 +1348,20 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ai_inference_execution_audits (
+        request_id VARCHAR(191) PRIMARY KEY,
+        notification_job_id VARCHAR(191) NOT NULL,
+        artifact_fingerprint VARCHAR(64) NOT NULL,
+        prompt_hash VARCHAR(64) NOT NULL DEFAULT '',
+        model VARCHAR(120) NOT NULL DEFAULT '',
+        reasoning_effort VARCHAR(32) NOT NULL DEFAULT '',
+        artifact_gzip LONGBLOB NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_ai_execution_audit_notification (notification_job_id, created_at),
+        KEY idx_ai_execution_audit_created (created_at, request_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_article_delivery_ledger (
         account_id VARCHAR(191) NOT NULL DEFAULT '',
         identity_key VARCHAR(191) NOT NULL,

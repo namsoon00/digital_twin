@@ -921,9 +921,16 @@ class ConsoleReadModelService:
             if count:
                 suppression_parts.append(label + " " + str(count))
         time_series_control = _mapping(time_series.get("control"))
-        active_backend_id = _text(time_series_control.get("activeBackendId") or time_series_control.get("active_backend_id"))
+        time_series_resolution = _mapping(time_series.get("runtimeResolution"))
+        active_backend_id = _text(
+            time_series_resolution.get("effectiveBackendId")
+            or time_series_control.get("activeBackendId")
+            or time_series_control.get("active_backend_id")
+        )
         time_series_health = _mapping(_mapping(time_series.get("health")).get(active_backend_id))
         time_series_state = self._generic_health_state(time_series_health or (time_series if not active_backend_id else {}))
+        if time_series_resolution.get("failedOver"):
+            time_series_state = "warning" if time_series_state == "healthy" else time_series_state
         if time_series_state == "unknown" and active_backend_id:
             active_deployment = next(
                 (item for item in _rows(time_series.get("deployments")) if _text(item.get("backendId")) == active_backend_id),

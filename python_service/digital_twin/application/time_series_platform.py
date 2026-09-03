@@ -35,6 +35,67 @@ def parsed_utc(value: object):
     return parsed.astimezone(timezone.utc)
 
 
+def healthy_backend_status(health: Mapping[str, object]) -> bool:
+    return str(dict(health or {}).get("status") or "").strip().lower() in {"ready", "healthy"}
+
+
+def merge_backend_health(previous: Mapping[str, object], current: Mapping[str, object]) -> Dict[str, object]:
+    """Keep a durable failure streak so process restarts cannot hide an outage."""
+
+    prior = dict(previous or {})
+    observed = dict(current or {})
+    stamp = str(observed.get("checkedAt") or utc_now_iso())
+    if healthy_backend_status(observed):
+        observed.update({
+            "consecutiveFailureCount": 0,
+            "firstFailureAt": "",
+            "lastHealthyAt": stamp,
+        })
+    else:
+        observed.update({
+            "consecutiveFailureCount": int(prior.get("consecutiveFailureCount") or 0) + 1,
+            "firstFailureAt": str(prior.get("firstFailureAt") or stamp),
+            "lastHealthyAt": str(prior.get("lastHealthyAt") or ""),
+        })
+    observed["checkedAt"] = stamp
+    return observed
+
+
+def backend_runtime_resolution(
+    control: Mapping[str, object],
+    deployments: Iterable[Mapping[str, object]],
+    health: Mapping[str, Mapping[str, object]],
+) -> Dict[str, object]:
+    """Describe the backend that callers can actually use, not only the requested label."""
+
+    current_control = dict(control or {})
+    requested = str(current_control.get("activeBackendId") or "mysql-primary")
+    registered = {
+        str(dict(item or {}).get("backendId") or "")
+        for item in deployments or []
+        if str(dict(item or {}).get("backendId") or "")
+    }
+    selected_health = dict((health or {}).get(requested) or {})
+    fallback_health = dict((health or {}).get("mysql-primary") or {})
+    effective = requested
+    reason = "selected-backend-ready"
+    if requested not in registered:
+        effective = "mysql-primary"
+        reason = "selected-backend-not-registered"
+    elif requested != "mysql-primary" and not healthy_backend_status(selected_health):
+        effective = "mysql-primary"
+        reason = "selected-backend-" + str(selected_health.get("status") or "unavailable")
+    return {
+        "requestedBackendId": requested,
+        "effectiveBackendId": effective,
+        "failedOver": effective != requested,
+        "reason": reason,
+        "requestedBackendHealth": selected_health,
+        "fallbackBackendHealth": fallback_health if effective != requested else {},
+        "checkedAt": str(selected_health.get("checkedAt") or fallback_health.get("checkedAt") or utc_now_iso()),
+    }
+
+
 class TimeSeriesBackendPlatformService:
     """Guard candidate selection, promotion, and rollback independently of vendors."""
 
@@ -48,13 +109,20 @@ class TimeSeriesBackendPlatformService:
     def status(self) -> Dict[str, object]:
         health = {}
         for backend_id, adapter in self.adapters.items():
-            health[backend_id] = adapter.health()
+            previous = {}
+            getter = getattr(self.registry, "get", None)
+            if callable(getter):
+                previous = dict((getter(backend_id) or {}).get("health") or {})
+            health[backend_id] = merge_backend_health(previous, adapter.health())
             self.registry.update_health(backend_id, health[backend_id])
+        control = self.registry.control()
+        deployments = self.registry.list()
         return {
-            "control": self.registry.control(),
-            "deployments": self.registry.list(),
+            "control": control,
+            "deployments": deployments,
             "health": health,
             "queue": self.outbox.summary(),
+            "runtimeResolution": backend_runtime_resolution(control, deployments, health),
         }
 
     def queue_blockers(self, backend_id: str) -> List[str]:
@@ -183,7 +251,7 @@ class VersionedMarketTimeSeriesStore:
 
     @staticmethod
     def healthy_status(health: Mapping[str, object]) -> bool:
-        return str(dict(health or {}).get("status") or "").strip().lower() in {"ready", "healthy"}
+        return healthy_backend_status(health)
 
     @staticmethod
     def adapter_health(adapter) -> Dict[str, object]:
@@ -275,6 +343,12 @@ class VersionedMarketTimeSeriesStore:
                 continue
             if backend_id == "questdb-shadow" and not truthy(self.settings.get("timeSeriesQuestDbEnabled")):
                 continue
+            if truthy(self.settings.get("timeSeriesProjectionCircuitEnabled", "1")):
+                getter = getattr(self.registry, "get", None)
+                deployment = dict(getter(backend_id) or {}) if callable(getter) else {}
+                persisted_health = dict(deployment.get("health") or {})
+                if persisted_health and not self.healthy_status(persisted_health):
+                    continue
             result.append(backend_id)
         return sorted(result)
 
@@ -465,8 +539,19 @@ class VersionedMarketTimeSeriesStore:
             adapter = self.baseline
             windows = adapter.load_temporal_windows(account_id, symbols, definitions, as_of)
         if self.snapshot_store is not None:
-            watermark = adapter.watermark() if callable(getattr(adapter, "watermark", None)) else TimeSeriesWatermark(
+            source_watermark = adapter.watermark() if callable(getattr(adapter, "watermark", None)) else TimeSeriesWatermark(
                 backend_id, str(as_of or ""), status="compatibility"
+            )
+            watermark = TimeSeriesWatermark(
+                backend_id=source_watermark.backend_id,
+                observed_through=source_watermark.observed_through,
+                source_event_id=source_watermark.source_event_id,
+                sequence=source_watermark.sequence,
+                status=source_watermark.status,
+                requested_backend_id=str(resolution.get("requestedBackendId") or backend_id),
+                effective_backend_id=backend_id,
+                failover_reason=str(resolution.get("reason") or ""),
+                health_checked_at=str(resolution.get("checkedAt") or ""),
             )
             snapshot = TemporalFeatureSnapshot.create(
                 backend_id=backend_id,
@@ -504,9 +589,102 @@ class TimeSeriesProjectionRunner:
         self.registry = registry
         self.settings = dict(settings or {})
         self.worker_id = worker_id or ("ts-projection-" + socket.gethostname() + "-" + str(id(self)))
+        self._last_health_probe_at = {}
+        self._terminal_payloads_compacted = False
+
+    def _persisted_health(self, backend_id: str) -> Dict[str, object]:
+        getter = getattr(self.registry, "get", None)
+        if not callable(getter):
+            return {}
+        try:
+            return dict((getter(backend_id) or {}).get("health") or {})
+        except Exception:  # noqa: BLE001 - a health read must not stop the worker.
+            return {}
+
+    def _backend_health(self, backend_id: str, adapter) -> Dict[str, object]:
+        previous = self._persisted_health(backend_id)
+        probe_interval = max(
+            5,
+            min(300, int(float(self.settings.get("timeSeriesProjectionHealthProbeSeconds") or 30))),
+        )
+        now = time.monotonic()
+        if (
+            previous
+            and backend_id in self._last_health_probe_at
+            and now - float(self._last_health_probe_at[backend_id]) < probe_interval
+        ):
+            return previous
+        health = merge_backend_health(previous, VersionedMarketTimeSeriesStore.adapter_health(adapter))
+        self._last_health_probe_at[backend_id] = now
+        try:
+            self.registry.update_health(backend_id, health)
+        except Exception:  # noqa: BLE001 - projection can still report the probe result.
+            pass
+        return health
+
+    def _auto_failover(self, health_by_backend: Mapping[str, Mapping[str, object]]) -> Dict[str, object]:
+        if not truthy(self.settings.get("timeSeriesAutoFailoverEnabled", "1")):
+            return {"status": "disabled"}
+        control = dict(self.registry.control() or {})
+        active = str(control.get("activeBackendId") or "mysql-primary")
+        if active == "mysql-primary":
+            return {"status": "not-required", "activeBackendId": active}
+        health = dict(health_by_backend.get(active) or {})
+        threshold = max(1, min(10, int(float(self.settings.get("timeSeriesAutoFailoverFailureCount") or 2))))
+        if healthy_backend_status(health) or int(health.get("consecutiveFailureCount") or 0) < threshold:
+            return {
+                "status": "waiting" if not healthy_backend_status(health) else "not-required",
+                "activeBackendId": active,
+                "failureCount": int(health.get("consecutiveFailureCount") or 0),
+                "failureThreshold": threshold,
+            }
+        baseline = self.adapters.get("mysql-primary")
+        baseline_health = (
+            VersionedMarketTimeSeriesStore.adapter_health(baseline)
+            if baseline is not None else {"status": "unavailable"}
+        )
+        if not healthy_backend_status(baseline_health):
+            return {"status": "blocked", "reason": "fallback-backend-unhealthy", "health": baseline_health}
+        failover = getattr(self.registry, "failover_active", None)
+        if not callable(failover):
+            return {"status": "unsupported", "reason": "atomic-registry-failover-unavailable"}
+        next_control = failover(active, "mysql-primary")
+        cancel = getattr(self.outbox, "cancel_backend_pending", None)
+        cancelled = int(cancel(active, "projection-circuit-open:auto-failover") or 0) if callable(cancel) else 0
+        health.update({
+            "autoFailoverAt": utc_now_iso(),
+            "autoFailoverBackendId": "mysql-primary",
+            "projectionCircuitOpen": True,
+        })
+        try:
+            self.registry.update_health(active, health)
+        except Exception:  # noqa: BLE001 - control has already moved atomically.
+            pass
+        return {
+            "status": "failed-over",
+            "previousBackendId": active,
+            "activeBackendId": "mysql-primary",
+            "cancelledProjectionCount": cancelled,
+            "control": next_control,
+        }
 
     def run_once(self) -> Dict[str, object]:
-        backend_ids = [key for key in self.adapters if key != "mysql-primary"]
+        compacted_terminal_payloads = 0
+        compact = getattr(self.outbox, "compact_terminal_payloads", None)
+        if not self._terminal_payloads_compacted and callable(compact):
+            compacted_terminal_payloads = int(compact() or 0)
+            self._terminal_payloads_compacted = True
+        candidate_ids = [key for key in self.adapters if key != "mysql-primary"]
+        health_by_backend = {
+            backend_id: self._backend_health(backend_id, self.adapters[backend_id])
+            for backend_id in candidate_ids
+        }
+        failover = self._auto_failover(health_by_backend)
+        circuit_enabled = truthy(self.settings.get("timeSeriesProjectionCircuitEnabled", "1"))
+        backend_ids = [
+            backend_id for backend_id in candidate_ids
+            if not circuit_enabled or healthy_backend_status(health_by_backend.get(backend_id) or {})
+        ]
         batch_size = max(1, min(200, int(float(self.settings.get("timeSeriesProjectionBatchSize") or 20))))
         lease_seconds = max(30, min(1800, int(float(self.settings.get("timeSeriesProjectionLeaseSeconds") or 120))))
         max_attempts = max(1, min(20, int(float(self.settings.get("timeSeriesProjectionMaxAttempts") or 8))))
@@ -544,6 +722,10 @@ class TimeSeriesProjectionRunner:
             "claimedCount": len(jobs),
             "completedCount": completed,
             "failedCount": failed,
+            "circuitOpenBackends": sorted(set(candidate_ids) - set(backend_ids)),
+            "backendHealth": health_by_backend,
+            "autoFailover": failover,
+            "compactedTerminalPayloadCount": compacted_terminal_payloads,
             "queue": self.outbox.summary(),
             "checkedAt": utc_now_iso(),
         }

@@ -671,6 +671,29 @@ def cached_api_payload(
         "lastSuccessAt": str(snapshot.get("lastSuccessAt") or ""),
         "lastError": str(snapshot.get("lastError") or ""),
     }
+    if snapshot.get("stale"):
+        reported_freshness = payload.get("dataFreshness")
+        if isinstance(reported_freshness, dict):
+            payload["dataFreshness"] = {
+                **reported_freshness,
+                "sourceStatus": str(reported_freshness.get("status") or ""),
+                "status": "stale",
+                "stale": True,
+                "reason": "읽기 캐시가 갱신 기한을 초과해 내부 최신성 표기를 사용할 수 없습니다.",
+            }
+        elif reported_freshness not in (None, ""):
+            payload["dataFreshness"] = {
+                "sourceStatus": str(reported_freshness),
+                "status": "stale",
+                "stale": True,
+                "reason": "읽기 캐시가 갱신 기한을 초과했습니다.",
+            }
+        payload["effectiveFreshness"] = {
+            "status": "stale",
+            "ageSeconds": int(snapshot.get("ageSeconds") or 0),
+            "lastSuccessAt": str(snapshot.get("lastSuccessAt") or ""),
+            "reason": "마지막 성공 응답을 제공하고 백그라운드에서 갱신 중입니다.",
+        }
     return payload
 
 
@@ -1471,20 +1494,10 @@ def save_settings_payload(payload: Dict[str, object], access: ShareAccess = None
 
 
 def time_series_platform_status_payload() -> Dict[str, object]:
-    from .time_series_factory import build_time_series_adapters, initialize_time_series_registry
+    from .time_series_factory import build_time_series_backend_platform
 
     settings = operational_read_settings()
-    adapters = build_time_series_adapters(settings)
-    registry = initialize_time_series_registry(settings, adapters)
-    health = {backend_id: adapter.health() for backend_id, adapter in adapters.items()}
-    for backend_id, payload in health.items():
-        registry.update_health(backend_id, payload)
-    return {
-        "control": registry.control(),
-        "deployments": registry.list(),
-        "health": health,
-        "queue": stores.time_series_projection_outbox_store(settings).summary(),
-    }
+    return build_time_series_backend_platform(settings).status()
 
 
 def reasoning_engine_platform_status_payload(

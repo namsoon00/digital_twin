@@ -3486,6 +3486,29 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
             )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
+    def blocking_counts(self, backend_id: str) -> Dict[str, int]:
+        """Return only work that can still affect candidate parity or delivery.
+
+        Terminal failures whose replay payload was compacted remain as audit
+        history, but a successful full backfill and parity comparison supersede
+        them. They must not permanently prevent a repaired backend promotion.
+        """
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT job_status, COUNT(*) AS count FROM time_series_projection_outbox "
+                "WHERE backend_id = %s AND ("
+                "job_status IN ('queued', 'processing', 'retry') OR "
+                "(job_status = 'failed' AND payload_json <> '{}')) "
+                "GROUP BY job_status",
+                (str(backend_id or ""),),
+            ).fetchall()
+        return {
+            str(row.get("job_status") or ""): int(row.get("count") or 0)
+            for row in rows or []
+            if str(row.get("job_status") or "")
+        }
+
     def summary(self) -> Dict[str, object]:
         with self.connect() as connection:
             rows = connection.execute(

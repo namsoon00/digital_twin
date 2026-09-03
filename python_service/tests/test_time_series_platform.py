@@ -45,6 +45,9 @@ class ClaimProbeOutbox(MySQLTimeSeriesProjectionOutboxStore):
     def transaction(self):
         return Context(self.connection)
 
+    def connect(self):
+        return Context(self.connection)
+
 
 class FakeBaseline:
     backend_id = "mysql-primary"
@@ -506,6 +509,44 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         self.assertEqual(1, result["projectionQueuedCount"])
         self.assertEqual("questdb-shadow", outbox.enqueued[0]["backend_id"])
         self.assertEqual(baseline.rows, outbox.enqueued[0]["payload"]["observations"])
+        self.assert_capital_flow_rebuild_projects_canonical_rows()
+
+    def assert_capital_flow_rebuild_projects_canonical_rows(self):
+        class CapitalFlowBaseline(FakeBaseline):
+            def rebuild_capital_flow_from_legacy(self, _limit):
+                return {
+                    "status": "completed",
+                    "observations": [{
+                        "subjectId": "005930",
+                        "observedAt": "2026-08-15T00:00:00Z",
+                        "foreignNetVolume": 10,
+                    }],
+                }
+
+            def load_capital_flow_observations(self, limit=50000):
+                del limit
+                return [{
+                    "subjectId": "005930",
+                    "observedAt": "2026-08-15T00:00:00Z",
+                    "foreignNetVolume": 10,
+                    "foreignBuyVolume": 110,
+                    "foreignSellVolume": 100,
+                }]
+
+        baseline = CapitalFlowBaseline()
+        outbox = FakeOutbox()
+        store = VersionedMarketTimeSeriesStore(
+            baseline,
+            {"mysql-primary": baseline, "questdb-shadow": FakeAdapter()},
+            FakeRegistry(),
+            outbox,
+            {"timeSeriesShadowWritesEnabled": "1", "timeSeriesQuestDbEnabled": "1"},
+        )
+
+        result = store.rebuild_capital_flow_from_legacy(50000)
+
+        self.assertEqual(1, result["projectionSourceCount"])
+        self.assertEqual(110, outbox.enqueued[0]["payload"]["observations"][0]["foreignBuyVolume"])
 
     def test_projection_failure_is_retried_and_not_reported_as_completed(self):
         outbox = FakeOutbox([{
@@ -594,10 +635,13 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         outbox = ClaimProbeOutbox()
 
         outbox.claim(["questdb-shadow"], "worker-1", 20, 120)
+        outbox.blocking_counts("questdb-shadow")
 
         select_sql = outbox.connection.statements[0][0]
         self.assertIn("job_status = 'processing'", select_sql)
         self.assertIn("lease_until < %s", select_sql)
+        blocker_sql = outbox.connection.statements[-1][0]
+        self.assertIn("job_status = 'failed' AND payload_json <> '{}'", blocker_sql)
 
     def test_compatibility_read_persists_feature_snapshot_identity(self):
         baseline = FakeBaseline()

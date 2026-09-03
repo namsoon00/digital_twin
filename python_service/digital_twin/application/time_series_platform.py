@@ -126,6 +126,14 @@ class TimeSeriesBackendPlatformService:
         }
 
     def queue_blockers(self, backend_id: str) -> List[str]:
+        blocking_counts = getattr(self.outbox, "blocking_counts", None)
+        if callable(blocking_counts):
+            counts = dict(blocking_counts(backend_id) or {})
+            return sorted(
+                "projection-" + status + ":" + str(int(count or 0))
+                for status, count in counts.items()
+                if int(count or 0) > 0
+            )
         summary = self.outbox.summary()
         row = next(
             (item for item in summary.get("backends") or [] if str(item.get("backendId") or "") == backend_id),
@@ -509,7 +517,18 @@ class VersionedMarketTimeSeriesStore:
 
     def rebuild_capital_flow_from_legacy(self, limit: int = 50000) -> Dict[str, object]:
         result = dict(self.baseline.rebuild_capital_flow_from_legacy(limit) or {})
-        observations = [dict(row or {}) for row in result.pop("observations", []) or []]
+        rebuilt_observations = [dict(row or {}) for row in result.pop("observations", []) or []]
+        loader = getattr(self.baseline, "load_capital_flow_observations", None)
+        # Legacy rows can contain only net volume while the canonical store has
+        # newer gross buy/sell and amount fields for the same trading date. A
+        # replica rebuild must project the canonical result, not the lossy
+        # legacy conversion returned by the repair step.
+        observations = (
+            [dict(row or {}) for row in loader(limit=max(1, int(limit or 50000))) or []]
+            if callable(loader)
+            else rebuilt_observations
+        )
+        result["projectionSourceCount"] = len(observations)
         result["projectionQueuedCount"] = self.enqueue_capital_flow_rows(observations)
         result["activeBackendId"] = self.active_backend_id()
         return result

@@ -38,6 +38,23 @@ HYPOTHESIS_LIFECYCLE_STATE_LABELS = {
     "invalidated": "가설 무효화",
     "expired": "근거 유효기간 만료",
 }
+RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v1"
+RELATION_LIFECYCLE_CHANGE_KINDS = {
+    "observed": "created",
+    "maintained": "maintained",
+    "strengthened": "strengthened",
+    "weakened": "weakened",
+    "invalidated": "resolved",
+    "expired": "expired",
+}
+RELATION_LIFECYCLE_CHANGE_LABELS = {
+    "created": "새 관계가 성립함",
+    "maintained": "관계가 유지됨",
+    "strengthened": "관계 근거가 강해짐",
+    "weakened": "관계 근거가 약해짐",
+    "resolved": "이전 관계가 해제됨",
+    "expired": "관계 근거가 만료됨",
+}
 
 
 def _text(value: object) -> str:
@@ -1006,4 +1023,89 @@ def lifecycle_context_summary(records: Iterable[HypothesisLifecycleRecord]) -> D
         "records": compact,
         "activeCount": sum(1 for item in rows if item.state not in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES),
         "terminalCount": sum(1 for item in rows if item.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES),
+    }
+
+
+def relation_lifecycle_transition_contract(value: Mapping[str, object]) -> Dict[str, object]:
+    """Return the current-generation relation change without choosing an action.
+
+    TypeDB owns the hypothesis path. The lifecycle service only compares two
+    verified, generation-aligned materializations and records what happened to
+    that path. This contract is therefore suitable for delivery policy, but it
+    must never be used to manufacture BUY/HOLD/SELL.
+    """
+
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    lifecycle = (
+        dict(payload.get("hypothesisLifecycle") or {})
+        if isinstance(payload.get("hypothesisLifecycle"), Mapping)
+        else payload
+    )
+    transitions = [
+        dict(item)
+        for item in lifecycle.get("transitions") or []
+        if isinstance(item, Mapping)
+        and _text(item.get("transitionId") or item.get("transition_id"))
+    ]
+    if not transitions:
+        return {}
+
+    priority = {
+        "invalidated": 6,
+        "expired": 5,
+        "weakened": 4,
+        "strengthened": 3,
+        "observed": 2,
+        "maintained": 1,
+    }
+    transitions.sort(
+        key=lambda item: (
+            priority.get(_text(item.get("currentState") or item.get("current_state")), 0),
+            _text(item.get("occurredAt") or item.get("occurred_at")),
+        ),
+        reverse=True,
+    )
+    selected = transitions[0]
+    current_state = _text(selected.get("currentState") or selected.get("current_state"))
+    previous_state = _text(selected.get("previousState") or selected.get("previous_state"))
+    change_kind = RELATION_LIFECYCLE_CHANGE_KINDS.get(current_state, current_state or "unknown")
+    # A newly observed path is a real relation creation even though it has no
+    # evidence delta yet. Maintained is intentionally non-material.
+    material = bool(
+        selected.get("materialChange")
+        or selected.get("material_change")
+        or current_state in {"observed", "strengthened", "weakened", "invalidated", "expired"}
+    )
+    material_transitions = [
+        item
+        for item in transitions
+        if bool(item.get("materialChange") or item.get("material_change"))
+        or _text(item.get("currentState") or item.get("current_state"))
+        in {"observed", "strengthened", "weakened", "invalidated", "expired"}
+    ]
+    return {
+        "version": RELATION_LIFECYCLE_TRANSITION_VERSION,
+        "status": "changed" if material else "maintained",
+        "changeKind": change_kind,
+        "changeLabel": RELATION_LIFECYCLE_CHANGE_LABELS.get(change_kind, change_kind),
+        "material": material,
+        "transitionId": _text(selected.get("transitionId") or selected.get("transition_id")),
+        "lifecycleKey": _text(selected.get("lifecycleKey") or selected.get("lifecycle_key")),
+        "lifecycleId": _text(selected.get("lifecycleId") or selected.get("lifecycle_id")),
+        "scope": _text(selected.get("scope")),
+        "previousState": previous_state,
+        "previousStateLabel": _text(selected.get("previousStateLabel"))
+        or HYPOTHESIS_LIFECYCLE_STATE_LABELS.get(previous_state, previous_state),
+        "currentState": current_state,
+        "currentStateLabel": _text(selected.get("currentStateLabel"))
+        or HYPOTHESIS_LIFECYCLE_STATE_LABELS.get(current_state, current_state),
+        "occurredAt": canonical_timestamp(selected.get("occurredAt") or selected.get("occurred_at")),
+        "reason": _text(selected.get("reason")),
+        "evidenceDelta": dict(selected.get("evidenceDelta") or {})
+        if isinstance(selected.get("evidenceDelta"), Mapping)
+        else {},
+        "transitionCount": len(transitions),
+        "materialTransitionCount": len(material_transitions),
+        "transitions": transitions[:12],
+        "action": "NO_ACTION",
     }

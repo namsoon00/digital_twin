@@ -181,8 +181,55 @@ def review_observation_context(outcome="REVIEW_ONLY"):
     return context
 
 
+def lifecycle_observation_context(outcome="OBSERVATION"):
+    context = context_observation_context(outcome=outcome)
+    relation = context["ontologyRelationContext"]
+    relation.update({
+        "relationLifecycleOnly": True,
+        "activeRules": [],
+        "matchedRules": [],
+        "actionEnvelope": {
+            "status": "NO_ELIGIBLE_THESIS",
+            "preferredAction": "NO_ACTION",
+        },
+        "hypothesisLifecycle": {
+            "transitions": [{
+                "transitionId": "transition:mstr:resolved",
+                "lifecycleKey": "v2:account:mstr-risk",
+                "lifecycleId": "hypothesis:mstr-risk",
+                "scope": "account",
+                "previousState": "weakened",
+                "currentState": "invalidated",
+                "occurredAt": "2026-08-16T00:00:00Z",
+                "reason": "이전 위험 관계가 현재 TypeDB 세대에서 더 이상 성립하지 않습니다.",
+                "materialChange": True,
+            }],
+        },
+    })
+    relation["decision"] = {
+        "selectedRuleId": "",
+        "basis": "typedbInferenceBox",
+        "candidateAction": "NO_ACTION",
+    }
+    relation["graphStoreInference"]["relations"] = []
+    relation["graphStoreInference"]["traces"] = []
+    return context
+
+
 class FinalAIDeliveryTests(unittest.TestCase):
+    def _assert_relation_lifecycle_observation_is_deliverable_without_action(self):
+        decision = final_ai_delivery_decision(lifecycle_observation_context())
+
+        self.assertEqual("send", decision["decision"])
+        self.assertEqual("NO_ACTION", decision.get("finalAction"))
+        self.assertIn("material-relation-lifecycle", decision["authorizationSources"])
+        self.assertEqual(
+            "resolved",
+            decision["relationLifecycleTransition"]["changeKind"],
+        )
+
     def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
+        self._assert_relation_lifecycle_observation_is_deliverable_without_action()
         policy = NotificationAdmissionPolicy()
         context = graph_risk_context(material=False)
         context["investmentSubjectDecisionCaseId"] = "subject-case:unchanged"
@@ -418,7 +465,48 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertFalse(diff["material"])
         self.assertEqual("readiness-context-changed", diff["decisionTransition"]["kind"])
 
+    def _assert_relation_lifecycle_resolution_is_material_without_new_action(self):
+        def relation(transition_id="", state=""):
+            lifecycle = {"transitions": []}
+            if transition_id:
+                lifecycle["transitions"] = [{
+                    "transitionId": transition_id,
+                    "lifecycleKey": "v2:account:trend",
+                    "previousState": "weakened",
+                    "currentState": state,
+                    "occurredAt": "2026-08-16T00:00:00Z",
+                    "reason": "이전 관계가 더 이상 성립하지 않습니다.",
+                    "materialChange": True,
+                }]
+            return {
+                "source": "typedbInferenceBox",
+                "graphStoreUsed": True,
+                "fallbackUsed": False,
+                "decision": {
+                    "basis": "typedbInferenceBox",
+                    "selectedRuleId": "graph.test.v1" if not transition_id else "",
+                    "candidateAction": "HOLD" if not transition_id else "NO_ACTION",
+                },
+                "actionEnvelope": {
+                    "status": "HOLDING_REVIEW" if not transition_id else "NO_ELIGIBLE_THESIS",
+                    "preferredAction": "HOLD" if not transition_id else "NO_ACTION",
+                },
+                "activeRules": [{"ruleId": "graph.test.v1"}] if not transition_id else [],
+                "hypothesisLifecycle": lifecycle,
+            }
+
+        diff = relation_delivery_diff(
+            relation("transition:resolved", "invalidated"),
+            relation(),
+        )
+
+        self.assertTrue(diff["changed"])
+        self.assertTrue(diff["material"])
+        self.assertEqual("relation-resolved", diff["decisionTransition"]["kind"])
+        self.assertIn("relationLifecycleTransition", diff["materialComponents"])
+
     def test_candidate_only_watchlist_change_is_suppressed(self):
+        self._assert_relation_lifecycle_resolution_is_material_without_new_action()
         decision = final_ai_delivery_decision(watchlist_context())
 
         self.assertEqual("suppress", decision["decision"])

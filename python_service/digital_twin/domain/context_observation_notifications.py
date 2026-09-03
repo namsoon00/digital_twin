@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Mapping
 
+from .hypothesis_lifecycle import relation_lifecycle_transition_contract
 from .notification_ai_context import is_graph_backed_relation_context
 
 
@@ -92,6 +93,42 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
     relation = _relation_context(payload)
     if not is_graph_backed_relation_context(relation):
         return {}
+    lifecycle_transition = relation_lifecycle_transition_contract(relation)
+    if (
+        relation.get("relationLifecycleOnly") is True
+        and lifecycle_transition
+        and bool(lifecycle_transition.get("material"))
+    ):
+        subject = _mapping(relation.get("subject"))
+        facts = _mapping(relation.get("facts"))
+        graph = _mapping(relation.get("graphStoreInference"))
+        return {
+            "schemaVersion": CONTEXT_OBSERVATION_NOTIFICATION_VERSION,
+            "status": "eligible",
+            "decisionMode": CONTEXT_OBSERVATION_DECISION_MODE,
+            "messageClass": "typedb-relation-lifecycle-change",
+            "selectedRuleId": "",
+            "selectedLifecycleKey": lifecycle_transition.get("lifecycleKey"),
+            "selectedRuleLabel": lifecycle_transition.get("changeLabel"),
+            "ruleKind": "relation-lifecycle-observation",
+            "decisionEligibility": "reference-only",
+            "requiresHypothesis": False,
+            "requiresAiJudgement": False,
+            "requiresAiNarrative": True,
+            "action": "NO_ACTION",
+            "validationState": "lifecycle-observation",
+            "symbol": _text(subject.get("symbol") or facts.get("symbol")).upper(),
+            "market": _text(subject.get("market") or facts.get("market")).upper(),
+            "graphSource": _text(relation.get("source")),
+            "graphStore": _text(relation.get("graphStore") or graph.get("graphStore")),
+            "sourceAboxSnapshotId": _text(
+                relation.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId")
+            ),
+            "inferenceGenerationId": _text(
+                relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId")
+            ),
+            "relationLifecycleTransition": lifecycle_transition,
+        }
     decision = _mapping(relation.get("decision"))
     envelope = _mapping(relation.get("actionEnvelope")) or _mapping(decision.get("actionEnvelope"))
     synthesis = _mapping(payload.get("v2DecisionSynthesis"))
@@ -383,6 +420,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         and row.get("matched") is not False
     })
     verified_evidence = context_observation_evidence_presentation(payload)
+    lifecycle_transition = relation_lifecycle_transition_contract(relation)
     authorization_sources = []
     if material_source_keys:
         authorization_sources.append("material-source-event")
@@ -392,6 +430,8 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         authorization_sources.append("verified-source-document")
     if notification_intent_rule_ids:
         authorization_sources.append("typedb-notification-intent")
+    if lifecycle_transition and bool(lifecycle_transition.get("material")):
+        authorization_sources.append("material-relation-lifecycle")
 
     decision = {
         "version": CONTEXT_OBSERVATION_DELIVERY_VERSION,
@@ -409,6 +449,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "verifiedFollowUpTransitionCount": len(verified_follow_ups),
         "notificationIntentRuleIds": notification_intent_rule_ids,
         "verifiedEvidenceId": _text(verified_evidence.get("evidenceId")),
+        "relationLifecycleTransition": lifecycle_transition,
     }
     if outcome != "OBSERVATION":
         decision.update({
@@ -426,7 +467,12 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     if authorization_sources:
         decision.update({
             "decision": "send",
-            "reason": "검증된 참고 관찰에 사용자에게 알릴 구체적인 새 근거가 연결됐습니다.",
+            "reason": (
+                str(lifecycle_transition.get("changeLabel") or "관계 변화")
+                + "이 정상 TypeDB 추론 세대에서 확인됐습니다."
+                if lifecycle_transition
+                else "검증된 참고 관찰에 사용자에게 알릴 구체적인 새 근거가 연결됐습니다."
+            ),
             "suppressionReason": "",
             "pushValueClass": "material-context-observation",
         })

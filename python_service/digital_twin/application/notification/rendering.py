@@ -177,15 +177,36 @@ class NotificationRenderingService:
                         "공시에서 확인된 변경 내용과 가격·수급 반응, 후속 정정 여부를 확인합니다."
                     ]
                 else:
-                    response.investment_view = (
-                        "TypeDB가 '" + label
-                        + "' 관계를 참고 신호로 확인했습니다. 이 알림은 매수·매도 판단이 아닙니다."
+                    lifecycle_transition = dict(
+                        observation.get("relationLifecycleTransition") or {}
                     )
-                    response.summary = "TypeDB 참고 관계가 새로 확인됐습니다. 투자 행동은 정하지 않습니다."
-                    response.current_action_plan = "현재 주문 판단은 하지 않고 관계의 다음 변화를 관찰합니다."
-                    response.next_checks = response.next_checks or [
-                        "같은 참고 관계가 다음 데이터 갱신에서도 유지되는지 확인합니다."
-                    ]
+                    if lifecycle_transition:
+                        change_label = str(
+                            lifecycle_transition.get("changeLabel") or label
+                        ).strip()
+                        reason = str(lifecycle_transition.get("reason") or "").strip()
+                        response.investment_view = (
+                            change_label + "이 TypeDB 세대 비교에서 확인됐습니다. "
+                            + (reason + " " if reason else "")
+                            + "이 변화만으로 매수·매도 행동을 정하지는 않습니다."
+                        )
+                        response.summary = change_label + ". 투자 행동은 정하지 않습니다."
+                        response.current_action_plan = (
+                            "현재 주문 판단은 하지 않고 새 가격·수급·뉴스가 이 관계 변화를 확인하는지 봅니다."
+                        )
+                        response.next_checks = response.next_checks or [
+                            "다음 정상 TypeDB 추론에서도 바뀐 관계 상태가 유지되는지 확인합니다."
+                        ]
+                    else:
+                        response.investment_view = (
+                            "TypeDB가 '" + label
+                            + "' 관계를 참고 신호로 확인했습니다. 이 알림은 매수·매도 판단이 아닙니다."
+                        )
+                        response.summary = "TypeDB 참고 관계가 새로 확인됐습니다. 투자 행동은 정하지 않습니다."
+                        response.current_action_plan = "현재 주문 판단은 하지 않고 관계의 다음 변화를 관찰합니다."
+                        response.next_checks = response.next_checks or [
+                            "같은 참고 관계가 다음 데이터 갱신에서도 유지되는지 확인합니다."
+                        ]
                 response.execution_decision = response.current_action_plan
                 response.hypotheses = []
                 response.selected_hypothesis_id = ""

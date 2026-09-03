@@ -1,6 +1,7 @@
 from typing import Dict, Iterable, List, Optional
 
 from .hypothesis_calibration import attach_abox_hypothesis_calibrations
+from .hypothesis_lifecycle import relation_lifecycle_transition_contract
 from .crypto_market_signals import crypto_market_positions
 from .investment_brain import hypothesis_set_from_relation_context
 from .market_data import number
@@ -177,9 +178,181 @@ def relation_contexts_from_snapshot(
             ),
             account_context=account_context,
         )
+        if not context:
+            context = relation_lifecycle_context_from_inferencebox(
+                position,
+                snapshot.portfolio,
+                inferencebox,
+                external_signals=snapshot.external_signals,
+                settings=settings,
+                source=source,
+                account_id=snapshot.account_id,
+                portfolio_world_id=str(inferencebox.get("worldId") or ""),
+                hypothesis_lifecycle=(
+                    lifecycle_by_symbol.get(symbol)
+                    if isinstance(lifecycle_by_symbol.get(symbol), dict)
+                    else {}
+                ),
+                account_context=account_context,
+            )
         if context:
             result[symbol] = context
     return result
+
+
+def relation_lifecycle_context_from_inferencebox(
+    position: Position,
+    portfolio: PortfolioSummary,
+    inferencebox: Dict[str, object],
+    external_signals: Optional[Dict[str, object]] = None,
+    settings: Optional[Dict[str, object]] = None,
+    source: str = "",
+    account_id: str = "",
+    portfolio_world_id: str = "",
+    hypothesis_lifecycle: Optional[Dict[str, object]] = None,
+    account_context: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    """Keep a verified relation disappearance visible without inventing a rule.
+
+    This context is emitted only from a healthy TypeDB generation and a
+    current-cycle lifecycle transition. It is an audit/delivery observation,
+    not an investment decision fallback.
+    """
+
+    symbol = str(position.symbol or "").upper().strip()
+    lifecycle = dict(hypothesis_lifecycle or {})
+    transition = relation_lifecycle_transition_contract(lifecycle)
+    if not symbol or not transition or not bool(transition.get("material")):
+        return {}
+    if str(inferencebox.get("status") or "").lower() != "ok":
+        return {}
+    if not bool(inferencebox.get("nativeTypeDbReasoningUsed")):
+        return {}
+    if not bool(inferencebox.get("generationAligned")):
+        return {}
+    targets = {
+        str(item or "").upper().strip()
+        for item in inferencebox.get("targetSymbols") or []
+        if str(item or "").strip()
+    }
+    if symbol not in targets:
+        return {}
+
+    facts = position_signal_facts(
+        position_with_source(position, source),
+        portfolio,
+        external_signals or {},
+        account_context=account_context or {},
+        settings=settings or {},
+    )
+    source_name = inferencebox_source_name(inferencebox)
+    generation_id = str(inferencebox.get("inferenceGenerationId") or "")
+    source_abox_snapshot_id = str(inferencebox.get("sourceAboxSnapshotId") or "")
+    market_world_id = market_world(facts.get("market") or position.market or "global").world_id
+    label = str(transition.get("changeLabel") or "관계 변화 확인")
+    action_envelope = {
+        "status": "NO_ELIGIBLE_THESIS",
+        "preferredAction": "NO_ACTION",
+        "investmentViewAction": "",
+        "executionAction": "NO_ACTION",
+        "investmentJudgementAvailable": False,
+        "judgementBlocked": False,
+        "decisionDisposition": "observe",
+        "dataReadiness": {"state": "sufficient", "judgementBlocked": False},
+    }
+    decision = {
+        "basis": source_name,
+        "label": label,
+        "notificationSeverity": "WATCH",
+        "candidateAction": "NO_ACTION",
+        "primaryAction": "NO_ACTION",
+        "decisionEffect": "observe",
+        "selectedRuleId": "",
+        "actionEnvelope": action_envelope,
+    }
+    observation_profiles = position_observation_profiles(
+        position,
+        {
+            "settings": settings or {},
+            "asOf": str(inferencebox.get("inferenceGenerationAt") or ""),
+        },
+    )
+    return {
+        "engineVersion": relation_context_version(source_name),
+        "source": source_name,
+        "graphStore": str(inferencebox.get("graphStore") or "typedb"),
+        "graphStoreUsed": True,
+        "fallbackUsed": False,
+        "nativeTypeDbReasoningUsed": True,
+        "inferenceStatus": "ok",
+        "subject": {
+            "symbol": facts.get("symbol"),
+            "name": facts.get("name"),
+            "market": facts.get("market"),
+            "sector": facts.get("sector"),
+        },
+        "facts": facts,
+        "observationProfiles": observation_profiles,
+        "matchedRules": [],
+        "activeRules": [],
+        "referenceRules": [],
+        "missingData": [],
+        "dominantSignals": [label],
+        "reviewLevel": "check",
+        "dataState": "sufficient",
+        "changeState": "changed",
+        "conflictState": "context-only",
+        "decisionState": {
+            "reviewLevel": "check",
+            "dataState": "sufficient",
+            "changeState": "changed",
+            "conflictState": "context-only",
+            "validationState": "lifecycle-observation",
+        },
+        "actionEnvelope": action_envelope,
+        "decision": decision,
+        "executionPlan": {
+            "primaryAction": "NO_ACTION",
+            "notificationSeverity": "WATCH",
+            "status": "observe",
+        },
+        "assessmentBundle": {},
+        "investmentBrain": {"hypothesisSet": {"hypotheses": []}},
+        "hypothesisSet": {"hypotheses": []},
+        "hypothesisLifecycle": lifecycle,
+        "relationLifecycleTransition": transition,
+        "relationLifecycleOnly": True,
+        "inferenceGenerationId": generation_id,
+        "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
+        "sourceAboxSnapshotId": source_abox_snapshot_id,
+        "activeAboxSnapshotId": str(inferencebox.get("activeAboxSnapshotId") or ""),
+        "generationAligned": True,
+        "worldId": str(inferencebox.get("worldId") or ""),
+        "accountId": str(account_id or facts.get("accountId") or ""),
+        "portfolioWorldId": str(portfolio_world_id or ""),
+        "marketWorldId": market_world_id,
+        "targetRole": "watchlist" if source == "watchlist" else "holding",
+        "allowedActions": [],
+        "blockedActions": [],
+        "graphStoreInference": {
+            "graphStore": str(inferencebox.get("graphStore") or "typedb"),
+            "sourceAboxSnapshotId": source_abox_snapshot_id,
+            "inferenceGenerationId": generation_id,
+            "inferenceGenerationAt": str(inferencebox.get("inferenceGenerationAt") or ""),
+            "relations": [],
+            "traces": [],
+        },
+        "promptContext": {
+            "subject": {
+                "symbol": facts.get("symbol"),
+                "name": facts.get("name"),
+                "market": facts.get("market"),
+            },
+            "hypothesisLifecycle": lifecycle,
+            "relationLifecycleTransition": transition,
+            "actionEnvelope": action_envelope,
+        },
+    }
 
 
 def portfolio_relation_context_from_snapshot(

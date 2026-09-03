@@ -178,6 +178,19 @@ Projection은 다음 용도로만 사용한다.
 - TypeDB 그래프 조회와 시각화.
 - reasoning card, AI inference packet, prompt payload 같은 읽기 모델 생성.
 - 품질 샘플과 운영 콘솔용 진단 지표 생성.
+
+## Relation Lifecycle And Delivery
+
+TypeDB가 한 번 만든 관계가 다음 세대에서 어떻게 바뀌었는지는 `HypothesisLifecycle`로 추적한다. 투자 의미는 여전히 TypeDB의 직접 TypeQL 규칙이 소유하며, Python 수명주기 서비스는 정상·정렬된 두 InferenceBox 세대를 비교하는 감사 역할만 한다.
+
+1. TypeDB가 현재 세대의 가설과 인과 경로를 물질화한다.
+2. `HypothesisLifecycleService`가 같은 의미의 경로를 세대가 바뀌어도 유지되는 `lifecycleKey`로 연결한다.
+3. 현재 주기에서 실제 전이가 있으면 `observed`, `strengthened`, `weakened`, `invalidated`, `expired`와 근거 증감, 발생 시각, 이전·현재 세대를 함께 기록한다.
+4. ABox에는 `HypothesisLifecycleTransition` 개체와 `TRANSITIONS_HYPOTHESIS_LIFECYCLE` 관계로 투영해 운영 화면에서 원인을 추적할 수 있게 한다.
+5. 선택 가능한 투자 가설이 사라진 경우에도 정상 세대의 `invalidated` 또는 `expired` 전이가 증명되면 `NO_ACTION` 관계 관찰 후보를 만든다. 이 경로는 관계 해제 사실만 전달하며 `BUY`, `HOLD`, `SELL`을 만들 수 없다.
+6. 알림 비교기는 새 관계, 근거 강화, 근거 약화, 관계 해제, 근거 만료를 의미 변화로 취급한다. 같은 경로 유지와 생성 ID 교체만 있는 경우에는 웹 이력에 남기고 반복 푸시는 억제한다.
+
+관계 해제는 단순히 현재 조회 결과가 비었다는 이유로 만들지 않는다. `status=ok`, `nativeTypeDbReasoningUsed=true`, `generationAligned=true`, 현재 `inferenceGenerationId`, 명시적인 `targetSymbols` 범위가 모두 있어야 이전 경로의 부재를 해제로 확정한다. TypeDB 오류, 부분 조회, 대상 범위 누락에서는 이전 상태를 보존한다.
 - bounded context 사이의 의미 관계를 설명하는 audit trail.
 
 새 투자 사실이 필요하면 projection에 직접 상태를 추가하지 말고, 먼저 소유 context의 aggregate/event/repository에 사실을 남긴 뒤 projection 변환을 확장한다.

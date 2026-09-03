@@ -115,6 +115,20 @@ class HypothesisLifecycleService:
         for record in next_by_key.values():
             if record.symbol in symbols:
                 by_symbol.setdefault(record.symbol, []).append(record)
+        transition_rows = [
+            {
+                **transition.to_dict(),
+                "accountId": record.account_id,
+                "marketId": record.market_id,
+                "symbol": record.symbol,
+            }
+            for record, transition in transitions
+        ]
+        transitions_by_symbol: Dict[str, List[Dict[str, object]]] = {}
+        for row in transition_rows:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if symbol:
+                transitions_by_symbol.setdefault(symbol, []).append(row)
         payload = {
             "version": HYPOTHESIS_LIFECYCLE_VERSION,
             "lifecycleKeyVersion": HYPOTHESIS_LIFECYCLE_KEY_VERSION,
@@ -124,10 +138,22 @@ class HypothesisLifecycleService:
             "inferenceGenerationId": str(inferencebox.get("inferenceGenerationId") or ""),
             "reconciledSymbols": sorted(symbols),
             "bySymbol": {
-                symbol: lifecycle_context_summary(records)
+                symbol: {
+                    **lifecycle_context_summary(records),
+                    "transitions": transitions_by_symbol.get(symbol, []),
+                    "transitionCount": len(transitions_by_symbol.get(symbol, [])),
+                    "materialTransitionCount": sum(
+                        1
+                        for item in transitions_by_symbol.get(symbol, [])
+                        if bool(item.get("materialChange"))
+                        or str(item.get("currentState") or "")
+                        in {"observed", "strengthened", "weakened", "invalidated", "expired"}
+                    ),
+                }
                 for symbol, records in sorted(by_symbol.items())
             },
             "transitionCount": len(transitions),
+            "transitions": transition_rows,
         }
         snapshot.metadata["hypothesisLifecycle"] = payload
         return payload

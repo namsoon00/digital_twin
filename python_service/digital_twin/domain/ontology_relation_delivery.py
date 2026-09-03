@@ -15,6 +15,8 @@ import re
 from typing import Dict, Iterable, List, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .hypothesis_lifecycle import relation_lifecycle_transition_contract
+
 
 RELATION_DELIVERY_FINGERPRINT_VERSION = "ontology-relation-delivery-v3"
 VOLATILE_EVENT_SUFFIX = re.compile(r":[+-]?\d+(?:\.\d+)?%?$")
@@ -265,6 +267,18 @@ def relation_delivery_components(
         context.get("materialSourceEventKeys"),
     ]:
         material_source_evidence.extend(_evidence_keys(source))
+    lifecycle_transition = relation_lifecycle_transition_contract(relation)
+    lifecycle_component = {}
+    if lifecycle_transition:
+        lifecycle_component = {
+            "transitionId": _normalized(lifecycle_transition.get("transitionId")),
+            "lifecycleKey": _normalized(lifecycle_transition.get("lifecycleKey")),
+            "changeKind": _normalized(lifecycle_transition.get("changeKind")),
+            "previousState": _normalized(lifecycle_transition.get("previousState")),
+            "currentState": _normalized(lifecycle_transition.get("currentState")),
+            "material": bool(lifecycle_transition.get("material")),
+            "evidenceDelta": _mapping(lifecycle_transition.get("evidenceDelta")),
+        }
     return {
         "version": RELATION_DELIVERY_FINGERPRINT_VERSION,
         "decision": {
@@ -314,6 +328,7 @@ def relation_delivery_components(
         "evidenceKeys": sorted(set(source_evidence)),
         "materialSourceEventKeys": sorted(set(material_source_evidence)),
         "inferenceEvidenceKeys": sorted(set(inference_evidence)),
+        "relationLifecycleTransition": lifecycle_component,
     }
 
 
@@ -324,6 +339,7 @@ def _initial_relation_is_material(components: Mapping[str, object]) -> bool:
     state = _mapping(components.get("state"))
     effect = _first(envelope, "selectedDecisionEffect") or _first(decision, "decisionEffect")
     review_level = _first(state, "reviewLevel")
+    lifecycle_transition = _mapping(components.get("relationLifecycleTransition"))
     # The envelope can conservatively retain HOLD while a selected rule still
     # raises a concrete risk action such as TRIM_REVIEW.  Inspect every action
     # field instead of letting that HOLD mask the risk on its first occurrence.
@@ -343,6 +359,7 @@ def _initial_relation_is_material(components: Mapping[str, object]) -> bool:
         or _normalized(effect) == "block"
         or _normalized(review_level) in {"act", "action", "urgent", "immediate", "blocked"}
         or components.get("materialSourceEventKeys")
+        or lifecycle_transition.get("material") is True
     )
 
 
@@ -378,9 +395,28 @@ def _decision_transition(
         and bool(current_readiness_evidence.get("judgementBlocked"))
         != bool(previous_readiness_evidence.get("judgementBlocked"))
     )
+    current_lifecycle = _mapping(current_components.get("relationLifecycleTransition"))
+    previous_lifecycle = _mapping(previous_components.get("relationLifecycleTransition"))
+    lifecycle_changed = bool(
+        current_lifecycle.get("material")
+        and current_lifecycle.get("transitionId")
+        and current_lifecycle.get("transitionId") != previous_lifecycle.get("transitionId")
+    )
     if first:
         kind = "initial"
         summary = "즉시 알릴 최초 조건입니다." if initial_material else "최초 관계 상태를 알림 없이 기준선으로 저장했습니다."
+    elif action_changed and current_action not in {"", "no-action", "no_action"}:
+        kind = "action-changed"
+        summary = (previous_action or "이전 판단") + "에서 " + (current_action or "현재 판단") + "으로 바뀌었습니다."
+    elif lifecycle_changed:
+        kind = "relation-" + (_first(current_lifecycle, "changeKind") or "changed")
+        summary = {
+            "created": "새 관계가 성립했습니다.",
+            "strengthened": "기존 관계를 지지하는 근거가 강해졌습니다.",
+            "weakened": "기존 관계를 지지하는 근거가 약해졌습니다.",
+            "resolved": "이전 관계가 더 이상 성립하지 않습니다.",
+            "expired": "이전 관계의 근거 유효기간이 끝났습니다.",
+        }.get(_first(current_lifecycle, "changeKind"), "관계 상태가 바뀌었습니다.")
     elif action_changed:
         kind = "action-changed"
         summary = (previous_action or "이전 판단") + "에서 " + (current_action or "현재 판단") + "으로 바뀌었습니다."
@@ -399,12 +435,13 @@ def _decision_transition(
     return {
         "changed": bool(
             first
+            or lifecycle_changed
             or action_changed
             or status_changed
             or readiness_label_changed
             or readiness_evidence_changed
         ),
-        "material": bool((first and initial_material) or action_changed or readiness_block_changed),
+        "material": bool((first and initial_material) or lifecycle_changed or action_changed or readiness_block_changed),
         "kind": kind,
         "summary": summary,
         "previousAction": previous_action,
@@ -416,6 +453,7 @@ def _decision_transition(
         "readinessEvidenceChanged": readiness_evidence_changed,
         "previousJudgementBlocked": bool(previous_readiness_evidence.get("judgementBlocked")),
         "currentJudgementBlocked": bool(current_readiness_evidence.get("judgementBlocked")),
+        "relationLifecycleTransition": current_lifecycle,
     }
 
 
@@ -429,6 +467,7 @@ def relation_delivery_metadata(
         or components["activeRules"]
         or components["relations"]
         or components["traces"]
+        or components["relationLifecycleTransition"]
     )
     if not has_graph_state:
         return {}
@@ -588,7 +627,7 @@ def relation_delivery_diff(
     previous_evidence = set(previous_components.get("evidenceKeys") or [])
     for key in [
         "decision", "actionEnvelope", "state", "activeRules", "relations",
-        "evidenceKeys", "materialSourceEventKeys",
+        "evidenceKeys", "materialSourceEventKeys", "relationLifecycleTransition",
     ]:
         if current_components.get(key) != previous_components.get(key):
             # Rule-set churn alone must not reopen a cooldown.  It becomes
@@ -599,6 +638,8 @@ def relation_delivery_diff(
             elif key == "state" and transition.get("kind") == "readiness-block-changed":
                 material_components.append(key)
             elif key == "materialSourceEventKeys":
+                material_components.append(key)
+            elif key == "relationLifecycleTransition" and transition.get("material"):
                 material_components.append(key)
             elif key == "evidenceKeys":
                 # A collected article or research row is context until the
@@ -621,6 +662,7 @@ def relation_delivery_diff(
         "evidenceKeys": "근거 원문",
         "materialSourceEventKeys": "판단 변경 원문",
         "inferenceEvidenceKeys": "추론 근거 식별자",
+        "relationLifecycleTransition": "관계 수명주기",
     }
     changed = material_components + context_components
     material = bool(material_components)

@@ -717,6 +717,40 @@ def add_hypothesis_lifecycle_concepts(
             "source": "typedb-hypothesis-lifecycle-audit",
             "scope": row.get("scope"),
         })
+        transition_at = str(row.get("lastTransitionAt") or "").strip()
+        transition_state = str(row.get("state") or "").strip()
+        transition_reason = str(row.get("transitionReason") or "").strip()
+        if transition_at and transition_state and transition_reason:
+            transition_key = "|".join([lifecycle_key, transition_at, transition_state])
+            transition_id = add_entity(
+                graph,
+                "hypothesis-lifecycle-transition",
+                transition_key,
+                symbol + " " + str(row.get("stateLabel") or transition_state),
+                {
+                    "tboxClass": "HypothesisLifecycleTransition",
+                    "lifecycleKey": lifecycle_key,
+                    "currentState": transition_state,
+                    "occurredAt": transition_at,
+                    "reason": transition_reason,
+                    "materialChange": bool(row.get("materialChange")),
+                    "inferenceGenerationId": row.get("inferenceGenerationId"),
+                    "previousGenerationId": row.get("previousGenerationId"),
+                    "source": "typedb-hypothesis-lifecycle-audit",
+                },
+            )
+            add_relation(
+                graph,
+                transition_id,
+                lifecycle_id,
+                "TRANSITIONS_HYPOTHESIS_LIFECYCLE",
+                weight=1.0,
+                properties={
+                    "source": "typedb-hypothesis-lifecycle-audit",
+                    "currentState": transition_state,
+                    "materialChange": bool(row.get("materialChange")),
+                },
+            )
         policy = row.get("snapshot", {}).get("policy") if isinstance(row.get("snapshot"), dict) else {}
         if isinstance(policy, dict):
             policy_id = add_entity(graph, "hypothesis-lifecycle-policy", lifecycle_key, "가설 수명주기 정책", {

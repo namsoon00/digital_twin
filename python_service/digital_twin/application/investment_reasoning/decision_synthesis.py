@@ -10,6 +10,7 @@ from ...domain.context_observation_notifications import (
     typedb_review_observation_contract,
 )
 from ...domain.data_freshness import freshness_from_snapshot_subject
+from ...domain.hypothesis_lifecycle import relation_lifecycle_transition_contract
 from ...domain.independent_reasoning import IndependentReasoningRequest
 from ...domain.investment_reasoning import decision_synthesis_from_relation_context
 from ...domain.message_types import (
@@ -179,6 +180,18 @@ class V2GraphDecisionCandidateBuilder:
         decision = _mapping(relation.get("decision"))
         rule = V2GraphDecisionCandidateBuilder._signal_rule(relation)
         severity = V2GraphDecisionCandidateBuilder._notification_severity(relation)
+        contract_payload = {
+            "ontologyRelationContext": dict(relation),
+            "v2DecisionSynthesis": synthesis.to_dict(),
+        }
+        context_observation = typedb_context_observation_contract(contract_payload)
+        review_observation = typedb_review_observation_contract(contract_payload)
+        narrative_observation = context_observation or review_observation
+        lifecycle_transition = _mapping(
+            narrative_observation.get("relationLifecycleTransition")
+            if narrative_observation
+            else relation_lifecycle_transition_contract(relation)
+        )
         first_holding_review = (
             holding_review_baseline_is_deliverable({
                 "ontologyRelationContext": dict(relation),
@@ -191,15 +204,10 @@ class V2GraphDecisionCandidateBuilder:
         )
         if not severity and first_holding_review:
             severity = "WATCH"
+        if not severity and lifecycle_transition.get("material"):
+            severity = "WATCH"
         if not severity:
             return None
-        contract_payload = {
-            "ontologyRelationContext": dict(relation),
-            "v2DecisionSynthesis": synthesis.to_dict(),
-        }
-        context_observation = typedb_context_observation_contract(contract_payload)
-        review_observation = typedb_review_observation_contract(contract_payload)
-        narrative_observation = context_observation or review_observation
         if not narrative_observation and not synthesis.eligible_hypothesis_ids:
             return None
         symbol = synthesis.symbol
@@ -207,10 +215,17 @@ class V2GraphDecisionCandidateBuilder:
         action = "NO_ACTION" if narrative_observation else synthesis.graph_candidate_action or "NO_ACTION"
         label = _text(decision.get("label")) or action
         if narrative_observation:
-            lines = [
-                "TypeDB 관계 검토: " + label,
-                "투자 행동: 이 관계만으로 매수·매도 판단을 만들지 않음",
-            ]
+            if lifecycle_transition:
+                lines = [
+                    "관계 변화: " + _text(lifecycle_transition.get("changeLabel") or label),
+                    "변화 이유: " + _text(lifecycle_transition.get("reason")),
+                    "투자 행동: 관계 변화만으로 매수·매도 판단을 만들지 않음",
+                ]
+            else:
+                lines = [
+                    "TypeDB 관계 검토: " + label,
+                    "투자 행동: 이 관계만으로 매수·매도 판단을 만들지 않음",
+                ]
         else:
             lines = [
                 "TypeDB 판단 후보: " + label,
@@ -263,6 +278,7 @@ class V2GraphDecisionCandidateBuilder:
             "dataFreshnessRequired": True,
             "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
             "firstHoldingReviewCandidate": first_holding_review,
+            "relationLifecycleTransition": lifecycle_transition,
         }
         if narrative_observation:
             metadata.update({
@@ -286,8 +302,14 @@ class V2GraphDecisionCandidateBuilder:
             symbol,
             criteria=(
                 [
-                    "설정: TypeDB 참고 관찰 규칙의 시장 상태가 변경될 때",
-                    "감지: " + label + " · 투자 행동 판단 없음",
+                    (
+                        "설정: TypeDB 관계가 생성·강화·약화·해제·만료될 때"
+                        if lifecycle_transition
+                        else "설정: TypeDB 참고 관찰 규칙의 시장 상태가 변경될 때"
+                    ),
+                    "감지: "
+                    + _text(lifecycle_transition.get("changeLabel") or label)
+                    + " · 투자 행동 판단 없음",
                 ]
                 if narrative_observation
                 else [

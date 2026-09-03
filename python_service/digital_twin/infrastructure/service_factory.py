@@ -2742,7 +2742,10 @@ def build_v2_reasoning_engine(
         inference_executor=ScopedTypeDBInferenceExecutor(
             projection_recorder,
             shared_inference_service=shared_inference_service,
-            post_inference_observer=build_hypothesis_lifecycle_service(store_settings),
+            post_inference_observer=build_hypothesis_lifecycle_service(
+                store_settings,
+                event_publisher=default_event_bus(),
+            ),
             settings=candidate_settings,
         ),
         candidate_builder=V2GraphDecisionCandidateBuilder(

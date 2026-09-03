@@ -13,10 +13,14 @@ from digital_twin.domain.hypothesis_lifecycle import (
     HypothesisLifecycleSnapshot,
     lifecycle_snapshots_from_relation_context,
     record_for_snapshot,
+    relation_lifecycle_transition_contract,
     stable_fingerprint,
 )
 from digital_twin.domain.hypothesis_review import episode_matches_lifecycle
-from digital_twin.domain.ontology_inference_context import relation_context_from_inferencebox
+from digital_twin.domain.ontology_inference_context import (
+    relation_context_from_inferencebox,
+    relation_contexts_from_snapshot,
+)
 from digital_twin.domain.ontology_rulebox_contracts import (
     GraphInferenceRule,
     GraphRuleCondition,
@@ -430,7 +434,19 @@ class HypothesisLifecycleTests(unittest.TestCase):
         ):
             covered_result = service.observe_snapshot(covered_snapshot)
         self.assertEqual(1, covered_result["transitionCount"])
+        self.assertEqual(1, len(covered_result["transitions"]))
+        self.assertEqual(
+            "invalidated",
+            covered_result["bySymbol"]["AAPL"]["transitions"][0]["currentState"],
+        )
         self.assertEqual("invalidated", next(iter(store.records.values())).state)
+
+        resolved_context = relation_contexts_from_snapshot(covered_snapshot)["AAPL"]
+        lifecycle_transition = relation_lifecycle_transition_contract(resolved_context)
+        self.assertTrue(resolved_context["relationLifecycleOnly"])
+        self.assertEqual("resolved", lifecycle_transition["changeKind"])
+        self.assertEqual("NO_ACTION", resolved_context["decision"]["candidateAction"])
+        self.assertEqual([], resolved_context["activeRules"])
 
         unaligned_snapshot = account_snapshot("generation-4", aligned="false")
         result = service.observe_snapshot(unaligned_snapshot)

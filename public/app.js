@@ -7774,6 +7774,17 @@
     return "hold";
   }
 
+  function hypothesisLifecycleLabel(stateValue) {
+    var value = String(stateValue || "").toLowerCase();
+    if (value === "observed") return "처음 관찰됨";
+    if (value === "maintained") return "근거 유지";
+    if (value === "strengthened") return "근거 강화";
+    if (value === "weakened") return "근거 약화";
+    if (value === "invalidated") return "관계 해제";
+    if (value === "expired") return "근거 만료";
+    return value;
+  }
+
   function hypothesisOutcomeTone(stateValue) {
     var value = String(stateValue || "").toLowerCase();
     if (value === "contradicted") return "danger";
@@ -8001,6 +8012,9 @@
     var summary = payload.summary && typeof payload.summary === "object" ? payload.summary : {};
     var items = hypothesisWorkspaceItems();
     var outcomeCounts = summary.outcomeStateCounts && typeof summary.outcomeStateCounts === "object" ? summary.outcomeStateCounts : {};
+    var stateCounts = summary.stateCounts && typeof summary.stateCounts === "object" ? summary.stateCounts : {};
+    var strengtheningCount = Number(stateCounts.observed || 0) + Number(stateCounts.strengthened || 0);
+    var weakeningCount = Number(stateCounts.weakened || 0) + Number(stateCounts.invalidated || 0) + Number(stateCounts.expired || 0);
     return [
       '<article class="panel hypothesis-workspace-panel">',
       '<div class="panel-head">',
@@ -8018,6 +8032,8 @@
       '<div class="investment-today-status-grid hypothesis-workspace-metrics">',
       renderHypothesisMetric("가설", payload.count == null ? items.length : payload.count, "현재 TypeDB 세대", items.length ? "watch" : "hold"),
       renderHypothesisMetric("유효", summary.activeCount || 0, "유지·강화·약화", Number(summary.activeCount || 0) ? "watch" : "hold"),
+      renderHypothesisMetric("성립·강화", strengtheningCount, "새로 생기거나 근거가 늘어남", strengtheningCount ? "watch" : "hold"),
+      renderHypothesisMetric("약화·해제", weakeningCount, "근거 감소·무효화·만료", weakeningCount ? "danger" : "hold"),
       renderHypothesisMetric("지지됨", outcomeCounts.supported || 0, "사후 관측", Number(outcomeCounts.supported || 0) ? "watch" : "hold"),
       renderHypothesisMetric("반증됨", outcomeCounts.contradicted || 0, "사후 관측", Number(outcomeCounts.contradicted || 0) ? "danger" : "hold"),
       '</div>',
@@ -8188,7 +8204,7 @@
       '<section class="hypothesis-detail-section">',
       '<strong>최근 상태 이력</strong>',
       rows.length ? '<div class="hypothesis-transition-list">' + rows.map(function (row) {
-        return '<div><b>' + escapeHtml(row.currentState || "상태 변경") + '</b><span>' + escapeHtml(row.reason || row.transitionReason || "변경 사유 없음") + '</span><em>' + escapeHtml(row.occurredAt ? formatClock(row.occurredAt) : "") + '</em></div>';
+        return '<div><b>' + escapeHtml(hypothesisLifecycleLabel(row.currentState) || row.currentStateLabel || row.currentState || "상태 변경") + '</b><span>' + escapeHtml(row.reason || row.transitionReason || "변경 사유 없음") + '</span><em>' + escapeHtml(row.occurredAt ? formatClock(row.occurredAt) : "") + '</em></div>';
       }).join("") + '</div>' : '<p>현재 상태를 만든 이전 전이 기록이 없습니다.</p>',
       '</section>'
     ].join("");

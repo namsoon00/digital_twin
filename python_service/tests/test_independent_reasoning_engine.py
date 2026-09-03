@@ -290,6 +290,79 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("typedb-review-observation", event.metadata["notificationDecisionMode"])
         self.assertFalse(event.metadata["requiresAiJudgement"])
         self.assertEqual("NO_ACTION", event.metadata["contextObservationDecision"]["action"])
+        self._assert_relation_resolution_without_hypothesis_routes_to_observation()
+
+    def _assert_relation_resolution_without_hypothesis_routes_to_observation(self):
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-08-16T00:00:00Z",
+        )
+        transition = {
+            "transitionId": "transition:resolved:1",
+            "lifecycleKey": "v2:account:resolved",
+            "lifecycleId": "hypothesis:resolved",
+            "scope": "account",
+            "previousState": "weakened",
+            "currentState": "invalidated",
+            "occurredAt": "2026-08-16T00:00:00Z",
+            "reason": "정상 TypeDB 세대에서 이전 관계가 더 이상 성립하지 않습니다.",
+            "materialChange": True,
+            "evidenceDelta": {"removedActivePath": ["path:1"]},
+        }
+        relation = {
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "relationLifecycleOnly": True,
+            "sourceAboxSnapshotId": "abox:resolved",
+            "inferenceGenerationId": "generation:resolved",
+            "generationAligned": True,
+            "subject": {"symbol": "MSTR", "name": "Strategy", "market": "US"},
+            "facts": {"currentPrice": 100.0, "source": "holding"},
+            "decision": {
+                "basis": "typedbInferenceBox",
+                "label": "이전 관계가 해제됨",
+                "candidateAction": "NO_ACTION",
+            },
+            "actionEnvelope": {
+                "status": "NO_ELIGIBLE_THESIS",
+                "preferredAction": "NO_ACTION",
+            },
+            "hypothesisLifecycle": {"transitions": [transition]},
+            "relationLifecycleTransition": {
+                "material": True,
+                "changeKind": "resolved",
+            },
+            "graphStoreInference": {
+                "graphStore": "typedb",
+                "sourceAboxSnapshotId": "abox:resolved",
+                "inferenceGenerationId": "generation:resolved",
+                "relations": [],
+                "traces": [],
+            },
+        }
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:resolved",
+            account_id="acct",
+            symbol="MSTR",
+            source_abox_snapshot_id="abox:resolved",
+            inference_generation_id="generation:resolved",
+            graph_candidate_action="NO_ACTION",
+            action_authority="observe",
+            hypothesis_state="NO_ELIGIBLE_THESIS",
+        )
+
+        event = builder._base_event(snapshot, relation, synthesis)
+
+        self.assertIsNotNone(event)
+        self.assertEqual("WATCH", event.severity)
+        self.assertEqual("typedb-context-observation", event.metadata["notificationDecisionMode"])
+        self.assertEqual("resolved", event.metadata["relationLifecycleTransition"]["changeKind"])
+        self.assertFalse(event.metadata["requiresAiJudgement"])
+        self.assertIn("이전 관계가 해제됨", event.lines[0])
 
     def test_quiet_typedb_context_still_captures_hypotheses_and_synthesis(self):
         builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))

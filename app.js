@@ -3749,6 +3749,14 @@
     return defaultNotificationRuleStateCooldownEnabled(messageType) ? 360 : 0;
   }
 
+  function defaultNotificationRuleImmediateCooldownMinutes(messageType) {
+    return defaultNotificationRuleStateCooldownEnabled(messageType) ? 10 : 0;
+  }
+
+  function defaultNotificationRuleMaterialCooldownMinutes(messageType) {
+    return defaultNotificationRuleStateCooldownEnabled(messageType) ? 60 : 0;
+  }
+
   function defaultMarketHoursSessions() {
     return [
       {
@@ -3826,6 +3834,8 @@
       similarityBypassConditions: defaultNotificationRuleSimilarityBypassConditions(type),
       similarityFields: defaultNotificationRuleSimilarityFields(),
       stateCooldownEnabled: defaultNotificationRuleStateCooldownEnabled(type),
+      immediateCooldownMinutes: defaultNotificationRuleImmediateCooldownMinutes(type),
+      materialCooldownMinutes: defaultNotificationRuleMaterialCooldownMinutes(type),
       stateCooldownMinutes: defaultNotificationRuleStateCooldownMinutes(type),
       marketHoursEnabled: defaultNotificationRuleMarketHoursEnabled(type),
       marketHoursMarkets: defaultNotificationRuleMarketHoursMarkets(type),
@@ -4218,6 +4228,8 @@
       : String(normalized.similarityFields || "").split(",").map(function (field) { return field.trim(); }).filter(Boolean);
     if (!normalized.similarityFields.length) normalized.similarityFields = defaultNotificationRuleSimilarityFields();
     normalized.stateCooldownEnabled = normalized.stateCooldownEnabled !== false;
+    normalized.immediateCooldownMinutes = clampInteger(normalized.immediateCooldownMinutes, 0, 10080, defaultNotificationRuleImmediateCooldownMinutes(normalized.messageType));
+    normalized.materialCooldownMinutes = clampInteger(normalized.materialCooldownMinutes, 0, 10080, defaultNotificationRuleMaterialCooldownMinutes(normalized.messageType));
     normalized.stateCooldownMinutes = clampInteger(normalized.stateCooldownMinutes, 0, 10080, defaultNotificationRuleStateCooldownMinutes(normalized.messageType));
     normalized.marketHoursEnabled = normalized.marketHoursEnabled !== false;
     normalized.marketHoursMarkets = Array.isArray(normalized.marketHoursMarkets)
@@ -4284,6 +4296,10 @@
       rule.similarityFields = String(value || "").split(",").map(function (item) { return item.trim(); }).filter(Boolean);
     } else if (field === "stateCooldownEnabled") {
       rule.stateCooldownEnabled = Boolean(value);
+    } else if (field === "immediateCooldownMinutes") {
+      rule.immediateCooldownMinutes = clampInteger(value, 0, 10080, defaultNotificationRuleImmediateCooldownMinutes(messageType));
+    } else if (field === "materialCooldownMinutes") {
+      rule.materialCooldownMinutes = clampInteger(value, 0, 10080, defaultNotificationRuleMaterialCooldownMinutes(messageType));
     } else if (field === "stateCooldownMinutes") {
       rule.stateCooldownMinutes = clampInteger(value, 0, 10080, defaultNotificationRuleStateCooldownMinutes(messageType));
     } else if (field === "marketHoursEnabled") {
@@ -17548,8 +17564,8 @@
       ["02", "스냅샷 저장", "monitoring.snapshot_collected", "한 번의 조회 결과를 계좌 스냅샷으로 저장합니다. 이 시점의 하이닉스 상태가 이후 알림의 기준시각이 됩니다. 이전 스냅샷과 비교할 수 있도록 손익률, 이동평균 위치, 판단 액션, 원천 뉴스 키도 함께 남깁니다."],
       ["03", "ABox 생성", "현재 데이터 그래프", "보유 종목 000660, 손익률, 5일·20일·60일 평균 가격, 거래량, 매수/매도 압력, 투자자별 수급 심리, 뉴스·공시 근거를 TypeDB에 넣을 실제 관계 데이터로 바꿉니다. 여기서 외국인·기관 동반 순매수, 개인 저가매수 위험 같은 수급 심리도 관계로 만들어집니다."],
       ["04", "TypeDB 네이티브 규칙 추론", "ABox → TypeDB native rule → InferenceBox", "저장된 관계 규칙이 TypeDB ABox를 읽고 손실 방어, 회복 확인, 추가매수 차단, 조건부 추가매수 검토 같은 추론 결과를 InferenceBox로 만듭니다. 추론 결과가 없으면 투자 판단 대신 추론 상태 점검 알림이 나옵니다."],
-      ["05", "AI 의견 작성", "검증된 근거만 사용", "AI는 TypeDB 네이티브 규칙이 만든 관계, 실제 가격·수급·뉴스·공시, 부족 데이터를 받아 매수, 추가매수, 보유, 분할축소, 매도, 회피 중 하나를 고릅니다. 없는 데이터는 만들 수 없고, 계산 후보와 다르게 판단하면 왜 바꿨는지 남깁니다."],
-      ["06", "알림 게이트", "쿨다운과 새 변화 판단", "알림 정책은 같은 메시지를 계속 보내지 않도록 막습니다. 다만 손익률이 이전 알림보다 1%p 이상 좋아지거나 나빠진 경우, 60일 평균 아래로 바뀐 경우, 새 뉴스·공시가 들어온 경우, 최종 행동이 바뀐 경우에는 쿨다운을 풀 수 있습니다."],
+      ["05", "판단 또는 근거 설명", "TypeDB 행동 권한 준수", "TypeDB가 행동 생성 권한을 준 가설만 AI가 매수, 추가매수, 보유, 분할축소, 매도, 회피 판단으로 검증합니다. 위험·제약처럼 단독 행동 권한이 없는 관계는 매매 결론을 만들지 않고 확인할 근거와 다음 조건만 설명합니다."],
+      ["06", "알림 게이트", "변화별 네 단계 전달", "손익·행동·주요 기준선 전환은 즉시 변화, 새 뉴스·공시와 중요 관계 변화는 중요 근거, 같은 상태는 정기 요약, 새 가치가 없는 참고 상태는 웹 기록으로 나눕니다. 기본 재알림 간격은 각각 10분, 60분, 360분이며 관리자 설정에서 바꿀 수 있습니다."],
       ["07", "메시지 생성", "템플릿과 사용자 레벨", "왕초보, 초보, 중수, 고수 레벨에 맞춰 문장 난이도와 노출 정보를 조절합니다. 하이닉스 보유 알림에는 현재가, 평균매입가, 수익률, 보유 수량, 종목 평가금액, 계좌 평가금액, 이동평균, 거래량, 매수/매도 압력, 투자자별 수급, 알림이 온 이유, 쿨다운 해제 이유가 들어갑니다."],
       ["08", "발송과 추적", "notification_jobs, Telegram, 웹 알림", "완성된 메시지는 Outbox에 저장되고 알림 워커가 Telegram과 웹 알림 목록으로 보냅니다. 메시지 끝의 알림 추적 번호로 어떤 판단 작업이었는지 다시 찾을 수 있습니다."]
     ];
@@ -27027,11 +27043,11 @@
       '<label class="notification-rule-toggle"><input type="checkbox" data-notification-rule-state-enabled="' + escapeHtml(messageType) + '"' + (rule.stateCooldownEnabled !== false ? " checked" : "") + (disabled ? " disabled" : "") + ' /> 적용</label>',
       '</div>',
       '<div class="notification-rule-state-grid">',
-      '<label><span>요약 쿨다운</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="stateCooldownMinutes" value="' + escapeHtml(rule.stateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
-      '<label><span>신규 돌파</span><input type="text" value="발송" disabled /></label>',
-      '<label><span>같은 상태</span><input type="text" value="보류" disabled /></label>',
+      '<label><span>즉시 변화 재알림</span><input type="number" min="0" max="10080" step="5" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="immediateCooldownMinutes" value="' + escapeHtml(rule.immediateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>중요 근거 재알림</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="materialCooldownMinutes" value="' + escapeHtml(rule.materialCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
+      '<label><span>같은 상태 요약</span><input type="number" min="0" max="10080" step="10" data-notification-rule-number="' + escapeHtml(messageType) + '" data-rule-field="stateCooldownMinutes" value="' + escapeHtml(rule.stateCooldownMinutes) + '"' + (disabled ? " disabled" : "") + ' /></label>',
       '</div>',
-      '<p class="subtle">추가 확대 조건은 반복 예외 조건을 사용하고, fingerprint 필드가 같은 알림을 같은 상태로 봅니다.</p>',
+      '<p class="subtle">즉시 변화는 손익·행동·주요 기준선 전환, 중요 근거는 새 뉴스·공시와 관계 변화입니다. 같은 상태는 요약 시간이 지난 뒤 한 번만 다시 알리고, 참고 정보는 웹 이력에 저장합니다.</p>',
       '</div>'
     ].join("");
   }

@@ -19,6 +19,12 @@ WINDOW_MINIMUM_SAMPLES = {
     "5D": 4,
     "20D": 5,
 }
+WINDOW_ROLLING_SAMPLES = {
+    "1D": 2,
+    "3D": 3,
+    "5D": 5,
+    "20D": 20,
+}
 PRICE_SIGNAL_MAX_SOURCE_AGE_SECONDS = 4 * 24 * 60 * 60
 
 
@@ -138,6 +144,51 @@ def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int) 
     }
 
 
+def _with_latest_session_observation(
+    rows: Iterable[Mapping[str, object]],
+    session_rows: Iterable[Mapping[str, object]],
+    cutoff_at: object,
+    maximum_samples: int,
+) -> List[Dict[str, object]]:
+    """Add the latest known live quote to a completed-session price path.
+
+    Daily candles normally stop at the previous close while the realtime
+    session window already contains the current quote and current moving-
+    average distances. A point-in-time model must use both without adding a
+    second observation for the same timestamp or reading beyond its cutoff.
+    """
+
+    historical = _ordered_rows(_rows_at_or_before(rows, cutoff_at))
+    live = _ordered_rows(_rows_at_or_before(session_rows, cutoff_at))
+    if not live:
+        return historical[-max(1, int(maximum_samples or 1)):]
+    latest_live = live[-1]
+    live_stamp = parse_timestamp(
+        _first(latest_live, "bucketAt", "bucket_at", "generatedAt", "observedAt", "observed_at")
+    )
+    historical_stamp = parse_timestamp(
+        _first(
+            historical[-1] if historical else {},
+            "bucketAt",
+            "bucket_at",
+            "generatedAt",
+            "observedAt",
+            "observed_at",
+        )
+    )
+    if not live_stamp or (historical_stamp and live_stamp <= historical_stamp):
+        return historical[-max(1, int(maximum_samples or 1)):]
+    live_session = str(_first(latest_live, "marketSessionDate", "market_session_date") or "")[:10]
+    historical_session = str(
+        _first(historical[-1] if historical else {}, "marketSessionDate", "market_session_date") or ""
+    )[:10]
+    if historical and live_session and live_session == historical_session:
+        historical[-1] = latest_live
+    else:
+        historical.append(latest_live)
+    return historical[-max(1, int(maximum_samples or 1)):]
+
+
 def _signal_eligibility(metrics: Mapping[str, object], release) -> SignalEligibility:
     reasons = []
     sample_count = int(metrics.get("sampleCount") or 0)
@@ -211,14 +262,18 @@ def _score_components(metrics: Mapping[str, object]) -> Dict[str, float]:
 
 
 def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "") -> Dict[str, object]:
-    metrics = {
-        key: _window_metrics(
-            _rows_at_or_before(windows.get(key) or [], cutoff_at),
-            WINDOW_MINIMUM_SAMPLES[key],
+    session_rows = windows.get("SESSION") if isinstance(windows.get("SESSION"), list) else []
+    metrics = {}
+    for key, minimum_samples in WINDOW_MINIMUM_SAMPLES.items():
+        if not isinstance(windows.get(key), list):
+            continue
+        rows = _with_latest_session_observation(
+            windows.get(key) or [],
+            session_rows,
+            cutoff_at,
+            WINDOW_ROLLING_SAMPLES[key],
         )
-        for key in WINDOW_MINIMUM_SAMPLES
-        if isinstance(windows.get(key), list)
-    }
+        metrics[key] = _window_metrics(rows, minimum_samples)
     primary = metrics.get("20D") or metrics.get("5D") or metrics.get("3D") or metrics.get("1D") or {}
     short = metrics.get("5D") or metrics.get("3D") or primary
     if not primary:

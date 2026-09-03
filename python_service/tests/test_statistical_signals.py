@@ -202,6 +202,33 @@ class StatisticalSignalTests(unittest.TestCase):
         second_risk = next(item for item in second.signals if item.signal_type == "price-trend-break-risk")
         self.assertGreater(second_risk.score, first_risk.score)
 
+        historical = feature_snapshot([100, 101, 103, 105, 108, 110])
+        live_windows = dict(historical.windows)
+        live_windows["NVDA"] = dict(live_windows["NVDA"])
+        live_windows["NVDA"]["SESSION"] = [{
+            "bucketAt": "2026-08-10T07:01:00Z",
+            "marketSessionDate": "2026-08-10",
+            "currentPrice": 130.0,
+            "ma20Distance": 12.0,
+            "ma60Distance": 18.0,
+            "dataQuality": "actual",
+            "marketSession": "regular",
+        }]
+        live = score_temporal_feature_snapshot(TemporalFeatureSnapshot.create(
+            backend_id="questdb-shadow",
+            account_id="account-1",
+            as_of="2026-08-10T07:02:00Z",
+            windows=live_windows,
+            watermark=TimeSeriesWatermark("questdb-shadow", "2026-08-10T07:01:00Z"),
+        ))
+        live_support = next(
+            item for item in live.signals
+            if item.signal_type == "price-trend-continuation-support"
+        )
+        self.assertEqual("2026-08-10T07:01:00Z", live_support.observed_at)
+        self.assertEqual(130.0, live_support.input_features["currentPrice"])
+        self.assertEqual("strong", live_support.strength_band)
+
     def test_pipeline_builds_one_bundle_and_persists_each_model_release(self):
         signal_store = MemorySignalStore()
         service = StatisticalSignalPipelineService(MemoryFeatureStore(), signal_store)
@@ -384,7 +411,8 @@ class StatisticalSignalTests(unittest.TestCase):
         conditions = {item.condition_id: item for item in momentum.conditions}
 
         self.assertEqual(-3, conditions["ma5-shallow-pullback"].value)
-        self.assertEqual("<", conditions["ma5-below"].operator)
+        self.assertEqual("<=", conditions["ma5-not-overextended"].operator)
+        self.assertEqual(8, conditions["ma5-not-overextended"].value)
         self.assertEqual(0, conditions["ma20-positive"].value)
         self.assertEqual(0, conditions["ma60-positive"].value)
         self.assertEqual(1, momentum.any_condition_min_count)

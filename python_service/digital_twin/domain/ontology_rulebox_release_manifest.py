@@ -9,7 +9,7 @@ boundary prevents infrastructure code from becoming a second RuleBox.
 from typing import Dict, FrozenSet
 
 
-RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v4"
+RULEBOX_RELEASE_MANIFEST_VERSION = "rulebox-release-manifest-v5"
 
 DEPRECATED_TYPEDB_RULE_IDS: FrozenSet[str] = frozenset({
     "shadow.market_psychology.state.v1",
@@ -96,7 +96,7 @@ RULEBOX_MARKET_EVIDENCE_GUARD_RULE_VERSIONS: Dict[str, str] = {
     "graph.aggressive.loss_recovery.add_buy_review.v1": "v3",
     "graph.averaging_down.risk_guard.v1": "v3",
     "graph.winner_momentum.add_buy_review.v1": "v3",
-    "graph.profit_momentum.hold_add_review.v1": "v4",
+    "graph.profit_momentum.hold_add_review.v1": "v5",
     "graph.instrument_profile.cyclical_growth.recovery_add_review.v1": "v2",
     "graph.strategy_profile.aggressive_recovery_room.v1": "v3",
     "graph.flow.sell_pressure.v1": "v2",

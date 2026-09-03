@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 
-CURRENT_STATE_ABOX_CONTRACT_VERSION = "current-abox-copy-on-write-v3"
+CURRENT_STATE_ABOX_CONTRACT_VERSION = "current-abox-copy-on-write-v4"
 LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE = "current-state-dual-slot-v1"
 CURRENT_STATE_ABOX_PERSISTENCE_MODE = "current-state-copy-on-write-v2"
 CURRENT_STATE_ABOX_PERSISTENCE_MODES = frozenset({

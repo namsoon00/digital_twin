@@ -121,7 +121,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         result = {
             "aboxPersistenceVerification": {
                 "timing": {
-                    "currentStateWriteStrategy": "copy-on-write-fresh-generation-v3",
+                    "currentStateWriteStrategy": "copy-on-write-fresh-generation-v4",
                     "currentStateInventoryReadMs": 0,
                     "changedScopeWritePlan": {
                         "relationWriteMode": "given-batch",
@@ -141,7 +141,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertNotIn("aboxCurrentStateWriteStrategy", stages)
         self.assertNotIn("aboxRelationWriteMode", stages)
         self.assertEqual(
-            "copy-on-write-fresh-generation-v3",
+            "copy-on-write-fresh-generation-v4",
             result["runtimeModes"]["aboxCurrentStateWriteStrategy"],
         )
         self.assertEqual(
@@ -162,7 +162,7 @@ class OntologyProjectionAuditTests(unittest.TestCase):
             {**result, "runtimeStages": stages},
         )
         self.assertEqual(
-            "copy-on-write-fresh-generation-v3",
+            "copy-on-write-fresh-generation-v4",
             observation["modes"]["aboxCurrentStateWriteStrategy"],
         )
         self.assertNotIn("aboxCurrentStateWriteStrategy", observation["stages"])

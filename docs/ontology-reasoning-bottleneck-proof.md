@@ -138,13 +138,16 @@ of its ABox time reading the inactive slot and deleting its previous rows. It
 also reused almost no relations, so the comparison itself cost more than the
 write it was intended to avoid. Current-state persistence therefore uses the
 `current-state-copy-on-write-v2` physical mode with the
-`current-abox-copy-on-write-v3` lifecycle contract:
+`current-abox-copy-on-write-v4` lifecycle contract:
 
 - a changed entity scope invalidates every link scope that names it in
   `dependencyScopeIds`, including transitive link dependencies;
 - the dependent links receive fresh physical generations, so their TypeDB
   endpoints always reference the active entity generation rather than a
   retired copy-on-write row;
+- each freshly written physical generation belongs to the candidate Manifest,
+  while reused generations retain the Manifest that first stored them, so
+  candidate verification includes every rewritten relation scope;
 - unrelated scopes keep their existing physical generations.
 
 - A changed scope receives a retry-stable fresh physical generation derived
@@ -157,7 +160,7 @@ write it was intended to avoid. Current-state persistence therefore uses the
 - Unchanged scopes retain their active physical generation. Retired and failed
   generations are reclaimed later by the bounded ABox maintenance turn owned
   by the same single TypeDB writer.
-- `currentStateWriteStrategy=copy-on-write-fresh-generation-v3`,
+- `currentStateWriteStrategy=copy-on-write-fresh-generation-v4`,
   `currentStateInventoryReadMs=0`, and `currentStateDeleteMs=0` are the required
   production proof. The legacy dual-slot path remains readable only for
   progressive migration.
@@ -171,7 +174,7 @@ critical path at about 92 seconds for ABox persistence. Copy-on-write target
 patches subsequently completed ABox persistence in 8.4 to 16.0 seconds; a
 two-symbol target patch completed in 10.2 seconds with 0 ms inventory read,
 0 ms retired-generation delete, and 0 delete queries. The same durable audit
-record preserved `copy-on-write-fresh-generation-v3` as a categorical runtime
+record preserved `copy-on-write-fresh-generation-v4` as a categorical runtime
 mode and completed native TypeDB inference in 8.0 seconds. These values are
 operational evidence from the live local account, not a fixed latency promise.
 

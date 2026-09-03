@@ -734,6 +734,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             active_flow_slot,
             copy_by_scope[flow_scope]["generationId"],
         )
+        self.assertTrue(copy_by_scope[market_scope]["physicalGenerationChanged"])
+        self.assertFalse(copy_by_scope[flow_scope]["physicalGenerationChanged"])
         self.assertNotEqual(
             copy_by_scope[market_scope]["generationId"],
             copy_on_write_generation_id(
@@ -828,6 +830,64 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 dependent_active,
                 current_state_mode=True,
             ),
+        )
+
+        manifest_graph = PortfolioOntology(
+            "manifest-ownership",
+            worldview={"aboxSnapshotId": "abox-manifest:new"},
+            entities=[
+                OntologyEntity("stock:005930", "삼성전자", "stock", {
+                    "ontologyBox": "ABox",
+                    "aboxScopeId": market_scope,
+                    "scopeGenerationId": "logical-market-2",
+                    "snapshotId": "logical-market-2",
+                    "manifestId": "abox-manifest:old",
+                }),
+                OntologyEntity("flow:005930", "삼성전자 수급", "flow", {
+                    "ontologyBox": "ABox",
+                    "aboxScopeId": flow_scope,
+                    "scopeGenerationId": "logical-flow-1",
+                    "snapshotId": "logical-flow-1",
+                    "manifestId": "abox-manifest:old",
+                }),
+            ],
+            relations=[
+                OntologyRelation("stock:005930", "flow:005930", "HAS_FLOW", properties={
+                    "ontologyBox": "ABox",
+                    "aboxScopeId": "link:symbol:005930:price",
+                    "scopeGenerationId": "logical-price-link-1",
+                    "snapshotId": "logical-price-link-1",
+                    "manifestId": "abox-manifest:old",
+                }),
+            ],
+        )
+        manifest_plan = repository.current_state_physical_scope_plan(
+            dependent_plan,
+            dependent_active,
+            [
+                market_scope,
+                "link:symbol:005930:price",
+                "link:symbol:005930:price-audit",
+            ],
+            world_id,
+            persistence_mode=CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            transition_id="projection-run:manifest-ownership",
+        )
+        physical_manifest_graph = repository.current_state_physical_graph(
+            manifest_graph,
+            manifest_plan,
+        )
+        self.assertEqual(
+            "abox-manifest:new",
+            physical_manifest_graph.entities[0].properties["manifestId"],
+        )
+        self.assertEqual(
+            "abox-manifest:old",
+            physical_manifest_graph.entities[1].properties["manifestId"],
+        )
+        self.assertEqual(
+            "abox-manifest:new",
+            physical_manifest_graph.relations[0].properties["manifestId"],
         )
 
         snapshot_id = "abox-current:scope-a:a"

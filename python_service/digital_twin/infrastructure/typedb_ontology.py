@@ -4311,7 +4311,10 @@ class ScopedABoxManifestMixin:
                 item.get("logicalGenerationId") or item.get("generationId") or ""
             ).strip()
             active_generation_id = str(active_generations.get(scope_id) or "").strip()
-            if scope_id in changed or not active_generation_id:
+            physical_generation_changed = bool(
+                scope_id in changed or not active_generation_id
+            )
+            if physical_generation_changed:
                 physical_generation_id = (
                     copy_on_write_generation_id(
                         world_id,
@@ -4332,6 +4335,7 @@ class ScopedABoxManifestMixin:
                 "generationId": physical_generation_id,
                 "logicalGenerationId": logical_generation_id,
                 "physicalGenerationId": physical_generation_id,
+                "physicalGenerationChanged": physical_generation_changed,
                 "physicalStateMode": str(
                     persistence_mode or CURRENT_STATE_ABOX_PERSISTENCE_MODE
                 ),
@@ -4423,6 +4427,11 @@ class ScopedABoxManifestMixin:
             (physical_plan[0] if physical_plan else {}).get("physicalStateMode")
             or CURRENT_STATE_ABOX_PERSISTENCE_MODE
         )
+        candidate_manifest_id = str(
+            (clone.worldview or {}).get("aboxSnapshotId")
+            or (clone.worldview or {}).get("snapshotId")
+            or ""
+        ).strip()
         by_scope = {
             str(item.get("scopeId") or "").strip(): item
             for item in physical_plan
@@ -4453,6 +4462,8 @@ class ScopedABoxManifestMixin:
                 "aboxSnapshotId": generation_id,
                 "physicalStateMode": physical_state_mode,
             })
+            if physical.get("physicalGenerationChanged") and candidate_manifest_id:
+                values["manifestId"] = candidate_manifest_id
             return values
 
         for item in clone.entities:
@@ -4485,6 +4496,8 @@ class ScopedABoxManifestMixin:
                     "snapshotId": generation_id,
                     "aboxSnapshotId": generation_id,
                 })
+                if physical.get("physicalGenerationChanged") and candidate_manifest_id:
+                    metadata["manifestId"] = candidate_manifest_id
             support_scopes[str(key)] = metadata
         logical_generations = {
             str(item.get("scopeId") or ""): str(item.get("logicalGenerationId") or "")
@@ -7340,7 +7353,7 @@ class ScopedABoxManifestMixin:
                                 "durationMs": 0,
                             }
                             timing["currentStateWriteStrategy"] = (
-                                "copy-on-write-fresh-generation-v3"
+                                "copy-on-write-fresh-generation-v4"
                             )
                         else:
                             inventory_started = time.monotonic()

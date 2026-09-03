@@ -5161,6 +5161,7 @@ def run_watchlist_refresh_pipeline() -> None:
     while True:
         with WATCHLIST_REFRESH_LOCK:
             account_ids = set(WATCHLIST_REFRESH_STATE["accountIds"])
+            symbols = set(WATCHLIST_REFRESH_STATE["symbols"])
             WATCHLIST_REFRESH_STATE["accountIds"] = set()
             WATCHLIST_REFRESH_STATE["symbols"] = set()
             WATCHLIST_REFRESH_STATE["pending"] = False
@@ -5172,7 +5173,11 @@ def run_watchlist_refresh_pipeline() -> None:
             registry = stores.account_registry(settings)
             accounts = [account for account in registry.load() if not account_ids or account.account_id in account_ids]
             if accounts:
-                build_monitor_runner(accounts, settings=settings).run_once(force=True)
+                build_monitor_runner(accounts, settings=settings).run_once(
+                    force=False,
+                    symbol_filter=symbols,
+                    holdings_snapshot_requested=False,
+                )
             with WATCHLIST_REFRESH_LOCK:
                 WATCHLIST_REFRESH_STATE["lastStatus"] = "completed"
         except Exception as error:  # noqa: BLE001 - the saved watchlist must remain usable when a vendor is unavailable.

@@ -320,7 +320,12 @@ def monitor_command(args) -> int:
         progress_callback=monitor_progress_printer if args.monitor_action == "once" else None,
     )
     if args.monitor_action == "once":
-        runner.run_once(dry_run=args.dry_run, force=args.force)
+        holdings_snapshot_requested = bool(args.holdings_snapshot)
+        runner.run_once(
+            dry_run=args.dry_run,
+            force=bool(args.force or holdings_snapshot_requested),
+            holdings_snapshot_requested=holdings_snapshot_requested,
+        )
         return 0
     if args.monitor_action == "send-types":
         account_map = {account.account_id: account for account in accounts}
@@ -2234,7 +2239,12 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_actions = monitor.add_subparsers(dest="monitor_action", required=True)
     once = monitor_actions.add_parser("once")
     once.add_argument("--dry-run", action="store_true")
-    once.add_argument("--force", action="store_true")
+    once.add_argument("--force", action="store_true", help="Refresh immediately and bypass alert cadence")
+    once.add_argument(
+        "--holdings-snapshot",
+        action="store_true",
+        help="Send an informational full-holdings snapshot; implies --force",
+    )
     send_types = monitor_actions.add_parser("send-types")
     send_types.add_argument("--dry-run", action="store_true")
     send_types.add_argument("--allow-demo", action="store_true")

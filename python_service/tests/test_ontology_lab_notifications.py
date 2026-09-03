@@ -9,7 +9,10 @@ from digital_twin.application.ontology_lab_service import (  # noqa: E402
     ontology_lab_automation_payload,
     ontology_lab_notification_text,
 )
-from digital_twin.domain.message_types import ONTOLOGY_LAB_EXPERIMENT  # noqa: E402
+from digital_twin.domain.message_types import (  # noqa: E402
+    ONTOLOGY_LAB_EXPERIMENT,
+    PORTFOLIO_HOLDINGS_SNAPSHOT,
+)
 from digital_twin.domain.notification_ai import build_notification_ai_opinion  # noqa: E402
 from digital_twin.domain.notification_templates import modeling_lines  # noqa: E402
 from digital_twin.domain.ontology_experiments import OntologyExperiment  # noqa: E402
@@ -122,13 +125,15 @@ class OntologyLabNotificationTests(unittest.TestCase):
         self.assertNotIn("sufficient", text)
 
     def test_dedicated_experiment_type_has_no_generic_ai_opinion_or_model(self):
-        context = {
-            "messageType": ONTOLOGY_LAB_EXPERIMENT,
-            "rawLines": "상태: 수동 검토 필요",
-        }
+        for message_type in [ONTOLOGY_LAB_EXPERIMENT, PORTFOLIO_HOLDINGS_SNAPSHOT]:
+            with self.subTest(message_type=message_type):
+                context = {
+                    "messageType": message_type,
+                    "rawLines": "상태: 수동 검토 필요",
+                }
 
-        self.assertEqual({}, build_notification_ai_opinion(context))
-        self.assertEqual([], modeling_lines(context))
+                self.assertEqual({}, build_notification_ai_opinion(context))
+                self.assertEqual([], modeling_lines(context))
 
 
 if __name__ == "__main__":

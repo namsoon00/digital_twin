@@ -144,6 +144,7 @@ REASONING_EXPLANATION_SKIP_TYPES = {
     OPERATOR_REASONING_REPORT,
     "ontologyReasoningQueue",
     "investmentAlertCoverage",
+    "portfolioHoldingsSnapshot",
 }
 
 CUSTOMER_FACING_MESSAGE_TYPES = {
@@ -186,7 +187,7 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     },
     "portfolioHoldingsSnapshot": {
         "template": DEFAULT_TEMPLATE,
-        "description": "강제 점검/수동 확인용 전체 보유 주식 스냅샷",
+        "description": "명시적 수동 요청으로만 생성하는 투자 판단 없는 전체 보유 현황 스냅샷",
     },
     "investmentCalendarReminder": {
         "template": BODY_TEMPLATE,

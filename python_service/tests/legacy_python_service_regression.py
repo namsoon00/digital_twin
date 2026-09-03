@@ -36,7 +36,7 @@ from digital_twin.domain.data_freshness import evaluate_notification_data_freshn
 from digital_twin.domain.external_signal_quality import attach_external_signal_quality
 from digital_twin.domain.investment_research import NewsCollectionTarget, ResearchEvidence, build_active_investment_opinion, research_evidence_from_facts
 from digital_twin.domain.market_data import normalize_position, technical_indicators_from_candles
-from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, public_message_catalog
+from digital_twin.domain.message_types import DEFAULT_ALERT_RULES, DEFAULT_CADENCE, MESSAGE_TYPE_EMOJIS, MESSAGE_TYPE_LABELS, PORTFOLIO_HOLDINGS_SNAPSHOT, public_message_catalog
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, entity_id
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
@@ -8593,10 +8593,12 @@ class PythonServiceTests(unittest.TestCase):
 
     def test_message_type_check_command_does_not_send_by_default(self):
         args = build_parser().parse_args(["monitor", "message-types"])
+        snapshot_args = build_parser().parse_args(["monitor", "once", "--holdings-snapshot"])
 
         self.assertFalse(args.send)
         self.assertFalse(args.json)
         self.assertEqual("message-types", args.monitor_action)
+        self.assertTrue(snapshot_args.holdings_snapshot)
 
     def test_handoff_message_includes_summary_without_secrets(self):
         message = build_handoff_message(
@@ -13931,9 +13933,30 @@ class PythonServiceTests(unittest.TestCase):
             build_snapshot.return_value = AccountSnapshot("main", "메인", "toss", "live", "ok", utc_now_iso(), portfolio, [position], decisions_for_positions([position], portfolio))
             send_events.return_value.delivered = True
 
-            events = MonitorRunner([account]).run_once(dry_run=True, force=True)
+            refresh_events = MonitorRunner([account]).run_once(dry_run=True, force=True)
+            events = MonitorRunner([account]).run_once(
+                dry_run=True,
+                force=True,
+                holdings_snapshot_requested=True,
+            )
 
-        self.assertTrue(events)
+        self.assertFalse(any(event.rule == PORTFOLIO_HOLDINGS_SNAPSHOT for event in refresh_events))
+        self.assertEqual([PORTFOLIO_HOLDINGS_SNAPSHOT], [event.rule for event in events])
+        snapshot_event = next(event for event in events if event.rule == PORTFOLIO_HOLDINGS_SNAPSHOT)
+        self.assertEqual("INFO", snapshot_event.severity)
+        self.assertEqual("전체 보유 현황 확인", snapshot_event.title)
+        self.assertTrue(snapshot_event.metadata["manualHoldingsSnapshotRequested"])
+        self.assertFalse(snapshot_event.metadata["investmentDecisionIncluded"])
+        self.assertIn("지금 할 일: 없음.", "\n".join(snapshot_event.lines))
+        self.assertTrue(any(line.startswith("보유 주식 평가금액 ") for line in snapshot_event.lines))
+        self.assertEqual(portfolio.invested, snapshot_event.metadata["holdingsSnapshot"]["portfolioValue"])
+        rendered = render_notification(
+            NotificationTemplate(PORTFOLIO_HOLDINGS_SNAPSHOT, "{telegramMessage}"),
+            alert_context(snapshot_event),
+        )
+        self.assertIn("지금 할 일", rendered)
+        self.assertNotIn("AI 의견", rendered)
+        self.assertNotIn("모델 판단", rendered)
 
     def test_application_runner_uses_injected_ports(self):
         account = AccountConfig("main", "메인", "toss", "https://example.test", "", "", "", ["AAPL"])
@@ -13963,7 +13986,7 @@ class PythonServiceTests(unittest.TestCase):
             event_sender=sender,
             event_publisher=event_bus,
             ontology_projection_recorder=FakeProjectionRecorder(),
-        ).run_once(dry_run=True, force=True)
+        ).run_once(dry_run=True, force=True, holdings_snapshot_requested=True)
 
         self.assertTrue(events)
         self.assertEqual(events, sent)

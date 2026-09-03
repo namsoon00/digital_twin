@@ -7,6 +7,7 @@ from .message_types import (
     ONTOLOGY_REASONING_QUEUE,
     OPERATOR_REASONING_REPORT,
     INVESTMENT_ALERT_COVERAGE,
+    PORTFOLIO_HOLDINGS_SNAPSHOT,
 )
 from .accounts import message_delivery_profile
 from .disclosure_analysis import local_disclosure_analysis
@@ -52,6 +53,7 @@ SKIP_AI_OPINION_TYPES = {
     ONTOLOGY_REASONING_QUEUE,
     "operationalStorageCapacity",
     INVESTMENT_ALERT_COVERAGE,
+    PORTFOLIO_HOLDINGS_SNAPSHOT,
 }
 AI_OPINION_ENGINE_VERSION = "notification-ai-opinion-v3"
 AI_OPINION_MAX_LINES = 5

@@ -96,8 +96,9 @@ class MonitorRunner:
         symbol_filter: Iterable[str] = None,
         reasoning_context: Dict[str, object] = None,
         delivery_guard=None,
+        holdings_snapshot_requested: bool = False,
     ) -> List[AlertEvent]:
-        if self.use_account_job_queue(dry_run, force, symbol_filter):
+        if not holdings_snapshot_requested and self.use_account_job_queue(dry_run, force, symbol_filter):
             return self.run_due_account_jobs()
         return self.run_all_accounts_once(
             dry_run=dry_run,
@@ -105,6 +106,7 @@ class MonitorRunner:
             symbol_filter=symbol_filter,
             reasoning_context=reasoning_context,
             delivery_guard=delivery_guard,
+            holdings_snapshot_requested=holdings_snapshot_requested,
         )
 
     def progress(self, stage: str, **payload) -> None:
@@ -125,6 +127,7 @@ class MonitorRunner:
         symbol_filter: Iterable[str] = None,
         reasoning_context: Dict[str, object] = None,
         delivery_guard=None,
+        holdings_snapshot_requested: bool = False,
     ) -> List[AlertEvent]:
         self.last_ontology_projection_results = {}
         self.last_detected_alert_events = []
@@ -142,6 +145,7 @@ class MonitorRunner:
                 dry_run=dry_run,
                 force=force,
                 reasoning_context=reasoning_context,
+                holdings_snapshot_requested=holdings_snapshot_requested,
             )
             self.progress("account.done", accountId=account.account_id, eventCount=len(events), mode=snapshot.mode, status=snapshot.status)
             snapshots.append(snapshot)
@@ -293,6 +297,7 @@ class MonitorRunner:
         dry_run: bool = False,
         force: bool = False,
         reasoning_context: Dict[str, object] = None,
+        holdings_snapshot_requested: bool = False,
     ):
         self.progress("snapshot.start", accountId=account.account_id)
         snapshot = self.build_snapshot(account, reasoning_context=reasoning_context)
@@ -453,20 +458,21 @@ class MonitorRunner:
         # stale monitor-side placeholder.
         if projection_enabled:
             self.record_hypothesis_lifecycle(snapshot)
-        event_builder = self.monitor.events_for_snapshot
-        event_builder_parameters = inspect.signature(event_builder).parameters
-        event_builder_accepts_kwargs = any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in event_builder_parameters.values()
-        )
-        if reasoning_context is not None and (
-            "reasoning_context" in event_builder_parameters or event_builder_accepts_kwargs
-        ):
-            events = event_builder(snapshot, previous, reasoning_context=reasoning_context)
+        if holdings_snapshot_requested and hasattr(self.monitor, "forced_holdings_snapshot_events"):
+            events = self.monitor.forced_holdings_snapshot_events(snapshot)
         else:
-            events = event_builder(snapshot, previous)
-        if force and hasattr(self.monitor, "forced_holdings_snapshot_events"):
-            events.extend(self.monitor.forced_holdings_snapshot_events(snapshot))
+            event_builder = self.monitor.events_for_snapshot
+            event_builder_parameters = inspect.signature(event_builder).parameters
+            event_builder_accepts_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in event_builder_parameters.values()
+            )
+            if reasoning_context is not None and (
+                "reasoning_context" in event_builder_parameters or event_builder_accepts_kwargs
+            ):
+                events = event_builder(snapshot, previous, reasoning_context=reasoning_context)
+            else:
+                events = event_builder(snapshot, previous)
         self.progress("events.detected", accountId=account.account_id, eventCount=len(events))
         if allowed_symbols:
             events = self.filter_events_by_symbol(
@@ -478,7 +484,11 @@ class MonitorRunner:
             self.progress("events.filtered", accountId=account.account_id, eventCount=len(events), symbolCount=len(allowed_symbols))
         detected_events = list(events)
         self.last_detected_alert_events.extend(detected_events)
-        events = self.monitor.apply_cadence(events, self.store, force=force)
+        events = self.monitor.apply_cadence(
+            events,
+            self.store,
+            force=bool(force or holdings_snapshot_requested),
+        )
         self.record_investment_alert_pipeline(
             snapshot,
             projection if isinstance(projection, dict) else {},

@@ -659,18 +659,27 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         positions = [item for item in snapshot.positions or [] if not item.is_cash()]
         if not snapshot.has_live_account_data() or not positions:
             return []
-        portfolio_value = snapshot.portfolio.total or snapshot.portfolio.invested
+        holdings_value = snapshot.portfolio.invested
+        cash_value = snapshot.portfolio.cash
+        account_total = snapshot.portfolio.total or (holdings_value + cash_value)
         lines = [
+            "지금 할 일: 없음. 요청한 시점의 계좌 잔고를 확인하는 정보이며 매수·매도 판단은 포함하지 않습니다.",
+            "판단 안내: 투자 행동은 TypeDB 관계 분석에서 근거와 조건이 확인될 때 별도 알림으로 보냅니다.",
             "기준시각 " + str(snapshot.generated_at or "-"),
             "보유 종목 " + str(len(positions)) + "개",
-            "계좌 평가금액 " + money(portfolio_value, "KRW"),
+            "보유 주식 평가금액 " + money(holdings_value, "KRW"),
         ]
+        if cash_value:
+            lines.append("현금성 잔액 " + money(cash_value, "KRW"))
+            lines.append("계좌 합계 " + money(account_total, "KRW"))
         for item in positions:
             lines.append(self.holding_snapshot_line(item))
         metadata = {
             "holdingsSnapshot": {
                 "positionCount": len(positions),
-                "portfolioValue": portfolio_value,
+                "portfolioValue": holdings_value,
+                "cashValue": cash_value,
+                "accountTotal": account_total,
                 "positions": [item.to_dict() for item in positions],
             },
             "dataFreshnessRequired": data_freshness_required(PORTFOLIO_HOLDINGS_SNAPSHOT),
@@ -681,18 +690,21 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 source_fetched_at=snapshot.generated_at,
                 data_quality=snapshot.mode,
             ),
+            "manualHoldingsSnapshotRequested": True,
+            "notificationPurpose": "account-status-only",
+            "investmentDecisionIncluded": False,
         }
         event = AlertEvent(
             snapshot.account_id,
             snapshot.account_label,
-            "WATCH",
+            "INFO",
             PORTFOLIO_HOLDINGS_SNAPSHOT,
             ":".join([snapshot.account_id, "holdings-snapshot", str(snapshot.generated_at or now_ms())]),
-            "전체 보유 주식 점검",
+            "전체 보유 현황 확인",
             lines,
             criteria=self.criteria(
-                "강제 점검 또는 수동 확인 요청에서 보유 종목 전체 상태를 확인할 때",
-                "보유 " + str(len(positions)) + "개, 계좌 평가금액 " + money(portfolio_value, "KRW"),
+                "사용자가 명시적으로 전체 보유 현황 확인을 요청했을 때",
+                "보유 " + str(len(positions)) + "개, 보유 주식 평가금액 " + money(holdings_value, "KRW"),
             ),
             metadata=metadata,
         )

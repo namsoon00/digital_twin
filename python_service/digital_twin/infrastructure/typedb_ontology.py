@@ -4349,6 +4349,7 @@ class ScopedABoxManifestMixin:
     ) -> List[str]:
         """Select physical writes for steady-state and progressive migration."""
 
+        scope_plan = [dict(item or {}) for item in logical_scope_plan or []]
         active = dict(active_metadata or {})
         active_fingerprints = dict(active.get("scopeFingerprints") or {})
         active_generations = dict(active.get("scopeGenerationIds") or {})
@@ -4364,11 +4365,10 @@ class ScopedABoxManifestMixin:
             and not active_current_state
             and str(migration_mode or "").strip().lower() == "full"
         )
-        return [
+        changed = {
             str(item.get("scopeId") or "")
-            for item in logical_scope_plan or []
-            if str(item.get("scopeId") or "")
-            and (
+            for item in scope_plan
+            if str(item.get("scopeId") or "") and (
                 not scoped_active
                 or full_current_state_migration
                 or str(
@@ -4381,6 +4381,33 @@ class ScopedABoxManifestMixin:
                     ) != str(item.get("generationId") or "")
                 )
             )
+        }
+
+        # A TypeDB relation is bound to the physical storage identities of
+        # both endpoints. Copy-on-write gives a changed node scope a new
+        # physical identity even when an incident relation's own semantic
+        # payload is unchanged. Rewrite every dependent link scope as well,
+        # otherwise the active Manifest points at a new node while its reused
+        # relations still point at the retired node generation.
+        while changed:
+            dependent = {
+                str(item.get("scopeId") or "")
+                for item in scope_plan
+                if str(item.get("scopeId") or "") not in changed
+                and changed.intersection({
+                    str(value or "").strip()
+                    for value in item.get("dependencyScopeIds") or []
+                    if str(value or "").strip()
+                })
+            }
+            if not dependent:
+                break
+            changed.update(dependent)
+
+        return [
+            str(item.get("scopeId") or "")
+            for item in scope_plan
+            if str(item.get("scopeId") or "") in changed
         ]
 
     @staticmethod
@@ -7313,7 +7340,7 @@ class ScopedABoxManifestMixin:
                                 "durationMs": 0,
                             }
                             timing["currentStateWriteStrategy"] = (
-                                "copy-on-write-fresh-generation-v2"
+                                "copy-on-write-fresh-generation-v3"
                             )
                         else:
                             inventory_started = time.monotonic()

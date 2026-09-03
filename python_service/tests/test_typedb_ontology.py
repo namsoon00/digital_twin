@@ -777,6 +777,59 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             ),
         )
 
+        dependent_plan = [
+            {
+                "scopeId": market_scope,
+                "generationId": "logical-market-2",
+                "fingerprint": "market-2",
+            },
+            {
+                "scopeId": "link:symbol:005930:price",
+                "generationId": "logical-price-link-1",
+                "fingerprint": "price-link-1",
+                "dependencyScopeIds": [market_scope, "symbol:005930:state"],
+            },
+            {
+                "scopeId": "link:symbol:005930:price-audit",
+                "generationId": "logical-price-audit-link-1",
+                "fingerprint": "price-audit-link-1",
+                "dependencyScopeIds": ["link:symbol:005930:price"],
+            },
+            {
+                "scopeId": flow_scope,
+                "generationId": "logical-flow-1",
+                "fingerprint": "flow-1",
+            },
+        ]
+        dependent_active = {
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "persistenceMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+            "scopeFingerprints": {
+                market_scope: "market-1",
+                "link:symbol:005930:price": "price-link-1",
+                "link:symbol:005930:price-audit": "price-audit-link-1",
+                flow_scope: "flow-1",
+            },
+            "scopeGenerationIds": {
+                market_scope: "active-market",
+                "link:symbol:005930:price": "active-price-link",
+                "link:symbol:005930:price-audit": "active-price-audit-link",
+                flow_scope: "active-flow",
+            },
+        }
+        self.assertEqual(
+            [
+                market_scope,
+                "link:symbol:005930:price",
+                "link:symbol:005930:price-audit",
+            ],
+            repository.scoped_abox_changed_scope_ids(
+                dependent_plan,
+                dependent_active,
+                current_state_mode=True,
+            ),
+        )
+
         snapshot_id = "abox-current:scope-a:a"
         unchanged = {
             "id": "stock:005930",

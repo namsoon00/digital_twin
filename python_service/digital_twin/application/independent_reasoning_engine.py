@@ -1730,7 +1730,20 @@ class IndependentReasoningJobRunner:
         health = dict(row.get("health") or {})
         existing = str(health.get("validationStartedAt") or "").strip()
         if existing:
-            return {"status": "already-started", "validationStartedAt": existing}
+            current_status = str(row.get("status") or "").strip().lower()
+            if current_status in {"provisioning", "replaying"}:
+                transition = getattr(self.registry, "transition", None)
+                if not callable(transition):
+                    raise RuntimeError(
+                        "Candidate registry cannot recover the provisioning-to-shadow transition."
+                    )
+                transition(deployment_id, "shadow")
+                current_status = "shadow"
+            return {
+                "status": "already-started",
+                "validationStartedAt": existing,
+                "deploymentStatus": current_status,
+            }
         release = dict(health.get("runtimeOntologyRelease") or {})
         if str(release.get("status") or "").lower() != "ready" or not bool(
             release.get("warmed")
@@ -1743,11 +1756,27 @@ class IndependentReasoningJobRunner:
                 "status": "abox-bootstrap-pending",
                 "successfulBootstrapRunCount": bootstrap_runs,
             }
+        current_status = str(row.get("status") or "").strip().lower()
+        if current_status in {"provisioning", "replaying"}:
+            transition = getattr(self.registry, "transition", None)
+            if not callable(transition):
+                raise RuntimeError(
+                    "Candidate registry cannot complete the provisioning-to-shadow transition."
+                )
+            transition(deployment_id, "shadow")
         started_at = utc_now_iso()
         health["validationStartedAt"] = started_at
         health["validationStartSource"] = "candidate-worker-abox-bootstrap-complete"
         self.registry.update_health(deployment_id, health)
-        return {"status": "started", "validationStartedAt": started_at}
+        return {
+            "status": "started",
+            "validationStartedAt": started_at,
+            "deploymentStatus": (
+                "shadow"
+                if current_status in {"provisioning", "replaying"}
+                else current_status
+            ),
+        }
 
     @staticmethod
     def market_observation_completion_scope(jobs) -> Dict[str, object]:

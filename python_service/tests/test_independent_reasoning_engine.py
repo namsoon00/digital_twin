@@ -492,9 +492,16 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                         "warmed": True,
                     }
                 }
+                self.status = "provisioning"
+                self.transitions = []
 
             def get(self, _deployment_id):
-                return {"status": "provisioning", "health": dict(self.health)}
+                return {"status": self.status, "health": dict(self.health)}
+
+            def transition(self, deployment_id, status):
+                self.transitions.append((deployment_id, status))
+                self.status = status
+                return self.get(deployment_id)
 
             def update_health(self, _deployment_id, health):
                 self.health = dict(health)
@@ -508,6 +515,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         )
 
         first = runner.ensure_candidate_validation_window("release:candidate")
+        registry.status = "provisioning"
         second = runner.ensure_candidate_validation_window("release:candidate")
 
         self.assertEqual("started", first["status"])
@@ -515,6 +523,15 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(
             "candidate-worker-abox-bootstrap-complete",
             registry.health["validationStartSource"],
+        )
+        self.assertEqual("shadow", first["deploymentStatus"])
+        self.assertEqual("shadow", second["deploymentStatus"])
+        self.assertEqual(
+            [
+                ("release:candidate", "shadow"),
+                ("release:candidate", "shadow"),
+            ],
+            registry.transitions,
         )
 
     def test_candidate_validation_window_waits_for_one_abox_bootstrap_run(self):

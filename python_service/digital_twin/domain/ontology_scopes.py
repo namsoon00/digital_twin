@@ -35,7 +35,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v9-evidence-64-slots"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v10-stable-item-ownership"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -76,6 +76,9 @@ _SYMBOL_PREFIXES = (
     "instrument-",
     "data-latency:",
     "fact-change:",
+    "technical-metric:",
+    "flow-metric:",
+    "data-quality:",
 )
 
 _MACRO_KINDS = {
@@ -130,6 +133,33 @@ _EVIDENCE_TOKENS = (
     "article",
     "document",
 )
+
+_PORTFOLIO_ITEM_KINDS = {
+    "cash-exposure",
+    "currency-exposure",
+    "portfolio-reconciliation",
+    "portfolio-risk-snapshot",
+    "rebalance-proposal",
+    "rebalance-state",
+    "sector-exposure",
+}
+
+_EPISODE_ITEM_KINDS = {
+    "inferred-portfolio-activity",
+    "portfolio-action-candidate",
+    "portfolio-activity-episode",
+    "rebalance-scenario",
+}
+
+_POLICY_ITEM_KINDS = {
+    "external-signal",
+    "position-role",
+}
+
+_REFERENCE_ITEM_KINDS = {
+    "catalog-entry",
+    "factor",
+}
 
 _GENERATED_SCOPE_PROPERTY_KEYS = {
     "ontologybox",
@@ -226,6 +256,31 @@ def _scope_id(scope_type: str, value: str = "") -> str:
         return symbol_scope_id(value, "state")
     clean_value = _clean(value) or "global"
     return scope_type + ":" + clean_value
+
+
+def entity_item_scope_id(
+    scope_type: object,
+    owner: object,
+    entity_id: object,
+) -> str:
+    """Return a graph-shape-independent owner for one non-symbol fact.
+
+    A target-scoped graph can contain fewer neighbours than a complete
+    portfolio graph. Inferring ownership from those neighbours therefore
+    moved the same logical node between ``reference`` and ``symbol`` scopes,
+    which produced relation endpoints that did not exist in the active
+    physical generation. Item scopes keep ownership stable in both views and
+    limit copy-on-write relation rebinding to edges incident to that fact.
+    """
+
+    clean_type = _clean(scope_type).lower() or "reference"
+    if clean_type not in {"reference", "portfolio", "episode", "policy"}:
+        clean_type = "reference"
+    digest = hashlib.sha256(_clean(entity_id).encode("utf-8")).hexdigest()[:16]
+    if clean_type == "reference":
+        return "reference:item:" + digest
+    clean_owner = re.sub(r"[^A-Za-z0-9_.-]+", "-", _clean(owner)).strip("-.") or "global"
+    return clean_type + ":" + clean_owner + ":item:" + digest
 
 
 def _scope_slot_token(value: object, fallback: str = "unknown") -> str:
@@ -414,6 +469,10 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
     if kind == "risk" and not _symbol(properties.get("symbol")):
         return _scope_id("portfolio", account_id)
     symbol = _symbol(properties.get("symbol"))
+    if kind == "position-exposure" and not symbol:
+        exposure_key = _symbol(properties.get("exposureKey"))
+        if re.fullmatch(r"(?:\d{4,8}|[A-Z]{1,6}(?:[.-][A-Z0-9]{1,5})?)", exposure_key):
+            symbol = exposure_key
     if symbol:
         return bounded_fact_scope_id(
             symbol_scope_id(symbol, family),
@@ -421,6 +480,16 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
             entity.entity_id,
             properties,
         )
+    if kind in _PORTFOLIO_ITEM_KINDS:
+        return entity_item_scope_id("portfolio", account_id, entity.entity_id)
+    if kind in _EPISODE_ITEM_KINDS:
+        return entity_item_scope_id("episode", account_id, entity.entity_id)
+    if kind in _POLICY_ITEM_KINDS:
+        return entity_item_scope_id("policy", account_id, entity.entity_id)
+    if kind == "data-quality":
+        return entity_item_scope_id("policy", account_id, entity.entity_id)
+    if kind in _REFERENCE_ITEM_KINDS:
+        return entity_item_scope_id("reference", "", entity.entity_id)
     if any(token in kind for token in _EPISODE_TOKENS):
         return _scope_id("episode", account_id)
     if any(token in kind for token in _EVIDENCE_TOKENS):
@@ -435,7 +504,10 @@ def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
                 entity.entity_id,
                 properties,
             )
-    return ""
+    # Unknown non-symbol facts still need stable ownership. Falling back to
+    # one global reference scope makes a partial subject graph look like a
+    # destructive replacement of every unrelated reference fact.
+    return entity_item_scope_id("reference", "", entity.entity_id)
 
 
 def _seed_entity_scopes(graph: PortfolioOntology) -> Dict[str, str]:
@@ -1971,6 +2043,7 @@ def select_target_scoped_manifest_patch(
     active_metadata: Mapping[str, object],
     target_symbols: Iterable[object],
     fact_slot_plan: Mapping[str, object] = None,
+    source_graph_complete: bool = True,
 ) -> Dict[str, object]:
     """Select the incoming scopes that may replace an active manifest.
 
@@ -2012,6 +2085,7 @@ def select_target_scoped_manifest_patch(
         "removedRelevantScopeIds": [],
         "retainsMissingTargetScopes": retain_missing_target_scopes,
         "targetScopeRetentionMode": target_scope_retention_mode,
+        "sourceGraphComplete": bool(source_graph_complete),
         "factSlot": dict(fact_slot_plan or {}),
     }
     if not requested_symbols:
@@ -2183,6 +2257,11 @@ def select_target_scoped_manifest_patch(
             "factSlot": dict(fact_slot_selection),
         }
     selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
+    fact_slot_deferred_scope_ids = {
+        _clean(scope_id)
+        for scope_id in fact_slot_selection.get("deferredScopeIds") or []
+        if _clean(scope_id)
+    }
     if topology_migration_required:
         # Replace one complete subject boundary so v7 and v8 copies of the
         # same fact never coexist in the active manifest. Other subjects stay
@@ -2368,6 +2447,11 @@ def select_target_scoped_manifest_patch(
         for scope_id in selected
         if _scope_type(scope_id) == "link"
     }
+    # Only scopes selected by the source fact boundary may trigger reverse
+    # relation rebinding. Endpoint companion scopes are added for integrity,
+    # but must not become traversal roots themselves; otherwise selecting one
+    # stock anchor pulls every unrelated relation owned by that anchor.
+    relation_rebind_root_scope_ids: Set[str] = set(selected)
 
     def include_missing_dependency(
         scope_id: str,
@@ -2408,6 +2492,7 @@ def select_target_scoped_manifest_patch(
         )
 
     missing_endpoints: List[str] = []
+    incomplete_source_endpoint_scopes: List[str] = []
     changed = True
     while changed:
         changed = False
@@ -2427,6 +2512,27 @@ def select_target_scoped_manifest_patch(
                         ),
                         traverse_owned_relations=_scope_type(dependency_id) == "link",
                     )
+        # Copy-on-write changes the physical identity of a node. Every
+        # relation scope that depends on that node must therefore be rebound
+        # even when its own semantic payload did not change. Keep this reverse
+        # dependency closure aligned with the repository write planner so a
+        # relation cannot appear only after endpoint selection has finished.
+        for scope_id, row in incoming.items():
+            if scope_id in selected or _scope_type(scope_id) != "link":
+                continue
+            dependencies = {
+                _clean(value)
+                for value in row.get("dependencyScopeIds") or []
+                if _clean(value)
+            }
+            if not dependencies.intersection(relation_rebind_root_scope_ids):
+                continue
+            include_missing_dependency(
+                scope_id,
+                missing_endpoints,
+                "required-dependent-link-rebind",
+                traverse_owned_relations=True,
+            )
         for relation in graph.relations:
             properties = dict(relation.properties or {})
             owner_scope = _clean(properties.get("aboxScopeId"))
@@ -2435,6 +2541,13 @@ def select_target_scoped_manifest_patch(
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 if endpoint_scope and dependency_requires_staging(endpoint_scope):
+                    if (
+                        not source_graph_complete
+                        and endpoint_scope in fact_slot_deferred_scope_ids
+                        and ":item:" not in endpoint_scope
+                    ):
+                        incomplete_source_endpoint_scopes.append(endpoint_scope)
+                        continue
                     include_missing_dependency(
                         endpoint_scope,
                         missing_endpoints,
@@ -2457,6 +2570,13 @@ def select_target_scoped_manifest_patch(
             ):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 if endpoint_scope and dependency_requires_staging(endpoint_scope):
+                    if (
+                        not source_graph_complete
+                        and endpoint_scope in fact_slot_deferred_scope_ids
+                        and ":item:" not in endpoint_scope
+                    ):
+                        incomplete_source_endpoint_scopes.append(endpoint_scope)
+                        continue
                     include_missing_dependency(
                         endpoint_scope,
                         missing_endpoints,
@@ -2467,6 +2587,16 @@ def select_target_scoped_manifest_patch(
                         ),
                     )
         changed = len(selected) != before
+
+    if incomplete_source_endpoint_scopes:
+        return {
+            **base,
+            "status": "skipped-incomplete-link-endpoint-source",
+            "applied": False,
+            "fallbackReason": "changed-link-endpoint-requires-complete-source",
+            "missingEndpointScopeIds": sorted(set(incomplete_source_endpoint_scopes)),
+            "factSlot": fact_slot_selection,
+        }
 
     if missing_endpoints:
         return {
@@ -2556,6 +2686,8 @@ def select_target_scoped_manifest_patch(
             "ruleDependencyChangedScopeCount": len(
                 dependency_changes_by_scope
             ),
+            "relationRebindRootScopeIds": sorted(relation_rebind_root_scope_ids),
+            "relationRebindRootScopeCount": len(relation_rebind_root_scope_ids),
         },
         "scopeTopologyMigration": topology_migration,
     }
@@ -2659,6 +2791,7 @@ def merge_target_scoped_abox_manifest(
     active_metadata: Mapping[str, object],
     target_symbols: Iterable[object],
     fact_slot_plan: Mapping[str, object] = None,
+    source_graph_complete: bool = True,
 ) -> Dict[str, object]:
     """Replace only target-symbol scopes while retaining active generations."""
 
@@ -2667,6 +2800,7 @@ def merge_target_scoped_abox_manifest(
         active_metadata,
         target_symbols,
         fact_slot_plan=fact_slot_plan,
+        source_graph_complete=source_graph_complete,
     )
     if not selection.get("applied"):
         return selection
@@ -2697,6 +2831,11 @@ def merge_target_scoped_abox_manifest(
         "deferredScopeIds": list(selection.get("deferredScopeIds") or []),
         "retiredScopeIds": list(selection.get("retiredScopeIds") or []),
         "factSlot": dict(selection.get("factSlot") or {}),
+        "relationRebindRootScopeIds": list(
+            (selection.get("scopeSelectionTrace") or {}).get(
+                "relationRebindRootScopeIds"
+            ) or []
+        ),
         "scopeTopologyMigration": dict(
             selection.get("scopeTopologyMigration") or {}
         ) if isinstance(selection.get("scopeTopologyMigration"), Mapping) else {},

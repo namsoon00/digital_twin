@@ -4350,6 +4350,7 @@ class ScopedABoxManifestMixin:
         current_state_mode: bool,
         migration_mode: str = "",
         current_state_persistence_mode: str = CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+        relation_rebind_root_scope_ids: Iterable[str] = None,
     ) -> List[str]:
         """Select physical writes for steady-state and progressive migration."""
 
@@ -4387,18 +4388,28 @@ class ScopedABoxManifestMixin:
             )
         }
 
+        requested_rebind_roots = {
+            str(value or "").strip()
+            for value in relation_rebind_root_scope_ids or []
+            if str(value or "").strip()
+        }
+        rebind_roots = (
+            changed.intersection(requested_rebind_roots)
+            if relation_rebind_root_scope_ids is not None
+            else set(changed)
+        )
         # A TypeDB relation is bound to the physical storage identities of
         # both endpoints. Copy-on-write gives a changed node scope a new
         # physical identity even when an incident relation's own semantic
         # payload is unchanged. Rewrite every dependent link scope as well,
         # otherwise the active Manifest points at a new node while its reused
         # relations still point at the retired node generation.
-        while changed:
+        while rebind_roots:
             dependent = {
                 str(item.get("scopeId") or "")
                 for item in scope_plan
                 if str(item.get("scopeId") or "") not in changed
-                and changed.intersection({
+                and rebind_roots.intersection({
                     str(value or "").strip()
                     for value in item.get("dependencyScopeIds") or []
                     if str(value or "").strip()
@@ -4407,6 +4418,11 @@ class ScopedABoxManifestMixin:
             if not dependent:
                 break
             changed.update(dependent)
+            # Preserve transitive physical dependencies (including a
+            # relation that plays a role in another relation). The caller's
+            # explicit root set prevents endpoint companion nodes from
+            # becoming unrelated fan-out roots.
+            rebind_roots = dependent
 
         return [
             str(item.get("scopeId") or "")
@@ -5705,6 +5721,52 @@ class ScopedABoxManifestMixin:
         }
         return sorted(expected - available)
 
+    @staticmethod
+    def missing_relation_endpoint_diagnostics(
+        relation_rows: Iterable[Dict[str, object]],
+        missing_storage_ids: Iterable[str],
+    ) -> List[Dict[str, str]]:
+        """Describe a missing physical endpoint without another graph read."""
+
+        missing = {
+            str(value or "").strip()
+            for value in missing_storage_ids or []
+            if str(value or "").strip()
+        }
+        rows: List[Dict[str, str]] = []
+        seen = set()
+        for raw in relation_rows or []:
+            relation = dict(raw or {})
+            for side, node_key, storage_key in [
+                ("source", "source", "sourceStorageId"),
+                ("target", "target", "targetStorageId"),
+            ]:
+                storage_id = str(relation.get(storage_key) or "").strip()
+                if storage_id not in missing:
+                    continue
+                key = (
+                    storage_id,
+                    str(relation.get("scopeId") or ""),
+                    str(relation.get("type") or ""),
+                    side,
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({
+                    "storageId": storage_id,
+                    "nodeId": str(relation.get(node_key) or ""),
+                    "side": side,
+                    "relationType": str(relation.get("type") or ""),
+                    "relationScopeId": str(relation.get("scopeId") or ""),
+                    "relationGenerationId": str(
+                        relation.get("snapshotId")
+                        or relation.get("aboxSnapshotId")
+                        or ""
+                    ),
+                })
+        return rows
+
     def write_persistence_rows(
         self,
         driver,
@@ -5857,11 +5919,21 @@ class ScopedABoxManifestMixin:
         trace["missingRelationEndpointCount"] = len(missing_endpoint_storage_ids)
         if missing_endpoint_storage_ids:
             trace["missingRelationEndpointStorageIds"] = missing_endpoint_storage_ids[:20]
+            endpoint_diagnostics = self.missing_relation_endpoint_diagnostics(
+                relation_rows_to_insert,
+                missing_endpoint_storage_ids,
+            )
+            trace["missingRelationEndpointDiagnostics"] = endpoint_diagnostics[:20]
             raise RuntimeError(
                 "Scoped ABox relation endpoint verification failed for "
                 + str(len(missing_endpoint_storage_ids))
                 + " physical nodes; sample="
-                + ",".join(missing_endpoint_storage_ids[:5])
+                + json.dumps(
+                    endpoint_diagnostics[:5],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
                 + "."
             )
 
@@ -7260,6 +7332,13 @@ class ScopedABoxManifestMixin:
             current_state_mode=current_state_mode,
             migration_mode=migration_mode,
             current_state_persistence_mode=current_state_persistence_mode,
+            relation_rebind_root_scope_ids=(
+                dict(worldview.get("targetScopedManifestPatch") or {}).get(
+                    "relationRebindRootScopeIds"
+                )
+                if isinstance(worldview.get("targetScopedManifestPatch"), dict)
+                else None
+            ),
         )
         persistence_graph = graph
         if current_state_mode:

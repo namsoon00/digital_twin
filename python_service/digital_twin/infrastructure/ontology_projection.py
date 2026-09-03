@@ -3361,6 +3361,7 @@ class PortfolioOntologyProjectionRecorder:
                     active_abox,
                     target_scoped_patch.get("targetSymbols") or [],
                     fact_slot_plan=target_scoped_patch.get("factSlotPlan") or {},
+                    source_graph_complete=str(graph_input.get("mode") or "") == "full",
                 )
                 repair_input_fallback = {}
                 if (
@@ -3423,6 +3424,7 @@ class PortfolioOntologyProjectionRecorder:
                         active_abox,
                         target_scoped_patch.get("targetSymbols") or [],
                         fact_slot_plan=target_scoped_patch.get("factSlotPlan") or {},
+                        source_graph_complete=True,
                     )
                     repair_runtime_stages = dict(
                         repair_projection_graph.get("runtimeStages") or {}

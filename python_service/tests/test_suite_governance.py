@@ -47,7 +47,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # resolution protect two additional alert-coverage failure modes.
         # Physical TypeDB relation-endpoint preflight prevents silent zero-row
         # match-inserts from creating incomplete candidate ABox generations.
-        self.assertLessEqual(total, 896)
+        # Stable item ownership additionally proves that complete and
+        # target-scoped graphs cannot move one logical ABox fact between
+        # physical scope owners.
+        self.assertLessEqual(total, 898)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

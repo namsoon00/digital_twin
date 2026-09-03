@@ -16,6 +16,117 @@ from digital_twin.domain.ontology_scopes import (
 
 
 class OntologyFactSlotTests(unittest.TestCase):
+    def test_non_symbol_fact_ownership_is_stable_across_graph_shapes(self):
+        factor_id = "factor:rate-sensitive-growth"
+        compact = PortfolioOntology(
+            "compact",
+            entities=[
+                OntologyEntity(factor_id, "Rate sensitive growth", "factor", {
+                    "ontologyBox": "ABox",
+                }),
+                OntologyEntity("stock:PLTR", "Palantir", "stock", {
+                    "ontologyBox": "ABox", "symbol": "PLTR",
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:PLTR",
+                factor_id,
+                "EXPOSED_TO",
+                properties={"ontologyBox": "ABox"},
+            )],
+        )
+        complete = PortfolioOntology(
+            "complete",
+            entities=[
+                OntologyEntity(factor_id, "Rate sensitive growth", "factor", {
+                    "ontologyBox": "ABox",
+                }),
+                OntologyEntity("stock:PLTR", "Palantir", "stock", {
+                    "ontologyBox": "ABox", "symbol": "PLTR",
+                }),
+                OntologyEntity("stock:TSLA", "Tesla", "stock", {
+                    "ontologyBox": "ABox", "symbol": "TSLA",
+                }),
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:PLTR",
+                    factor_id,
+                    "EXPOSED_TO",
+                    properties={"ontologyBox": "ABox"},
+                ),
+                OntologyRelation(
+                    "stock:TSLA",
+                    factor_id,
+                    "EXPOSED_TO",
+                    properties={"ontologyBox": "ABox"},
+                ),
+            ],
+        )
+
+        apply_scoped_abox_identity(compact, account_id="main")
+        apply_scoped_abox_identity(complete, account_id="main")
+
+        compact_scope = next(
+            entity.properties["aboxScopeId"]
+            for entity in compact.entities
+            if entity.entity_id == factor_id
+        )
+        complete_scope = next(
+            entity.properties["aboxScopeId"]
+            for entity in complete.entities
+            if entity.entity_id == factor_id
+        )
+        self.assertEqual(compact_scope, complete_scope)
+        self.assertTrue(compact_scope.startswith("reference:item:"))
+
+    def test_dynamic_account_facts_use_independent_item_scopes(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity(
+                    "inferred-portfolio-activity:main:1",
+                    "Portfolio activity",
+                    "inferred-portfolio-activity",
+                    {"ontologyBox": "ABox"},
+                ),
+                OntologyEntity(
+                    "portfolio-action-candidate:main:1",
+                    "Action candidate",
+                    "portfolio-action-candidate",
+                    {"ontologyBox": "ABox"},
+                ),
+                OntologyEntity(
+                    "position-exposure:main:MSTR",
+                    "MSTR exposure",
+                    "position-exposure",
+                    {"ontologyBox": "ABox", "exposureKey": "MSTR"},
+                ),
+            ],
+        )
+
+        apply_scoped_abox_identity(graph, account_id="main")
+        scopes = {
+            entity.entity_id: entity.properties["aboxScopeId"]
+            for entity in graph.entities
+        }
+
+        self.assertTrue(
+            scopes["inferred-portfolio-activity:main:1"].startswith(
+                "episode:main:item:"
+            )
+        )
+        self.assertTrue(
+            scopes["portfolio-action-candidate:main:1"].startswith(
+                "episode:main:item:"
+            )
+        )
+        self.assertTrue(
+            scopes["position-exposure:main:MSTR"].startswith(
+                "symbol:MSTR:"
+            )
+        )
+
     def test_company_valuation_section_routes_without_other_company_slots(self):
         plan = build_fact_slot_projection_plan(
             ["MSTR"],

@@ -124,10 +124,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
     def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
         rows = [
             {
+                "source": "stock:MSTR",
+                "target": "signal:trend",
+                "type": "HAS_SIGNAL",
+                "scopeId": "link:symbol:MSTR:model-signal",
+                "snapshotId": "relation-generation:g2",
                 "sourceStorageId": "node:stock:MSTR:g2",
                 "targetStorageId": "node:signal:trend:g2",
             },
             {
+                "source": "stock:MSTR",
+                "target": "factor:btc",
+                "type": "EXPOSED_TO",
+                "scopeId": "link:symbol:MSTR:exposure",
+                "snapshotId": "relation-generation:g2",
                 "sourceStorageId": "node:stock:MSTR:g2",
                 "targetStorageId": "node:factor:btc:g1",
             },
@@ -142,6 +152,20 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
 
         self.assertEqual(["node:signal:trend:g2"], missing)
+        self.assertEqual(
+            [{
+                "storageId": "node:signal:trend:g2",
+                "nodeId": "signal:trend",
+                "side": "target",
+                "relationType": "HAS_SIGNAL",
+                "relationScopeId": "link:symbol:MSTR:model-signal",
+                "relationGenerationId": "relation-generation:g2",
+            }],
+            TypeDBOntologyGraphRepository.missing_relation_endpoint_diagnostics(
+                rows,
+                missing,
+            ),
+        )
 
     def _assert_matched_evidence_plan_narrows_relation_type_by_target_kind_and_field(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
@@ -851,6 +875,48 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 dependent_plan,
                 dependent_active,
                 current_state_mode=True,
+            ),
+        )
+        self.assertEqual(
+            [
+                market_scope,
+                "link:symbol:005930:price",
+                "link:symbol:005930:price-audit",
+            ],
+            repository.scoped_abox_changed_scope_ids(
+                dependent_plan,
+                dependent_active,
+                current_state_mode=True,
+                relation_rebind_root_scope_ids=[market_scope],
+            ),
+        )
+
+        endpoint_companion_plan = dependent_plan + [{
+            "scopeId": "link:symbol:005930:flow",
+            "generationId": "logical-flow-link-1",
+            "fingerprint": "flow-link-1",
+            "dependencyScopeIds": [flow_scope],
+        }]
+        endpoint_companion_active = deepcopy(dependent_active)
+        endpoint_companion_active["scopeFingerprints"].update({
+            flow_scope: "stale-partial-flow",
+            "link:symbol:005930:flow": "flow-link-1",
+        })
+        endpoint_companion_active["scopeGenerationIds"].update({
+            "link:symbol:005930:flow": "active-flow-link",
+        })
+        self.assertEqual(
+            [
+                market_scope,
+                "link:symbol:005930:price",
+                "link:symbol:005930:price-audit",
+                flow_scope,
+            ],
+            repository.scoped_abox_changed_scope_ids(
+                endpoint_companion_plan,
+                endpoint_companion_active,
+                current_state_mode=True,
+                relation_rebind_root_scope_ids=[market_scope],
             ),
         )
 

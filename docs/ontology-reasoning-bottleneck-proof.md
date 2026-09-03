@@ -133,6 +133,31 @@ authority. Production telemetry exposes `currentStatePostWriteVerificationMs`,
 `matchedGraphReuseReason` so a real event can prove whether each fast path was
 used.
 
+### Stable fact ownership invariant
+
+A logical ABox fact must have the same scope owner in a complete portfolio
+graph and in a one-symbol graph. Scope ownership must never be inferred from
+the set of neighbouring nodes because that set changes with projection shape.
+
+- Symbol facts use a bounded symbol/family scope.
+- Account activities, action candidates, risk snapshots, exposures, and
+  rebalance facts use deterministic per-item account scopes.
+- Shared factors and catalog facts use deterministic per-item reference
+  scopes instead of one mutable `reference:global` aggregate.
+- A selected semantic fact is a relation-rebind root. An endpoint scope added
+  only to preserve physical integrity is not a new root and must not pull in
+  every other relation owned by that endpoint.
+- Every changed root rebinds all incident relation generations transitively.
+  Before TypeDB inserts a relation, the exact physical storage IDs for both
+  endpoints are verified. Missing endpoints fail the candidate write and the
+  diagnostic records the logical node, relation type, relation scope, and
+  generation.
+
+This prevents a target update such as MSTR market data from moving a shared
+factor between scopes or replacing a large mixed reference bucket. It also
+keeps copy-on-write work proportional to the changed facts and their incident
+relations.
+
 Production evidence then showed that the dual-slot delta path still spent most
 of its ABox time reading the inactive slot and deleting its previous rows. It
 also reused almost no relations, so the comparison itself cost more than the

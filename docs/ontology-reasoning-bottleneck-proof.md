@@ -583,3 +583,7 @@ could therefore report a submitted relation that was never created. Missing
 endpoints now fail the candidate before any relation batch is written, with
 the missing physical identities recorded in projection telemetry. Exact
 post-write scope verification remains the final promotion boundary.
+
+Target-patch trace compaction must preserve `relationRebindRootScopeIds` as a
+write contract. Selected/deferred diagnostic rows may be truncated, but that
+must never broaden physical relation rebinding beyond semantic roots.

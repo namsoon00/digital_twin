@@ -27,6 +27,7 @@ from digital_twin.infrastructure.mysql_ontology_projection_runs import MySQLOnto
 from digital_twin.infrastructure.ontology_projection import (
     PortfolioOntologyProjectionRecorder,
     compact_staged_abox_activation_lifecycle,
+    compact_target_scope_selection_trace,
     shared_inference_from_result_slot_proof,
     shared_premise_evaluation_plan,
 )
@@ -64,6 +65,44 @@ class ConnectionContext:
 
     def __exit__(self, *_args):
         return False
+
+
+class TargetScopeSelectionTraceTests(unittest.TestCase):
+    def test_compaction_preserves_relation_rebind_roots_beyond_trace_limit(self):
+        patch = {
+            "relationRebindRootScopeIds": [
+                "symbol:AAPL:market",
+                "symbol:000660:evidence:bucket:25",
+                "symbol:AAPL:market",
+            ],
+            "scopeSelectionTrace": {
+                "version": "target-scope-selection-trace-v2",
+                "selected": [{"scopeId": "selected:" + str(index)} for index in range(4)],
+                "deferred": [{"scopeId": "deferred:" + str(index)} for index in range(4)],
+            },
+        }
+
+        compact = compact_target_scope_selection_trace(patch, item_limit=2)
+
+        self.assertEqual(2, len(compact["selected"]))
+        self.assertEqual(2, len(compact["deferred"]))
+        self.assertEqual(
+            ["symbol:000660:evidence:bucket:25", "symbol:AAPL:market"],
+            compact["relationRebindRootScopeIds"],
+        )
+        self.assertEqual(2, compact["relationRebindRootScopeCount"])
+
+    def test_compaction_reads_rebind_roots_from_full_trace_for_compatibility(self):
+        compact = compact_target_scope_selection_trace({
+            "scopeSelectionTrace": {
+                "relationRebindRootScopeIds": ["symbol:AAPL:temporal:window:1d"],
+            },
+        })
+
+        self.assertEqual(
+            ["symbol:AAPL:temporal:window:1d"],
+            compact["relationRebindRootScopeIds"],
+        )
 
 
 def source_snapshot():

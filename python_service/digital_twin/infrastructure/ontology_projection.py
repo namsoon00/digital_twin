@@ -150,6 +150,44 @@ _RULEBOX_BOOTSTRAP_CATALOG: Dict[str, object] = {}
 RULE_EVALUATION_NAMESPACE_VERSION = "rule-evaluation-namespace-v3"
 
 
+def compact_target_scope_selection_trace(
+    target_patch: Mapping[str, object],
+    item_limit: int = 40,
+) -> Dict[str, object]:
+    """Compact diagnostics without dropping the persistence rebind contract."""
+
+    patch = dict(target_patch or {})
+    raw_trace = dict(patch.get("scopeSelectionTrace") or {})
+    relation_rebind_root_scope_ids = sorted({
+        str(value or "").strip()
+        for value in (
+            patch.get("relationRebindRootScopeIds")
+            or raw_trace.get("relationRebindRootScopeIds")
+            or []
+        )
+        if str(value or "").strip()
+    })
+    limit = max(0, int(item_limit or 0))
+    return {
+        "version": str(raw_trace.get("version") or ""),
+        "selected": [
+            dict(item)
+            for item in (raw_trace.get("selected") or [])[:limit]
+            if isinstance(item, dict)
+        ],
+        "deferred": [
+            dict(item)
+            for item in (raw_trace.get("deferred") or [])[:limit]
+            if isinstance(item, dict)
+        ],
+        # The repository consumes these fields to constrain physical
+        # relation rebinding. They remain part of the write contract even
+        # though the selected/deferred rows are bounded diagnostics.
+        "relationRebindRootScopeIds": relation_rebind_root_scope_ids,
+        "relationRebindRootScopeCount": len(relation_rebind_root_scope_ids),
+    }
+
+
 def shared_premise_evaluation_plan(
     selection_context: Mapping[str, object],
     dynamic_preflight: Mapping[str, object],
@@ -3544,22 +3582,12 @@ class PortfolioOntologyProjectionRecorder:
                     material_snapshot_id = str(
                         scoped_identity.get("manifestId") or material_snapshot_id
                     )
-                    raw_scope_trace = dict(
-                        applied_target_patch.get("scopeSelectionTrace") or {}
+                    scope_selection_trace = compact_target_scope_selection_trace(
+                        applied_target_patch,
                     )
-                    scope_selection_trace = {
-                        "version": str(raw_scope_trace.get("version") or ""),
-                        "selected": [
-                            dict(item)
-                            for item in (raw_scope_trace.get("selected") or [])[:40]
-                            if isinstance(item, dict)
-                        ],
-                        "deferred": [
-                            dict(item)
-                            for item in (raw_scope_trace.get("deferred") or [])[:40]
-                            if isinstance(item, dict)
-                        ],
-                    }
+                    relation_rebind_root_scope_ids = list(
+                        scope_selection_trace.get("relationRebindRootScopeIds") or []
+                    )
                     target_scoped_patch = {
                         "status": "applied",
                         "mode": "incremental-target-scoped-manifest-patch",
@@ -3573,6 +3601,14 @@ class PortfolioOntologyProjectionRecorder:
                         ),
                         "deferredScopeCount": len(
                             applied_target_patch.get("deferredScopeIds") or []
+                        ),
+                        # This is a persistence-integrity contract, not
+                        # optional trace detail. Without it the repository
+                        # treats endpoint companions as semantic roots and can
+                        # rebind relations to nodes not staged by this patch.
+                        "relationRebindRootScopeIds": relation_rebind_root_scope_ids,
+                        "relationRebindRootScopeCount": len(
+                            relation_rebind_root_scope_ids
                         ),
                         "retiredScopeIds": list(
                             applied_target_patch.get("retiredScopeIds") or []

@@ -45,7 +45,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # material-event-to-alert coverage are separate production boundaries.
         # Durable post-retention outcomes and batch-to-subject suppression
         # resolution protect two additional alert-coverage failure modes.
-        self.assertLessEqual(total, 895)
+        # Physical TypeDB relation-endpoint preflight prevents silent zero-row
+        # match-inserts from creating incomplete candidate ABox generations.
+        self.assertLessEqual(total, 896)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

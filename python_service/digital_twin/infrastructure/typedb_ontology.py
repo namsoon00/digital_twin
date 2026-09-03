@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache, wraps
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_current_state import (
@@ -5675,6 +5675,36 @@ class ScopedABoxManifestMixin:
             "conflicts": list(plan.get("conflicts") or []),
         }
 
+    @staticmethod
+    def missing_relation_endpoint_storage_ids(
+        relation_rows: Iterable[Dict[str, object]],
+        node_inventory: Mapping[str, object],
+    ) -> List[str]:
+        """Return physical relation endpoints absent from the staged ABox.
+
+        TypeDB accepts a ``match ... insert`` whose match resolves no rows
+        without raising a write error. A copy-on-write relation would then be
+        reported as submitted even though no assertion was created. Verify
+        endpoint identities after node commits and before any relation batch
+        so an incomplete candidate cannot produce partial relation scopes.
+        """
+
+        expected = {
+            str(value or "").strip()
+            for row in relation_rows or []
+            for value in (
+                (row or {}).get("sourceStorageId"),
+                (row or {}).get("targetStorageId"),
+            )
+            if str(value or "").strip()
+        }
+        available = {
+            str(value or "").strip()
+            for value in dict(node_inventory or {})
+            if str(value or "").strip()
+        }
+        return sorted(expected - available)
+
     def write_persistence_rows(
         self,
         driver,
@@ -5793,6 +5823,47 @@ class ScopedABoxManifestMixin:
             trace["completedNodeTransactionCount"] = int(
                 trace.get("completedNodeTransactionCount") or 0
             ) + 1
+
+        # TypeDB does not treat a zero-row relation match as an error. Check
+        # all physical endpoints in one batched inventory read before sending
+        # relation plans; this turns silent partial writes into a precise,
+        # recoverable candidate failure.
+        trace["stage"] = "relation-endpoint-verification"
+        endpoint_storage_ids = sorted({
+            str(value or "").strip()
+            for row in relation_rows_to_insert
+            for value in (
+                (row or {}).get("sourceStorageId"),
+                (row or {}).get("targetStorageId"),
+            )
+            if str(value or "").strip()
+        })
+        endpoint_verification_started = time.monotonic()
+        endpoint_inventory = self.current_state_storage_inventory(
+            driver,
+            imported,
+            node_storage_ids=endpoint_storage_ids,
+            relation_storage_ids=[],
+        )
+        missing_endpoint_storage_ids = self.missing_relation_endpoint_storage_ids(
+            relation_rows_to_insert,
+            endpoint_inventory.get("nodes") or {},
+        )
+        trace["relationEndpointVerificationMs"] = round(
+            (time.monotonic() - endpoint_verification_started) * 1000,
+            1,
+        )
+        trace["relationEndpointCount"] = len(endpoint_storage_ids)
+        trace["missingRelationEndpointCount"] = len(missing_endpoint_storage_ids)
+        if missing_endpoint_storage_ids:
+            trace["missingRelationEndpointStorageIds"] = missing_endpoint_storage_ids[:20]
+            raise RuntimeError(
+                "Scoped ABox relation endpoint verification failed for "
+                + str(len(missing_endpoint_storage_ids))
+                + " physical nodes; sample="
+                + ",".join(missing_endpoint_storage_ids[:5])
+                + "."
+            )
 
         given_plans = [
             plan

@@ -121,6 +121,28 @@ def governed_catalog_rule(rule_id: str) -> GraphInferenceRule:
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
+        rows = [
+            {
+                "sourceStorageId": "node:stock:MSTR:g2",
+                "targetStorageId": "node:signal:trend:g2",
+            },
+            {
+                "sourceStorageId": "node:stock:MSTR:g2",
+                "targetStorageId": "node:factor:btc:g1",
+            },
+        ]
+
+        missing = TypeDBOntologyGraphRepository.missing_relation_endpoint_storage_ids(
+            rows,
+            {
+                "node:stock:MSTR:g2": {"storageId": "node:stock:MSTR:g2"},
+                "node:factor:btc:g1": {"storageId": "node:factor:btc:g1"},
+            },
+        )
+
+        self.assertEqual(["node:signal:trend:g2"], missing)
+
     def _assert_matched_evidence_plan_narrows_relation_type_by_target_kind_and_field(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         common = {

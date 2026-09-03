@@ -535,3 +535,26 @@ window. The deployment health then records `graphStorePruned.status` as
 bindings even when an older warmup result still says `ready`, preventing a
 large retired store from silently re-entering the next release and every
 subsequent TypeDB startup.
+
+## Candidate ABox Integrity Boundary
+
+A later live candidate exposed a stricter failure mode than schema readiness.
+Its retired TypeDB database had a valid, warmed TBox, but an older copy-on-write
+lifecycle had deleted endpoint nodes without rebinding every dependent
+relation. The active manifest still described complete relation scopes even
+though their physical assertions were missing. Reusing that store caused a new
+release to inherit the corruption before it processed its first event.
+
+Candidate registration now provisions a new isolated TypeDB database by
+default. Retired-store reuse is available only through the explicit
+`REASONING_ENGINE_REUSE_RETIRED_CANDIDATE_STORE_ENABLED=1` operational opt-in.
+This makes a full projection, rather than historical physical state, the basis
+of every normal candidate release.
+
+The TypeDB adapter also verifies every physical source and target node after
+node commits and before relation writes. TypeDB permits a `match ... insert`
+whose match returns no rows without raising an error; previously the adapter
+could therefore report a submitted relation that was never created. Missing
+endpoints now fail the candidate before any relation batch is written, with
+the missing physical identities recorded in projection telemetry. Exact
+post-write scope verification remains the final promotion boundary.

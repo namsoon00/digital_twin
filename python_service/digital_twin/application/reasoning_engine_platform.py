@@ -72,12 +72,15 @@ class ReasoningEnginePlatformService:
         release_id: str,
         protected_bindings: Iterable[str],
     ) -> Dict[str, object]:
-        """Select an isolated warm store before allocating a cold database.
+        """Select an isolated candidate database.
 
-        A retired delivery database has already paid the TypeDB schema compile
-        cost and is the natural blue-green standby. A binding is reusable only
-        when its latest deployment completed ontology warmup; an older healthy
-        row cannot make a later failed provisioning attempt look reusable.
+        A retired delivery database can contain a valid schema and still carry
+        an ABox generation whose endpoint-bound relations were removed by an
+        older lifecycle implementation. Reusing that database makes a new
+        release inherit historical physical state that its immutable release
+        artifact cannot verify. Cold isolated candidates are therefore the
+        correctness default. Warm reuse remains an explicit operational opt-in
+        for installations that independently attest the complete ABox.
         """
 
         protected = {str(item or "").strip() for item in protected_bindings if str(item or "").strip()}
@@ -110,38 +113,39 @@ class ReasoningEnginePlatformService:
             ).strip()
             if binding:
                 latest_by_binding[binding] = (index, item)
-        warm_candidates = []
-        for binding, (index, item) in latest_by_binding.items():
-            if binding in occupied:
-                continue
-            if str(item.get("status") or "").strip().lower() != "retired":
-                continue
-            health = dict(item.get("health") or {})
-            pruned_store = dict(health.get("graphStorePruned") or {})
-            if str(pruned_store.get("status") or "").strip().lower() in {
-                "deleted",
-                "missing",
-                "quarantined",
-            }:
-                continue
-            runtime_release = dict(health.get("runtimeOntologyRelease") or {})
-            if (
-                str(runtime_release.get("status") or "").strip().lower() != "ready"
-                or not bool(runtime_release.get("warmed"))
-                or int(runtime_release.get("ruleCount") or 0) <= 0
-            ):
-                continue
-            warm_candidates.append((index, binding, item))
-        if warm_candidates:
-            _, binding, source = max(warm_candidates, key=lambda value: value[0])
-            return {
-                "database": binding,
-                "mode": "reuse-existing",
-                "source": "verified-retired-delivery-store",
-                "sourceDeploymentId": str(
-                    source.get("deploymentId") or source.get("deployment_id") or ""
-                ),
-            }
+        if self.bool_setting("reasoningEngineReuseRetiredCandidateStoreEnabled", False):
+            warm_candidates = []
+            for binding, (index, item) in latest_by_binding.items():
+                if binding in occupied:
+                    continue
+                if str(item.get("status") or "").strip().lower() != "retired":
+                    continue
+                health = dict(item.get("health") or {})
+                pruned_store = dict(health.get("graphStorePruned") or {})
+                if str(pruned_store.get("status") or "").strip().lower() in {
+                    "deleted",
+                    "missing",
+                    "quarantined",
+                }:
+                    continue
+                runtime_release = dict(health.get("runtimeOntologyRelease") or {})
+                if (
+                    str(runtime_release.get("status") or "").strip().lower() != "ready"
+                    or not bool(runtime_release.get("warmed"))
+                    or int(runtime_release.get("ruleCount") or 0) <= 0
+                ):
+                    continue
+                warm_candidates.append((index, binding, item))
+            if warm_candidates:
+                _, binding, source = max(warm_candidates, key=lambda value: value[0])
+                return {
+                    "database": binding,
+                    "mode": "reuse-existing",
+                    "source": "verified-retired-delivery-store-opt-in",
+                    "sourceDeploymentId": str(
+                        source.get("deploymentId") or source.get("deployment_id") or ""
+                    ),
+                }
 
         digest = hashlib.sha256(
             (str(deployment_id or "") + "|" + str(release_id or "")).encode("utf-8")

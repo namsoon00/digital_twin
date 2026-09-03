@@ -412,6 +412,7 @@ domain:
 - `REASONING_ENGINE_V2_TYPEDB_DATABASE`
 - `REASONING_ENGINE_ACTIVE_RELEASE_ID`
 - `REASONING_ENGINE_CANDIDATE_RELEASE_ID`
+- `REASONING_ENGINE_REUSE_RETIRED_CANDIDATE_STORE_ENABLED`
 - `REASONING_ENGINE_SHADOW_ENABLED`
 - `REASONING_ENGINE_SHADOW_TYPEDB_DATABASE`
 - `REASONING_ENGINE_V2_INDEPENDENT_ENABLED`
@@ -442,6 +443,12 @@ The independent V2 candidate can evaluate two symbols in one native TypeDB
 batch. Promotion therefore defaults to a 180-second processing p95, equivalent
 to the 90-second per-symbol budget at the maximum batch width. Queue wait keeps
 its separate 60-second budget, and the end-to-end default is 240 seconds.
+
+Candidate releases use a new isolated TypeDB database by default. Reusing a
+retired database is an explicit opt-in because schema readiness alone does not
+prove that every active ABox relation still has both physical endpoints. Set
+`REASONING_ENGINE_REUSE_RETIRED_CANDIDATE_STORE_ENABLED=1` only after an
+independent full-manifest integrity audit of that database.
 
 ## Legacy Comparison Cohorts
 

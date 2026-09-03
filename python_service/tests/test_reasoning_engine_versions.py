@@ -598,6 +598,19 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             ["typedb-production"],
         )
 
+        self.assertNotEqual("typedb-warm-standby", selection["database"])
+        self.assertEqual("create-isolated", selection["mode"])
+
+        warm_reuse_platform = ReasoningEnginePlatformService(
+            WarmRegistry(),
+            {"reasoningEngineReuseRetiredCandidateStoreEnabled": "1"},
+        )
+        selection = warm_reuse_platform.candidate_graph_database_selection(
+            "v2-candidate",
+            "release-candidate",
+            ["typedb-production"],
+        )
+
         self.assertEqual("typedb-warm-standby", selection["database"])
         self.assertEqual("reuse-existing", selection["mode"])
         self.assertEqual("v2-retired-ready", selection["sourceDeploymentId"])

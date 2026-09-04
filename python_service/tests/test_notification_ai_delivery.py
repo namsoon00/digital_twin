@@ -173,6 +173,10 @@ def review_observation_context(outcome="REVIEW_ONLY"):
     }
     context["notificationDecisionMode"] = "typedb-review-observation"
     context["cooldownDecision"] = "new-condition"
+    context["decisionTransition"] = {
+        "kind": "relation-changed",
+        "material": True,
+    }
     context["deliveryCadenceTier"] = "material"
     context["notificationAiExecutionAudit"] = {
         "status": "typedb-fallback",
@@ -358,6 +362,18 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("material-review-observation", actionless_review["pushValueClass"])
         self.assertEqual("NO_ACTION", actionless_review.get("finalAction"))
         self.assertTrue(actionless_review["typedbFallback"])
+
+        nonmaterial_review = review_observation_context()
+        nonmaterial_review["decisionTransition"] = {
+            "kind": "initial",
+            "material": False,
+        }
+        nonmaterial_decision = final_ai_delivery_decision(nonmaterial_review)
+        self.assertEqual("suppress", nonmaterial_decision["decision"])
+        self.assertEqual(
+            "review_observation_web_history",
+            nonmaterial_decision["suppressionReason"],
+        )
 
         review_in_cooldown = review_observation_context()
         review_in_cooldown.update({
@@ -596,6 +612,24 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", follow_up_decision["decision"])
         self.assertEqual("verified-threshold-transition", follow_up_decision["pushValueClass"])
+
+        context = watchlist_context()
+        context["cooldownDecision"] = "scheduled-summary"
+        context["decisionTransition"] = {"kind": "unchanged", "material": False}
+        context["investmentNotificationTransition"] = {
+            "kind": "unchanged",
+            "changed": False,
+            "material": False,
+        }
+
+        decision = final_ai_delivery_decision(context)
+
+        self.assertEqual("suppress", decision["decision"])
+        self.assertEqual(
+            "scheduled_summary_web_history",
+            decision["suppressionReason"],
+        )
+        self.assertEqual("web-only-scheduled-summary", decision["pushValueClass"])
 
     def test_pre_ai_unchanged_gate_requires_verified_transition_or_material_evidence(self):
         unchanged = {

@@ -2713,3 +2713,23 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
 
         self.assertEqual("ok", repository.with_typedb_retries(operation))
         self.assertEqual(2, calls["count"])
+
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729", retry_count=1)
+        calls = {"count": 0}
+        timing = {}
+        verification = {"symbol:TSLA": {"status": "count-mismatch"}}
+
+        def operation():
+            calls["count"] += 1
+            raise RuntimeError("Scoped ABox candidate verification failed for symbol:TSLA")
+
+        with self.assertRaises(RuntimeError):
+            repository.with_scoped_abox_candidate_verification_retry(
+                operation,
+                timing=timing,
+                verification=verification,
+            )
+
+        self.assertEqual(1, calls["count"])
+        self.assertFalse(timing["candidateVerificationRetryAttempted"])
+        self.assertTrue(timing["candidateVerificationRetryDeferred"])

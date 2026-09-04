@@ -506,10 +506,8 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
     })
     authorization_sources = []
     if cooldown_decision in {
-        "new-condition",
         "meaningful-change",
         "typedb-profit-loss-change",
-        "scheduled-summary",
     }:
         authorization_sources.append("delivery-cadence:" + cooldown_decision)
     if bool(relation_transition.get("material")):

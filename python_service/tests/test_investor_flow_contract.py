@@ -22,7 +22,11 @@ from digital_twin.domain.portfolio import PortfolioSummary, Position
 from digital_twin.domain.portfolio_ontology_temporal_concepts import (
     has_smart_money_flow_observation,
 )
-from digital_twin.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
+from digital_twin.infrastructure.mysql_market_time_series import (
+    MySQLMarketTimeSeriesStore,
+    OBSERVATION_COLUMNS,
+    row_values,
+)
 from digital_twin.infrastructure.mysql_schema_tuning import (
     MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY,
     ensure_mysql_column_compatibility,
@@ -95,7 +99,9 @@ class InvestorFlowContractTests(unittest.TestCase):
             def execute(self, sql, params=()):
                 self.statements.append((sql, params))
                 if sql.startswith("SHOW COLUMNS"):
-                    return Cursor({"Field": "investor_coverage_json", "Null": "NO"})
+                    if params and params[0] == "investor_coverage_json":
+                        return Cursor({"Field": "investor_coverage_json", "Null": "NO"})
+                    return Cursor()
                 return Cursor()
 
         connection = Connection()
@@ -284,6 +290,78 @@ class InvestorFlowContractTests(unittest.TestCase):
         self._assert_capital_flow_storage_distinguishes_missing_from_observed_zero()
         self._assert_daily_final_capital_flow_replaces_same_day_estimate()
         self._assert_capital_flow_window_uses_cumulative_amount_and_coverage()
+
+        unavailable = {
+            "status": "unavailable",
+            "observedFields": [],
+            "fields": [],
+        }
+        position = Position(
+            symbol="TSLA",
+            name="Tesla",
+            market="US",
+            currency="USD",
+            current_price=376.77,
+            trade_strength=0,
+            bid_ask_imbalance=0,
+            foreign_net_volume=0,
+            institution_net_volume=0,
+            individual_net_volume=0,
+            market_signal_coverage={
+                "ccnl": dict(unavailable),
+                "orderbook": dict(unavailable),
+                "investor": dict(unavailable),
+            },
+        )
+
+        observation = MarketTimeSeriesObservation.from_position(
+            "main", position, "2026-09-04T04:57:00Z", provider="Toss"
+        )
+        payload = MySQLMarketTimeSeriesStore.__new__(
+            MySQLMarketTimeSeriesStore
+        ).observation_payload(observation.to_row())
+
+        self.assertIsNone(observation.trade_strength)
+        self.assertIsNone(observation.bid_ask_imbalance)
+        self.assertIsNone(observation.foreign_net_volume)
+        self.assertNotIn("tradeStrength", payload)
+        self.assertNotIn("bidAskImbalance", payload)
+        self.assertNotIn("foreignNetVolume", payload)
+
+        position = Position(
+            symbol="005930",
+            name="삼성전자",
+            market="KR",
+            currency="KRW",
+            current_price=100,
+            trade_strength=0,
+            bid_ask_imbalance=0,
+            market_signal_coverage={
+                "ccnl": {"status": "available", "observedFields": ["tradeStrength"]},
+                "orderbook": {"status": "available", "observedFields": ["bidAskImbalance"]},
+                "investor": {"status": "unavailable", "observedFields": []},
+            },
+        )
+
+        observation = MarketTimeSeriesObservation.from_position(
+            "main", position, "2026-09-04T01:00:00Z", provider="KIS"
+        )
+        payload = MySQLMarketTimeSeriesStore.__new__(
+            MySQLMarketTimeSeriesStore
+        ).observation_payload(observation.to_row())
+
+        self.assertEqual(0.0, observation.trade_strength)
+        self.assertEqual(0.0, observation.bid_ask_imbalance)
+        self.assertEqual(0.0, payload["tradeStrength"])
+        self.assertEqual(0.0, payload["bidAskImbalance"])
+
+        row = {column: None for column in OBSERVATION_COLUMNS}
+        values = dict(zip(OBSERVATION_COLUMNS, row_values(row)))
+
+        self.assertEqual(0.0, values["trade_strength"])
+        self.assertEqual(0.0, values["bid_ask_imbalance"])
+        self.assertEqual(0.0, values["foreign_net_volume"])
+        self.assertIsNone(values["current_price"])
 
     def _assert_capital_flow_storage_distinguishes_missing_from_observed_zero(self):
         foreign_only = Position(

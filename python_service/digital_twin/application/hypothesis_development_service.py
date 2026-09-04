@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List
 
@@ -147,12 +148,19 @@ class HypothesisDevelopmentService:
 
     def process_pending(self, limit: int = 5) -> Dict[str, object]:
         statuses = {"proposed", "screening", "compiled", "validating", "needs-data"}
-        rows = [
+        candidates = [
             item
             for item in (self.case_store.list(limit=max(1, min(50, int(limit or 5)))) if self.case_store else [])
             if item.status in statuses
             and (item.status != "needs-data" or (item.candidate_rule and item.experiment_id))
         ]
+        rows = []
+        deferred = []
+        for item in candidates:
+            if item.status == "needs-data" and not self.validation_retry_due(item):
+                deferred.append(item.case_id)
+                continue
+            rows.append(item)
         results = []
         for item in rows[: max(1, int(limit or 5))]:
             try:
@@ -162,6 +170,8 @@ class HypothesisDevelopmentService:
         return {
             "status": "processed" if results else "idle",
             "processedCount": len(results),
+            "deferredUnchangedCount": len(deferred),
+            "deferredCaseIds": deferred[:20],
             "results": results,
         }
 
@@ -306,6 +316,12 @@ class HypothesisDevelopmentService:
 
     def validate(self, case: HypothesisDevelopmentCase, experiment: OntologyExperiment) -> Dict[str, object]:
         world = self.world_context(case)
+        history = self.history_for(case)
+        case.validation_input_fingerprint = self.validation_input_fingerprint(
+            case,
+            history=history,
+        )
+        case.validation_attempted_at = utc_now_iso()
         try:
             preview = self.ontology_repository.validate_rulebox_materialization({
                 "rules": experiment.candidate_rules,
@@ -321,7 +337,6 @@ class HypothesisDevelopmentService:
         matched_count = int(preview.get("matchedCount") or 0)
         type_status = "passed" if preview_status == "ok" else ("needs-data" if preview_status in {"missing-abox", "incomplete-abox", "provisioning", "unavailable", "error", "typedb-error"} else "blocked")
         replay_status = "passed" if preview_status == "ok" and matched_count > 0 else ("needs-data" if type_status == "needs-data" or (preview_status == "ok" and matched_count == 0) else "blocked")
-        history = self.history_for(case)
         minimum_history = max(1, int(self.settings.get("hypothesisDevelopmentMinimumHistoricalSnapshots") or 3))
         history_status = "passed" if len(history) >= minimum_history else "needs-data"
         holdout = [item for item in history if self.timestamp_after(self.snapshot_generated_at(item), case.created_at)]
@@ -499,6 +514,70 @@ class HypothesisDevelopmentService:
             return []
         return [item for item in rows if self.snapshot_has_symbol(item, case.symbol)]
 
+    def validation_retry_due(self, case: HypothesisDevelopmentCase) -> bool:
+        """Retry a needs-data experiment only after new input or a slow health retry."""
+
+        current = self.validation_input_fingerprint(case)
+        if not case.validation_input_fingerprint or current != case.validation_input_fingerprint:
+            return True
+        attempted = self.parse_timestamp(case.validation_attempted_at)
+        if attempted is None:
+            return True
+        retry_minutes = max(
+            15,
+            min(
+                24 * 60,
+                int(self.settings.get("hypothesisDevelopmentUnchangedRetryMinutes") or 180),
+            ),
+        )
+        return (datetime.now(timezone.utc) - attempted).total_seconds() >= retry_minutes * 60
+
+    def validation_input_fingerprint(
+        self,
+        case: HypothesisDevelopmentCase,
+        history: List[Dict[str, object]] = None,
+    ) -> str:
+        rows = list(history if history is not None else self.history_for(case))
+        latest_state: Dict[str, object] = {}
+        if rows:
+            latest = rows[0] if isinstance(rows[0], dict) else {}
+            target = str(case.symbol or "").upper()
+            for key in ["positions", "watchlist"]:
+                for item in latest.get(key) or []:
+                    if not isinstance(item, dict) or str(item.get("symbol") or "").upper() != target:
+                        continue
+                    latest_state = {
+                        name: item.get(name)
+                        for name in [
+                            "symbol", "market", "currentPrice", "changeRate", "volume",
+                            "volumeRatio", "tradeStrength", "bidAskImbalance",
+                            "foreignNetVolume", "institutionNetVolume", "individualNetVolume",
+                            "ma5", "ma20", "ma60", "ma20Slope", "ma60Slope",
+                            "profitLossRate", "quantity", "averagePrice",
+                        ]
+                        if name in item
+                    }
+                    break
+                if latest_state:
+                    break
+        payload = {
+            "caseFingerprint": case.fingerprint,
+            "supportingEvidenceIds": sorted(case.supporting_evidence_ids),
+            "counterEvidenceIds": sorted(case.counter_evidence_ids),
+            "requiredEvidenceTypes": sorted(case.required_evidence_types),
+            "candidateRule": case.candidate_rule,
+            "historyCoverageCount": len(rows),
+            "latestSymbolState": latest_state,
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     @staticmethod
     def snapshot_has_symbol(snapshot: Dict[str, object], symbol: str) -> bool:
         target = str(symbol or "").upper()
@@ -527,6 +606,19 @@ class HypothesisDevelopmentService:
         candidate_time = parsed(candidate)
         baseline_time = parsed(baseline)
         return bool(candidate_time and baseline_time and candidate_time > baseline_time)
+
+    @staticmethod
+    def parse_timestamp(value: object):
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def world_context(self, case: HypothesisDevelopmentCase) -> Dict[str, str]:
         tenant = str(self.settings.get("ontologyTenantId") or self.settings.get("tenantId") or "")

@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Mapping, Set
 
 
-DECISION_EVIDENCE_CONTRACT_VERSION = "decision-evidence-contract-v1"
+DECISION_EVIDENCE_CONTRACT_VERSION = "decision-evidence-contract-v2"
 TEMPORAL_EVIDENCE_CONTRACT_VERSION = "temporal-evidence-contract-v1"
 DECISION_READINESS_CONTRACT_VERSION = "decision-readiness-contract-v1"
 MATERIAL_TRANSITION_CONTRACT_VERSION = "material-decision-transition-v1"
@@ -19,6 +19,16 @@ MATERIAL_TRANSITION_CONTRACT_VERSION = "material-decision-transition-v1"
 EXECUTABLE_ACTIONS = {"BUY", "ADD", "TRIM", "SELL"}
 EXPOSURE_INCREASING_ACTIONS = {"BUY", "ADD"}
 DECISION_ELIGIBLE_EVIDENCE_STATES = {"supported", "contested"}
+DECISION_ELIGIBLE_APPROVAL_STATES = {"approved-active", "active"}
+DECISION_ELIGIBLE_VERIFICATION_STATES = {
+    "typedb-current-generation",
+    "verified-current-generation",
+    "verified-by-current-evidence",
+    "current",
+    "verified",
+}
+DECISION_ELIGIBLE_HYPOTHESIS_STATES = {"active", "candidate"}
+DECISION_ELIGIBLE_SCOPE_STATES = {"market-shared", "account-only", "mixed"}
 READINESS_RANK = {"insufficient": 0, "conditional": 1, "ready": 2}
 
 TEMPORAL_HORIZON_GROUPS = (
@@ -93,10 +103,22 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
     ).lower()
     qualification_warnings: List[str] = []
     claim_contract = _mapping(item.get("claimContract") or item.get("claim_contract"))
+    claim_type = _text(
+        claim_contract.get("claimType") or claim_contract.get("claim_type")
+    ).lower()
+    claim_contract_id = _text(
+        claim_contract.get("claimContractId")
+        or claim_contract.get("claim_contract_id")
+    )
+    claim_rule_id = _text(claim_contract.get("ruleId") or claim_contract.get("rule_id"))
     qualification = _mapping(item.get("qualification"))
     qualification_status = _text(qualification.get("status")).lower()
-    if claim_contract and _text(claim_contract.get("claimType")) != "market-hypothesis":
+    if not claim_contract:
+        reasons.append("claim-boundary:missing-claim-contract")
+    elif claim_type != "market-hypothesis":
         reasons.append("claim-boundary:not-a-market-hypothesis")
+    if not claim_contract_id:
+        reasons.append("claim-boundary:missing-claim-contract-id")
     if qualification_status == "quarantined":
         reasons.append("hypothesis-qualification:quarantined")
     elif qualification_status in {"shadow", "observed", "limited-active"}:
@@ -113,23 +135,55 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         qualification_warnings.append("signal-migration:" + migration_disposition)
     if knowledge_eligibility in {"guardrail-only", "reference-only"}:
         reasons.append("knowledge-eligibility:" + knowledge_eligibility)
-    if knowledge_basis and not bool(
+    requires_hypothesis = (
         knowledge_basis.get("requiresHypothesis")
         if "requiresHypothesis" in knowledge_basis
         else knowledge_basis.get("requires_hypothesis")
-    ):
+    )
+    if requires_hypothesis is not True:
         reasons.append("knowledge-boundary:not-a-hypothesis")
     rule_ids = item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []
     if not rule_ids:
         reasons.append("missing-rule-evidence")
-    if evidence_state and evidence_state not in DECISION_ELIGIBLE_EVIDENCE_STATES:
-        reasons.append("evidence-state:" + evidence_state)
-    if approval_status and approval_status not in {"approved-active", "active"}:
-        reasons.append("approval-status:" + approval_status)
-    if status in {"rejected", "retired", "disabled", "superseded"}:
+    elif claim_rule_id and claim_rule_id not in {_text(item) for item in rule_ids}:
+        reasons.append("claim-boundary:rule-lineage-mismatch")
+    evidence_ids = item.get("supportingEvidenceIds") or item.get("supporting_evidence_ids") or []
+    if not evidence_ids:
+        reasons.append("missing-supporting-evidence")
+    causal_path_ids = (
+        item.get("causalPathIds")
+        or item.get("causalTraceIds")
+        or item.get("causal_path_ids")
+        or item.get("causal_trace_ids")
+        or []
+    )
+    if not causal_path_ids:
+        reasons.append("missing-causal-trace")
+    if evidence_state not in DECISION_ELIGIBLE_EVIDENCE_STATES:
+        reasons.append("evidence-state:" + (evidence_state or "missing"))
+    if approval_status not in DECISION_ELIGIBLE_APPROVAL_STATES:
+        reasons.append("approval-status:" + (approval_status or "missing"))
+    if status not in DECISION_ELIGIBLE_HYPOTHESIS_STATES:
         reasons.append("hypothesis-status:" + status)
-    if verification_status in {"stale", "invalid", "rejected", "superseded"}:
-        reasons.append("verification-status:" + verification_status)
+    if verification_status not in DECISION_ELIGIBLE_VERIFICATION_STATES:
+        reasons.append("verification-status:" + (verification_status or "missing"))
+    inference_generation_id = _text(
+        item.get("inferenceGenerationId") or item.get("inference_generation_id")
+    )
+    if not inference_generation_id:
+        reasons.append("missing-inference-generation")
+    scope_state = _text(item.get("scopeState") or item.get("scope_state")).lower()
+    if scope_state not in DECISION_ELIGIBLE_SCOPE_STATES:
+        reasons.append("scope-state:" + (scope_state or "missing"))
+    if scope_state == "market-shared" and not _text(
+        item.get("marketHypothesisId") or item.get("market_hypothesis_id")
+    ):
+        reasons.append("scope-lineage:missing-market-hypothesis")
+    if scope_state in {"account-only", "mixed"} and not _text(
+        item.get("accountHypothesisOverlayId")
+        or item.get("account_hypothesis_overlay_id")
+    ):
+        reasons.append("scope-lineage:missing-account-overlay")
     eligible = not reasons
     return {
         "version": DECISION_EVIDENCE_CONTRACT_VERSION,

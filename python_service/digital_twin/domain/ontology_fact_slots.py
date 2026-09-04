@@ -512,6 +512,8 @@ def select_fact_slot_scope_ids(
         },
         "dependencyBoundaryAuthoritative": dependency_boundary_authoritative,
         "dependencyMatchedScopeIds": [],
+        "directSelectedScopeIds": list(candidates),
+        "reverseDependencySelectedScopeIds": [],
         "candidateScopeCount": len(candidates),
         "selectedScopeIds": list(candidates),
         "deferredScopeIds": [],
@@ -529,6 +531,7 @@ def select_fact_slot_scope_ids(
     unknown = []
     dependency_matched = []
     unchanged_dependency_matched = []
+    reverse_dependency_selected = set()
 
     def dependency_key_matches(scope_key: str, requested_key: str) -> bool:
         return bool(
@@ -556,6 +559,31 @@ def select_fact_slot_scope_ids(
                 for requested_key in applicable_dependency_keys
             )
         )
+
+    def reverse_dependency_matches_event_family(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> bool:
+        """Keep reverse relation closure inside the authoritative event slice."""
+
+        symbol = scope_symbol(scope_id)
+        applicable_slots = slots_by_symbol.get(symbol, slots) if symbol else slots
+        precise_scope = bool(
+            plan.get("eventBoundaryAuthoritative")
+            or symbol in precise_field_routing_symbols
+            or (
+                not symbol
+                and precise_field_routing_symbols
+                == set(plan.get("targetSymbols") or [])
+            )
+        )
+        families = _scope_families(
+            scope_id,
+            item,
+            include_impact_families=not precise_scope,
+            include_semantic_families=not precise_scope,
+        )
+        return bool(families & applicable_slots)
 
     for scope_id in candidates:
         item = scope_plan_by_id.get(scope_id) or {}
@@ -623,6 +651,7 @@ def select_fact_slot_scope_ids(
                 dependency_matched.append(scope_id)
         else:
             deferred.append(scope_id)
+    direct_selected = set(selected)
     if dependency_boundary_authoritative and not dependency_matched:
         candidate_set = set(candidates)
         unchanged_dependency_matched = sorted(
@@ -648,8 +677,12 @@ def select_fact_slot_scope_ids(
                     for value in item.get("dependencyScopeIds") or []
                     if _clean(value)
                 }
-                if dependencies.intersection(selected_set):
+                if (
+                    dependencies.intersection(selected_set)
+                    and reverse_dependency_matches_event_family(scope_id, item)
+                ):
                     selected_set.add(scope_id)
+                    reverse_dependency_selected.add(scope_id)
                     changed = True
         selected = sorted(selected_set)
         deferred = sorted(set(candidates) - selected_set)
@@ -701,8 +734,12 @@ def select_fact_slot_scope_ids(
                     for value in item.get("dependencyScopeIds") or []
                     if _clean(value)
                 }
-                if dependencies.intersection(selected_set):
+                if (
+                    dependencies.intersection(selected_set)
+                    and reverse_dependency_matches_event_family(scope_id, item)
+                ):
                     selected_set.add(scope_id)
+                    reverse_dependency_selected.add(scope_id)
                     changed = True
         selected = sorted(selected_set)
         deferred = sorted(set(candidates) - selected_set)
@@ -728,5 +765,7 @@ def select_fact_slot_scope_ids(
         "selectedScopeIds": sorted(selected),
         "deferredScopeIds": sorted(deferred),
         "dependencyMatchedScopeIds": sorted(dependency_matched),
+        "directSelectedScopeIds": sorted(direct_selected),
+        "reverseDependencySelectedScopeIds": sorted(reverse_dependency_selected),
         "fallbackReason": "",
     }

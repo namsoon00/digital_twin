@@ -484,6 +484,62 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["selectedScopeIds"],
         )
 
+        # A price-only event must not pull a changed news relation back into the
+        # semantic write set through its physical dependency on instrument state.
+        plan = build_fact_slot_projection_plan(
+            ["MSTR"],
+            ["flow", "market", "temporal"],
+            requested_fact_families_by_symbol={
+                "MSTR": ["flow", "market", "temporal"],
+            },
+            requested_dependency_keys=["kind:stock:field:currentprice"],
+            requested_dependency_keys_by_symbol={
+                "MSTR": ["kind:stock:field:currentprice"],
+            },
+            dependency_boundary_authoritative=True,
+            event_boundary_authoritative=True,
+        )
+        scopes = {
+            "symbol:MSTR:state": {
+                "scopeFamily": "state",
+                "semanticDependencyFingerprints": {
+                    "kind:stock:field:currentprice": "price-v4",
+                },
+            },
+            "symbol:MSTR:evidence:bucket:47": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {
+                    "kind:news-article": "news-v2",
+                },
+            },
+            "link:symbol:MSTR:evidence:bucket:47": {
+                "scopeFamily": "evidence",
+                "semanticDependencyFingerprints": {
+                    "relation:mentions-instrument": "news-link-v2",
+                },
+                "dependencyScopeIds": [
+                    "symbol:MSTR:state",
+                    "symbol:MSTR:evidence:bucket:47",
+                ],
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertEqual(["symbol:MSTR:state"], selection["selectedScopeIds"])
+        self.assertEqual(
+            [
+                "link:symbol:MSTR:evidence:bucket:47",
+                "symbol:MSTR:evidence:bucket:47",
+            ],
+            selection["deferredScopeIds"],
+        )
+        self.assertEqual(
+            ["symbol:MSTR:state"],
+            selection["directSelectedScopeIds"],
+        )
+        self.assertEqual([], selection["reverseDependencySelectedScopeIds"])
+
     def _assert_crypto_dependency_selects_shared_market_and_symbol_exposure(self):
         plan = build_fact_slot_projection_plan(
             ["BTC", "MSTR"],

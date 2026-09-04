@@ -2971,19 +2971,40 @@ def hypothesis_comparison_audit(
 
 
 def is_selectable_hypothesis_payload(candidate: Dict[str, object]) -> bool:
-    """Return true only for a graph/rule-backed investment hypothesis."""
+    """Return true for a graph/rule-backed comparison candidate.
+
+    Comparison visibility and decision authority are intentionally separate.
+    An incomplete hypothesis must remain visible to the AI as a weakened or
+    rejected alternative, while ``decision_eligible_hypothesis_payload``
+    independently decides whether it may authorize an investment action.
+    """
 
     item = dict(candidate or {}) if isinstance(candidate, dict) else {}
     template_id = str(item.get("templateId") or item.get("template_id") or "")
     approval_status = str(item.get("approvalStatus") or item.get("approval_status") or "")
+    evidence_state = str(item.get("evidenceState") or item.get("evidence_state") or "")
     family_source = str(item.get("familySource") or item.get("family_source") or "")
     scope_state = str(item.get("scopeState") or item.get("scope_state") or "")
     rule_ids = item.get("supportingRuleIds") or item.get("supporting_rule_ids") or []
-    return bool(rule_ids) and decision_eligible_hypothesis_payload(item) and not (
+    hypothesis_id = str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip()
+    knowledge_basis = item.get("knowledgeBasis") or item.get("knowledge_basis") or {}
+    knowledge_basis = dict(knowledge_basis or {}) if isinstance(knowledge_basis, dict) else {}
+    claim_contract = item.get("claimContract") or item.get("claim_contract") or {}
+    claim_contract = dict(claim_contract or {}) if isinstance(claim_contract, dict) else {}
+    qualification = item.get("qualification") or {}
+    qualification = dict(qualification or {}) if isinstance(qualification, dict) else {}
+    reference_only = (
+        knowledge_basis.get("requiresHypothesis") is False
+        or str(claim_contract.get("claimType") or "").strip().lower() == "reference"
+        or str(qualification.get("executionAuthority") or "").strip().lower() == "reference-only"
+    )
+    return bool(hypothesis_id and rule_ids) and not (
         template_id.startswith("hypothesis-template:system.")
         or approval_status == "approved-safety-policy"
         or family_source == "system-safety-policy"
         or scope_state == SYSTEM_SAFETY_SCOPE
+        or evidence_state in {"blocked", "quarantined"}
+        or reference_only
     )
 
 

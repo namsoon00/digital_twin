@@ -13,7 +13,7 @@ from .context_observation_notifications import (
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v12"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v13"
 PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v1"
 
 EXPLICIT_DELIVERY_AUTHORIZATIONS = {
@@ -24,10 +24,6 @@ EXPLICIT_DELIVERY_AUTHORIZATIONS = {
     "meaningful-change": (
         "material-observation-transition",
         "사용자가 확인해야 할 가격·수급·관계 조건 변화가 확인됐습니다.",
-    ),
-    "scheduled-summary": (
-        "scheduled-state-summary",
-        "설정한 재확인 시간이 지나 현재 판단을 다시 알립니다.",
     ),
 }
 
@@ -400,6 +396,20 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
             "reason": explicit_authorization["reason"],
             "pushValueClass": explicit_authorization["pushValueClass"],
             "deliveryAuthorization": explicit_authorization["decision"],
+        })
+        return base
+    if (
+        _text(context.get("cooldownDecision")).lower() == "scheduled-summary"
+        and _text(ai_transition.get("kind")).lower() != "action-changed"
+        and not bool(user_transition.get("material"))
+        and not verified_follow_ups
+        and not material_sources
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "scheduled_summary_web_history",
+            "reason": "같은 판단의 정기 재확인은 웹 이력에만 저장합니다.",
+            "pushValueClass": "web-only-scheduled-summary",
         })
         return base
     transition_enabled = context.get("investmentStateTransitionNotificationsEnabled") is not False

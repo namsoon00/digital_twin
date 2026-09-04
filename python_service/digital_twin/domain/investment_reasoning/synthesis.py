@@ -149,6 +149,24 @@ def decision_synthesis_from_relation_context(
             hypothesis_paths.append((action, hypothesis, bool(assessment.get("eligible"))))
         (eligible_ids if assessment.get("eligible") else reference_ids).append(hypothesis_id)
 
+    selected_path_eligible = any(
+        eligible
+        and selected_rule_id
+        and selected_rule_id in {
+            str(value or "").strip()
+            for value in (
+                hypothesis.get("supportingRuleIds")
+                or hypothesis.get("supporting_rule_ids")
+                or []
+            )
+        }
+        for _action, hypothesis, eligible in hypothesis_paths
+    )
+    if action_authority == "originate" and not selected_path_eligible:
+        action_authority = "observe"
+        graph_candidate_action = "NO_ACTION"
+        execution_action = "NO_ACTION"
+
     alternatives = []
     for action, hypothesis, eligible in sorted(
         hypothesis_paths,
@@ -211,15 +229,14 @@ def decision_synthesis_from_relation_context(
         and traces
     )
     quality_blocked = bool(quality_assessment.get("judgementBlocked"))
-    no_eligible_thesis = not eligible_ids and not investment_view_action and not quality_blocked
+    no_eligible_thesis = not eligible_ids
     selected_action_conflict = candidate_contract_conflict
     judgement_blocked = bool(
         envelope.get("judgementBlocked")
         or quality_blocked
         or selected_action_conflict
+        or bool(investment_view_action and not selected_path_eligible)
     )
-    if no_eligible_thesis and not quality_blocked:
-        judgement_blocked = False
     return DecisionSynthesis(
         synthesis_id=_stable_id(
             account_id,

@@ -197,6 +197,8 @@ class HypothesisDevelopmentCase:
     validation_summary_payload: Dict[str, object] = field(default_factory=dict)
     decision_impact: Dict[str, object] = field(default_factory=dict)
     deployment: Dict[str, object] = field(default_factory=dict)
+    validation_input_fingerprint: str = ""
+    validation_attempted_at: str = ""
     blocked_reason: str = ""
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -220,6 +222,8 @@ class HypothesisDevelopmentCase:
             "validation_gates": "validationGates",
             "validation_summary_payload": "validationSummary",
             "decision_impact": "decisionImpact",
+            "validation_input_fingerprint": "validationInputFingerprint",
+            "validation_attempted_at": "validationAttemptedAt",
             "blocked_reason": "blockedReason",
             "created_at": "createdAt",
             "updated_at": "updatedAt",
@@ -260,6 +264,16 @@ class HypothesisDevelopmentCase:
             validation_summary_payload=dict(payload.get("validationSummary") or payload.get("validation_summary") or {}),
             decision_impact=dict(payload.get("decisionImpact") or payload.get("decision_impact") or {}),
             deployment=dict(payload.get("deployment") or {}),
+            validation_input_fingerprint=clean_text(
+                payload.get("validationInputFingerprint")
+                or payload.get("validation_input_fingerprint"),
+                64,
+            ),
+            validation_attempted_at=clean_text(
+                payload.get("validationAttemptedAt")
+                or payload.get("validation_attempted_at"),
+                40,
+            ),
             blocked_reason=clean_text(payload.get("blockedReason") or payload.get("blocked_reason"), 1000),
             created_at=clean_text(payload.get("createdAt") or payload.get("created_at") or utc_now_iso(), 40),
             updated_at=clean_text(payload.get("updatedAt") or payload.get("updated_at") or utc_now_iso(), 40),

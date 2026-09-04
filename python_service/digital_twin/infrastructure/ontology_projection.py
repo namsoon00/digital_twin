@@ -3602,6 +3602,17 @@ class PortfolioOntologyProjectionRecorder:
                         "deferredScopeCount": len(
                             applied_target_patch.get("deferredScopeIds") or []
                         ),
+                        # These exact scope IDs are part of the persistence
+                        # contract. The TypeDB adapter uses them to keep the
+                        # active semantic relation image when the current
+                        # in-memory graph also contains changes from another
+                        # event family.
+                        "deferredRelationScopeIds": list(
+                            applied_target_patch.get("deferredRelationScopeIds") or []
+                        ),
+                        "reusedActiveRelationScopeIds": list(
+                            applied_target_patch.get("reusedActiveRelationScopeIds") or []
+                        ),
                         # This is a persistence-integrity contract, not
                         # optional trace detail. Without it the repository
                         # treats endpoint companions as semantic roots and can

@@ -4344,15 +4344,14 @@ class ScopedABoxManifestMixin:
         return sorted(result, key=lambda item: str(item.get("scopeId") or ""))
 
     @staticmethod
-    def scoped_abox_changed_scope_ids(
+    def scoped_abox_semantic_changed_scope_ids(
         logical_scope_plan: Iterable[Dict[str, object]],
         active_metadata: Dict[str, object],
         current_state_mode: bool,
         migration_mode: str = "",
         current_state_persistence_mode: str = CURRENT_STATE_ABOX_PERSISTENCE_MODE,
-        relation_rebind_root_scope_ids: Iterable[str] = None,
     ) -> List[str]:
-        """Select physical writes for steady-state and progressive migration."""
+        """Return scopes whose logical content, rather than storage binding, changed."""
 
         scope_plan = [dict(item or {}) for item in logical_scope_plan or []]
         active = dict(active_metadata or {})
@@ -4387,6 +4386,31 @@ class ScopedABoxManifestMixin:
                 )
             )
         }
+        return [
+            str(item.get("scopeId") or "")
+            for item in scope_plan
+            if str(item.get("scopeId") or "") in changed
+        ]
+
+    @staticmethod
+    def scoped_abox_changed_scope_ids(
+        logical_scope_plan: Iterable[Dict[str, object]],
+        active_metadata: Dict[str, object],
+        current_state_mode: bool,
+        migration_mode: str = "",
+        current_state_persistence_mode: str = CURRENT_STATE_ABOX_PERSISTENCE_MODE,
+        relation_rebind_root_scope_ids: Iterable[str] = None,
+    ) -> List[str]:
+        """Select semantic writes plus physical relation endpoint rebinds."""
+
+        scope_plan = [dict(item or {}) for item in logical_scope_plan or []]
+        changed = set(ScopedABoxManifestMixin.scoped_abox_semantic_changed_scope_ids(
+            scope_plan,
+            active_metadata,
+            current_state_mode=current_state_mode,
+            migration_mode=migration_mode,
+            current_state_persistence_mode=current_state_persistence_mode,
+        ))
 
         requested_rebind_roots = {
             str(value or "").strip()
@@ -4429,6 +4453,39 @@ class ScopedABoxManifestMixin:
             for item in scope_plan
             if str(item.get("scopeId") or "") in changed
         ]
+
+    @staticmethod
+    def scoped_abox_rebind_only_relation_scope_ids(
+        logical_scope_plan: Iterable[Dict[str, object]],
+        semantic_changed_scope_ids: Iterable[str],
+        physical_changed_scope_ids: Iterable[str],
+    ) -> List[str]:
+        """Return relation scopes rewritten only because an endpoint moved.
+
+        Copy-on-write changes a node's physical storage identity. Incident
+        relations must then be written into a new physical generation even
+        when their assertion did not change. Keeping this set separate from
+        semantic changes prevents the current in-memory graph from replacing
+        an active relation that belongs to another authoritative event.
+        """
+
+        semantic_changed = {
+            str(value or "").strip()
+            for value in semantic_changed_scope_ids or []
+            if str(value or "").strip()
+        }
+        physical_changed = {
+            str(value or "").strip()
+            for value in physical_changed_scope_ids or []
+            if str(value or "").strip()
+        }
+        return sorted({
+            str(item.get("scopeId") or "").strip()
+            for item in logical_scope_plan or []
+            if str(item.get("scopeId") or "").strip() in physical_changed
+            and str(item.get("scopeId") or "").strip() not in semantic_changed
+            and int(number_or_none(item.get("relationCount")) or 0) > 0
+        })
 
     @staticmethod
     def current_state_physical_graph(
@@ -5037,6 +5094,583 @@ class ScopedABoxManifestMixin:
                 "targetStorageId": ontology_storage_id(target_row, target_id, "node"),
             })
         return changed_nodes, relation_rows
+
+    def read_active_scoped_abox_rows(
+        self,
+        active_metadata: Dict[str, object],
+        scope_ids: Iterable[str],
+        world_id: str = "",
+    ) -> Dict[str, object]:
+        """Read exact active rows for a bounded set of scope generations.
+
+        A target-scoped source graph may already contain facts produced by a
+        different mailbox event. When those facts are deferred, the active
+        Manifest is the only authoritative source for their current semantic
+        image. Generation-keyed reads keep this recovery bounded and avoid the
+        full active-membership join used by general graph readers.
+        """
+
+        active = dict(active_metadata or {})
+        generations = {
+            str(scope_id or "").strip(): str(generation_id or "").strip()
+            for scope_id, generation_id in dict(
+                active.get("scopeGenerationIds") or {}
+            ).items()
+            if str(scope_id or "").strip() and str(generation_id or "").strip()
+        }
+        active_plan = {
+            str(item.get("scopeId") or "").strip(): dict(item or {})
+            for item in active.get("scopePlan") or []
+            if str((item or {}).get("scopeId") or "").strip()
+        }
+        requested = sorted({
+            str(scope_id or "").strip()
+            for scope_id in scope_ids or []
+            if str(scope_id or "").strip() in generations
+        })
+        if not requested:
+            return {
+                "status": "ok",
+                "scopeIds": [],
+                "nodeRows": [],
+                "relationRows": [],
+                "endpointNodeRows": [],
+                "countsByScope": {},
+            }
+
+        expected_generation_by_scope = {
+            scope_id: generations[scope_id]
+            for scope_id in requested
+        }
+        requested_generations = sorted(set(expected_generation_by_scope.values()))
+        generation_scope = {
+            generation_id: scope_id
+            for scope_id, generation_id in expected_generation_by_scope.items()
+        }
+        node_rows: List[Dict[str, object]] = []
+        relation_rows: List[Dict[str, object]] = []
+        endpoint_rows_by_storage_id: Dict[str, Dict[str, object]] = {}
+        batch_size = self.current_state_inventory_batch_size()
+        world_clause = (
+            "has ontology-world-id " + typedb_string(world_id) + ", "
+            if str(world_id or "").strip()
+            else ""
+        )
+
+        for offset in range(0, len(requested_generations), batch_size):
+            batch = requested_generations[offset: offset + batch_size]
+            generation_filter = typedb_value_match(
+                "$n",
+                "ontology-snapshot-id",
+                batch,
+                "==",
+                "activeScopeGenerationFilter",
+            )
+            node_query = (
+                "match $n isa ontology-node, "
+                "has ontology-id $id, "
+                "has ontology-storage-id $storageId, "
+                "has ontology-label $label, "
+                "has ontology-kind $kind, "
+                'has ontology-box "ABox", '
+                + world_clause
+                + "has ontology-scope-id $scopeId, "
+                "has ontology-snapshot-id $generationId, "
+                "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json; "
+                + generation_filter
+            )
+            raw_nodes = self.read_rows(
+                node_query,
+                [
+                    "id", "storageId", "label", "kind", "scopeId",
+                    "generationId", "updatedAt", "json",
+                ],
+                label="typedb.scoped-abox.active-node-rows",
+            )
+            for raw in raw_nodes:
+                scope_id = str(raw.get("scopeId") or "").strip()
+                generation_id = str(raw.get("generationId") or "").strip()
+                if (
+                    expected_generation_by_scope.get(scope_id) != generation_id
+                    or generation_scope.get(generation_id) != scope_id
+                ):
+                    return {
+                        "status": "scope-generation-mismatch",
+                        "reason": "An active node row did not match the requested scope generation.",
+                        "scopeId": scope_id,
+                        "generationId": generation_id,
+                        "nodeRows": [],
+                        "relationRows": [],
+                        "endpointNodeRows": [],
+                    }
+                properties = json_object(raw.get("json"))
+                mapped = self.entity_row_from_typeql(raw, "ABox")
+                mapped.update({
+                    "storageId": str(raw.get("storageId") or ""),
+                    "scopeId": scope_id,
+                    "scopeType": str(
+                        properties.get("aboxScopeType")
+                        or (active_plan.get(scope_id) or {}).get("scopeType")
+                        or ""
+                    ),
+                    "snapshotId": generation_id,
+                    "aboxSnapshotId": generation_id,
+                    "scopeGenerationId": generation_id,
+                    "manifestId": str(
+                        properties.get("worldviewManifestId")
+                        or properties.get("manifestId")
+                        or ""
+                    ),
+                    "worldId": str(properties.get("worldId") or world_id or ""),
+                })
+                node_rows.append(mapped)
+
+            relation_generation_filter = typedb_value_match(
+                "$r",
+                "ontology-snapshot-id",
+                batch,
+                "==",
+                "activeRelationGenerationFilter",
+            )
+            relation_query = (
+                "match "
+                "$source isa ontology-node, has ontology-id $sourceId, "
+                "has ontology-storage-id $sourceStorageId, "
+                "has ontology-label $sourceLabel, has ontology-kind $sourceKind, "
+                "has ontology-scope-id $sourceScopeId, "
+                "has ontology-snapshot-id $sourceGenerationId, "
+                "has ontology-updated-at $sourceUpdatedAt, has ontology-json $sourceJson; "
+                "$target isa ontology-node, has ontology-id $targetId, "
+                "has ontology-storage-id $targetStorageId, "
+                "has ontology-label $targetLabel, has ontology-kind $targetKind, "
+                "has ontology-scope-id $targetScopeId, "
+                "has ontology-snapshot-id $targetGenerationId, "
+                "has ontology-updated-at $targetUpdatedAt, has ontology-json $targetJson; "
+                "$r isa ontology-assertion, links (source: $source, target: $target), "
+                "has ontology-id $id, has ontology-storage-id $storageId, "
+                "has ontology-relation-type $type, "
+                'has ontology-box "ABox", '
+                + world_clause
+                + "has ontology-scope-id $scopeId, "
+                "has ontology-snapshot-id $generationId, "
+                "has ontology-updated-at $updatedAt, has ontology-json $json, "
+                "has ontology-weight $weight; "
+                + relation_generation_filter
+            )
+            raw_relations = self.read_rows(
+                relation_query,
+                [
+                    "id", "storageId", "sourceId", "sourceStorageId",
+                    "sourceLabel", "sourceKind", "sourceScopeId",
+                    "sourceGenerationId", "sourceUpdatedAt", "sourceJson",
+                    "targetId", "targetStorageId", "targetLabel", "targetKind",
+                    "targetScopeId", "targetGenerationId", "targetUpdatedAt",
+                    "targetJson", "type", "scopeId", "generationId",
+                    "updatedAt", "json", "weight",
+                ],
+                label="typedb.scoped-abox.active-relation-rows",
+            )
+            for raw in raw_relations:
+                scope_id = str(raw.get("scopeId") or "").strip()
+                generation_id = str(raw.get("generationId") or "").strip()
+                if (
+                    expected_generation_by_scope.get(scope_id) != generation_id
+                    or generation_scope.get(generation_id) != scope_id
+                ):
+                    return {
+                        "status": "scope-generation-mismatch",
+                        "reason": "An active relation row did not match the requested scope generation.",
+                        "scopeId": scope_id,
+                        "generationId": generation_id,
+                        "nodeRows": [],
+                        "relationRows": [],
+                        "endpointNodeRows": [],
+                    }
+                properties = json_object(raw.get("json"))
+                mapped = self.relation_row_from_typeql(raw, "ABox")
+                mapped.update({
+                    "storageId": str(raw.get("storageId") or ""),
+                    "sourceStorageId": str(raw.get("sourceStorageId") or ""),
+                    "targetStorageId": str(raw.get("targetStorageId") or ""),
+                    "scopeId": scope_id,
+                    "scopeType": str(
+                        properties.get("aboxScopeType")
+                        or (active_plan.get(scope_id) or {}).get("scopeType")
+                        or ""
+                    ),
+                    "snapshotId": generation_id,
+                    "aboxSnapshotId": generation_id,
+                    "scopeGenerationId": generation_id,
+                    "manifestId": str(
+                        properties.get("worldviewManifestId")
+                        or properties.get("manifestId")
+                        or ""
+                    ),
+                    "worldId": str(properties.get("worldId") or world_id or ""),
+                })
+                for prefix in ("source", "target"):
+                    endpoint = endpoint_node_row(raw, prefix, "ABox")
+                    endpoint_properties = json_object(raw.get(prefix + "Json"))
+                    endpoint.update({
+                        "storageId": str(raw.get(prefix + "StorageId") or ""),
+                        "scopeId": str(raw.get(prefix + "ScopeId") or ""),
+                        "scopeType": str(endpoint_properties.get("aboxScopeType") or ""),
+                        "snapshotId": str(raw.get(prefix + "GenerationId") or ""),
+                        "aboxSnapshotId": str(raw.get(prefix + "GenerationId") or ""),
+                        "scopeGenerationId": str(raw.get(prefix + "GenerationId") or ""),
+                        "manifestId": str(
+                            endpoint_properties.get("worldviewManifestId")
+                            or endpoint_properties.get("manifestId")
+                            or ""
+                        ),
+                        "worldId": str(endpoint_properties.get("worldId") or world_id or ""),
+                    })
+                    endpoint_storage_id = str(endpoint.get("storageId") or "").strip()
+                    if endpoint_storage_id:
+                        endpoint_rows_by_storage_id[endpoint_storage_id] = endpoint
+                relation_rows.append(mapped)
+
+        counts_by_scope = self.scoped_abox_counts_by_scope(node_rows, relation_rows)
+        failed_scopes = []
+        for scope_id in requested:
+            plan = active_plan.get(scope_id) or {}
+            actual = counts_by_scope.get(scope_id) or {}
+            expected_entity_count = int(number_or_none(plan.get("entityCount")) or 0)
+            expected_relation_count = int(number_or_none(plan.get("relationCount")) or 0)
+            if (
+                int(actual.get("entityCount") or 0) != expected_entity_count
+                or int(actual.get("relationCount") or 0) != expected_relation_count
+            ):
+                failed_scopes.append({
+                    "scopeId": scope_id,
+                    "generationId": expected_generation_by_scope.get(scope_id, ""),
+                    "expectedEntityCount": expected_entity_count,
+                    "actualEntityCount": int(actual.get("entityCount") or 0),
+                    "expectedRelationCount": expected_relation_count,
+                    "actualRelationCount": int(actual.get("relationCount") or 0),
+                })
+        return {
+            "status": "ok" if not failed_scopes else "active-scope-row-count-mismatch",
+            "reason": (
+                ""
+                if not failed_scopes
+                else "The active Manifest did not return every row required for semantic reuse."
+            ),
+            "scopeIds": requested,
+            "nodeRows": node_rows,
+            "relationRows": relation_rows,
+            "endpointNodeRows": list(endpoint_rows_by_storage_id.values()),
+            "countsByScope": counts_by_scope,
+            "failedScopes": failed_scopes,
+        }
+
+    @staticmethod
+    def scoped_abox_candidate_persistence_rows(
+        current_node_rows: Iterable[Dict[str, object]],
+        current_relation_rows: Iterable[Dict[str, object]],
+        active_scope_rows: Dict[str, object],
+        physical_scope_plan: Iterable[Dict[str, object]],
+        semantic_changed_scope_ids: Iterable[str],
+        physical_changed_scope_ids: Iterable[str],
+        deferred_scope_ids: Iterable[str],
+        candidate_manifest_id: str,
+    ) -> Dict[str, object]:
+        """Reconcile source rows with the active semantic image before writes.
+
+        The current projection graph is allowed to be newer than the event
+        being persisted. Deferred scopes therefore come from the active
+        Manifest, while semantically selected scopes come from the source
+        graph. Relations changed only for endpoint rebinding preserve their
+        active assertion and receive only new physical identities.
+        """
+
+        current_nodes = [dict(row or {}) for row in current_node_rows or []]
+        current_relations = [dict(row or {}) for row in current_relation_rows or []]
+        active_context = dict(active_scope_rows or {})
+        active_nodes = [
+            dict(row or {})
+            for row in (
+                list(active_context.get("nodeRows") or [])
+                + list(active_context.get("endpointNodeRows") or [])
+            )
+        ]
+        active_relations = [
+            dict(row or {})
+            for row in active_context.get("relationRows") or []
+        ]
+        plan_by_scope = {
+            str(item.get("scopeId") or "").strip(): dict(item or {})
+            for item in physical_scope_plan or []
+            if str((item or {}).get("scopeId") or "").strip()
+        }
+        semantic_changed = {
+            str(value or "").strip()
+            for value in semantic_changed_scope_ids or []
+            if str(value or "").strip()
+        }
+        physical_changed = {
+            str(value or "").strip()
+            for value in physical_changed_scope_ids or []
+            if str(value or "").strip()
+        }
+        deferred = {
+            str(value or "").strip()
+            for value in deferred_scope_ids or []
+            if str(value or "").strip()
+        }
+        rebind_only = {
+            scope_id
+            for scope_id in physical_changed - semantic_changed
+            if int(number_or_none((plan_by_scope.get(scope_id) or {}).get("relationCount")) or 0) > 0
+        }
+        current_nodes_by_id = {
+            str(row.get("id") or ""): row
+            for row in current_nodes
+            if str(row.get("id") or "")
+        }
+
+        def active_endpoint(row: Dict[str, object], prefix: str) -> Dict[str, object]:
+            storage_id = str(row.get(prefix + "StorageId") or "").strip()
+            canonical_id = str(row.get(prefix) or "").strip()
+            for candidate in active_nodes:
+                if storage_id and str(candidate.get("storageId") or "") == storage_id:
+                    return candidate
+            for candidate in active_nodes:
+                if canonical_id and str(candidate.get("id") or "") == canonical_id:
+                    return candidate
+            return {}
+
+        def rebound_relation(row: Dict[str, object]) -> Dict[str, object]:
+            scope_id = str(row.get("scopeId") or "").strip()
+            physical = plan_by_scope.get(scope_id) or {}
+            generation_id = str(physical.get("generationId") or "").strip()
+            if not generation_id:
+                raise ValueError("Rebound relation scope has no physical generation: " + scope_id)
+            endpoint_storage_ids = {}
+            for prefix in ("source", "target"):
+                endpoint = active_endpoint(row, prefix)
+                endpoint_id = str(row.get(prefix) or "").strip()
+                endpoint_scope_id = str(endpoint.get("scopeId") or "").strip()
+                current_endpoint = current_nodes_by_id.get(endpoint_id) or {}
+                if endpoint_scope_id in physical_changed:
+                    if not current_endpoint:
+                        raise ValueError(
+                            "A rebound relation endpoint changed generation but is absent from the current graph: "
+                            + endpoint_id
+                        )
+                    endpoint_storage_ids[prefix + "StorageId"] = ontology_storage_id(
+                        current_endpoint,
+                        endpoint_id,
+                        "node",
+                    )
+                else:
+                    endpoint_storage_ids[prefix + "StorageId"] = str(
+                        row.get(prefix + "StorageId")
+                        or endpoint.get("storageId")
+                        or ""
+                    ).strip()
+                if not endpoint_storage_ids[prefix + "StorageId"]:
+                    raise ValueError(
+                        "A rebound relation endpoint has no verified storage identity: "
+                        + endpoint_id
+                    )
+
+            properties = json_object(row.get("propertiesJson"))
+            properties.update({
+                "aboxScopeId": scope_id,
+                "aboxScopeType": str(
+                    physical.get("scopeType")
+                    or row.get("scopeType")
+                    or properties.get("aboxScopeType")
+                    or "link"
+                ),
+                "logicalScopeGenerationId": str(
+                    physical.get("logicalGenerationId")
+                    or properties.get("logicalScopeGenerationId")
+                    or ""
+                ),
+                "physicalGenerationId": generation_id,
+                "scopeGenerationId": generation_id,
+                "snapshotId": generation_id,
+                "aboxSnapshotId": generation_id,
+                "physicalStateMode": str(
+                    physical.get("physicalStateMode")
+                    or properties.get("physicalStateMode")
+                    or CURRENT_STATE_ABOX_PERSISTENCE_MODE
+                ),
+            })
+            if candidate_manifest_id:
+                properties["manifestId"] = candidate_manifest_id
+                properties["worldviewManifestId"] = candidate_manifest_id
+            rebound = {
+                key: value
+                for key, value in row.items()
+                if key not in {
+                    "contentFingerprint", "id", "relationStorageId", "sourceNode",
+                    "storageId", "targetNode", "updatedAt",
+                }
+            }
+            rebound.update({
+                **endpoint_storage_ids,
+                "scopeId": scope_id,
+                "scopeType": str(properties.get("aboxScopeType") or "link"),
+                "snapshotId": generation_id,
+                "aboxSnapshotId": generation_id,
+                "scopeGenerationId": generation_id,
+                "physicalGenerationId": generation_id,
+                "logicalScopeGenerationId": str(
+                    properties.get("logicalScopeGenerationId") or ""
+                ),
+                "physicalStateMode": str(properties.get("physicalStateMode") or ""),
+                "manifestId": candidate_manifest_id,
+                "propertiesJson": json.dumps(
+                    properties,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            })
+            rebound["contentFingerprint"] = ontology_row_content_fingerprint(
+                rebound,
+                "relation",
+            )
+            return rebound
+
+        active_relations_by_scope: Dict[str, List[Dict[str, object]]] = {}
+        for row in active_relations:
+            active_relations_by_scope.setdefault(
+                str(row.get("scopeId") or "").strip(),
+                [],
+            ).append(row)
+
+        rebound_relations: List[Dict[str, object]] = []
+        try:
+            for scope_id in sorted(rebind_only):
+                rows = list(active_relations_by_scope.get(scope_id) or [])
+                expected = int(
+                    number_or_none((plan_by_scope.get(scope_id) or {}).get("relationCount"))
+                    or 0
+                )
+                if len(rows) != expected:
+                    return {
+                        "status": "active-rebind-relation-count-mismatch",
+                        "reason": "A physical relation rebind could not recover its complete active semantic image.",
+                        "scopeId": scope_id,
+                        "expectedRelationCount": expected,
+                        "actualRelationCount": len(rows),
+                    }
+                rebound_relations.extend(rebound_relation(row) for row in rows)
+        except ValueError as error:
+            return {
+                "status": "active-rebind-endpoint-invalid",
+                "reason": str(error),
+            }
+
+        candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
+        for row in active_nodes:
+            node_id = str(row.get("id") or "").strip()
+            if node_id:
+                candidate_nodes_by_id[node_id] = row
+        for row in current_nodes:
+            node_id = str(row.get("id") or "").strip()
+            if node_id and str(row.get("scopeId") or "").strip() not in deferred:
+                candidate_nodes_by_id[node_id] = row
+
+        candidate_relations: List[Dict[str, object]] = [
+            row
+            for row in current_relations
+            if str(row.get("scopeId") or "").strip() not in deferred
+            and str(row.get("scopeId") or "").strip() not in rebind_only
+        ]
+        candidate_relations.extend(
+            row
+            for row in active_relations
+            if str(row.get("scopeId") or "").strip() in deferred
+            and str(row.get("scopeId") or "").strip() not in rebind_only
+        )
+        candidate_relations.extend(rebound_relations)
+        candidate_relations_by_storage_id = {
+            ontology_storage_id(row, relation_row_id(row), "relation"): row
+            for row in candidate_relations
+            if str(row.get("source") or "") and str(row.get("target") or "")
+        }
+        candidate_node_rows = sorted(
+            candidate_nodes_by_id.values(),
+            key=lambda row: (str(row.get("scopeId") or ""), str(row.get("id") or "")),
+        )
+        candidate_relation_rows = sorted(
+            candidate_relations_by_storage_id.values(),
+            key=lambda row: (
+                str(row.get("scopeId") or ""),
+                str(row.get("source") or ""),
+                str(row.get("type") or ""),
+                str(row.get("target") or ""),
+            ),
+        )
+        persistence_node_rows = [
+            row
+            for row in current_nodes
+            if str(row.get("scopeId") or "").strip() in physical_changed
+        ]
+        persistence_relation_rows = [
+            row
+            for row in candidate_relation_rows
+            if str(row.get("scopeId") or "").strip() in physical_changed
+        ]
+
+        expected_counts = {
+            scope_id: {
+                "entityCount": int(number_or_none(plan.get("entityCount")) or 0),
+                "relationCount": int(number_or_none(plan.get("relationCount")) or 0),
+            }
+            for scope_id, plan in plan_by_scope.items()
+            if scope_id in physical_changed
+        }
+        actual_counts: Dict[str, Dict[str, int]] = {}
+        for row, field in [
+            *((row, "entityCount") for row in persistence_node_rows),
+            *((row, "relationCount") for row in persistence_relation_rows),
+        ]:
+            scope_id = str(row.get("scopeId") or "").strip()
+            actual_counts.setdefault(
+                scope_id,
+                {"entityCount": 0, "relationCount": 0},
+            )[field] += 1
+        failed_scopes = [
+            {
+                "scopeId": scope_id,
+                "expected": expected,
+                "actual": actual_counts.get(
+                    scope_id,
+                    {"entityCount": 0, "relationCount": 0},
+                ),
+            }
+            for scope_id, expected in sorted(expected_counts.items())
+            if actual_counts.get(
+                scope_id,
+                {"entityCount": 0, "relationCount": 0},
+            ) != expected
+        ]
+        if failed_scopes:
+            return {
+                "status": "candidate-scope-row-count-mismatch",
+                "reason": "The reconciled candidate rows do not match the physical scope plan.",
+                "failedScopes": failed_scopes,
+            }
+        return {
+            "status": "ok",
+            "nodeRows": persistence_node_rows,
+            "relationRows": persistence_relation_rows,
+            "candidateNodeRows": candidate_node_rows,
+            "candidateRelationRows": candidate_relation_rows,
+            "semanticChangedScopeIds": sorted(semantic_changed),
+            "physicalChangedScopeIds": sorted(physical_changed),
+            "rebindOnlyRelationScopeIds": sorted(rebind_only),
+            "deferredScopeIds": sorted(deferred),
+            "reusedActiveNodeCount": len(active_nodes),
+            "reusedActiveRelationCount": len(active_relations),
+            "reboundRelationCount": len(rebound_relations),
+        }
 
     def scoped_abox_manifest_generation_references(self, world_id: str = "") -> Dict[str, object]:
         """Return generations protected by a durable Worldview Manifest."""
@@ -6210,6 +6844,10 @@ class ScopedABoxManifestMixin:
         self,
         graph: PortfolioOntology,
         active_metadata: Dict[str, object] = None,
+        persistence_rows: Tuple[
+            Iterable[Dict[str, object]],
+            Iterable[Dict[str, object]],
+        ] = None,
     ) -> Dict[str, object]:
         """Bind a staged target graph to the complete active Manifest index.
 
@@ -6235,7 +6873,12 @@ class ScopedABoxManifestMixin:
         )
         patch = dict(worldview.get("targetScopedManifestPatch") or {})
         target_symbols = clean_symbols_from_payload(patch.get("targetSymbols") or [])
-        node_rows, relation_rows = self.graph_persistence_rows(graph)
+        if persistence_rows is None:
+            node_rows, relation_rows = self.graph_persistence_rows(graph)
+        else:
+            raw_node_rows, raw_relation_rows = persistence_rows
+            node_rows = [dict(row or {}) for row in raw_node_rows or []]
+            relation_rows = [dict(row or {}) for row in raw_relation_rows or []]
         incoming_index = native_rule_evidence_read_index_from_rows(node_rows, relation_rows)
         target_scoped = (
             str(patch.get("status") or "") == "applied"
@@ -7326,6 +7969,13 @@ class ScopedABoxManifestMixin:
                         "writeLeaseRelease": release,
                     }
                 active_before = dict(self.active_abox_metadata(world_id) or {})
+        semantic_changed_scope_ids = self.scoped_abox_semantic_changed_scope_ids(
+            logical_scope_plan,
+            active_before,
+            current_state_mode=current_state_mode,
+            migration_mode=migration_mode,
+            current_state_persistence_mode=current_state_persistence_mode,
+        )
         changed_scope_ids = self.scoped_abox_changed_scope_ids(
             logical_scope_plan,
             active_before,
@@ -7339,6 +7989,11 @@ class ScopedABoxManifestMixin:
                 if isinstance(worldview.get("targetScopedManifestPatch"), dict)
                 else None
             ),
+        )
+        rebind_only_relation_scope_ids = self.scoped_abox_rebind_only_relation_scope_ids(
+            logical_scope_plan,
+            semantic_changed_scope_ids,
+            changed_scope_ids,
         )
         persistence_graph = graph
         if current_state_mode:
@@ -7383,10 +8038,109 @@ class ScopedABoxManifestMixin:
                 "reason": "A scoped ABox Manifest must change whenever its scope generation changes.",
                 "writeLeaseRelease": release,
             }
+        target_patch = dict(worldview.get("targetScopedManifestPatch") or {})
+        deferred_scope_ids = {
+            str(value or "").strip()
+            for value in target_patch.get("deferredScopeIds") or []
+            if str(value or "").strip()
+        }
+        active_generations = dict(active_before.get("scopeGenerationIds") or {})
+        active_reuse_scope_ids = sorted({
+            scope_id
+            for scope_id in deferred_scope_ids.union(rebind_only_relation_scope_ids)
+            if str(active_generations.get(scope_id) or "").strip()
+        })
+        active_scope_rows: Dict[str, object] = {
+            "status": "ok",
+            "scopeIds": [],
+            "nodeRows": [],
+            "relationRows": [],
+            "endpointNodeRows": [],
+            "countsByScope": {},
+        }
+        active_scope_read_started = time.monotonic()
+        if current_state_mode and scoped_active and active_reuse_scope_ids:
+            try:
+                active_scope_rows = self.read_active_scoped_abox_rows(
+                    active_before,
+                    active_reuse_scope_ids,
+                    world_id=world_id,
+                )
+            except Exception as error:  # noqa: BLE001 - preserve the active Manifest on an uncertain semantic rebind.
+                release = release_write_lease()
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "active-scope-semantic-reuse-read-failed",
+                    "graphStore": "typedb",
+                    "aboxSnapshotId": manifest_id,
+                    "worldviewManifestId": manifest_id,
+                    "worldId": world_id,
+                    "preservedActiveGeneration": True,
+                    "reason": "Active scoped rows required for an exact relation rebind could not be read: " + str(error)[:180],
+                    "activeReuseScopeIds": active_reuse_scope_ids,
+                    "writeLeaseRelease": release,
+                }
+            if str(active_scope_rows.get("status") or "") != "ok":
+                release = release_write_lease()
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "active-scope-semantic-reuse-incomplete",
+                    "graphStore": "typedb",
+                    "aboxSnapshotId": manifest_id,
+                    "worldviewManifestId": manifest_id,
+                    "worldId": world_id,
+                    "preservedActiveGeneration": True,
+                    "reason": str(active_scope_rows.get("reason") or "Active scoped rows are incomplete.")[:220],
+                    "activeReuseScopeIds": active_reuse_scope_ids,
+                    "failedScopes": list(active_scope_rows.get("failedScopes") or []),
+                    "writeLeaseRelease": release,
+                }
+
+        exact_candidate_rows: Dict[str, object] = {}
+        if current_state_mode:
+            current_node_rows, current_relation_rows = self.graph_persistence_rows(
+                persistence_graph
+            )
+            exact_candidate_rows = self.scoped_abox_candidate_persistence_rows(
+                current_node_rows,
+                current_relation_rows,
+                active_scope_rows,
+                scope_plan,
+                semantic_changed_scope_ids,
+                changed_scope_ids,
+                deferred_scope_ids,
+                manifest_id,
+            )
+            if str(exact_candidate_rows.get("status") or "") != "ok":
+                release = release_write_lease()
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": str(
+                        exact_candidate_rows.get("status")
+                        or "candidate-semantic-reconciliation-failed"
+                    ),
+                    "graphStore": "typedb",
+                    "aboxSnapshotId": manifest_id,
+                    "worldviewManifestId": manifest_id,
+                    "worldId": world_id,
+                    "preservedActiveGeneration": True,
+                    "reason": str(exact_candidate_rows.get("reason") or "Candidate semantic rows could not be reconciled.")[:220],
+                    "failedScopes": list(exact_candidate_rows.get("failedScopes") or []),
+                    "rebindOnlyRelationScopeIds": rebind_only_relation_scope_ids,
+                    "writeLeaseRelease": release,
+                }
+
         native_manifest_index_started = time.monotonic()
         native_manifest_index = self.prepare_scoped_manifest_native_rule_indexes(
             persistence_graph,
             active_before,
+            persistence_rows=(
+                exact_candidate_rows.get("candidateNodeRows") or [],
+                exact_candidate_rows.get("candidateRelationRows") or [],
+            ) if current_state_mode else None,
         )
         if str(native_manifest_index.get("status") or "") not in {
             "local-complete",
@@ -7411,10 +8165,14 @@ class ScopedABoxManifestMixin:
                 "activeManifestEvidenceIndexRepair": active_manifest_index_repair,
                 "writeLeaseRelease": release,
             }
-        node_rows, relation_rows = self.scoped_abox_persistence_rows(
-            persistence_graph,
-            changed_scope_ids,
-        )
+        if current_state_mode:
+            node_rows = list(exact_candidate_rows.get("nodeRows") or [])
+            relation_rows = list(exact_candidate_rows.get("relationRows") or [])
+        else:
+            node_rows, relation_rows = self.scoped_abox_persistence_rows(
+                persistence_graph,
+                changed_scope_ids,
+            )
         scope_rows = {str(item.get("scopeId") or ""): item for item in scope_plan}
         verification: Dict[str, object] = {}
         timing: Dict[str, object] = {
@@ -7425,6 +8183,27 @@ class ScopedABoxManifestMixin:
                 (time.monotonic() - native_manifest_index_started) * 1000,
                 1,
             ),
+            "activeScopeSemanticReuseMs": round(
+                (time.monotonic() - active_scope_read_started) * 1000,
+                1,
+            ),
+            "activeScopeSemanticReuse": {
+                "status": str(active_scope_rows.get("status") or ""),
+                "scopeIds": list(active_scope_rows.get("scopeIds") or []),
+                "nodeCount": len(active_scope_rows.get("nodeRows") or []),
+                "relationCount": len(active_scope_rows.get("relationRows") or []),
+                "endpointNodeCount": len(active_scope_rows.get("endpointNodeRows") or []),
+            },
+            "candidateSemanticReconciliation": {
+                key: exact_candidate_rows.get(key)
+                for key in [
+                    "status", "semanticChangedScopeIds", "physicalChangedScopeIds",
+                    "rebindOnlyRelationScopeIds", "deferredScopeIds",
+                    "reusedActiveNodeCount", "reusedActiveRelationCount",
+                    "reboundRelationCount",
+                ]
+                if key in exact_candidate_rows
+            },
         }
         save_started_at = time.monotonic()
         imported = self.driver_imports()
@@ -7960,6 +8739,7 @@ class ScopedABoxManifestMixin:
                     "failedScopes": failed_scope_verification,
                     "retryAttempted": bool(timing.get("candidateVerificationRetryAttempted")),
                     "retryCount": int(timing.get("candidateVerificationRetryCount") or 0),
+                    "retryDeferred": bool(timing.get("candidateVerificationRetryDeferred")),
                     "operationAttemptCount": operation_attempt_count,
                 },
                 "timing": timing,
@@ -9808,11 +10588,13 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         timing: Dict[str, object] = None,
         verification: Dict[str, object] = None,
     ):
-        """Retry one exact candidate after a count verification mismatch.
+        """Run one candidate write and never replay a semantic mismatch inline.
 
-        The operation begins by deleting rows for the candidate Manifest only,
-        so replaying it cannot mutate the currently active generation. Other
-        TypeDB failures keep the normal repository retry policy unchanged.
+        A candidate verification failure is not a transient transport error.
+        Replaying the complete write in the live inference request doubled the
+        most expensive ABox stage and could starve unrelated symbols. The next
+        projection attempt clears this immutable candidate before writing, so
+        keep the active generation and let the control plane retry it later.
         """
 
         telemetry = timing if isinstance(timing, dict) else {}
@@ -9826,8 +10608,9 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         except Exception as error:
             if typedb_error_code(error) != "typedbCandidateVerificationError":
                 raise
-            telemetry["candidateVerificationRetryAttempted"] = True
-            telemetry["candidateVerificationRetryCount"] = 1
+            telemetry["candidateVerificationRetryAttempted"] = False
+            telemetry["candidateVerificationRetryCount"] = 0
+            telemetry["candidateVerificationRetryDeferred"] = True
             telemetry["candidateVerificationFirstFailure"] = {
                 "reason": str(error)[:220],
                 "failedScopeIds": sorted(
@@ -9841,8 +10624,7 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
                     if str((value or {}).get("status") or "") != "ok"
                 },
             }
-            scope_verification.clear()
-            return self.with_typedb_retries(operation, retry_if=retry_transient)
+            raise
 
     def with_typedb_retries(self, operation, retry_if=None):
         attempts = max(1, self.retry_count + 1)
@@ -22155,29 +22937,51 @@ relation ontology-assertion,
             scoped_active_abox
             and str(evidence_read_index.get("status") or "") != "verified"
         ):
-            repair_started_at = time.perf_counter()
-            evidence_index_repair = self.repair_active_manifest_native_rule_evidence_index(
-                abox_metadata,
-                world_id=world_id,
-                expected_manifest_id=str(
+            # Evidence-index reconstruction scans physical ABox membership and
+            # rewrites control metadata. It belongs to projection maintenance,
+            # not the latency-sensitive native inference request. A successor
+            # projection repairs the active marker before staging new facts.
+            evidence_index_repair = {
+                "status": "deferred-to-projection-maintenance",
+                "totalDurationMs": 0,
+                "manifestId": str(
                     abox_metadata.get("worldviewManifestId")
                     or abox_metadata.get("aboxSnapshotId")
                     or ""
                 ),
-                stable_write_lease_held=stable_abox_write_lease_held,
-            )
-            evidence_index_repair["totalDurationMs"] = int(
-                (time.perf_counter() - repair_started_at) * 1000
-            )
-            if str(evidence_index_repair.get("status") or "") in {"ok", "unchanged"}:
-                abox_metadata = typedb_call_for_world(
-                    self.active_abox_metadata,
-                    world_id=world_id,
-                )
-                evidence_read_index = typedb_native_rule_evidence_read_index_for_execution(
-                    abox_metadata,
-                    target_symbols=target_symbols,
-                )
+            }
+            return {
+                "configured": True,
+                "status": "deferred-manifest-evidence-index-repair",
+                "graphStore": "typedb",
+                "source": "typedbNativeRule",
+                "reasoningMode": TYPEDB_NATIVE_BLOCKED_MODE,
+                "reason": (
+                    "The active ABox evidence index requires control-plane repair; "
+                    "native inference did not perform a synchronous full-membership scan."
+                ),
+                "reasonCode": "manifest-evidence-index-repair-required",
+                "recommendedRetryAfterSeconds": 30,
+                "statementCount": 0,
+                "relationTypes": [],
+                "nativeTypeDbReasoningUsed": False,
+                "typedbNativeFunctionReasoningUsed": False,
+                "typedbBootstrapReasoningUsed": False,
+                "pythonBootstrapDisabled": True,
+                "preservedActiveGeneration": True,
+                "aboxMetadata": abox_metadata,
+                "nativeRuleEvidenceReadIndexStatus": str(
+                    evidence_read_index.get("status") or ""
+                ),
+                "nativeRuleEvidenceReadIndexReason": str(
+                    evidence_read_index.get("reason") or ""
+                )[:220],
+                "nativeRuleEvidenceReadIndexRepairStatus": str(
+                    evidence_index_repair.get("status") or ""
+                ),
+                "nativeRuleEvidenceReadIndexRepairDurationMs": 0,
+                "typedbQueryMetrics": self.query_metrics_snapshot(),
+            }
         planner_topology = typedb_native_rule_planner_topology_for_execution(
             abox_metadata,
             payload.get("nativeRulePlannerTopology") if isinstance(payload.get("nativeRulePlannerTopology"), dict) else {},

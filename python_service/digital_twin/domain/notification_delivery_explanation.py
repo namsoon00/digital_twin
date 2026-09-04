@@ -32,6 +32,7 @@ ACTION_LABELS = {
     "AVOID": "신규 진입 회피",
 }
 ACTIONABLE_ACTIONS = {"BUY", "ADD", "REDUCE", "PARTIAL_SELL", "SELL"}
+DECISION_ACTIONS = ACTIONABLE_ACTIONS | {"HOLD", "WATCH", "AVOID"}
 FORBIDDEN_CUSTOMER_REASON_MARKERS = (
     "meaningful graph relation change",
     "graph context drift",
@@ -208,7 +209,11 @@ def _relation_transition_cause(context: Mapping[str, object]) -> CustomerDeliver
         "blocked": "판단 보류",
     }
     references = [relation_diff.get("previousFingerprint"), relation_diff.get("currentFingerprint")]
-    if previous_action and current_action and previous_action != current_action:
+    if (
+        previous_action in DECISION_ACTIONS
+        and current_action in DECISION_ACTIONS
+        and previous_action != current_action
+    ):
         return _cause(
             "relation-action-envelope-transition",
             "readiness-transition",
@@ -251,8 +256,8 @@ def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCau
     current_action = str(values["currentAction"] or "")
     action_changed = bool(
         values["changed"]
-        and previous_action
-        and current_action
+        and previous_action in DECISION_ACTIONS
+        and current_action in DECISION_ACTIONS
         and previous_action != current_action
     )
     if action_changed:

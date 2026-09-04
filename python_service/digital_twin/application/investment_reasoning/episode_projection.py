@@ -9,6 +9,7 @@ from ...domain.investment_brain import (
     DecisionEpisode,
     canonical_investment_timestamp,
     reasoning_case_decision_episode_id,
+    scoped_decision_follow_ups,
     stable_id,
 )
 from ...domain.hypothesis_outcome_contract import (
@@ -99,21 +100,33 @@ def _hypothesis_payload(hypothesis) -> Dict[str, object]:
         "claim": hypothesis.label or hypothesis.family_id or hypothesis.hypothesis_id,
         "stance": stance,
         "horizon": hypothesis.horizon or "multi-horizon",
-        "evidenceState": "supported" if hypothesis.supporting_evidence_ids else "unresolved",
+        "evidenceState": hypothesis.evidence_state or "unresolved",
         "supportingEvidenceIds": list(hypothesis.supporting_evidence_ids),
         "counterEvidenceIds": list(hypothesis.counter_evidence_ids),
         "supportingRuleIds": list(hypothesis.supporting_rule_ids),
         "assumptions": list(hypothesis.assumptions),
         "invalidationConditions": list(hypothesis.invalidation_conditions),
         "causalPathIds": list(hypothesis.causal_trace_ids),
-        "verificationStatus": hypothesis.validation_state or "verified-current-generation",
-        "status": "active",
+        "approvalStatus": hypothesis.approval_status,
+        "verificationStatus": hypothesis.verification_status or hypothesis.validation_state,
+        "status": hypothesis.status,
         "familyId": hypothesis.family_id,
+        "causalSignature": hypothesis.causal_signature,
         "theoryFamily": hypothesis.theory_family,
         "thesisFamily": hypothesis.thesis_family,
         "knowledgeBasis": dict(hypothesis.knowledge_basis or {}),
         "claimContract": dict(hypothesis.claim_contract or {}),
         "qualification": dict(hypothesis.qualification or {}),
+        "scopeState": hypothesis.scope_state,
+        "scopeVersion": hypothesis.scope_version,
+        "marketHypothesisId": hypothesis.market_hypothesis_id,
+        "marketWorldId": hypothesis.market_world_id,
+        "marketId": hypothesis.market_id,
+        "marketCausalSignature": hypothesis.market_causal_signature,
+        "accountHypothesisOverlayId": hypothesis.account_hypothesis_overlay_id,
+        "portfolioWorldId": hypothesis.portfolio_world_id,
+        "accountId": hypothesis.account_id,
+        "subjectSymbol": hypothesis.subject_symbol,
         "predictionTarget": hypothesis.prediction_target,
         "expectedDirection": hypothesis.expected_direction,
         "expectedOutcome": hypothesis.expected_outcome,
@@ -122,6 +135,68 @@ def _hypothesis_payload(hypothesis) -> Dict[str, object]:
         "falsificationContract": hypothesis.falsification_contract,
         "inferenceGenerationId": hypothesis.inference_generation_id,
         "candidateAction": hypothesis.candidate_action,
+    }
+
+
+def _hypothesis_scope_payloads(hypotheses) -> Dict[str, List[Dict[str, object]]]:
+    """Persist the stable market/account identities behind V2 instances."""
+
+    families: Dict[str, Dict[str, object]] = {}
+    markets: Dict[str, Dict[str, object]] = {}
+    overlays: Dict[str, Dict[str, object]] = {}
+    for item in hypotheses or []:
+        if item.family_id:
+            family = families.setdefault(item.family_id, {
+                "familyId": item.family_id,
+                "label": item.label or item.family_id,
+                "causalSignature": item.causal_signature,
+                "sourceRuleIds": [],
+                "candidateHypothesisIds": [],
+                "scopeState": item.scope_state,
+                "marketHypothesisId": item.market_hypothesis_id,
+                "accountOverlayIds": [],
+                "theoryFamily": item.theory_family,
+                "thesisFamily": item.thesis_family,
+            })
+            family["sourceRuleIds"] = _unique([
+                *family["sourceRuleIds"],
+                *item.supporting_rule_ids,
+            ])
+            family["candidateHypothesisIds"] = _unique([
+                *family["candidateHypothesisIds"],
+                item.hypothesis_id,
+            ])
+            family["accountOverlayIds"] = _unique([
+                *family["accountOverlayIds"],
+                item.account_hypothesis_overlay_id,
+            ])
+        if item.market_hypothesis_id:
+            markets.setdefault(item.market_hypothesis_id, {
+                "marketHypothesisId": item.market_hypothesis_id,
+                "marketWorldId": item.market_world_id,
+                "marketId": item.market_id,
+                "subjectSymbol": item.subject_symbol,
+                "horizon": item.horizon or "multi-horizon",
+                "causalSignature": item.market_causal_signature,
+                "sourceRuleIds": list(item.supporting_rule_ids),
+                "scopeState": item.scope_state,
+                "scopeVersion": item.scope_version,
+            })
+        if item.account_hypothesis_overlay_id:
+            overlays.setdefault(item.account_hypothesis_overlay_id, {
+                "accountOverlayId": item.account_hypothesis_overlay_id,
+                "accountId": item.account_id,
+                "portfolioWorldId": item.portfolio_world_id,
+                "familyId": item.family_id,
+                "scopeState": item.scope_state,
+                "marketHypothesisId": item.market_hypothesis_id,
+                "sourceRuleIds": list(item.supporting_rule_ids),
+                "scopeVersion": item.scope_version,
+            })
+    return {
+        "families": list(families.values()),
+        "marketHypotheses": list(markets.values()),
+        "accountOverlays": list(overlays.values()),
     }
 
 
@@ -219,6 +294,7 @@ def decision_episode_from_reasoning_case(
         or (judgment.selected_hypothesis_id if judgment else "")
     )
     hypotheses = [_hypothesis_payload(item) for item in reasoning_case.hypotheses]
+    hypothesis_scopes = _hypothesis_scope_payloads(reasoning_case.hypotheses)
     selected = next(
         (item for item in reasoning_case.hypotheses if item.hypothesis_id == selected_id),
         None,
@@ -289,6 +365,14 @@ def decision_episode_from_reasoning_case(
     reviews = []
     if judgment and selected_id:
         reviews = [dict(item) for item in judgment.hypothesis_reviews]
+    follow_up_conditions = scoped_decision_follow_ups(
+        episode_id,
+        list(judgment.follow_up_conditions if judgment else ()),
+    )
+    unsupported_follow_ups = scoped_decision_follow_ups(
+        episode_id,
+        list(judgment.unsupported_follow_ups if judgment else ()),
+    )
     payload = {
         "episodeId": episode_id,
         "accountId": account_id,
@@ -307,6 +391,7 @@ def decision_episode_from_reasoning_case(
             "hypothesisSetId": stable_id("hypothesis-set-v2", reasoning_case.case_id, account_id, symbol),
             "subjectSymbol": symbol,
             "hypotheses": hypotheses,
+            **hypothesis_scopes,
             "comparisonRequired": bool(hypotheses),
             "minimumComparisonCount": min(3, len(hypotheses)),
             "comparisonPolicy": "typedb-decision-synthesis",
@@ -355,6 +440,8 @@ def decision_episode_from_reasoning_case(
         ),
         "investmentView": _text(judgment.rationale if judgment else (final.reason if final else "")),
         "executionDecision": action,
+        "followUpConditions": follow_up_conditions,
+        "unsupportedFollowUps": unsupported_follow_ups,
         "decidedAt": decided_at,
         "status": "active" if reasoning_case.stage in {CASE_VALIDATED, CASE_COMPLETED, CASE_PUBLISHED} else reasoning_case.stage.lower(),
         "source": "v2-reasoning-case",

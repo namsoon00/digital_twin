@@ -277,6 +277,16 @@ class QuestDBTimeSeriesAdapter:
             coverage = json.dumps(coverage, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         fields.append("investor_coverage_json=" + ilp_string(coverage))
         observed_fields = set(observed_fields_from_coverage(coverage))
+        try:
+            coverage_payload = json.loads(str(coverage or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            coverage_payload = {}
+        signal_coverage = (
+            coverage_payload.get("_marketSignalCoverage")
+            if isinstance(coverage_payload, dict)
+            and isinstance(coverage_payload.get("_marketSignalCoverage"), dict)
+            else {}
+        )
         for snake, camel in [
             ("foreign_net_volume", "foreignNetVolume"),
             ("institution_net_volume", "institutionNetVolume"),
@@ -287,7 +297,20 @@ class QuestDBTimeSeriesAdapter:
                 fields.append(snake + "=" + format(numeric_value(value), ".17g"))
         for snake, camel in [("trade_strength", "tradeStrength"), ("bid_ask_imbalance", "bidAskImbalance")]:
             value = source_value(raw, snake, camel)
-            if value not in (None, "", 0, 0.0):
+            stage = "ccnl" if camel == "tradeStrength" else "orderbook"
+            stage_coverage = (
+                signal_coverage.get(stage)
+                if isinstance(signal_coverage.get(stage), dict)
+                else {}
+            )
+            stage_fields = {
+                str(item or "")
+                for item in stage_coverage.get("observedFields") or stage_coverage.get("fields") or []
+            }
+            if value not in (None, "") and (
+                camel in stage_fields
+                or (not stage_coverage and value not in (0, 0.0))
+            ):
                 fields.append(snake + "=" + format(numeric_value(value), ".17g"))
         return table_name + tags + " " + ",".join(fields) + " " + str(epoch_value(event_at, 1_000_000_000))
 

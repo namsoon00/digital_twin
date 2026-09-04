@@ -6,6 +6,7 @@ from .accounts import message_delivery_profile, normalize_message_delivery_level
 from .company_knowledge import active_company_valuation_rule_ids
 from .decision_evidence_contract import (
     cap_decision_readiness,
+    decision_eligible_hypothesis_payload,
     decision_readiness_contract,
     hypothesis_set_evidence_summary,
     material_action_transition_contract,
@@ -2234,6 +2235,10 @@ def validated_response_from_payload(
         item for item in hypotheses
         if str(item.get("hypothesisId") or "") == selected_hypothesis_id
     ), {})
+    selected_hypothesis_eligible = bool(
+        selected_hypothesis
+        and decision_eligible_hypothesis_payload(selected_hypothesis)
+    )
     selected_hypothesis_action = str(selected_hypothesis.get("candidateAction") or "").strip().upper()
     if selected_hypothesis_action in VALID_ACTIONS:
         investment_view_action = selected_hypothesis_action
@@ -2310,9 +2315,11 @@ def validated_response_from_payload(
         "notification-ai-decision-contract-v8",
     }
     if strict_causal_contract and action in executable_actions and (
-        decision_readiness != "ready" or not supported_causal_path
+        decision_readiness != "ready"
+        or not supported_causal_path
+        or (bool(selected_hypothesis_id) and not selected_hypothesis_eligible)
     ):
-        warnings.append("실행 행동의 검증된 인과 경로가 부족해 실행 의견을 보류로 낮췄습니다.")
+        warnings.append("실행 행동의 검증된 가설·인과 경로가 부족해 실행 의견을 보류로 낮췄습니다.")
         action = normalized_action_for_rulebox_policy(
             context,
             normalized_action_for_target(context, "HOLD"),
@@ -2326,7 +2333,7 @@ def validated_response_from_payload(
         review_label = REVIEW_LEVEL_LABELS["check"]
         append_unique_text(
             validation_reasons,
-            "실행 행동에는 근거 ID가 연결된 supported 인과 경로와 ready 상태가 필요합니다.",
+            "실행 행동에는 현재 세대에서 승인·검증된 가설, 근거 ID가 연결된 supported 인과 경로와 ready 상태가 필요합니다.",
             180,
         )
     transition_contract = material_action_transition_contract(context, action)

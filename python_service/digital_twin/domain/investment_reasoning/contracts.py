@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
-from typing import Dict, Iterable, Mapping, Tuple
+from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 from ..hypothesis_catalog import hypothesis_family_definition
 from ..ontology_rule_knowledge import rule_knowledge_basis_from_rows
@@ -18,7 +18,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v2"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v3"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v4"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -144,6 +144,7 @@ class HypothesisRecord:
     hypothesis_id: str
     family_id: str = ""
     label: str = ""
+    causal_signature: str = ""
     candidate_action: str = ""
     supporting_rule_ids: Tuple[str, ...] = ()
     supporting_evidence_ids: Tuple[str, ...] = ()
@@ -165,6 +166,18 @@ class HypothesisRecord:
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
     claim_contract: Dict[str, object] = field(default_factory=dict)
     qualification: Dict[str, object] = field(default_factory=dict)
+    evidence_state: str = ""
+    approval_status: str = ""
+    verification_status: str = ""
+    status: str = ""
+    scope_state: str = ""
+    scope_version: str = ""
+    market_hypothesis_id: str = ""
+    market_world_id: str = ""
+    market_id: str = ""
+    market_causal_signature: str = ""
+    account_hypothesis_overlay_id: str = ""
+    portfolio_world_id: str = ""
     account_id: str = ""
     subject_symbol: str = ""
     inference_generation_id: str = ""
@@ -193,6 +206,9 @@ class HypothesisRecord:
             hypothesis_id=str(payload.get("hypothesisId") or payload.get("hypothesis_id") or ""),
             family_id=str(payload.get("familyId") or payload.get("family_id") or ""),
             label=str(payload.get("label") or payload.get("claim") or payload.get("title") or ""),
+            causal_signature=str(
+                payload.get("causalSignature") or payload.get("causal_signature") or ""
+            ),
             candidate_action=str(payload.get("candidateAction") or payload.get("candidate_action") or "").upper(),
             supporting_rule_ids=supporting_rule_ids,
             supporting_evidence_ids=_texts(payload.get("supportingEvidenceIds") or payload.get("supporting_evidence_ids")),
@@ -259,6 +275,50 @@ class HypothesisRecord:
                 or {}
             ),
             qualification=dict(payload.get("qualification") or {}),
+            evidence_state=str(
+                payload.get("evidenceState") or payload.get("evidence_state") or ""
+            ).lower(),
+            approval_status=str(
+                payload.get("approvalStatus") or payload.get("approval_status") or ""
+            ).lower(),
+            verification_status=str(
+                payload.get("verificationStatus")
+                or payload.get("verification_status")
+                or payload.get("validationState")
+                or payload.get("validation_state")
+                or ""
+            ).lower(),
+            status=str(payload.get("status") or "").lower(),
+            scope_state=str(
+                payload.get("scopeState") or payload.get("scope_state") or ""
+            ).lower(),
+            scope_version=str(
+                payload.get("scopeVersion") or payload.get("scope_version") or ""
+            ),
+            market_hypothesis_id=str(
+                payload.get("marketHypothesisId")
+                or payload.get("market_hypothesis_id")
+                or ""
+            ),
+            market_world_id=str(
+                payload.get("marketWorldId") or payload.get("market_world_id") or ""
+            ),
+            market_id=str(payload.get("marketId") or payload.get("market_id") or ""),
+            market_causal_signature=str(
+                payload.get("marketCausalSignature")
+                or payload.get("market_causal_signature")
+                or ""
+            ),
+            account_hypothesis_overlay_id=str(
+                payload.get("accountHypothesisOverlayId")
+                or payload.get("account_hypothesis_overlay_id")
+                or ""
+            ),
+            portfolio_world_id=str(
+                payload.get("portfolioWorldId")
+                or payload.get("portfolio_world_id")
+                or ""
+            ),
             account_id=str(payload.get("accountId") or payload.get("account_id") or ""),
             subject_symbol=str(payload.get("subjectSymbol") or payload.get("subject_symbol") or "").upper(),
             inference_generation_id=str(
@@ -704,7 +764,7 @@ class AIJudgmentResult:
     request_id: str
     result_id: str
     action: str
-    confidence: float
+    confidence: Optional[float]
     selected_hypothesis_id: str
     validation_state: str
     rationale: str
@@ -713,6 +773,8 @@ class AIJudgmentResult:
     rejected_candidate_reason: str = ""
     next_observations: Tuple[str, ...] = ()
     reversal_conditions: Tuple[str, ...] = ()
+    follow_up_conditions: Tuple[Dict[str, object], ...] = ()
+    unsupported_follow_ups: Tuple[Dict[str, object], ...] = ()
     reviewed_hypothesis_ids: Tuple[str, ...] = ()
     hypothesis_reviews: Tuple[Dict[str, object], ...] = ()
     comparison_state: str = ""
@@ -749,11 +811,15 @@ class AIJudgmentResult:
             for item in reviews
             if item.get("hypothesisId")
         )
-        confidence = payload.get("confidence") or payload.get("judgmentStrength") or 0
+        confidence = (
+            payload.get("confidence")
+            if payload.get("confidence") not in (None, "")
+            else payload.get("judgmentStrength")
+        )
         try:
-            confidence_value = float(confidence or 0)
+            confidence_value = float(confidence) if confidence not in (None, "") else None
         except (TypeError, ValueError):
-            confidence_value = 0.0
+            confidence_value = None
         return cls(
             request_id=str(getattr(result, "request_id", "") or ""),
             result_id=str(getattr(result, "result_id", "") or ""),
@@ -789,6 +855,16 @@ class AIJudgmentResult:
                 payload.get("reversalConditions")
                 or ([payload.get("invalidationCondition")] if payload.get("invalidationCondition") else [])
             ),
+            follow_up_conditions=tuple(
+                dict(item)
+                for item in payload.get("followUpConditions") or []
+                if isinstance(item, Mapping)
+            ),
+            unsupported_follow_ups=tuple(
+                dict(item)
+                for item in payload.get("unsupportedFollowUps") or []
+                if isinstance(item, Mapping)
+            ),
             reviewed_hypothesis_ids=reviewed_hypothesis_ids,
             hypothesis_reviews=tuple(reviews),
             comparison_state=str(
@@ -810,15 +886,21 @@ class AIJudgmentResult:
         ]:
             payload[key] = list(payload[key])
         payload["hypothesis_reviews"] = [dict(item) for item in self.hypothesis_reviews]
+        payload["follow_up_conditions"] = [dict(item) for item in self.follow_up_conditions]
+        payload["unsupported_follow_ups"] = [dict(item) for item in self.unsupported_follow_ups]
         return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "AIJudgmentResult":
         payload = dict(value or {})
         try:
-            confidence = float(payload.get("confidence") or 0)
+            confidence = (
+                float(payload.get("confidence"))
+                if payload.get("confidence") not in (None, "")
+                else None
+            )
         except (TypeError, ValueError):
-            confidence = 0.0
+            confidence = None
         return cls(
             request_id=str(payload.get("request_id") or payload.get("requestId") or ""),
             result_id=str(payload.get("result_id") or payload.get("resultId") or ""),
@@ -832,6 +914,16 @@ class AIJudgmentResult:
             rejected_candidate_reason=str(payload.get("rejected_candidate_reason") or payload.get("rejectedCandidateReason") or ""),
             next_observations=_texts(payload.get("next_observations") or payload.get("nextObservations")),
             reversal_conditions=_texts(payload.get("reversal_conditions") or payload.get("reversalConditions")),
+            follow_up_conditions=tuple(
+                dict(item)
+                for item in payload.get("follow_up_conditions") or payload.get("followUpConditions") or []
+                if isinstance(item, Mapping)
+            ),
+            unsupported_follow_ups=tuple(
+                dict(item)
+                for item in payload.get("unsupported_follow_ups") or payload.get("unsupportedFollowUps") or []
+                if isinstance(item, Mapping)
+            ),
             reviewed_hypothesis_ids=_texts(
                 payload.get("reviewed_hypothesis_ids") or payload.get("reviewedHypothesisIds")
             ),

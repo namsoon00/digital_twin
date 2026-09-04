@@ -1,7 +1,7 @@
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from .portfolio import Position
@@ -143,11 +143,11 @@ class MarketTimeSeriesObservation:
     volume: float = 0.0
     trading_value: float = 0.0
     volume_ratio: float = 0.0
-    trade_strength: float = 0.0
-    bid_ask_imbalance: float = 0.0
-    foreign_net_volume: float = 0.0
-    institution_net_volume: float = 0.0
-    individual_net_volume: float = 0.0
+    trade_strength: Optional[float] = None
+    bid_ask_imbalance: Optional[float] = None
+    foreign_net_volume: Optional[float] = None
+    institution_net_volume: Optional[float] = None
+    individual_net_volume: Optional[float] = None
     investor_coverage_json: str = "{}"
     ma5: float = 0.0
     ma20: float = 0.0
@@ -171,6 +171,28 @@ class MarketTimeSeriesObservation:
         price = number(position.current_price)
         market_signal_coverage = position.market_signal_coverage if isinstance(position.market_signal_coverage, dict) else {}
         investor_coverage = market_signal_coverage.get("investor") if isinstance(market_signal_coverage.get("investor"), dict) else {}
+        execution_coverage = market_signal_coverage.get("ccnl") if isinstance(market_signal_coverage.get("ccnl"), dict) else {}
+        orderbook_coverage = market_signal_coverage.get("orderbook") if isinstance(market_signal_coverage.get("orderbook"), dict) else {}
+
+        def observed_value(value: object, coverage: Mapping[str, object], field: str) -> Optional[float]:
+            observed = {
+                str(item or "").strip()
+                for item in coverage.get("observedFields") or coverage.get("fields") or []
+                if str(item or "").strip()
+            }
+            if field in observed:
+                return number(value)
+            # Older providers did not publish field-level coverage. Preserve a
+            # non-zero observation, but never turn a default zero into a fact.
+            if not coverage and number(value) != 0:
+                return number(value)
+            return None
+
+        stored_investor_coverage = dict(investor_coverage)
+        stored_investor_coverage["_marketSignalCoverage"] = {
+            "ccnl": dict(execution_coverage),
+            "orderbook": dict(orderbook_coverage),
+        }
         return cls(
             account_id=str(account_id or ""),
             symbol=str(position.symbol or "").upper().strip(),
@@ -194,12 +216,12 @@ class MarketTimeSeriesObservation:
             volume=number(position.volume),
             trading_value=number(position.trading_value),
             volume_ratio=number(position.volume_ratio),
-            trade_strength=number(position.trade_strength),
-            bid_ask_imbalance=number(position.bid_ask_imbalance),
-            foreign_net_volume=number(position.foreign_net_volume),
-            institution_net_volume=number(position.institution_net_volume),
-            individual_net_volume=number(position.individual_net_volume),
-            investor_coverage_json=json.dumps(investor_coverage, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+            trade_strength=observed_value(position.trade_strength, execution_coverage, "tradeStrength"),
+            bid_ask_imbalance=observed_value(position.bid_ask_imbalance, orderbook_coverage, "bidAskImbalance"),
+            foreign_net_volume=observed_value(position.foreign_net_volume, investor_coverage, "foreignNetVolume"),
+            institution_net_volume=observed_value(position.institution_net_volume, investor_coverage, "institutionNetVolume"),
+            individual_net_volume=observed_value(position.individual_net_volume, investor_coverage, "individualNetVolume"),
+            investor_coverage_json=json.dumps(stored_investor_coverage, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
             ma5=number(position.ma5),
             ma20=number(position.ma20),
             ma60=number(position.ma60),
@@ -371,6 +393,25 @@ def temporal_observation_payload(
         for field in (investor_coverage.get("observedFields") or investor_coverage.get("fields") or [])
         if str(field or "").strip()
     }
+    market_signal_coverage = (
+        investor_coverage.get("_marketSignalCoverage")
+        if isinstance(investor_coverage.get("_marketSignalCoverage"), dict)
+        else {}
+    )
+    execution_coverage = (
+        market_signal_coverage.get("ccnl")
+        if isinstance(market_signal_coverage.get("ccnl"), dict)
+        else {}
+    )
+    orderbook_coverage = (
+        market_signal_coverage.get("orderbook")
+        if isinstance(market_signal_coverage.get("orderbook"), dict)
+        else {}
+    )
+    payload["marketSignalCoverage"].update({
+        "ccnl": execution_coverage,
+        "orderbook": orderbook_coverage,
+    })
     for public_field, storage_field in [
         ("foreignNetVolume", "foreign_net_volume"),
         ("institutionNetVolume", "institution_net_volume"),
@@ -381,8 +422,22 @@ def temporal_observation_payload(
     # The legacy mixed table has no per-field coverage for execution data.
     # A non-zero value proves observation; zero remains missing rather than
     # being promoted from the column default into a false neutral signal.
-    if row.get("trade_strength") not in (None, "", 0, 0.0):
+    observed_execution_fields = {
+        str(field)
+        for field in execution_coverage.get("observedFields") or execution_coverage.get("fields") or []
+    }
+    observed_orderbook_fields = {
+        str(field)
+        for field in orderbook_coverage.get("observedFields") or orderbook_coverage.get("fields") or []
+    }
+    if row.get("trade_strength") not in (None, "") and (
+        "tradeStrength" in observed_execution_fields
+        or (not execution_coverage and row.get("trade_strength") not in (0, 0.0))
+    ):
         payload["tradeStrength"] = float(row.get("trade_strength"))
-    if row.get("bid_ask_imbalance") not in (None, "", 0, 0.0):
+    if row.get("bid_ask_imbalance") not in (None, "") and (
+        "bidAskImbalance" in observed_orderbook_fields
+        or (not orderbook_coverage and row.get("bid_ask_imbalance") not in (0, 0.0))
+    ):
         payload["bidAskImbalance"] = float(row.get("bid_ask_imbalance"))
     return payload

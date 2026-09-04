@@ -2520,6 +2520,19 @@ def select_target_scoped_manifest_patch(
         for scope_id, row in incoming.items():
             if scope_id in selected or _scope_type(scope_id) != "link":
                 continue
+            if (
+                bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
+                and scope_id in fact_slot_deferred_scope_ids
+            ):
+                # The repository will physically rebind an existing active
+                # link when one of its endpoint generations changes. Do not
+                # replace that link's semantic payload with an unrelated
+                # relation change that merely happened to share the same
+                # in-memory subject graph.
+                selection_reasons.setdefault(scope_id, set()).add(
+                    "deferred-unrelated-event-relation"
+                )
+                continue
             dependencies = {
                 _clean(value)
                 for value in row.get("dependencyScopeIds") or []
@@ -2656,6 +2669,16 @@ def select_target_scoped_manifest_patch(
         and not semantic_changes_by_scope.get(scope_id)
         and not dependency_changes_by_scope.get(scope_id)
     )
+    deferred_relation_scope_ids = sorted(
+        scope_id
+        for scope_id in deferred
+        if _scope_type(scope_id) == "link"
+    )
+    reused_active_relation_scope_ids = sorted(
+        scope_id
+        for scope_id in deferred_relation_scope_ids
+        if scope_id in retained_active_by_scope
+    )
 
     return {
         **base,
@@ -2665,6 +2688,8 @@ def select_target_scoped_manifest_patch(
         "selectedIncomingScopePlan": selected_plan,
         "reusedActiveScopeIds": sorted(set(retained_active_by_scope) - selected),
         "deferredScopeIds": sorted(deferred),
+        "deferredRelationScopeIds": deferred_relation_scope_ids,
+        "reusedActiveRelationScopeIds": reused_active_relation_scope_ids,
         "retiredScopeIds": retired_scope_ids,
         "replacedDependencyScopeIds": sorted(replaced_dependency_scope_ids),
         "cascadedRetiredScopeIds": sorted(cascaded_retired_scope_ids),
@@ -2682,6 +2707,8 @@ def select_target_scoped_manifest_patch(
             "deferredPersistenceRebindScopeCount": len(
                 deferred_persistence_rebind_scope_ids
             ),
+            "deferredRelationScopeIds": deferred_relation_scope_ids,
+            "reusedActiveRelationScopeIds": reused_active_relation_scope_ids,
             "semanticChangedScopeCount": len(semantic_changes_by_scope),
             "ruleDependencyChangedScopeCount": len(
                 dependency_changes_by_scope
@@ -2829,6 +2856,12 @@ def merge_target_scoped_abox_manifest(
         "selectedIncomingScopeIds": list(selection.get("selectedIncomingScopeIds") or []),
         "reusedActiveScopeIds": list(selection.get("reusedActiveScopeIds") or []),
         "deferredScopeIds": list(selection.get("deferredScopeIds") or []),
+        "deferredRelationScopeIds": list(
+            selection.get("deferredRelationScopeIds") or []
+        ),
+        "reusedActiveRelationScopeIds": list(
+            selection.get("reusedActiveRelationScopeIds") or []
+        ),
         "retiredScopeIds": list(selection.get("retiredScopeIds") or []),
         "factSlot": dict(selection.get("factSlot") or {}),
         "relationRebindRootScopeIds": list(

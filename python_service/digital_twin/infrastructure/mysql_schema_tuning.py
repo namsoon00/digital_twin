@@ -926,6 +926,31 @@ MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY: Dict[str, Sequence[MySQLColumnCompatibil
             "investor_coverage_json",
             "LONGTEXT NULL",
         ),
+        MySQLColumnCompatibilityDefinition(
+            "market_time_series_observations",
+            "trade_strength",
+            "DOUBLE NULL",
+        ),
+        MySQLColumnCompatibilityDefinition(
+            "market_time_series_observations",
+            "bid_ask_imbalance",
+            "DOUBLE NULL",
+        ),
+        MySQLColumnCompatibilityDefinition(
+            "market_time_series_observations",
+            "foreign_net_volume",
+            "DOUBLE NULL",
+        ),
+        MySQLColumnCompatibilityDefinition(
+            "market_time_series_observations",
+            "institution_net_volume",
+            "DOUBLE NULL",
+        ),
+        MySQLColumnCompatibilityDefinition(
+            "market_time_series_observations",
+            "individual_net_volume",
+            "DOUBLE NULL",
+        ),
     ),
 }
 
@@ -1071,12 +1096,31 @@ def ensure_mysql_column_compatibility(
 ) -> List[str]:
     modified: List[str] = []
     for table, definitions in column_map.items():
+        pending: List[MySQLColumnCompatibilityDefinition] = []
         for definition in definitions:
             if not mysql_column_exists(connection, table, definition.name):
                 continue
             if mysql_column_is_nullable(connection, table, definition.name):
                 continue
-            _execute(connection, definition.alter_sql())
+            pending.append(definition)
+        if not pending:
+            continue
+        # One online table rebuild is substantially safer than one rebuild per
+        # column for the large time-series tables.
+        _execute(
+            connection,
+            "ALTER TABLE "
+            + quote_identifier(table)
+            + " "
+            + ", ".join(
+                "MODIFY COLUMN "
+                + quote_identifier(definition.name)
+                + " "
+                + definition.definition_sql
+                for definition in pending
+            ),
+        )
+        for definition in pending:
             modified.append(definition.table + "." + definition.name)
     return modified
 

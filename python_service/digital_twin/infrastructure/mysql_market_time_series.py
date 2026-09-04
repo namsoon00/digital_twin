@@ -50,6 +50,18 @@ OBSERVATION_COLUMNS = [
     "ma20_slope", "ma60_slope", "ma20_distance", "ma60_distance", "data_quality",
 ]
 
+# Older local installations created these columns as NOT NULL. Coverage JSON,
+# not the numeric placeholder, is the semantic source of truth, so retain a
+# storage-only zero sentinel while domain reads expose unsupported values as
+# ``None``. This avoids an online table rebuild on a large history table.
+LEGACY_OPTIONAL_SIGNAL_COLUMNS = {
+    "trade_strength",
+    "bid_ask_imbalance",
+    "foreign_net_volume",
+    "institution_net_volume",
+    "individual_net_volume",
+}
+
 CAPITAL_FLOW_COLUMNS = [
     "observation_id", "subject_kind", "subject_id", "market", "currency", "sector",
     "trading_date", "observed_at", "source_as_of", "received_at", "provider",
@@ -74,7 +86,12 @@ def insert_placeholders() -> str:
 
 
 def row_values(row: Dict[str, object]):
-    return tuple(row.get(column) for column in OBSERVATION_COLUMNS)
+    return tuple(
+        0.0
+        if column in LEGACY_OPTIONAL_SIGNAL_COLUMNS and row.get(column) is None
+        else row.get(column)
+        for column in OBSERVATION_COLUMNS
+    )
 
 
 def capital_flow_row(observation: CapitalFlowObservation, now_value: str = "") -> Dict[str, object]:

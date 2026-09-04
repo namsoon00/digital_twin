@@ -103,6 +103,7 @@ def reasoning_failure_recovery_allowed(
         # Replay remains bounded by ``maximum_recovery_attempts``.
         "candidate-scope-row-count-mismatch",
         "active-scope-semantic-reuse-incomplete",
+        "active-rebind-endpoint-invalid",
     }
     projection_statuses = {
         str(item.get("status") or "").strip().lower()
@@ -2518,6 +2519,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             rows = connection.execute(
                 "SELECT * FROM reasoning_engine_jobs WHERE deployment_id = %s "
                 "AND job_status IN ('failed', 'completed', 'excluded', 'superseded') "
+                "AND (job_status = 'failed' OR release_fingerprint <> '') "
                 "ORDER BY updated_at DESC, job_id DESC LIMIT 1000 FOR UPDATE",
                 (clean_deployment_id,),
             ).fetchall() or []

@@ -171,6 +171,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         for status in [
             "candidate-scope-row-count-mismatch",
             "active-scope-semantic-reuse-incomplete",
+            "active-rebind-endpoint-invalid",
         ]:
             self.assertTrue(reasoning_failure_recovery_allowed(
                 "reasoning-execution-blocked",
@@ -2143,6 +2144,11 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         recovered_event = json.loads(inserted[9])["sourceEvent"]
         self.assertEqual(1, recovered_event["payload"]["reasoningRecovery"]["attempt"])
         self.assertEqual("job:failed", recovered_event["payload"]["reasoningRecovery"]["sourceJobId"])
+        recovery_select = next(
+            sql for sql, _params in connection.calls
+            if sql.startswith("SELECT * FROM reasoning_engine_jobs")
+        )
+        self.assertIn("job_status = 'failed' OR release_fingerprint <> ''", recovery_select)
 
     def test_runner_does_not_claim_jobs_when_typedb_execution_guard_is_blocked(self):
         class Queue:

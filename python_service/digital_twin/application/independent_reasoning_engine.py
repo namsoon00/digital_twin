@@ -290,6 +290,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("reasoningExecution"), Mapping)
         else {}
     )
+    candidate_reconciliation_failure = (
+        values.get("candidateSemanticReconciliationFailure")
+        if isinstance(values.get("candidateSemanticReconciliationFailure"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -311,6 +316,16 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "failureReasonCode": retry["reasonCode"],
         "failureStage": retry["failureStage"],
         "blockingRuleId": retry["blockingRuleId"],
+        "candidateSemanticReconciliationFailure": {
+            str(key): value
+            for key, value in candidate_reconciliation_failure.items()
+            if key in {
+                "status", "reason", "scopeId", "relationType", "source", "target",
+                "endpointRole", "endpointId", "endpointStorageId",
+                "knownEndpointScopeIds", "knownEndpointGenerationIds",
+                "expectedGenerationId", "actualGenerationId",
+            }
+        },
         "reasoningExecution": {
             key: reasoning_execution.get(key)
             for key in [

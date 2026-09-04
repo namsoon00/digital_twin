@@ -35,7 +35,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v10-stable-item-ownership"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v11-model-signal-isolation"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -2511,8 +2511,36 @@ def select_target_scoped_manifest_patch(
             else missing_reason
         )
 
+    def outside_authoritative_fact_slot(scope_id: str) -> bool:
+        if not bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative")):
+            return False
+        plan = dict(fact_slot_plan or {})
+        raw_by_symbol = plan.get("slotFamiliesBySymbol")
+        by_symbol = raw_by_symbol if isinstance(raw_by_symbol, Mapping) else {}
+        symbol = scope_symbol(scope_id)
+        raw_families = by_symbol.get(symbol, plan.get("slotFamilies") or [])
+        allowed_families = {
+            _clean(value).lower()
+            for value in raw_families or []
+            if _clean(value)
+        }
+        item = incoming.get(scope_id) or {}
+        family = (
+            _clean(item.get("scopeFamily"))
+            or scope_family(scope_id)
+        ).lower()
+        return bool(allowed_families and family and family not in allowed_families)
+
     missing_endpoints: List[str] = []
     incomplete_source_endpoint_scopes: List[str] = []
+    # An authoritative event can assemble a newer in-memory endpoint for a
+    # relation that belongs to another fact slot.  The relation scope itself
+    # may remain byte-for-byte unchanged, so the ordinary changed-scope list
+    # would not classify it as deferred.  Persisting that current relation
+    # beside the active endpoint generation creates a mixed candidate graph.
+    # Record it explicitly so the repository reuses both the active assertion
+    # and its active endpoint rows.
+    forced_deferred_relation_scope_ids: Set[str] = set()
     changed = True
     while changed:
         changed = False
@@ -2543,7 +2571,10 @@ def select_target_scoped_manifest_patch(
             assertion_changed = assertion_changed_from_active(scope_id, row)
             if (
                 bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
-                and scope_id in fact_slot_deferred_scope_ids
+                and (
+                    scope_id in fact_slot_deferred_scope_ids
+                    or outside_authoritative_fact_slot(scope_id)
+                )
                 and not assertion_changed
             ):
                 # The repository will physically rebind an existing active
@@ -2554,6 +2585,7 @@ def select_target_scoped_manifest_patch(
                 selection_reasons.setdefault(scope_id, set()).add(
                     "deferred-unrelated-event-relation"
                 )
+                forced_deferred_relation_scope_ids.add(scope_id)
                 continue
             dependencies = {
                 _clean(value)
@@ -2647,7 +2679,7 @@ def select_target_scoped_manifest_patch(
         }
 
     selected_plan = [incoming[scope_id] for scope_id in sorted(selected)]
-    deferred = [
+    deferred = sorted({
         scope_id
         for scope_id, item in incoming.items()
         if scope_id not in selected
@@ -2656,7 +2688,7 @@ def select_target_scoped_manifest_patch(
             or _clean((active_by_scope.get(scope_id) or {}).get("generationId")) != _clean(item.get("generationId"))
             or _clean((active_by_scope.get(scope_id) or {}).get("fingerprint")) != _clean(item.get("fingerprint"))
         )
-    ]
+    }.union(forced_deferred_relation_scope_ids))
 
     def selection_trace(scope_ids: Iterable[str], disposition: str) -> List[Dict[str, object]]:
         rows = []

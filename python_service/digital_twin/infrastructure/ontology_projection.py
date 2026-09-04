@@ -4290,6 +4290,9 @@ class PortfolioOntologyProjectionRecorder:
                     currentFallbackRelationScopeIds=list(
                         result.get("currentFallbackRelationScopeIds") or []
                     )[:24],
+                    candidateSemanticReconciliationFailure=dict(
+                        result.get("candidateSemanticReconciliationFailure") or {}
+                    ),
                     reason=str(result.get("reason") or "")[:220],
                 )
                 # Candidate ABox writes have committed at this point and the

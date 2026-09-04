@@ -349,6 +349,46 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
             relation["targetStorageId"],
         )
 
+    def test_selected_relation_can_reuse_unchanged_active_endpoint(self):
+        current_relation = self._relation(
+            "stock:MSTR",
+            "research:MSTR:news:active",
+            self.new_link_generation,
+            title="Published active article",
+        )
+
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock],
+            [current_relation],
+            self._active_context(),
+            self.physical_scope_plan,
+            [self.state_scope, self.link_scope],
+            [self.state_scope, self.link_scope],
+            [],
+            self.manifest_id,
+        )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(
+            "research:MSTR:news:active",
+            result["candidateRelationRows"][0]["target"],
+        )
+
+    def test_unselected_current_relation_does_not_enter_candidate(self):
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, self.current_news],
+            [self.current_relation],
+            self._active_context(),
+            self.physical_scope_plan,
+            [self.state_scope],
+            [self.state_scope],
+            [self.evidence_scope],
+            self.manifest_id,
+        )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual([], result["candidateRelationRows"])
+
     def test_candidate_relation_fails_before_write_for_retired_endpoint_generation(self):
         changed_plan = [dict(item) for item in self.physical_scope_plan]
         for item in changed_plan:

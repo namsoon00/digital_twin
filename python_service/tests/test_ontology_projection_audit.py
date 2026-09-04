@@ -155,6 +155,24 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_projection_summary_keeps_candidate_endpoint_failure_details(self):
+        summary = projection_result_summary({
+            "status": "candidate-relation-endpoint-missing",
+            "candidateSemanticReconciliationFailure": {
+                "status": "candidate-relation-endpoint-missing",
+                "scopeId": "link:symbol:035720:evidence:bucket:20",
+                "relationType": "HAS_ARTICLE_ANALYSIS",
+                "endpointId": "article-ai-analysis:035720:one",
+                "knownEndpointGenerationIds": ["abox-scope:old"],
+                "unboundedDebugPayload": "omit-me",
+            },
+        })
+
+        failure = summary["candidateSemanticReconciliationFailure"]
+        self.assertEqual("HAS_ARTICLE_ANALYSIS", failure["relationType"])
+        self.assertEqual(["abox-scope:old"], failure["knownEndpointGenerationIds"])
+        self.assertNotIn("unboundedDebugPayload", failure)
+
     def assert_abox_runtime_modes_are_not_coerced_into_numeric_stages(self):
         stages = {}
         result = {

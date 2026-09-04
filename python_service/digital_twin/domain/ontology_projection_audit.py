@@ -697,6 +697,9 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
     replay_validation = dict(values.get("nativeReplayValidation") or {})
     equivalence_audit = dict(values.get("incrementalEquivalenceAudit") or {})
     native_rule_failure = dict(values.get("nativeRuleFailure") or {})
+    candidate_reconciliation_failure = dict(
+        values.get("candidateSemanticReconciliationFailure") or {}
+    )
     reasoning_context = compact_reasoning_request_context(values.get("reasoningContext"))
     analysis_telemetry = projection_analysis_telemetry(values)
     return {
@@ -849,6 +852,17 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
         ),
         "recoveryMode": str(values.get("recoveryMode") or ""),
         "preservedActiveGeneration": bool(values.get("preservedActiveGeneration")),
+        "candidateSemanticReconciliationFailure": {
+            str(key): value
+            for key, value in candidate_reconciliation_failure.items()
+            if key in {
+                "status", "reason", "scopeId", "relationType", "source", "target",
+                "endpointRole", "endpointId", "endpointStorageId",
+                "knownEndpointScopeIds", "knownEndpointGenerationIds",
+                "candidateManifestId", "expectedGenerationId", "actualGenerationId",
+                "expectedRelationCount", "currentRelationCount",
+            }
+        },
         "nativeRuleFailure": {
             "version": str(native_rule_failure.get("version") or ""),
             "stage": str(native_rule_failure.get("stage") or ""),

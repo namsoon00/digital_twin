@@ -53,8 +53,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Scoped relation rebind separately protects semantic preservation,
         # evidence-node cardinality, and fail-closed behavior when a reused
         # endpoint generation changes. Frozen releases also preserve authored
-        # extension fields when a graph store is restored.
-        self.assertLessEqual(total, 908)
+        # extension fields when a graph store is restored. Candidate Manifest
+        # closure also verifies unchanged endpoint reuse, unrelated relation
+        # exclusion, model-signal scope isolation, and bounded failure audit.
+        self.assertLessEqual(total, 913)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

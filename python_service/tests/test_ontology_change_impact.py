@@ -6,6 +6,7 @@ from digital_twin.domain.ontology_change_impact import (
     build_dynamic_inference_preflight,
     build_inference_impact_plan,
     compact_inference_impact_plan,
+    family_for_entity,
     family_for_relation,
     rule_condition_dependency_profile,
     rule_dependency_profile,
@@ -38,6 +39,26 @@ from digital_twin.infrastructure.typedb_ontology import (
 
 
 class OntologyChangeImpactTests(unittest.TestCase):
+    def test_model_hypothesis_assessment_family_does_not_follow_hypothesis_name(self):
+        self.assertEqual(
+            "model-signal",
+            family_for_entity(
+                "model-hypothesis-assessment",
+                {"symbol": "028260", "hypothesisFamilyId": "fundamental-deterioration"},
+                "model-hypothesis-assessment:028260:fundamental-deterioration",
+            ),
+        )
+        self.assertEqual(
+            "model-signal",
+            family_for_relation(
+                "HAS_HYPOTHESIS_ASSESSMENT",
+                source_family="state",
+                target_family="model-signal",
+                source_kind="stock",
+                target_kind="model-hypothesis-assessment",
+            ),
+        )
+
     def test_dynamic_preflight_reuses_shared_generation_for_account_only_change(self):
         rules = [{
             "ruleId": "shared.market.price.v1",

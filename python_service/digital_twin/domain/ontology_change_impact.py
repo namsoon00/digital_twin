@@ -330,6 +330,19 @@ def family_for_entity(kind: object, properties: Mapping[str, object] = None, ent
         return "governance"
     if _matches_any(text, ["company-capital", "capital-state", "capital-structure", "capital-event", "ownership-stake"]):
         return "capital"
+    # Model assessments are model-signal facts regardless of the hypothesis
+    # name.  A family id such as ``fundamental-deterioration`` previously made
+    # the entity fall through to the generic valuation matcher.  That mixed
+    # short-lived model assessments with company valuation rows in one
+    # copy-on-write bucket and could retire a relation endpoint during an
+    # unrelated valuation refresh.
+    if _matches_any(text, [
+        "model-hypothesis-assessment",
+        "modelhypothesisassessment",
+        "statistical-model-hypothesis-evidence",
+        "modelhypothesisevidence",
+    ]):
+        return "model-signal"
     if _matches_any(text, ["company-valuation", "company-valuation-state"]):
         return "company-valuation"
     if _matches_any(text, ["valuation", "fair-value", "fairvalue", "fundamental", "margin-of-safety", "cross-market-premium", "adr-premium"]):
@@ -422,6 +435,23 @@ def family_for_relation(
         return "capital"
     if _matches_any(text, ["company_valuation", "company-valuation"]):
         return "company-valuation"
+    if _matches_any(text, [
+        "has_model_signal",
+        "has_hypothesis_assessment",
+        "assesses_hypothesis_family",
+        "derived_from_model_signal",
+        "generated_by_model_release",
+        "based_on_feature_snapshot",
+        "has_signal_eligibility",
+        "supports_hypothesis_family",
+    ]) and (
+        "model" in text
+        or "hypothesis" in text
+        or "signal" in text
+        or _lower(source_family) == "model-signal"
+        or _lower(target_family) == "model-signal"
+    ):
+        return "model-signal"
     if _matches_any(text, ["has_beta_to", "has_crypto_exposure", "has_factor_exposure", "exposed_to"]):
         return "exposure"
     if _matches_any(text, ["has_rebalance_state", "has_rebalance_proposal", "has_rebalance_scenario"]):

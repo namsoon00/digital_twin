@@ -847,6 +847,145 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertEqual(new_assessment_id, graph.relations[0].target)
         self.assertNotEqual(old_assessment_id, graph.relations[0].target)
 
+    def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):
+        state_scope = "symbol:035720:market:bucket:00"
+        article_scope = "symbol:035720:evidence:bucket:20"
+        link_scope = "link:symbol:035720:evidence:bucket:20"
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:035720", "Kakao", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "035720",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity("article-ai-analysis:new", "New analysis", "article-ai-analysis", {
+                    "ontologyBox": "ABox",
+                    "symbol": "035720",
+                    "aboxScopeId": article_scope,
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:035720",
+                "article-ai-analysis:new",
+                "HAS_ARTICLE_ANALYSIS",
+                properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+            )],
+        )
+        graph.worldview = {
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "market",
+                    "baseFingerprint": "state-new",
+                    "fingerprint": "state-new",
+                    "generationId": "state-generation-new",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": article_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "evidence",
+                    "impactScopeFamilies": ["evidence"],
+                    "baseFingerprint": "article-new",
+                    "fingerprint": "article-new",
+                    "generationId": "article-generation-new",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "evidence",
+                    "impactScopeFamilies": ["evidence"],
+                    "baseFingerprint": "stable-link-assertion",
+                    "fingerprint": "stable-link-generation",
+                    "generationId": "link-generation-active",
+                    "dependencyScopeIds": [state_scope, article_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "market",
+                    "impactScopeFamilies": ["market"],
+                    "baseFingerprint": "state-old",
+                    "fingerprint": "state-old",
+                    "generationId": "state-generation-old",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": article_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "evidence",
+                    "impactScopeFamilies": ["evidence"],
+                    "baseFingerprint": "article-active",
+                    "fingerprint": "article-active",
+                    "generationId": "article-generation-active",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "evidence",
+                    "impactScopeFamilies": ["evidence"],
+                    "baseFingerprint": "stable-link-assertion",
+                    "fingerprint": "stable-link-generation",
+                    "generationId": "link-generation-active",
+                    "dependencyScopeIds": [state_scope, article_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["035720"],
+            fact_slot_plan={
+                "enabled": True,
+                "status": "ready",
+                "targetSymbols": ["035720"],
+                "requestedFactFamilies": ["market"],
+                "requestedFactFamiliesBySymbol": {"035720": ["market"]},
+                "slotFamilies": ["market"],
+                "slotFamiliesBySymbol": {"035720": ["market"]},
+                "eventBoundaryAuthoritative": True,
+            },
+        )
+
+        self.assertEqual("ready", selection["status"])
+        self.assertEqual([state_scope], selection["selectedIncomingScopeIds"])
+        self.assertIn(article_scope, selection["deferredScopeIds"])
+        self.assertIn(link_scope, selection["deferredScopeIds"])
+        self.assertIn(link_scope, selection["deferredRelationScopeIds"])
+        self.assertIn(link_scope, selection["reusedActiveRelationScopeIds"])
+        trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["deferred"]
+        }
+        self.assertIn(
+            "deferred-unrelated-event-relation",
+            trace[link_scope]["reasons"],
+        )
+
     def test_endpoint_companion_does_not_expand_into_other_owned_relations(self):
         graph = PortfolioOntology(
             "main",

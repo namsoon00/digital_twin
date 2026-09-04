@@ -5591,12 +5591,13 @@ class ScopedABoxManifestMixin:
         candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
         for row in active_nodes:
             node_id = str(row.get("id") or "").strip()
-            scope_id = str(row.get("scopeId") or "").strip()
-            if (
-                node_id
-                and node_matches_candidate_plan(row)
-                and (not scope_id or scope_id in deferred)
-            ):
+            if node_id and node_matches_candidate_plan(row):
+                # Active endpoint rows are loaded only for scopes needed by
+                # semantic reuse or relation rebinding.  An unchanged endpoint
+                # can be reached through one of those relations even when its
+                # own scope is neither changed nor explicitly deferred.  Its
+                # exact planned generation is sufficient proof that it belongs
+                # to the candidate Manifest.
                 candidate_nodes_by_id[node_id] = row
         for row in current_nodes:
             node_id = str(row.get("id") or "").strip()
@@ -5637,10 +5638,17 @@ class ScopedABoxManifestMixin:
                 # identity for an external static endpoint; the TypeDB
                 # inventory check still proves that it exists before writes.
                 return existing_storage_id
+            known_scope_generations = sorted({
+                str(item.get("scopeId") or "").strip()
+                + "@" + row_generation_id(item)
+                for item in known_rows
+                if str(item.get("scopeId") or "").strip()
+            })
             raise CandidateRelationEndpointError({
                 "reason": (
                     "A relation endpoint is absent from the exact candidate graph: "
                     + endpoint_id
+                    + "; known=" + ",".join(known_scope_generations[:3])
                 ),
                 "scopeId": str(row.get("scopeId") or "").strip(),
                 "relationType": str(row.get("type") or "").strip(),
@@ -5726,10 +5734,17 @@ class ScopedABoxManifestMixin:
                 current_fallback_relation_scope_ids.append(scope_id)
             rebound_relations.extend(rebound_scope_rows)
 
+        # The complete in-memory source can contain facts newer than this
+        # mailbox event.  Only semantically selected current relation scopes
+        # belong to this candidate; unchanged scopes remain represented by
+        # the active Manifest/index.  Including every current relation made an
+        # unrelated article or portfolio fact fail a target-symbol write when
+        # its endpoint scope was intentionally deferred.
         candidate_relations: List[Dict[str, object]] = [
             row
             for row in current_relations
-            if str(row.get("scopeId") or "").strip() not in deferred
+            if str(row.get("scopeId") or "").strip() in semantic_changed
+            and str(row.get("scopeId") or "").strip() not in deferred
             and str(row.get("scopeId") or "").strip() not in rebind_only
         ]
         candidate_relations.extend(

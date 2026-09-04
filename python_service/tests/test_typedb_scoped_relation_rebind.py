@@ -284,6 +284,33 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
         self.assertEqual("active-rebind-relation-count-mismatch", result["status"])
         self.assertEqual(self.link_scope, result["scopeId"])
 
+    def test_current_fallback_rejects_endpoint_outside_candidate_manifest(self):
+        changed_plan = [dict(item) for item in self.physical_scope_plan]
+        for item in changed_plan:
+            if item["scopeId"] == self.evidence_scope:
+                item.update({
+                    "generationId": "abox-current-cow:evidence-new",
+                    "logicalGenerationId": "logical-evidence-new",
+                    "physicalGenerationChanged": True,
+                })
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, self.current_news],
+            [self.current_relation],
+            self._active_context(),
+            changed_plan,
+            [self.state_scope],
+            [self.state_scope, self.evidence_scope, self.link_scope],
+            [self.evidence_scope, self.link_scope],
+            self.manifest_id,
+        )
+
+        # The current relation points at a new evidence node while that
+        # evidence scope is explicitly deferred. It cannot be used as a
+        # physical fallback until recovery expands the exact candidate scope.
+        self.assertEqual("active-rebind-endpoint-invalid", result["status"])
+        self.assertEqual(self.link_scope, result["scopeId"])
+        self.assertIn("absent from the exact candidate graph", result["reason"])
+
     def test_initial_candidate_counts_evidence_as_a_physical_node(self):
         evidence_row = self._node(
             "evidence:MSTR:price",

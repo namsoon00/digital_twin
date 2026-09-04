@@ -5554,6 +5554,44 @@ class ScopedABoxManifestMixin:
                 [],
             ).append(row)
 
+        # Resolve relation endpoints against the exact candidate node image,
+        # not against whichever generation happened to produce the incoming
+        # row. A fact-slot patch can defer one endpoint scope while a related
+        # link is physically rebound. In that case the active node storage ID
+        # is authoritative; a brand-new endpoint that is not part of the
+        # candidate must fail before any TypeDB write starts.
+        candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
+        for row in active_nodes:
+            node_id = str(row.get("id") or "").strip()
+            if node_id:
+                candidate_nodes_by_id[node_id] = row
+        for row in current_nodes:
+            node_id = str(row.get("id") or "").strip()
+            if node_id and str(row.get("scopeId") or "").strip() not in deferred:
+                candidate_nodes_by_id[node_id] = row
+
+        def relation_with_candidate_endpoints(
+            row: Dict[str, object],
+        ) -> Dict[str, object]:
+            resolved = dict(row or {})
+            for prefix in ("source", "target"):
+                endpoint_id = str(resolved.get(prefix) or "").strip()
+                endpoint = candidate_nodes_by_id.get(endpoint_id) or {}
+                if not endpoint:
+                    raise ValueError(
+                        "A replacement relation endpoint is absent from the exact candidate graph: "
+                        + endpoint_id
+                    )
+                resolved[prefix + "StorageId"] = str(
+                    endpoint.get("storageId")
+                    or ontology_storage_id(endpoint, endpoint_id, "node")
+                ).strip()
+            resolved["contentFingerprint"] = ontology_row_content_fingerprint(
+                resolved,
+                "relation",
+            )
+            return resolved
+
         rebound_relations: List[Dict[str, object]] = []
         current_fallback_relation_scope_ids: List[str] = []
         for scope_id in sorted(rebind_only):
@@ -5580,15 +5618,18 @@ class ScopedABoxManifestMixin:
                 current_scope_rows = list(
                     current_relations_by_scope.get(scope_id) or []
                 )
-                current_scope_complete = (
-                    len(current_scope_rows) == expected
-                    and all(
-                        str(row.get("sourceStorageId") or "").strip()
-                        and str(row.get("targetStorageId") or "").strip()
+                try:
+                    candidate_endpoint_rows = [
+                        relation_with_candidate_endpoints(row)
                         for row in current_scope_rows
-                    )
-                )
-                if not current_scope_complete:
+                    ]
+                except ValueError as candidate_error:
+                    candidate_endpoint_rows = []
+                    error = candidate_error
+                if (
+                    len(current_scope_rows) != expected
+                    or len(candidate_endpoint_rows) != expected
+                ):
                     return {
                         "status": "active-rebind-endpoint-invalid",
                         "reason": str(error),
@@ -5596,19 +5637,9 @@ class ScopedABoxManifestMixin:
                         "expectedRelationCount": expected,
                         "currentRelationCount": len(current_scope_rows),
                     }
-                rebound_scope_rows = current_scope_rows
+                rebound_scope_rows = candidate_endpoint_rows
                 current_fallback_relation_scope_ids.append(scope_id)
             rebound_relations.extend(rebound_scope_rows)
-
-        candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
-        for row in active_nodes:
-            node_id = str(row.get("id") or "").strip()
-            if node_id:
-                candidate_nodes_by_id[node_id] = row
-        for row in current_nodes:
-            node_id = str(row.get("id") or "").strip()
-            if node_id and str(row.get("scopeId") or "").strip() not in deferred:
-                candidate_nodes_by_id[node_id] = row
 
         candidate_relations: List[Dict[str, object]] = [
             row

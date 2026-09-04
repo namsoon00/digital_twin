@@ -2215,6 +2215,18 @@ def select_target_scoped_manifest_patch(
         if semantic_changes:
             semantic_changes_by_scope[scope_id] = semantic_changes
             reasons.add("semantic-value-change")
+        elif assertion_changed_from_active(scope_id, item):
+            # Hand-authored/legacy manifests may have only baseFingerprint.
+            # Treat that canonical row fingerprint as semantic authority so
+            # the persistence-only filter never suppresses a real fact or
+            # relation assertion change.
+            fallback_family = (
+                _clean(item.get("scopeFamily"))
+                or scope_family(scope_id)
+                or "scope-assertion"
+            )
+            semantic_changes_by_scope[scope_id] = [fallback_family]
+            reasons.add("semantic-value-change")
         if dependency_changes:
             dependency_changes_by_scope[scope_id] = dependency_changes
             reasons.add("rule-dependency-change")
@@ -2236,31 +2248,33 @@ def select_target_scoped_manifest_patch(
         selected.add(scope_id)
         record_direct_change(scope_id, item)
 
-    # An authoritative mailbox event owns a narrow set of fact slots. A
-    # symbol-less link whose assertion did not change can still receive a new
-    # storage generation only because one of its global endpoints was rebuilt
-    # while assembling the complete in-memory graph. Rebinding that unrelated
-    # link expands a calendar/news update into reference, profile, exposure,
-    # and macro writes. Keep the active link and endpoint generations until
-    # their own source event reports a semantic or rule-dependency change.
+    # An authoritative mailbox event owns a narrow set of fact slots. Scope
+    # generations can still roll while assembling the in-memory graph solely
+    # because another endpoint was rebuilt. Those persistence-only changes do
+    # not belong to the source event, even when their physical family happens
+    # to match the event family. Keep the verified active generation until a
+    # semantic value or rule dependency changes. The integrity closure below
+    # will re-add only links that must be rebound to a genuinely selected
+    # endpoint.
     if bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative")):
-        persistence_only_shared_links = {
+        persistence_only_scope_ids = {
             scope_id
             for scope_id in selected
-            if _scope_type(scope_id) == "link"
-            and not scope_symbol(scope_id)
-            and bool(selection_reasons.get(scope_id))
+            if bool(selection_reasons.get(scope_id))
             and set(selection_reasons.get(scope_id) or []).issubset({
                 "persistence-dependency-rebind",
                 "generation-only-change",
             })
         }
-        selected.difference_update(persistence_only_shared_links)
-        for scope_id in persistence_only_shared_links:
-            selection_reasons.setdefault(scope_id, set()).update({
-                "deferred-shared-persistence-rebind",
+        selected.difference_update(persistence_only_scope_ids)
+        for scope_id in persistence_only_scope_ids:
+            reasons = selection_reasons.setdefault(scope_id, set())
+            reasons.update({
+                "deferred-persistence-only-generation",
                 "deferred-unrelated-event-fact-slot",
             })
+            if _scope_type(scope_id) == "link" and not scope_symbol(scope_id):
+                reasons.add("deferred-shared-persistence-rebind")
     fact_slot_selection = select_fact_slot_scope_ids(
         incoming,
         selected,

@@ -985,6 +985,150 @@ class OntologyFactSlotTests(unittest.TestCase):
             "deferred-unrelated-event-relation",
             trace[link_scope]["reasons"],
         )
+        self._assert_authoritative_event_defers_matching_family_generation_only_scopes()
+
+    def _assert_authoritative_event_defers_matching_family_generation_only_scopes(self):
+        state_scope = "symbol:066570:state:bucket:00"
+        evidence_scope = "symbol:066570:evidence:bucket:01"
+        link_scope = "link:symbol:066570:evidence:bucket:01"
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:066570", "LG Electronics", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "066570",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity("news:066570:1", "Existing news", "news-article", {
+                    "ontologyBox": "ABox",
+                    "symbol": "066570",
+                    "aboxScopeId": evidence_scope,
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:066570",
+                "news:066570:1",
+                "HAS_EVIDENCE",
+                properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+            )],
+        )
+        graph.worldview = {
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "baseFingerprint": "state-stable",
+                    "fingerprint": "state-stable",
+                    "generationId": "state-generation-active",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": evidence_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "evidence",
+                    "baseFingerprint": "evidence-stable",
+                    "fingerprint": "evidence-stable",
+                    "generationId": "evidence-generation-incoming",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "evidence",
+                    "baseFingerprint": "link-stable",
+                    "fingerprint": "link-incoming-endpoint-generation",
+                    "generationId": "link-generation-incoming",
+                    "dependencyScopeIds": [state_scope, evidence_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "baseFingerprint": "state-stable",
+                    "fingerprint": "state-stable",
+                    "generationId": "state-generation-active",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": evidence_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "evidence",
+                    "baseFingerprint": "evidence-stable",
+                    "fingerprint": "evidence-stable",
+                    "generationId": "evidence-generation-active",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "evidence",
+                    "baseFingerprint": "link-stable",
+                    "fingerprint": "link-active-endpoint-generation",
+                    "generationId": "link-generation-active",
+                    "dependencyScopeIds": [state_scope, evidence_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["066570"],
+            fact_slot_plan={
+                "enabled": True,
+                "status": "ready",
+                "targetSymbols": ["066570"],
+                "requestedFactFamilies": ["evidence"],
+                "requestedFactFamiliesBySymbol": {"066570": ["evidence"]},
+                "slotFamilies": ["state", "evidence", "quality", "link"],
+                "slotFamiliesBySymbol": {
+                    "066570": ["state", "evidence", "quality", "link"],
+                },
+                "eventBoundaryAuthoritative": True,
+            },
+            source_graph_complete=False,
+        )
+
+        self.assertEqual("ready", selection["status"])
+        self.assertTrue(selection["applied"])
+        self.assertEqual([], selection["selectedIncomingScopeIds"])
+        self.assertEqual(
+            {evidence_scope, link_scope},
+            set(selection["deferredScopeIds"]),
+        )
+        trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["deferred"]
+        }
+        self.assertIn(
+            "deferred-persistence-only-generation",
+            trace[evidence_scope]["reasons"],
+        )
+        self.assertIn(
+            "deferred-persistence-only-generation",
+            trace[link_scope]["reasons"],
+        )
+        self.assertNotIn("missingEndpointScopeIds", selection)
 
     def test_endpoint_companion_does_not_expand_into_other_owned_relations(self):
         graph = PortfolioOntology(

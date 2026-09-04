@@ -2548,13 +2548,14 @@ def select_target_scoped_manifest_patch(
     def can_reuse_deferred_active_dependency(
         owner_scope_id: str,
         dependency_scope_id: str,
+        endpoint_id: str = "",
     ) -> bool:
         """Keep an unrelated endpoint on its verified active generation.
 
         A relation-only scope can require a physical rebind when one endpoint
-        in the authoritative event changes. If the relation assertion itself
-        is unchanged, its other endpoint must come from the active Manifest,
-        not from a newer in-memory fact owned by another mailbox event. The
+        in the authoritative event changes. An unchanged assertion, or the
+        canonical stock/security anchor of a changed assertion, must use the
+        active Manifest when its state belongs to another mailbox event. The
         repository validates the exact endpoint storage identity before any
         TypeDB write, so this remains fail-closed without rebuilding the full
         source graph merely to rediscover an already active node.
@@ -2569,10 +2570,19 @@ def select_target_scoped_manifest_patch(
         if dependency_scope_id not in retained_active_by_scope:
             return False
         owner = incoming.get(owner_scope_id) or {}
-        return bool(owner) and not assertion_changed_from_active(
+        if bool(owner) and not assertion_changed_from_active(
             owner_scope_id,
             owner,
-        )
+        ):
+            return True
+        # The authoritative event does not own this endpoint's newer
+        # in-memory facts. Reuse the exact logical endpoint from the verified
+        # active scope, regardless of whether it is a stock, macro, portfolio,
+        # valuation, flow, or exposure fact. The TypeDB candidate-row builder
+        # resolves this endpoint by ID against active physical rows and fails
+        # closed when that exact ID is absent, so a genuinely new endpoint can
+        # never be silently substituted.
+        return bool(_clean(endpoint_id))
 
     missing_endpoints: List[str] = []
     incomplete_source_endpoint_scopes: List[str] = []
@@ -2590,6 +2600,12 @@ def select_target_scoped_manifest_patch(
         before = len(selected)
         for scope_id in list(selected):
             row = incoming.get(scope_id) or {}
+            # Link dependencies are checked against their concrete relation
+            # endpoints below. Expanding a link's abstract dependency list
+            # here loses the endpoint identity needed to distinguish a stable
+            # stock anchor from a genuinely new evidence/assessment node.
+            if _scope_type(scope_id) == "link":
+                continue
             for dependency in row.get("dependencyScopeIds") or []:
                 dependency_id = _clean(dependency)
                 if dependency_id and dependency_requires_staging(dependency_id):
@@ -2626,13 +2642,12 @@ def select_target_scoped_manifest_patch(
                     scope_id in fact_slot_deferred_scope_ids
                     or outside_authoritative_fact_slot(scope_id)
                 )
-                and not assertion_changed
             ):
-                # The repository will physically rebind an existing active
-                # link when one of its endpoint generations changes. Do not
-                # replace that link's semantic payload with an unrelated
-                # relation change that merely happened to share the same
-                # in-memory subject graph.
+                # This source event does not own the relation, even when a
+                # separately collected fact made its in-memory assertion look
+                # newer. Preserve the verified active assertion. The repository
+                # physically rebinds it only when one of this event's selected
+                # endpoint generations changes.
                 selection_reasons.setdefault(scope_id, set()).add(
                     "deferred-unrelated-event-relation"
                 )
@@ -2666,6 +2681,7 @@ def select_target_scoped_manifest_patch(
                     if can_reuse_deferred_active_dependency(
                         owner_scope,
                         endpoint_scope,
+                        endpoint,
                     ):
                         selection_reasons.setdefault(owner_scope, set()).add(
                             "reused-active-link-endpoint"
@@ -2703,6 +2719,7 @@ def select_target_scoped_manifest_patch(
                     if can_reuse_deferred_active_dependency(
                         owner_scope,
                         endpoint_scope,
+                        endpoint,
                     ):
                         selection_reasons.setdefault(owner_scope, set()).add(
                             "reused-active-link-endpoint"

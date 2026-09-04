@@ -173,6 +173,8 @@ def _field_slot_families(value: object) -> Set[str]:
         "earningsreports", "researchevidence", "verifiedclaims",
     }:
         return {"evidence"}
+    if external == "corporateactions":
+        return {"capital", "evidence"}
     if external in {"companyoverviews", "yfinancedata"}:
         return {"evidence", "profile", "valuation"}
     if external == "companyknowledge.profile":
@@ -374,6 +376,26 @@ def build_fact_slot_projection_plan(
                 symbol_slots.update(
                     FACT_SLOT_DIRECT_FAMILIES.get(family, {family})
                 )
+            if use_precise_fields:
+                for field in symbol_fields:
+                    symbol_slots.update(_field_slot_families(field))
+                precise_field_routing_symbols.add(symbol)
+            # Live account/quote diffs expose current price, moving averages,
+            # volume, and P/L as fields on the canonical stock anchor. That
+            # anchor is physically owned by the symbol ``state`` scope even
+            # though each field routes native rules through market, temporal,
+            # flow, or position semantics. Include the physical owner for
+            # authoritative direct-stock changes; external evidence/company
+            # sections remain isolated in their own fact families.
+            if any(
+                _field_key(field) in FIELD_SLOT_FAMILIES
+                and _field_key(field) != FOLLOWUP_FIELD
+                and not _clean(field).lower().startswith("external.")
+                for field in symbol_fields
+            ):
+                symbol_slots.add("state")
+            if unclassified_fields:
+                unclassified_fields_by_symbol[symbol] = unclassified_fields
         elif use_precise_fields and FOLLOWUP_FIELD not in compact_fields:
             for family in symbol_requested:
                 symbol_slots.update(
@@ -532,6 +554,46 @@ def select_fact_slot_scope_ids(
     dependency_matched = []
     unchanged_dependency_matched = []
     reverse_dependency_selected = set()
+    event_boundary_authoritative = bool(plan.get("eventBoundaryAuthoritative"))
+    target_symbols = {
+        _clean(symbol).upper()
+        for symbol in plan.get("targetSymbols") or []
+        if _clean(symbol)
+    }
+
+    def associated_target_symbols(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> Set[str]:
+        direct_symbol = scope_symbol(scope_id)
+        if direct_symbol in target_symbols:
+            return {direct_symbol}
+        return {
+            dependency_symbol
+            for dependency_symbol in (
+                scope_symbol(dependency)
+                for dependency in item.get("dependencyScopeIds") or []
+            )
+            if dependency_symbol in target_symbols
+        }
+
+    def applicable_values_for_scope(
+        scope_id: str,
+        item: Mapping[str, object],
+        values_by_symbol: Mapping[str, Set[str]],
+        shared_values: Set[str],
+    ) -> Set[str]:
+        direct_symbol = scope_symbol(scope_id)
+        if direct_symbol:
+            return set(values_by_symbol.get(direct_symbol, shared_values))
+        if not event_boundary_authoritative:
+            return set(shared_values)
+        related_symbols = associated_target_symbols(scope_id, item)
+        return {
+            value
+            for symbol in related_symbols
+            for value in values_by_symbol.get(symbol, shared_values)
+        }
 
     def dependency_key_matches(scope_key: str, requested_key: str) -> bool:
         return bool(
@@ -541,11 +603,11 @@ def select_fact_slot_scope_ids(
         )
 
     def scope_matches_requested_dependency(scope_id: str, item: Mapping[str, object]) -> bool:
-        symbol = scope_symbol(scope_id)
-        applicable_dependency_keys = (
-            dependency_keys_by_symbol.get(symbol, dependency_keys)
-            if symbol
-            else dependency_keys
+        applicable_dependency_keys = applicable_values_for_scope(
+            scope_id,
+            item,
+            dependency_keys_by_symbol,
+            dependency_keys,
         )
         scope_dependency_keys = _family_values(
             unpack_semantic_dependency_fingerprints(item).keys()
@@ -567,9 +629,14 @@ def select_fact_slot_scope_ids(
         """Keep reverse relation closure inside the authoritative event slice."""
 
         symbol = scope_symbol(scope_id)
-        applicable_slots = slots_by_symbol.get(symbol, slots) if symbol else slots
+        applicable_slots = applicable_values_for_scope(
+            scope_id,
+            item,
+            slots_by_symbol,
+            slots,
+        )
         precise_scope = bool(
-            plan.get("eventBoundaryAuthoritative")
+            event_boundary_authoritative
             or symbol in precise_field_routing_symbols
             or (
                 not symbol
@@ -588,8 +655,20 @@ def select_fact_slot_scope_ids(
     for scope_id in candidates:
         item = scope_plan_by_id.get(scope_id) or {}
         symbol = scope_symbol(scope_id)
+        applicable_slots = applicable_values_for_scope(
+            scope_id,
+            item,
+            slots_by_symbol,
+            slots,
+        )
+        applicable_dependency_keys = applicable_values_for_scope(
+            scope_id,
+            item,
+            dependency_keys_by_symbol,
+            dependency_keys,
+        )
         precise_scope = bool(
-            plan.get("eventBoundaryAuthoritative")
+            event_boundary_authoritative
             or
             symbol in precise_field_routing_symbols
             or (
@@ -610,17 +689,18 @@ def select_fact_slot_scope_ids(
         if symbol in fallback_targets or (not symbol and fallback_targets):
             selected.append(scope_id)
             continue
+        # A target-local authoritative event does not own disconnected account,
+        # policy, episode, or reference rows. Keep those shared generations on
+        # the active manifest instead of widening one quote update to the whole
+        # portfolio graph.
+        if event_boundary_authoritative and not symbol and not applicable_slots:
+            deferred.append(scope_id)
+            continue
         # A legacy link scope without semantic/impact metadata cannot be
         # safely deferred because it can carry an endpoint dependency.
         if not families or (families == {"link"} and not item.get("impactScopeFamilies")):
             unknown.append(scope_id)
             continue
-        applicable_slots = slots_by_symbol.get(symbol, slots) if symbol else slots
-        applicable_dependency_keys = (
-            dependency_keys_by_symbol.get(symbol, dependency_keys)
-            if symbol
-            else dependency_keys
-        )
         scope_dependency_keys = _family_values(
             unpack_semantic_dependency_fingerprints(item).keys()
         )

@@ -765,6 +765,7 @@ def merge_native_rule_evidence_read_index(
     incoming_topology: Dict[str, object],
     merged_topology: Dict[str, object],
     replacement_symbols: Iterable[object] = None,
+    incoming_index_is_candidate_subset: bool = False,
 ) -> Dict[str, object]:
     """Merge target-scoped physical identities into an active Manifest index.
 
@@ -783,7 +784,15 @@ def merge_native_rule_evidence_read_index(
     if str(merged_topology_normalized.get("status") or "") != "ok":
         return {"status": "merged-topology-invalid", "reason": str(merged_topology_normalized.get("reason") or "")}
     active = normalize_native_rule_evidence_read_index(active_index, active_topology_normalized)
-    incoming = normalize_native_rule_evidence_read_index(incoming_index, incoming_topology_normalized)
+    incoming = normalize_native_rule_evidence_read_index(
+        incoming_index,
+        (
+            merged_topology_normalized
+            if incoming_index_is_candidate_subset
+            else incoming_topology_normalized
+        ),
+        allow_topology_subset=incoming_index_is_candidate_subset,
+    )
     if str(active.get("status") or "") != "ok":
         return {"status": "active-index-unavailable", "reason": str(active.get("reason") or "")}
     if str(incoming.get("status") or "") != "ok":
@@ -797,6 +806,20 @@ def merge_native_rule_evidence_read_index(
     active_sources = dict(active.get("sourceIdsBySymbol") or {})
     incoming_sources = dict(incoming.get("sourceIdsBySymbol") or {})
     incoming_symbols = set(incoming_sources)
+    missing_requested_symbols = sorted({
+        symbol
+        for symbol in requested
+        if symbol in dict(merged_topology_normalized.get("sourceIdsBySymbol") or {})
+        and symbol not in incoming_symbols
+    })
+    if incoming_index_is_candidate_subset and missing_requested_symbols:
+        return {
+            "status": "incoming-target-source-missing",
+            "reason": (
+                "Candidate persistence rows do not contain every requested target source."
+            ),
+            "missingSymbols": missing_requested_symbols,
+        }
     # A stock-targeted portfolio projection carries both the changed stock
     # scopes and a freshly computed account aggregate. The caller's requested
     # symbols list names only the stocks, so retaining the old PORTFOLIO key
@@ -887,6 +910,7 @@ def normalize_native_rule_evidence_read_index(
     value: Dict[str, object] = None,
     planner_topology: Dict[str, object] = None,
     target_symbols: Iterable[str] = None,
+    allow_topology_subset: bool = False,
 ) -> Dict[str, object]:
     """Validate a Manifest's exact evidence-read index before using it.
 
@@ -1029,8 +1053,32 @@ def normalize_native_rule_evidence_read_index(
         symbol: sorted({str(item or "").strip() for item in values or [] if str(item or "").strip()})
         for symbol, values in dict(topology.get("sourceIdsBySymbol") or {}).items()
     }
+    if allow_topology_subset:
+        unexpected_symbols = sorted(
+            set(payload["sourceIdsBySymbol"]) - set(expected_sources)
+        )
+        if unexpected_symbols:
+            return {
+                "status": "invalid",
+                "reason": "Native rule evidence read index contains subjects outside the candidate planner topology.",
+                "unexpectedSymbols": unexpected_symbols,
+            }
+        expected_sources = {
+            symbol: expected_sources[symbol]
+            for symbol in payload["sourceIdsBySymbol"]
+        }
     if expected_sources != payload["sourceIdsBySymbol"]:
-        return {"status": "invalid", "reason": "Native rule evidence read index stock subjects do not match the active planner topology."}
+        return {
+            "status": "invalid",
+            "reason": "Native rule evidence read index stock subjects do not match the active planner topology.",
+            "expectedSymbols": sorted(expected_sources),
+            "actualSymbols": sorted(payload["sourceIdsBySymbol"]),
+            "mismatchedSymbols": sorted({
+                symbol
+                for symbol in set(expected_sources).union(payload["sourceIdsBySymbol"])
+                if expected_sources.get(symbol) != payload["sourceIdsBySymbol"].get(symbol)
+            }),
+        }
     requested_symbols = clean_symbols_from_payload(target_symbols or [])
     # Portfolio work items still carry their affected stock symbols so the
     # downstream explanation can remain target-scoped. Portfolio RuleBox
@@ -5371,6 +5419,74 @@ class ScopedABoxManifestMixin:
         }
 
     @staticmethod
+    def scoped_abox_active_reuse_scope_ids(
+        physical_scope_plan: Iterable[Dict[str, object]],
+        active_generations: Mapping[str, object],
+        physical_changed_scope_ids: Iterable[str],
+        deferred_scope_ids: Iterable[str],
+        rebind_only_relation_scope_ids: Iterable[str],
+    ) -> Dict[str, object]:
+        """Select exact active rows needed to reconcile candidate relations.
+
+        A target graph can contain a relation to an unchanged endpoint that
+        sits outside the target subject or fact family. That endpoint remains
+        in the active Manifest, but it is not necessarily listed as a deferred
+        incoming scope. Read every unchanged dependency of a changed relation
+        explicitly so candidate storage IDs can be resolved without expanding
+        the source graph. Missing logical endpoint IDs still fail closed in
+        ``scoped_abox_candidate_persistence_rows``.
+        """
+
+        active_by_scope = {
+            str(scope_id or "").strip(): str(generation_id or "").strip()
+            for scope_id, generation_id in dict(active_generations or {}).items()
+            if str(scope_id or "").strip() and str(generation_id or "").strip()
+        }
+        changed = {
+            str(value or "").strip()
+            for value in physical_changed_scope_ids or []
+            if str(value or "").strip()
+        }
+        rebind_only = {
+            str(value or "").strip()
+            for value in rebind_only_relation_scope_ids or []
+            if str(value or "").strip()
+        }
+        requested = {
+            str(value or "").strip()
+            for value in deferred_scope_ids or []
+            if str(value or "").strip() in active_by_scope
+        }.union({
+            scope_id
+            for scope_id in rebind_only
+            if scope_id in active_by_scope
+        })
+        relation_endpoint_scopes = set()
+        relation_candidates = changed.union(rebind_only)
+        for raw in physical_scope_plan or []:
+            item = dict(raw or {})
+            scope_id = str(item.get("scopeId") or "").strip()
+            scope_type = str(item.get("scopeType") or "").strip().lower()
+            if (
+                scope_id not in relation_candidates
+                or (scope_type != "link" and not scope_id.startswith("link:"))
+            ):
+                continue
+            for raw_dependency in item.get("dependencyScopeIds") or []:
+                dependency_scope_id = str(raw_dependency or "").strip()
+                if (
+                    dependency_scope_id
+                    and dependency_scope_id not in changed
+                    and dependency_scope_id in active_by_scope
+                ):
+                    requested.add(dependency_scope_id)
+                    relation_endpoint_scopes.add(dependency_scope_id)
+        return {
+            "scopeIds": sorted(requested),
+            "relationEndpointScopeIds": sorted(relation_endpoint_scopes),
+        }
+
+    @staticmethod
     def scoped_abox_candidate_persistence_rows(
         current_node_rows: Iterable[Dict[str, object]],
         current_relation_rows: Iterable[Dict[str, object]],
@@ -7049,11 +7165,17 @@ class ScopedABoxManifestMixin:
             Iterable[Dict[str, object]],
         ] = None,
     ) -> Dict[str, object]:
-        """Bind a staged target graph to the complete active Manifest index.
+        """Bind a staged target graph to the complete candidate Manifest index.
 
         This is control-plane persistence only. It never evaluates RuleBox
-        conditions. A failed merge leaves the marker without an index so the
-        runtime falls back to active-membership reads for correctness.
+        conditions. ``persistence_rows`` must be the exact, reconciled candidate
+        image (selected incoming scopes plus every reused active scope). When it
+        is supplied, validate that complete image against the merged candidate
+        topology directly. Treating those rows as a target-only delta makes a
+        valid multi-symbol candidate fail against the incoming target topology.
+
+        A failed merge leaves the marker without an index so the runtime falls
+        back to active-membership reads for correctness.
         """
         worldview = dict(getattr(graph, "worldview", {}) or {})
         if not native_rule_manifest_index_required(worldview):
@@ -7085,6 +7207,72 @@ class ScopedABoxManifestMixin:
             and bool(target_symbols)
             and bool(worldview.get("nativeRulePlannerTopologyIncoming"))
         )
+        if persistence_rows is not None:
+            complete_candidate = normalize_native_rule_evidence_read_index(
+                incoming_index,
+                planner_topology=topology,
+            )
+            if str(complete_candidate.get("status") or "") == "ok":
+                graph.worldview["nativeRuleEvidenceReadIndex"] = incoming_index
+                graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                    "status": "local-complete",
+                    "mode": "exact-candidate-rows",
+                    "replacedSymbols": target_symbols if target_scoped else [],
+                    "mergedSymbolCount": len(
+                        incoming_index.get("sourceIdsBySymbol") or {}
+                    ),
+                }
+                return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+            if target_scoped:
+                merged_candidate = merge_native_rule_evidence_read_index(
+                    dict((active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}),
+                    dict((active_metadata or {}).get("nativeRulePlannerTopology") or {}),
+                    incoming_index,
+                    incoming_topology,
+                    topology,
+                    target_symbols,
+                    incoming_index_is_candidate_subset=True,
+                )
+                if str(merged_candidate.get("status") or "") == "ok":
+                    graph.worldview["nativeRuleEvidenceReadIndex"] = dict(
+                        merged_candidate.get("index") or {}
+                    )
+                    graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                        "status": "merged",
+                        "mode": "exact-candidate-subset",
+                        "replacedSymbols": list(
+                            merged_candidate.get("replacedSymbols") or []
+                        ),
+                        "mergedSymbolCount": int(
+                            merged_candidate.get("mergedSymbolCount") or 0
+                        ),
+                    }
+                    return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+                graph.worldview.pop("nativeRuleEvidenceReadIndex", None)
+                graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                    "status": str(
+                        merged_candidate.get("status")
+                        or "candidate-subset-index-merge-failed"
+                    ),
+                    "mode": "exact-candidate-subset",
+                    "reason": str(merged_candidate.get("reason") or "")[:220],
+                    "replacedSymbols": list(
+                        merged_candidate.get("replacedSymbols") or []
+                    ),
+                    "missingSymbols": list(
+                        merged_candidate.get("missingSymbols") or []
+                    ),
+                    "mergedSymbolCount": 0,
+                }
+                return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+            graph.worldview.pop("nativeRuleEvidenceReadIndex", None)
+            graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                "status": "complete-candidate-index-topology-mismatch",
+                "reason": str(complete_candidate.get("reason") or "")[:220],
+                "replacedSymbols": target_symbols if target_scoped else [],
+                "mergedSymbolCount": 0,
+            }
+            return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
         if not target_scoped:
             local = normalize_native_rule_evidence_read_index(
                 incoming_index,
@@ -8245,11 +8433,17 @@ class ScopedABoxManifestMixin:
             if str(value or "").strip()
         }
         active_generations = dict(active_before.get("scopeGenerationIds") or {})
-        active_reuse_scope_ids = sorted({
-            scope_id
-            for scope_id in deferred_scope_ids.union(rebind_only_relation_scope_ids)
-            if str(active_generations.get(scope_id) or "").strip()
-        })
+        active_reuse_plan = self.scoped_abox_active_reuse_scope_ids(
+            scope_plan,
+            active_generations,
+            changed_scope_ids,
+            deferred_scope_ids,
+            rebind_only_relation_scope_ids,
+        )
+        active_reuse_scope_ids = list(active_reuse_plan.get("scopeIds") or [])
+        active_relation_endpoint_scope_ids = list(
+            active_reuse_plan.get("relationEndpointScopeIds") or []
+        )
         active_scope_rows: Dict[str, object] = {
             "status": "ok",
             "scopeIds": [],
@@ -8405,6 +8599,7 @@ class ScopedABoxManifestMixin:
             "activeScopeSemanticReuse": {
                 "status": str(active_scope_rows.get("status") or ""),
                 "scopeIds": list(active_scope_rows.get("scopeIds") or []),
+                "relationEndpointScopeIds": active_relation_endpoint_scope_ids,
                 "nodeCount": len(active_scope_rows.get("nodeRows") or []),
                 "relationCount": len(active_scope_rows.get("relationRows") or []),
                 "endpointNodeCount": len(active_scope_rows.get("endpointNodeRows") or []),

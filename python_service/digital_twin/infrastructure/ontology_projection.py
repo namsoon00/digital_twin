@@ -3416,6 +3416,18 @@ class PortfolioOntologyProjectionRecorder:
                     emit_progress(
                         "target_manifest_repair_input.start",
                         status=str(applied_target_patch.get("status") or "repair-required"),
+                        fallbackReason=str(
+                            applied_target_patch.get("fallbackReason") or ""
+                        ),
+                        missingEndpointScopeIds=list(
+                            applied_target_patch.get("missingEndpointScopeIds") or []
+                        )[:24],
+                        missingEndpointScopes="|".join(
+                            str(value or "")
+                            for value in (
+                                applied_target_patch.get("missingEndpointScopeIds") or []
+                            )[:12]
+                        ),
                     )
                     repair_input_started = time.perf_counter()
                     first_patch_failure = dict(applied_target_patch or {})

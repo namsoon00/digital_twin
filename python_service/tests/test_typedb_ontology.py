@@ -126,6 +126,187 @@ def governed_catalog_rule(rule_id: str) -> GraphInferenceRule:
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def _assert_scoped_manifest_indexes_validate_complete_candidate_rows_against_merged_topology(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        def stock(symbol):
+            return OntologyEntity(
+                "stock:" + symbol,
+                symbol,
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "symbol": symbol,
+                    "tboxClass": "Stock",
+                },
+            )
+
+        full_graph = PortfolioOntology(
+            "complete-candidate",
+            entities=[stock("AAPL"), stock("MSTR")],
+        )
+        incoming_graph = PortfolioOntology(
+            "target-delta",
+            entities=[stock("MSTR")],
+        )
+        candidate_graph = PortfolioOntology(
+            "candidate-control",
+            worldview={
+                "worldType": "portfolio",
+                "nativeRulePlannerTopology": native_rule_planner_topology(full_graph),
+                "nativeRulePlannerTopologyIncoming": native_rule_planner_topology(
+                    incoming_graph
+                ),
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "targetSymbols": ["MSTR"],
+                },
+            },
+        )
+        candidate_rows = repository.graph_persistence_rows(full_graph)
+
+        result = repository.prepare_scoped_manifest_native_rule_indexes(
+            candidate_graph,
+            active_metadata={},
+            persistence_rows=candidate_rows,
+        )
+
+        self.assertEqual("local-complete", result["status"])
+        self.assertEqual("exact-candidate-rows", result["mode"])
+        self.assertEqual(["MSTR"], result["replacedSymbols"])
+        self.assertEqual(2, result["mergedSymbolCount"])
+        self.assertEqual(
+            {"AAPL", "MSTR"},
+            set(
+                candidate_graph.worldview["nativeRuleEvidenceReadIndex"][
+                    "sourceIdsBySymbol"
+                ]
+            ),
+        )
+
+    def _assert_scoped_manifest_indexes_merge_exact_candidate_subset_with_active_index(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        def stock(symbol):
+            return OntologyEntity(
+                "stock:" + symbol,
+                symbol,
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "symbol": symbol,
+                    "tboxClass": "Stock",
+                },
+            )
+
+        full_graph = PortfolioOntology(
+            "active",
+            entities=[stock("AAPL"), stock("MSTR")],
+        )
+        incoming_graph = PortfolioOntology(
+            "target-delta",
+            entities=[stock("MSTR")],
+        )
+        full_topology = native_rule_planner_topology(full_graph)
+        incoming_topology = native_rule_planner_topology(incoming_graph)
+        active_rows = repository.graph_persistence_rows(full_graph)
+        incoming_rows = repository.graph_persistence_rows(incoming_graph)
+        candidate_graph = PortfolioOntology(
+            "candidate-control",
+            worldview={
+                "worldType": "portfolio",
+                "nativeRulePlannerTopology": full_topology,
+                "nativeRulePlannerTopologyIncoming": incoming_topology,
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "targetSymbols": ["MSTR"],
+                },
+            },
+        )
+
+        result = repository.prepare_scoped_manifest_native_rule_indexes(
+            candidate_graph,
+            active_metadata={
+                "nativeRulePlannerTopology": full_topology,
+                "nativeRuleEvidenceReadIndex": native_rule_evidence_read_index_from_rows(
+                    *active_rows
+                ),
+            },
+            persistence_rows=incoming_rows,
+        )
+
+        self.assertEqual("merged", result["status"])
+        self.assertEqual("exact-candidate-subset", result["mode"])
+        self.assertEqual(["MSTR"], result["replacedSymbols"])
+        self.assertEqual(2, result["mergedSymbolCount"])
+        self.assertEqual(
+            {"AAPL", "MSTR"},
+            set(
+                candidate_graph.worldview["nativeRuleEvidenceReadIndex"][
+                    "sourceIdsBySymbol"
+                ]
+            ),
+        )
+
+    def _assert_scoped_manifest_indexes_reject_candidate_subset_missing_requested_target(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        def stock(symbol):
+            return OntologyEntity(
+                "stock:" + symbol,
+                symbol,
+                "stock",
+                {
+                    "ontologyBox": "ABox",
+                    "symbol": symbol,
+                    "tboxClass": "Stock",
+                },
+            )
+
+        full_graph = PortfolioOntology(
+            "active",
+            entities=[stock("AAPL"), stock("MSTR")],
+        )
+        mstr_graph = PortfolioOntology(
+            "target-delta",
+            entities=[stock("MSTR")],
+        )
+        aapl_graph = PortfolioOntology(
+            "wrong-delta",
+            entities=[stock("AAPL")],
+        )
+        full_topology = native_rule_planner_topology(full_graph)
+        active_rows = repository.graph_persistence_rows(full_graph)
+        candidate_graph = PortfolioOntology(
+            "candidate-control",
+            worldview={
+                "worldType": "portfolio",
+                "nativeRulePlannerTopology": full_topology,
+                "nativeRulePlannerTopologyIncoming": native_rule_planner_topology(
+                    mstr_graph
+                ),
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "targetSymbols": ["MSTR"],
+                },
+            },
+        )
+
+        result = repository.prepare_scoped_manifest_native_rule_indexes(
+            candidate_graph,
+            active_metadata={
+                "nativeRulePlannerTopology": full_topology,
+                "nativeRuleEvidenceReadIndex": native_rule_evidence_read_index_from_rows(
+                    *active_rows
+                ),
+            },
+            persistence_rows=repository.graph_persistence_rows(aapl_graph),
+        )
+
+        self.assertEqual("incoming-target-source-missing", result["status"])
+        self.assertEqual(["MSTR"], result["missingSymbols"])
+        self.assertNotIn("nativeRuleEvidenceReadIndex", candidate_graph.worldview)
+
     def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
         rows = [
             {
@@ -650,6 +831,51 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(1, result["queryCount"])
 
     def test_scoped_abox_changes_only_the_affected_symbol_generation(self):
+        self._assert_scoped_manifest_indexes_validate_complete_candidate_rows_against_merged_topology()
+        self._assert_scoped_manifest_indexes_merge_exact_candidate_subset_with_active_index()
+        self._assert_scoped_manifest_indexes_reject_candidate_subset_missing_requested_target()
+        active_reuse = TypeDBOntologyGraphRepository.scoped_abox_active_reuse_scope_ids(
+            [
+                {
+                    "scopeId": "link:symbol:TSLA:evidence:bucket:31",
+                    "scopeType": "link",
+                    "dependencyScopeIds": [
+                        "symbol:TSLA:evidence:bucket:31",
+                        "symbol:000680:state",
+                    ],
+                },
+                {
+                    "scopeId": "symbol:TSLA:evidence:bucket:31",
+                    "scopeType": "symbol",
+                    "dependencyScopeIds": [],
+                },
+                {
+                    "scopeId": "symbol:000680:state",
+                    "scopeType": "symbol",
+                    "dependencyScopeIds": [],
+                },
+            ],
+            {
+                "link:symbol:TSLA:evidence:bucket:31": "link-active",
+                "symbol:TSLA:evidence:bucket:31": "evidence-active",
+                "symbol:000680:state": "stock-active",
+                "symbol:MSTR:flow": "flow-active",
+            },
+            {
+                "link:symbol:TSLA:evidence:bucket:31",
+                "symbol:TSLA:evidence:bucket:31",
+            },
+            {"symbol:MSTR:flow"},
+            set(),
+        )
+        self.assertEqual(
+            ["symbol:000680:state", "symbol:MSTR:flow"],
+            active_reuse["scopeIds"],
+        )
+        self.assertEqual(
+            ["symbol:000680:state"],
+            active_reuse["relationEndpointScopeIds"],
+        )
         graph = PortfolioOntology(
             "main",
             entities=[

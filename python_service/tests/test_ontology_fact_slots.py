@@ -986,6 +986,145 @@ class OntologyFactSlotTests(unittest.TestCase):
             trace[link_scope]["reasons"],
         )
         self._assert_authoritative_event_defers_matching_family_generation_only_scopes()
+        self._assert_rebind_reuses_active_endpoint_from_unrelated_fact_slot()
+
+    def _assert_rebind_reuses_active_endpoint_from_unrelated_fact_slot(self):
+        state_scope = "symbol:035720:state"
+        valuation_scope = "symbol:035720:valuation:bucket:01"
+        link_scope = "link:symbol:035720:valuation:bucket:01"
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:035720", "Kakao", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "035720",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity("valuation:035720", "Valuation", "valuation-metric", {
+                    "ontologyBox": "ABox",
+                    "symbol": "035720",
+                    "aboxScopeId": valuation_scope,
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:035720",
+                "valuation:035720",
+                "HAS_VALUATION",
+                properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+            )],
+        )
+        graph.worldview = {
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "baseFingerprint": "state-new",
+                    "fingerprint": "state-new",
+                    "generationId": "state-generation-new",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": valuation_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "valuation",
+                    "baseFingerprint": "valuation-new",
+                    "fingerprint": "valuation-new",
+                    "generationId": "valuation-generation-new",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "valuation",
+                    "impactScopeFamilies": ["valuation"],
+                    "baseFingerprint": "stable-link",
+                    "fingerprint": "link-new-endpoint-generations",
+                    "generationId": "link-generation-new",
+                    "dependencyScopeIds": [state_scope, valuation_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "baseFingerprint": "state-old",
+                    "fingerprint": "state-old",
+                    "generationId": "state-generation-old",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": valuation_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "valuation",
+                    "baseFingerprint": "valuation-old",
+                    "fingerprint": "valuation-old",
+                    "generationId": "valuation-generation-old",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "valuation",
+                    "impactScopeFamilies": ["valuation"],
+                    "baseFingerprint": "stable-link",
+                    "fingerprint": "link-old-endpoint-generations",
+                    "generationId": "link-generation-old",
+                    "dependencyScopeIds": [state_scope, valuation_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["035720"],
+            fact_slot_plan={
+                "enabled": True,
+                "status": "ready",
+                "targetSymbols": ["035720"],
+                "requestedFactFamilies": ["valuation"],
+                "requestedFactFamiliesBySymbol": {"035720": ["valuation"]},
+                "slotFamilies": ["valuation"],
+                "slotFamiliesBySymbol": {"035720": ["valuation"]},
+                "eventBoundaryAuthoritative": True,
+            },
+            source_graph_complete=False,
+        )
+
+        self.assertEqual("ready", selection["status"])
+        self.assertEqual(
+            {valuation_scope, link_scope},
+            set(selection["selectedIncomingScopeIds"]),
+        )
+        self.assertIn(state_scope, selection["deferredScopeIds"])
+        self.assertNotIn("missingEndpointScopeIds", selection)
+        selected_trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["selected"]
+        }
+        self.assertIn(
+            "reused-active-link-endpoint",
+            selected_trace[link_scope]["reasons"],
+        )
 
     def _assert_authoritative_event_defers_matching_family_generation_only_scopes(self):
         state_scope = "symbol:066570:state:bucket:00"
@@ -1198,10 +1337,27 @@ class OntologyFactSlotTests(unittest.TestCase):
             value.startswith("link:symbol:005930:company-valuation:")
             for value in selected
         ))
-        self.assertTrue(any(
+        self.assertFalse(any(
             value.startswith("symbol:005930:state:")
             for value in selected
         ))
+        deferred = set(selection["deferredScopeIds"])
+        self.assertTrue(any(
+            value.startswith("symbol:005930:state:")
+            for value in deferred
+        ))
+        selected_trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["selected"]
+        }
+        valuation_link = next(
+            value for value in selected
+            if value.startswith("link:symbol:005930:company-valuation:")
+        )
+        self.assertIn(
+            "reused-active-link-endpoint",
+            selected_trace[valuation_link]["reasons"],
+        )
         self.assertFalse(any(
             value.startswith("symbol:005930:market:")
             for value in selected

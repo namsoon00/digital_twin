@@ -2545,6 +2545,35 @@ def select_target_scoped_manifest_patch(
         ).lower()
         return bool(allowed_families and family and family not in allowed_families)
 
+    def can_reuse_deferred_active_dependency(
+        owner_scope_id: str,
+        dependency_scope_id: str,
+    ) -> bool:
+        """Keep an unrelated endpoint on its verified active generation.
+
+        A relation-only scope can require a physical rebind when one endpoint
+        in the authoritative event changes. If the relation assertion itself
+        is unchanged, its other endpoint must come from the active Manifest,
+        not from a newer in-memory fact owned by another mailbox event. The
+        repository validates the exact endpoint storage identity before any
+        TypeDB write, so this remains fail-closed without rebuilding the full
+        source graph merely to rediscover an already active node.
+        """
+
+        if not bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative")):
+            return False
+        if _scope_type(owner_scope_id) != "link":
+            return False
+        if dependency_scope_id not in fact_slot_deferred_scope_ids:
+            return False
+        if dependency_scope_id not in retained_active_by_scope:
+            return False
+        owner = incoming.get(owner_scope_id) or {}
+        return bool(owner) and not assertion_changed_from_active(
+            owner_scope_id,
+            owner,
+        )
+
     missing_endpoints: List[str] = []
     incomplete_source_endpoint_scopes: List[str] = []
     # An authoritative event can assemble a newer in-memory endpoint for a
@@ -2564,6 +2593,14 @@ def select_target_scoped_manifest_patch(
             for dependency in row.get("dependencyScopeIds") or []:
                 dependency_id = _clean(dependency)
                 if dependency_id and dependency_requires_staging(dependency_id):
+                    if can_reuse_deferred_active_dependency(
+                        scope_id,
+                        dependency_id,
+                    ):
+                        selection_reasons.setdefault(scope_id, set()).add(
+                            "reused-active-link-endpoint"
+                        )
+                        continue
                     include_missing_dependency(
                         dependency_id,
                         missing_endpoints,
@@ -2626,6 +2663,14 @@ def select_target_scoped_manifest_patch(
             for endpoint in (_clean(relation.source), _clean(relation.target)):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 if endpoint_scope and dependency_requires_staging(endpoint_scope):
+                    if can_reuse_deferred_active_dependency(
+                        owner_scope,
+                        endpoint_scope,
+                    ):
+                        selection_reasons.setdefault(owner_scope, set()).add(
+                            "reused-active-link-endpoint"
+                        )
+                        continue
                     if (
                         not source_graph_complete
                         and endpoint_scope in fact_slot_deferred_scope_ids
@@ -2655,6 +2700,14 @@ def select_target_scoped_manifest_patch(
             ):
                 endpoint_scope = node_scopes.get(endpoint, "")
                 if endpoint_scope and dependency_requires_staging(endpoint_scope):
+                    if can_reuse_deferred_active_dependency(
+                        owner_scope,
+                        endpoint_scope,
+                    ):
+                        selection_reasons.setdefault(owner_scope, set()).add(
+                            "reused-active-link-endpoint"
+                        )
+                        continue
                     if (
                         not source_graph_complete
                         and endpoint_scope in fact_slot_deferred_scope_ids

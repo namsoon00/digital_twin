@@ -211,6 +211,61 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
             [row["target"] for row in result["candidateRelationRows"]],
         )
 
+        changed_plan = [dict(item) for item in self.physical_scope_plan]
+        for item in changed_plan:
+            if item["scopeId"] == self.evidence_scope:
+                item.update({
+                    "generationId": "abox-current-cow:evidence-new",
+                    "logicalGenerationId": "logical-evidence-new",
+                    "physicalGenerationChanged": True,
+                })
+        replacement_news = self._node(
+            "research:MSTR:news:new",
+            "news-article",
+            self.evidence_scope,
+            "abox-current-cow:evidence-new",
+            title="Deferred new article",
+            symbol="MSTR",
+        )
+        replacement_relation = self._relation(
+            "stock:MSTR",
+            replacement_news["id"],
+            self.new_link_generation,
+            title="Deferred new article",
+        )
+        replacement_relation.update({
+            "sourceStorageId": ontology_storage_id(
+                self.current_stock,
+                self.current_stock["id"],
+                "node",
+            ),
+            "targetStorageId": ontology_storage_id(
+                replacement_news,
+                replacement_news["id"],
+                "node",
+            ),
+        })
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, replacement_news],
+            [replacement_relation],
+            self._active_context(),
+            changed_plan,
+            [self.state_scope, self.evidence_scope],
+            [self.state_scope, self.evidence_scope, self.link_scope],
+            [self.link_scope],
+            self.manifest_id,
+        )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(
+            [self.link_scope],
+            result["currentFallbackRelationScopeIds"],
+        )
+        self.assertEqual(
+            ["research:MSTR:news:new"],
+            [row["target"] for row in result["candidateRelationRows"]],
+        )
+
     def test_rebind_fails_closed_when_active_relation_is_missing(self):
         active_context = self._active_context()
         active_context["relationRows"] = []
@@ -228,6 +283,40 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
 
         self.assertEqual("active-rebind-relation-count-mismatch", result["status"])
         self.assertEqual(self.link_scope, result["scopeId"])
+
+    def test_initial_candidate_counts_evidence_as_a_physical_node(self):
+        evidence_row = self._node(
+            "evidence:MSTR:price",
+            "evidence:price",
+            self.evidence_scope,
+            self.evidence_generation,
+            symbol="MSTR",
+        )
+        evidence_row["nodeType"] = "ontology-evidence"
+        plan = [{
+            "scopeId": self.evidence_scope,
+            "scopeType": "symbol",
+            "generationId": self.evidence_generation,
+            "logicalGenerationId": "logical-evidence",
+            "physicalGenerationChanged": True,
+            "entityCount": 0,
+            "evidenceCount": 1,
+            "relationCount": 0,
+        }]
+
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [evidence_row],
+            [],
+            {},
+            plan,
+            [self.evidence_scope],
+            [self.evidence_scope],
+            [],
+            self.manifest_id,
+        )
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(["evidence:MSTR:price"], [row["id"] for row in result["nodeRows"]])
 
 
 if __name__ == "__main__":

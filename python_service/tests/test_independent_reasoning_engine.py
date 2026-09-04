@@ -168,6 +168,18 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 },
             },
         ))
+        for status in [
+            "candidate-scope-row-count-mismatch",
+            "active-scope-semantic-reuse-incomplete",
+        ]:
+            self.assertTrue(reasoning_failure_recovery_allowed(
+                "reasoning-execution-blocked",
+                {
+                    "projection_results": {
+                        "default": {"status": status},
+                    },
+                },
+            ))
 
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
         self._assert_non_originating_hypothesis_routes_to_review_observation()

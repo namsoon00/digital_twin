@@ -33,6 +33,85 @@ def descriptor(status="candidate"):
 
 
 class ReasoningEngineVersionTests(unittest.TestCase):
+    def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
+        from unittest.mock import MagicMock
+
+        from digital_twin.domain.investment_ubiquitous_language import (
+            investment_language_registry,
+        )
+        from digital_twin.domain.ontology_rulebox_catalog import (
+            default_graph_inference_rules,
+        )
+        from digital_twin.domain.ontology_rulebox_governance import (
+            rulebox_rules_hash,
+        )
+        from digital_twin.infrastructure.graph_store_lifecycle import (
+            ontology_release_seed_artifact,
+        )
+        from digital_twin.infrastructure.typedb_ontology import (
+            TypeDBOntologyGraphRepository,
+        )
+
+        artifact = ontology_release_seed_artifact(
+            default_graph_inference_rules(),
+            language_registry=investment_language_registry({}),
+            release_bundle={"release_id": "frozen-release"},
+        )
+        artifact["rules"][0]["legacy_extension"] = {
+            "contractVersion": "frozen-rule-extension-v1"
+        }
+        artifact["ruleboxFingerprint"] = rulebox_rules_hash(artifact["rules"])
+        authored_rules = deepcopy(artifact["rules"])
+        expected_tbox = str(artifact["tboxFingerprint"])
+        expected_rulebox = str(artifact["ruleboxFingerprint"])
+
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        repository.sync_base_schema_contract = MagicMock(return_value={
+            "saved": True,
+            "status": "ok",
+        })
+        repository.save_static_seed_boxes = MagicMock(return_value={
+            "saved": True,
+            "status": "ok",
+        })
+        repository.save_seed_static_manifest = MagicMock(return_value={
+            "saved": True,
+            "status": "ok",
+        })
+        repository.clear_rulebox_snapshot_cache = MagicMock()
+        repository.rulebox_snapshot = MagicMock(return_value={
+            "status": "ok",
+            "sourceRulesHash": "runtime-rulebox-fingerprint",
+        })
+        repository.active_tbox_metadata = MagicMock(return_value={
+            "status": "ok",
+            "fingerprint": expected_tbox,
+        })
+        repository.read_seed_static_manifest = MagicMock(return_value={
+            "status": "ok",
+            "metadata": {
+                "ruleboxRulesHash": expected_rulebox,
+                "tboxFingerprint": expected_tbox,
+            },
+        })
+
+        result = TypeDBOntologyGraphRepository.seed_release_artifact.__wrapped__(
+            repository,
+            artifact,
+        )
+
+        self.assertTrue(result["saved"], result)
+        self.assertEqual("restored", result["status"])
+        self.assertEqual(expected_rulebox, result["artifactRuleboxFingerprint"])
+        self.assertEqual(
+            authored_rules,
+            repository.save_static_seed_boxes.call_args.kwargs["rules_payload"],
+        )
+        self.assertEqual(
+            authored_rules,
+            repository.save_seed_static_manifest.call_args.args[1],
+        )
+
     def test_reasoning_health_merge_preserves_write_once_lifecycle_markers(self):
         result = merge_reasoning_deployment_health(
             {

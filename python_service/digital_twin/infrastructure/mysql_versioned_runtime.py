@@ -98,6 +98,11 @@ def reasoning_failure_recovery_allowed(
         "target-scope-repair-required",
         "blocked-pending-abox-activation",
         "pending-abox-activation",
+        # These failures are deterministic for one broken physical ABox, but
+        # become recoverable after a verified graph rotation or scoped repair.
+        # Replay remains bounded by ``maximum_recovery_attempts``.
+        "candidate-scope-row-count-mismatch",
+        "active-scope-semantic-reuse-incomplete",
     }
     projection_statuses = {
         str(item.get("status") or "").strip().lower()

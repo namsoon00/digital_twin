@@ -50,9 +50,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Stable item ownership additionally proves that complete and
         # target-scoped graphs cannot move one logical ABox fact between
         # physical scope owners.
-        # Scoped relation rebind separately protects semantic preservation and
-        # fail-closed behavior when a reused endpoint generation changes.
-        self.assertLessEqual(total, 902)
+        # Scoped relation rebind separately protects semantic preservation,
+        # evidence-node cardinality, and fail-closed behavior when a reused
+        # endpoint generation changes. Frozen releases also preserve authored
+        # extension fields when a graph store is restored.
+        self.assertLessEqual(total, 904)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

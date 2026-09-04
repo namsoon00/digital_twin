@@ -60,7 +60,12 @@ from digital_twin.infrastructure.ontology_projection import (
     rulebox_catalog_requires_bootstrap_repair,
 )
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules, rulebox_rules_to_payload
-from digital_twin.infrastructure.graph_store_lifecycle import ontology_seed_graph
+from digital_twin.infrastructure.graph_store_lifecycle import (
+    ontology_release_seed_artifact,
+    ontology_seed_graph,
+)
+from digital_twin.domain.ontology_rulebox_governance import rulebox_rules_hash
+from digital_twin.domain.investment_ubiquitous_language import investment_language_registry
 from digital_twin.infrastructure.typedb_ontology import (
     NullTypeDBOntologyGraphRepository,
     TypeDBOperationTimeout,
@@ -1178,6 +1183,62 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             {item["scopeId"] for item in audited_plan},
         )
         self.assertEqual("portfolio:local:main", counts.call_args.kwargs["world_id"])
+        self._assert_scoped_manifest_integrity_audit_finishes_with_short_final_slice()
+
+    def _assert_scoped_manifest_integrity_audit_finishes_with_short_final_slice(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        scope_plan = [
+            {
+                "scopeId": f"symbol:{index:06d}:market",
+                "scopeFamily": "market",
+                "generationId": f"scope:{index}",
+                "entityCount": 1,
+                "relationCount": 0,
+            }
+            for index in range(5)
+        ]
+        with patch.object(repository, "active_abox_metadata", return_value={
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "worldviewManifestId": "abox-manifest:active",
+            "worldId": "portfolio:local:main",
+            "worldType": "portfolio",
+            "accountId": "main",
+            "scopePlan": scope_plan,
+        }), patch.object(
+            repository,
+            "scoped_abox_scope_row_counts_batch",
+            side_effect=lambda selected, **_: {
+                item["scopeId"]: {"entityCount": 1, "relationCount": 0}
+                for item in selected
+            },
+        ) as counts:
+            first = repository.scoped_abox_integrity_audit(
+                "portfolio:local:main",
+                cursor=0,
+                limit=3,
+            )
+            final = repository.scoped_abox_integrity_audit(
+                "portfolio:local:main",
+                cursor=first["nextCursor"],
+                limit=3,
+            )
+
+        self.assertEqual(3, first["checkedScopeCount"])
+        self.assertEqual(3, first["nextCursor"])
+        self.assertFalse(first["cycleCompleted"])
+        self.assertEqual(2, final["checkedScopeCount"])
+        self.assertEqual(0, final["nextCursor"])
+        self.assertTrue(final["cycleCompleted"])
+        audited_scope_ids = [
+            item["scopeId"]
+            for call in counts.call_args_list
+            for item in call.args[0]
+        ]
+        self.assertEqual(
+            sorted(item["scopeId"] for item in scope_plan),
+            audited_scope_ids,
+        )
 
     def test_scoped_abox_save_defers_when_another_writer_holds_the_lease(self):
         graph = PortfolioOntology(

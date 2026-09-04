@@ -4283,6 +4283,14 @@ class PortfolioOntologyProjectionRecorder:
                     status=save_status,
                     saved=bool(result.get("saved")),
                     runtimeMs=runtime_stages["aboxPersistenceMs"],
+                    failedScopes=list(result.get("failedScopes") or [])[:12],
+                    rebindOnlyRelationScopeIds=list(
+                        result.get("rebindOnlyRelationScopeIds") or []
+                    )[:24],
+                    currentFallbackRelationScopeIds=list(
+                        result.get("currentFallbackRelationScopeIds") or []
+                    )[:24],
+                    reason=str(result.get("reason") or "")[:220],
                 )
                 # Candidate ABox writes have committed at this point and the
                 # pending activation journal protects this world.  Do not

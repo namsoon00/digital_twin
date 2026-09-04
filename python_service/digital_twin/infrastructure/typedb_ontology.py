@@ -3072,8 +3072,6 @@ class ScopedABoxManifestMixin:
         else:
             start = max(0, int(cursor or 0)) % len(ordered)
             selected = ordered[start:start + bounded_limit]
-            if len(selected) < bounded_limit and len(selected) < len(ordered):
-                selected.extend(ordered[:min(start, bounded_limit - len(selected))])
         counts = self.scoped_abox_scope_row_counts_batch(
             selected,
             world_id=str(world_id or ""),
@@ -3107,10 +3105,11 @@ class ScopedABoxManifestMixin:
                 "expectedRelationCount": expected_relations,
                 "actualRelationCount": actual_relations,
             })
+        reached_cycle_end = start + len(selected) >= len(ordered)
         next_cursor = (
             start
             if targeted_verification
-            else (start + len(selected)) % len(ordered)
+            else 0 if reached_cycle_end else start + len(selected)
         )
         checked_scope_ids = (
             requested_scope_ids
@@ -3134,7 +3133,7 @@ class ScopedABoxManifestMixin:
             "mismatches": mismatches[:50],
             "cursor": start,
             "nextCursor": next_cursor,
-            "cycleCompleted": targeted_verification or next_cursor == 0,
+            "cycleCompleted": targeted_verification or reached_cycle_end,
             "targetedVerification": targeted_verification,
             "readOnly": True,
             "automaticFullProjectionUsed": False,
@@ -5336,7 +5335,13 @@ class ScopedABoxManifestMixin:
         for scope_id in requested:
             plan = active_plan.get(scope_id) or {}
             actual = counts_by_scope.get(scope_id) or {}
-            expected_entity_count = int(number_or_none(plan.get("entityCount")) or 0)
+            # OntologyEvidence is persisted as an ontology-node. The scoped
+            # Manifest keeps logical entities and evidence separate, while a
+            # physical TypeDB read returns both as node rows.
+            expected_entity_count = (
+                int(number_or_none(plan.get("entityCount")) or 0)
+                + int(number_or_none(plan.get("evidenceCount")) or 0)
+            )
             expected_relation_count = int(number_or_none(plan.get("relationCount")) or 0)
             if (
                 int(actual.get("entityCount") or 0) != expected_entity_count
@@ -5542,29 +5547,58 @@ class ScopedABoxManifestMixin:
                 str(row.get("scopeId") or "").strip(),
                 [],
             ).append(row)
+        current_relations_by_scope: Dict[str, List[Dict[str, object]]] = {}
+        for row in current_relations:
+            current_relations_by_scope.setdefault(
+                str(row.get("scopeId") or "").strip(),
+                [],
+            ).append(row)
 
         rebound_relations: List[Dict[str, object]] = []
-        try:
-            for scope_id in sorted(rebind_only):
-                rows = list(active_relations_by_scope.get(scope_id) or [])
-                expected = int(
-                    number_or_none((plan_by_scope.get(scope_id) or {}).get("relationCount"))
-                    or 0
+        current_fallback_relation_scope_ids: List[str] = []
+        for scope_id in sorted(rebind_only):
+            rows = list(active_relations_by_scope.get(scope_id) or [])
+            expected = int(
+                number_or_none((plan_by_scope.get(scope_id) or {}).get("relationCount"))
+                or 0
+            )
+            if len(rows) != expected:
+                return {
+                    "status": "active-rebind-relation-count-mismatch",
+                    "reason": "A physical relation rebind could not recover its complete active semantic image.",
+                    "scopeId": scope_id,
+                    "expectedRelationCount": expected,
+                    "actualRelationCount": len(rows),
+                }
+            try:
+                rebound_scope_rows = [rebound_relation(row) for row in rows]
+            except ValueError as error:
+                # Derived evidence can be replaced when its owning fact scope
+                # changes. Prefer the active assertion, but use the complete
+                # current relation scope when the old endpoint no longer has a
+                # representation in the new generation.
+                current_scope_rows = list(
+                    current_relations_by_scope.get(scope_id) or []
                 )
-                if len(rows) != expected:
+                current_scope_complete = (
+                    len(current_scope_rows) == expected
+                    and all(
+                        str(row.get("sourceStorageId") or "").strip()
+                        and str(row.get("targetStorageId") or "").strip()
+                        for row in current_scope_rows
+                    )
+                )
+                if not current_scope_complete:
                     return {
-                        "status": "active-rebind-relation-count-mismatch",
-                        "reason": "A physical relation rebind could not recover its complete active semantic image.",
+                        "status": "active-rebind-endpoint-invalid",
+                        "reason": str(error),
                         "scopeId": scope_id,
                         "expectedRelationCount": expected,
-                        "actualRelationCount": len(rows),
+                        "currentRelationCount": len(current_scope_rows),
                     }
-                rebound_relations.extend(rebound_relation(row) for row in rows)
-        except ValueError as error:
-            return {
-                "status": "active-rebind-endpoint-invalid",
-                "reason": str(error),
-            }
+                rebound_scope_rows = current_scope_rows
+                current_fallback_relation_scope_ids.append(scope_id)
+            rebound_relations.extend(rebound_scope_rows)
 
         candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
         for row in active_nodes:
@@ -5620,7 +5654,11 @@ class ScopedABoxManifestMixin:
 
         expected_counts = {
             scope_id: {
-                "entityCount": int(number_or_none(plan.get("entityCount")) or 0),
+                # Physical node counts include separately modelled evidence.
+                "entityCount": (
+                    int(number_or_none(plan.get("entityCount")) or 0)
+                    + int(number_or_none(plan.get("evidenceCount")) or 0)
+                ),
                 "relationCount": int(number_or_none(plan.get("relationCount")) or 0),
             }
             for scope_id, plan in plan_by_scope.items()
@@ -5666,6 +5704,9 @@ class ScopedABoxManifestMixin:
             "semanticChangedScopeIds": sorted(semantic_changed),
             "physicalChangedScopeIds": sorted(physical_changed),
             "rebindOnlyRelationScopeIds": sorted(rebind_only),
+            "currentFallbackRelationScopeIds": sorted(
+                current_fallback_relation_scope_ids
+            ),
             "deferredScopeIds": sorted(deferred),
             "reusedActiveNodeCount": len(active_nodes),
             "reusedActiveRelationCount": len(active_relations),
@@ -8097,6 +8138,10 @@ class ScopedABoxManifestMixin:
                     "failedScopes": list(active_scope_rows.get("failedScopes") or []),
                     "writeLeaseRelease": release,
                 }
+        active_scope_read_ms = round(
+            (time.monotonic() - active_scope_read_started) * 1000,
+            1,
+        )
 
         exact_candidate_rows: Dict[str, object] = {}
         if current_state_mode:
@@ -8183,10 +8228,7 @@ class ScopedABoxManifestMixin:
                 (time.monotonic() - native_manifest_index_started) * 1000,
                 1,
             ),
-            "activeScopeSemanticReuseMs": round(
-                (time.monotonic() - active_scope_read_started) * 1000,
-                1,
-            ),
+            "activeScopeSemanticReuseMs": active_scope_read_ms,
             "activeScopeSemanticReuse": {
                 "status": str(active_scope_rows.get("status") or ""),
                 "scopeIds": list(active_scope_rows.get("scopeIds") or []),
@@ -8199,6 +8241,7 @@ class ScopedABoxManifestMixin:
                 for key in [
                     "status", "semanticChangedScopeIds", "physicalChangedScopeIds",
                     "rebindOnlyRelationScopeIds", "deferredScopeIds",
+                    "currentFallbackRelationScopeIds",
                     "reusedActiveNodeCount", "reusedActiveRelationCount",
                     "reboundRelationCount",
                 ]
@@ -18824,9 +18867,14 @@ relation ontology-assertion,
                     artifact.get("semanticStorageContractVersion") or ""
                 ),
             }
+        authored_rules_payload = [
+            dict(item)
+            for item in list(artifact.get("rules") or [])
+            if isinstance(item, dict)
+        ]
         try:
             rules = rulebox_rules_from_payload(
-                {"rules": list(artifact.get("rules") or [])},
+                {"rules": authored_rules_payload},
                 strict_governance=True,
             )
         except ValueError as error:
@@ -18836,9 +18884,13 @@ relation ontology-assertion,
                 "status": "invalid-release-artifact",
                 "reason": str(error)[:240],
             }
-        rules_payload = rulebox_rules_to_payload(rules)
         expected_rulebox_fingerprint = str(artifact.get("ruleboxFingerprint") or "").strip()
-        actual_rulebox_fingerprint = rulebox_rules_hash(rules_payload)
+        # The artifact payload is immutable release data. Newer readers may
+        # normalize an older governed rule into a different in-memory shape,
+        # so hashing a parse/serialize round trip falsely marks a valid frozen
+        # release as corrupt. Validate and publish the authored rows exactly;
+        # keep parsed rules only as the executable in-process representation.
+        actual_rulebox_fingerprint = rulebox_rules_hash(authored_rules_payload)
         tbox_metadata = normalize_tbox_metadata(dict(artifact.get("tboxMetadata") or {}))
         expected_tbox_fingerprint = str(artifact.get("tboxFingerprint") or "").strip()
         if (
@@ -18882,7 +18934,7 @@ relation ontology-assertion,
         static_write = self.save_static_seed_boxes(
             graph,
             self.seed_static_box_names(),
-            rules_payload=rules_payload,
+            rules_payload=authored_rules_payload,
             schema_prepared=True,
             tbox_metadata=tbox_metadata,
         )
@@ -18895,7 +18947,7 @@ relation ontology-assertion,
             }
         manifest = self.save_seed_static_manifest(
             graph,
-            rules_payload,
+            authored_rules_payload,
             schema_prepared=True,
             tbox_metadata=tbox_metadata,
         )
@@ -18934,7 +18986,7 @@ relation ontology-assertion,
             "configured": True,
             "saved": ready,
             "status": "restored" if ready else "release-artifact-readback-mismatch",
-            "ruleCount": len(rules_payload),
+            "ruleCount": len(authored_rules_payload),
             # TypeDB normalizes governed rule rows on readback. Keep the exact
             # authored artifact hash separate from the executable readback
             # hash used by the deployment release identity.

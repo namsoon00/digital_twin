@@ -311,6 +311,84 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
         self.assertEqual(self.link_scope, result["scopeId"])
         self.assertIn("absent from the exact candidate graph", result["reason"])
 
+    def test_candidate_relation_storage_ids_are_rebound_to_candidate_nodes(self):
+        current_relation = self._relation(
+            "stock:MSTR",
+            "research:MSTR:news:active",
+            self.new_link_generation,
+            title="Published active article",
+        )
+        current_relation.update({
+            "sourceStorageId": "ontology-storage:stale-source",
+            "targetStorageId": "ontology-storage:stale-target",
+        })
+
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, self.current_news],
+            [current_relation],
+            self._active_context(),
+            self.physical_scope_plan,
+            [self.state_scope, self.link_scope],
+            [self.state_scope, self.link_scope],
+            [self.evidence_scope],
+            self.manifest_id,
+        )
+
+        self.assertEqual("ok", result["status"])
+        relation = result["candidateRelationRows"][0]
+        self.assertEqual(
+            ontology_storage_id(self.current_stock, "stock:MSTR", "node"),
+            relation["sourceStorageId"],
+        )
+        self.assertEqual(
+            ontology_storage_id(
+                self.active_news,
+                "research:MSTR:news:active",
+                "node",
+            ),
+            relation["targetStorageId"],
+        )
+
+    def test_candidate_relation_fails_before_write_for_retired_endpoint_generation(self):
+        changed_plan = [dict(item) for item in self.physical_scope_plan]
+        for item in changed_plan:
+            if item["scopeId"] == self.evidence_scope:
+                item.update({
+                    "generationId": "abox-current-cow:evidence-new",
+                    "logicalGenerationId": "logical-evidence-new",
+                    "physicalGenerationChanged": True,
+                })
+        relation = self._relation(
+            "stock:MSTR",
+            "research:MSTR:news:active",
+            self.new_link_generation,
+            title="Retired article",
+        )
+        relation.update({
+            "sourceStorageId": "ontology-storage:stale-source",
+            "targetStorageId": "ontology-storage:stale-target",
+        })
+
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, self.current_news],
+            [relation],
+            self._active_context(),
+            changed_plan,
+            [self.state_scope, self.evidence_scope, self.link_scope],
+            [self.state_scope, self.evidence_scope, self.link_scope],
+            [],
+            self.manifest_id,
+        )
+
+        self.assertEqual("candidate-relation-endpoint-missing", result["status"])
+        self.assertEqual(self.link_scope, result["scopeId"])
+        self.assertEqual("target", result["endpointRole"])
+        self.assertEqual("research:MSTR:news:active", result["endpointId"])
+        self.assertEqual(
+            [self.evidence_generation],
+            result["knownEndpointGenerationIds"],
+        )
+
     def test_initial_candidate_counts_evidence_as_a_physical_node(self):
         evidence_row = self._node(
             "evidence:MSTR:price",

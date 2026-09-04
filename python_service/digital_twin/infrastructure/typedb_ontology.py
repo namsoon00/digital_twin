@@ -5560,32 +5560,117 @@ class ScopedABoxManifestMixin:
         # link is physically rebound. In that case the active node storage ID
         # is authoritative; a brand-new endpoint that is not part of the
         # candidate must fail before any TypeDB write starts.
+        def row_generation_id(row: Dict[str, object]) -> str:
+            return str(
+                row.get("scopeGenerationId")
+                or row.get("physicalGenerationId")
+                or row.get("snapshotId")
+                or row.get("aboxSnapshotId")
+                or ""
+            ).strip()
+
+        def node_matches_candidate_plan(row: Dict[str, object]) -> bool:
+            scope_id = str(row.get("scopeId") or "").strip()
+            if not scope_id:
+                # Static TBox/RuleBox endpoints can participate in an ABox
+                # relation without belonging to the scoped ABox Manifest.
+                return True
+            planned = plan_by_scope.get(scope_id) or {}
+            planned_generation = str(planned.get("generationId") or "").strip()
+            return bool(
+                planned_generation
+                and row_generation_id(row) == planned_generation
+            )
+
+        all_nodes_by_id: Dict[str, List[Dict[str, object]]] = {}
+        for row in [*active_nodes, *current_nodes]:
+            node_id = str(row.get("id") or "").strip()
+            if node_id:
+                all_nodes_by_id.setdefault(node_id, []).append(row)
+
         candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
         for row in active_nodes:
             node_id = str(row.get("id") or "").strip()
-            if node_id:
+            scope_id = str(row.get("scopeId") or "").strip()
+            if (
+                node_id
+                and node_matches_candidate_plan(row)
+                and (not scope_id or scope_id in deferred)
+            ):
                 candidate_nodes_by_id[node_id] = row
         for row in current_nodes:
             node_id = str(row.get("id") or "").strip()
-            if node_id and str(row.get("scopeId") or "").strip() not in deferred:
+            if (
+                node_id
+                and str(row.get("scopeId") or "").strip() not in deferred
+                and node_matches_candidate_plan(row)
+            ):
                 candidate_nodes_by_id[node_id] = row
+
+        class CandidateRelationEndpointError(ValueError):
+            def __init__(self, details: Dict[str, object]):
+                self.details = dict(details or {})
+                super().__init__(
+                    str(
+                        self.details.get("reason")
+                        or "Candidate relation endpoint is invalid."
+                    )
+                )
+
+        def candidate_endpoint_storage_id(
+            row: Dict[str, object],
+            prefix: str,
+        ) -> str:
+            endpoint_id = str(row.get(prefix) or "").strip()
+            endpoint = candidate_nodes_by_id.get(endpoint_id) or {}
+            if endpoint:
+                return str(
+                    endpoint.get("storageId")
+                    or ontology_storage_id(endpoint, endpoint_id, "node")
+                ).strip()
+            existing_storage_id = str(
+                row.get(prefix + "StorageId") or ""
+            ).strip()
+            known_rows = list(all_nodes_by_id.get(endpoint_id) or [])
+            if existing_storage_id and not known_rows:
+                # No scoped ABox row owns this canonical id. Keep the storage
+                # identity for an external static endpoint; the TypeDB
+                # inventory check still proves that it exists before writes.
+                return existing_storage_id
+            raise CandidateRelationEndpointError({
+                "reason": (
+                    "A relation endpoint is absent from the exact candidate graph: "
+                    + endpoint_id
+                ),
+                "scopeId": str(row.get("scopeId") or "").strip(),
+                "relationType": str(row.get("type") or "").strip(),
+                "source": str(row.get("source") or "").strip(),
+                "target": str(row.get("target") or "").strip(),
+                "endpointRole": prefix,
+                "endpointId": endpoint_id,
+                "endpointStorageId": existing_storage_id,
+                "knownEndpointScopeIds": sorted({
+                    str(item.get("scopeId") or "").strip()
+                    for item in known_rows
+                    if str(item.get("scopeId") or "").strip()
+                }),
+                "knownEndpointGenerationIds": sorted({
+                    row_generation_id(item)
+                    for item in known_rows
+                    if row_generation_id(item)
+                }),
+                "candidateManifestId": candidate_manifest_id,
+            })
 
         def relation_with_candidate_endpoints(
             row: Dict[str, object],
         ) -> Dict[str, object]:
             resolved = dict(row or {})
             for prefix in ("source", "target"):
-                endpoint_id = str(resolved.get(prefix) or "").strip()
-                endpoint = candidate_nodes_by_id.get(endpoint_id) or {}
-                if not endpoint:
-                    raise ValueError(
-                        "A replacement relation endpoint is absent from the exact candidate graph: "
-                        + endpoint_id
-                    )
-                resolved[prefix + "StorageId"] = str(
-                    endpoint.get("storageId")
-                    or ontology_storage_id(endpoint, endpoint_id, "node")
-                ).strip()
+                resolved[prefix + "StorageId"] = candidate_endpoint_storage_id(
+                    resolved,
+                    prefix,
+                )
             resolved["contentFingerprint"] = ontology_row_content_fingerprint(
                 resolved,
                 "relation",
@@ -5623,7 +5708,7 @@ class ScopedABoxManifestMixin:
                         relation_with_candidate_endpoints(row)
                         for row in current_scope_rows
                     ]
-                except ValueError as candidate_error:
+                except CandidateRelationEndpointError as candidate_error:
                     candidate_endpoint_rows = []
                     error = candidate_error
                 if (
@@ -5654,9 +5739,36 @@ class ScopedABoxManifestMixin:
             and str(row.get("scopeId") or "").strip() not in rebind_only
         )
         candidate_relations.extend(rebound_relations)
+
+        normalized_candidate_relations: List[Dict[str, object]] = []
+        for row in candidate_relations:
+            scope_id = str(row.get("scopeId") or "").strip()
+            planned_generation = str(
+                (plan_by_scope.get(scope_id) or {}).get("generationId") or ""
+            ).strip()
+            if planned_generation and row_generation_id(row) != planned_generation:
+                return {
+                    "status": "candidate-relation-generation-mismatch",
+                    "reason": "A candidate relation belongs to a different physical scope generation.",
+                    "scopeId": scope_id,
+                    "relationType": str(row.get("type") or "").strip(),
+                    "source": str(row.get("source") or "").strip(),
+                    "target": str(row.get("target") or "").strip(),
+                    "expectedGenerationId": planned_generation,
+                    "actualGenerationId": row_generation_id(row),
+                }
+            try:
+                normalized_candidate_relations.append(
+                    relation_with_candidate_endpoints(row)
+                )
+            except CandidateRelationEndpointError as error:
+                return {
+                    "status": "candidate-relation-endpoint-missing",
+                    **error.details,
+                }
         candidate_relations_by_storage_id = {
             ontology_storage_id(row, relation_row_id(row), "relation"): row
-            for row in candidate_relations
+            for row in normalized_candidate_relations
             if str(row.get("source") or "") and str(row.get("target") or "")
         }
         candidate_node_rows = sorted(
@@ -5676,6 +5788,7 @@ class ScopedABoxManifestMixin:
             row
             for row in current_nodes
             if str(row.get("scopeId") or "").strip() in physical_changed
+            and node_matches_candidate_plan(row)
         ]
         persistence_relation_rows = [
             row
@@ -8191,6 +8304,19 @@ class ScopedABoxManifestMixin:
             )
             if str(exact_candidate_rows.get("status") or "") != "ok":
                 release = release_write_lease()
+                candidate_failure = {
+                    key: exact_candidate_rows.get(key)
+                    for key in [
+                        "status", "reason", "scopeId", "relationType",
+                        "source", "target", "endpointRole", "endpointId",
+                        "endpointStorageId", "knownEndpointScopeIds",
+                        "knownEndpointGenerationIds", "candidateManifestId",
+                        "expectedGenerationId", "actualGenerationId",
+                        "expectedRelationCount", "currentRelationCount",
+                        "failedScopes",
+                    ]
+                    if key in exact_candidate_rows
+                }
                 return {
                     "configured": True,
                     "saved": False,
@@ -8206,6 +8332,7 @@ class ScopedABoxManifestMixin:
                     "reason": str(exact_candidate_rows.get("reason") or "Candidate semantic rows could not be reconciled.")[:220],
                     "failedScopes": list(exact_candidate_rows.get("failedScopes") or []),
                     "rebindOnlyRelationScopeIds": rebind_only_relation_scope_ids,
+                    "candidateSemanticReconciliationFailure": candidate_failure,
                     "writeLeaseRelease": release,
                 }
 

@@ -104,6 +104,8 @@ def reasoning_failure_recovery_allowed(
         "candidate-scope-row-count-mismatch",
         "active-scope-semantic-reuse-incomplete",
         "active-rebind-endpoint-invalid",
+        "candidate-relation-endpoint-missing",
+        "candidate-relation-generation-mismatch",
     }
     projection_statuses = {
         str(item.get("status") or "").strip().lower()

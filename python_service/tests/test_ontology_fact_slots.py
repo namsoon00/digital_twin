@@ -703,6 +703,150 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["scopeSelectionTrace"]["deferredPersistenceRebindScopeCount"],
         )
 
+    def test_authoritative_event_replaces_changed_relation_and_new_endpoint_together(self):
+        state_scope = "symbol:028260:market:bucket:00"
+        assessment_scope = "symbol:028260:company-valuation:bucket:03"
+        link_scope = "link:symbol:028260:company-valuation:bucket:03"
+        old_assessment_id = "model-hypothesis-assessment:028260:old"
+        new_assessment_id = "model-hypothesis-assessment:028260:new"
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:028260", "Samsung C&T", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "028260",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity(new_assessment_id, "New assessment", "assessment", {
+                    "ontologyBox": "ABox",
+                    "symbol": "028260",
+                    "aboxScopeId": assessment_scope,
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:028260",
+                new_assessment_id,
+                "HAS_HYPOTHESIS_ASSESSMENT",
+                properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+            )],
+        )
+        graph.worldview = {
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "market",
+                    "impactScopeFamilies": ["market"],
+                    "baseFingerprint": "state-new",
+                    "fingerprint": "state-new-with-dependencies",
+                    "generationId": "state-generation-new",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": assessment_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "company-valuation",
+                    "impactScopeFamilies": ["company-valuation"],
+                    "baseFingerprint": "assessment-new",
+                    "fingerprint": "assessment-new-with-dependencies",
+                    "generationId": "assessment-generation-new",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "company-valuation",
+                    "impactScopeFamilies": ["company-valuation"],
+                    "baseFingerprint": "relation-to-new-assessment",
+                    "fingerprint": "relation-new-with-dependencies",
+                    "generationId": "link-generation-new",
+                    "dependencyScopeIds": [state_scope, assessment_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "market",
+                    "impactScopeFamilies": ["market"],
+                    "baseFingerprint": "state-old",
+                    "fingerprint": "state-old-with-dependencies",
+                    "generationId": "state-generation-old",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": assessment_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "company-valuation",
+                    "impactScopeFamilies": ["company-valuation"],
+                    "baseFingerprint": "assessment-old",
+                    "fingerprint": "assessment-old-with-dependencies",
+                    "generationId": "assessment-generation-old",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "company-valuation",
+                    "impactScopeFamilies": ["company-valuation"],
+                    "baseFingerprint": "relation-to-old-assessment",
+                    "fingerprint": "relation-old-with-dependencies",
+                    "generationId": "link-generation-old",
+                    "dependencyScopeIds": [state_scope, assessment_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["028260"],
+            fact_slot_plan={
+                "enabled": True,
+                "status": "ready",
+                "targetSymbols": ["028260"],
+                "requestedFactFamilies": ["market"],
+                "requestedFactFamiliesBySymbol": {"028260": ["market"]},
+                "slotFamilies": ["market"],
+                "slotFamiliesBySymbol": {"028260": ["market"]},
+                "eventBoundaryAuthoritative": True,
+            },
+        )
+
+        self.assertEqual("ready", selection["status"])
+        self.assertEqual(
+            {state_scope, assessment_scope, link_scope},
+            set(selection["selectedIncomingScopeIds"]),
+        )
+        self.assertNotIn(link_scope, selection["deferredScopeIds"])
+        trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["selected"]
+        }
+        self.assertIn(
+            "required-dependent-link-semantic-replacement",
+            trace[link_scope]["reasons"],
+        )
+        self.assertEqual(new_assessment_id, graph.relations[0].target)
+        self.assertNotEqual(old_assessment_id, graph.relations[0].target)
+
     def test_endpoint_companion_does_not_expand_into_other_owned_relations(self):
         graph = PortfolioOntology(
             "main",

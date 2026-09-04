@@ -2155,6 +2155,26 @@ def select_target_scoped_manifest_patch(
             or _clean(active_item.get("fingerprint")) != _clean(item.get("fingerprint"))
         )
 
+    def assertion_changed_from_active(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> bool:
+        """Return whether a scope's own rows changed, excluding endpoint rolls."""
+
+        active_item = active_by_scope.get(scope_id) or {}
+        if not active_item:
+            return True
+        incoming_base = _clean(item.get("baseFingerprint"))
+        active_base = _clean(active_item.get("baseFingerprint"))
+        if incoming_base or active_base:
+            return incoming_base != active_base
+        # Older manifests may not contain baseFingerprint. Semantic row
+        # fingerprints still distinguish a changed assertion from a scope
+        # generation that moved only because an endpoint was rebuilt.
+        return bool(
+            changed_mapping_keys(active_item, item, "semanticFingerprints")
+        )
+
     def changed_mapping_keys(
         active_item: Mapping[str, object],
         incoming_item: Mapping[str, object],
@@ -2520,9 +2540,11 @@ def select_target_scoped_manifest_patch(
         for scope_id, row in incoming.items():
             if scope_id in selected or _scope_type(scope_id) != "link":
                 continue
+            assertion_changed = assertion_changed_from_active(scope_id, row)
             if (
                 bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
                 and scope_id in fact_slot_deferred_scope_ids
+                and not assertion_changed
             ):
                 # The repository will physically rebind an existing active
                 # link when one of its endpoint generations changes. Do not
@@ -2543,7 +2565,11 @@ def select_target_scoped_manifest_patch(
             include_missing_dependency(
                 scope_id,
                 missing_endpoints,
-                "required-dependent-link-rebind",
+                (
+                    "required-dependent-link-semantic-replacement"
+                    if assertion_changed
+                    else "required-dependent-link-rebind"
+                ),
                 traverse_owned_relations=True,
             )
         for relation in graph.relations:

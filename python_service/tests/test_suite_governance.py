@@ -54,7 +54,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # evidence-node cardinality, and fail-closed behavior when a reused
         # endpoint generation changes. Frozen releases also preserve authored
         # extension fields when a graph store is restored.
-        self.assertLessEqual(total, 905)
+        self.assertLessEqual(total, 908)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

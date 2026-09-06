@@ -656,6 +656,13 @@ function checkWorkflowConsoleContract() {
   );
   assertOk(styles.indexOf(".market-workspace-tabs") >= 0 && styles.indexOf(".watchlist-picker-backdrop") >= 0, "시장 화면 모바일 탐색 또는 계정 선택 레이어 스타일이 없습니다.");
   assertOk(code.indexOf("function workDetailUrl") >= 0 && code.indexOf('params.set("detail"') >= 0 && code.indexOf('params.set("detailKey"') >= 0 && code.indexOf("closeWorkDetailLayer") >= 0, "상세 URL과 브라우저 뒤로 가기 계약이 없습니다.");
+  assertOk(
+    code.indexOf("function investmentCaseDetailRequiresKey") >= 0
+      && code.indexOf("investmentCaseDetailRequiresKey(type) && !key) return null") >= 0
+      && code.indexOf("투자 케이스를 먼저 선택해 주세요.") >= 0
+      && code.indexOf("선택된 투자 케이스가 없습니다") >= 0,
+    "식별자 없는 투자 케이스 상세 주소가 영구 로딩 대신 판단 목록으로 복구되지 않습니다."
+  );
   assertOk(code.indexOf("trapWorkDetailFocus") >= 0 && code.indexOf("restoreWorkDetailFocus") >= 0 && code.indexOf("data-work-detail-dialog") >= 0, "상세 화면의 키보드 포커스 관리가 없습니다.");
   assertOk(code.indexOf('params.set("mock", "1")') >= 0, "로컬 웹 URL에서 서버 mock 검증 모드로 연결되는 경로가 없습니다.");
   assertOk(code.indexOf("function patchStableDashboardMarkup") >= 0 && code.indexOf("function syncStableDashboardDom") >= 0 && code.indexOf("function reconcileDashboardCollections") >= 0 && code.indexOf('data-console-row-key="') >= 0 && code.indexOf('data-render-mode", "stable-patch"') >= 0, "실시간 데이터 변경 시 canonical key 기반 DOM 부분 갱신 경로가 없습니다.");

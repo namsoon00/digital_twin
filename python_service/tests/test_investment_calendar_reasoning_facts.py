@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.investment_calendar_service import InvestmentCalendarService
 from digital_twin.domain.events import (
@@ -210,8 +211,13 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
             Repository(), event_publisher=publisher,
             reasoning_source_fact_store=FactStore(),
         )
-        first = service.save_event(calendar_payload("2026-08-28T00:00:00Z"))
-        second = service.save_event(calendar_payload("2026-08-28T00:05:00Z"))
+        starts_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        first_payload = calendar_payload("2026-08-28T00:00:00Z")
+        second_payload = calendar_payload("2026-08-28T00:05:00Z")
+        first_payload["startsAt"] = starts_at
+        second_payload["startsAt"] = starts_at
+        first = service.save_event(first_payload)
+        second = service.save_event(second_payload)
 
         self.assertTrue(first["reasoningRequested"])
         self.assertFalse(second["reasoningRequested"])

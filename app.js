@@ -2070,7 +2070,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260830-portfolio-ai-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260907-investment-case-route-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -2143,8 +2143,17 @@
     syncAccountDraftFromLoadedAccounts(Boolean(forceDraft));
   }
 
+  function investmentCaseDetailRequiresKey(type) {
+    return ["investment-case", "investment-flow"].indexOf(String(type || "").trim()) >= 0;
+  }
+
   function initialTab() {
     var params = new URLSearchParams(window.location.search);
+    var detailType = String(params.get("detail") || "").trim();
+    var detailKey = String(params.get("detailKey") || "").trim();
+    if (!params.get("tab") && investmentCaseDetailRequiresKey(detailType) && !detailKey) {
+      return "modeling";
+    }
     if (String(params.get("tab") || "").toLowerCase() === "settings"
         && ["operations", "operation", "runtime", "system", "data", "diagnostics"].indexOf(String(params.get("settings") || "").toLowerCase()) >= 0) {
       return "operations";
@@ -2176,8 +2185,9 @@
     var params = new URLSearchParams(window.location.search);
     var type = String(params.get("detail") || "").trim();
     if (!type) return null;
-    var key = String(params.get("detailKey") || "");
+    var key = String(params.get("detailKey") || "").trim();
     if (type === "investment-action" && key.indexOf("decision:") === 0) type = "investment-case";
+    if (investmentCaseDetailRequiresKey(type) && !key) return null;
     return {
       type: type,
       key: key
@@ -12597,6 +12607,11 @@
     if (!type) return;
     if (type === "investment-action" && String(key || "").indexOf("decision:") === 0) {
       type = "investment-case";
+    }
+    if (investmentCaseDetailRequiresKey(type) && !String(key || "").trim()) {
+      if (state.activeTab !== "modeling") navigateToTab("modeling");
+      showSnackbar("투자 케이스를 먼저 선택해 주세요.", "caution");
+      return;
     }
     var activeElement = document.activeElement;
     workDetailReturnFocus = activeElement && activeElement.getAttribute ? {
@@ -25748,6 +25763,19 @@
   }
 
   function investmentFlowWorkDetailPayload(key) {
+    key = String(key || "").trim();
+    if (!key) {
+      return {
+        kicker: "Investment Case",
+        title: "투자 케이스를 선택해 주세요",
+        meta: "상세 주소에 판단 식별자가 없습니다.",
+        body: renderConsoleEmpty(
+          "선택된 투자 케이스가 없습니다",
+          "판단 목록에서 종목을 선택하면 사실, 근거, 추론과 결과를 확인할 수 있습니다.",
+          '<button class="text-button primary" type="button" data-tab="modeling" data-work-detail-close>판단 목록 보기</button>'
+        )
+      };
+    }
     var detail = state.investmentFlowDetails[key] && typeof state.investmentFlowDetails[key] === "object"
       ? state.investmentFlowDetails[key]
       : null;

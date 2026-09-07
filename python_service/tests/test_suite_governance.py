@@ -61,7 +61,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # process ownership also keeps its independent runtime regression.
         # Physical generation retention additionally protects nodes that remain
         # role players in a different relation generation.
-        self.assertLessEqual(total, 918)
+        self.assertLessEqual(total, 921)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -5717,9 +5717,11 @@ class ScopedABoxManifestMixin:
                 candidate_nodes_by_id[node_id] = row
         for row in current_nodes:
             node_id = str(row.get("id") or "").strip()
+            scope_id = str(row.get("scopeId") or "").strip()
             if (
                 node_id
-                and str(row.get("scopeId") or "").strip() not in deferred
+                and scope_id in physical_changed
+                and scope_id not in deferred
                 and node_matches_candidate_plan(row)
             ):
                 candidate_nodes_by_id[node_id] = row

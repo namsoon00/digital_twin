@@ -259,6 +259,11 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
             stock_id = available_stock_id(symbol)
             if not stock_id:
                 continue
+            benchmark_symbol = str(
+                metric.get("benchmark_symbol")
+                or metric.get("benchmarkSymbol")
+                or ""
+            ).upper().strip()
             metric_id = add_entity(graph, "position-risk-metric",
                 str(risk.get("riskSnapshotId") or "latest") + ":" + symbol,
                 symbol + " 시계열 위험", {
@@ -269,24 +274,38 @@ def add_portfolio_lifecycle_concepts(graph, portfolio_node_id: str, runtime_cont
                     "maximumDrawdownPct": number(metric.get("maximum_drawdown_pct") or metric.get("maximumDrawdownPct")),
                     "beta": metric.get("beta"),
                     "activeReturnPct": metric.get("active_return_pct") or metric.get("activeReturnPct"),
+                    "benchmarkSymbol": benchmark_symbol,
+                    "benchmarkPeriodReturnPct": number(
+                        metric.get("benchmark_return_pct")
+                        or metric.get("benchmarkReturnPct")
+                    ),
                     "sampleCount": number(metric.get("sample_count") or metric.get("sampleCount")),
                     "dataState": metric.get("data_state") or metric.get("dataState"),
                     "source": "portfolio-risk-analytics",
                 })
             add_relation(graph, stock_id, metric_id, "HAS_POSITION_RISK", properties={"source": "portfolio-risk-analytics"})
-            benchmark_symbol = str(metric.get("benchmark_symbol") or metric.get("benchmarkSymbol") or "").upper().strip()
             if benchmark_symbol and metric.get("beta") is not None:
-                benchmark_id = add_entity(graph, "benchmark-index",
-                    str(risk.get("riskSnapshotId") or "latest") + ":" + symbol + ":" + benchmark_symbol,
-                    benchmark_symbol + " 실측 베타", {
-                        "tboxClass": "BenchmarkIndex", "symbol": benchmark_symbol,
-                        "beta": number(metric.get("beta")),
-                        "periodReturnPct": number(metric.get("benchmark_return_pct") or metric.get("benchmarkReturnPct")),
-                        "sampleCount": number(metric.get("sample_count") or metric.get("sampleCount")),
-                        "dataState": metric.get("data_state") or metric.get("dataState"),
-                        "source": "portfolio-risk-analytics",
-                    })
-                add_relation(graph, stock_id, benchmark_id, "HAS_BETA_TO", properties={"source": "portfolio-risk-analytics"})
+                benchmark_id = entity_id("benchmark-index", benchmark_symbol)
+                if benchmark_id not in existing_entity_ids:
+                    add_entity(graph, "benchmark-index", benchmark_symbol,
+                        benchmark_symbol + " 벤치마크", {
+                            "tboxClass": "BenchmarkIndex",
+                            "symbol": benchmark_symbol,
+                            "source": "portfolio-risk-analytics",
+                        })
+                    existing_entity_ids.add(benchmark_id)
+                add_relation(graph, stock_id, benchmark_id, "HAS_BETA_TO", properties={
+                    "source": "portfolio-risk-analytics",
+                    "riskSnapshotId": risk.get("riskSnapshotId"),
+                    "beta": number(metric.get("beta")),
+                    "periodReturnPct": number(
+                        metric.get("benchmark_return_pct")
+                        or metric.get("benchmarkReturnPct")
+                    ),
+                    "sampleCount": number(metric.get("sample_count") or metric.get("sampleCount")),
+                    "dataState": metric.get("data_state") or metric.get("dataState"),
+                    "observedAt": risk.get("observedAt"),
+                })
 
     rebalance = lifecycle.get("rebalanceProposal") if isinstance(lifecycle.get("rebalanceProposal"), dict) else {}
     if rebalance:

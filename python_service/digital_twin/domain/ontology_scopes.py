@@ -35,7 +35,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v11-model-signal-isolation"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v12-stable-benchmark-anchor"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -79,6 +79,27 @@ _SYMBOL_PREFIXES = (
     "technical-metric:",
     "flow-metric:",
     "data-quality:",
+)
+
+_STABLE_ACTIVE_ANCHOR_PREFIXES = (
+    "account:",
+    "catalog-entry:",
+    "company:",
+    "crypto-asset:",
+    "factor:",
+    "fx-rate:",
+    "instrument-anchor:",
+    "instrument-profile:",
+    "interest-rate:",
+    "macro-indicator:",
+    "macro-regime:",
+    "market-index:",
+    "market-proxy:",
+    "portfolio:",
+    "position:",
+    "security:",
+    "stock:",
+    "yield-curve:",
 )
 
 _MACRO_KINDS = {
@@ -445,6 +466,18 @@ def _id_symbol(entity_id: object) -> str:
         if re.fullmatch(r"[A-Z]{1,6}(?:[.-][A-Z0-9]{1,5})?", candidate):
             return candidate
     return ""
+
+
+def _is_stable_active_anchor_id(entity_id: object) -> bool:
+    """Return whether a changed relation may reuse this logical endpoint."""
+
+    value = _clean(entity_id)
+    lowered = value.lower()
+    if lowered.startswith("benchmark-index:"):
+        # Legacy portfolio-risk projections embedded a new snapshot id in the
+        # benchmark id. Such a measurement is not an active reusable anchor.
+        return "portfolio-risk-snapshot:" not in lowered
+    return lowered.startswith(_STABLE_ACTIVE_ANCHOR_PREFIXES)
 
 
 def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
@@ -2575,14 +2608,11 @@ def select_target_scoped_manifest_patch(
             owner,
         ):
             return True
-        # The authoritative event does not own this endpoint's newer
-        # in-memory facts. Reuse the exact logical endpoint from the verified
-        # active scope, regardless of whether it is a stock, macro, portfolio,
-        # valuation, flow, or exposure fact. The TypeDB candidate-row builder
-        # resolves this endpoint by ID against active physical rows and fails
-        # closed when that exact ID is absent, so a genuinely new endpoint can
-        # never be silently substituted.
-        return bool(_clean(endpoint_id))
+        # A changed assertion may retain an endpoint from another mailbox only
+        # when its logical identity is a stable anchor. Snapshot observations
+        # must bring their owning scope into the candidate generation; their
+        # ids can be new even when the broad scope already has an active row.
+        return _is_stable_active_anchor_id(endpoint_id)
 
     missing_endpoints: List[str] = []
     incomplete_source_endpoint_scopes: List[str] = []

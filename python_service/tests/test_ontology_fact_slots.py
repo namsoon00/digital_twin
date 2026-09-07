@@ -6,6 +6,9 @@ from digital_twin.domain.ontology_fact_slots import (
     select_fact_slot_scope_ids,
 )
 from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+from digital_twin.domain.portfolio_ontology_lifecycle_concepts import (
+    add_portfolio_lifecycle_concepts,
+)
 from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
@@ -16,6 +19,202 @@ from digital_twin.domain.ontology_scopes import (
 
 
 class OntologyFactSlotTests(unittest.TestCase):
+    def test_portfolio_risk_uses_stable_benchmark_anchor(self):
+        def risk_graph(snapshot_id, beta):
+            graph = PortfolioOntology(
+                "main",
+                entities=[
+                    OntologyEntity("portfolio:main", "Portfolio", "portfolio", {
+                        "ontologyBox": "ABox",
+                    }),
+                    OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                        "ontologyBox": "ABox", "symbol": "MSTR",
+                    }),
+                ],
+            )
+            add_portfolio_lifecycle_concepts(
+                graph,
+                "portfolio:main",
+                {"portfolioLifecycle": {"portfolioRiskSnapshot": {
+                    "riskSnapshotId": snapshot_id,
+                    "observedAt": "2026-09-07T03:00:00Z",
+                    "positions": [{
+                        "symbol": "MSTR",
+                        "beta": beta,
+                        "benchmarkSymbol": "SPY",
+                        "benchmarkReturnPct": 2.4,
+                        "sampleCount": 60,
+                        "dataState": "complete",
+                    }],
+                }}},
+            )
+            apply_scoped_abox_identity(graph, account_id="main")
+            return graph
+
+        first = risk_graph("portfolio-risk-snapshot:first", 1.42)
+        second = risk_graph("portfolio-risk-snapshot:second", 1.51)
+        benchmark_ids = {
+            entity.entity_id
+            for graph in (first, second)
+            for entity in graph.entities
+            if entity.kind == "benchmark-index"
+        }
+
+        self.assertEqual({"benchmark-index:SPY"}, benchmark_ids)
+        benchmark = next(
+            entity for entity in second.entities
+            if entity.entity_id == "benchmark-index:SPY"
+        )
+        self.assertEqual("macro:market", benchmark.properties["aboxScopeId"])
+        self.assertNotIn("beta", benchmark.properties)
+        beta_relation = next(
+            relation for relation in second.relations
+            if relation.relation_type == "HAS_BETA_TO"
+        )
+        self.assertEqual("benchmark-index:SPY", beta_relation.target)
+        self.assertEqual(1.51, beta_relation.properties["beta"])
+        self.assertTrue(
+            beta_relation.properties["aboxScopeId"].startswith(
+                "link:symbol:MSTR:exposure"
+            )
+        )
+
+    def test_changed_relation_stages_dynamic_snapshot_endpoint(self):
+        state_scope = "symbol:MSTR:state"
+        macro_scope = "macro:market"
+        link_scope = "link:symbol:MSTR:exposure"
+        dynamic_id = (
+            "benchmark-index:portfolio-risk-snapshot:new:MSTR:SPY"
+        )
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:MSTR", "Strategy", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "MSTR",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity(dynamic_id, "SPY measured beta", "benchmark-index", {
+                    "ontologyBox": "ABox",
+                    "symbol": "SPY",
+                    "aboxScopeId": macro_scope,
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:MSTR",
+                dynamic_id,
+                "HAS_BETA_TO",
+                properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+            )],
+        )
+        graph.worldview = {"scopePlan": [
+            {
+                "scopeId": state_scope,
+                "scopeType": "symbol",
+                "scopeFamily": "state",
+                "baseFingerprint": "state-active",
+                "fingerprint": "state-active",
+                "generationId": "state-active",
+                "dependencyScopeIds": [],
+                "entityCount": 1,
+                "relationCount": 0,
+            },
+            {
+                "scopeId": macro_scope,
+                "scopeType": "macro",
+                "scopeFamily": "macro-market",
+                "baseFingerprint": "dynamic-new",
+                "fingerprint": "dynamic-new",
+                "generationId": "macro-new",
+                "dependencyScopeIds": [],
+                "entityCount": 1,
+                "relationCount": 0,
+            },
+            {
+                "scopeId": link_scope,
+                "scopeType": "link",
+                "scopeFamily": "exposure",
+                "impactScopeFamilies": ["exposure"],
+                "baseFingerprint": "link-new-endpoint",
+                "fingerprint": "link-new-endpoint",
+                "generationId": "link-new",
+                "dependencyScopeIds": [state_scope, macro_scope],
+                "entityCount": 0,
+                "relationCount": 1,
+            },
+        ]}
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "baseFingerprint": "state-active",
+                    "fingerprint": "state-active",
+                    "generationId": "state-active",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": macro_scope,
+                    "scopeType": "macro",
+                    "scopeFamily": "macro-market",
+                    "baseFingerprint": "dynamic-old",
+                    "fingerprint": "dynamic-old",
+                    "generationId": "macro-old",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "exposure",
+                    "impactScopeFamilies": ["exposure"],
+                    "baseFingerprint": "link-old-endpoint",
+                    "fingerprint": "link-old-endpoint",
+                    "generationId": "link-old",
+                    "dependencyScopeIds": [state_scope, macro_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+
+        selection = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["MSTR"],
+            fact_slot_plan={
+                "enabled": True,
+                "status": "ready",
+                "targetSymbols": ["MSTR"],
+                "requestedFactFamilies": ["exposure"],
+                "requestedFactFamiliesBySymbol": {"MSTR": ["exposure"]},
+                "slotFamilies": ["exposure"],
+                "slotFamiliesBySymbol": {"MSTR": ["exposure"]},
+                "eventBoundaryAuthoritative": True,
+            },
+        )
+
+        self.assertEqual("ready", selection["status"])
+        self.assertEqual(
+            {macro_scope, link_scope},
+            set(selection["selectedIncomingScopeIds"]),
+        )
+        selected_trace = {
+            item["scopeId"]: item
+            for item in selection["scopeSelectionTrace"]["selected"]
+        }
+        self.assertNotIn(
+            "reused-active-link-endpoint",
+            selected_trace[link_scope]["reasons"],
+        )
+
     def test_non_symbol_fact_ownership_is_stable_across_graph_shapes(self):
         factor_id = "factor:rate-sensitive-growth"
         compact = PortfolioOntology(

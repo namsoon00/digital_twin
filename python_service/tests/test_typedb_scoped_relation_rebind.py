@@ -351,6 +351,23 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
             relation["targetStorageId"],
         )
 
+    def test_current_only_node_from_unchanged_scope_is_not_candidate_endpoint(self):
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, self.current_news],
+            [self.current_relation],
+            self._active_context(),
+            self.physical_scope_plan,
+            [self.state_scope, self.link_scope],
+            [self.state_scope, self.link_scope],
+            [],
+            self.manifest_id,
+        )
+
+        self.assertEqual("candidate-relation-endpoint-missing", result["status"])
+        self.assertEqual("research:MSTR:news:new", result["endpointId"])
+        self.assertEqual("target", result["endpointRole"])
+        self.assertEqual([self.evidence_scope], result["knownEndpointScopeIds"])
+
     def test_selected_relation_can_reuse_unchanged_active_endpoint(self):
         current_relation = self._relation(
             "stock:MSTR",

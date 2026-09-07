@@ -13,7 +13,7 @@ CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
 CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v2"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v1"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
-REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v2"
+REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v3"
 
 DELIVERY_POLICY_BLOCKING_DECISIONS = {
     "baseline",
@@ -480,7 +480,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
 
 
 def review_observation_delivery_decision(value: object) -> Dict[str, object]:
-    """Deliver a non-originating hypothesis as review evidence, never an action."""
+    """Deliver review-only evidence only with a concrete source or condition change."""
 
     payload = _mapping(value)
     contract = typedb_review_observation_contract(payload)
@@ -488,7 +488,6 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         return {}
     publication = _mapping(payload.get("decisionPublication"))
     outcome = _text(publication.get("outcomeKind")).upper()
-    cooldown_decision = _text(payload.get("cooldownDecision")).lower()
     relation_transition = _mapping(payload.get("decisionTransition")) or _mapping(
         _mapping(payload.get("ontologyRelationDiff")).get("decisionTransition")
     )
@@ -504,16 +503,27 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         )
         if _text(item)
     })
+    continuity = _mapping(payload.get("decisionContinuityPacket"))
+    verified_follow_ups = [
+        _mapping(item)
+        for item in continuity.get("followUpConditions") or []
+        if isinstance(item, Mapping)
+        and item.get("transitionVerified") is True
+        and _text(item.get("transitionAt"))
+        and _text(item.get("status")).lower()
+        in {"satisfied", "invalidated", "expired"}
+    ]
+    validated = _mapping(payload.get("notificationAiValidatedResponse"))
+    next_condition_available = bool(
+        _text(validated.get("nextActionPlan") or validated.get("invalidationCondition"))
+        or [item for item in validated.get("nextChecks") or [] if _text(item)]
+        or [item for item in validated.get("followUpConditions") or [] if _text(item)]
+    )
     authorization_sources = []
-    if cooldown_decision in {
-        "meaningful-change",
-        "typedb-profit-loss-change",
-    }:
-        authorization_sources.append("delivery-cadence:" + cooldown_decision)
-    if bool(relation_transition.get("material")):
-        authorization_sources.append("material-relation-transition")
     if material_source_keys:
         authorization_sources.append("material-source-event")
+    if verified_follow_ups:
+        authorization_sources.append("verified-follow-up-transition")
 
     decision = {
         "version": REVIEW_OBSERVATION_DELIVERY_VERSION,
@@ -525,6 +535,9 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         "selectedRuleId": contract.get("selectedRuleId"),
         "authorizationSources": authorization_sources,
         "materialSourceEventCount": len(material_source_keys),
+        "verifiedFollowUpTransitionCount": len(verified_follow_ups),
+        "nextConditionAvailable": next_condition_available,
+        "relationTransitionMaterial": bool(relation_transition.get("material")),
         "actionAuthority": contract.get("actionAuthority"),
     }
     if outcome != "REVIEW_ONLY":
@@ -540,11 +553,16 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
             "suppressionReason": "review_observation_delivery_cooldown",
         })
         return decision
-    if authorization_sources:
+    if authorization_sources and (next_condition_available or verified_follow_ups):
         decision.update({
             "decision": "send",
-            "reason": "TypeDB가 매매 결론 없이 다시 확인할 위험·제약 관계를 검증했습니다.",
+            "reason": "새 중요 원문 또는 검증된 후속 조건 전환과 다음 확인 항목이 연결됐습니다.",
             "suppressionReason": "",
             "pushValueClass": "material-review-observation",
+        })
+    elif authorization_sources:
+        decision.update({
+            "reason": "새 근거는 있으나 사용자가 확인할 다음 조건이 없어 웹 이력에만 저장합니다.",
+            "suppressionReason": "review_observation_missing_next_condition",
         })
     return decision

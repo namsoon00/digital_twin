@@ -659,6 +659,18 @@ class ExternalDataPlatformTest(unittest.TestCase):
                         "recordDate": "20260930", "eventLifecycleState": "upcoming", "cashDividendPerCommonShare": 500,
                         "provider": "금융위원회·공공데이터포털",
                     },
+                    "dividend-right": {
+                        "eventId": "dividend-right", "eventType": "shareholder-right",
+                        "tboxClass": "ShareholderRightEvent", "eventLifecycleState": "active",
+                        "exerciseStartDate": "20260901", "issuanceReason": "배당/분배",
+                        "rightReason": "명부폐쇄기간", "provider": "금융위원회·공공데이터포털",
+                    },
+                    "rights-offering": {
+                        "eventId": "rights-offering", "eventType": "shareholder-right",
+                        "tboxClass": "ShareholderRightEvent", "eventLifecycleState": "upcoming",
+                        "exerciseStartDate": "20261001", "issuanceReason": "유상증자",
+                        "rightReason": "신주인수권 행사", "provider": "금융위원회·공공데이터포털",
+                    },
                 }
             },
         }
@@ -678,7 +690,26 @@ class ExternalDataPlatformTest(unittest.TestCase):
         relation_types = {item.relation_type for item in graph.relations}
         self.assertTrue({"SecurityListing", "Index", "DividendEvent", "EquityIssuanceEvent"}.issubset(classes))
         self.assertTrue({"AFFILIATED_WITH", "CONTROLS", "USES_MARKET_BENCHMARK", "HAS_CORPORATE_ACTION"}.issubset(relation_types))
-        self.assertTrue(any(item.relation_type == "HAS_EXTERNAL_SIGNAL" for item in graph.relations))
+        external_signal_targets = {
+            item.target for item in graph.relations if item.relation_type == "HAS_EXTERNAL_SIGNAL"
+        }
+        corporate_actions = {
+            item.properties.get("eventId"): item
+            for item in graph.entities
+            if item.kind == "corporate-action"
+        }
+        self.assertIn(corporate_actions["issue"].entity_id, external_signal_targets)
+        self.assertIn(corporate_actions["rights-offering"].entity_id, external_signal_targets)
+        self.assertNotIn(corporate_actions["dividend"].entity_id, external_signal_targets)
+        self.assertNotIn(corporate_actions["dividend-right"].entity_id, external_signal_targets)
+        self.assertEqual(
+            "shareholder-administration",
+            corporate_actions["dividend-right"].properties["eventDecisionCategory"],
+        )
+        self.assertNotIn(
+            "ExternalSignal",
+            corporate_actions["dividend-right"].properties["tboxClasses"],
+        )
         validation = validate_ontology(graph)
         self.assertEqual("valid", validation.status, [item.to_dict() for item in validation.issues])
 

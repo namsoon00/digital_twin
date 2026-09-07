@@ -548,7 +548,7 @@ class AIInferenceQueueRunner:
         self.max_prompt_bytes = _int_setting(
             self.settings,
             "notificationAiQueueMaxPromptBytes",
-            16 * 1024,
+            24 * 1024,
             12 * 1024,
             24 * 1024,
         )

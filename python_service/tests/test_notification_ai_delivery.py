@@ -358,12 +358,17 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertTrue(decision["typedbFallback"])
 
         actionless_review = final_ai_delivery_decision(review_observation_context())
-        self.assertEqual("send", actionless_review["decision"])
-        self.assertEqual("material-review-observation", actionless_review["pushValueClass"])
+        self.assertEqual("suppress", actionless_review["decision"])
+        self.assertEqual("ai_failure_web_history", actionless_review["suppressionReason"])
+        self.assertEqual("web-only-ai-failure", actionless_review["pushValueClass"])
         self.assertEqual("NO_ACTION", actionless_review.get("finalAction"))
         self.assertTrue(actionless_review["typedbFallback"])
 
         nonmaterial_review = review_observation_context()
+        nonmaterial_review["notificationAiExecutionAudit"] = {
+            "status": "completed",
+            "adoptionState": "narrative-adopted-action-not-applicable",
+        }
         nonmaterial_review["decisionTransition"] = {
             "kind": "initial",
             "material": False,
@@ -377,6 +382,19 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         review_in_cooldown = review_observation_context()
         review_in_cooldown.update({
+            "notificationAiExecutionAudit": {
+                "status": "completed",
+                "adoptionState": "narrative-adopted-action-not-applicable",
+            },
+            "ontologyInsight": {
+                "semanticComponents": {
+                    "materialSourceEventKeys": ["disclosure:MSTR:new"],
+                },
+            },
+            "notificationAiValidatedResponse": {
+                "action": "NO_ACTION",
+                "nextChecks": ["신규 발행 조건과 주식 수 변화를 확인합니다."],
+            },
             "cooldownDecision": "cooldown",
             "cooldownSuppressed": True,
             "cooldownReason": "중요 근거 재알림 간격 60분 전입니다.",
@@ -387,6 +405,27 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "review_observation_delivery_cooldown",
             blocked_review["suppressionReason"],
         )
+
+        material_review = review_observation_context()
+        material_review.update({
+            "notificationAiExecutionAudit": {
+                "status": "completed",
+                "adoptionState": "narrative-adopted-action-not-applicable",
+            },
+            "ontologyInsight": {
+                "semanticComponents": {
+                    "materialSourceEventKeys": ["disclosure:MSTR:new"],
+                },
+            },
+            "notificationAiValidatedResponse": {
+                "action": "NO_ACTION",
+                "nextChecks": ["신규 발행 조건과 주식 수 변화를 확인합니다."],
+            },
+        })
+        material_decision = final_ai_delivery_decision(material_review)
+        self.assertEqual("send", material_decision["decision"])
+        self.assertEqual("material-review-observation", material_decision["pushValueClass"])
+        self.assertEqual(["material-source-event"], material_decision["authorizationSources"])
 
         review_only = watchlist_context(ai_kind="action-changed")
         review_only.update({

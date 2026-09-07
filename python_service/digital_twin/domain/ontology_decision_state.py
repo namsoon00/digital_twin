@@ -120,6 +120,7 @@ ACTION_ENVELOPE_STATUS_LABELS = {
     "ENTRY_OBSERVING": "관심 유지",
     "ENTRY_BLOCKED": "진입 판단 보류",
     "HOLDING_REVIEW": "보유 판단 재확인",
+    "HYPOTHESIS_COMPARISON_REQUIRED": "AI 가설 비교 필요",
     "JUDGEMENT_BLOCKED": "판단 보류",
     "CONTEXT_OBSERVATION": "중요 자료 확인",
     "NO_ELIGIBLE_THESIS": "성립한 투자 가설 없음",

@@ -4244,7 +4244,7 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
         GraphInferenceRule(
             rule_id="graph.disclosure.financing_or_dilution.risk.v1",
             label="공시 + 자금조달/희석 이벤트 -> 공시 영향 심화 점검",
-            version="v1",
+            version="v2",
             source_kind="stock",
             action_group="eventImpact",
             action_level="review",

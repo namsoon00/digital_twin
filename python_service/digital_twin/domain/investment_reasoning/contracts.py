@@ -18,7 +18,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v2"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v4"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v5"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"

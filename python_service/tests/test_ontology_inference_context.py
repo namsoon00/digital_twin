@@ -2,6 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -13,10 +14,15 @@ from digital_twin.domain.ontology_inference_context import (
     relation_contexts_from_snapshot,
     signal_conflict_packet,
 )
+from digital_twin.domain.investment_reasoning.synthesis import (
+    decision_synthesis_from_relation_context,
+)
+from digital_twin.domain.ontology_decision_assessments import decision_assessment_bundle
 from digital_twin.domain.ontology_relation_contracts import OntologyRuleMatch
 from digital_twin.domain.ontology_relation_execution_plan import decision_drivers_from_relation_context, execution_plan_from_relation_context
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
 from digital_twin.domain.instrument_profiles import InstrumentProfile, profile_settings
+from digital_twin.domain.ai_inference_queue import notification_ai_action_eligibility
 from digital_twin.domain.investment_ubiquitous_language import (
     investment_archetype_label,
     user_facing_investment_language,
@@ -29,6 +35,113 @@ from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_re
 
 
 class OntologyInferenceContextTests(unittest.TestCase):
+    def _assert_competing_investment_actions_are_routed_to_ai_comparison(self):
+        facts = {
+            "symbol": "000660",
+            "name": "SK하이닉스",
+            "source": "holding",
+            "isHolding": True,
+            "currentPrice": 1775000,
+        }
+        policy = {
+            "targetRole": "holding",
+            "allowedActions": ["ADD", "HOLD"],
+            "blockedActions": ["BUY", "TRIM", "SELL"],
+        }
+        relations = [
+            {
+                "type": "SUPPORTS_ADD",
+                "ruleId": "graph.recovery.add.v1",
+                "decisionStage": "ADD_BUY_REVIEW",
+                "actionGroup": "addBuy",
+                "actionLevel": "review",
+                "decisionLabel": "조건부 추가매수 검토",
+                "decisionTone": "caution",
+                "decisionEffect": "support",
+                "candidateAction": "ADD",
+                "polarity": "support",
+                "knowledgeBasis": {"ruleKind": "predictive-hypothesis"},
+                **policy,
+            },
+            {
+                "type": "SUPPORTS_HOLD",
+                "ruleId": "graph.fundamental.hold.v1",
+                "decisionStage": "HOLD_KEEP",
+                "actionGroup": "holdWatch",
+                "actionLevel": "watch",
+                "decisionLabel": "보유 유지",
+                "decisionTone": "hold",
+                "decisionEffect": "support",
+                "candidateAction": "HOLD",
+                "polarity": "support",
+                "knowledgeBasis": {"ruleKind": "predictive-hypothesis"},
+                **policy,
+            },
+        ]
+        matches = matches_from_inference(relations, [], facts=facts)
+        assessments = decision_assessment_bundle(matches, relations)
+        envelope = action_envelope_from_inference(
+            facts,
+            matches,
+            relations,
+            assessment_bundle=assessments,
+        )
+
+        self.assertEqual("comparison-required", assessments["investmentOpinion"]["status"])
+        self.assertFalse(assessments["investmentOpinion"]["judgementBlocked"])
+        self.assertEqual("HYPOTHESIS_COMPARISON_REQUIRED", envelope["status"])
+        self.assertEqual(["ADD", "HOLD"], envelope["aiAllowedActions"])
+        self.assertEqual("NO_ACTION", envelope["executionAction"])
+        self.assertFalse(envelope["judgementBlocked"])
+
+        hypotheses = [
+            {
+                "hypothesisId": "hypothesis:add",
+                "candidateAction": "ADD",
+                "supportingRuleIds": ["graph.recovery.add.v1"],
+            },
+            {
+                "hypothesisId": "hypothesis:hold",
+                "candidateAction": "HOLD",
+                "supportingRuleIds": ["graph.fundamental.hold.v1"],
+            },
+        ]
+        relation_context = {
+            "accountId": "acct",
+            "subject": {"symbol": "000660", "name": "SK하이닉스"},
+            "facts": facts,
+            "actionEnvelope": envelope,
+            "assessmentBundle": assessments,
+            "hypothesisSet": {"hypotheses": hypotheses},
+            "sourceAboxSnapshotId": "abox:sk:1",
+            "inferenceGenerationId": "generation:sk:1",
+            "generationAligned": True,
+            "graphStoreInference": {
+                "sourceAboxSnapshotId": "abox:sk:1",
+                "inferenceGenerationId": "generation:sk:1",
+                "relations": relations,
+                "traces": [
+                    {"traceId": "trace:add", "ruleId": "graph.recovery.add.v1"},
+                    {"traceId": "trace:hold", "ruleId": "graph.fundamental.hold.v1"},
+                ],
+            },
+        }
+        with patch(
+            "digital_twin.domain.investment_reasoning.synthesis.hypothesis_decision_eligibility",
+            return_value={"eligible": True},
+        ):
+            synthesis = decision_synthesis_from_relation_context("acct", relation_context)
+
+        self.assertEqual("originate", synthesis.action_authority)
+        self.assertEqual("COMPARISON_REQUIRED", synthesis.action_state)
+        self.assertEqual("JUDGEMENT_READY", synthesis.ai_state)
+        self.assertFalse(synthesis.judgement_blocked)
+        action_eligibility = notification_ai_action_eligibility({
+            "v2DecisionSynthesis": synthesis.to_dict(),
+        })
+        self.assertTrue(action_eligibility["eligible"])
+        self.assertTrue(action_eligibility["comparisonRequired"])
+
     def test_only_predictive_hypotheses_compete_in_signal_conflict(self):
         predictive_risk = OntologyRuleMatch(
             rule_id="graph.cross-asset.relative-strength.v1",
@@ -182,6 +295,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertEqual("HOLD", choose_action(position, context, conflict_state="support-only"))
 
     def test_entry_defer_narrows_an_entry_support_without_turning_it_into_avoid(self):
+        self._assert_competing_investment_actions_are_routed_to_ai_comparison()
         facts = {"symbol": "NVDA", "source": "watchlist", "isWatchlist": True}
         policy = {
             "targetRole": "watchlist",

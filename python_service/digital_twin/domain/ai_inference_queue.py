@@ -85,6 +85,13 @@ def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[st
     candidate_action = _clean(
         synthesis.get("graph_candidate_action") or synthesis.get("graphCandidateAction")
     ).upper()
+    action_state = _clean(
+        synthesis.get("action_state") or synthesis.get("actionState")
+    ).upper()
+    action_authority = _clean(
+        synthesis.get("action_authority") or synthesis.get("actionAuthority")
+    ).lower()
+    comparison_required = action_state == "COMPARISON_REQUIRED"
     judgement_blocked = bool(
         synthesis.get("judgement_blocked") or synthesis.get("judgementBlocked")
     )
@@ -94,9 +101,11 @@ def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[st
         reason_code = "no-eligible-hypothesis"
     elif not allowed_actions:
         reason_code = "no-allowed-action"
-    elif candidate_action in {"", "NO_ACTION"}:
+    elif comparison_required and action_authority != "originate":
+        reason_code = "comparison-without-action-authority"
+    elif candidate_action in {"", "NO_ACTION"} and not comparison_required:
         reason_code = "no-graph-action"
-    elif candidate_action not in allowed_actions:
+    elif candidate_action not in {"", "NO_ACTION"} and candidate_action not in allowed_actions:
         reason_code = "graph-action-outside-envelope"
     else:
         reason_code = "eligible"
@@ -107,11 +116,15 @@ def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[st
             "judgement-blocked": "TypeDB marked the subject as judgement blocked.",
             "no-eligible-hypothesis": "No eligible hypothesis can support an AI action judgement.",
             "no-allowed-action": "TypeDB did not authorize an investment action for AI selection.",
+            "comparison-without-action-authority": "TypeDB action comparison does not authorize an AI investment judgment.",
             "no-graph-action": "TypeDB produced an observation without an action candidate.",
             "graph-action-outside-envelope": "The graph candidate is outside the allowed action envelope.",
             "eligible": "The TypeDB hypothesis and action envelope are complete.",
         }.get(reason_code, reason_code),
         "candidateAction": candidate_action,
+        "actionState": action_state,
+        "actionAuthority": action_authority,
+        "comparisonRequired": comparison_required,
         "allowedActions": allowed_actions,
         "eligibleHypothesisIds": hypothesis_ids,
     }

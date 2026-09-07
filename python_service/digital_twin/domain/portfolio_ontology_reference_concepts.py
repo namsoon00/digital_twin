@@ -12,6 +12,25 @@ from .portfolio import Position
 
 MAX_CORPORATE_ACTIONS = 8
 
+SHAREHOLDER_RIGHT_FINANCING_MARKERS = (
+    "유상증자",
+    "신주인수",
+    "신주발행",
+    "주식발행",
+    "전환사채",
+    "교환사채",
+    "rights offering",
+    "rights issue",
+)
+SHAREHOLDER_RIGHT_ADMIN_MARKERS = (
+    "배당",
+    "분배",
+    "명부폐쇄",
+    "명세접수",
+    "명세통지",
+    "배당금지급",
+)
+
 
 def _text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -174,6 +193,58 @@ def _event_date(event: Mapping[str, object]) -> str:
     )
 
 
+def _corporate_action_decision_contract(event: Mapping[str, object]) -> Dict[str, object]:
+    """Classify official schedules without turning every dated right into dilution."""
+
+    event_type = _text(event.get("eventType")).lower()
+    lifecycle = _text(event.get("eventLifecycleState")).lower()
+    if lifecycle not in {"upcoming", "active"}:
+        return {
+            "eligible": False,
+            "category": "historical-reference",
+            "reason": "공식 과거 기업행동 참고 사실입니다.",
+        }
+    if event_type == "equity-issuance":
+        return {
+            "eligible": True,
+            "category": "equity-financing",
+            "reason": "공식 주식 발행 일정이 현재 또는 예정 상태입니다.",
+        }
+    if event_type == "lockup-release" and _text(event.get("releaseDate")):
+        return {
+            "eligible": True,
+            "category": "tradable-supply-release",
+            "reason": "공식 보호예수 해제일이 현재 또는 예정 상태입니다.",
+        }
+    if event_type == "shareholder-right":
+        descriptor = " ".join([
+            _text(event.get("issuanceReason")),
+            _text(event.get("rightReason")),
+        ]).lower()
+        if any(marker.lower() in descriptor for marker in SHAREHOLDER_RIGHT_ADMIN_MARKERS):
+            return {
+                "eligible": False,
+                "category": "shareholder-administration",
+                "reason": "배당·분배 또는 명부 관리 일정으로 희석 판단에는 사용하지 않습니다.",
+            }
+        if any(marker.lower() in descriptor for marker in SHAREHOLDER_RIGHT_FINANCING_MARKERS):
+            return {
+                "eligible": True,
+                "category": "equity-financing-right",
+                "reason": "공식 신주 발행 관련 주주 권리 일정이 현재 또는 예정 상태입니다.",
+            }
+        return {
+            "eligible": False,
+            "category": "shareholder-right-reference",
+            "reason": "자금조달 근거가 명시되지 않은 주주 권리 일정은 참고 사실로만 사용합니다.",
+        }
+    return {
+        "eligible": False,
+        "category": "corporate-action-reference",
+        "reason": "현재 투자 판단 대상이 아닌 공식 기업행동 참고 사실입니다.",
+    }
+
+
 def add_official_corporate_action_concepts(
     graph: PortfolioOntology,
     stock_id: str,
@@ -204,14 +275,8 @@ def add_official_corporate_action_concepts(
         if not event_key:
             continue
         tbox_class = _text(event.get("tboxClass") or "CorporateAction")
-        financing_or_supply_event = event_type in {
-            "equity-issuance",
-            "lockup-release",
-            "shareholder-right",
-        }
-        event_decision_eligible = financing_or_supply_event and _text(
-            event.get("eventLifecycleState")
-        ) in {"upcoming", "active"}
+        decision_contract = _corporate_action_decision_contract(event)
+        event_decision_eligible = bool(decision_contract["eligible"])
         label = (position.name or symbol) + " " + {
             "dividend": "배당",
             "equity-issuance": "주식 발행",
@@ -220,7 +285,12 @@ def add_official_corporate_action_concepts(
         }.get(event_type, "기업 행동")
         event_id = add_entity(graph, "corporate-action", event_key, label, {
             "tboxClass": tbox_class,
-            "tboxClasses": ["Observation", "ExternalSignal", "CorporateAction", tbox_class],
+            "tboxClasses": [
+                "Observation",
+                "CorporateAction",
+                tbox_class,
+                *(["ExternalSignal"] if event_decision_eligible else []),
+            ],
             **{
                 key: value
                 for key, value in event.items()
@@ -229,11 +299,8 @@ def add_official_corporate_action_concepts(
             "eventDate": _event_date(event),
             "officialSource": True,
             "eventDecisionEligible": event_decision_eligible,
-            "eventDecisionReason": (
-                "공식 발행·유통물량·주주권리 일정이 현재 또는 예정 상태입니다."
-                if event_decision_eligible
-                else "공식 과거 기업행동 참고 사실입니다."
-            ),
+            "eventDecisionCategory": decision_contract["category"],
+            "eventDecisionReason": decision_contract["reason"],
         })
         source_id = add_entity(graph, "data-source", "public-data:" + event_type, _text(event.get("provider") or "공공데이터포털"), {
             "tboxClass": "DataSource",

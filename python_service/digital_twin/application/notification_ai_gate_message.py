@@ -4605,6 +4605,7 @@ def typedb_decision_assessment_rows(context: Dict[str, object]) -> List[str]:
     plan_labels = {
         "judgement-blocked": "근거가 보완될 때까지 종목 판단 보류",
         "judgement-conflicted": "서로 다른 종목 의견이 함께 성립해 판단 보류",
+        "comparison-required": "서로 다른 유효 가설을 AI가 비교해 최종 행동 결정",
         "execution-blocked": "검토 가설은 유지하고 실행만 보류",
         "constrained": "검토 가설은 유지하고 계좌·주문 제약 안에서 실행",
         "observe": "검토 가설은 유지하고 확인 조건을 관찰",
@@ -4622,7 +4623,7 @@ def typedb_decision_assessment_rows(context: Dict[str, object]) -> List[str]:
             for action in opinion.get("candidateActions") or []
             if str(action or "").strip()
         ]
-        opinion_text = " · ".join(conflict_labels) + " 의견이 함께 성립해 결론 보류"
+        opinion_text = " · ".join(conflict_labels) + " 후보를 AI가 근거별로 비교"
     elif opinion_label:
         opinion_text = opinion_label + (" · 추가 확인 필요" if opinion_status == "deferred" else "")
     else:

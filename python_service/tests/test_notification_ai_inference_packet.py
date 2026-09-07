@@ -86,7 +86,82 @@ def response_payload(view_id, support_id, next_id):
 
 
 class NotificationAIInferencePacketTests(unittest.TestCase):
+    def _assert_compaction_preserves_every_hypothesis_evidence_identifier(self):
+        evidence_ids = ["evidence:" + str(index) for index in range(18)]
+        hypotheses = [
+            {
+                "hypothesisId": "hypothesis:" + str(index),
+                "candidateAction": "ADD" if index == 0 else "HOLD",
+                "claim": "검증 가능한 투자 가설 " + str(index),
+                "supportingRuleIds": ["rule:" + str(index)],
+                "supportingEvidenceIds": evidence_ids[index:index + 2],
+                "counterEvidenceIds": evidence_ids[6:12] if index == 0 else [evidence_ids[12 + index]],
+            }
+            for index in range(4)
+        ]
+        ledger = [
+            {
+                "evidenceId": evidence_id,
+                "role": "counter" if evidence_id in evidence_ids[6:12] else "support",
+                "kind": "relation",
+                "label": "가설 비교 근거 " + evidence_id,
+                "source": "typedb",
+                "judgementEligible": True,
+            }
+            for evidence_id in evidence_ids
+        ]
+        core = {
+            "schemaVersion": "investment-ai-decision-core-v1",
+            "notificationIntent": "investment-judgement",
+            "subject": {"symbol": "000660", "name": "SK하이닉스", "market": "KR"},
+            "facts": {"currentPrice": 1775000, "market": "KR", "currency": "KRW"},
+            "decision": {
+                "actionEnvelope": {
+                    "status": "HYPOTHESIS_COMPARISON_REQUIRED",
+                    "executionAction": "NO_ACTION",
+                    "targetRole": "holding",
+                },
+            },
+            "hypothesisSet": {
+                "hypothesisSetId": "hypothesis-set:sk",
+                "comparisonRequired": True,
+                "hypotheses": hypotheses,
+            },
+            "rules": [
+                {"ruleId": "rule:" + str(index), "label": "규칙 " + str(index)}
+                for index in range(8)
+            ],
+            "evidenceLedger": ledger,
+            "narrativeClaimContract": narrative_claim_evidence_contract(ledger),
+            "background": {"auditOnly": "참고 자료 " * 6000},
+            "routingAudit": {"version": "notification-ai-context-route-v2", "status": "routed"},
+        }
+
+        fitted = fit_notification_ai_decision_core(core, 12 * 1024)
+
+        fitted_hypotheses = fitted["hypothesisSet"]["hypotheses"]
+        by_id = {item["hypothesisId"]: item for item in fitted_hypotheses}
+        for hypothesis in hypotheses:
+            fitted_hypothesis = by_id[hypothesis["hypothesisId"]]
+            self.assertEqual(
+                hypothesis["supportingEvidenceIds"],
+                fitted_hypothesis["supportingEvidenceIds"],
+            )
+            self.assertEqual(
+                hypothesis["counterEvidenceIds"],
+                fitted_hypothesis["counterEvidenceIds"],
+            )
+        required_ids = {
+            evidence_id
+            for hypothesis in hypotheses
+            for key in ("supportingEvidenceIds", "counterEvidenceIds")
+            for evidence_id in hypothesis[key]
+        }
+        retained_ids = {item["evidenceId"] for item in fitted["evidenceLedger"]}
+        self.assertTrue(required_ids.issubset(retained_ids))
+
     def test_retry_budget_preserves_minimum_contract_for_large_live_shape(self):
+        self._assert_compaction_preserves_every_hypothesis_evidence_identifier()
         ledger = [
             {
                 "evidenceId": "evidence:" + str(index),

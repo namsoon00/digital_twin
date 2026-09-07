@@ -98,9 +98,15 @@ def decision_synthesis_from_relation_context(
         or ""
     ).lower().strip()
     decision_disposition = str(envelope.get("decisionDisposition") or "").lower().strip()
+    comparison_required = bool(
+        opinion_assessment.get("actionConflict")
+        and len(_texts(opinion_assessment.get("candidateActions"), uppercase=True)) > 1
+    )
+    if comparison_required:
+        selected_decision_effect = "support"
     action_authority = (
         "originate"
-        if selected_decision_effect == "support"
+        if (selected_decision_effect == "support" or comparison_required)
         and bool(envelope.get("investmentJudgementAvailable", True))
         else "modify"
         if selected_decision_effect in {"constrain", "defer", "block"}
@@ -162,7 +168,16 @@ def decision_synthesis_from_relation_context(
         }
         for _action, hypothesis, eligible in hypothesis_paths
     )
-    if action_authority == "originate" and not selected_path_eligible:
+    eligible_comparison_paths = {
+        action
+        for action, _hypothesis, eligible in hypothesis_paths
+        if eligible and action not in {"", "UNSPECIFIED", "NO_ACTION"}
+    }
+    if (
+        action_authority == "originate"
+        and not selected_path_eligible
+        and not (comparison_required and len(eligible_comparison_paths) > 1)
+    ):
         action_authority = "observe"
         graph_candidate_action = "NO_ACTION"
         execution_action = "NO_ACTION"
@@ -257,7 +272,7 @@ def decision_synthesis_from_relation_context(
             or recommended_plan.get("status")
             or "judgement-blocked"
         ),
-        decision_effect=selected_decision_effect,
+        decision_effect=selected_decision_effect or ("support" if comparison_required else ""),
         decision_disposition=decision_disposition,
         action_authority=action_authority,
         allowed_actions=() if context_observation else allowed_actions,
@@ -294,7 +309,15 @@ def decision_synthesis_from_relation_context(
         graph_trace_complete=graph_trace_complete,
         evidence_state="INVALID" if quality_blocked else ("VERIFIED" if graph_trace_complete else "PARTIAL"),
         hypothesis_state="NO_ELIGIBLE_THESIS" if no_eligible_thesis else ("ELIGIBLE" if eligible_ids else "REFERENCE_ONLY"),
-        action_state="CONFLICTED" if selected_action_conflict else ("SELECTED" if investment_view_action else "NOT_APPLICABLE"),
+        action_state=(
+            "COMPARISON_REQUIRED"
+            if comparison_required
+            else "CONFLICTED"
+            if selected_action_conflict
+            else "SELECTED"
+            if investment_view_action
+            else "NOT_APPLICABLE"
+        ),
         ai_state="BLOCKED" if judgement_blocked else ("INTERPRETATION_READY" if no_eligible_thesis else "JUDGEMENT_READY"),
     )
 

@@ -12,7 +12,7 @@ from .ontology_decision_state import decision_effect_from_relation, semantic_rel
 from .ontology_rule_manifest import ASSESSMENT_SCOPES, rule_assessment_scope
 
 
-DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v3"
+DECISION_ASSESSMENT_BUNDLE_VERSION = "typedb-decision-assessment-bundle-v4"
 
 
 def _text(value: object) -> str:
@@ -141,12 +141,11 @@ def _assessment(scope: str, entries: List[Dict[str, object]]) -> Dict[str, objec
     blocked = (
         bool(effect_counts.get("block"))
         or any(item.get("judgementBlocked") for item in entries)
-        or action_conflict
     )
     if not entries:
         status = "not-evaluated"
     elif action_conflict:
-        status = "conflicted"
+        status = "comparison-required"
     elif blocked:
         status = "blocked"
     elif effect_counts.get("constrain"):
@@ -189,7 +188,7 @@ def _assessment(scope: str, entries: List[Dict[str, object]]) -> Dict[str, objec
         },
         "actionConflict": action_conflict,
         "conflictReason": (
-            "multiple-typedb-investment-actions-without-unique-selection"
+            "multiple-typedb-investment-actions-require-ai-comparison"
             if action_conflict else ""
         ),
         "decisionEffectCounts": dict(sorted(effect_counts.items())),
@@ -227,8 +226,8 @@ def _recommended_plan(assessments: Mapping[str, Mapping[str, object]]) -> Dict[s
     market_context = assessments.get("market-context") or {}
     opinion_action = _text(opinion.get("candidateAction")).upper()
     if opinion.get("actionConflict"):
-        status = "judgement-conflicted"
-        option = "resolve-opinion-conflict"
+        status = "comparison-required"
+        option = "compare-opinion-hypotheses"
     elif quality.get("judgementBlocked"):
         status = "judgement-blocked"
         option = "wait-for-usable-evidence"

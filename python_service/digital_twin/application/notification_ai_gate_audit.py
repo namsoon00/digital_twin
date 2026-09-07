@@ -322,7 +322,11 @@ def context_with_validated_ai_response(
     enriched["notificationAiReviewMode"] = review_mode
     enriched["notificationWriterProvenance"] = dict(narrative_brief.writer_provenance)
     enriched["notificationClaimValidation"] = dict(response.claim_validation or {})
-    enriched = context_with_investment_notification_state(enriched)
+    if narrative_only:
+        enriched.pop("investmentNotificationState", None)
+        enriched.pop("investmentNotificationTransition", None)
+    else:
+        enriched = context_with_investment_notification_state(enriched)
     icon = investment_notification_icon(enriched.get("messageType") or enriched.get("rule") or "", enriched)
     if icon:
         enriched["headline"] = execution_headline(enriched, response)

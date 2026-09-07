@@ -84,6 +84,17 @@ def _unique(values: Iterable[object], limit: int = 24) -> List[str]:
     return rows
 
 
+def _unique_all(values: Iterable[object]) -> List[str]:
+    rows: List[str] = []
+    seen = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text.casefold() not in seen:
+            seen.add(text.casefold())
+            rows.append(text)
+    return rows
+
+
 def _json_bytes(value: object) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
 
@@ -210,7 +221,15 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
             "supportingRuleIds", "supportingEvidenceIds", "counterEvidenceIds",
             "causalPathIds", "requiredEvidenceTypes", "invalidationConditions",
         ):
-            values = _unique(item.get(key) or [], 5)
+            values = (
+                _unique_all(item.get(key) or [])
+                if key in {
+                    "supportingRuleIds",
+                    "supportingEvidenceIds",
+                    "counterEvidenceIds",
+                }
+                else _unique(item.get(key) or [], 5)
+            )
             if values:
                 row[key] = values
         if not row.get("supportingRuleIds"):
@@ -731,10 +750,42 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
 
 
 def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int) -> Dict[str, object]:
-    """Reduce reference detail only; never remove or truncate hypothesis IDs."""
+    """Reduce reference detail without truncating the hypothesis evidence contract."""
 
     budget = max(6 * 1024, int(budget_bytes or 6 * 1024))
     fitted = json.loads(json.dumps(core, ensure_ascii=False, default=str))
+    required_evidence_ids = {
+        evidence_id
+        for item in _mapping(fitted.get("hypothesisSet")).get("hypotheses") or []
+        if isinstance(item, dict)
+        for key in ("supportingEvidenceIds", "counterEvidenceIds")
+        for evidence_id in _unique_all(item.get(key) or [])
+    }
+
+    def compact_ledger(limit: int) -> List[Dict[str, object]]:
+        rows = [
+            item for item in fitted.get("evidenceLedger") or []
+            if isinstance(item, dict)
+        ]
+        required_rows = [
+            item for item in rows
+            if str(item.get("evidenceId") or "") in required_evidence_ids
+        ]
+        target = max(max(1, int(limit or 1)), len(required_rows))
+        selected_ids = {
+            str(item.get("evidenceId") or "") for item in required_rows
+        }
+        for item in rows:
+            evidence_id = str(item.get("evidenceId") or "")
+            if len(selected_ids) >= target:
+                break
+            if evidence_id:
+                selected_ids.add(evidence_id)
+        return [
+            item for item in rows
+            if str(item.get("evidenceId") or "") in selected_ids
+        ]
+
     if _json_bytes(fitted) <= budget:
         return fitted
     fitted.pop("background", None)
@@ -751,7 +802,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
                 "freshness", "ruleIds", "hypothesisIds", "judgementEligible",
             ),
         )
-        for item in list(fitted.get("evidenceLedger") or [])[:10]
+        for item in compact_ledger(10)
         if isinstance(item, dict)
     ]
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
@@ -769,7 +820,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         if isinstance(rule, dict):
             rule["evidence"] = list(rule.get("evidence") or [])[:1]
     fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
-    fitted["evidenceLedger"] = list(fitted.get("evidenceLedger") or [])[:6]
+    fitted["evidenceLedger"] = compact_ledger(6)
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
         fitted["evidenceLedger"]
     )
@@ -786,9 +837,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
                 "claimContract", "qualification",
             )),
             "claim": _sentence_text(item.get("claim"), 140),
-            "supportingRuleIds": _unique(item.get("supportingRuleIds") or [], 3),
-            "supportingEvidenceIds": _unique(item.get("supportingEvidenceIds") or [], 2),
-            "counterEvidenceIds": _unique(item.get("counterEvidenceIds") or [], 2),
+            "supportingRuleIds": _unique_all(item.get("supportingRuleIds") or []),
+            "supportingEvidenceIds": _unique_all(item.get("supportingEvidenceIds") or []),
+            "counterEvidenceIds": _unique_all(item.get("counterEvidenceIds") or []),
             "invalidationConditions": _unique(item.get("invalidationConditions") or [], 1),
         }
         for item in fitted.get("hypothesisSet", {}).get("hypotheses") or []
@@ -803,7 +854,7 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
             _mapping(item.get("qualification")),
             ("status", "decisionAuthority", "reason"),
         )
-    fitted["evidenceLedger"] = list(fitted.get("evidenceLedger") or [])[:4]
+    fitted["evidenceLedger"] = compact_ledger(4)
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
         fitted["evidenceLedger"]
     )
@@ -916,14 +967,13 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
                 "ruleIds", "hypothesisIds", "judgementEligible",
             ),
         )
-        for item in list(fitted.get("evidenceLedger") or [])[:3]
+        for item in compact_ledger(3)
         if isinstance(item, dict)
     ]
     fitted["narrativeClaimContract"] = narrative_claim_evidence_contract(
         fitted["evidenceLedger"]
     )
     fitted["routingAudit"] = {
-        "version": _mapping(fitted.get("routingAudit")).get("version"),
         "status": "minimum-decision-contract",
     }
     if _json_bytes(fitted) <= budget:

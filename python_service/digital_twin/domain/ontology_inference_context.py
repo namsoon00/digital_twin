@@ -1534,6 +1534,13 @@ def action_envelope_from_inference(
     context_rule_ids = set(market_context.get("ruleIds") or [])
     context_entries = [item for item in entries if item["match"].rule_id in context_rule_ids]
     selected_opinion_rule_id = str(investment_opinion.get("selectedRuleId") or "").strip()
+    opinion_candidate_actions = unique_texts(
+        str(value or "").strip().upper()
+        for value in investment_opinion.get("candidateActions") or []
+    )
+    comparison_required = bool(
+        investment_opinion.get("actionConflict") and len(opinion_candidate_actions) > 1
+    )
     selected_entry = next(
         (item for item in opinion_entries if item["match"].rule_id == selected_opinion_rule_id),
         None,
@@ -1594,7 +1601,9 @@ def action_envelope_from_inference(
     else:
         execution_action = investment_view_action
 
-    if not investment_view_action and selected_context_entry is not None and not quality_blocked:
+    if comparison_required and not quality_blocked and not blocked_policy_entries:
+        status = "HYPOTHESIS_COMPARISON_REQUIRED"
+    elif not investment_view_action and selected_context_entry is not None and not quality_blocked:
         status = "CONTEXT_OBSERVATION"
     elif not investment_view_action and not quality_blocked and not blocked_policy_entries:
         status = "NO_ELIGIBLE_THESIS"
@@ -1617,7 +1626,13 @@ def action_envelope_from_inference(
     driving = opinion_entries or context_entries
     preferred_action = execution_action
 
-    if not investment_view_action:
+    if comparison_required:
+        ai_allowed_actions = [
+            code for code in opinion_candidate_actions
+            if code not in set(blocked_actions)
+            and (not allowed_actions or code in set(allowed_actions))
+        ]
+    elif not investment_view_action:
         ai_allowed_actions = []
     elif target_role == WATCHLIST_TARGET_ROLE:
         if status == "ENTRY_ELIGIBLE":
@@ -1705,6 +1720,9 @@ def action_envelope_from_inference(
         for item in opinion_entries
     )
     decision_disposition = (
+        "compare"
+        if status == "HYPOTHESIS_COMPARISON_REQUIRED"
+        else
         "observe"
         if status in {"CONTEXT_OBSERVATION", "NO_ELIGIBLE_THESIS"}
         else "blocked"
@@ -1716,7 +1734,7 @@ def action_envelope_from_inference(
         else "hold"
     )
     return {
-        "version": "typedb-action-envelope-v4",
+        "version": "typedb-action-envelope-v5",
         "source": "typedb-materialized-decision-effects",
         "status": status,
         "statusLabel": status_label,
@@ -1736,10 +1754,17 @@ def action_envelope_from_inference(
         "comparisonAvailable": len(candidate_actions) > 1,
         "singleCandidateAction": len(candidate_actions) == 1,
         "judgementBlocked": bool(
-            (not investment_view_action and status not in {"CONTEXT_OBSERVATION", "NO_ELIGIBLE_THESIS"})
+            (
+                not investment_view_action
+                and status not in {
+                    "CONTEXT_OBSERVATION",
+                    "NO_ELIGIBLE_THESIS",
+                    "HYPOTHESIS_COMPARISON_REQUIRED",
+                }
+            )
             or quality_blocked
             or candidate_contract_conflict
-            or investment_opinion.get("actionConflict")
+            or (comparison_required and not ai_allowed_actions)
         ),
         "opinionActionConflict": bool(investment_opinion.get("actionConflict")),
         "opinionCandidateActions": list(investment_opinion.get("candidateActions") or []),

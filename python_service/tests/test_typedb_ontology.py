@@ -309,6 +309,47 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(["MSTR"], result["missingSymbols"])
         self.assertNotIn("nativeRuleEvidenceReadIndex", candidate_graph.worldview)
 
+    def _assert_native_index_reuses_unchanged_target_scopes_for_deletion_patch(self):
+        active_generations = {
+            "symbol:MSTR:state": "generation:state",
+            "symbol:MSTR:evidence:bucket:01": "generation:retired-event",
+            "link:symbol:MSTR:evidence:bucket:01": "generation:retired-link",
+            "link:symbol:MSTR:market": "generation:market-link",
+            "symbol:AAPL:state": "generation:aapl-state",
+        }
+        result = TypeDBOntologyGraphRepository.scoped_abox_native_index_reuse_scope_ids(
+            {
+                "replacementSymbols": ["MSTR"],
+                "reusedActiveScopeIds": [
+                    "symbol:MSTR:state",
+                    "link:symbol:MSTR:market",
+                    "symbol:AAPL:state",
+                ],
+                "retiredScopeIds": [
+                    "symbol:MSTR:evidence:bucket:01",
+                    "link:symbol:MSTR:evidence:bucket:01",
+                ],
+            },
+            active_generations,
+            ["symbol:MSTR:evidence:bucket:02"],
+        )
+
+        self.assertEqual(
+            ["link:symbol:MSTR:market", "symbol:MSTR:state"],
+            result,
+        )
+        self.assertEqual(
+            [],
+            TypeDBOntologyGraphRepository.scoped_abox_native_index_reuse_scope_ids(
+                {
+                    "replacementSymbols": [],
+                    "reusedActiveScopeIds": ["symbol:MSTR:state"],
+                },
+                active_generations,
+                [],
+            ),
+        )
+
     def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
         rows = [
             {
@@ -836,6 +877,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self._assert_scoped_manifest_indexes_validate_complete_candidate_rows_against_merged_topology()
         self._assert_scoped_manifest_indexes_merge_exact_candidate_subset_with_active_index()
         self._assert_scoped_manifest_indexes_reject_candidate_subset_missing_requested_target()
+        self._assert_native_index_reuses_unchanged_target_scopes_for_deletion_patch()
         active_reuse = TypeDBOntologyGraphRepository.scoped_abox_active_reuse_scope_ids(
             [
                 {

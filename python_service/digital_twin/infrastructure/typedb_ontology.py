@@ -5487,6 +5487,69 @@ class ScopedABoxManifestMixin:
         }
 
     @staticmethod
+    def scoped_abox_native_index_reuse_scope_ids(
+        target_patch: Mapping[str, object],
+        active_generations: Mapping[str, object],
+        physical_changed_scope_ids: Iterable[str],
+    ) -> List[str]:
+        """Read the unchanged target image needed by the physical rule index.
+
+        A fact-slice update can remove the only decision-eligible event in a
+        selected scope without rewriting the stock anchor. The candidate then
+        has no incoming subject row even though its merged planner topology
+        still owns the stock. Reuse every unchanged active scope for the
+        replacement symbol while constructing the control-plane evidence
+        index; persistence still writes only physically changed scopes.
+        """
+
+        patch = dict(target_patch or {})
+        replacement_symbols = set(clean_symbols_from_payload(
+            patch.get("replacementSymbols") or []
+        ))
+        if not replacement_symbols:
+            return []
+        active_scope_ids = {
+            str(scope_id or "").strip()
+            for scope_id, generation_id in dict(active_generations or {}).items()
+            if str(scope_id or "").strip()
+            and str(generation_id or "").strip()
+        }
+        changed = {
+            str(scope_id or "").strip()
+            for scope_id in physical_changed_scope_ids or []
+            if str(scope_id or "").strip()
+        }
+        retired = {
+            str(scope_id or "").strip()
+            for scope_id in patch.get("retiredScopeIds") or []
+            if str(scope_id or "").strip()
+        }
+        reused = {
+            str(scope_id or "").strip()
+            for scope_id in patch.get("reusedActiveScopeIds") or []
+            if str(scope_id or "").strip()
+        }
+
+        def belongs_to_replacement_symbol(scope_id: str) -> bool:
+            owned_symbol = str(scope_symbol(scope_id) or "").upper().strip()
+            if owned_symbol in replacement_symbols:
+                return True
+            normalized_scope = scope_id.upper()
+            return any(
+                ("SYMBOL:" + symbol + ":") in normalized_scope
+                for symbol in replacement_symbols
+            )
+
+        return sorted(
+            scope_id
+            for scope_id in reused
+            if scope_id in active_scope_ids
+            and scope_id not in changed
+            and scope_id not in retired
+            and belongs_to_replacement_symbol(scope_id)
+        )
+
+    @staticmethod
     def scoped_abox_candidate_persistence_rows(
         current_node_rows: Iterable[Dict[str, object]],
         current_relation_rows: Iterable[Dict[str, object]],
@@ -8482,11 +8545,19 @@ class ScopedABoxManifestMixin:
             if str(value or "").strip()
         }
         active_generations = dict(active_before.get("scopeGenerationIds") or {})
+        native_index_reuse_scope_ids = self.scoped_abox_native_index_reuse_scope_ids(
+            target_patch,
+            active_generations,
+            changed_scope_ids,
+        )
+        candidate_deferred_scope_ids = deferred_scope_ids.union(
+            native_index_reuse_scope_ids
+        )
         active_reuse_plan = self.scoped_abox_active_reuse_scope_ids(
             scope_plan,
             active_generations,
             changed_scope_ids,
-            deferred_scope_ids,
+            candidate_deferred_scope_ids,
             rebind_only_relation_scope_ids,
         )
         active_reuse_scope_ids = list(active_reuse_plan.get("scopeIds") or [])
@@ -8557,7 +8628,7 @@ class ScopedABoxManifestMixin:
                 scope_plan,
                 semantic_changed_scope_ids,
                 changed_scope_ids,
-                deferred_scope_ids,
+                candidate_deferred_scope_ids,
                 manifest_id,
             )
             if str(exact_candidate_rows.get("status") or "") != "ok":
@@ -8624,6 +8695,7 @@ class ScopedABoxManifestMixin:
                 ),
                 "nativeManifestEvidenceIndex": native_manifest_index,
                 "activeManifestEvidenceIndexRepair": active_manifest_index_repair,
+                "nativeRuleIndexReuseScopeIds": native_index_reuse_scope_ids,
                 "writeLeaseRelease": release,
             }
         if current_state_mode:
@@ -8649,6 +8721,8 @@ class ScopedABoxManifestMixin:
                 "status": str(active_scope_rows.get("status") or ""),
                 "scopeIds": list(active_scope_rows.get("scopeIds") or []),
                 "relationEndpointScopeIds": active_relation_endpoint_scope_ids,
+                "nativeRuleIndexScopeIds": native_index_reuse_scope_ids,
+                "nativeRuleIndexScopeCount": len(native_index_reuse_scope_ids),
                 "nodeCount": len(active_scope_rows.get("nodeRows") or []),
                 "relationCount": len(active_scope_rows.get("relationRows") or []),
                 "endpointNodeCount": len(active_scope_rows.get("endpointNodeRows") or []),

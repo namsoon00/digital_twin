@@ -85,16 +85,31 @@ def source_policy_status(criterion, facts: Mapping[str, object]) -> Tuple[bool, 
             facts.get("provider"),
             facts.get("source"),
             facts.get("observationSource"),
+            facts.get("observationBasis"),
+            facts.get("observationSourcePolicy"),
             facts.get("evidenceSource"),
         ]
         if text(value)
     }
-    raw_sources = facts.get("evidenceSources") or []
+    raw_sources = (
+        facts.get("evidenceSources")
+        or facts.get("observationSourcePolicies")
+        or []
+    )
     if not isinstance(raw_sources, (list, tuple, set)):
         raw_sources = [raw_sources]
     for value in raw_sources:
         if text(value):
             observed.add(text(value).lower())
+    if (
+        optional_number(facts.get("currentPrice")) is not None
+        and observed.intersection({
+            "historical-market-time-series",
+            "subsequent-market-observation",
+            "point-in-time-market-observation",
+        })
+    ):
+        observed.add("point-in-time-market-observation")
     if any(any(policy in source or source in policy for source in observed) for policy in required):
         return True, ""
     return False, "required-source-not-observed"

@@ -36,6 +36,10 @@ from ..domain.notification_explanation import (
 from ..domain.notification_narrative import response_writer_provenance
 from ..domain.notification_decision_policy import includes_portfolio_rebalance_policy
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
+from ..domain.investment_decision_actionability import (
+    investment_decision_actionability,
+    is_concrete_observable_condition,
+)
 from ..domain.ontology_decision_state import (
     ACTION_ENVELOPE_STATUS_LABELS,
     CHANGE_STATE_LABELS,
@@ -662,6 +666,26 @@ def prepend_execution_start_badge(rendered: str, context: Dict[str, object] = No
     if not text:
         return text
     values = dict(context or {})
+    validated = values.get("notificationAiValidatedResponse")
+    if not isinstance(validated, dict):
+        validated = values.get("validatedDecisionResponse")
+    strict_actionability = bool(
+        values.get("notificationAiDecisionContractVersion")
+        or values.get("_notificationAiPreparedDecisionCore")
+        or values.get("investmentSubjectDecisionCaseId")
+        or values.get("investmentSubjectDecisionCase")
+    )
+    if (
+        strict_actionability
+        and isinstance(validated, dict)
+        and str(
+            investment_decision_actionability(values, validated).get("status") or ""
+        ) == "review-only"
+    ):
+        # The body has already projected the failed executable opinion to a
+        # safe review-only result. A stale pre-AI transition badge must not
+        # reintroduce the rejected BUY/SELL instruction above that body.
+        return strip_message_start_badge(text, MESSAGE_START_BADGE)
     if not notification_start_badge_required(values):
         text = strip_message_start_badge(text, MESSAGE_START_BADGE)
         summary = notification_topline_change_summary(values)
@@ -950,6 +974,12 @@ def execution_headline(context: Dict[str, object], response: NotificationAIValid
             context.get("displayTarget") or context.get("target") or context.get("title") or ""
         )
         return " ".join(part for part in ["📌", ((target + " · ") if target else "") + "중요 자료 확인"] if part)
+    if str(response.action or "").upper() in {"BUY", "ADD"} and market_hours_message_rows(context):
+        target = target_name_for_headline(
+            context.get("displayTarget") or context.get("target") or context.get("title") or ""
+        )
+        label = "다음 장 소액 진입 검토" if is_watchlist_context(context) else "다음 장 추가매수 검토"
+        return "🟡 " + (((target + " · ") if target else "") + label)
     presentation_context = dict(context or {})
     presentation_context["notificationAiValidatedResponse"] = response.to_dict()
     headline = investment_notification_title(
@@ -3073,10 +3103,7 @@ def market_hours_message_rows(context: Dict[str, object]) -> List[str]:
 
 def execution_telegram_message(context: Dict[str, object], response: NotificationAIValidatedResponse) -> str:
     detail_level = notification_detail_level_from_context(context)
-    if detail_level in {"concise", "standard"}:
-        rendered = execution_telegram_message_progressive(context, response, detail_level)
-    else:
-        rendered = execution_telegram_message_full(context, response)
+    rendered = execution_telegram_message_decision_first(context, response, detail_level)
     return enforce_customer_message_quality(rendered)
 
 
@@ -3646,11 +3673,11 @@ def compact_current_action_line(context: Dict[str, object], response: Notificati
         and str(response.hypothesis_comparison_state or "").strip().lower() != "completed"
     )
     if is_typedb_context_observation_notification(context or {}):
-        marker = "[TypeDB 참고]"
+        marker = "[자료 확인]"
     elif writer_kind == "typedb":
-        marker = "[TypeDB 추론]"
+        marker = "[시스템 판단]"
     elif writer_kind == "ai" and comparison_incomplete:
-        marker = "[AI 안전 보류]" if str(response.action or "").upper() == "HOLD" else "[AI 조건부]"
+        marker = "[판단 보류]" if str(response.action or "").upper() == "HOLD" else "[조건부 판단]"
     elif writer_kind == "ai":
         marker = "[AI]"
     else:
@@ -3839,22 +3866,19 @@ def _compact_trend_from_facts(context: Dict[str, object]) -> str:
     rows = []
     for period in [5, 20, 60]:
         average = _number(facts.get("ma" + str(period)))
-        if average <= 0:
-            continue
         distance_key = "ma" + str(period) + "Distance"
+        if average <= 0 and facts.get(distance_key) in (None, ""):
+            continue
         distance = _number(facts.get(distance_key))
         if distance == 0 and current:
-            distance = ((current / average) - 1) * 100
+            distance = ((current / average) - 1) * 100 if average > 0 else 0
         direction = "높음" if distance >= 0 else "낮음"
-        rows.append(
-            str(period)
-            + "일선 "
-            + price_money(average, currency)
-            + "보다 "
-            + str(abs(round(distance, 1)))
-            + "% "
-            + direction
-        )
+        prefix = str(period) + "일선"
+        if average > 0:
+            prefix += " " + price_money(average, currency) + "보다 "
+        else:
+            prefix += "보다 "
+        rows.append(prefix + str(abs(round(distance, 1))) + "% " + direction)
     return ", ".join(rows)
 
 
@@ -4275,7 +4299,8 @@ def compact_reason_is_internal(value: object) -> bool:
     text = str(value or "").lower()
     return any(token in text for token in [
         "typedb", "rulebox", "inferencebox", "관계 분석 규칙", "관계 분석 실행 계획",
-        "관계가 새로 감지", "관계 신호 관계",
+        "관계가 새로 감지", "관계 신호 관계", "다음 추론 세대", "추론 세대",
+        "동일한 인과 경로", "watchlistontologysignal", "선택 가설", "검토 가설",
         "supportingevidenceid", "counterevidenceid", "reviewedsupportingevidenceid",
         "reviewedcounterevidenceid", "causalpathid", "relation-evidence", "relation_근거",
         "relation-근거", "changedevidencecount", "reasoningrefreshed",
@@ -4450,9 +4475,6 @@ def full_decision_evidence_rows(
     limit: int = 5,
 ) -> List[str]:
     if not counter:
-        canonical_rows = canonical_publication_evidence_rows(context, limit=limit)
-        if canonical_rows:
-            return canonical_rows
         projected_rows = customer_evidence_rows(
             context,
             include_limitations=is_non_final_publication(context),
@@ -4460,6 +4482,11 @@ def full_decision_evidence_rows(
         )
         if projected_rows:
             return projected_rows
+        canonical_rows = canonical_publication_evidence_rows(context, limit=limit)
+        if canonical_rows and not any(
+            row.startswith("선택 가설:") for row in canonical_rows
+        ):
+            return canonical_rows
     if not counter and is_typedb_context_observation_notification(context or {}):
         presentation = context_observation_evidence_presentation(context)
         rows = []
@@ -4493,6 +4520,340 @@ def full_decision_evidence_rows(
         ), {})
         append_unique_text(rows, selected.get("reasoning") or selected.get("claim"), 360)
     return rows
+
+
+_FOLLOW_UP_FIELD_LABELS = {
+    "currentPrice": "현재가",
+    "priceChangeRate": "가격 변화율",
+    "ma5Distance": "5일선 차이",
+    "ma20Distance": "20일선 차이",
+    "ma60Distance": "60일선 차이",
+    "volumeRatio": "평균 대비 거래량",
+    "timeAdjustedVolumeRatio": "장 진행률 보정 거래량",
+    "tradeStrength": "체결강도",
+    "foreignNetVolume": "외국인 순매수",
+    "institutionNetVolume": "기관 순매수",
+    "usdKrw": "원·달러 환율",
+    "usdKrwRate": "원·달러 환율",
+    "us10yYield": "미국 10년 금리",
+    "krBaseRate": "한국 기준금리",
+}
+
+
+def _follow_up_threshold_text(
+    context: Dict[str, object],
+    field: str,
+    threshold: object,
+) -> str:
+    try:
+        numeric = float(threshold)
+    except (TypeError, ValueError):
+        return _rule_condition_display_value(threshold)
+    facts = relation_facts(context or {})
+    if field == "currentPrice":
+        currency = str(
+            facts.get("currency")
+            or ("USD" if str(facts.get("market") or "").upper() == "US" else "KRW")
+        )
+        return price_money(numeric, currency)
+    if field in {"priceChangeRate", "ma5Distance", "ma20Distance", "ma60Distance", "us10yYield", "krBaseRate"}:
+        return _rule_condition_display_value(numeric) + "%"
+    if field in {"volumeRatio", "timeAdjustedVolumeRatio"}:
+        return _rule_condition_display_value(numeric) + "배"
+    if field in {"foreignNetVolume", "institutionNetVolume"}:
+        return compact_number(numeric) + "주"
+    if field in {"usdKrw", "usdKrwRate"}:
+        return format(round(numeric, 2), ",").rstrip("0").rstrip(".") + "원"
+    return _rule_condition_display_value(numeric)
+
+
+def _follow_up_condition_text(
+    item: Dict[str, object],
+    context: Dict[str, object] = None,
+) -> str:
+    field = str(item.get("field") or "").strip()
+    operator = str(item.get("operator") or "").strip()
+    threshold = item.get("threshold")
+    if not field or not operator or threshold in (None, ""):
+        return ""
+    label = customer_visible_ai_text(item.get("label") or "")
+    field_label = _FOLLOW_UP_FIELD_LABELS.get(field, label or "확인 지표")
+    value = _follow_up_threshold_text(context or {}, field, threshold)
+    comparison = {
+        ">=": value + " 이상",
+        ">": value + " 초과",
+        "<=": value + " 이하",
+        "<": value + " 미만",
+        "==": value + "일 때",
+        "!=": value + "이 아닐 때",
+    }.get(operator, operator + " " + value)
+    purpose = {
+        "strengthen": "판단 강화",
+        "weaken": "판단 약화",
+        "invalidate": "판단 취소",
+        "switch": "판단 전환",
+    }.get(str(item.get("purpose") or "").lower(), "재판단")
+    effect = compact_sentence_count(customer_visible_ai_text(item.get("onSatisfied") or ""), 1)
+    text = purpose + ": " + field_label + " " + comparison
+    if effect:
+        text += " → " + effect
+    return text
+
+
+def customer_follow_up_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    limit: int = 4,
+) -> List[str]:
+    rows: List[str] = []
+    for item in response.follow_up_conditions or []:
+        if isinstance(item, dict):
+            append_unique_text(rows, _follow_up_condition_text(item, context), 360)
+    next_action = compact_sentence_count(
+        customer_visible_ai_text(response.next_action_plan or ""),
+        2,
+    )
+    if (
+        next_action
+        and not compact_reason_is_internal(next_action)
+        and is_concrete_observable_condition(next_action)
+    ):
+        append_unique_text(rows, "다음 확인: " + _friendly_next_check_text(context, next_action), 420)
+    elif not next_action:
+        derived_next = compact_sentence_count(compact_next_action_line(context, response), 2)
+        if (
+            derived_next
+            and not compact_reason_is_internal(derived_next)
+            and is_concrete_observable_condition(derived_next)
+        ):
+            append_unique_text(rows, "다음 확인: " + derived_next, 420)
+    invalidation = compact_invalidation_line(context, response)
+    if (
+        invalidation
+        and not compact_reason_is_internal(invalidation)
+        and is_concrete_observable_condition(invalidation)
+    ):
+        append_unique_text(rows, "판단 취소 조건: " + invalidation, 420)
+    for item in response.next_checks or []:
+        text = compact_sentence_count(_friendly_next_check_text(context, item), 1)
+        if (
+            text
+            and not compact_reason_is_internal(text)
+            and is_concrete_observable_condition(text)
+        ):
+            append_unique_text(rows, "다음 확인: " + text, 360)
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+
+def _decision_first_reason_rows(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    evidence_rows: List[str],
+) -> List[str]:
+    rows: List[str] = []
+    interpretation = _investment_view_row(context, response)
+    if interpretation and not compact_reason_is_internal(interpretation):
+        append_unique_text(rows, interpretation, 420)
+    macro_reason = compact_macro_constraint_reason(context)
+    if macro_reason and not compact_reason_is_internal(macro_reason):
+        append_unique_text(rows, macro_reason, 420)
+    for item in evidence_rows:
+        text = customer_visible_ai_text(item)
+        if (
+            text
+            and not compact_reason_is_internal(text)
+            and "사용자에게 표시할 성립값이 부족" not in text
+            and not text.startswith("선택 가설:")
+            and not text.startswith("확인 한계:")
+        ):
+            append_unique_text(rows, text, 420)
+    return rows[:3]
+
+
+def execution_telegram_message_decision_first(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+    detail_level: str = "concise",
+) -> str:
+    """Render one customer decision contract; keep implementation audit on web."""
+
+    level = delivery_level_from_context(context)
+    normalized_detail = normalize_notification_detail_level(detail_level)
+    limits = {
+        "concise": {"reason": 2, "counter": 1, "followUp": 3, "flow": 6},
+        "standard": {"reason": 3, "counter": 2, "followUp": 4, "flow": 6},
+        "full": {"reason": 3, "counter": 2, "followUp": 4, "flow": 6},
+    }[normalized_detail]
+    target = str(context.get("displayTarget") or context.get("target") or "").strip()
+    strict_actionability = bool(
+        context.get("notificationAiDecisionContractVersion")
+        or context.get("_notificationAiPreparedDecisionCore")
+        or context.get("investmentSubjectDecisionCaseId")
+        or context.get("investmentSubjectDecisionCase")
+    )
+    actionability = (
+        investment_decision_actionability(context, response)
+        if strict_actionability
+        else {}
+    )
+    review_only = str(actionability.get("status") or "") == "review-only"
+    if review_only:
+        target_name = target_name_for_headline(target)
+        headline = "🔎 " + (((target_name + " · ") if target_name else "") + "판단 보류")
+    else:
+        headline = execution_headline(context, response)
+    evidence_rows = full_decision_evidence_rows(context, response)
+    reason_rows = _decision_first_reason_rows(context, response, evidence_rows)[
+        :limits["reason"]
+    ]
+    if review_only:
+        gaps = set(actionability.get("gaps") or [])
+        review_reason = (
+            "가격·수급 신호는 검토 대상으로 남겼지만, 같은 조건이 실제 결과로 이어졌는지 "
+            "검증이 부족해 매수·매도 판단에는 사용하지 않았습니다."
+            if "hypothesis-execution-qualification" in gaps
+            else "현재 신호는 확인했지만 실행 판단에 필요한 근거와 변경 조건이 충분하지 않아 "
+            "매수·매도 판단에는 사용하지 않았습니다."
+        )
+        factual_rows = [
+            customer_visible_ai_text(item)
+            for item in evidence_rows
+            if customer_visible_ai_text(item)
+            and not compact_reason_is_internal(customer_visible_ai_text(item))
+            and not customer_visible_ai_text(item).startswith(("선택 가설:", "확인 한계:"))
+        ]
+        reason_rows = [review_reason]
+        for item in factual_rows:
+            append_unique_text(reason_rows, item, 420)
+            if len(reason_rows) >= limits["reason"]:
+                break
+    counter_rows = [
+        customer_visible_ai_text(item)
+        for item in full_decision_evidence_rows(context, response, counter=True)
+        if customer_visible_ai_text(item)
+        and not compact_reason_is_internal(customer_visible_ai_text(item))
+    ][:limits["counter"]]
+    follow_up_rows = customer_follow_up_rows(
+        context,
+        response,
+        limit=limits["followUp"],
+    )
+    if review_only and not follow_up_rows:
+        follow_up_rows = [
+            "재판단 기준 없음: 수치 임계값이나 명확한 상태 전환 기준이 없어 "
+            "이번 결과는 검토 기록으로만 남깁니다."
+        ]
+    flow_rows = [
+        item for item in compact_current_flow_rows(context)
+        if not str(item or "").startswith("현재 공급자 미지원:")
+    ]
+    for item in compact_temporal_analysis_rows(context):
+        append_unique_text(flow_rows, item, 360)
+    flow_rows = flow_rows[:limits["flow"]]
+    limitations = canonical_publication_data_warning_rows(context)
+    for item in evidence_rows:
+        text = customer_visible_ai_text(item)
+        if text.startswith("확인 한계:") and not compact_reason_is_internal(text):
+            append_unique_text(limitations, text, 360)
+    for item in customer_data_note_rows(list(response.missing_data_impact)):
+        append_unique_text(limitations, item, 360)
+    unsupported = compact_provider_unsupported_line(context)
+    if unsupported:
+        append_unique_text(limitations, unsupported, 360)
+    if review_only:
+        gaps = set(actionability.get("gaps") or [])
+        if "hypothesis-execution-qualification" in gaps:
+            append_unique_text(
+                limitations,
+                "같은 조건의 독립된 사후 결과가 충분히 쌓이지 않았습니다.",
+                360,
+            )
+        if "supported-causal-path" in gaps:
+            append_unique_text(
+                limitations,
+                "현재 신호가 수급·실적 또는 위험 변화로 이어지는 경로가 확인되지 않았습니다.",
+                360,
+            )
+
+    action_line = compact_current_action_line(context, response)
+    market_rows = market_hours_message_rows(context)
+    if review_only:
+        action_line = (
+            "지금은 주문하지 않습니다. 기존 보유 종목은 수량을 바꾸지 않고, 관심 종목은 "
+            "신규 진입하지 않은 채 아래 조건만 다시 확인합니다."
+        )
+    elif market_rows and str(response.action or "").upper() in {"BUY", "ADD"}:
+        action_line = (
+            "지금은 장이 닫혀 있어 주문하지 않습니다. 다음 거래가 시작되면 표시 가격과 "
+            "아래 확인 조건을 다시 점검한 뒤 소액 진입 여부를 판단합니다."
+        )
+
+    parts = [
+        "<b>" + html.escape(headline, quote=False) + "</b>",
+        ("<code>" + html.escape(target, quote=False) + "</code>") if target else "",
+        "",
+        "<b>지금 할 일</b>",
+        _html_bullet(action_line, level),
+    ]
+    transition = compact_decision_transition(context, response)
+    transition_state = ai_decision_transition_from_context(context)
+    if not transition_state:
+        transition_state = decision_transition_from_context(context)
+    previous_action = str(transition_state.get("previousAction") or "").strip().upper()
+    current_action = str(
+        transition_state.get("currentAction") or response.action or ""
+    ).strip().upper()
+    if not previous_action:
+        previous_episode = context.get("previousInvestmentDecisionEpisode")
+        previous_episode = previous_episode if isinstance(previous_episode, dict) else {}
+        previous_action = str(previous_episode.get("action") or "").strip().upper()
+    if (
+        not review_only
+        and transition
+        and previous_action
+        and current_action
+        and previous_action != current_action
+    ):
+        parts.extend(["", "<b>무엇이 바뀌었나</b>", _html_bullet(transition, level)])
+    if reason_rows:
+        parts.extend(["", "<b>판단 이유</b>", *[_html_bullet(row, level) for row in reason_rows]])
+    if counter_rows:
+        parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
+    news_row = compact_news_impact_html_row(context, level)
+    if news_row:
+        parts.extend(["", "<b>관련 사건</b>", news_row])
+    if follow_up_rows:
+        follow_up_title = "다시 판단할 조건" if review_only else "판단이 바뀌는 조건"
+        parts.extend(["", "<b>" + follow_up_title + "</b>", *[_html_bullet(row, level) for row in follow_up_rows]])
+    if flow_rows:
+        parts.extend(["", "<b>현재 수치</b>", *[_html_bullet(row, level) for row in flow_rows]])
+    if market_rows and str(response.action or "").upper() not in {"BUY", "ADD"}:
+        parts.extend([
+            "",
+            "<b>거래 시간 안내</b>",
+            *[_html_bullet(row, level) for row in market_rows[:2]],
+        ])
+    if limitations:
+        parts.extend([
+            "",
+            "<b>판단 한계</b>",
+            *[_html_bullet(row, level) for row in limitations[:2]],
+        ])
+    link_row = _notification_detail_link_row(context, level)
+    if link_row:
+        parts.extend(["", link_row])
+    reference = response.reference_date or reference_date(context)
+    sent = str(context.get("sentTime") or "").strip()
+    footer = " · ".join(part for part in [
+        "기준 " + str(reference) if reference else "",
+        "발송 " + sent if sent else "",
+        "번호 " + str(context.get("notificationNumber")) if context.get("notificationNumber") else "",
+    ] if part)
+    if footer:
+        parts.extend(["", "<i>" + html.escape(footer, quote=False) + "</i>"])
+    return "\n".join(part for part in parts if str(part).strip() or part == "").strip()
 
 
 def full_typedb_competing_inference_rows(

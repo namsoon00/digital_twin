@@ -8,6 +8,7 @@ from .decision_evidence_contract import (
     cap_decision_readiness,
     decision_eligible_hypothesis_payload,
     decision_readiness_contract,
+    hypothesis_decision_eligibility,
     hypothesis_set_evidence_summary,
     material_action_transition_contract,
     minimum_hypothesis_comparison_count,
@@ -322,6 +323,29 @@ def local_action_envelope_summary(context: Dict[str, object], action: str) -> st
         return "현재 확인된 사실만으로 행동을 바꿀 투자 가설이 성립하지 않았습니다."
     label = ACTION_ENVELOPE_STATUS_LABELS.get(status, "")
     return (label + " 상태입니다.") if label else ""
+
+
+def deterministic_current_action_plan(context: Dict[str, object], action: str) -> str:
+    """Return an action-consistent customer plan after a policy override."""
+
+    clean = str(action or "").strip().upper()
+    if clean == "BUY":
+        return (
+            "소액 분할 진입만 검토하고 한 번에 큰 주문은 하지 않습니다."
+            if is_entry_only_action_context(context)
+            else "허용 범위 안에서 분할매수를 검토하고 한 번에 큰 주문은 하지 않습니다."
+        )
+    if clean == "ADD":
+        return "추가매수는 허용 범위 안에서 분할로 검토하고 한 번에 비중을 크게 늘리지 않습니다."
+    if clean == "TRIM":
+        return "보유 수량의 일부를 분할축소하는 방안을 검토하고 추가매수는 하지 않습니다."
+    if clean == "SELL":
+        return "매도를 우선 검토하고 새 매수나 추가매수는 하지 않습니다."
+    if clean == "AVOID":
+        return "지금은 신규 진입을 피하고 가격·수급 또는 새 공식 자료가 바뀔 때까지 대기합니다."
+    if is_entry_only_action_context(context):
+        return "지금은 매수하지 않고 관심 상태를 유지하며 다음 가격·수급 변화를 확인합니다."
+    return "지금은 매도·추가매수 없이 보유를 유지하며 다음 가격·수급 변화를 확인합니다."
 
 
 def normalized_action_for_action_envelope(context: Dict[str, object], action: str) -> str:
@@ -661,6 +685,7 @@ def normalized_hypothesis_comparison(
     for candidate in candidates:
         hypothesis_id = str(candidate.get("hypothesisId") or "").strip()
         review = review_by_id.get(hypothesis_id)
+        eligibility = hypothesis_decision_eligibility(candidate)
         reviews.append({
             "hypothesisId": hypothesis_id,
             "familyId": str(candidate.get("familyId") or ""),
@@ -686,6 +711,13 @@ def normalized_hypothesis_comparison(
             "requiredEvidenceTypes": user_friendly_ai_list(candidate.get("requiredEvidenceTypes") or [], 12),
             "approvalStatus": str(candidate.get("approvalStatus") or ""),
             "verificationStatus": str(candidate.get("verificationStatus") or ""),
+            "qualification": dict(candidate.get("qualification") or {}),
+            "decisionEligible": bool(eligibility.get("eligible")),
+            "decisionUse": str(eligibility.get("decisionUse") or ""),
+            "executionEligible": bool(eligibility.get("executionEligible")),
+            "outcomeQualificationStatus": str(
+                eligibility.get("outcomeQualificationStatus") or ""
+            ),
             "verdict": review.verdict if review else "unreviewed",
             "reasoning": user_friendly_ai_text(
                 review.reasoning if review and review.reasoning else "AI 응답에서 가설별 비교 설명이 없습니다.",
@@ -1978,6 +2010,7 @@ def build_notification_ai_gate_prompt(
         "relationshipDatabaseInference.hypothesisSet.hypotheses에는 현재 TypeDB RuleBox에서 실제로 성립한 경쟁 인과 가설만 있다. decisionGuardrails는 근거 부족·충돌·반대 경로 부족을 나타내는 안전 제한이며 가설이 아니고 selectedHypothesisId의 선택 대상도 아니다. familyId가 같은 규칙 변형은 하나의 인과 설명 후보로 이미 압축되어 있으며, supportingRuleIds는 그 설명을 뒷받침한 규칙 가지들이다. 같은 action을 시사해도 familyId 또는 causalSignature가 다른 경로는 별도의 가설로 비교한다.",
         "각 가설의 scopeState를 먼저 확인한다. market-shared와 marketHypothesisId가 있는 가설은 가격·수급·뉴스·공시·거시처럼 계정과 무관한 공통 설명이고, accountHypothesisOverlayId는 보유 여부·손익·비중·투자 성향·허용 행동처럼 이 계정에서만 적용되는 맥락이다. 시장 공통 설명만으로 이 계정의 매수·매도 결론을 확정하지 말고, 계정 오버레이와 반대 근거를 함께 비교한다. mixed 또는 unverified 가설은 공통 시장 사실로 부풀려 설명하지 않는다.",
         "각 가설의 familyId, causalSignature, templateId, approvalStatus, causalPathIds, supportingEvidenceIds, counterEvidenceIds를 확인한다. supportingEvidenceIds와 counterEvidenceIds는 실제 입력 ID에서만 선택하고, 가정·무효화 조건·유효시각·검증 상태를 점검한다.",
+        "각 가설의 qualification과 decisionUse를 확인한다. execution이 아닌 shadow·observed·limited-active 가설은 비교와 사후 검증에는 사용하되 BUY·ADD·TRIM·SELL을 만드는 근거로 사용하지 않는다.",
         "relationshipDatabaseInference.hypothesisCalibration은 현재 InferenceBox와 같은 ABox 세대에서 읽은 동일 종목·동일 가설 템플릿의 사후 결과 집계다. status=applied이고 각 가설의 historicalCalibration.calibrationStatus=usable일 때만 과거 검증 이력으로 언급한다. 이는 가격 예측이나 자동 매매 규칙이 아니며, 현재 TypeDB 근거보다 우선하지 않는다. outcomeState가 more-contradicted이면 같은 설명이 과거 결과와 자주 맞지 않았다는 점을 반대 근거와 다음 확인에 반영하되, 그 사실만으로 action을 고르지 않는다. 표본 부족, 세대 불일치, 미래 시각 기록은 근거로 사용하지 않는다.",
         "promptContext.hypothesisLifecycle이 있으면, 이는 이전 정상 TypeDB 세대와 비교한 가설 감사 기록이다. observed·maintained·strengthened·weakened·invalidated·expired 상태는 새로움과 근거의 유지 여부를 설명하는 데만 사용하고, 상태 이름만으로 매수·매도 action을 고르지 않는다. transitionReason, evidenceDelta, requiredFreshnessDomains, nextDataRequirements를 읽어 이전 알림과 무엇이 달라졌는지와 다음 확인을 구체적으로 설명한다.",
         "relationshipDatabaseInference.hypothesisDecisionBrief는 현재 TypeDB 가설의 상태 변화, 반증 조건, 필수 신선도, 사후 관측 이력을 묶은 감사용 문맥이다. market scope와 account scope를 섞지 말고, outcomeState가 지지됨·반증됨·판단 불가·표본 부족인지와 표본 수를 정확히 읽는다. outcomeContract의 필수 데이터가 비어 제외된 관측은 가설을 지지하거나 반증하는 근거로 쓰지 않는다. qualityReview의 coverage-gap·freshness-blocked·revision-required 상태는 데이터 보완 또는 설명 재검토가 필요하다는 뜻일 뿐 현재 행동을 자동으로 고르는 근거가 아니다. 이 이력은 현재 세대의 가격·수급·뉴스·공시 증거와 분리해 설명한다. strategyGuide.hypothesisUpdate에는 이전 세대 대비 실제로 바뀐 점만 한두 문장으로 쓰고, strategyGuide.hypothesisNextCheck에는 그 가설을 지지하거나 반증할 다음 확인 하나를 쓴다.",
@@ -2023,6 +2056,7 @@ def build_notification_ai_gate_prompt(
         "strategyGuide.executionCriteria는 현재 조건 → 실행 강도 → 가격 기준 → 수량 기준 → 판단이 약해지는 조건 순서로 쓴다.",
         "HOLD를 고르면 '그냥 보유'라고 쓰지 않는다. TypeDB executionPlan의 유지·약화 조건과 다음 확인을 설명한다. 해당 조건이 없으면 실행 판단이 아니라 자료 보완 대기라고 명확히 쓴다.",
         "출력 전 계약 검사를 직접 수행한다. 입력 hypotheses의 각 hypothesisId를 정확히 한 번 평가하고, 각 행의 모든 counterEvidenceIds를 같은 행에 그대로 분류하며, nextActionPlan·invalidationCondition·nextChecks 중 적어도 하나에는 현재 판단이 바뀌는 구체 조건을 쓴다. 이 조건을 충족하지 못하면 실행 행동을 만들지 말고 조건부 HOLD 또는 AVOID로 답하되 필드를 비워 두지 않는다.",
+        "사용자 문장의 자체 검사를 수행한다. currentActionPlan에는 지금 할 일과 하지 말아야 할 일을 쓰고, nextActionPlan에는 실제로 재관측할 가격·거래량·수급·실적·공시·금리·환율 중 하나와 그 결과에 따른 판단 변화를 쓴다. '관계 확인', '다음 추론 세대', 내부 규칙명만 있는 문장은 계약 실패다.",
         "확률, 확신도, 관계 점수, 종합 점수는 만들거나 출력하지 않는다. 판단 품질은 시스템이 자료 상태와 검증 상태로 따로 확인한다.",
         "응답 JSON이 최종 메시지의 원천이다. 설명 문장 없이 JSON 객체 하나만 출력한다.",
         "스키마:",
@@ -2110,15 +2144,20 @@ def validated_response_from_payload(
         fallback.raw_response = raw_response
         return fallback
 
-    action = str(payload.get("action") or "").strip().upper()
+    submitted_action = str(payload.get("action") or "").strip().upper()
+    action = submitted_action
+    action_adjustment_reason = ""
     if action not in VALID_ACTIONS:
         warnings.append("지원하지 않는 action 값이라 로컬 판단으로 대체했습니다.")
         action = fallback.action
+        action_adjustment_reason = "invalid-action"
     original_action = action
     action = normalized_action_for_target(context, action)
     target_normalized_action = action
     action = normalized_action_for_rulebox_policy(context, action)
     action = normalized_action_for_action_envelope(context, action)
+    if action != original_action:
+        action_adjustment_reason = "action-envelope"
     append_watchlist_action_warning(context, original_action, action, warnings)
     append_rulebox_action_policy_warning(context, target_normalized_action, action, warnings)
     summary = watchlist_friendly_text(context, user_friendly_ai_text(
@@ -2148,6 +2187,7 @@ def validated_response_from_payload(
         if not raw_counter and not explicit_disagreement:
             warnings.append("TypeDB 진입 조건을 낮추는 AI 의견에 반대 근거 또는 불일치 사유가 없어 진입 후보를 유지했습니다.")
             action = "BUY"
+            action_adjustment_reason = "missing-disagreement"
         elif raw_counter and not explicit_disagreement:
             warnings.append("AI가 별도 불일치 사유를 쓰지 않아 첫 번째 반대 근거를 진입 보류 사유로 기록했습니다.")
     evidence = list(raw_evidence)
@@ -2236,8 +2276,10 @@ def validated_response_from_payload(
         if str(item.get("hypothesisId") or "") == selected_hypothesis_id
     ), {})
     selected_hypothesis_eligible = bool(
-        selected_hypothesis
-        and decision_eligible_hypothesis_payload(selected_hypothesis)
+        selected_hypothesis and selected_hypothesis.get("decisionEligible")
+    )
+    selected_hypothesis_execution_eligible = bool(
+        selected_hypothesis and selected_hypothesis.get("executionEligible")
     )
     selected_hypothesis_action = str(selected_hypothesis.get("candidateAction") or "").strip().upper()
     if selected_hypothesis_action in VALID_ACTIONS:
@@ -2290,6 +2332,7 @@ def validated_response_from_payload(
         if action != "HOLD":
             warnings.append("가설 비교가 끝나기 전의 실행 의견은 사용하지 않고 보류로 낮췄습니다.")
         action = normalized_action_for_rulebox_policy(context, normalized_action_for_target(context, "HOLD"))
+        action_adjustment_reason = "hypothesis-comparison"
         summary = "경쟁 가설 비교가 끝나지 않아 지금은 실행 판단을 유보합니다."
         opinion = "시스템 안전 제한과 비교 실패 사유를 확인하고 모든 규칙 가설을 다시 평가한 뒤 판단합니다."
         append_unique_text(next_checks, "모든 경쟁 가설의 근거와 반대 근거 비교 완료", 180)
@@ -2303,27 +2346,29 @@ def validated_response_from_payload(
         item.get("status") == "supported" and item.get("evidenceIds")
         for item in causal_chain
     )
-    strict_causal_contract = str(
+    contract_version = str(
         context.get("notificationAiDecisionContractVersion") or ""
-    ).strip() in {
-        "notification-ai-decision-contract-v2",
-        "notification-ai-decision-contract-v3",
-        "notification-ai-decision-contract-v4",
-        "notification-ai-decision-contract-v5",
-        "notification-ai-decision-contract-v6",
-        "notification-ai-decision-contract-v7",
-        "notification-ai-decision-contract-v8",
-    }
+    ).strip()
+    contract_match = re.fullmatch(
+        r"notification-ai-decision-contract-v(\d+)",
+        contract_version,
+    )
+    strict_causal_contract = bool(
+        contract_match and int(contract_match.group(1)) >= 2
+    )
     if strict_causal_contract and action in executable_actions and (
         decision_readiness != "ready"
         or not supported_causal_path
-        or (bool(selected_hypothesis_id) and not selected_hypothesis_eligible)
+        or not selected_hypothesis_id
+        or not selected_hypothesis_eligible
+        or not selected_hypothesis_execution_eligible
     ):
         warnings.append("실행 행동의 검증된 가설·인과 경로가 부족해 실행 의견을 보류로 낮췄습니다.")
         action = normalized_action_for_rulebox_policy(
             context,
             normalized_action_for_target(context, "HOLD"),
         )
+        action_adjustment_reason = "execution-qualification"
         summary = "검증된 인과 경로가 충분하지 않아 지금은 실행 판단을 유보합니다."
         opinion = "근거가 실제 실적·현금흐름·수급 또는 위험 변화로 이어지는지 확인한 뒤 다시 판단합니다."
         validation_state = "conditional"
@@ -2349,6 +2394,7 @@ def validated_response_from_payload(
             context,
             normalized_action_for_target(context, previous_action),
         )
+        action_adjustment_reason = "non-material-transition"
         summary = "실질적인 새 근거가 없어 이전 행동 판단을 유지합니다."
         opinion = "새 세대 기준선만 생성된 상태이므로 가격·수급·재무의 실제 변화가 확인될 때 다시 판단합니다."
         validation_state = "conditional"
@@ -2441,11 +2487,32 @@ def validated_response_from_payload(
             420,
         ),
     ))
+    if action_adjustment_reason:
+        current_action_plan = deterministic_current_action_plan(context, action)
+        execution_decision = current_action_plan
+        investment_view = local_action_envelope_summary(context, action) or summary
+        change_analysis = {
+            "execution-qualification": (
+                "현재 근거가 실행 판단에 필요한 검증 수준에 도달하지 않아 행동을 바꾸지 않았습니다."
+            ),
+            "hypothesis-comparison": (
+                "서로 다른 설명의 비교가 끝나지 않아 행동을 바꾸지 않았습니다."
+            ),
+            "non-material-transition": (
+                "가격·수급·재무의 실질 변화가 확인되지 않아 이전 행동을 유지했습니다."
+            ),
+            "missing-disagreement": (
+                "진입 후보를 뒤집을 확인된 반대 근거가 없어 기존 후보를 유지했습니다."
+            ),
+        }.get(
+            action_adjustment_reason,
+            "보유 상태와 허용 행동 범위를 적용해 현재 행동을 다시 맞췄습니다.",
+        )
     if (
         bool(transition_contract.get("evaluated"))
         and not bool(transition_contract.get("allowsActionChange"))
     ):
-        current_action_plan = opinion
+        current_action_plan = deterministic_current_action_plan(context, action)
         change_analysis = (
             "이전 판단과 다른 행동 후보가 생성됐지만 가격·수급·재무의 실질 변화가 없어 "
             "행동 변경으로 인정하지 않았습니다."
@@ -2529,7 +2596,12 @@ def validated_response_from_payload(
                 "blocked"
                 if validation_state == "blocked" or data_state == "unavailable"
                 else "eligible"
-                if action in {"BUY", "ADD", "TRIM", "SELL"} and decision_readiness == "ready"
+                if (
+                    action in {"BUY", "ADD", "TRIM", "SELL"}
+                    and decision_readiness == "ready"
+                    and selected_hypothesis_execution_eligible
+                    and supported_causal_path
+                )
                 else "review-only"
             ),
             "counterEvidenceStatus": counter_evidence_status,

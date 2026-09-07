@@ -12,7 +12,7 @@ from .contracts import AIJudgmentResult, DecisionSynthesis, FinalDecision, Hypot
 
 
 SUBJECT_CASE_VERSION = "investment-subject-decision-case-v3"
-CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v1"
+CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v2"
 PUBLICATION_VERSION = "investment-decision-publication-v1"
 
 SUBJECT_CREATED = "CREATED"
@@ -66,6 +66,7 @@ class CandidateSetSnapshot:
     synthesis_id: str
     hypotheses: Tuple[HypothesisRecord, ...] = ()
     eligible_hypothesis_ids: Tuple[str, ...] = ()
+    execution_eligible_hypothesis_ids: Tuple[str, ...] = ()
     reference_hypothesis_ids: Tuple[str, ...] = ()
     allowed_actions: Tuple[str, ...] = ()
     blocked_actions: Tuple[str, ...] = ()
@@ -86,6 +87,7 @@ class CandidateSetSnapshot:
         hypotheses: Iterable[HypothesisRecord],
     ) -> "CandidateSetSnapshot":
         eligible_ids = _texts(synthesis.eligible_hypothesis_ids)
+        execution_eligible_ids = _texts(synthesis.execution_eligible_hypothesis_ids)
         reference_ids = _texts(synthesis.reference_hypothesis_ids)
         candidate_ids = set(eligible_ids).union(reference_ids)
         scoped = []
@@ -114,6 +116,16 @@ class CandidateSetSnapshot:
         missing_eligible = sorted(set(eligible_ids) - available_ids)
         if missing_eligible:
             scope_errors.append("eligible-hypothesis-missing:" + ",".join(missing_eligible))
+        invalid_execution = sorted(set(execution_eligible_ids) - set(eligible_ids))
+        if invalid_execution:
+            scope_errors.append(
+                "execution-hypothesis-not-decision-eligible:" + ",".join(invalid_execution)
+            )
+        missing_execution = sorted(set(execution_eligible_ids) - available_ids)
+        if missing_execution:
+            scope_errors.append(
+                "execution-hypothesis-missing:" + ",".join(missing_execution)
+            )
         material = {
             "batchCaseId": str(batch_case_id or ""),
             "accountId": synthesis.account_id,
@@ -123,6 +135,7 @@ class CandidateSetSnapshot:
             "synthesisId": synthesis.synthesis_id,
             "synthesis": synthesis.to_dict(),
             "eligibleHypothesisIds": list(eligible_ids),
+            "executionEligibleHypothesisIds": list(execution_eligible_ids),
             "referenceHypothesisIds": list(reference_ids),
             "allowedActions": list(_texts(synthesis.allowed_actions)),
             "blockedActions": list(_texts(synthesis.blocked_actions)),
@@ -140,6 +153,7 @@ class CandidateSetSnapshot:
             synthesis_id=synthesis.synthesis_id,
             hypotheses=tuple(scoped),
             eligible_hypothesis_ids=eligible_ids,
+            execution_eligible_hypothesis_ids=execution_eligible_ids,
             reference_hypothesis_ids=reference_ids,
             allowed_actions=_texts(synthesis.allowed_actions),
             blocked_actions=_texts(synthesis.blocked_actions),
@@ -159,6 +173,7 @@ class CandidateSetSnapshot:
             "synthesisId": self.synthesis_id,
             "hypotheses": [item.to_dict() for item in self.hypotheses],
             "eligibleHypothesisIds": list(self.eligible_hypothesis_ids),
+            "executionEligibleHypothesisIds": list(self.execution_eligible_hypothesis_ids),
             "referenceHypothesisIds": list(self.reference_hypothesis_ids),
             "allowedActions": list(self.allowed_actions),
             "blockedActions": list(self.blocked_actions),
@@ -185,6 +200,9 @@ class CandidateSetSnapshot:
                 if isinstance(item, Mapping)
             ),
             eligible_hypothesis_ids=_texts(payload.get("eligibleHypothesisIds") or []),
+            execution_eligible_hypothesis_ids=_texts(
+                payload.get("executionEligibleHypothesisIds") or []
+            ),
             reference_hypothesis_ids=_texts(payload.get("referenceHypothesisIds") or []),
             allowed_actions=_texts(payload.get("allowedActions") or []),
             blocked_actions=_texts(payload.get("blockedActions") or []),

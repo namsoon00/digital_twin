@@ -285,7 +285,7 @@ class HypothesisReviewTests(unittest.TestCase):
                 "stateLabel": "약화",
                 "transitionReason": "새 반대 근거가 추가되었습니다.",
             }],
-            "nextDataRequirements": ["다음 정규장 거래량"],
+            "nextDataRequirements": ["다음 정규장 거래량이 20일 평균 1배 이상인지 확인"],
             "items": [{
                 "outcomeAssessment": {
                     "outcomeState": "supported",
@@ -306,7 +306,9 @@ class HypothesisReviewTests(unittest.TestCase):
             opinion="추가 확인이 필요합니다.",
             strategy_guide={
                 "hypothesisUpdate": "새 반대 근거가 추가돼 기존 가설이 약화됐습니다.",
-                "hypothesisNextCheck": "다음 정규장 거래량을 확인합니다.",
+                "hypothesisNextCheck": (
+                    "다음 정규장 거래량이 20일 평균 1배 이상인지 확인합니다."
+                ),
             },
         )
 
@@ -316,8 +318,10 @@ class HypothesisReviewTests(unittest.TestCase):
 
         self.assertEqual("context-only-not-action-selector", prompt_context["facts"]["hypothesisDecisionBrief"]["decisionEligibility"])
         self.assertIn("hypothesisDecisionBrief", prompt)
-        self.assertIn("가설 변화와 검증", message)
-        self.assertIn("AI가 본 가설 변화", message)
+        self.assertIn("보유 유지", message)
+        self.assertIn("다음 정규장 거래량이 20일 평균 1배 이상", message)
+        self.assertNotIn("가설 변화와 검증", message)
+        self.assertNotIn("TypeDB", message)
 
 
 if __name__ == "__main__":

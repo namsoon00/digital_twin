@@ -331,6 +331,40 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertEqual("", reason)
         self.assertTrue(detail["pending"])
 
+    def test_normal_monitor_observes_decision_outcomes_after_source_commit(self):
+        snapshot = account_snapshot_from_monitor_state(monitor_state())
+        order = []
+
+        class Recorder(CapturingCycleRecorder):
+            def record_cycle(self, *args, **kwargs):
+                order.append("source-commit")
+                return super().record_cycle(*args, **kwargs)
+
+        class OutcomeObserver:
+            def observe_snapshot(self, observed_snapshot):
+                order.append("outcome-observation")
+                return {
+                    "status": "observed",
+                    "targetCount": 1,
+                    "savedOutcomeCount": 1,
+                    "generatedAt": observed_snapshot.generated_at,
+                }
+
+        runner = MonitorRunner(
+            [account()],
+            store=SnapshotStore(monitor_state()),
+            monitor=EmptyMonitor(),
+            snapshot_builder=lambda _account: snapshot,
+            event_sender=lambda *_args, **_kwargs: None,
+            cycle_recorder=Recorder(),
+            investment_outcome_observer=OutcomeObserver(),
+        )
+
+        runner.run_once()
+
+        self.assertEqual(["source-commit", "outcome-observation"], order)
+        self.assertEqual("observed", runner.last_investment_outcome_results["acct"]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

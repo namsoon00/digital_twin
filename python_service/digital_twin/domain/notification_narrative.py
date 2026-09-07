@@ -1163,9 +1163,11 @@ def apply_narrative_brief_to_response(brief: InvestmentNarrativeBrief, response:
     response.summary = views[0] if views else ""
     response.opinion = views[0] if views else ""
     response.change_analysis = changes[0] if changes else ""
-    response.current_action_plan = ""
-    response.execution_decision = ""
-    response.next_action_plan = next_conditions[0] if next_conditions else ""
+    # Action plans are decisions, not factual narrative claims. They have
+    # already passed the actionability contract and must not be erased while
+    # projecting evidence-bound explanatory claims.
+    if next_conditions:
+        response.next_action_plan = next_conditions[0]
     response.writer_provenance = dict(brief.writer_provenance)
     response.claim_validation = {
         "version": NOTIFICATION_CLAIM_VALIDATION_VERSION,

@@ -53,6 +53,7 @@ from ...domain.investment_reasoning.subject_case import (
     SUBJECT_VALIDATED,
 )
 from ...domain.investment_alert_coverage import derive_delivery_eligibility
+from ...domain.investment_decision_actionability import investment_decision_actionability
 from .episode_projection import (
     decision_episode_from_subject_case,
     decision_episode_outcome_contract_readiness,
@@ -485,6 +486,9 @@ class InvestmentReasoningOrchestrator:
             hypothesis_set.update({
                 "hypotheses": prompt_hypotheses,
                 "eligibleHypothesisIds": [item["hypothesisId"] for item in prompt_hypotheses],
+                "executionEligibleHypothesisIds": list(
+                    subject_case.candidate_set.execution_eligible_hypothesis_ids
+                ),
                 "candidateSetId": subject_case.candidate_set.candidate_set_id,
                 "candidateFingerprint": subject_case.candidate_set.fingerprint,
                 "accountId": subject_case.account_id,
@@ -1044,6 +1048,12 @@ class InvestmentReasoningOrchestrator:
             return False, "AI hypothesis comparison is not complete."
         if judgment.selected_hypothesis_id not in eligible_ids:
             return False, "AI selected hypothesis is not eligible in the subject decision candidate set."
+        if (
+            judgment.action in {"BUY", "ADD", "TRIM", "SELL"}
+            and judgment.selected_hypothesis_id
+            not in set(candidate_set.execution_eligible_hypothesis_ids)
+        ):
+            return False, "AI selected hypothesis is not qualified to originate an executable action."
         selected_hypothesis = next((
             item
             for item in candidate_set.hypotheses
@@ -1116,6 +1126,23 @@ class InvestmentReasoningOrchestrator:
             return False, "Actionable AI judgment has no follow-up or reversal condition."
         if str(judgment.validation_state or "").lower() in {"blocked", "invalid", "failed", "error"}:
             return False, "AI judgment validation state blocks publication."
+        actionability = investment_decision_actionability(
+            {
+                "messageType": "investmentInsight",
+                "notificationAiDecisionContractVersion": "canonical-subject-decision-v1",
+                "_notificationAiPreparedDecisionCore": {
+                    "hypothesisSet": {
+                        "hypotheses": [item.to_dict() for item in candidate_set.hypotheses],
+                    },
+                },
+            },
+            judgment.to_dict(),
+        )
+        if actionability.get("gaps"):
+            return False, (
+                "AI judgment failed the final actionability contract: "
+                + ", ".join(actionability.get("gaps") or [])
+            )
         return True, ""
 
     @staticmethod
@@ -1134,9 +1161,20 @@ class InvestmentReasoningOrchestrator:
             "candidateSetId": subject_case.candidate_set.candidate_set_id,
             "candidateFingerprint": subject_case.candidate_set.fingerprint,
             "eligibleHypothesisIds": list(subject_case.candidate_set.eligible_hypothesis_ids),
+            "executionEligibleHypothesisIds": list(
+                subject_case.candidate_set.execution_eligible_hypothesis_ids
+            ),
             "allowedActions": list(subject_case.candidate_set.allowed_actions),
             "blockedActions": list(subject_case.candidate_set.blocked_actions),
             "actionAuthority": subject_case.synthesis.action_authority,
+            "executionQualified": subject_case.synthesis.execution_qualified,
+            "executionDisposition": subject_case.synthesis.execution_disposition,
+            "hypothesisQualificationState": (
+                subject_case.synthesis.hypothesis_qualification_state
+            ),
+            "hypothesisQualificationReasons": list(
+                subject_case.synthesis.hypothesis_qualification_reasons
+            ),
             "decisionEffect": subject_case.synthesis.decision_effect,
             "contractVersion": subject_case.contract_version,
         }

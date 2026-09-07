@@ -138,13 +138,13 @@ class CustomerNotificationExplanationTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("[관계 검토] 매수·매도·보유 판단을 새로 만들지 않았습니다.", message)
-        self.assertIn("<b>서로 다른 근거</b>", message)
+        self.assertIn("지금은 주문하지 않습니다.", message)
+        self.assertIn("매수·매도 판단에는 사용하지 않았습니다.", message)
+        self.assertIn("<b>판단 이유</b>", message)
         self.assertIn("위험 쪽: 재무 위험 모델은 이번 반등이 이어지지 못할 가능성을 감지했습니다.", message)
         self.assertIn("5일선보다 0.9% 높음", message)
-        self.assertIn("거래량은 평균의 0.49배", message)
+        self.assertIn("거래량 48,156 · 평균 대비 0.49배", message)
         self.assertIn("현금흐름과 부채의 실제 수치", message)
-        self.assertIn("AI 비교 결과가 시스템이 허용한 후보와 일치하지 않아", message)
         self.assertIn("예상 EPS·적정가·목표 PER", message)
         self.assertNotIn("판단 유지", message)
         self.assertNotIn("이전 AI 최종 판단과 같은 관심 유지", message)

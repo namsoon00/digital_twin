@@ -4,7 +4,7 @@ from typing import Dict, Iterable, Tuple
 
 
 DEFAULT_NOTIFICATION_DETAIL_LEVEL = "concise"
-INVESTMENT_NOTIFICATION_PRESENTATION_VERSION = "investment-notification-presentation-v1"
+INVESTMENT_NOTIFICATION_PRESENTATION_VERSION = "investment-notification-presentation-v2"
 NOTIFICATION_DETAIL_LEVELS = {
     "concise": {
         "label": "간결",
@@ -15,14 +15,14 @@ NOTIFICATION_DETAIL_LEVELS = {
     },
     "standard": {
         "label": "표준",
-        "description": "간결 알림에 현재 흐름, 핵심 TypeDB 추론과 가치 정보를 더합니다.",
+        "description": "행동형 요약에 현재 흐름과 확인된 반대 근거를 조금 더 표시합니다.",
         "maxEvidence": 4,
         "maxCounterEvidence": 2,
         "maxNextChecks": 3,
     },
     "full": {
         "label": "전체",
-        "description": "추론, 근거, 자료 상태와 추적 정보를 알림에도 모두 표시합니다.",
+        "description": "알림은 읽기 쉬운 행동형 요약으로 보내고 전체 추론과 추적 정보는 웹 상세에서 봅니다.",
         "maxEvidence": 0,
         "maxCounterEvidence": 0,
         "maxNextChecks": 0,

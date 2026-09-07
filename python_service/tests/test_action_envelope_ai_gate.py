@@ -99,9 +99,11 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual("HOLD", response.execution_action)
         self.assertEqual("HOLD", response.action)
         self.assertEqual(["graph.portfolio.position_limit.v1"], response.portfolio_constraint_rule_ids)
-        self.assertIn("AI 해석", message)
+        self.assertIn("<b>지금 할 일</b>", message)
+        self.assertIn("[시스템 판단]", message)
+        self.assertNotIn("TypeDB", message)
         self.assertNotIn("종목 의견: 소액 진입 검토", message)
-        self.assertIn("관심 유지", message)
+        self.assertIn("관심종목으로 유지", message)
 
     def test_ai_cannot_lower_entry_eligibility_without_counter_evidence(self):
         response = validated_response_from_payload(
@@ -154,7 +156,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         self.assertEqual(["volumeRatio"], [item["field"] for item in response.follow_up_conditions])
         self.assertEqual(["foreignNetVolume"], [item["field"] for item in response.unsupported_follow_ups])
 
-    def test_v2_execution_contract_accepts_only_input_bound_supported_causal_path(self):
+    def test_v2_execution_contract_requires_qualified_hypothesis_even_with_supported_path(self):
         context = entry_context()
         context["notificationAiDecisionContractVersion"] = "notification-ai-decision-contract-v2"
         context["ontologyRelationContext"]["activeRules"] = [{
@@ -184,8 +186,8 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             },
         })
 
-        self.assertEqual("BUY", response.action)
-        self.assertEqual("ready", response.decision_readiness)
+        self.assertEqual("HOLD", response.action)
+        self.assertEqual("conditional", response.decision_readiness)
         self.assertEqual(["evidence:price-volume:NVDA"], response.causal_chain[0]["evidenceIds"])
         self.assertEqual("HOLD", response.alternative_action["action"])
 
@@ -453,21 +455,17 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         self.assertIn("[AI] 지금은 매수하지 않고 관심종목으로 유지합니다.", message)
-        self.assertIn("<b>TypeDB 경쟁 추론</b>", message)
-        self.assertIn("TypeDB 검토 설명 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
-        self.assertIn("<b>핵심 근거</b>", message)
+        self.assertIn("<b>판단 이유</b>", message)
         self.assertIn("<b>반대 근거</b>", message)
         self.assertLess(
-            message.index("<b>핵심 근거</b>"),
+            message.index("<b>판단 이유</b>"),
             message.index("<b>반대 근거</b>"),
         )
-        self.assertIn("TypeDB 검토 설명 진입 후보·추가 확인 · AI 최종 행동 관심 유지", message)
-        self.assertNotIn("TypeDB 검토 설명 관심 유지 · AI 최종 행동 관심 유지", message)
+        self.assertNotIn("TypeDB", message)
         self.assertNotIn("<b>포트폴리오 영향</b>", message)
         self.assertNotIn("현금 비중 0.1%", message)
         self.assertNotIn("전체 외화 비중 60.6%", message)
         self.assertNotIn("기존 종목 집중 초과", message)
-        self.assertIn("포트폴리오 리밸런싱: 이번 종목 시세 판단에서는", message)
         self.assertNotIn(
             "이전 AI 최종 판단과 같은 관심 유지입니다. 이전 AI 최종 판단과 같은 관심 유지입니다.",
             message,
@@ -532,8 +530,14 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             evidence=["가격 회복 관계와 진입 지지 관계가 함께 확인됐습니다."],
             counter_evidence=["거시 부담이 남아 있어 한 번에 크게 진입하지 않습니다."],
             change_analysis="관심 유지에서 소액 진입 검토로 바뀌었고 가격 회복 근거가 새로 확인됐습니다.",
-            invalidation_condition="진입 지지 관계가 사라지거나 직접 반대 뉴스가 확인되면 다시 봅니다.",
-            next_checks=["정규장 거래량이 유지되는지 확인"],
+            invalidation_condition=(
+                "현재가가 20일선 아래로 이탈하거나 중요 악재가 확인되면 "
+                "진입 판단을 취소합니다."
+            ),
+            next_checks=[
+                "정규장 거래량이 20일 평균 1배 이상이고 현재가가 20일선 "
+                "위를 유지하는지 확인합니다."
+            ],
             reference_date="2026-07-27 10:00 KST",
             source="test AI",
             raw_response='{"action":"BUY"}',
@@ -542,19 +546,18 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         message = execution_telegram_message(context, response)
 
         for heading in [
-            "지금 행동", "이번 변화", "현재 흐름", "시간축 분석",
-            "핵심 근거", "반대 근거", "TypeDB 경쟁 추론", "회사 가치",
-            "주요 사건·일정", "다음 행동", "판단 변경 조건",
-            "판단에서 제외한 정보", "뉴스 영향", "판단 이력",
+            "지금 할 일", "무엇이 바뀌었나", "판단 이유", "반대 근거",
+            "관련 사건", "판단이 바뀌는 조건", "현재 수치",
         ]:
             self.assertIn(heading, message)
         self.assertIn("장중 +1.1% · 5일 +2.8% · 20일 -7.4%", message)
         self.assertNotIn("15분 +0.4%", message)
         self.assertNotIn("60일 -12.0%", message)
         self.assertIn("관심 유지", message)
-        self.assertIn("현재 소액 진입 검토", message)
         self.assertNotIn("decision-episode:previous", message)
         self.assertNotIn("<b>추론 추적</b>", message)
+        self.assertNotIn("TypeDB", message)
+        self.assertNotIn("온톨로지", message)
         self.assertNotIn("<b>원문·출처</b>", message)
         self.assertNotIn("<b>출처</b>", message)
         self.assertIn('<a href="https://example.test/nvidia-contract">', message)
@@ -573,8 +576,9 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             local_validated_ai_response(context, source="TypeDB inference fallback"),
         )
 
-        self.assertIn("[TypeDB 추론]", message)
+        self.assertIn("[시스템 판단]", message)
         self.assertNotIn("[AI]", message)
+        self.assertNotIn("TypeDB", message)
 
     def test_compact_message_explains_macro_constraint_with_observed_rates(self):
         context = entry_context()
@@ -618,7 +622,14 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
             action_label="소액 진입 검토",
             data_state_label="판단에 필요한 자료 있음",
             summary="진입을 뒷받침하는 근거가 확인돼 소액 진입을 검토할 수 있습니다.",
-            invalidation_condition="거시 부담 관계가 사라지고 진입 지지 관계가 새로 성립하면 소액 진입 여부를 다시 검토",
+            next_action_plan=(
+                "미국 10년 금리가 4.5% 이하로 내려가고 Apple 가격이 "
+                "5일선·20일선·60일선 위를 유지하면 진입 범위를 다시 검토합니다."
+            ),
+            invalidation_condition=(
+                "미국 10년 금리가 5% 이상으로 오르거나 Apple 가격이 "
+                "20일선 아래로 이탈하면 진입 판단을 취소합니다."
+            ),
             next_checks=[
                 "가격 회복, 거래 확인, 반대 이벤트 해소를 확인 / 금리, 환율, 지수, 크립토와 종목 반응을 함께 확인",
             ],
@@ -629,9 +640,9 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         self.assertIn("미국 10년 금리 4.71%", message)
         self.assertIn("미국 2년 금리 4.37%", message)
-        self.assertIn("금리 부담이 완화되고", message)
-        self.assertIn("Apple 가격이 5일선·20일선·60일선 위를 유지하는지", message)
-        self.assertIn("진입 제한을 완화할 조건", message)
+        self.assertIn("미국 10년 금리가 4.5% 이하", message)
+        self.assertIn("미국 10년 금리가 5% 이상", message)
+        self.assertIn("Apple 가격이 5일선·20일선·60일선 위를 유지하면", message)
         for internal in ["거시 부담 관계", "진입 지지 관계", "원시"]:
             self.assertNotIn(internal, message)
 
@@ -664,10 +675,11 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         )
 
         message = execution_telegram_message(context, response)
-        reason_section = message.split("<b>핵심 근거</b>", 1)[0]
+        reason_section = message.split("<b>판단 이유</b>", 1)[0]
 
         self.assertNotIn("미국 10년 금리", reason_section)
-        self.assertIn("금리·환율: TypeDB 행동 규칙과 직접 연결되지 않아 이번 판단 변경 이유에서 제외했습니다.", message)
+        self.assertNotIn("미국 10년 금리", message)
+        self.assertNotIn("TypeDB", message)
 
     def test_existing_validated_response_rebuilds_stale_presentation_cache(self):
         context = entry_context()
@@ -705,7 +717,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
         })(job)
 
         message = job.context["telegramMessage"]
-        self.assertIn("[관심 유지] 현재 행동은 관심 유지입니다. 매수 판단으로 바뀐 것은 아닙니다.", message)
+        self.assertIn("지금은 매수하지 않고 관심종목으로 유지합니다.", message)
         self.assertNotIn("기존 뉴스·조사 내용을 새 판단 근거처럼 강화", message)
         for internal in ["old rendered message", "entry_observing", "supportingEvidenceIds", "relation-evidence", "changedEvidenceCount", "reasoningRefreshed"]:
             self.assertNotIn(internal, message)
@@ -728,7 +740,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("[AI 안전 보류]", message)
+        self.assertIn("[판단 보류]", message)
         self.assertNotIn("[AI] 관심 유지", message)
 
     def test_compact_message_hides_stale_or_unlinked_news_impact(self):
@@ -756,7 +768,7 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         self.assertNotIn("뉴스 영향", execution_telegram_message(context, response))
 
-    def test_compact_message_includes_independent_ontology_assessments(self):
+    def test_compact_message_keeps_ontology_assessments_in_web_audit(self):
         context = entry_context()
         context["messageDeliveryLevel"] = "beginner"
         context["ontologyRelationContext"]["assessmentBundle"] = {
@@ -774,9 +786,10 @@ class ActionEnvelopeAiGateTests(unittest.TestCase):
 
         message = execution_telegram_message(context, response)
 
-        self.assertIn("온톨로지 판단 영역", message)
-        self.assertIn("TypeDB 검토 설명: 소액 진입 검토", message)
-        self.assertIn("최종 조합: 검토 설명과 실행 조건이 함께 성립", message)
+        self.assertIn("<b>지금 할 일</b>", message)
+        self.assertIn("<b>판단 이유</b>", message)
+        self.assertNotIn("온톨로지 판단 영역", message)
+        self.assertNotIn("TypeDB", message)
 
 
 if __name__ == "__main__":

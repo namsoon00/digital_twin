@@ -232,8 +232,11 @@ class V2GraphDecisionCandidateBuilder:
                 "행동 대안: " + ", ".join(
                     alternative.action
                     for alternative in synthesis.alternatives
-                    if alternative.decision_eligible
-                ),
+                    if alternative.execution_eligible
+                ) if any(
+                    alternative.execution_eligible
+                    for alternative in synthesis.alternatives
+                ) else "실행 가능한 행동 대안: 없음 · 검증 이력 축적 필요",
             ]
         current_price = _float_text(facts.get("currentPrice"))
         if current_price:

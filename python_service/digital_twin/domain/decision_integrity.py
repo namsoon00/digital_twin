@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Mapping
 
+from .investment_decision_actionability import persisted_decision_authorization
+
 
 DECISION_INTEGRITY_VERSION = "decision-integrity-v1"
 
@@ -96,6 +98,16 @@ def validate_decision_episode_integrity(episode: Mapping[str, object]) -> Dict[s
         add("source-snapshot-missing", "원천 스냅샷 없음", "blocked", "판단 시점의 원천 사실을 재현할 수 없습니다.")
     if not _text(episode.get("inferenceGenerationId") or episode.get("inference_generation_id")):
         add("inference-generation-missing", "추론 세대 없음", "blocked", "TypeDB 추론 결과와 판단을 연결할 수 없습니다.")
+
+    decision_authorization = persisted_decision_authorization(episode)
+    if decision_authorization.get("authorized") is False:
+        add(
+            "decision-actionability-invalid",
+            "실행 판단 자격 없음",
+            "blocked",
+            _text(decision_authorization.get("detail"))
+            or "저장된 실행 의견을 현재 투자 행동에 사용할 수 없습니다.",
+        )
 
     snapshot_state = _text(reasoning.get("snapshotState"))
     if not reasoning:

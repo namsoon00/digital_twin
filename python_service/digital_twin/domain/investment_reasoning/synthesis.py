@@ -132,7 +132,9 @@ def decision_synthesis_from_relation_context(
                 actions_by_rule[rule_id].append(candidate_action)
     hypothesis_paths = []
     eligible_ids = []
+    execution_eligible_ids = []
     reference_ids = []
+    qualification_reasons = []
     for hypothesis in hypotheses:
         hypothesis_id = str(hypothesis.get("hypothesisId") or hypothesis.get("hypothesis_id") or "").strip()
         supporting_rule_ids = _texts(
@@ -152,8 +154,18 @@ def decision_synthesis_from_relation_context(
             actions.append("UNSPECIFIED")
         assessment = hypothesis_decision_eligibility(hypothesis)
         for action in actions:
-            hypothesis_paths.append((action, hypothesis, bool(assessment.get("eligible"))))
+            hypothesis_paths.append((
+                action,
+                hypothesis,
+                bool(assessment.get("eligible")),
+                bool(assessment.get("executionEligible")),
+            ))
+        for warning in assessment.get("qualificationWarnings") or []:
+            if warning not in qualification_reasons:
+                qualification_reasons.append(str(warning))
         (eligible_ids if assessment.get("eligible") else reference_ids).append(hypothesis_id)
+        if assessment.get("executionEligible"):
+            execution_eligible_ids.append(hypothesis_id)
 
     selected_path_eligible = any(
         eligible
@@ -166,13 +178,31 @@ def decision_synthesis_from_relation_context(
                 or []
             )
         }
-        for _action, hypothesis, eligible in hypothesis_paths
+        for _action, hypothesis, eligible, _execution_eligible in hypothesis_paths
     )
     eligible_comparison_paths = {
         action
-        for action, _hypothesis, eligible in hypothesis_paths
+        for action, _hypothesis, eligible, _execution_eligible in hypothesis_paths
         if eligible and action not in {"", "UNSPECIFIED", "NO_ACTION"}
     }
+    selected_path_execution_eligible = any(
+        execution_eligible
+        and selected_rule_id
+        and selected_rule_id in {
+            str(value or "").strip()
+            for value in (
+                hypothesis.get("supportingRuleIds")
+                or hypothesis.get("supporting_rule_ids")
+                or []
+            )
+        }
+        for _action, hypothesis, _eligible, execution_eligible in hypothesis_paths
+    )
+    if not selected_rule_id and comparison_required:
+        selected_path_execution_eligible = any(
+            execution_eligible
+            for _action, _hypothesis, _eligible, execution_eligible in hypothesis_paths
+        )
     if (
         action_authority == "originate"
         and not selected_path_eligible
@@ -183,7 +213,7 @@ def decision_synthesis_from_relation_context(
         execution_action = "NO_ACTION"
 
     alternatives = []
-    for action, hypothesis, eligible in sorted(
+    for action, hypothesis, eligible, execution_eligible in sorted(
         hypothesis_paths,
         key=lambda item: (str(item[0]), str(item[1].get("hypothesisId") or item[1].get("hypothesis_id") or "")),
     ):
@@ -206,6 +236,7 @@ def decision_synthesis_from_relation_context(
             evidence_conflict_ids=evidence_conflicts,
             invalidation_conditions=_texts(hypothesis.get("invalidationConditions") or hypothesis.get("invalidation_conditions")),
             decision_eligible=eligible and not evidence_conflicts,
+            execution_eligible=execution_eligible and not evidence_conflicts,
         ))
 
     symbol = str(subject.get("symbol") or relation.get("symbol") or "").upper().strip()
@@ -252,6 +283,19 @@ def decision_synthesis_from_relation_context(
         or selected_action_conflict
         or bool(investment_view_action and not selected_path_eligible)
     )
+    execution_qualified = bool(
+        selected_path_execution_eligible
+        or graph_candidate_action not in {"BUY", "ADD", "TRIM", "SELL"}
+    )
+    if not execution_qualified and execution_action in {"BUY", "ADD", "TRIM", "SELL"}:
+        execution_action = "NO_ACTION"
+    qualification_state = (
+        "active"
+        if selected_path_execution_eligible
+        else "conditional"
+        if eligible_ids
+        else "reference-only"
+    )
     return DecisionSynthesis(
         synthesis_id=_stable_id(
             account_id,
@@ -268,7 +312,9 @@ def decision_synthesis_from_relation_context(
         investment_view_action=investment_view_action,
         execution_action=execution_action,
         execution_disposition=str(
-            envelope.get("executionDisposition")
+            "hypothesis-qualification-required"
+            if not execution_qualified
+            else envelope.get("executionDisposition")
             or recommended_plan.get("status")
             or "judgement-blocked"
         ),
@@ -279,6 +325,7 @@ def decision_synthesis_from_relation_context(
         blocked_actions=() if context_observation else blocked_actions,
         alternatives=tuple(alternatives),
         eligible_hypothesis_ids=_texts(eligible_ids),
+        execution_eligible_hypothesis_ids=_texts(execution_eligible_ids),
         reference_hypothesis_ids=_texts(reference_ids),
         selected_rule_id=selected_rule_id,
         portfolio_constraint_rule_ids=_texts(
@@ -305,6 +352,9 @@ def decision_synthesis_from_relation_context(
         reversal_conditions=_texts(
             decision.get("weakenConditions") or envelope.get("invalidationConditions")
         ),
+        execution_qualified=execution_qualified,
+        hypothesis_qualification_state=qualification_state,
+        hypothesis_qualification_reasons=_texts(qualification_reasons),
         judgement_blocked=judgement_blocked,
         graph_trace_complete=graph_trace_complete,
         evidence_state="INVALID" if quality_blocked else ("VERIFIED" if graph_trace_complete else "PARTIAL"),

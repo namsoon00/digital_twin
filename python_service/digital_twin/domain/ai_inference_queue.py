@@ -74,6 +74,12 @@ def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[st
         or _mapping(subject.get("candidateSet")).get("eligibleHypothesisIds")
         or []
     )
+    execution_hypothesis_ids = _texts(
+        synthesis.get("execution_eligible_hypothesis_ids")
+        or synthesis.get("executionEligibleHypothesisIds")
+        or _mapping(subject.get("candidateSet")).get("executionEligibleHypothesisIds")
+        or []
+    )
     allowed_actions = [
         value.upper() for value in _texts(
             synthesis.get("allowed_actions")
@@ -127,6 +133,8 @@ def notification_ai_action_eligibility(context: Mapping[str, object]) -> Dict[st
         "comparisonRequired": comparison_required,
         "allowedActions": allowed_actions,
         "eligibleHypothesisIds": hypothesis_ids,
+        "executionEligibleHypothesisIds": execution_hypothesis_ids,
+        "executionQualified": bool(execution_hypothesis_ids),
     }
 
 

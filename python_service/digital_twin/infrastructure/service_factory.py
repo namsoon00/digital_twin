@@ -38,6 +38,7 @@ from ..application.investment_reasoning import (
 )
 from ..application.shared_instrument_inference_service import SharedInstrumentInferenceService
 from ..application.investment_brain_service import InvestmentBrainService
+from ..application.investment_outcome_observation_service import InvestmentOutcomeObservationService
 from ..application.investment_domain_service import InvestmentDomainService
 from ..application.investment_research_orchestration_service import InvestmentResearchOrchestrationService, InvestmentResearchQueueRunner
 from ..application.hypothesis_proposal_service import (
@@ -748,6 +749,16 @@ def build_monitor_runner(
                 InvestmentDomainService(investment_domain_store, publisher),
                 market_time_series_store,
                 configured_settings,
+            )
+        ),
+        investment_outcome_observer=(
+            None
+            if source_snapshot_replay
+            else InvestmentOutcomeObservationService(
+                decision_episode_store=stores.investment_decision_episode_store(configured_settings),
+                market_time_series_store=market_time_series_store,
+                settings=configured_settings,
+                investment_domain_store=investment_domain_store,
             )
         ),
     )

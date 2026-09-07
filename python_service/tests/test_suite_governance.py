@@ -67,7 +67,13 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Explicit ABox change/patch contracts now fail closed before TypeDB
         # writes, while DecisionDelta keeps investment meaning independent from
         # delivery policy and verifies compatibility against persisted cases.
-        self.assertLessEqual(total, 935)
+        # The staged investment actionability contract separately proves
+        # evidence, hypothesis qualification, causal lineage, action-plan
+        # consistency, and observable follow-up before publication.
+        # Durable outcome scheduling, source-time admission, monitor-owned
+        # observation, and compact long-history calibration independently
+        # protect the feedback path that qualifies those hypotheses.
+        self.assertLessEqual(total, 951)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

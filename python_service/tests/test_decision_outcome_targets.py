@@ -9,8 +9,12 @@ from digital_twin.domain.hypothesis_outcome_contract import (
 from digital_twin.application.investment_reasoning.episode_projection import (
     decision_episode_outcome_contract_readiness,
 )
+from digital_twin.domain.hypothesis_outcome_evaluation import (
+    evaluate_hypothesis_outcome,
+)
 from digital_twin.infrastructure.mysql_investment_decision_episodes import (
     MySQLInvestmentDecisionEpisodeStore,
+    outcome_target_at,
 )
 from digital_twin.infrastructure.mysql_schema_tuning import (
     MYSQL_OPERATIONAL_COLUMN_WIDTHS,
@@ -31,6 +35,16 @@ class EmptyMigrationConnection(RecordingConnection):
     def execute(self, sql, params=()):
         self.statements.append((" ".join(sql.split()), tuple(params)))
         return SimpleNamespace(rowcount=0, fetchall=lambda: [])
+
+
+class QueryRowsConnection(RecordingConnection):
+    def __init__(self, rows):
+        super().__init__()
+        self.rows = list(rows or [])
+
+    def execute(self, sql, params=()):
+        self.statements.append((" ".join(sql.split()), tuple(params)))
+        return SimpleNamespace(fetchall=lambda: list(self.rows))
 
 
 def predictive_contract():
@@ -59,6 +73,7 @@ def predictive_contract():
             "horizonMinutes": 60,
             "required": True,
             "requiredObservationDomains": ["quote"],
+            "sourcePolicy": ["point-in-time-market-observation"],
         }],
     }
     payload["contractFingerprint"] = outcome_contract_fingerprint(payload)
@@ -197,6 +212,65 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         store.pending_outcome_targets("account:1")
         store.pending_outcome_targets("account:1")
         self.assertEqual(["account:1"], backfill_calls)
+
+    def test_market_symbol_without_metadata_aligns_outcome_to_next_session(self):
+        value = episode(predictive_contract())
+        value.symbol = "035420"
+        value.decided_at = "2026-09-07T15:01:00Z"
+        value.facts_at_decision.pop("market", None)
+        value.facts_at_decision.pop("currency", None)
+
+        target = outcome_target_at(value, 60)
+
+        self.assertEqual("2026-09-08T00:00:00Z", target)
+
+    def test_historical_quote_satisfies_point_in_time_source_policy(self):
+        result = evaluate_hypothesis_outcome(
+            predictive_contract(),
+            "support",
+            {
+                "currentPrice": 101.0,
+                "observationBasis": "historical-market-time-series",
+                "sourceAsOf": "2026-08-25T01:00:05Z",
+            },
+            1.0,
+            60,
+        )
+
+        self.assertEqual("directionally-corroborated", result["selectedHypothesisStatus"])
+        self.assertEqual([], result["missingRequiredMetricIds"])
+
+    def test_performance_loader_keeps_observed_episodes_outside_recent_window(self):
+        store = self.store()
+        connection = QueryRowsConnection([{
+            "episode_id": "episode:historical",
+            "account_id": "account:1",
+            "symbol": "NVDA",
+            "action": "HOLD",
+            "selected_hypothesis_id": "hypothesis:trend:1",
+            "observed_at": "2026-08-25T01:00:00Z",
+            "outcome_json": '{"outcomeId":"outcome:1","observedAt":"2026-08-25T01:00:00Z","payload":{}}',
+        }])
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        store.connect = connect
+
+        rows = store.performance_episodes(
+            "account:1",
+            limit=1,
+            as_of="2026-08-25T01:30:00Z",
+        )
+
+        self.assertEqual(["episode:historical"], [item["episodeId"] for item in rows])
+        self.assertIn("SELECT episode_id, MAX(observed_at)", connection.statements[0][0])
+        self.assertEqual(2, connection.statements[0][0].count("observed_at <= %s"))
+        self.assertEqual(
+            ("account:1", "2026-08-25T01:30:00Z", 1, "2026-08-25T01:30:00Z"),
+            connection.statements[0][1],
+        )
 
 
 if __name__ == "__main__":

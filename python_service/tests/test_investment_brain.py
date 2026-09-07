@@ -1190,12 +1190,12 @@ class InvestmentBrainTest(unittest.TestCase):
             "hypothesisSet": brain["hypothesisSet"],
             "action": "HOLD",
             "confidence": 70,
-            "decidedAt": "2026-07-19T00:00:00Z",
+            "decidedAt": "2026-07-20T00:00:00Z",
         })
-        self.assertEqual(60, due_outcome_horizon_minutes(episode, "2026-07-19T01:05:00Z", "60,1440"))
+        self.assertEqual(60, due_outcome_horizon_minutes(episode, "2026-07-20T01:05:00Z", "60,1440"))
         episode.outcomes.append(type("Outcome", (), {"payload": {"horizonMinutes": 60}})())
-        self.assertEqual(0, due_outcome_horizon_minutes(episode, "2026-07-19T02:00:00Z", "60,1440"))
-        self.assertEqual(1440, due_outcome_horizon_minutes(episode, "2026-07-20T01:00:00Z", "60,1440"))
+        self.assertEqual(0, due_outcome_horizon_minutes(episode, "2026-07-20T02:00:00Z", "60,1440"))
+        self.assertEqual(1440, due_outcome_horizon_minutes(episode, "2026-07-21T01:00:00Z", "60,1440"))
 
     def test_stock_outcome_target_rolls_weekend_but_crypto_keeps_elapsed_time(self):
         brain = hypothesis_set_from_relation_context(relation_context())
@@ -1279,6 +1279,59 @@ class InvestmentBrainTest(unittest.TestCase):
             if item.entity_id == entity_id("hypothesis-template", template_id)
         ]))
         self.assertIn("CALIBRATED_BY_OUTCOME", {item.relation_type for item in graph.relations})
+
+    def test_historical_outcomes_calibrate_without_replaying_old_decisions(self):
+        brain = hypothesis_set_from_relation_context(relation_context())
+        hypothesis_set = brain["hypothesisSet"]
+        selected = hypothesis_set["hypotheses"][0]
+        recent = {
+            "episodeId": "episode-current",
+            "symbol": "005930",
+            "subjectName": "삼성전자",
+            "selectedHypothesisId": selected["hypothesisId"],
+            "hypothesisSet": hypothesis_set,
+            "outcomes": [],
+        }
+        history = []
+        for index in range(3):
+            history.append({
+                "episodeId": "episode-history-" + str(index),
+                "symbol": "005930",
+                "subjectName": "삼성전자",
+                "action": "HOLD",
+                "selectedHypothesisId": selected["hypothesisId"],
+                "factsAtDecision": {"hypothesisOutcomeContract": governed_outcome_contract(
+                    selected["hypothesisId"],
+                    (selected.get("supportingRuleIds") or ["rule:test"])[0],
+                    60,
+                )},
+                "hypothesisSet": hypothesis_set,
+                "outcomes": [{
+                    "outcomeId": "outcome-history-" + str(index),
+                    "observedAt": "2026-08-0" + str(index + 1) + "T01:00:00Z",
+                    "selectedHypothesisStatus": "directionally-corroborated",
+                    "priceChangeFromDecisionPct": 1.0 + index,
+                    "payload": {
+                        "calibrationEligibility": "eligible",
+                        "accountIndependenceKey": "market-history-" + str(index),
+                        "horizonMinutes": 60,
+                    },
+                }],
+            })
+
+        graph = PortfolioOntology("account-1")
+        add_investment_brain_concepts(
+            graph,
+            "account-1",
+            [recent],
+            decision_outcome_history=history,
+        )
+
+        decision_episodes = [item for item in graph.entities if item.kind == "decision-episode"]
+        calibration = next(item for item in graph.entities if item.kind == "hypothesis-calibration")
+        self.assertEqual(["decision-episode:episode-current"], [item.entity_id for item in decision_episodes])
+        self.assertEqual(3, calibration.properties["independentEpisodeCount"])
+        self.assertEqual("usable", calibration.properties["calibrationStatus"])
 
 
 if __name__ == "__main__":

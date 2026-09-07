@@ -11,6 +11,9 @@ from digital_twin.application.ai_inference_queue_service import NotificationAIRe
 from digital_twin.application.notification_ai_gate_message import decision_continuity_rows
 from digital_twin.application.notification_decision_memory import context_with_previous_investment_decision
 from digital_twin.domain.decision_continuity import build_decision_continuity_packet
+from digital_twin.domain.investment_decision_actionability import (
+    investment_decision_actionability,
+)
 from digital_twin.domain.decision_follow_up import (
     evaluate_follow_up_conditions,
     normalize_follow_up_conditions,
@@ -78,7 +81,7 @@ class DomainStore:
 
 
 def prior_episode():
-    return {
+    row = {
         "episodeId": "decision:previous",
         "accountId": "main",
         "portfolioId": "portfolio:main",
@@ -89,8 +92,18 @@ def prior_episode():
         "dataState": "sufficient",
         "validationState": "ready",
         "decisionReadiness": "ready",
+        "decisionAssurance": {"executionEligibility": "eligible"},
         "selectedHypothesisId": "hypothesis:recovery",
+        "evidenceIds": ["evidence:price", "evidence:flow"],
         "decisionSummary": "가격과 수급 회복을 확인했습니다.",
+        "currentActionPlan": "허용 범위 안에서 추가매수를 분할로 검토합니다.",
+        "changeAnalysis": "가격 회복과 외국인 순매수가 함께 확인됐습니다.",
+        "nextActionPlan": "다음 정규장에서 거래량과 외국인 수급을 다시 확인합니다.",
+        "invalidationCondition": "현재가가 20일선 아래로 내려가면 추가매수 판단을 취소합니다.",
+        "causalChain": [{
+            "status": "supported",
+            "evidenceIds": ["evidence:price", "evidence:flow"],
+        }],
         "decidedAt": "2026-08-16T00:00:00Z",
         "status": "active",
         "source": "notification-ai",
@@ -99,7 +112,28 @@ def prior_episode():
             "templateId": "template:recovery",
             "claim": "회복이 이어질 수 있다.",
             "stance": "support",
-            "verificationStatus": "verified-by-current-evidence",
+            "candidateAction": "ADD",
+            "evidenceState": "supported",
+            "supportingRuleIds": ["graph.recovery.v1"],
+            "supportingEvidenceIds": ["evidence:price", "evidence:flow"],
+            "causalPathIds": ["trace:recovery"],
+            "invalidationConditions": ["20일선 아래로 하락"],
+            "verificationStatus": "verified-current-generation",
+            "approvalStatus": "approved-active",
+            "status": "active",
+            "scopeState": "market-shared",
+            "marketHypothesisId": "market-hypothesis:recovery",
+            "inferenceGenerationId": "generation:1",
+            "knowledgeBasis": {
+                "requiresHypothesis": True,
+                "decisionEligibility": "investment-evidence",
+            },
+            "claimContract": {
+                "claimContractId": "claim:recovery",
+                "claimType": "market-hypothesis",
+                "ruleId": "graph.recovery.v1",
+            },
+            "qualification": {"status": "active"},
         }]},
         "followUpConditions": [{
             "conditionId": "follow-up:1",
@@ -125,6 +159,8 @@ def prior_episode():
             "selectedHypothesisStatus": "supported",
         }],
     }
+    row["decisionActionability"] = investment_decision_actionability(row, row)
+    return row
 
 
 class DecisionContinuityTests(unittest.TestCase):

@@ -7,6 +7,9 @@ from digital_twin.domain.investment_case import (
     parse_investment_case_id,
 )
 from digital_twin.domain.investment_analysis import investment_decision_key
+from digital_twin.domain.investment_decision_actionability import (
+    investment_decision_actionability,
+)
 
 
 def episode(
@@ -50,6 +53,51 @@ def episode(
         },
         "outcomes": list(outcomes or []),
     }
+
+
+def authorized_executable_episode(action="BUY", symbol="AAPL"):
+    row = episode("decision-episode:authorized", action=action, symbol=symbol)
+    candidate = row["hypothesisSet"]["hypotheses"][0]
+    candidate.update({
+        "templateId": "hypothesis-template:verified-demand",
+        "familyId": "verified-demand",
+        "candidateAction": action,
+        "evidenceState": "supported",
+        "verificationStatus": "verified-current-generation",
+        "approvalStatus": "approved-active",
+        "status": "active",
+        "scopeState": "market-shared",
+        "marketHypothesisId": "market-hypothesis:verified-demand",
+        "inferenceGenerationId": "generation:1",
+        "knowledgeBasis": {
+            "requiresHypothesis": True,
+            "decisionEligibility": "investment-evidence",
+        },
+        "claimContract": {
+            "claimContractId": "claim:verified-demand",
+            "claimType": "market-hypothesis",
+            "ruleId": "rule:ai-demand",
+        },
+        "qualification": {"status": "active"},
+    })
+    row.update({
+        "decisionReadiness": "ready",
+        "decisionAssurance": {"executionEligibility": "eligible"},
+        "currentActionPlan": (
+            "소액 분할매수만 검토하고 한 번에 큰 주문은 하지 않습니다."
+            if action == "BUY" else
+            "보유 수량의 일부를 분할매도하고 추가매수는 하지 않습니다."
+        ),
+        "changeAnalysis": "가격과 확인된 수급이 직전 판단보다 개선됐습니다.",
+        "nextActionPlan": "다음 정규장에서 거래량과 외국인 수급을 다시 확인합니다.",
+        "invalidationCondition": "현재가가 20일선 아래로 내려가면 현재 판단을 취소합니다.",
+        "causalChain": [{
+            "status": "supported",
+            "evidenceIds": ["evidence:1"],
+        }],
+    })
+    row["decisionActionability"] = investment_decision_actionability(row, row)
+    return row
 
 
 class FakeDecisionStore:
@@ -341,7 +389,7 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         )
 
     def test_action_attention_does_not_count_blocked_judgement_as_user_action(self):
-        actionable = episode("decision-episode:buy", action="BUY", symbol="AAPL")
+        actionable = authorized_executable_episode(action="BUY", symbol="AAPL")
         blocked = episode("decision-episode:blocked", action="SELL", symbol="TSLA")
         blocked["decisionAbstention"] = {"abstained": True, "reason": "가설 비교가 끝나지 않았습니다."}
 
@@ -353,6 +401,20 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertFalse(by_symbol["TSLA"]["attention"]["userActionable"])
         self.assertEqual("blocked", by_symbol["TSLA"]["attention"]["state"])
         self.assertEqual(1, result["summary"]["actionRequired"])
+
+    def test_legacy_executable_opinion_is_shown_as_blocked_not_current_action(self):
+        row = episode("decision-episode:legacy-buy", action="BUY", symbol="AAPL")
+        row["source"] = "notification-ai-hypothesis-competition"
+
+        result = investment_case_snapshot(row)
+
+        self.assertEqual("NO_ACTION", result.decision["action"])
+        self.assertEqual("BUY", result.decision["recordedAction"])
+        self.assertFalse(result.decision["authorization"]["authorized"])
+        self.assertEqual("blocked", result.readiness_state)
+        self.assertEqual("decision", result.phase)
+        self.assertFalse(result.attention["userActionable"])
+        self.assertIn("현재 실행 판단으로 사용할 수 없습니다", result.headline)
 
     def test_ai_only_episode_does_not_report_false_typedb_agreement(self):
         row = episode()

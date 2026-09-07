@@ -19,9 +19,13 @@ def add_investment_brain_concepts(
     decision_performance: Dict[str, object] = None,
     hypothesis_lifecycles: Iterable[Dict[str, object]] = None,
     hypothesis_outcome_minimum_samples: int = 3,
+    decision_outcome_history: Iterable[Dict[str, object]] = None,
 ) -> None:
     portfolio_node_id = entity_id("portfolio", portfolio_id)
     episode_rows = [item for item in decision_episodes or [] if isinstance(item, dict)]
+    outcome_history_rows = [
+        item for item in decision_outcome_history or [] if isinstance(item, dict)
+    ]
     for episode in episode_rows:
         if not isinstance(episode, dict):
             continue
@@ -661,11 +665,12 @@ def add_investment_brain_concepts(
                 },
             )
             add_relation(graph, review_id, episode_id, "REVIEWS_DECISION", weight=1.0, properties={"source": "investment-decision-review"})
-    add_hypothesis_calibration_concepts(graph, portfolio_id, episode_rows)
+    calibration_rows = outcome_history_rows or episode_rows
+    add_hypothesis_calibration_concepts(graph, portfolio_id, calibration_rows)
     add_hypothesis_outcome_assessment_concepts(
         graph,
         portfolio_id,
-        episode_rows,
+        calibration_rows,
         hypothesis_outcome_minimum_samples,
     )
     add_decision_performance_concepts(graph, portfolio_id, decision_performance or {})

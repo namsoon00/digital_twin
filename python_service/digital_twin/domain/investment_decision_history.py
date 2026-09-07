@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
+from .investment_decision_actionability import persisted_decision_authorization
+
 
 INVESTMENT_ACTIONS = {"BUY", "ADD", "HOLD", "TRIM", "SELL", "AVOID"}
+EXECUTABLE_INVESTMENT_ACTIONS = {"BUY", "ADD", "TRIM", "SELL"}
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -34,6 +37,19 @@ def compact_decision_episode_memory(value: object) -> Dict[str, object]:
     action = _text(_value(payload, "action")).upper()
     if action not in INVESTMENT_ACTIONS:
         return {}
+    actionability = _mapping(
+        payload.get("decisionActionability") or payload.get("decision_actionability")
+    )
+    assurance = _mapping(
+        payload.get("decisionAssurance") or payload.get("decision_assurance")
+    )
+    source = _text(_value(payload, "source")).lower()
+    if action in EXECUTABLE_INVESTMENT_ACTIONS:
+        authorization = persisted_decision_authorization(payload)
+        # Persisted production decisions must carry the fail-closed marker.
+        # Source-less payloads remain accepted for legacy callers and tests.
+        if source and not bool(authorization.get("authorized")):
+            return {}
     return {
         "episodeId": _text(_value(payload, "episodeId", "episode_id")),
         "accountId": _text(_value(payload, "accountId", "account_id")),
@@ -44,6 +60,8 @@ def compact_decision_episode_memory(value: object) -> Dict[str, object]:
         "dataState": _text(_value(payload, "dataState", "data_state")),
         "validationState": _text(_value(payload, "validationState", "validation_state")),
         "decisionReadiness": _text(_value(payload, "decisionReadiness", "decision_readiness")),
+        "decisionActionabilityStatus": _text(actionability.get("status")),
+        "executionEligibility": _text(assurance.get("executionEligibility")),
         "inferenceGenerationId": _text(_value(payload, "inferenceGenerationId", "inference_generation_id")),
         "selectedHypothesisId": _text(_value(payload, "selectedHypothesisId", "selected_hypothesis_id")),
         "decisionSummary": _text(_value(payload, "decisionSummary", "decision_summary")),

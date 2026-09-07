@@ -79,6 +79,8 @@ def investment_notification_state(context: Dict[str, object]) -> Dict[str, objec
     ai_transition = ai_transition if isinstance(ai_transition, dict) else {}
     response = _context_value(context, "notificationAiValidatedResponse")
     response = response if isinstance(response, dict) else {}
+    actionability = _context_value(context, "investmentDecisionActionability")
+    actionability = actionability if isinstance(actionability, dict) else {}
     facts = relation.get("facts") if isinstance(relation.get("facts"), dict) else {}
     readiness = envelope.get("dataReadiness") if isinstance(envelope.get("dataReadiness"), dict) else {}
     action = _normalized(
@@ -128,6 +130,7 @@ def investment_notification_state(context: Dict[str, object]) -> Dict[str, objec
         or _normalized(response.get("validationState")) == "BLOCKED"
         or _normalized(readiness.get("state")) == "BLOCKED"
         or readiness.get("usable") is False
+        or str(actionability.get("status") or "").strip().lower() == "review-only"
     )
     return {
         "action": action,

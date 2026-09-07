@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Mapping, Set
 
 
-DECISION_EVIDENCE_CONTRACT_VERSION = "decision-evidence-contract-v2"
+DECISION_EVIDENCE_CONTRACT_VERSION = "decision-evidence-contract-v3"
 TEMPORAL_EVIDENCE_CONTRACT_VERSION = "temporal-evidence-contract-v1"
 DECISION_READINESS_CONTRACT_VERSION = "decision-readiness-contract-v1"
 MATERIAL_TRANSITION_CONTRACT_VERSION = "material-decision-transition-v1"
@@ -29,6 +29,9 @@ DECISION_ELIGIBLE_VERIFICATION_STATES = {
 }
 DECISION_ELIGIBLE_HYPOTHESIS_STATES = {"active", "candidate"}
 DECISION_ELIGIBLE_SCOPE_STATES = {"market-shared", "account-only", "mixed"}
+EXECUTION_QUALIFIED_HYPOTHESIS_STATES = {"active"}
+CONDITIONAL_HYPOTHESIS_STATES = {"limited-active"}
+RESEARCH_ONLY_HYPOTHESIS_STATES = {"shadow", "observed", "not-recorded"}
 READINESS_RANK = {"insufficient": 0, "conditional": 1, "ready": 2}
 
 TEMPORAL_HORIZON_GROUPS = (
@@ -123,6 +126,8 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         reasons.append("hypothesis-qualification:quarantined")
     elif qualification_status in {"shadow", "observed", "limited-active"}:
         qualification_warnings.append("hypothesis-qualification:" + qualification_status)
+    elif claim_type == "market-hypothesis" and not qualification_status:
+        qualification_warnings.append("hypothesis-qualification:not-recorded")
     if knowledge_validation in {
         "replay-required", "candidate-replay-required", "authored-review-required",
     }:
@@ -185,6 +190,17 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
     ):
         reasons.append("scope-lineage:missing-account-overlay")
     eligible = not reasons
+    outcome_qualification_status = qualification_status or "not-recorded"
+    if not eligible:
+        decision_use = "reference-only"
+    elif claim_type != "market-hypothesis":
+        decision_use = "guardrail-only"
+    elif outcome_qualification_status in EXECUTION_QUALIFIED_HYPOTHESIS_STATES:
+        decision_use = "execution"
+    elif outcome_qualification_status in CONDITIONAL_HYPOTHESIS_STATES:
+        decision_use = "conditional"
+    else:
+        decision_use = "research-only"
     return {
         "version": DECISION_EVIDENCE_CONTRACT_VERSION,
         "status": "eligible" if eligible else "reference-only",
@@ -193,7 +209,9 @@ def hypothesis_decision_eligibility(candidate: Mapping[str, object]) -> Dict[str
         "reasons": reasons,
         "qualificationState": "conditional" if qualification_warnings else "qualified",
         "qualificationWarnings": qualification_warnings,
-        "outcomeQualificationStatus": qualification_status or "not-recorded",
+        "outcomeQualificationStatus": outcome_qualification_status,
+        "decisionUse": decision_use,
+        "executionEligible": decision_use == "execution",
     }
 
 

@@ -648,12 +648,23 @@ class FinalAIDeliveryTests(unittest.TestCase):
         canonical["notificationAiValidatedResponse"].update({
             "currentActionPlan": "현재 보유를 유지합니다.",
             "changeAnalysis": "최종 행동이 이전 판단과 달라졌습니다.",
-            "nextChecks": ["다음 가격·수급 갱신에서 조건 유지 여부를 확인합니다."],
+            "nextChecks": [
+                "다음 가격·수급 갱신에서도 관계가 유지되는지 확인합니다."
+            ],
+        })
+        vague = final_ai_delivery_decision(canonical)
+        canonical["notificationAiValidatedResponse"].update({
+            "nextChecks": [
+                "현재가가 20일선 아래로 이탈하거나 외국인이 순매도로 "
+                "전환되는지 확인합니다."
+            ],
         })
         complete = final_ai_delivery_decision(canonical)
 
         self.assertEqual("suppress", incomplete["decision"])
         self.assertEqual("incomplete_customer_action_contract", incomplete["suppressionReason"])
+        self.assertEqual("suppress", vague["decision"])
+        self.assertEqual("incomplete_customer_action_contract", vague["suppressionReason"])
         self.assertEqual("send", complete["decision"])
         self.assert_explicit_profit_loss_authorization_survives_unchanged_ai_action()
 

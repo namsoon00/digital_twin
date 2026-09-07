@@ -8,16 +8,18 @@ import json
 from typing import Dict, List
 
 
-AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v13"
-AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v12"
+AI_DECISION_PROMPT_VERSION = "investment-ai-judge-v14"
+AI_DECISION_CONTRACT_VERSION = "notification-ai-decision-contract-v13"
 AI_DECISION_PROMPT_RELEASE_SCHEMA_VERSION = "notification-ai-prompt-release-v1"
 
 
 AI_DECISION_RESPONSE_SCHEMA = {
     "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
     "summary": "현재 대응과 가장 중요한 이유를 쉬운 한국어 두 문장 이내로 설명",
+    "currentActionPlan": "지금 할 일, 하지 말아야 할 일, 적용 범위를 한 문장으로 설명",
     "executionDecision": "현재 사용자가 할 일과 아직 하지 말아야 할 일을 한 문장으로 설명",
     "changeAnalysis": "직전 판단 이후 실제로 달라진 사실 한 문장; 변화가 없으면 변화 없음이라고 명시",
+    "nextActionPlan": "다음에 확인할 수치·사건·시점과 판단 결과를 한 문장으로 설명",
     "evidence": ["핵심 근거 최대 3개"],
     "counterEvidence": ["반대 근거 최대 2개"],
     "narrativeClaims": [{
@@ -49,6 +51,19 @@ AI_DECISION_RESPONSE_SCHEMA = {
     "selectedHypothesisId": "입력 가설 ID 하나, 입력 가설이 없으면 빈 문자열",
     "unresolvedQuestions": ["판단을 실제로 바꿀 수 있는 미해결 질문 최대 2개"],
     "decisionReadiness": "ready|conditional|insufficient",
+    "causalChain": [{
+        "driver": "확인된 변화",
+        "channel": "revenue|cost|cash-flow|valuation|flow|risk",
+        "expectedEffect": "투자 판단에 미치는 경로",
+        "evidenceIds": ["DecisionCore의 근거 ID"],
+        "status": "supported|contested|unresolved",
+    }],
+    "alternativeAction": {
+        "action": "BUY|ADD|HOLD|TRIM|SELL|AVOID",
+        "whyNotSelected": "현재 선택하지 않은 이유",
+        "switchCondition": "이 행동으로 바뀌는 관찰 조건",
+    },
+    "epistemicSummary": "확인된 사실, 모르는 점, 남은 반증을 구분한 짧은 설명",
     "disagreementReason": "TypeDB 후보와 다를 때 검증 가능한 이유",
     "referenceDate": "입력 기준일",
 }
@@ -70,7 +85,9 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "자료 부족은 limitation으로만 쓰고 counter 근거로 쓰지 않는다. 행동 결론 자체를 support 근거로 반복하지 않는다.",
     "확인된 반대 사실이 없으면 counter 문장을 만들지 않는다. 확인되지 않은 내용을 채우기 위해 일반론을 만들지 않는다.",
     "system readiness가 conditional 또는 insufficient이면 실행 행동을 만들지 않는다.",
+    "가설 qualification의 decisionUse가 execution이 아니면 그 가설은 비교·학습에만 사용하고 BUY, ADD, TRIM, SELL의 근거로 사용하지 않는다.",
     "causalChain이 검증된 근거 ID로 이어지지 않으면 BUY, ADD, TRIM, SELL을 선택하지 않는다.",
+    "판단은 사실 신선도 확인, 경쟁 가설 비교, 반대 근거 확인, 행동 범위 적용, 실행 가능성 확인 순서로 수행한다.",
     "temporalEvidence.windows만 규칙에 일치한 기간이다. 로드 수를 규칙 성립 수로 해석하지 않는다.",
     "companyEvidence는 행동 근거로 사용할 수 있지만 background는 참고 전용이며 행동을 바꾸지 않는다.",
     "externalEvidence에서 evidenceUse=action인 항목만 행동을 바꿀 근거로 사용하고 rule-scoped-reference는 확인 항목으로만 쓴다.",
@@ -79,6 +96,7 @@ BASE_AI_DECISION_INSTRUCTIONS = (
     "근거 3개, 반대 근거 2개, 다음 확인 2개 이내로 쓴다.",
     "입력에 없는 목표가, 손절가, 비중, 확률, 점수는 만들지 않는다.",
     "쉬운 한국어로 쓰고 내부 변수명과 TypeDB 식별자는 사용자 설명문에 노출하지 않는다.",
+    "currentActionPlan은 행동 코드나 '관찰한다'만 반복하지 말고 지금 할 일과 보류할 일을 명확히 쓴다. nextActionPlan은 '다음 추론에서 확인'처럼 쓰지 말고 실제로 관찰할 가격·거래량·수급·실적·공시·거시 지표와 판단 결과를 쓴다.",
     "설명 문장 없이 응답 스키마를 따르는 JSON 객체 하나만 출력한다.",
 )
 

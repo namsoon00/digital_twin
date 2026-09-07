@@ -8,6 +8,7 @@ import math
 from typing import Dict, Iterable, List, Optional, Protocol
 
 from ..domain.investment_mandate import InvestmentMandate
+from ..domain.investment_decision_actionability import persisted_decision_authorization
 from ..domain.events import ontology_reasoning_requested_event
 from ..domain.portfolio_activity_episode import (
     DecisionActionObservation,
@@ -1153,6 +1154,13 @@ class DecisionActionPlanningService:
         return monitor_account_state(self.monitor_store, account_id)
 
     def prepare(self, episode, context: Dict[str, object]) -> ActionPlan:
+        action = str(episode.action or "HOLD").upper()
+        if action in EXECUTABLE_ACTIONS:
+            authorization = persisted_decision_authorization(episode)
+            if not authorization.get("authorized"):
+                raise ValueError(
+                    "Executable action planning requires a complete decision actionability contract."
+                )
         portfolio_id = str(episode.portfolio_id or "portfolio:" + str(episode.account_id or "default"))
         mandate_payload = self.repository.active_mandate(portfolio_id)
         mandate = InvestmentMandate.from_dict(mandate_payload) if mandate_payload else None
@@ -1190,7 +1198,6 @@ class DecisionActionPlanningService:
             blocked.append("active-mandate-missing")
         if episode.mandate_version and policy_version and episode.mandate_version != policy_version:
             blocked.append("decision-policy-version-stale")
-        action = str(episode.action or "HOLD").upper()
         lifecycle = {}
         lifecycle_loader = getattr(self.repository, "latest_portfolio_lifecycle", None)
         if callable(lifecycle_loader):

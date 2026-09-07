@@ -11,6 +11,7 @@ from .context_observation_notifications import (
     typedb_review_observation_contract,
 )
 from .hypothesis_lifecycle import has_material_delta
+from .investment_decision_actionability import investment_decision_actionability
 from .investment_reasoning.decision_delta import DecisionDelta
 from .notification.delivery_policy import (
     DeliveryPolicyContext,
@@ -290,29 +291,13 @@ def pre_ai_deferred_delivery_decision(context: Mapping[str, object]) -> Dict[str
     return base
 
 
-def customer_action_contract_gaps(validated: Mapping[str, object]):
-    response = _mapping(validated)
-    gaps = []
-    if not _text(response.get("action")):
-        gaps.append("final-action")
-    if not _text(
-        response.get("executionDecision")
-        or response.get("currentActionPlan")
-        or response.get("investmentViewAction")
-    ):
-        gaps.append("current-action-plan")
-    if not (
-        _text(response.get("changeAnalysis") or response.get("investmentView") or response.get("summary"))
-        or _items(response.get("evidence"))
-    ):
-        gaps.append("why-now")
-    if not (
-        _text(response.get("nextActionPlan") or response.get("invalidationCondition"))
-        or _items(response.get("nextChecks"))
-        or _items(response.get("followUpConditions"))
-    ):
-        gaps.append("next-condition")
-    return gaps
+def customer_action_contract_gaps(
+    validated: Mapping[str, object],
+    context: Mapping[str, object] = None,
+):
+    return list(
+        investment_decision_actionability(context or {}, validated).get("gaps") or []
+    )
 
 
 def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
@@ -354,7 +339,7 @@ def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[st
         or context.get("investmentSubjectDecisionCaseId")
         or context.get("investmentSubjectDecisionCase")
     )
-    action_contract_gaps = customer_action_contract_gaps(validated)
+    action_contract_gaps = customer_action_contract_gaps(validated, context)
     base = {
         "version": FINAL_AI_DELIVERY_POLICY_VERSION,
         "decision": "send",
@@ -666,7 +651,7 @@ def decision_delta_from_context(context: Mapping[str, object]) -> DecisionDelta:
             or values.get("investmentSubjectDecisionCase")
         ),
         validated_response_present=bool(validated),
-        customer_action_contract_gaps=tuple(customer_action_contract_gaps(validated)),
+        customer_action_contract_gaps=tuple(customer_action_contract_gaps(validated, values)),
         verified_follow_up_transition_count=len(verified_follow_ups),
         verified_market_transition_count=len(verified_market_transitions),
         verified_market_transition_id=_text(market_transition.get("conditionId")),
@@ -696,7 +681,7 @@ def delivery_policy_context_from_context(
 
 
 def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
-    """Apply typed delivery policy with a compatibility parity guard."""
+    """Apply the typed delivery policy and retain legacy output only as audit."""
 
     values = _mapping(context)
     delta = decision_delta_from_context(values)
@@ -749,13 +734,12 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "differences": differences,
     }
     if differences:
-        # Preserve the established decision while the typed contract records
-        # the exact mismatch. This is a bounded migration guard, not a second
-        # permanent policy path.
+        # A compatibility implementation must never override the canonical
+        # fail-closed contract. Keep the mismatch visible for migration work,
+        # but let the typed policy own push authorization.
         return {
-            **legacy,
-            "decisionDelta": delta.to_dict(),
-            "effectiveDeliveryPolicy": "legacy-parity-guard",
+            **typed,
+            "effectiveDeliveryPolicy": "decision-delta-v1",
             "deliveryPolicyParity": parity,
         }
     return {

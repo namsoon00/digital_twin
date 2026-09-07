@@ -12,6 +12,8 @@ from ..domain.investment_brain import (
     scoped_decision_follow_ups,
     utc_now_iso,
 )
+from ..domain.investment_decision_history import compact_decision_episode_memory
+from ..domain.investment_decision_actionability import persisted_decision_authorization
 from ..domain.decision_follow_up import evaluate_follow_up_conditions
 from ..domain.hypothesis_outcome_contract import (
     observation_domain_status,
@@ -20,6 +22,7 @@ from ..domain.hypothesis_outcome_contract import (
 )
 from ..domain.hypothesis_outcome_evaluation import evaluate_hypothesis_outcome
 from ..domain.market_time_series import market_timezone
+from ..domain.market_hours import infer_market_from_context
 from ..domain.decision_performance import (
     contradiction_learning_candidates,
     evaluate_decision_performance,
@@ -53,6 +56,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         episode.portfolio_id = episode.portfolio_id or "portfolio:" + str(episode.account_id or "default")
         plan = None
         if action in {"BUY", "ADD", "TRIM", "SELL"}:
+            authorization = persisted_decision_authorization(episode)
+            if not authorization.get("authorized"):
+                raise ValueError(
+                    "Executable DecisionEpisode requires a complete actionability contract."
+                )
             plan = ActionPlan.create(
                 portfolio_id=episode.portfolio_id,
                 decision_episode_id=episode.episode_id,
@@ -608,6 +616,85 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             "excludedEpisodeCount": excluded,
         }
 
+    def repair_pending_outcome_target_schedules(
+        self,
+        account_id: str,
+        limit: int = 1000,
+    ) -> Dict[str, object]:
+        """Realign legacy pending targets with the inferred market session.
+
+        Older decision payloads sometimes omitted market and currency. Their
+        short horizon was therefore scheduled during closed hours and a later
+        ingestion of the unchanged close could be mistaken for a new quote.
+        Only pending targets are mutable; observed and excluded audit rows are
+        deliberately left untouched.
+        """
+
+        maximum = max(1, min(5000, int(limit or 1000)))
+        repaired = []
+        stamp = utc_now_iso()
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT targets.target_id, targets.horizon_minutes, targets.target_at, "
+                "targets.payload_json AS target_json, episodes.payload_json AS episode_json, "
+                "episodes.status AS episode_status, episodes.decided_at "
+                "FROM investment_decision_outcome_targets AS targets "
+                "JOIN investment_decision_episodes AS episodes ON episodes.episode_id = targets.episode_id "
+                "WHERE targets.account_id = %s AND targets.status = 'pending' "
+                "ORDER BY targets.target_at ASC, targets.target_id ASC LIMIT %s",
+                (str(account_id or ""), maximum),
+            ).fetchall()
+            for row in rows or []:
+                episode_payload = _json_loads(row.get("episode_json"), {})
+                if not episode_payload:
+                    continue
+                episode = DecisionEpisode.from_dict(episode_payload)
+                stored_decided_at = canonical_investment_timestamp(row.get("decided_at"))
+                if stored_decided_at:
+                    episode.decided_at = stored_decided_at
+                try:
+                    horizon_minutes = int(float(row.get("horizon_minutes") or 0))
+                except (TypeError, ValueError):
+                    horizon_minutes = 0
+                target_at = outcome_target_at(episode, horizon_minutes)
+                if not target_at or target_at == canonical_investment_timestamp(row.get("target_at")):
+                    continue
+                target_payload = _json_loads(row.get("target_json"), {})
+                target_payload["targetAt"] = target_at
+                inferred_market = infer_market_from_context(
+                    "investmentInsight",
+                    {
+                        "symbol": episode.symbol,
+                        "market": target_payload.get("market"),
+                        "currency": target_payload.get("currency"),
+                    },
+                )
+                if inferred_market and not str(target_payload.get("market") or "").strip():
+                    target_payload["market"] = inferred_market
+                if not str(target_payload.get("currency") or "").strip():
+                    target_payload["currency"] = (
+                        "KRW" if inferred_market == "KR" else "USD" if inferred_market == "US" else ""
+                    )
+                cursor = connection.execute(
+                    "UPDATE investment_decision_outcome_targets SET target_at = %s, "
+                    "payload_json = %s, updated_at = %s "
+                    "WHERE target_id = %s AND status = 'pending'",
+                    (
+                        target_at,
+                        json_dumps(target_payload),
+                        stamp,
+                        str(row.get("target_id") or ""),
+                    ),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+                    repaired.append(str(row.get("target_id") or ""))
+        return {
+            "status": "repaired" if repaired else "unchanged",
+            "checkedCount": len(rows or []),
+            "repairedCount": len(repaired),
+            "targetIds": repaired,
+        }
+
     def outcome_horizons(self) -> List[int]:
         return outcome_horizon_minutes(
             self.runtime_settings.get("investmentBrainOutcomeObservationMinutes") or "60,1440,7200,28800",
@@ -706,18 +793,29 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             ))
         return outcomes
 
-    def hydrate_outcomes(self, episodes: Iterable[DecisionEpisode]) -> List[DecisionEpisode]:
-        result = self.hydrate_follow_ups(episodes)
+    def hydrate_outcomes(
+        self,
+        episodes: Iterable[DecisionEpisode],
+        as_of: str = "",
+    ) -> List[DecisionEpisode]:
+        result = self.hydrate_follow_ups(episodes, as_of=as_of)
         episode_ids = [item.episode_id for item in result if item.episode_id]
         if not episode_ids:
             return result
         placeholders = ",".join(["%s"] * len(episode_ids))
+        normalized_as_of = canonical_investment_timestamp(as_of)
+        params: List[object] = list(episode_ids)
+        cutoff = " AND observed_at <= %s" if normalized_as_of else ""
+        if normalized_as_of:
+            params.append(normalized_as_of)
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT episode_id, observed_at, payload_json FROM investment_decision_outcomes "
                 "WHERE episode_id IN (" + placeholders + ") "
+                + cutoff
+                + " "
                 "ORDER BY observed_at ASC, outcome_id ASC",
-                episode_ids,
+                tuple(params),
             ).fetchall()
         grouped: Dict[str, List[Dict[str, object]]] = {}
         for row in rows or []:
@@ -726,7 +824,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             episode.outcomes = self.outcomes_from_rows(grouped.get(episode.episode_id, []), episode.episode_id)
         return result
 
-    def hydrate_follow_ups(self, episodes: Iterable[DecisionEpisode]) -> List[DecisionEpisode]:
+    def hydrate_follow_ups(
+        self,
+        episodes: Iterable[DecisionEpisode],
+        as_of: str = "",
+    ) -> List[DecisionEpisode]:
         """Merge mutable follow-up state into immutable decision payloads.
 
         DecisionEpisode keeps the facts and AI answer at decision time. Follow-up
@@ -740,12 +842,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         if not episode_ids:
             return result
         placeholders = ",".join(["%s"] * len(episode_ids))
+        normalized_as_of = canonical_investment_timestamp(as_of)
+        params: List[object] = list(episode_ids)
+        cutoff = " AND created_at <= %s" if normalized_as_of else ""
+        if normalized_as_of:
+            params.append(normalized_as_of)
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT episode_id, observable, payload_json "
                 "FROM investment_decision_follow_ups WHERE episode_id IN (" + placeholders + ") "
+                + cutoff
+                + " "
                 "ORDER BY created_at ASC, condition_id ASC",
-                episode_ids,
+                tuple(params),
             ).fetchall()
         grouped: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
         for row in rows or []:
@@ -994,10 +1103,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
     ) -> Dict[str, object]:
         """Read the compact prior decision used by the next notification AI run.
 
-        Notification continuity needs one action and its audit identity, not the
-        episode's full hypothesis payload or outcome history. Keeping this read
-        on indexed columns prevents one live alert from hydrating the heavier
-        learning model.
+        Notification continuity needs one valid prior action and its audit
+        identity, not outcome history. A bounded payload scan skips legacy
+        executable opinions that cannot reproduce the current actionability
+        contract without hydrating the heavier learning model.
         """
 
         where = [
@@ -1013,37 +1122,45 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             where.append("episode_id <> %s")
             params.append(str(exclude_episode_id).strip())
         with self.connect() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 "SELECT episode_id, account_id, symbol, subject_name, selected_hypothesis_id, "
                 "action, review_level, data_state, validation_state, inference_generation_id, "
-                "status, decided_at, source "
+                "status, decided_at, source, payload_json "
                 "FROM investment_decision_episodes WHERE " + " AND ".join(where)
-                + " ORDER BY decided_at DESC, episode_id DESC LIMIT 1",
+                + " ORDER BY decided_at DESC, episode_id DESC LIMIT 12",
                 tuple(params),
-            ).fetchone()
-        if not row:
-            return {}
-        return {
-            "episodeId": str(row.get("episode_id") or ""),
-            "accountId": str(row.get("account_id") or ""),
-            "symbol": str(row.get("symbol") or "").upper(),
-            "subjectName": str(row.get("subject_name") or ""),
-            "selectedHypothesisId": str(row.get("selected_hypothesis_id") or ""),
-            "action": str(row.get("action") or "").upper(),
-            "reviewLevel": str(row.get("review_level") or ""),
-            "dataState": str(row.get("data_state") or ""),
-            "validationState": str(row.get("validation_state") or ""),
-            "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
-            "status": str(row.get("status") or ""),
-            "decidedAt": canonical_investment_timestamp(row.get("decided_at")) or str(row.get("decided_at") or ""),
-            "source": str(row.get("source") or ""),
-        }
+            ).fetchall()
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            payload.update({
+                "episodeId": str(row.get("episode_id") or ""),
+                "accountId": str(row.get("account_id") or ""),
+                "symbol": str(row.get("symbol") or "").upper(),
+                "subjectName": str(row.get("subject_name") or ""),
+                "selectedHypothesisId": str(row.get("selected_hypothesis_id") or ""),
+                "action": str(row.get("action") or "").upper(),
+                "reviewLevel": str(row.get("review_level") or ""),
+                "dataState": str(row.get("data_state") or ""),
+                "validationState": str(row.get("validation_state") or ""),
+                "inferenceGenerationId": str(row.get("inference_generation_id") or ""),
+                "status": str(row.get("status") or ""),
+                "decidedAt": (
+                    canonical_investment_timestamp(row.get("decided_at"))
+                    or str(row.get("decided_at") or "")
+                ),
+                "source": str(row.get("source") or ""),
+            })
+            memory = compact_decision_episode_memory(payload)
+            if memory:
+                return memory
+        return {}
 
     def list_for_symbols(
         self,
         symbols: Iterable[str],
         account_id: str = "",
         limit_per_symbol: int = 20,
+        as_of: str = "",
     ) -> List[DecisionEpisode]:
         """Fetch bounded episode history for many symbols without N+1 reads.
 
@@ -1059,6 +1176,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         if not clean_symbols:
             return []
         per_symbol = max(1, min(80, int(limit_per_symbol or 20)))
+        normalized_as_of = canonical_investment_timestamp(as_of)
         rows: List[Dict[str, object]] = []
         # Keep a generated query below operational limits for large accounts.
         for offset in range(0, len(clean_symbols), 24):
@@ -1071,6 +1189,9 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 if account_id:
                     where += " AND account_id = %s"
                     statement_params.append(str(account_id))
+                if normalized_as_of:
+                    where += " AND decided_at <= %s"
+                    statement_params.append(normalized_as_of)
                 statements.append(
                     "(SELECT payload_json, status, decided_at FROM investment_decision_episodes "
                     "WHERE " + where + " ORDER BY decided_at DESC, episode_id DESC LIMIT %s)"
@@ -1080,18 +1201,219 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             sql = " UNION ALL ".join(statements)
             with self.connect() as connection:
                 rows.extend(connection.execute(sql, tuple(params)).fetchall() or [])
-        return self.hydrate_outcomes(self.episode_from_row(row) for row in rows)
+        return self.hydrate_outcomes(
+            (self.episode_from_row(row) for row in rows),
+            as_of=normalized_as_of,
+        )
 
-    def performance(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
+    def performance(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 500,
+        as_of: str = "",
+    ) -> Dict[str, object]:
         try:
             minimum_samples = int(float(str(self.runtime_settings.get("investmentBrainPerformanceMinimumSamples") or "5")))
         except ValueError:
             minimum_samples = 5
-        episodes = self.list(account_id=account_id, symbol=symbol, limit=max(1, min(2000, int(limit or 500))))
-        return evaluate_decision_performance(
+        episodes = self.performance_episodes(
+            account_id=account_id,
+            symbol=symbol,
+            limit=max(1, min(2000, int(limit or 500))),
+            as_of=as_of,
+        )
+        result = evaluate_decision_performance(
             episodes,
             minimum_sample_count=max(2, min(100, minimum_samples)),
         )
+        archive_count = self.performance_archive_episode_count(account_id, symbol, as_of=as_of)
+        evaluated_count = int(result.get("episodeCount") or 0)
+        result["evaluatedEpisodeCount"] = evaluated_count
+        result["episodeCount"] = archive_count
+        result["outcomeCoveragePct"] = round(
+            (int(result.get("episodeWithOutcomeCount") or 0) / archive_count) * 100,
+            2,
+        ) if archive_count else 0.0
+        result["historySelection"] = "outcome-led-bounded-history"
+        return result
+
+    def performance_archive_episode_count(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        as_of: str = "",
+    ) -> int:
+        clauses = []
+        params: List[object] = []
+        if account_id:
+            clauses.append("account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            clauses.append("symbol = %s")
+            params.append(str(symbol).upper())
+        normalized_as_of = canonical_investment_timestamp(as_of)
+        if normalized_as_of:
+            clauses.append("decided_at <= %s")
+            params.append(normalized_as_of)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM investment_decision_episodes" + where,
+                tuple(params),
+            ).fetchone() or {}
+        return max(0, int(row.get("count") or 0))
+
+    def performance_episodes(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 500,
+        as_of: str = "",
+    ) -> List[Dict[str, object]]:
+        """Load a bounded outcome-led history for performance calibration.
+
+        The decision table grows much faster than its delayed outcome table.
+        Reading only the latest decision rows eventually hides every observed
+        result and resets all hypothesis qualification to ``shadow``. Outcome
+        metrics do not need pending decisions or mutable follow-up rows, so
+        load only episodes that own an observation and obtain the archive
+        denominator with a separate count query.
+        """
+
+        clauses = []
+        params: List[object] = []
+        if account_id:
+            clauses.append("account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            clauses.append("symbol = %s")
+            params.append(str(symbol).upper())
+        normalized_as_of = canonical_investment_timestamp(as_of)
+        if normalized_as_of:
+            clauses.append("observed_at <= %s")
+            params.append(normalized_as_of)
+        try:
+            outcome_limit = int(float(str(
+                self.runtime_settings.get("investmentBrainPerformanceOutcomeEpisodeLimit")
+                or "2000"
+            )))
+        except (TypeError, ValueError):
+            outcome_limit = 2000
+        requested_limit = max(1, min(5000, int(limit or 500)))
+        outcome_limit = max(1, min(5000, outcome_limit, requested_limit))
+        params.append(outcome_limit)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        outer_where = " WHERE outcomes.observed_at <= %s" if normalized_as_of else ""
+        if normalized_as_of:
+            params.append(normalized_as_of)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
+                "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
+                "episodes.selected_hypothesis_id, episodes.decided_at "
+                "FROM investment_decision_outcomes AS outcomes JOIN ("
+                "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
+                "FROM investment_decision_outcomes"
+                + where
+                + " GROUP BY episode_id ORDER BY latest_observed_at DESC LIMIT %s"
+                ") AS selected ON selected.episode_id = outcomes.episode_id "
+                "JOIN investment_decision_episodes AS episodes ON episodes.episode_id = outcomes.episode_id "
+                + outer_where
+                + " "
+                "ORDER BY selected.latest_observed_at DESC, outcomes.observed_at ASC, outcomes.outcome_id ASC",
+                tuple(params),
+            ).fetchall()
+        grouped: Dict[str, Dict[str, object]] = {}
+        for row in rows or []:
+            episode_id = str(row.get("episode_id") or "").strip()
+            outcome = _json_loads(row.get("outcome_json"), {})
+            if not episode_id or not outcome:
+                continue
+            if not outcome.get("observedAt"):
+                outcome["observedAt"] = canonical_investment_timestamp(row.get("observed_at"))
+            payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
+            contract = payload.get("hypothesisOutcomeContract") if isinstance(payload.get("hypothesisOutcomeContract"), dict) else {}
+            selected_hypothesis_id = str(
+                payload.get("selectedHypothesisId")
+                or row.get("selected_hypothesis_id")
+                or ""
+            )
+            episode = grouped.setdefault(episode_id, {
+                "episodeId": episode_id,
+                "accountId": str(row.get("account_id") or ""),
+                "symbol": str(row.get("symbol") or "").upper(),
+                "subjectName": str(row.get("subject_name") or row.get("symbol") or ""),
+                "action": str(row.get("action") or "HOLD").upper(),
+                "selectedHypothesisId": selected_hypothesis_id,
+                "decidedAt": canonical_investment_timestamp(row.get("decided_at")),
+                "hypothesisSet": {
+                    "hypotheses": [{
+                        "hypothesisId": selected_hypothesis_id,
+                        "templateId": str(payload.get("hypothesisTemplateId") or ""),
+                        "templateLabel": str(payload.get("hypothesisTemplateLabel") or ""),
+                        "familyId": str(payload.get("hypothesisFamilyId") or ""),
+                        "stance": str(payload.get("selectedHypothesisStance") or "uncertain"),
+                        "predictionTarget": str(payload.get("predictionTarget") or contract.get("predictionTarget") or ""),
+                        "expectedDirection": str(payload.get("expectedDirection") or contract.get("expectedDirection") or ""),
+                        "expectedOutcome": str(payload.get("expectedOutcome") or contract.get("expectedOutcome") or ""),
+                        "outcomeMetric": str(payload.get("outcomeMetric") or contract.get("outcomeMetric") or ""),
+                        "falsificationContract": str(payload.get("falsificationContract") or contract.get("falsificationContract") or ""),
+                        "supportingRuleIds": list(contract.get("sourceRuleIds") or []),
+                    }],
+                },
+                "factsAtDecision": {"hypothesisOutcomeContract": contract},
+                "outcomes": [],
+            })
+            episode["outcomes"].append(outcome)
+        return list(grouped.values())
+
+    def outcome_history_for_symbols(
+        self,
+        symbols: Iterable[str],
+        account_id: str = "",
+        as_of: str = "",
+        limit_per_symbol: int = 120,
+        maximum_episode_count: int = 600,
+    ) -> List[Dict[str, object]]:
+        """Load compact, point-in-time outcome history for ABox calibration.
+
+        Recent decision memory and historical calibration have different
+        retention needs. This read keeps enough independent result episodes
+        for qualification while returning no prompts, research documents, or
+        mutable follow-up state from the original decision payload.
+        """
+
+        clean_symbols = list(dict.fromkeys(
+            str(item or "").upper().strip()
+            for item in symbols or []
+            if str(item or "").strip()
+        ))[:24]
+        if not clean_symbols:
+            return []
+        per_symbol = max(3, min(500, int(limit_per_symbol or 120)))
+        maximum = max(3, min(2000, int(maximum_episode_count or 600)))
+        rows: List[Dict[str, object]] = []
+        for clean_symbol in clean_symbols:
+            rows.extend(self.performance_episodes(
+                account_id=account_id,
+                symbol=clean_symbol,
+                limit=per_symbol,
+                as_of=as_of,
+            ))
+
+        def latest_observed_at(item: Dict[str, object]) -> str:
+            return max((
+                str(outcome.get("observedAt") or "")
+                for outcome in item.get("outcomes") or []
+                if isinstance(outcome, dict)
+            ), default="")
+
+        return sorted(
+            rows,
+            key=lambda item: (latest_observed_at(item), str(item.get("episodeId") or "")),
+            reverse=True,
+        )[:maximum]
 
     def outcomes_for_episode(self, episode_id: str, limit: int = 30) -> List[ObservedOutcome]:
         with self.connect() as connection:
@@ -1121,6 +1443,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             if str(backfill.get("status") or "") == "already-initialized":
                 completed_accounts.add(normalized_account_id)
                 self._outcome_target_backfill_completed_accounts = completed_accounts
+        repaired_accounts = getattr(self, "_outcome_target_schedule_repair_completed_accounts", set())
+        if normalized_account_id not in repaired_accounts:
+            self.repair_pending_outcome_target_schedules(normalized_account_id, limit=5000)
+            repaired_accounts.add(normalized_account_id)
+            self._outcome_target_schedule_repair_completed_accounts = repaired_accounts
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -1730,6 +2057,15 @@ def outcome_target_at(episode: DecisionEpisode, horizon_minutes: int) -> str:
     facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
     market = str(facts.get("market") or "").upper().strip()
     currency = str(facts.get("currency") or "").upper().strip()
+    if not market:
+        market = infer_market_from_context(
+            "investmentInsight",
+            {
+                "symbol": episode.symbol,
+                "market": market,
+                "currency": currency,
+            },
+        )
     is_crypto_market = market in {"CRYPTO", "COIN"} or currency in {"BTC", "ETH", "USDT", "USDC"}
     traditional_market = not is_crypto_market and (market in {
         "KR", "KOR", "KOREA", "KOSPI", "KOSDAQ", "KONEX", "KRX", "XKRX",

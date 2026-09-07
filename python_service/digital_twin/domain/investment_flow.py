@@ -10,8 +10,9 @@ import hashlib
 from dataclasses import asdict, is_dataclass
 from typing import Dict, Iterable, List, Mapping
 
+from .investment_decision_actionability import persisted_decision_authorization
 
-INVESTMENT_FLOW_VERSION = "investment-flow-v2"
+INVESTMENT_FLOW_VERSION = "investment-flow-v3"
 
 FLOW_STAGES = (
     ("source", "원천 데이터"),
@@ -218,6 +219,9 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         if item_dict(item)
     ]
     notices = notification_items(jobs or [])
+    recorded_action = text(episode.get("action")).upper() or "HOLD"
+    decision_authorization = persisted_decision_authorization(episode)
+    effective_action = text(decision_authorization.get("effectiveAction")) or recorded_action
 
     source_ok = bool(source_snapshot_id or facts)
     source_state = "pass" if source_ok else (
@@ -227,13 +231,34 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
     relation_state = "pass" if relation_ids else ("warning" if inference_generation_id else "blocked")
     hypothesis_state = "pass" if selected_id else ("warning" if hypotheses else "blocked")
     inference_state = "pass" if inference_generation_id else "blocked"
-    decision_state = "blocked" if abstention else "pass"
+    decision_state = (
+        "blocked"
+        if abstention or decision_authorization.get("authorized") is False
+        else "pass"
+    )
     delivery = delivery_projection(notices)
+    stored_assurance = item_dict(
+        episode.get("decisionAssurance") or episode.get("decision_assurance")
+    )
     assurance = {
-        "state": validation_state,
-        "label": FLOW_STATE_LABELS[validation_state],
-        "detail": text(episode.get("decisionSummary") or episode.get("decision_summary")) or "근거 점검 상태를 확인하세요.",
+        "state": (
+            "blocked"
+            if decision_authorization.get("authorized") is False
+            else validation_state
+        ),
+        "label": FLOW_STATE_LABELS[
+            "blocked"
+            if decision_authorization.get("authorized") is False
+            else validation_state
+        ],
+        "detail": (
+            text(decision_authorization.get("detail"))
+            if decision_authorization.get("authorized") is False
+            else text(episode.get("decisionSummary") or episode.get("decision_summary"))
+            or "근거 점검 상태를 확인하세요."
+        ),
         "guardrailCount": len(guardrails),
+        "executionEligibility": text(stored_assurance.get("executionEligibility")),
     }
     stages = [
         stage_payload("source", source_state, source_snapshot_id or ("판단 시점 사실이 저장됨" if facts else "판단 시점 원천 스냅샷 연결 필요"), refId=source_snapshot_id),
@@ -241,7 +266,18 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         stage_payload("relation", relation_state, str(len(relation_ids)) + "개 관계 경로 · " + str(len(rule_ids)) + "개 규칙" if relation_ids else "실제 관계 경로 연결 필요", count=len(relation_ids), ruleCount=len(rule_ids)),
         stage_payload("hypothesis", hypothesis_state, text(selected.get("claim") or selected.get("label")) or ("후보 가설 " + str(len(hypotheses)) + "개" if hypotheses else "선택 가능한 가설 없음"), count=len(hypotheses), refId=selected_id),
         stage_payload("inference", inference_state, inference_generation_id or "추론 세대 연결 필요", refId=inference_generation_id),
-        stage_payload("decision", decision_state, text(episode.get("decisionSummary") or episode.get("decision_summary")) or text(episode.get("action")) or "판단 보류", refId=episode_id),
+        stage_payload(
+            "decision",
+            decision_state,
+            (
+                text(decision_authorization.get("detail"))
+                if decision_authorization.get("authorized") is False
+                else text(episode.get("decisionSummary") or episode.get("decision_summary"))
+                or effective_action
+                or "판단 보류"
+            ),
+            refId=episode_id,
+        ),
     ]
     readiness_stages = list(stages) + [{"id": "assurance", "label": "근거 점검", **assurance}]
     worst = max(readiness_stages, key=lambda item: FLOW_STATE_RANK.get(text(item.get("state")), 2))
@@ -270,7 +306,8 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         "accountId": account_id,
         "symbol": symbol,
         "name": text(episode.get("subjectName") or episode.get("subject_name")) or symbol,
-        "action": text(episode.get("action")) or "HOLD",
+        "action": effective_action,
+        "recordedAction": recorded_action,
         "reviewLevel": text(episode.get("reviewLevel") or episode.get("review_level")),
         "dataState": data_state,
         "validationState": validation_state,
@@ -306,6 +343,10 @@ def decision_flow_projection(episode_value: object, jobs: Iterable[object] = Non
         "abstention": abstention,
         "notifications": notices,
         "assurance": assurance,
+        "decisionAuthorization": decision_authorization,
+        "decisionActionability": item_dict(
+            episode.get("decisionActionability") or episode.get("decision_actionability")
+        ),
         "delivery": delivery,
         "stages": stages,
         "raw": episode,

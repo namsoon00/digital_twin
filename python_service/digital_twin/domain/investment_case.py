@@ -585,13 +585,26 @@ def _status_dimensions(
     outcome_count: int,
     decision_source: str = "",
     ai_execution: Mapping[str, object] = None,
+    decision_authorization: Mapping[str, object] = None,
 ) -> List[Dict[str, object]]:
     abstained = bool(abstention)
     ai_execution = dict(ai_execution or {})
     ai_execution_state = text(ai_execution.get("state")).lower()
     ai_execution_reason = text(ai_execution.get("reason"))
     typedb_only = "typedb" in decision_source.lower() and "fallback" in decision_source.lower()
-    if typedb_only:
+    decision_authorization = dict(decision_authorization or {})
+    if decision_authorization.get("authorized") is False:
+        decision = _dimension(
+            "decision",
+            "판단 상태",
+            "blocked",
+            "판단 사용 불가",
+            "DECISION_ACTIONABILITY_INVALID",
+            text(decision_authorization.get("detail"))
+            or "저장된 실행 의견의 근거와 행동 조건을 다시 검증할 수 없습니다.",
+            "현재 주문 근거로 사용하지 않고 새 판단을 기다립니다.",
+        )
+    elif typedb_only:
         decision = _dimension(
             "decision",
             "판단 상태",
@@ -1005,6 +1018,7 @@ def investment_case_snapshot(
     flow = decision_flow_projection(episode, jobs or [])
     flow_stages = {text(item.get("id")): item_dict(item) for item in flow.get("stages") or []}
     assurance = item_dict(flow.get("assurance"))
+    decision_authorization = item_dict(flow.get("decisionAuthorization"))
     hypotheses = _hypotheses(episode)
     selected_id = text(episode.get("selectedHypothesisId") or episode.get("selected_hypothesis_id"))
     scenarios = [_scenario(item, selected_id) for item in hypotheses]
@@ -1085,7 +1099,11 @@ def investment_case_snapshot(
     local_decision_state = text(flow_stages.get("decision", {}).get("state")) or "warning"
     outcome_state = "pass" if outcomes else "pending"
     ai_execution = _ai_execution_status(episode, facts_at_decision, selected_id)
-    if text(ai_execution.get("state")) in {"not-run", "not-required"} and local_decision_state == "blocked":
+    if (
+        text(ai_execution.get("state")) in {"not-run", "not-required"}
+        and local_decision_state == "blocked"
+        and decision_authorization.get("authorized") is not False
+    ):
         local_decision_state = "warning"
     raw_abstention = item_dict(
         episode.get("decisionAbstention") or episode.get("decision_abstention")
@@ -1117,6 +1135,7 @@ def investment_case_snapshot(
         outcome_count=len(outcomes),
         decision_source=text(ai_execution.get("source") or episode.get("source")),
         ai_execution=ai_execution,
+        decision_authorization=decision_authorization,
     )
     dimension_by_id = {item["id"]: item for item in dimensions}
     decision_dimension = dimension_by_id["decision"]
@@ -1124,12 +1143,12 @@ def investment_case_snapshot(
     data_dimension = dimension_by_id["data"]
     ai_dimension = dimension_by_id["ai"]
     integrity = validate_decision_episode_integrity(episode)
-    if text(integrity.get("state")) == "blocked":
-        readiness_state = "blocked"
-        phase = "fact"
-    elif decision_dimension["state"] == "blocked":
+    if decision_dimension["state"] == "blocked":
         readiness_state = "blocked"
         phase = "decision"
+    elif text(integrity.get("state")) == "blocked":
+        readiness_state = "blocked"
+        phase = "fact"
     elif inference_dimension["state"] == "blocked" or data_dimension["state"] == "blocked":
         readiness_state = "blocked"
         phase = "case" if inference_dimension["state"] == "blocked" else "fact"
@@ -1145,6 +1164,8 @@ def investment_case_snapshot(
     headline = text(abstention.get("reason")) if abstention else text(
         episode.get("decisionSummary") or episode.get("decision_summary")
     )
+    if decision_authorization.get("authorized") is False:
+        headline = text(decision_authorization.get("detail")) or headline
     if text(ai_execution.get("state")) in {"not-run", "not-required"}:
         headline = text(ai_execution.get("reason")) or headline
     if not headline:
@@ -1255,7 +1276,11 @@ def investment_case_snapshot(
     )
     attention = _attention_summary(action, dimensions, integrity)
     change_conditions = list(explanation.get("changeConditions") or [])
-    if abstention:
+    if decision_authorization.get("authorized") is False:
+        next_action = (
+            "새 가격·수급·재무 자료로 실행 자격과 판단 변경 조건이 모두 확인될 때 다시 판단합니다."
+        )
+    elif abstention:
         next_action = text(abstention.get("nextAction")) or "비교하지 못한 가설을 다시 검증한 뒤 판단을 갱신합니다."
     elif change_conditions:
         next_action = change_conditions[0]
@@ -1297,6 +1322,8 @@ def investment_case_snapshot(
         scenarios=scenarios,
         decision={
             "action": action,
+            "recordedAction": text(flow.get("recordedAction")) or action,
+            "authorization": decision_authorization,
             "state": text(decision_dimension.get("state")),
             "stateLabel": text(decision_dimension.get("stateLabel")),
             "reasonCode": text(decision_dimension.get("reasonCode")),

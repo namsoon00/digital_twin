@@ -39,6 +39,7 @@ class MonitorRunner:
         source_snapshot_replay: bool = False,
         projection_symbol_filters_by_account: Dict[str, Iterable[str]] = None,
         portfolio_lifecycle_observer=None,
+        investment_outcome_observer=None,
     ):
         self.accounts = list(accounts)
         self.account_map = {account.account_id: account for account in self.accounts}
@@ -79,12 +80,14 @@ class MonitorRunner:
             if str(account_id or "")
         }
         self.portfolio_lifecycle_observer = portfolio_lifecycle_observer
+        self.investment_outcome_observer = investment_outcome_observer
         # The reasoning worker advances its event cursor only after this
         # projection has a usable TypeDB result.
         self.last_ontology_projection_results: Dict[str, Dict[str, object]] = {}
         self.last_cycle_record_result = None
         self.last_delivery_guard_result: Dict[str, object] = {}
         self.last_portfolio_lifecycle_results: Dict[str, Dict[str, object]] = {}
+        self.last_investment_outcome_results: Dict[str, Dict[str, object]] = {}
         self.last_detected_alert_events: List[AlertEvent] = []
         self.last_reasoning_source_states: Dict[str, Dict[str, object]] = {}
         self.last_projection_runtime_contexts: Dict[str, Dict[str, object]] = {}
@@ -190,6 +193,7 @@ class MonitorRunner:
             delivered_events = getattr(cycle_result, "delivered_events", None) if cycle_result is not None else None
             if delivered_events is not None:
                 all_events = list(delivered_events or [])
+            self.observe_investment_outcomes(snapshots)
             self.observe_portfolio_lifecycle(snapshots)
             if not all_events:
                 self.progress("monitor.no_events")
@@ -223,6 +227,7 @@ class MonitorRunner:
                 snapshot.metadata.pop("monitorStateHistory", None)
                 self.store.save_snapshot(snapshot)
             self.store.write()
+            self.observe_investment_outcomes(snapshots)
             self.observe_portfolio_lifecycle(snapshots)
         self.progress("monitor.completed", snapshotCount=len(snapshots), eventCount=len(all_events))
         return all_events
@@ -271,6 +276,7 @@ class MonitorRunner:
             snapshot.metadata.pop("previousMonitorState", None)
             snapshot.metadata.pop("monitorStateHistory", None)
             self.cycle_recorder.record_cycle([account.account_id], [snapshot], events, dry_run=False)
+            self.observe_investment_outcomes([snapshot])
             self.observe_portfolio_lifecycle([snapshot])
         else:
             if snapshot.has_live_account_data():
@@ -286,6 +292,7 @@ class MonitorRunner:
                 self.publish_cycle_completed([snapshot], events, False, False)
             self.store.save_snapshot(snapshot)
             self.store.write()
+            self.observe_investment_outcomes([snapshot])
         self.account_job_store.mark_done(account.account_id, self.next_account_run_at(self.account_job_interval_seconds))
         self.progress("account.done", accountId=account.account_id, eventCount=len(events), job=True)
         return events
@@ -768,6 +775,44 @@ class MonitorRunner:
                 }
                 self.progress(
                     "portfolio_lifecycle.failed",
+                    accountId=snapshot.account_id,
+                    reason=str(error)[:180],
+                )
+
+    def observe_investment_outcomes(self, snapshots: Iterable[AccountSnapshot]) -> None:
+        """Advance delayed decision feedback after source facts are committed.
+
+        Outcome observation belongs to the source-data lifecycle, not to a
+        particular TypeDB or time-series reasoning backend. Running it here
+        keeps feedback alive when the delivery engine changes and prevents a
+        read-only inference replay from mutating decision history.
+        """
+
+        if self.source_snapshot_replay or not self.investment_outcome_observer:
+            return
+        observer = getattr(self.investment_outcome_observer, "observe_snapshot", None)
+        if not callable(observer):
+            return
+        for snapshot in snapshots or []:
+            if not snapshot.has_live_account_data():
+                continue
+            try:
+                result = dict(observer(snapshot) or {})
+                self.last_investment_outcome_results[snapshot.account_id] = result
+                self.progress(
+                    "investment_outcomes.observed",
+                    accountId=snapshot.account_id,
+                    status=result.get("status") or "ready",
+                    targetCount=int(result.get("targetCount") or 0),
+                    savedOutcomeCount=int(result.get("savedOutcomeCount") or 0),
+                )
+            except Exception as error:  # noqa: BLE001 - retry on the next source snapshot.
+                self.last_investment_outcome_results[snapshot.account_id] = {
+                    "status": "error",
+                    "reason": str(error)[:220],
+                }
+                self.progress(
+                    "investment_outcomes.failed",
                     accountId=snapshot.account_id,
                     reason=str(error)[:180],
                 )

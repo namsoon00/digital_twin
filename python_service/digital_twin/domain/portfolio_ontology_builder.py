@@ -471,6 +471,7 @@ def build_portfolio_ontology(
         runtime_context.get("decisionPerformance") if isinstance(runtime_context, dict) else {},
         lifecycle_rows,
         max(1, min(100, hypothesis_outcome_minimum_samples)),
+        runtime_context.get("decisionOutcomeHistory") if isinstance(runtime_context, dict) else [],
     )
     # Lifecycle relations can only target stock and decision entities that
     # belong to this full or target-scoped ABox generation.

@@ -17,6 +17,7 @@ from ...domain.hypothesis_outcome_contract import (
     outcome_contract_completeness,
     outcome_contract_fingerprint,
 )
+from ...domain.investment_decision_actionability import investment_decision_actionability
 from ...domain.rule_claim_contract import (
     RuleClaimContract,
     authored_outcome_contract_complete,
@@ -329,11 +330,16 @@ def decision_episode_from_reasoning_case(
     review_level = _text(getattr(synthesis, "review_level", "")).lower()
     if review_level not in {"normal", "observe", "check", "act", "immediate", "blocked"}:
         review_level = "blocked" if failed else "observe"
+    judgment_readiness = _text(judgment.decision_readiness if judgment else "").lower()
     decision_ready = (
-        "ready" if validation_state == "ready" and action != "NO_ACTION"
+        judgment_readiness
+        if judgment_readiness in {"ready", "conditional", "insufficient"}
+        else "ready" if validation_state == "ready" and action != "NO_ACTION"
         else "insufficient" if failed
         else "conditional"
     )
+    if validation_state != "ready" and decision_ready == "ready":
+        decision_ready = "conditional"
     decided_at = reasoning_case.completed_at or reasoning_case.updated_at or reasoning_case.created_at
     source_fact_independence_key = stable_id(
         "reasoning-source-fact-delta",
@@ -373,6 +379,20 @@ def decision_episode_from_reasoning_case(
         episode_id,
         list(judgment.unsupported_follow_ups if judgment else ()),
     )
+    actionability = (
+        investment_decision_actionability(
+            {
+                "messageType": "investmentInsight",
+                "notificationAiDecisionContractVersion": "canonical-subject-decision-v1",
+                "_notificationAiPreparedDecisionCore": {
+                    "hypothesisSet": {"hypotheses": hypotheses},
+                },
+            },
+            judgment.to_dict(),
+        )
+        if judgment
+        else {}
+    )
     payload = {
         "episodeId": episode_id,
         "accountId": account_id,
@@ -403,6 +423,8 @@ def decision_episode_from_reasoning_case(
         "dataState": data_state,
         "validationState": validation_state,
         "decisionReadiness": decision_ready,
+        "decisionAssurance": dict(judgment.decision_assurance if judgment else {}),
+        "decisionActionability": actionability,
         "selectedHypothesisId": selected_id,
         "hypothesisReviews": reviews,
         "hypothesisComparisonState": (
@@ -439,7 +461,14 @@ def decision_episode_from_reasoning_case(
             or reasoning_case.stage
         ),
         "investmentView": _text(judgment.rationale if judgment else (final.reason if final else "")),
-        "executionDecision": action,
+        "executionDecision": _text(judgment.execution_decision if judgment else action),
+        "currentActionPlan": _text(judgment.current_action_plan if judgment else ""),
+        "changeAnalysis": _text(judgment.change_analysis if judgment else ""),
+        "nextActionPlan": _text(judgment.next_action_plan if judgment else ""),
+        "invalidationCondition": _text(
+            judgment.invalidation_condition if judgment else ""
+        ),
+        "causalChain": [dict(item) for item in judgment.causal_chain] if judgment else [],
         "followUpConditions": follow_up_conditions,
         "unsupportedFollowUps": unsupported_follow_ups,
         "decidedAt": decided_at,

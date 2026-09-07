@@ -947,7 +947,7 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                            observations.*,
                            ROW_NUMBER() OVER (
                                PARTITION BY target_requests.request_key, observations.account_id
-                               ORDER BY observations.observed_at ASC,
+                               ORDER BY COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) ASC,
                                         CASE observations.granularity
                                             WHEN '3m' THEN 1
                                             WHEN '15m' THEN 2
@@ -962,8 +962,8 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
                       ON observations.symbol = target_requests.symbol
                      AND observations.account_id IN (%s, %s)
                      AND observations.current_price > 0
-                     AND observations.observed_at >= target_requests.target_at
-                     AND observations.observed_at <= target_requests.deadline_at
+                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) >= target_requests.target_at
+                     AND COALESCE(NULLIF(observations.source_as_of, ''), observations.observed_at) <= target_requests.deadline_at
                 ) ranked
                 WHERE ranked.row_number_value = 1
                 """,

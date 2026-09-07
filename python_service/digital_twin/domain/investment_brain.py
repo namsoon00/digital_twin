@@ -10,6 +10,7 @@ from .decision_evidence_contract import (
     hypothesis_decision_eligibility,
     hypothesis_set_evidence_summary,
 )
+from .investment_decision_actionability import investment_decision_actionability
 from .hypothesis_scoping import (
     ACCOUNT_ONLY_SCOPE,
     HYPOTHESIS_SCOPE_VERSION,
@@ -39,7 +40,7 @@ from .ontology_worlds import market_world
 from .investment_reasoning_detail import reasoning_detail_snapshot
 
 
-INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v5"
+INVESTMENT_BRAIN_VERSION = "ontology-investment-brain-v6"
 HYPOTHESIS_SET_VERSION = "typedb-causal-hypotheses-v6"
 SYSTEM_ABSTENTION_TEMPLATE_ID = "hypothesis-template:system.evidence-sufficiency.v1"
 META_INFERENCE_RELATION_TYPES = {
@@ -547,6 +548,8 @@ class DecisionEpisode:
     data_state: str
     validation_state: str
     decision_readiness: str = "conditional"
+    decision_assurance: Dict[str, object] = field(default_factory=dict)
+    decision_actionability: Dict[str, object] = field(default_factory=dict)
     selected_hypothesis_id: str = ""
     hypothesis_reviews: List[HypothesisReview] = field(default_factory=list)
     hypothesis_comparison_state: str = "unavailable"
@@ -567,6 +570,11 @@ class DecisionEpisode:
     decision_summary: str = ""
     investment_view: str = ""
     execution_decision: str = ""
+    current_action_plan: str = ""
+    change_analysis: str = ""
+    next_action_plan: str = ""
+    invalidation_condition: str = ""
+    causal_chain: List[Dict[str, object]] = field(default_factory=list)
     follow_up_conditions: List[Dict[str, object]] = field(default_factory=list)
     unsupported_follow_ups: List[Dict[str, object]] = field(default_factory=list)
     decided_at: str = field(default_factory=utc_now_iso)
@@ -587,6 +595,9 @@ class DecisionEpisode:
         payload["aiExecution"] = dict(self.ai_execution or {})
         payload["decisionGuardrails"] = [dict(item) for item in self.decision_guardrails]
         payload["decisionAbstention"] = dict(self.decision_abstention or {})
+        payload["decisionAssurance"] = dict(self.decision_assurance or {})
+        payload["decisionActionability"] = dict(self.decision_actionability or {})
+        payload["causalChain"] = [dict(item) for item in self.causal_chain]
         payload["researchPlan"] = dict(self.research_plan or {})
         payload["researchAudit"] = dict(self.research_audit or {})
         payload["outcomes"] = [item.to_dict() for item in self.outcomes]
@@ -884,6 +895,16 @@ class DecisionEpisode:
                 {"ready", "conditional", "insufficient"},
                 "conditional",
             ),
+            decision_assurance=dict(
+                payload.get("decisionAssurance")
+                or payload.get("decision_assurance")
+                or {}
+            ),
+            decision_actionability=dict(
+                payload.get("decisionActionability")
+                or payload.get("decision_actionability")
+                or {}
+            ),
             selected_hypothesis_id=str(payload.get("selectedHypothesisId") or ""),
             hypothesis_reviews=reviews,
             hypothesis_comparison_state=known_state(
@@ -937,6 +958,25 @@ class DecisionEpisode:
             decision_summary=str(payload.get("decisionSummary") or ""),
             investment_view=str(payload.get("investmentView") or payload.get("investment_view") or ""),
             execution_decision=str(payload.get("executionDecision") or payload.get("execution_decision") or ""),
+            current_action_plan=str(
+                payload.get("currentActionPlan") or payload.get("current_action_plan") or ""
+            ),
+            change_analysis=str(
+                payload.get("changeAnalysis") or payload.get("change_analysis") or ""
+            ),
+            next_action_plan=str(
+                payload.get("nextActionPlan") or payload.get("next_action_plan") or ""
+            ),
+            invalidation_condition=str(
+                payload.get("invalidationCondition")
+                or payload.get("invalidation_condition")
+                or ""
+            ),
+            causal_chain=[
+                dict(item)
+                for item in payload.get("causalChain") or payload.get("causal_chain") or []
+                if isinstance(item, dict)
+            ],
             follow_up_conditions=[
                 dict(item)
                 for item in payload.get("followUpConditions") or payload.get("follow_up_conditions") or []
@@ -3225,6 +3265,11 @@ def decision_episode_from_context(
         seed_episode.hypothesis_set.to_dict(),
         validated_response,
     )
+    actionability = dict(
+        validated_response.get("decisionActionability")
+        or context.get("investmentDecisionActionability")
+        or investment_decision_actionability(context, validated_response)
+    )
     return DecisionEpisode(
         episode_id=episode_id,
         account_id=str(context.get("accountId") or ""),
@@ -3241,6 +3286,8 @@ def decision_episode_from_context(
             {"ready", "conditional", "insufficient"},
             "conditional",
         ),
+        decision_assurance=dict(validated_response.get("decisionAssurance") or {}),
+        decision_actionability=actionability,
         selected_hypothesis_id=selected_id,
         hypothesis_reviews=list(comparison.reviews),
         hypothesis_comparison_state=comparison.comparison_state,
@@ -3281,6 +3328,15 @@ def decision_episode_from_context(
         decision_summary=str(validated_response.get("summary") or ""),
         investment_view=str(validated_response.get("investmentView") or validated_response.get("summary") or ""),
         execution_decision=str(validated_response.get("executionDecision") or validated_response.get("currentActionPlan") or ""),
+        current_action_plan=str(validated_response.get("currentActionPlan") or ""),
+        change_analysis=str(validated_response.get("changeAnalysis") or ""),
+        next_action_plan=str(validated_response.get("nextActionPlan") or ""),
+        invalidation_condition=str(validated_response.get("invalidationCondition") or ""),
+        causal_chain=[
+            dict(item)
+            for item in validated_response.get("causalChain") or []
+            if isinstance(item, dict)
+        ],
         follow_up_conditions=scoped_decision_follow_ups(
             episode_id,
             validated_response.get("followUpConditions") or [],

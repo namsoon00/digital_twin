@@ -17,8 +17,8 @@ INVESTMENT_REASONING_CONTRACT_VERSION = "investment-reasoning-case-v2"
 FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
-AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v2"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v5"
+AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v3"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v6"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -351,6 +351,7 @@ class ActionAlternative:
     evidence_conflict_ids: Tuple[str, ...] = ()
     invalidation_conditions: Tuple[str, ...] = ()
     decision_eligible: bool = False
+    execution_eligible: bool = False
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "ActionAlternative":
@@ -364,6 +365,9 @@ class ActionAlternative:
             evidence_conflict_ids=_texts(payload.get("evidence_conflict_ids") or payload.get("evidenceConflictIds")),
             invalidation_conditions=_texts(payload.get("invalidation_conditions") or payload.get("invalidationConditions")),
             decision_eligible=bool(payload.get("decision_eligible") or payload.get("decisionEligible")),
+            execution_eligible=bool(
+                payload.get("execution_eligible") or payload.get("executionEligible")
+            ),
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -396,6 +400,7 @@ class DecisionSynthesis:
     blocked_actions: Tuple[str, ...] = ()
     alternatives: Tuple[ActionAlternative, ...] = ()
     eligible_hypothesis_ids: Tuple[str, ...] = ()
+    execution_eligible_hypothesis_ids: Tuple[str, ...] = ()
     reference_hypothesis_ids: Tuple[str, ...] = ()
     selected_rule_id: str = ""
     portfolio_constraint_rule_ids: Tuple[str, ...] = ()
@@ -408,6 +413,9 @@ class DecisionSynthesis:
     missing_data: Tuple[str, ...] = ()
     next_checks: Tuple[str, ...] = ()
     reversal_conditions: Tuple[str, ...] = ()
+    execution_qualified: bool = False
+    hypothesis_qualification_state: str = "not-evaluated"
+    hypothesis_qualification_reasons: Tuple[str, ...] = ()
     judgement_blocked: bool = False
     graph_trace_complete: bool = False
     evidence_state: str = ""
@@ -440,6 +448,10 @@ class DecisionSynthesis:
                 if isinstance(item, Mapping)
             ),
             eligible_hypothesis_ids=_texts(payload.get("eligible_hypothesis_ids") or payload.get("eligibleHypothesisIds")),
+            execution_eligible_hypothesis_ids=_texts(
+                payload.get("execution_eligible_hypothesis_ids")
+                or payload.get("executionEligibleHypothesisIds")
+            ),
             reference_hypothesis_ids=_texts(payload.get("reference_hypothesis_ids") or payload.get("referenceHypothesisIds")),
             selected_rule_id=str(payload.get("selected_rule_id") or payload.get("selectedRuleId") or ""),
             portfolio_constraint_rule_ids=_texts(payload.get("portfolio_constraint_rule_ids") or payload.get("portfolioConstraintRuleIds")),
@@ -452,6 +464,18 @@ class DecisionSynthesis:
             missing_data=_texts(payload.get("missing_data") or payload.get("missingData")),
             next_checks=_texts(payload.get("next_checks") or payload.get("nextChecks")),
             reversal_conditions=_texts(payload.get("reversal_conditions") or payload.get("reversalConditions")),
+            execution_qualified=bool(
+                payload.get("execution_qualified") or payload.get("executionQualified")
+            ),
+            hypothesis_qualification_state=str(
+                payload.get("hypothesis_qualification_state")
+                or payload.get("hypothesisQualificationState")
+                or "not-evaluated"
+            ),
+            hypothesis_qualification_reasons=_texts(
+                payload.get("hypothesis_qualification_reasons")
+                or payload.get("hypothesisQualificationReasons")
+            ),
             judgement_blocked=bool(payload.get("judgement_blocked") or payload.get("judgementBlocked")),
             graph_trace_complete=bool(payload.get("graph_trace_complete") or payload.get("graphTraceComplete")),
             evidence_state=str(payload.get("evidence_state") or payload.get("evidenceState") or ""),
@@ -465,9 +489,11 @@ class DecisionSynthesis:
         payload = asdict(self)
         for key in [
             "allowed_actions", "blocked_actions", "eligible_hypothesis_ids",
+            "execution_eligible_hypothesis_ids",
             "reference_hypothesis_ids", "missing_data", "next_checks",
             "reversal_conditions", "portfolio_constraint_rule_ids",
             "execution_constraint_rule_ids", "data_quality_rule_ids",
+            "hypothesis_qualification_reasons",
         ]:
             payload[key] = list(payload[key])
         payload["alternatives"] = [item.to_dict() for item in self.alternatives]
@@ -778,6 +804,14 @@ class AIJudgmentResult:
     reviewed_hypothesis_ids: Tuple[str, ...] = ()
     hypothesis_reviews: Tuple[Dict[str, object], ...] = ()
     comparison_state: str = ""
+    decision_readiness: str = "conditional"
+    execution_decision: str = ""
+    current_action_plan: str = ""
+    change_analysis: str = ""
+    next_action_plan: str = ""
+    invalidation_condition: str = ""
+    decision_assurance: Dict[str, object] = field(default_factory=dict)
+    causal_chain: Tuple[Dict[str, object], ...] = ()
     model: str = ""
     reasoning_effort: str = ""
     latency_ms: int = 0
@@ -873,6 +907,20 @@ class AIJudgmentResult:
                 or payload.get("hypothesisComparisonState")
                 or ""
             ),
+            decision_readiness=str(
+                payload.get("decisionReadiness") or "conditional"
+            ).lower(),
+            execution_decision=str(payload.get("executionDecision") or ""),
+            current_action_plan=str(payload.get("currentActionPlan") or ""),
+            change_analysis=str(payload.get("changeAnalysis") or ""),
+            next_action_plan=str(payload.get("nextActionPlan") or ""),
+            invalidation_condition=str(payload.get("invalidationCondition") or ""),
+            decision_assurance=_mapping(payload.get("decisionAssurance")),
+            causal_chain=tuple(
+                dict(item)
+                for item in payload.get("causalChain") or []
+                if isinstance(item, Mapping)
+            ),
             model=str(getattr(result, "model", "") or ""),
             reasoning_effort=str(getattr(result, "reasoning_effort", "") or ""),
             latency_ms=max(0, int(getattr(result, "latency_ms", 0) or 0)),
@@ -888,6 +936,7 @@ class AIJudgmentResult:
         payload["hypothesis_reviews"] = [dict(item) for item in self.hypothesis_reviews]
         payload["follow_up_conditions"] = [dict(item) for item in self.follow_up_conditions]
         payload["unsupported_follow_ups"] = [dict(item) for item in self.unsupported_follow_ups]
+        payload["causal_chain"] = [dict(item) for item in self.causal_chain]
         return payload
 
     @classmethod
@@ -933,6 +982,24 @@ class AIJudgmentResult:
                 if isinstance(item, Mapping)
             ),
             comparison_state=str(payload.get("comparison_state") or payload.get("comparisonState") or ""),
+            decision_readiness=str(
+                payload.get("decision_readiness") or payload.get("decisionReadiness") or "conditional"
+            ).lower(),
+            execution_decision=str(payload.get("execution_decision") or payload.get("executionDecision") or ""),
+            current_action_plan=str(payload.get("current_action_plan") or payload.get("currentActionPlan") or ""),
+            change_analysis=str(payload.get("change_analysis") or payload.get("changeAnalysis") or ""),
+            next_action_plan=str(payload.get("next_action_plan") or payload.get("nextActionPlan") or ""),
+            invalidation_condition=str(
+                payload.get("invalidation_condition") or payload.get("invalidationCondition") or ""
+            ),
+            decision_assurance=_mapping(
+                payload.get("decision_assurance") or payload.get("decisionAssurance")
+            ),
+            causal_chain=tuple(
+                dict(item)
+                for item in payload.get("causal_chain") or payload.get("causalChain") or []
+                if isinstance(item, Mapping)
+            ),
             model=str(payload.get("model") or ""),
             reasoning_effort=str(payload.get("reasoning_effort") or payload.get("reasoningEffort") or ""),
             latency_ms=max(0, int(payload.get("latency_ms") or payload.get("latencyMs") or 0)),

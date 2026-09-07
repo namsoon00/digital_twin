@@ -12,6 +12,7 @@
     {"file": "test_decision_continuity.py", "tier": "unit", "core": true},
     {"file": "test_decision_audit_entries.py", "tier": "unit", "core": true},
     {"file": "test_decision_delta_delivery_policy.py", "tier": "unit", "core": true},
+    {"file": "test_investment_decision_actionability.py", "tier": "unit", "core": true},
     {"file": "test_action_envelope_ai_gate.py", "tier": "unit", "core": true},
     {"file": "test_valuation_contracts.py", "tier": "unit", "core": true},
     {"file": "test_decision_outcome_targets.py", "tier": "unit", "core": true},

@@ -9,6 +9,7 @@ import time
 from typing import Callable, Dict, Optional
 
 from ..domain.context_observation_notifications import typedb_context_observation_contract
+from ..domain.investment_decision_actionability import investment_decision_actionability
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from ..domain.notification_ai_inference_packet import (
@@ -20,6 +21,26 @@ from ..domain.notification_narrative import normalize_narrative_claims
 
 class NotificationAIContractError(ValueError):
     """The model answered, but its result is not safe to publish as AI advice."""
+
+
+def _actionability_contract_error(
+    context: Dict[str, object],
+    response: NotificationAIValidatedResponse,
+) -> str:
+    if str(context.get("messageType") or "") != INVESTMENT_INSIGHT:
+        return ""
+    modern_contract = bool(
+        context.get("notificationAiDecisionContractVersion")
+        or context.get("_notificationAiPreparedDecisionCore")
+        or context.get("investmentSubjectDecisionCaseId")
+    )
+    if not modern_contract:
+        return ""
+    assessment = investment_decision_actionability(context, response)
+    gaps = list(assessment.get("gaps") or [])
+    if not gaps:
+        return ""
+    return "investment decision actionability contract failed: " + ", ".join(gaps)
 
 
 def hypothesis_comparison_needs_repair(
@@ -101,11 +122,11 @@ def ai_response_contract_error(
                 return "AI returned hypotheses when the routed TypeDB hypothesis set is empty."
             return ""
         if hypothesis_ids and (allowed_actions or blocked_actions):
-            return ""
+            return _actionability_contract_error(context, response)
 
     reasoning_case = context.get("investmentReasoningCase")
     if not isinstance(reasoning_case, dict) or not reasoning_case:
-        return ""
+        return _actionability_contract_error(context, response)
     selected_id = str(getattr(response, "selected_hypothesis_id", "") or "")
     hypothesis_ids = {
         str(value or "") for value in reasoning_case.get("hypothesisIds") or [] if str(value or "")
@@ -116,7 +137,7 @@ def ai_response_contract_error(
         dict(value) for value in reasoning_case.get("decisionSyntheses") or [] if isinstance(value, dict)
     ]
     if not syntheses:
-        return ""
+        return _actionability_contract_error(context, response)
     eligible_ids = {
         str(value or "")
         for synthesis in syntheses
@@ -167,7 +188,7 @@ def ai_response_contract_error(
             "The selected action differs from the selected TypeDB hypothesis "
             "without an explicit disagreement reason."
         )
-    return ""
+    return _actionability_contract_error(context, response)
 
 
 def _claim_validation_ledger_ids(response: NotificationAIValidatedResponse) -> set:
@@ -269,6 +290,8 @@ def ai_contract_repair_prompt(
         "action은 actionEnvelope 안에서 선택하고 모든 입력 가설을 한 번씩 검토한다.",
         "각 가설의 입력 근거와 반대 근거를 모두 확인한 뒤 evidenceReviewStatus를 all-input-evidence-reviewed로 쓴다. 근거 ID 배열을 응답에 복사하지 않는다.",
         "narrativeClaims는 허용된 evidence ID만 연결하며 view와 next-condition 또는 limitation을 포함한다.",
+        "currentActionPlan에는 지금 할 일과 보류할 일을, nextActionPlan에는 실제로 재관측할 가격·거래량·수급·실적·공시·금리·환율과 그 결과에 따른 판단 변화를 쓴다.",
+        "BUY·ADD·TRIM·SELL은 decisionReadiness=ready, executionEligibility=eligible, qualification decisionUse=execution, 근거 ID가 있는 supported causalChain을 모두 만족할 때만 선택한다.",
         "검증 오류: " + json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         "이전 응답: " + previous,
         "DecisionCore:",

@@ -235,5 +235,18 @@ class InvestmentFlowQueryService:
         return result
 
     def _compact(self, item: Dict[str, object]) -> Dict[str, object]:
-        omitted = {"raw", "hypotheses", "guardrails", "evidenceIds", "relationIds", "ruleIds", "abstention"}
-        return {key: value for key, value in item.items() if key not in omitted}
+        omitted = {
+            "raw", "hypotheses", "guardrails", "evidenceIds", "relationIds",
+            "ruleIds", "abstention", "decisionActionability",
+        }
+        compact = {key: value for key, value in item.items() if key not in omitted}
+        authorization = item_dict(compact.get("decisionAuthorization"))
+        if authorization:
+            compact["decisionAuthorization"] = {
+                key: authorization.get(key)
+                for key in (
+                    "version", "status", "state", "authorized", "recordedAction",
+                    "effectiveAction", "detail",
+                )
+            }
+        return compact

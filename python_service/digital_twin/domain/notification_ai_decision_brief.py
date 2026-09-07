@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List
 
 from .decision_evidence_contract import (
     decision_readiness_contract,
+    hypothesis_decision_eligibility,
     temporal_evidence_summary,
 )
 from .decision_continuity import compact_decision_continuity_packet
@@ -239,6 +240,12 @@ def _enriched_prompt_hypothesis_set(
         for key in ("theoryFamily", "thesisFamily", "evidenceIndependenceKey"):
             if not enriched.get(key) and knowledge_basis.get(key):
                 enriched[key] = knowledge_basis[key]
+        assessment = hypothesis_decision_eligibility(enriched)
+        enriched["decisionUse"] = assessment.get("decisionUse")
+        enriched["executionEligible"] = assessment.get("executionEligible")
+        enriched["outcomeQualificationStatus"] = assessment.get(
+            "outcomeQualificationStatus"
+        )
         hypotheses.append(enriched)
     return {
         **selected,
@@ -529,7 +536,8 @@ HYPOTHESIS_DECISION_FIELDS = (
     "theoryFamily", "thesisFamily", "evidenceIndependenceKey", "knowledgeBasis",
     "predictionTarget", "expectedDirection", "expectedOutcome", "outcomeMetric",
     "falsificationContract", "competingFamilyIds", "inferenceGenerationId", "candidateAction",
-    "claimContract", "qualification",
+    "claimContract", "qualification", "decisionUse", "executionEligible",
+    "outcomeQualificationStatus",
 )
 
 DECISION_FIELDS = (

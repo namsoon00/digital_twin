@@ -123,6 +123,10 @@ class InvestmentOutcomeObservationService:
             if not facts:
                 missing_count += 1
                 continue
+            facts.setdefault(
+                "observationSourcePolicy",
+                "point-in-time-market-observation",
+            )
             benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
             if benchmark_symbol:
                 start = benchmark_observations.get(request_id + ":benchmark-start") or {}
@@ -138,7 +142,7 @@ class InvestmentOutcomeObservationService:
             records.append({
                 "episodeId": target.get("episodeId"),
                 "horizonMinutes": target.get("horizonMinutes"),
-                "observedAt": facts.get("generatedAt") or facts.get("updatedAt") or observed_at,
+                "observedAt": facts.get("sourceAsOf") or facts.get("generatedAt") or facts.get("updatedAt") or observed_at,
                 "facts": facts,
             })
         outcomes = self.decision_episode_store.record_outcome_observations(snapshot.account_id, records)

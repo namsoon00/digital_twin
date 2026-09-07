@@ -9419,7 +9419,12 @@ class PortfolioOntologyProjectionRecorder:
             target_symbols=decision_memory_symbols,
         )
         decision_episodes = list(decision_memory.get("episodes") or [])
-        emit("decision_episodes.done", episodeCount=len(decision_episodes))
+        decision_outcome_history = list(decision_memory.get("outcomeHistoryEpisodes") or [])
+        emit(
+            "decision_episodes.done",
+            episodeCount=len(decision_episodes),
+            outcomeHistoryEpisodeCount=len(decision_outcome_history),
+        )
         emit("metadata.start")
         metadata = self.factual_runtime_metadata(
             snapshot.metadata,
@@ -9433,10 +9438,28 @@ class PortfolioOntologyProjectionRecorder:
         metadata.pop("ontology", None)
         account_context = metadata.get("accountContext") if isinstance(metadata.get("accountContext"), dict) else {}
         emit("decision_performance.start")
-        decision_performance = evaluate_decision_performance(
-            decision_episodes,
-            minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
-        )
+        decision_performance = {}
+        if hasattr(self.decision_episode_store, "performance"):
+            try:
+                decision_performance = self.decision_episode_store.performance(
+                    account_id=snapshot.account_id,
+                    limit=2000,
+                    as_of=as_of,
+                )
+            except TypeError:
+                # Compatibility stores may not yet expose the point-in-time
+                # parameter. Their bounded result remains diagnostic only.
+                decision_performance = self.decision_episode_store.performance(
+                    account_id=snapshot.account_id,
+                    limit=2000,
+                )
+            except Exception:  # noqa: BLE001 - calibration history still supports the current subject.
+                decision_performance = {}
+        if not decision_performance:
+            decision_performance = evaluate_decision_performance(
+                decision_outcome_history or decision_episodes,
+                minimum_sample_count=int(self.performance_setting("investmentBrainPerformanceMinimumSamples", 5)),
+            )
         emit("decision_performance.done")
         emit("hypothesis_proposals.start")
         hypothesis_proposals = self.hypothesis_proposal_context(
@@ -9517,6 +9540,10 @@ class PortfolioOntologyProjectionRecorder:
             # reasoning context and keeps this input empty to avoid feedback.
             "decisionItems": [],
             "decisionEpisodes": decision_episodes,
+            # Historical outcomes are aggregated into calibration facts only;
+            # their old decisions and AI prose are not reintroduced as live
+            # reasoning premises.
+            "decisionOutcomeHistory": decision_outcome_history,
             "decisionEpisodeProjection": dict(decision_memory.get("projection") or {}),
             "decisionPerformance": decision_performance,
             "hypothesisProposals": hypothesis_proposals,
@@ -9711,10 +9738,18 @@ class PortfolioOntologyProjectionRecorder:
             "perSymbolLimit": self.decision_episode_context_per_symbol_limit(),
             "maximumEpisodeCount": self.decision_episode_context_maximum_episodes(),
             "outcomeObservation": {},
+            "outcomeHistory": {
+                "mode": "point-in-time-compact-calibration-history",
+                "status": "pending",
+                "includedEpisodeCount": 0,
+                "perSymbolLimit": self.decision_outcome_history_per_symbol_limit(),
+                "maximumEpisodeCount": self.decision_outcome_history_maximum_episodes(),
+            },
         }
         if not self.decision_episode_store:
             projection["status"] = "unavailable"
-            return {"episodes": [], "projection": projection}
+            projection["outcomeHistory"]["status"] = "unavailable"
+            return {"episodes": [], "outcomeHistoryEpisodes": [], "projection": projection}
         try:
             observation = self.outcome_observation_service.observe_snapshot(snapshot)
             snapshot.metadata.setdefault("investmentBrain", {})["outcomeObservation"] = observation
@@ -9740,6 +9775,7 @@ class PortfolioOntologyProjectionRecorder:
                     symbols,
                     account_id=snapshot.account_id,
                     limit_per_symbol=per_symbol_limit,
+                    as_of=str(snapshot.generated_at or ""),
                 )
             elif symbols:
                 source_episodes = []
@@ -9758,7 +9794,42 @@ class PortfolioOntologyProjectionRecorder:
                 )
         except Exception:  # noqa: BLE001 - projection remains valid without historical memory.
             projection["status"] = "unavailable"
-            return {"episodes": [], "projection": projection}
+            projection["outcomeHistory"]["status"] = "unavailable"
+            return {"episodes": [], "outcomeHistoryEpisodes": [], "projection": projection}
+        outcome_history_episodes = []
+        outcome_history_projection = projection["outcomeHistory"]
+        try:
+            if symbols and hasattr(self.decision_episode_store, "outcome_history_for_symbols"):
+                outcome_history_episodes = self.decision_episode_store.outcome_history_for_symbols(
+                    symbols,
+                    account_id=snapshot.account_id,
+                    as_of=str(snapshot.generated_at or ""),
+                    limit_per_symbol=int(outcome_history_projection["perSymbolLimit"] or 120),
+                    maximum_episode_count=int(outcome_history_projection["maximumEpisodeCount"] or 600),
+                )
+            elif symbols and hasattr(self.decision_episode_store, "performance_episodes"):
+                for symbol in symbols:
+                    outcome_history_episodes.extend(
+                        self.decision_episode_store.performance_episodes(
+                            account_id=snapshot.account_id,
+                            symbol=symbol,
+                            limit=int(outcome_history_projection["perSymbolLimit"] or 120),
+                            as_of=str(snapshot.generated_at or ""),
+                        )
+                    )
+                outcome_history_episodes = outcome_history_episodes[
+                    :int(outcome_history_projection["maximumEpisodeCount"] or 600)
+                ]
+            outcome_history_episodes = [
+                dict(item) for item in outcome_history_episodes or []
+                if isinstance(item, dict)
+            ]
+            outcome_history_projection["includedEpisodeCount"] = len(outcome_history_episodes)
+            outcome_history_projection["status"] = "ok"
+        except Exception as error:  # noqa: BLE001 - recent decision memory remains independently usable.
+            outcome_history_episodes = []
+            outcome_history_projection["status"] = "unavailable"
+            outcome_history_projection["reason"] = str(error)[:180]
         source_by_id = {}
         for item in source_episodes or []:
             episode_id = str(getattr(item, "episode_id", "") or "").strip()
@@ -9797,7 +9868,11 @@ class PortfolioOntologyProjectionRecorder:
         projection["includedEpisodeCount"] = len(rows)
         projection["droppedEpisodeCount"] = max(0, len(ordered) - len(rows))
         projection["status"] = "ok"
-        return {"episodes": rows, "projection": projection}
+        return {
+            "episodes": rows,
+            "outcomeHistoryEpisodes": outcome_history_episodes,
+            "projection": projection,
+        }
 
     def decision_episode_context_per_symbol_limit(self) -> int:
         return self.integer_setting("ontologyDecisionEpisodeContextPerSymbolLimit", 3, 1, 12)
@@ -9810,6 +9885,12 @@ class PortfolioOntologyProjectionRecorder:
 
     def decision_episode_context_outcome_limit(self) -> int:
         return self.integer_setting("ontologyDecisionEpisodeContextOutcomeLimit", 8, 1, 16)
+
+    def decision_outcome_history_per_symbol_limit(self) -> int:
+        return self.integer_setting("ontologyDecisionOutcomeHistoryPerSymbolLimit", 120, 12, 500)
+
+    def decision_outcome_history_maximum_episodes(self) -> int:
+        return self.integer_setting("ontologyDecisionOutcomeHistoryMaxEpisodes", 600, 12, 2000)
 
     def integer_setting(self, key: str, fallback: int, minimum: int, maximum: int) -> int:
         try:

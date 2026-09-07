@@ -8,7 +8,7 @@ from typing import Dict
 from ..investment_reasoning.decision_delta import DecisionDelta
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v16"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v17"
 
 
 @dataclass(frozen=True)

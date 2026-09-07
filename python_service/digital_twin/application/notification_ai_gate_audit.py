@@ -3,6 +3,7 @@ from typing import Dict, Optional
 
 from ..domain.investment_ubiquitous_language import user_facing_investment_language
 from ..domain.investment_decision_history import context_with_ai_decision_transition
+from ..domain.investment_decision_actionability import investment_decision_actionability
 from ..domain.investment_notification_state import (
     context_with_investment_notification_state,
     investment_notification_transition_line,
@@ -306,6 +307,8 @@ def context_with_validated_ai_response(
     narrative_payload = narrative_brief.to_dict()
     narrative_payload["fingerprint"] = narrative_fingerprint(narrative_payload)
     payload = response.to_dict()
+    actionability = investment_decision_actionability(enriched, response)
+    payload["decisionActionability"] = actionability
     guide_quality = strategy_guide_quality(enriched, response)
     payload["strategyGuideQuality"] = guide_quality
     audit = notification_ai_decision_audit(enriched, response, payload)
@@ -322,6 +325,7 @@ def context_with_validated_ai_response(
     enriched["notificationAiReviewMode"] = review_mode
     enriched["notificationWriterProvenance"] = dict(narrative_brief.writer_provenance)
     enriched["notificationClaimValidation"] = dict(response.claim_validation or {})
+    enriched["investmentDecisionActionability"] = actionability
     if narrative_only:
         enriched.pop("investmentNotificationState", None)
         enriched.pop("investmentNotificationTransition", None)

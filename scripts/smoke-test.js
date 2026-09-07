@@ -3194,7 +3194,7 @@ async function checkNormalMode(port, context) {
   const investmentFlow = await request(port, "/api/investment-flow?limit=10");
   assertOk(investmentFlow.statusCode === 200, "투자 판단 흐름 API 응답 코드가 200이 아닙니다: " + investmentFlow.statusCode + " · " + investmentFlow.body.slice(0, 500));
   const investmentFlowPayload = JSON.parse(investmentFlow.body);
-  assertOk(investmentFlowPayload.version === "investment-flow-v2", "투자 판단 흐름 API v2 계약이 없습니다.");
+  assertOk(investmentFlowPayload.version === "investment-flow-v3", "투자 판단 흐름 API v3 계약이 없습니다.");
   assertOk(Array.isArray(investmentFlowPayload.items), "투자 판단 흐름 API items가 배열이 아닙니다.");
   assertOk(investmentFlowPayload.operatorView && Array.isArray(investmentFlowPayload.operatorView.stages), "투자 판단 흐름 API 운영 단계가 없습니다.");
 

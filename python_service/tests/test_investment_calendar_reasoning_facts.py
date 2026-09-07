@@ -2,6 +2,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.investment_calendar_service import InvestmentCalendarService
+from digital_twin.application.investment_calendar_discovery_service import InvestmentCalendarDiscoveryService
+from digital_twin.application.official_calendar_sync_service import OfficialCalendarSyncService
 from digital_twin.domain.events import (
     ONTOLOGY_REASONING_REQUESTED,
     DomainEvent,
@@ -9,6 +11,7 @@ from digital_twin.domain.events import (
 )
 from digital_twin.domain.independent_reasoning import independent_reasoning_request
 from digital_twin.domain.investment_calendar import InvestmentCalendarEvent
+from digital_twin.domain.official_calendar import OfficialCalendarEvent
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.portfolio_calculations import portfolio_summary
 from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
@@ -274,6 +277,69 @@ class InvestmentCalendarReasoningFactsTest(unittest.TestCase):
 
         self.assertEqual("ready", profile["status"])
         self.assertEqual([], profile["blockers"])
+
+        class CheckpointStore:
+            def __init__(self):
+                self.values = {}
+
+            def load(self, checkpoint_id):
+                return dict(self.values.get(checkpoint_id) or {})
+
+            def save(self, checkpoint_id, payload):
+                self.values[checkpoint_id] = dict(payload or {})
+
+        class CalendarService:
+            def save_event(self, _payload):
+                return None
+
+        class OfficialSource:
+            def events(self):
+                return [OfficialCalendarEvent(
+                    event_id="official-test-20260916",
+                    title="test",
+                    event_type="macro",
+                    starts_at="2026-09-16T18:00:00Z",
+                )]
+
+        checkpoint_store = CheckpointStore()
+        now = datetime(2026, 9, 8, 1, 0, tzinfo=timezone.utc)
+        official = OfficialCalendarSyncService(
+            CalendarService(),
+            sources=[OfficialSource()],
+            settings={"investmentCalendarOfficialMacroSyncIntervalHours": "12"},
+            now=lambda: now,
+            checkpoint_store=checkpoint_store,
+        )
+        self.assertEqual("ok", official.run_due()["status"])
+        recreated_official = OfficialCalendarSyncService(
+            CalendarService(),
+            sources=[OfficialSource()],
+            settings={"investmentCalendarOfficialMacroSyncIntervalHours": "12"},
+            now=lambda: now + timedelta(hours=1),
+            checkpoint_store=checkpoint_store,
+        )
+        self.assertFalse(recreated_official.due())
+        self.assertEqual("2026-09-08T01:00:00Z", recreated_official.status()["lastRunAt"])
+
+        discovery = InvestmentCalendarDiscoveryService(
+            calendar_service=CalendarService(),
+            candidate_repository=None,
+            research_gateway=object(),
+            settings={"investmentCalendarDiscoveryIntervalHours": "12", "watchlistSymbols": ""},
+            now=lambda: now,
+            checkpoint_store=checkpoint_store,
+        )
+        self.assertEqual("noTargets", discovery.run_once()["status"])
+        recreated_discovery = InvestmentCalendarDiscoveryService(
+            calendar_service=CalendarService(),
+            candidate_repository=None,
+            research_gateway=object(),
+            settings={"investmentCalendarDiscoveryIntervalHours": "12", "watchlistSymbols": ""},
+            now=lambda: now + timedelta(hours=2),
+            checkpoint_store=checkpoint_store,
+        )
+        self.assertFalse(recreated_discovery.due())
+        self.assertEqual("noTargets", recreated_discovery.status()["lastResult"]["status"])
 
     def test_expired_calendar_source_fact_is_history_only_during_release_replay(self):
         payload = calendar_payload()

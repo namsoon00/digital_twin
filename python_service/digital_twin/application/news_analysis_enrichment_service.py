@@ -358,6 +358,11 @@ class NewsAnalysisEnrichmentRunner:
                 result["enrichmentRevisions"] = dict(enrichment_loader() or {})
             except Exception as error:  # noqa: BLE001 - diagnostics must not block status.
                 result["enrichmentRevisions"] = {"status": "error", "reason": str(error)[:180]}
+        storage = self.storage_state()
+        blocked = not bool(storage.get("nonEssentialWritesAllowed", True))
+        result["storage"] = storage
+        result["processingState"] = "blocked-capacity" if blocked else "ready"
+        result["actionRequired"] = bool(blocked and result.get("pendingCount"))
         return result
 
     def storage_state(self) -> Dict[str, object]:
@@ -454,14 +459,11 @@ class NewsAnalysisEnrichmentRunner:
             return {"status": "disabled", **self.status(), "processedCount": 0, "savedCount": 0}
         storage = self.storage_state()
         if not bool(storage.get("nonEssentialWritesAllowed", True)):
+            blocked_status = self.status()
             return {
-                "status": "deferred-low-disk",
-                "enabled": True,
-                "intervalSeconds": self.interval_seconds(),
-                "batchSize": self.batch_size(),
-                "retryMinutes": self.retry_minutes(),
-                "pendingCount": 0,
-                "pendingTranslationCount": 0,
+                **blocked_status,
+                "status": "blocked-capacity",
+                "processingState": "blocked-capacity",
                 "processedCount": 0,
                 "savedCount": 0,
                 "storage": storage,

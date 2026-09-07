@@ -138,6 +138,11 @@ from .share_notification_links import ActiveShareNotificationLinkResolver
 from .bok_calendar_source import BokPolicyDecisionCalendarSource
 from .opendart_calendar_source import OpenDartEarningsCalendarSource
 from .samsung_ir_calendar_source import SamsungIrEarningsCalendarSource
+from .us_macro_calendar_source import (
+    BeaMacroReleaseCalendarSource,
+    BlsMacroReleaseCalendarSource,
+    FederalReserveFomcCalendarSource,
+)
 from .disclosure_analyzer import disclosure_analyzer_from_settings
 from .model_review_queue import ModelReviewEnqueuer
 from .model_reviewer import reviewer_from_settings
@@ -1290,11 +1295,15 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
         calendar_service=calendar_service,
         sources=[
             BokPolicyDecisionCalendarSource(configured_settings),
+            FederalReserveFomcCalendarSource(configured_settings),
+            BlsMacroReleaseCalendarSource(configured_settings),
+            BeaMacroReleaseCalendarSource(configured_settings),
             OpenDartEarningsCalendarSource(configured_settings, target_symbols=calendar_symbols),
             SamsungIrEarningsCalendarSource(configured_settings),
         ],
         candidate_service=candidate_service,
         settings=configured_settings,
+        checkpoint_store=stores.runtime_checkpoint_store(configured_settings),
     )
 
 
@@ -1331,6 +1340,7 @@ def build_investment_calendar_discovery_service(settings=None, event_publisher=N
         account_repository=stores.account_registry(configured_settings),
         research_gateway=ExistingApiResearchGateway(configured_settings),
         settings=configured_settings,
+        checkpoint_store=stores.runtime_checkpoint_store(configured_settings),
     )
 
 

@@ -96,6 +96,7 @@ MYSQL_OPERATIONAL_COMPACTION_TABLES = frozenset({
     "investment_research_runs",
     "research_evidence",
     "market_time_series_observations",
+    "temporal_feature_snapshots",
     "ontology_reasoning_mailbox_events",
     "portfolio_rebalance_review_windows",
     "symbol_universe",

@@ -35,6 +35,12 @@ from digital_twin.infrastructure.kis_market_signals import (
     stage_coverage,
 )
 from digital_twin.infrastructure.toss_snapshots import TossProvider, normalize_price_payload
+from digital_twin.infrastructure.us_macro_calendar_source import (
+    parse_bea_release_events,
+    parse_bls_release_events,
+    parse_fred_bls_release_events,
+    parse_fomc_meeting_events,
+)
 
 
 class MemoryQuoteCache:
@@ -486,6 +492,52 @@ class ExternalApiSourceTests(unittest.TestCase):
 
         source = next(item for item in metadata["externalApiSources"] if item["provider"] == "공공데이터포털")
         self.assertIn("금융위원회 국내 주식 공식 일별 시세·거래량", source["details"])
+        fomc = parse_fomc_meeting_events(
+            '<a id="one">2026 FOMC Meetings</a>'
+            '<div class="fomc-meeting__month"><strong>September</strong></div>'
+            '<div class="fomc-meeting__date">15-16*</div>'
+            '<a id="two">2027 FOMC Meetings</a>',
+            years=[2026],
+        )
+        self.assertEqual("official-fed-fomc-20260916", fomc[0].event_id)
+        self.assertEqual("2026-09-16T18:00:00Z", fomc[0].starts_at)
+        self.assertTrue(fomc[0].payload["economicProjectionsExpected"])
+
+        bls = parse_bls_release_events("""BEGIN:VCALENDAR
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260911T083000
+SUMMARY:Consumer Price Index for August 2026
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20261002T083000
+SUMMARY:Employment Situation for September 2026
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260929T100000
+SUMMARY:Job Openings and Labor Turnover Survey
+END:VEVENT
+END:VCALENDAR
+""")
+        self.assertEqual(["official-bls-cpi-20260911", "official-bls-employment-20261002"], [item.event_id for item in bls])
+        self.assertEqual("2026-09-11T12:30:00Z", bls[0].starts_at)
+        fred_bls = parse_fred_bls_release_events({"release_dates": [
+            {"release_id": 10, "release_name": "Consumer Price Index", "date": "2026-09-11"},
+            {"release_id": 50, "release_name": "Employment Situation", "date": "2026-10-02"},
+            {"release_id": 46, "release_name": "Producer Price Index", "date": "2026-09-12"},
+        ]})
+        self.assertEqual(["official-bls-cpi-20260911", "official-bls-employment-20261002"], [item.event_id for item in fred_bls])
+        self.assertEqual("FRED", fred_bls[0].payload["sourceProvider"])
+
+        bea = parse_bea_release_events("""
+        <table><thead><tr><th>Year 2026</th></tr></thead><tbody>
+        <tr><td><div class="release-date">September 30</div><small class="text-muted">8:30 AM</small></td>
+        <td class="release-title">GDP (Third Estimate), Industries, 2nd Quarter 2026</td></tr>
+        <tr><td><div class="release-date">October 29</div><small class="text-muted">8:30 AM</small></td>
+        <td class="release-title">Personal Income and Outlays, September 2026</td></tr>
+        </tbody></table>
+        """)
+        self.assertEqual(["official-bea-gdp-20260930", "official-bea-pce-20261029"], [item.event_id for item in bea])
+        self.assertEqual("2026-09-30T12:30:00Z", bea[0].starts_at)
 
     def test_monitor_stamps_external_api_metadata_but_renderer_hides_block(self):
         snapshot = self.snapshot_with_sources()

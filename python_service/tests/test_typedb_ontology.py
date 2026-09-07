@@ -349,6 +349,33 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 [],
             ),
         )
+        compact_active_generations = {
+            "symbol:028260:state": "generation:state",
+            "symbol:028260:profile": "generation:profile",
+            "symbol:028260:evidence:bucket:01": "generation:old-evidence",
+            "symbol:035420:state": "generation:other-state",
+        }
+        candidate_plan = [
+            {"scopeId": "symbol:028260:state"},
+            {"scopeId": "symbol:028260:profile"},
+            {"scopeId": "symbol:028260:evidence:bucket:01"},
+            {"scopeId": "symbol:035420:state"},
+        ]
+
+        result = TypeDBOntologyGraphRepository.scoped_abox_native_index_reuse_scope_ids(
+            {
+                "replacementSymbols": ["028260"],
+                "reusedActiveScopeCount": 3,
+            },
+            compact_active_generations,
+            ["symbol:028260:evidence:bucket:01"],
+            candidate_plan,
+        )
+
+        self.assertEqual(
+            ["symbol:028260:profile", "symbol:028260:state"],
+            result,
+        )
 
     def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
         rows = [

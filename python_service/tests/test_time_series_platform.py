@@ -13,6 +13,8 @@ from digital_twin.domain.time_series_storage import (
     TemporalFeatureSnapshot,
     TimeSeriesWatermark,
     compare_feature_snapshots,
+    compacted_legacy_window_reference,
+    temporal_window_reference,
 )
 from digital_twin.infrastructure.questdb_time_series import QuestDBTimeSeriesAdapter
 from digital_twin.infrastructure.mysql_versioned_runtime import MySQLTimeSeriesProjectionOutboxStore
@@ -643,7 +645,7 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         blocker_sql = outbox.connection.statements[-1][0]
         self.assertIn("job_status = 'failed' AND payload_json <> '{}'", blocker_sql)
 
-    def test_compatibility_read_persists_feature_snapshot_identity(self):
+    def test_compatibility_read_tracks_identity_without_duplicate_persistence(self):
         baseline = FakeBaseline()
         snapshots = SnapshotStore()
         store = VersionedMarketTimeSeriesStore(
@@ -659,9 +661,29 @@ class TimeSeriesPlatformTests(unittest.TestCase):
             "main", ["005930"], [SimpleNamespace(key="1D")], "2026-08-15T00:00:00Z"
         )
 
-        self.assertEqual(1, len(snapshots.saved))
-        self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
-        self.assertEqual(snapshots.saved[0].snapshot_id, store.last_feature_snapshot["snapshotId"])
+        self.assertEqual([], snapshots.saved)
+        self.assertEqual("mysql-primary", store.last_feature_snapshot["backendId"])
+        self.assertTrue(store.last_feature_snapshot["snapshotId"].startswith("temporal-feature:"))
+        rows = [
+            {"bucketAt": "2026-09-01T00:00:00Z", "close": 100},
+            {"bucketAt": "2026-09-02T00:00:00Z", "close": 110},
+        ]
+        reference = temporal_window_reference({"MSTR": {"1D": rows, "SESSION": rows}})
+        self.assertEqual("temporal-window-reference-v1", reference["storageMode"])
+        self.assertEqual(4, reference["rowReferenceCount"])
+        self.assertEqual(2, reference["symbols"]["MSTR"]["1D"]["rowCount"])
+        self.assertEqual(
+            "2026-09-02T00:00:00.000000Z",
+            reference["symbols"]["MSTR"]["1D"]["lastObservedAt"],
+        )
+        self.assertEqual("1D", reference["symbols"]["MSTR"]["SESSION"]["duplicateOf"])
+        self.assertEqual("boundary-sample-v1", reference["symbols"]["MSTR"]["1D"]["contentHashMode"])
+        legacy_reference = compacted_legacy_window_reference(
+            ["MSTR"], "payload-hash", "2026-09-02T00:00:00Z", 9000000
+        )
+        self.assertEqual("not-retained", legacy_reference["rowCountState"])
+        self.assertEqual("payload-hash", legacy_reference["snapshotPayloadHash"])
+        self.assertEqual(9000000, legacy_reference["legacyInlineBytes"])
         self.assert_active_read_fails_over_to_mysql_when_selected_backend_is_degraded()
         self.assert_active_read_fails_over_to_mysql_after_candidate_query_failure()
 
@@ -683,11 +705,21 @@ class TimeSeriesPlatformTests(unittest.TestCase):
         )
 
         self.assertEqual("mysql-primary", store.active_backend_id())
-        self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
+        self.assertEqual([], snapshots.saved)
+        self.assertEqual("mysql-primary", store.last_feature_snapshot["backendId"])
         self.assertTrue(store.active_backend_resolution()["failedOver"])
-        self.assertEqual("questdb-shadow", snapshots.saved[0].watermark.requested_backend_id)
-        self.assertEqual("mysql-primary", snapshots.saved[0].watermark.effective_backend_id)
-        self.assertIn("degraded", snapshots.saved[0].watermark.failover_reason)
+        self.assertEqual(
+            "questdb-shadow",
+            store.last_feature_snapshot["watermark"]["requested_backend_id"],
+        )
+        self.assertEqual(
+            "mysql-primary",
+            store.last_feature_snapshot["watermark"]["effective_backend_id"],
+        )
+        self.assertIn(
+            "degraded",
+            store.last_feature_snapshot["watermark"]["failover_reason"],
+        )
 
     def assert_active_read_fails_over_to_mysql_after_candidate_query_failure(self):
         baseline = FakeBaseline()
@@ -706,7 +738,8 @@ class TimeSeriesPlatformTests(unittest.TestCase):
             "main", ["MSTR"], [SimpleNamespace(key="1D")], "2026-09-01T00:00:00Z"
         )
 
-        self.assertEqual("mysql-primary", snapshots.saved[0].backend_id)
+        self.assertEqual([], snapshots.saved)
+        self.assertEqual("mysql-primary", store.last_feature_snapshot["backendId"])
         self.assertEqual(
             "selected-backend-temporal-read-failed",
             store.active_backend_resolution()["reason"],

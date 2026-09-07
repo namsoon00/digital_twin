@@ -40,7 +40,10 @@ from ..domain.time_series_storage import (
     backend_transition_allowed,
     canonical_json,
     clean_status,
+    compacted_legacy_window_reference,
+    is_temporal_window_reference,
     payload_fingerprint,
+    temporal_window_reference,
 )
 from .mysql_operational_connection import (
     MySQLOperationalConnection,
@@ -3554,6 +3557,7 @@ class MySQLTimeSeriesProjectionOutboxStore(MySQLOperationalConnection):
 class MySQLTemporalFeatureSnapshotStore(MySQLOperationalConnection):
     def upsert(self, snapshot: TemporalFeatureSnapshot) -> bool:
         stamp = iso_utc()
+        window_reference = temporal_window_reference(snapshot.windows)
         with self.connect() as connection:
             cursor = connection.execute(
                 """
@@ -3571,7 +3575,7 @@ class MySQLTemporalFeatureSnapshotStore(MySQLOperationalConnection):
                     snapshot.as_of,
                     canonical_json(snapshot.watermark.to_dict()),
                     canonical_json(list(snapshot.symbols)),
-                    canonical_json(snapshot.windows),
+                    canonical_json(window_reference),
                     snapshot.payload_hash,
                     stamp,
                 ),
@@ -3592,6 +3596,8 @@ class MySQLTemporalFeatureSnapshotStore(MySQLOperationalConnection):
             ).fetchone()
         if not row:
             return {}
+        stored_windows = json_value(row.get("windows_json"), {})
+        referenced = is_temporal_window_reference(stored_windows)
         return {
             "snapshotId": str(row.get("snapshot_id") or ""),
             "featureSetVersion": str(row.get("feature_set_version") or ""),
@@ -3600,7 +3606,85 @@ class MySQLTemporalFeatureSnapshotStore(MySQLOperationalConnection):
             "asOf": str(row.get("as_of") or ""),
             "watermark": json_value(row.get("watermark_json"), {}),
             "symbols": json_value(row.get("symbols_json"), []),
-            "windows": json_value(row.get("windows_json"), {}),
+            "windows": {} if referenced else stored_windows,
+            "windowReference": stored_windows if referenced else {},
+            "storageMode": str(stored_windows.get("storageMode") or "legacy-inline-windows"),
             "payloadHash": str(row.get("payload_hash") or ""),
             "createdAt": str(row.get("created_at") or ""),
+        }
+
+    def compact_legacy_windows(
+        self,
+        limit: int = 100,
+        apply: bool = False,
+        after_snapshot_id: str = "",
+    ) -> Dict[str, object]:
+        """Replace legacy inline windows with point-in-time references.
+
+        This is an explicit maintenance operation. It changes only replay
+        storage representation; snapshot ids and full-payload hashes remain
+        unchanged and continue to bind statistical evidence.
+        """
+
+        bounded_limit = max(1, min(1000, int(limit or 100)))
+        cursor_id = str(after_snapshot_id or "")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT snapshot_id, symbols_json, payload_hash, as_of, "
+                "OCTET_LENGTH(windows_json) AS windows_bytes "
+                "FROM temporal_feature_snapshots "
+                "WHERE snapshot_id > %s "
+                "AND OCTET_LENGTH(windows_json) > 4096 "
+                "AND windows_json NOT LIKE %s "
+                "ORDER BY snapshot_id LIMIT %s",
+                (cursor_id, '%\"storageMode\":\"temporal-window-reference-v1\"%', bounded_limit),
+            ).fetchall()
+            candidates = []
+            parse_failures = []
+            for row in rows or []:
+                snapshot_id = str(row.get("snapshot_id") or "")
+                windows_bytes = int(row.get("windows_bytes") or 0)
+                if not snapshot_id or windows_bytes <= 0:
+                    continue
+                try:
+                    compact = canonical_json(compacted_legacy_window_reference(
+                        json_value(row.get("symbols_json"), []),
+                        row.get("payload_hash"),
+                        row.get("as_of"),
+                        windows_bytes,
+                    ))
+                except Exception as error:  # noqa: BLE001 - report a damaged legacy row without stopping the batch.
+                    parse_failures.append({"snapshotId": snapshot_id, "reason": str(error)[:180]})
+                    continue
+                candidates.append((snapshot_id, windows_bytes, str(row.get("payload_hash") or ""), compact))
+            updated = 0
+            if apply:
+                for snapshot_id, windows_bytes, payload_hash, compact in candidates:
+                    cursor = connection.execute(
+                        "UPDATE temporal_feature_snapshots SET windows_json = %s "
+                        "WHERE snapshot_id = %s AND payload_hash = %s "
+                        "AND OCTET_LENGTH(windows_json) = %s "
+                        "AND windows_json NOT LIKE %s",
+                        (
+                            compact,
+                            snapshot_id,
+                            payload_hash,
+                            windows_bytes,
+                            '%\"storageMode\":\"temporal-window-reference-v1\"%',
+                        ),
+                    )
+                    updated += int(getattr(cursor, "rowcount", 0) or 0)
+        bytes_before = sum(windows_bytes for _, windows_bytes, _, _ in candidates)
+        bytes_after = sum(len(compact.encode("utf-8")) for _, _, _, compact in candidates)
+        return {
+            "status": "compacted" if apply else "preview",
+            "apply": bool(apply),
+            "candidateCount": len(candidates),
+            "updatedCount": updated,
+            "bytesBefore": bytes_before,
+            "bytesAfter": bytes_after,
+            "reclaimableBytes": max(0, bytes_before - bytes_after),
+            "parseFailures": parse_failures,
+            "hasMore": len(rows or []) >= bounded_limit,
+            "nextCursor": str((rows or [{}])[-1].get("snapshot_id") or cursor_id),
         }

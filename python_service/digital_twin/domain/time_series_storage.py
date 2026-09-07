@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Mapping, Protocol, Tuple
 
 TIME_SERIES_CONTRACT_VERSION = "time-series-storage-contract-v1"
 TEMPORAL_FEATURE_SET_VERSION = "temporal-features-v2"
+TEMPORAL_WINDOW_REFERENCE_VERSION = "temporal-window-reference-v1"
 
 BACKEND_STATUSES = {
     "registered",
@@ -39,6 +40,96 @@ def payload_fingerprint(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def temporal_window_reference(windows: Mapping[str, object]) -> Dict[str, object]:
+    """Describe immutable windows without copying raw time-series rows.
+
+    Raw observations already live in the selected time-series backend. The
+    MySQL feature record only needs the point-in-time boundary and hashes that
+    prove which rows were scored. This keeps audit identity while avoiding a
+    full history copy on every reasoning cycle.
+    """
+
+    timestamp_keys = (
+        "bucketAt",
+        "observedAt",
+        "sourceAsOf",
+        "capitalFlowObservedAt",
+        "capitalFlowSourceAsOf",
+        "date",
+    )
+    symbols: Dict[str, Dict[str, object]] = {}
+    total_rows = 0
+    for raw_symbol, raw_windows in sorted(dict(windows or {}).items()):
+        symbol = str(raw_symbol or "").upper().strip()
+        if not symbol:
+            continue
+        descriptors: Dict[str, object] = {}
+        fingerprints: Dict[str, str] = {}
+        for raw_name, raw_rows in sorted(dict(raw_windows or {}).items()):
+            name = str(raw_name or "").upper().strip()
+            rows = [row if isinstance(row, dict) else {} for row in raw_rows or []]
+            if not name:
+                continue
+            def observed_at(row):
+                return next(
+                    (
+                        normalized_timestamp(row.get(key))
+                        for key in timestamp_keys
+                        if row.get(key) not in (None, "")
+                    ),
+                    "",
+                )
+
+            first_observed_at = next((value for value in (observed_at(row) for row in rows) if value), "")
+            last_observed_at = next((value for value in (observed_at(row) for row in reversed(rows)) if value), "")
+            sample_indexes = sorted({
+                0,
+                max(0, len(rows) // 4),
+                max(0, len(rows) // 2),
+                max(0, (len(rows) * 3) // 4),
+                max(0, len(rows) - 1),
+            }) if rows else []
+            sampled_rows = [rows[index] for index in sample_indexes]
+            content_hash = payload_fingerprint({
+                "rowCount": len(rows),
+                "firstObservedAt": first_observed_at,
+                "lastObservedAt": last_observed_at,
+                "samples": semantic_feature_value(sampled_rows),
+            })
+            duplicate_of = next(
+                (window for window, fingerprint in fingerprints.items() if fingerprint == content_hash),
+                "",
+            )
+            descriptor = {
+                "rowCount": len(rows),
+                "firstObservedAt": first_observed_at,
+                "lastObservedAt": last_observed_at,
+                "contentHash": content_hash,
+                "contentHashMode": "boundary-sample-v1",
+            }
+            if duplicate_of:
+                descriptor["duplicateOf"] = duplicate_of
+            descriptors[name] = descriptor
+            fingerprints[name] = content_hash
+            total_rows += len(rows)
+        if descriptors:
+            symbols[symbol] = descriptors
+    return {
+        "storageMode": TEMPORAL_WINDOW_REFERENCE_VERSION,
+        "source": "time-series-backend-point-in-time-read",
+        "symbolCount": len(symbols),
+        "rowReferenceCount": total_rows,
+        "symbols": symbols,
+    }
+
+
+def is_temporal_window_reference(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and str(value.get("storageMode") or "") == TEMPORAL_WINDOW_REFERENCE_VERSION
+    )
+
+
 def normalized_timestamp(value: object) -> str:
     text = str(value or "").strip()
     if not text:
@@ -50,6 +141,33 @@ def normalized_timestamp(value: object) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def compacted_legacy_window_reference(
+    symbols: Iterable[object],
+    payload_hash: object,
+    as_of: object,
+    inline_bytes: int,
+) -> Dict[str, object]:
+    normalized_symbols = sorted({
+        str(symbol or "").upper().strip()
+        for symbol in symbols or []
+        if str(symbol or "").strip()
+    })
+    return {
+        "storageMode": TEMPORAL_WINDOW_REFERENCE_VERSION,
+        "source": "legacy-inline-window-compaction",
+        "symbolCount": len(normalized_symbols),
+        "rowReferenceCount": 0,
+        "rowCountState": "not-retained",
+        "symbols": {
+            symbol: {"storageState": "compacted-reference-only"}
+            for symbol in normalized_symbols
+        },
+        "snapshotPayloadHash": str(payload_hash or ""),
+        "snapshotAsOf": normalized_timestamp(as_of),
+        "legacyInlineBytes": max(0, int(inline_bytes or 0)),
+    }
 
 
 def semantic_feature_value(value: object, key: str = ""):

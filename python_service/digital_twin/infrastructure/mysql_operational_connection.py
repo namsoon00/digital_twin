@@ -549,6 +549,14 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS service_runtime_checkpoints (
+        checkpoint_id VARCHAR(191) PRIMARY KEY,
+        payload_json LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_service_runtime_checkpoints_updated (updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS app_store (
         store_id VARCHAR(191) PRIMARY KEY,
         payload_json LONGTEXT NOT NULL,

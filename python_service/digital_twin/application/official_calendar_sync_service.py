@@ -3,9 +3,11 @@ from typing import Dict, Iterable, List
 
 from ..domain.official_calendar import OfficialCalendarEvent
 from ..domain.portfolio import utc_now_iso
+from .runtime_checkpoint import checkpoint_datetime, checkpoint_iso
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
+OFFICIAL_CALENDAR_SYNC_CHECKPOINT_ID = "investment-calendar:official-sync:v1"
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -31,13 +33,46 @@ class OfficialCalendarSyncService:
         candidate_service=None,
         settings: Dict[str, object] = None,
         now=None,
+        checkpoint_store=None,
     ):
         self.calendar_service = calendar_service
         self.sources = list(sources or [])
         self.candidate_service = candidate_service
         self.settings = dict(settings or {})
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.checkpoint_store = checkpoint_store
         self.last_synced_at = None
+        self.last_result: Dict[str, object] = {}
+        self.checkpoint_error = ""
+        self._checkpoint_loaded = False
+
+    def restore_checkpoint(self) -> None:
+        if self._checkpoint_loaded:
+            return
+        self._checkpoint_loaded = True
+        if not self.checkpoint_store:
+            return
+        try:
+            payload = self.checkpoint_store.load(OFFICIAL_CALENDAR_SYNC_CHECKPOINT_ID) or {}
+            self.last_synced_at = checkpoint_datetime(payload, "lastRunAt")
+            result = payload.get("lastResult")
+            self.last_result = dict(result) if isinstance(result, dict) else {}
+        except Exception as error:  # noqa: BLE001 - a lost checkpoint must not block schedule refresh.
+            self.checkpoint_error = str(error)[:240]
+
+    def save_checkpoint(self, result: Dict[str, object]) -> None:
+        if not self.checkpoint_store:
+            return
+        payload = {
+            "lastRunAt": checkpoint_iso(self.last_synced_at),
+            "lastResult": dict(result or {}),
+        }
+        try:
+            self.checkpoint_store.save(OFFICIAL_CALENDAR_SYNC_CHECKPOINT_ID, payload)
+            self.checkpoint_error = ""
+        except Exception as error:  # noqa: BLE001 - events already persisted remain valid.
+            self.checkpoint_error = str(error)[:240]
+            result["checkpointError"] = self.checkpoint_error
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarOfficialMacroSyncEnabled"), True)
@@ -47,6 +82,7 @@ class OfficialCalendarSyncService:
         return hours * 3600
 
     def due(self) -> bool:
+        self.restore_checkpoint()
         if not self.enabled() or not self.sources:
             return False
         if not self.last_synced_at:
@@ -123,7 +159,7 @@ class OfficialCalendarSyncService:
             status = "partial"
         elif errors:
             status = "error"
-        return {
+        result = {
             "status": status,
             "generatedAt": utc_now_iso(),
             "fetchedCount": fetched,
@@ -135,4 +171,19 @@ class OfficialCalendarSyncService:
             "eventIds": event_ids[:200],
             "sources": source_results,
             "errors": errors[:10],
+        }
+        self.last_result = dict(result)
+        self.save_checkpoint(result)
+        return result
+
+    def status(self) -> Dict[str, object]:
+        self.restore_checkpoint()
+        return {
+            "enabled": self.enabled(),
+            "due": self.due(),
+            "intervalSeconds": self.interval_seconds(),
+            "lastRunAt": checkpoint_iso(self.last_synced_at),
+            "lastResult": dict(self.last_result or {}),
+            "checkpointStatus": "error" if self.checkpoint_error else ("persisted" if self.checkpoint_store else "memory"),
+            "checkpointError": self.checkpoint_error,
         }

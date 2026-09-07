@@ -5514,6 +5514,7 @@ class ScopedABoxManifestMixin:
         target_patch: Mapping[str, object],
         active_generations: Mapping[str, object],
         physical_changed_scope_ids: Iterable[str],
+        candidate_scope_plan: Iterable[Mapping[str, object]] = None,
     ) -> List[str]:
         """Read the unchanged target image needed by the physical rule index.
 
@@ -5547,11 +5548,22 @@ class ScopedABoxManifestMixin:
             for scope_id in patch.get("retiredScopeIds") or []
             if str(scope_id or "").strip()
         }
-        reused = {
+        explicit_reused = {
             str(scope_id or "").strip()
             for scope_id in patch.get("reusedActiveScopeIds") or []
             if str(scope_id or "").strip()
         }
+        candidate_scope_ids = {
+            str(dict(item or {}).get("scopeId") or "").strip()
+            for item in candidate_scope_plan or []
+            if str(dict(item or {}).get("scopeId") or "").strip()
+        }
+        # Compact target patches retain only reuse counts. The complete merged
+        # scope plan is the authoritative list of active generations that the
+        # candidate will keep, so use it when the optional verbose reuse list is
+        # absent. This also excludes retired scopes without trusting a missing
+        # patch detail.
+        reused = explicit_reused or active_scope_ids.intersection(candidate_scope_ids)
 
         def belongs_to_replacement_symbol(scope_id: str) -> bool:
             owned_symbol = str(scope_symbol(scope_id) or "").upper().strip()
@@ -8590,6 +8602,7 @@ class ScopedABoxManifestMixin:
             target_patch,
             active_generations,
             changed_scope_ids,
+            scope_plan,
         )
         candidate_deferred_scope_ids = deferred_scope_ids.union(
             native_index_reuse_scope_ids

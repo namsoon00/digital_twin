@@ -103,6 +103,38 @@ class NewsCollectionQualityTests(unittest.TestCase):
 
         self.assertFalse(quality.passed)
         self.assertIn("body-truncated-at-cap", quality.issues)
+        item = self.evidence({
+            "relationScope": "direct",
+            "articleText": "Apple changed its annual revenue guidance. " * 8,
+            "aiAnalysis": {"status": "deferred"},
+        })
+        current = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        item.published_at = current
+        item.observed_at = current
+
+        class EvidenceStore:
+            def latest(self, **_kwargs):
+                return [item]
+
+            def news_analysis_work_status(self):
+                return {"durable": True, "states": []}
+
+            def news_analysis_work_items(self, _evidence_ids):
+                return {}
+
+        result = NewsAnalysisEnrichmentRunner(
+            EvidenceStore(),
+            analysis_service=object(),
+            settings={},
+            storage_guard=lambda: {
+                "nonEssentialWritesAllowed": False,
+                "mysqlCapacityStage": "core-only",
+            },
+        ).run_once()
+        self.assertEqual("blocked-capacity", result["status"])
+        self.assertEqual(1, result["pendingCount"])
+        self.assertEqual(1, result["queueIntegrity"]["missingWorkCount"])
+        self.assertTrue(result["actionRequired"])
 
     def evidence(self, payload=None):
         return ResearchEvidence(

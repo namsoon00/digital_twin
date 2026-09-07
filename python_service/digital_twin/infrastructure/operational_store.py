@@ -49,6 +49,7 @@ from .mysql_operational import (
     MySQLOntologyReasoningMailboxStore,
     MySQLResearchEvidenceStore,
     MySQLRuntimeSettingsStore,
+    MySQLRuntimeCheckpointStore,
     MySQLSymbolUniverseStore,
     MySQLReasoningEngineRegistryStore,
     MySQLReasoningEngineComparisonStore,
@@ -74,6 +75,10 @@ def use_mysql(settings: Dict[str, str] = None) -> bool:
 
 def runtime_settings_store(settings: Dict[str, str] = None):
     return MySQLRuntimeSettingsStore(settings)
+
+
+def runtime_checkpoint_store(settings: Dict[str, str] = None):
+    return MySQLRuntimeCheckpointStore(configured_settings(settings))
 
 
 def account_registry(settings: Dict[str, str] = None):

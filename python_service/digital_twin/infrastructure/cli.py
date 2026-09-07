@@ -1807,6 +1807,71 @@ def run_mysql_delivered_payload_compaction(
             raise
 
 
+def run_mysql_temporal_snapshot_compaction(
+    settings: Dict[str, object],
+    apply: bool = False,
+    batch_size: int = 25,
+    drain_max_passes: int = 100,
+) -> Dict[str, object]:
+    """Compact legacy feature snapshots without changing their audit ids."""
+
+    configured = dict(settings or {})
+    configured["_skipOperationalHistoryRetention"] = True
+    configured["_skipOperationalSchemaBootstrap"] = True
+    configured["_mysqlPoolRole"] = "maintenance"
+    configured["mysqlOperationTimeoutSeconds"] = str(
+        max(60, mysql_operation_timeout_seconds(configured))
+    )
+    store = stores.temporal_feature_snapshot_store(configured)
+    maximum_passes = max(1, min(1000, int(drain_max_passes or 100)))
+    bounded_batch = max(1, min(100, int(batch_size or 25)))
+    totals = {
+        "candidateCount": 0,
+        "updatedCount": 0,
+        "bytesBefore": 0,
+        "bytesAfter": 0,
+        "reclaimableBytes": 0,
+    }
+    failures = []
+    passes = 0
+    has_more = False
+    cursor = ""
+    while passes < maximum_passes:
+        result = store.compact_legacy_windows(
+            limit=bounded_batch,
+            apply=apply,
+            after_snapshot_id=cursor,
+        )
+        passes += 1
+        for key in totals:
+            totals[key] += int(result.get(key) or 0)
+        failures.extend(result.get("parseFailures") or [])
+        has_more = bool(result.get("hasMore"))
+        next_cursor = str(result.get("nextCursor") or "")
+        if not apply or not has_more:
+            break
+        if not next_cursor or next_cursor == cursor:
+            failures.append({"snapshotId": cursor, "reason": "compaction cursor did not advance"})
+            break
+        cursor = next_cursor
+    return {
+        "status": "compacted" if apply else "preview",
+        "apply": bool(apply),
+        "passCount": passes,
+        "batchSize": bounded_batch,
+        **totals,
+        "parseFailures": failures[:50],
+        "hasMore": has_more,
+        "nextCursor": cursor,
+        "physicalReclaimRequired": bool(apply and totals["reclaimableBytes"]),
+        "nextCommand": (
+            "python3 python_service/service.py maintenance mysql-cleanup --optimize"
+            if apply and totals["reclaimableBytes"]
+            else ""
+        ),
+    }
+
+
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings())
@@ -1823,6 +1888,15 @@ def maintenance_command(args) -> int:
         result = run_mysql_delivered_payload_compaction(
             settings,
             drain_max_passes=getattr(args, "drain_max_passes", 20),
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if str(result.get("status") or "ok") != "error" else 1
+    if args.maintenance_action == "mysql-temporal-snapshot-compaction":
+        result = run_mysql_temporal_snapshot_compaction(
+            settings,
+            apply=bool(args.apply),
+            batch_size=int(getattr(args, "batch_size", 25) or 25),
+            drain_max_passes=int(getattr(args, "drain_max_passes", 100) or 100),
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0 if str(result.get("status") or "ok") != "error" else 1
@@ -2590,6 +2664,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Clear delivered outbox payload bodies without broad retention scans",
     )
     mysql_payload_compaction.add_argument("--drain-max-passes", default="20")
+    mysql_temporal_compaction = maintenance_actions.add_parser(
+        "mysql-temporal-snapshot-compaction",
+        help="Preview or replace legacy inline temporal windows with replay references",
+    )
+    mysql_temporal_compaction.add_argument("--apply", action="store_true")
+    mysql_temporal_compaction.add_argument("--batch-size", default="25")
+    mysql_temporal_compaction.add_argument("--drain-max-passes", default="100")
     mysql_retention_watch = maintenance_actions.add_parser("watch")
     mysql_retention_watch.add_argument("--interval", default="")
     maintenance.set_defaults(func=maintenance_command)

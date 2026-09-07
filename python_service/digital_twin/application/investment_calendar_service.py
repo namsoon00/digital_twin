@@ -582,11 +582,7 @@ class InvestmentCalendarRunner:
     def status(self) -> Dict[str, object]:
         result = self.service.status()
         if self.official_sync_service:
-            result["officialCalendarSync"] = {
-                "enabled": self.official_sync_service.enabled(),
-                "due": self.official_sync_service.due(),
-                "intervalSeconds": self.official_sync_service.interval_seconds(),
-            }
+            result["officialCalendarSync"] = self.official_sync_service.status()
         if self.discovery_service:
             result["calendarDiscovery"] = self.discovery_service.status()
         return result

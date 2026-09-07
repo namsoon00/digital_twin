@@ -8,10 +8,12 @@ from ..domain.investment_research import NewsCollectionTarget
 from ..domain.investment_strategy_guidance import event_type_guidance, target_text
 from ..domain.market_data import number
 from ..domain.portfolio import utc_now_iso
+from .runtime_checkpoint import checkpoint_datetime, checkpoint_iso
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 DISCOVERY_DETECTOR = "calendar-scheduled-research-v1"
+CALENDAR_DISCOVERY_CHECKPOINT_ID = "investment-calendar:discovery:v1"
 
 
 def truthy(value: object, default: bool = True) -> bool:
@@ -54,6 +56,7 @@ class InvestmentCalendarDiscoveryService:
         research_gateway=None,
         settings: Dict[str, object] = None,
         now=None,
+        checkpoint_store=None,
     ):
         self.calendar_service = calendar_service
         self.candidate_repository = candidate_repository
@@ -62,8 +65,39 @@ class InvestmentCalendarDiscoveryService:
         self.research_gateway = research_gateway
         self.settings = dict(settings or {})
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.checkpoint_store = checkpoint_store
         self.last_run_at = None
         self.last_result: Dict[str, object] = {}
+        self.checkpoint_error = ""
+        self._checkpoint_loaded = False
+
+    def restore_checkpoint(self) -> None:
+        if self._checkpoint_loaded:
+            return
+        self._checkpoint_loaded = True
+        if not self.checkpoint_store:
+            return
+        try:
+            payload = self.checkpoint_store.load(CALENDAR_DISCOVERY_CHECKPOINT_ID) or {}
+            self.last_run_at = checkpoint_datetime(payload, "lastRunAt")
+            result = payload.get("lastResult")
+            self.last_result = dict(result) if isinstance(result, dict) else {}
+        except Exception as error:  # noqa: BLE001 - discovery can still run without its cadence checkpoint.
+            self.checkpoint_error = str(error)[:240]
+
+    def save_checkpoint(self, result: Dict[str, object]) -> None:
+        if not self.checkpoint_store:
+            return
+        payload = {
+            "lastRunAt": checkpoint_iso(self.last_run_at),
+            "lastResult": dict(result or {}),
+        }
+        try:
+            self.checkpoint_store.save(CALENDAR_DISCOVERY_CHECKPOINT_ID, payload)
+            self.checkpoint_error = ""
+        except Exception as error:  # noqa: BLE001 - discovered evidence remains independently committed.
+            self.checkpoint_error = str(error)[:240]
+            result["checkpointError"] = self.checkpoint_error
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarDiscoveryEnabled"), True)
@@ -82,6 +116,7 @@ class InvestmentCalendarDiscoveryService:
         return int_setting(self.settings, "investmentCalendarDiscoveryHorizonDays", 180, 14, 730)
 
     def due(self) -> bool:
+        self.restore_checkpoint()
         if not self.enabled() or not self.research_gateway:
             return False
         if not self.last_run_at:
@@ -284,9 +319,17 @@ class InvestmentCalendarDiscoveryService:
             return {"status": "unavailable", "targetCount": 0, "evidenceCount": 0, "tentativeCount": 0}
         targets = self.targets(payload)
         if not targets:
-            result = {"status": "noTargets", "targetCount": 0, "evidenceCount": 0, "tentativeCount": 0, "sources": []}
+            result = {
+                "status": "noTargets",
+                "generatedAt": utc_now_iso(),
+                "targetCount": 0,
+                "evidenceCount": 0,
+                "tentativeCount": 0,
+                "sources": [],
+            }
             self.last_run_at = self.now()
             self.last_result = result
+            self.save_checkpoint(result)
             return result
         items, statuses, collect_errors = self.collect(targets)
         result = self.save_discovered_candidates(items)
@@ -303,13 +346,17 @@ class InvestmentCalendarDiscoveryService:
         })
         self.last_run_at = self.now()
         self.last_result = dict(result)
+        self.save_checkpoint(result)
         return result
 
     def status(self) -> Dict[str, object]:
+        self.restore_checkpoint()
         return {
             "enabled": self.enabled(),
             "due": self.due(),
             "intervalSeconds": self.interval_seconds(),
-            "lastRunAt": self.last_run_at.isoformat().replace("+00:00", "Z") if self.last_run_at else "",
+            "lastRunAt": checkpoint_iso(self.last_run_at),
             "lastResult": dict(self.last_result or {}),
+            "checkpointStatus": "error" if self.checkpoint_error else ("persisted" if self.checkpoint_store else "memory"),
+            "checkpointError": self.checkpoint_error,
         }

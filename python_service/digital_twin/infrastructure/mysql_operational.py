@@ -68,4 +68,5 @@ from .mysql_versioned_runtime import (
     MySQLTimeSeriesProjectionOutboxStore,
 )
 from .mysql_shared_instrument_inference import MySQLSharedInstrumentInferenceStore
+from .mysql_runtime_checkpoints import MySQLRuntimeCheckpointStore
 from .external_api.mysql_stores import MySQLExternalDataStore

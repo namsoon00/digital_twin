@@ -580,7 +580,9 @@ class VersionedMarketTimeSeriesStore:
                 watermark=watermark,
                 feature_set_version=TEMPORAL_FEATURE_SET_VERSION,
             )
-            self.snapshot_store.upsert(snapshot)
+            # The statistical signal pipeline owns durable feature evidence.
+            # A query adapter must not persist the same full window a second
+            # time merely because it served the read.
             self.last_feature_snapshot = snapshot.to_dict(include_windows=False)
         return windows
 

@@ -621,6 +621,7 @@ TEXT_SETTING_KEYS = [
     "reasoningEngineV2HeartbeatSeconds",
     "reasoningEngineV2MaxAttempts",
     "reasoningEngineV2WorldProjectionMaxAttempts",
+    "reasoningEngineV2TargetScopeRepairMaxAttempts",
     "reasoningEngineSharedPremiseInlineRetryCount",
     "reasoningEngineSharedPremiseInlineRetryMaxSeconds",
     "ontologyIncrementalCurrentStateReasoningEnabled",
@@ -2583,6 +2584,11 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "reasoningEngineV2HeartbeatSeconds": value("reasoningEngineV2HeartbeatSeconds", "REASONING_ENGINE_V2_HEARTBEAT_SECONDS", "15"),
         "reasoningEngineV2MaxAttempts": value("reasoningEngineV2MaxAttempts", "REASONING_ENGINE_V2_MAX_ATTEMPTS", "3"),
         "reasoningEngineV2WorldProjectionMaxAttempts": value("reasoningEngineV2WorldProjectionMaxAttempts", "REASONING_ENGINE_V2_WORLD_PROJECTION_MAX_ATTEMPTS", "5"),
+        "reasoningEngineV2TargetScopeRepairMaxAttempts": value(
+            "reasoningEngineV2TargetScopeRepairMaxAttempts",
+            "REASONING_ENGINE_V2_TARGET_SCOPE_REPAIR_MAX_ATTEMPTS",
+            "2",
+        ),
         "reasoningEngineSharedPremiseInlineRetryCount": value(
             "reasoningEngineSharedPremiseInlineRetryCount",
             "REASONING_ENGINE_SHARED_PREMISE_INLINE_RETRY_COUNT",

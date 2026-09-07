@@ -2411,6 +2411,88 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "retryAfterSeconds": 0 if terminal else delay,
         }
 
+    @reasoning_queue_deadlock_retry("reasoning-engine-target-scope-repair-wait")
+    def await_target_scope_repair(
+        self,
+        job_id: str,
+        result: Mapping[str, object],
+        reason: str,
+        retry_after_seconds: int = 60,
+        max_attempts: int = 2,
+    ) -> Dict[str, object]:
+        """Bound retries after scoped and complete-source Manifest repair fail.
+
+        The projection boundary has already preserved the active ABox. Repeating
+        the same immutable input forever cannot improve it and prevents unrelated
+        graph work from receiving a fair queue turn.
+        """
+
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT attempts FROM reasoning_engine_jobs WHERE job_id = %s FOR UPDATE",
+                (str(job_id or ""),),
+            ).fetchone() or {"attempts": 0}
+            attempts = int(row.get("attempts") or 0) + 1
+            bounded_max_attempts = max(1, int(max_attempts or 2))
+            terminal = attempts >= bounded_max_attempts
+            base_delay = max(15, int(retry_after_seconds or 60))
+            delay = min(900, base_delay * (2 ** min(4, attempts - 1)))
+            stamp = iso_utc()
+            values = dict(result or {})
+            values.update({
+                "status": "failed" if terminal else "awaiting_target_scope_repair",
+                "retryable": not terminal,
+                "retry_after_seconds": 0 if terminal else delay,
+                "reason": str(
+                    reason
+                    or values.get("reason")
+                    or "Target-scoped Manifest repair is pending."
+                )[:500],
+                "reason_code": (
+                    "target-scope-repair-exhausted"
+                    if terminal
+                    else "target-scope-repair-required"
+                ),
+                "projection_failure_reason_code": "target-scope-repair-required",
+                "target_scope_repair_attempt": attempts,
+                "target_scope_repair_max_attempts": bounded_max_attempts,
+            })
+            connection.execute(
+                """
+                UPDATE reasoning_engine_jobs
+                SET job_status = %s, attempts = %s, result_json = %s,
+                    lease_owner = '', lease_expires_at = '', heartbeat_at = '',
+                    current_stage = '', stage_started_at = '', stage_updated_at = '',
+                    stage_details_json = NULL,
+                    available_at = %s, last_error = %s, completed_at = %s,
+                    terminal_reason_code = %s, updated_at = %s
+                WHERE job_id = %s
+                """,
+                (
+                    "failed" if terminal else "retry",
+                    attempts,
+                    canonical_json(values),
+                    "" if terminal else iso_utc(utc_now() + timedelta(seconds=delay)),
+                    str(reason or "")[:500],
+                    stamp if terminal else "",
+                    "target-scope-repair-exhausted" if terminal else "",
+                    stamp,
+                    str(job_id or ""),
+                ),
+            )
+        return {
+            "jobId": str(job_id or ""),
+            "attemptCount": attempts,
+            "maximumAttemptCount": bounded_max_attempts,
+            "terminal": terminal,
+            "reasonCode": (
+                "target-scope-repair-exhausted"
+                if terminal
+                else "target-scope-repair-required"
+            ),
+            "retryAfterSeconds": 0 if terminal else delay,
+        }
+
     @reasoning_queue_deadlock_retry("reasoning-engine-job-exclude")
     def exclude(
         self,

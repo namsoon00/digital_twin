@@ -166,6 +166,29 @@ def waits_for_shared_world_projection(result: object) -> bool:
     )
 
 
+def waits_for_target_scope_repair(result: object) -> bool:
+    """Return whether one subject-local Manifest patch needs bounded repair."""
+
+    values = dict(result or {}) if isinstance(result, Mapping) else {}
+    statuses = {
+        str(values.get("status") or "").strip().lower(),
+        str(values.get("reason_code") or values.get("reasonCode") or "").strip().lower(),
+    }
+    for projection in dict(values.get("projection_results") or {}).values():
+        if not isinstance(projection, Mapping):
+            continue
+        statuses.update({
+            str(projection.get("status") or "").strip().lower(),
+            str(
+                projection.get("failureReasonCode")
+                or projection.get("reasonCode")
+                or ""
+            ).strip().lower(),
+        })
+    statuses.discard("")
+    return "target-scope-repair-required" in statuses
+
+
 def waits_for_graph_writer(result: object) -> bool:
     """Return whether a deferred turn is ordinary single-writer back-pressure."""
 
@@ -295,6 +318,16 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("candidateSemanticReconciliationFailure"), Mapping)
         else {}
     )
+    target_manifest_patch = (
+        values.get("targetScopedManifestPatch")
+        if isinstance(values.get("targetScopedManifestPatch"), Mapping)
+        else {}
+    )
+    repair_input_fallback = (
+        target_manifest_patch.get("repairInputFallback")
+        if isinstance(target_manifest_patch.get("repairInputFallback"), Mapping)
+        else {}
+    )
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -325,6 +358,26 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                 "knownEndpointScopeIds", "knownEndpointGenerationIds",
                 "expectedGenerationId", "actualGenerationId",
             }
+        },
+        "targetScopedManifestPatch": {
+            "status": str(target_manifest_patch.get("status") or ""),
+            "fallbackReason": str(target_manifest_patch.get("fallbackReason") or ""),
+            "missingEndpointScopeIds": [
+                str(value or "")
+                for value in target_manifest_patch.get("missingEndpointScopeIds") or []
+                if str(value or "")
+            ][:50],
+            "patchPlanViolations": [
+                dict(value) if isinstance(value, Mapping) else str(value or "")
+                for value in target_manifest_patch.get("patchPlanViolations") or []
+            ][:50],
+            "repairInputFallback": {
+                key: repair_input_fallback.get(key)
+                for key in [
+                    "attempted", "mode", "firstStatus", "finalStatus", "applied", "runtimeMs",
+                ]
+                if key in repair_input_fallback
+            },
         },
         "reasoningExecution": {
             key: reasoning_execution.get(key)
@@ -2179,11 +2232,18 @@ class IndependentReasoningJobRunner:
                 outcome = "excluded"
             elif status == "deferred" and result.get("retryable"):
                 projection_waits = []
+                target_scope_repair_waits = []
                 writer_back_pressure = waits_for_graph_writer(result)
                 wait_for_projection = (
                     waits_for_shared_world_projection(result)
                     and not writer_back_pressure
                     and callable(getattr(self.queue, "await_world_projection", None))
+                )
+                target_scope_repair_wait = (
+                    waits_for_target_scope_repair(result)
+                    and not writer_back_pressure
+                    and not wait_for_projection
+                    and callable(getattr(self.queue, "await_target_scope_repair", None))
                 )
                 for job_id in job_ids:
                     if wait_for_projection:
@@ -2200,6 +2260,29 @@ class IndependentReasoningJobRunner:
                                 20,
                             ),
                         ))
+                    elif target_scope_repair_wait:
+                        target_scope_repair_waits.append(
+                            self.queue.await_target_scope_repair(
+                                job_id,
+                                result,
+                                str(
+                                    result.get("reason")
+                                    or "The target-scoped Manifest patch needs repair."
+                                ),
+                                int(
+                                    result.get("retry_after_seconds")
+                                    or result.get("retryAfterSeconds")
+                                    or 60
+                                ),
+                                max_attempts=_int_setting(
+                                    self.settings,
+                                    "reasoningEngineV2TargetScopeRepairMaxAttempts",
+                                    2,
+                                    1,
+                                    5,
+                                ),
+                            )
+                        )
                     else:
                         self.queue.defer(
                             job_id,
@@ -2209,11 +2292,17 @@ class IndependentReasoningJobRunner:
                 terminal_projection_wait = bool(projection_waits) and all(
                     wait.get("terminal") for wait in projection_waits
                 )
+                terminal_target_scope_repair = bool(target_scope_repair_waits) and all(
+                    wait.get("terminal") for wait in target_scope_repair_waits
+                )
+                result["target_scope_repair_waits"] = target_scope_repair_waits
                 outcome = (
                     "failed"
-                    if terminal_projection_wait
+                    if terminal_projection_wait or terminal_target_scope_repair
                     else "awaiting-world-projection"
                     if wait_for_projection
+                    else "awaiting-target-scope-repair"
+                    if target_scope_repair_wait
                     else "awaiting-graph-writer"
                     if writer_back_pressure
                     else "deferred"
@@ -2316,7 +2405,11 @@ class IndependentReasoningJobRunner:
                 "lastRunAt": utc_now_iso(),
                 "queue": self.queue_summary(descriptor.deployment_id),
             })
-            if outcome in {"awaiting-world-projection", "awaiting-graph-writer"}:
+            if outcome in {
+                "awaiting-world-projection",
+                "awaiting-target-scope-repair",
+                "awaiting-graph-writer",
+            }:
                 health["status"] = "deferred"
                 health["dependencyStatus"] = outcome
                 health["dependencyReasonCode"] = str(
@@ -2324,7 +2417,12 @@ class IndependentReasoningJobRunner:
                 )
                 health.pop("lastError", None)
             elif outcome == "failed":
-                health["status"] = "blocked"
+                health["status"] = (
+                    "degraded" if waits_for_target_scope_repair(result) else "blocked"
+                )
+                if waits_for_target_scope_repair(result):
+                    health["dependencyStatus"] = "target-scope-repair-exhausted"
+                    health["dependencyReasonCode"] = "target-scope-repair-exhausted"
                 health["lastError"] = str(result.get("reason") or "SharedPremiseWorld projection failed.")[:300]
             elif outcome == "excluded":
                 health["status"] = "ready"
@@ -3035,6 +3133,7 @@ class IndependentReasoningJobRunner:
                     "disabled",
                     "deferred",
                     "awaiting-graph-writer",
+                    "awaiting-target-scope-repair",
                     "awaiting-world-projection",
                 }:
                     time.sleep(interval)

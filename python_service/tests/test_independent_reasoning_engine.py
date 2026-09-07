@@ -151,6 +151,109 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(60, policy["retryAfterSeconds"])
         self.assertEqual("target-scope-repair-required", policy["reasonCode"])
 
+    def _assert_target_scope_repair_uses_bounded_subject_local_wait(self):
+        class Queue:
+            def __init__(self, terminal):
+                self.terminal = terminal
+                self.waits = []
+
+            def claim(self, *_args, **_kwargs):
+                return [{
+                    "jobId": "job:000680",
+                    "sourceEvent": source_event("000680", []).to_dict(),
+                }]
+
+            def await_target_scope_repair(
+                self,
+                job_id,
+                result,
+                reason,
+                retry_after_seconds,
+                max_attempts,
+            ):
+                self.waits.append({
+                    "jobId": job_id,
+                    "result": result,
+                    "reason": reason,
+                    "retryAfterSeconds": retry_after_seconds,
+                    "maxAttempts": max_attempts,
+                })
+                return {
+                    "jobId": job_id,
+                    "terminal": self.terminal,
+                    "retryAfterSeconds": 0 if self.terminal else retry_after_seconds,
+                }
+
+            def await_world_projection(self, *_args, **_kwargs):
+                raise AssertionError("Subject-local repair must not enter the world wait lane")
+
+            def defer(self, *_args):
+                raise AssertionError("Subject-local repair must not enter the unbounded defer loop")
+
+            @staticmethod
+            def summary(_deployment_id):
+                return {"pendingCount": 0}
+
+        class Engine:
+            @staticmethod
+            def descriptor():
+                return descriptor()
+
+            @staticmethod
+            def consume(_events):
+                return {
+                    "request_id": "request:000680",
+                    "status": "deferred",
+                    "retryable": True,
+                    "retry_after_seconds": 60,
+                    "reason": "Target-scoped Manifest patch could not be applied safely.",
+                    "reason_code": "target-scope-repair-required",
+                    "projection_results": {
+                        "acct": {
+                            "status": "target-scope-repair-required",
+                            "failureReasonCode": "target-scope-repair-required",
+                        }
+                    },
+                }
+
+            @staticmethod
+            def health():
+                return {"status": "degraded", "monitorRunnerUsed": False}
+
+        class Registry:
+            def __init__(self):
+                self.health = {}
+
+            def get(self, _deployment_id):
+                return {"health": dict(self.health)}
+
+            def update_health(self, _deployment_id, health):
+                self.health = dict(health)
+
+        for terminal, expected_status, expected_health in [
+            (False, "awaiting-target-scope-repair", "deferred"),
+            (True, "failed", "degraded"),
+        ]:
+            with self.subTest(terminal=terminal):
+                queue = Queue(terminal)
+                registry = Registry()
+                result = IndependentReasoningJobRunner(
+                    queue,
+                    Engine(),
+                    registry,
+                    settings={"reasoningEngineV2TargetScopeRepairMaxAttempts": "2"},
+                ).run_once()
+
+                self.assertEqual(expected_status, result["status"])
+                self.assertEqual(1, len(queue.waits))
+                self.assertEqual(2, queue.waits[0]["maxAttempts"])
+                self.assertEqual(expected_health, registry.health["status"])
+                if terminal:
+                    self.assertEqual(
+                        "target-scope-repair-exhausted",
+                        registry.health["dependencyStatus"],
+                    )
+
     def _assert_failure_recovery_allows_only_repairable_blocked_results(self):
         self.assertTrue(reasoning_failure_recovery_allowed(
             "reasoning-execution-blocked",
@@ -187,6 +290,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
         self._assert_non_originating_hypothesis_routes_to_review_observation()
         self._assert_target_scope_repair_is_retryable_without_duplicate_flag()
+        self._assert_target_scope_repair_uses_bounded_subject_local_wait()
         self._assert_failure_recovery_allows_only_repairable_blocked_results()
         self._assert_replayed_crypto_event_upgrades_stale_dependency_contract()
         self._assert_live_watch_turn_releases_graph_writer_before_polling_sleep()
@@ -1953,6 +2057,18 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 }],
                 "stages": [{"large": "payload"}],
             },
+            "targetScopedManifestPatch": {
+                "status": "blocked-invalid-manifest-patch-plan",
+                "fallbackReason": "manifest-patch-invariant-violation",
+                "missingEndpointScopeIds": ["symbol:000680:flow"],
+                "patchPlanViolations": [{"code": "missing-endpoint"}],
+                "repairInputFallback": {
+                    "attempted": True,
+                    "finalStatus": "blocked-invalid-manifest-patch-plan",
+                    "applied": False,
+                    "privatePayload": {"large": "payload"},
+                },
+            },
         })
 
         performance = compact["performanceAssessment"]
@@ -1960,6 +2076,11 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("nativeInferenceMs", performance["bottleneckStage"])
         self.assertEqual(67500, performance["violations"][0]["durationMs"])
         self.assertNotIn("stages", performance)
+        patch = compact["targetScopedManifestPatch"]
+        self.assertEqual("blocked-invalid-manifest-patch-plan", patch["status"])
+        self.assertEqual(["symbol:000680:flow"], patch["missingEndpointScopeIds"])
+        self.assertEqual("missing-endpoint", patch["patchPlanViolations"][0]["code"])
+        self.assertNotIn("privatePayload", patch["repairInputFallback"])
 
     def test_job_lease_heartbeat_also_refreshes_worker_liveness(self):
         class Queue:

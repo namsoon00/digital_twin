@@ -24,7 +24,7 @@ from .fact_changes import scope_families_for_fact_types
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v15-model-input-routing"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v16-native-source-routing"
 LEGACY_DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v4-packed"
 DYNAMIC_INFERENCE_PREFLIGHT_VERSION = "dynamic-inference-preflight-v1"
@@ -165,6 +165,27 @@ def scope_symbol(scope_id: object) -> str:
     ):
         return parts[2].upper()
     return ""
+
+
+def scope_source_symbols(
+    scope_id: object,
+    item: Mapping[str, object] = None,
+) -> Set[str]:
+    """Return subjects that own a scope's source observation.
+
+    Most scopes encode their subject in the scope id. Shared market scopes do
+    not, so their immutable manifest row records ``nativeSourceSymbols``. This
+    ownership is routing metadata only; it never changes a RuleBox outcome.
+    """
+
+    values = {
+        scope_symbol(scope_id),
+        *(
+            _clean(value).upper()
+            for value in dict(item or {}).get("nativeSourceSymbols") or []
+        ),
+    }
+    return {value for value in values if value}
 
 
 def scope_family(scope_id: object) -> str:
@@ -932,16 +953,30 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         for item in [current.get(scope_id) or previous.get(scope_id) or {}]
         for token in _scope_plan_family_tokens(scope_id, item)
     })
+    source_symbols_by_scope = {
+        scope_id: sorted(scope_source_symbols(
+            scope_id,
+            current.get(scope_id) or previous.get(scope_id) or {},
+        ))
+        for scope_id in direct_changed
+        if scope_source_symbols(
+            scope_id,
+            current.get(scope_id) or previous.get(scope_id) or {},
+        )
+    }
     direct_symbols = sorted({
         symbol
         for scope_id in direct_changed
-        for symbol in [scope_symbol(scope_id)]
+        for symbol in source_symbols_by_scope.get(scope_id) or []
         if symbol
     })
     affected_symbols = sorted({
         symbol
         for scope_id in affected
-        for symbol in [scope_symbol(scope_id)]
+        for symbol in scope_source_symbols(
+            scope_id,
+            current.get(scope_id) or previous.get(scope_id) or {},
+        )
         if symbol
     })
     relation_context_symbols = sorted({
@@ -978,6 +1013,7 @@ def scope_delta(previous_scope_plan: Iterable[object], next_scope_plan: Iterable
         "affectedScopeFamilies": affected_families,
         "changedSymbols": direct_symbols,
         "directChangedSymbols": direct_symbols,
+        "sourceSymbolsByScope": source_symbols_by_scope,
         "dependencyAffectedSymbols": sorted(set(affected_symbols) - set(direct_symbols)),
         "relationContextScopeIds": active_relation_context_scope_ids,
         "relationContextSymbols": relation_context_symbols,
@@ -995,6 +1031,40 @@ def _families_intersect(left: Iterable[object], right: Iterable[object]) -> bool
     return "macro" in left_values and any(value.startswith("macro-") for value in right_values)
 
 
+def _dependency_key_matches(left: object, right: object) -> bool:
+    """Match one structural dependency and any of its property descendants."""
+
+    left_value = _lower(left)
+    right_value = _lower(right)
+    return bool(
+        left_value
+        and right_value
+        and (
+            left_value == right_value
+            or left_value.startswith(right_value + ":")
+            or right_value.startswith(left_value + ":")
+        )
+    )
+
+
+def _matching_changed_dependency_keys(
+    changed_keys: Iterable[object],
+    requested_keys: Iterable[object],
+) -> Set[str]:
+    """Return changed keys covered by an event or rule dependency boundary."""
+
+    changed = {_lower(value) for value in changed_keys or [] if _clean(value)}
+    requested = {_lower(value) for value in requested_keys or [] if _clean(value)}
+    return {
+        changed_key
+        for changed_key in changed
+        if any(
+            _dependency_key_matches(changed_key, requested_key)
+            for requested_key in requested
+        )
+    }
+
+
 def _rule_may_depend_on(
     profile: Mapping[str, object],
     changed_families: Set[str],
@@ -1008,7 +1078,7 @@ def _rule_may_depend_on(
     family_intersects = _families_intersect(families, changed_families)
     if not dependency_fingerprint_coverage_complete:
         return family_intersects
-    changed_keys = {str(value or "") for value in changed_dependency_keys or [] if _clean(value)}
+    changed_keys = {_lower(value) for value in changed_dependency_keys or [] if _clean(value)}
     if not changed_keys:
         return False
 
@@ -1037,11 +1107,11 @@ def _rule_may_depend_on(
         if bool(condition.get("conservative")) and condition_family_intersects:
             return True
         dependency_keys = {
-            str(value or "")
+            _lower(value)
             for value in condition.get("dependencyKeys") or []
             if _clean(value)
         }
-        if dependency_keys & changed_keys:
+        if _matching_changed_dependency_keys(changed_keys, dependency_keys):
             return True
         if not dependency_keys and condition_family_intersects:
             return True
@@ -1380,7 +1450,12 @@ def event_scoped_routing_inputs(
         keys = {_lower(value) for value in values or [] if _clean(value)}
         if symbol and keys:
             requested_keys_by_symbol[symbol] = keys
-    if not targets or (not requested and not requested_by_symbol):
+    if not targets or (
+        not requested
+        and not requested_by_symbol
+        and not requested_keys
+        and not requested_keys_by_symbol
+    ):
         return {
             "enabled": False,
             "scopeIds": [],
@@ -1389,6 +1464,7 @@ def event_scoped_routing_inputs(
             "dependencyKeysComplete": False,
             "eventDependencyKeyRoutingApplied": False,
             "eventDependencyKeyNarrowed": False,
+            "nativeSourceScopeRoutingApplied": False,
             "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
@@ -1398,6 +1474,12 @@ def event_scoped_routing_inputs(
     semantic_by_scope = semantic_by_scope if isinstance(semantic_by_scope, Mapping) else {}
     dependency_by_scope = delta.get("semanticChangedDependencyKeysByScope")
     dependency_by_scope = dependency_by_scope if isinstance(dependency_by_scope, Mapping) else {}
+    source_symbols_by_scope = delta.get("sourceSymbolsByScope")
+    source_symbols_by_scope = (
+        source_symbols_by_scope
+        if isinstance(source_symbols_by_scope, Mapping)
+        else {}
+    )
     direct_scope_ids = [
         _clean(scope_id)
         for scope_id in delta.get("directChangedScopeIds") or []
@@ -1410,6 +1492,7 @@ def event_scoped_routing_inputs(
     requested_dependency_keys_for_selected_scopes: Set[str] = set()
     deferred_shared_scope_ids: List[str] = []
     deferred_shared_families: Set[str] = set()
+    native_source_scope_ids: Set[str] = set()
     target_scope_narrowed = False
 
     for scope_id in direct_scope_ids:
@@ -1420,9 +1503,42 @@ def event_scoped_routing_inputs(
         }
         if not semantic:
             semantic = scope_family_tokens(scope_id)
-        scope_target = scope_symbol(scope_id).upper()
-        is_target_scope = scope_target in targets
-        target_requested = requested_by_symbol.get(scope_target, requested)
+        direct_scope_target = scope_symbol(scope_id).upper()
+        scope_targets = {
+            _clean(symbol).upper()
+            for symbol in source_symbols_by_scope.get(scope_id, []) or []
+            if _clean(symbol).upper() in targets
+        }
+        if direct_scope_target in targets:
+            scope_targets.add(direct_scope_target)
+        is_target_scope = bool(scope_targets)
+        symbol_specific_family_routing = bool(
+            scope_targets.intersection(requested_by_symbol)
+        )
+        target_requested = {
+            family
+            for symbol in scope_targets
+            for family in requested_by_symbol.get(symbol, requested)
+        } or set(requested)
+        scope_requested_dependency_keys = {
+            key
+            for symbol in scope_targets
+            for key in requested_keys_by_symbol.get(symbol, requested_keys)
+        } or set(requested_keys)
+        scope_dependency_keys = {
+            _lower(key)
+            for key in dependency_by_scope.get(scope_id, []) or []
+            if _clean(key)
+        }
+        dependency_matches = _matching_changed_dependency_keys(
+            scope_dependency_keys,
+            scope_requested_dependency_keys,
+        )
+        dependency_match = bool(
+            dependency_boundary_authoritative
+            and scope_requested_dependency_keys
+            and dependency_matches
+        )
         matched_families = {
             family
             for family in semantic
@@ -1434,9 +1550,23 @@ def event_scoped_routing_inputs(
             # verified snapshots bind fact types to each symbol. That lets a
             # market turn avoid reopening an unrelated evidence/flow change
             # that happened to be present in the same persisted snapshot.
-            included_families = matched_families if scope_target in requested_by_symbol else semantic
-            if scope_target in requested_by_symbol and semantic - included_families:
+            included_families = (
+                matched_families
+                if symbol_specific_family_routing
+                else semantic
+            )
+            # Exact event dependencies are stronger than coarse physical
+            # families. A shared crypto observation is stored as macro-crypto
+            # even when the source event is named market/exposure.
+            if dependency_match:
+                included_families = set(semantic)
+            if (
+                symbol_specific_family_routing
+                and semantic - included_families
+            ):
                 target_scope_narrowed = True
+            if not direct_scope_target and scope_targets:
+                native_source_scope_ids.add(scope_id)
         else:
             included_families = matched_families
         if included_families:
@@ -1446,18 +1576,15 @@ def event_scoped_routing_inputs(
             # When a new per-symbol request intentionally narrows one scope,
             # retain safe family-level selection instead of incorrectly using
             # dependency keys from the omitted facts.
-            scope_dependency_keys = {
-                _lower(key)
-                for key in dependency_by_scope.get(scope_id, []) or []
-                if _clean(key)
-            }
             selected_dependency_keys_all.update(scope_dependency_keys)
             requested_dependency_keys_for_selected_scopes.update(
-                requested_keys_by_symbol.get(scope_target, requested_keys)
+                scope_requested_dependency_keys
             )
-            if not (
+            if dependency_match:
+                selected_dependency_keys.update(dependency_matches)
+            elif not (
                 is_target_scope
-                and scope_target in requested_by_symbol
+                and symbol_specific_family_routing
                 and semantic - included_families
             ):
                 selected_dependency_keys.update(scope_dependency_keys)
@@ -1479,13 +1606,14 @@ def event_scoped_routing_inputs(
             "dependencyKeysComplete": False,
             "eventDependencyKeyRoutingApplied": False,
             "eventDependencyKeyNarrowed": False,
+            "nativeSourceScopeRoutingApplied": False,
             "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
         }
-    exact_event_dependency_keys = (
-        selected_dependency_keys_all
-        & requested_dependency_keys_for_selected_scopes
+    exact_event_dependency_keys = _matching_changed_dependency_keys(
+        selected_dependency_keys_all,
+        requested_dependency_keys_for_selected_scopes,
     )
     event_dependency_key_routing_applied = bool(
         dependency_boundary_authoritative
@@ -1509,6 +1637,7 @@ def event_scoped_routing_inputs(
             deferred_shared_scope_ids
             or target_scope_narrowed
             or event_dependency_key_narrowed
+            or native_source_scope_ids
         ),
         "scopeIds": sorted(set(selected_scope_ids)),
         "scopeFamilies": sorted(selected_families),
@@ -1516,6 +1645,8 @@ def event_scoped_routing_inputs(
         "dependencyKeysComplete": dependency_keys_complete,
         "eventDependencyKeyRoutingApplied": event_dependency_key_routing_applied,
         "eventDependencyKeyNarrowed": event_dependency_key_narrowed,
+        "nativeSourceScopeRoutingApplied": bool(native_source_scope_ids),
+        "nativeSourceScopeIds": sorted(native_source_scope_ids),
         "requestedDependencyKeys": sorted(
             requested_dependency_keys_for_selected_scopes
         ),
@@ -1939,6 +2070,12 @@ def build_inference_impact_plan(
         "eventDependencyKeyNarrowed": bool(
             event_routing.get("eventDependencyKeyNarrowed")
         ),
+        "nativeSourceScopeRoutingApplied": bool(
+            event_routing.get("nativeSourceScopeRoutingApplied")
+        ),
+        "nativeSourceScopeIds": list(
+            event_routing.get("nativeSourceScopeIds") or []
+        ),
         "eventScopedRuleSelection": event_scoped_rule_selection,
         "eventScopedScopeIds": list(event_routing.get("scopeIds") or []),
         "deferredSharedContextScopeIds": list(event_routing.get("deferredSharedScopeIds") or []),
@@ -2063,6 +2200,12 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         "eventDependencyKeyNarrowed": bool(
             values.get("eventDependencyKeyNarrowed")
         ),
+        "nativeSourceScopeRoutingApplied": bool(
+            values.get("nativeSourceScopeRoutingApplied")
+        ),
+        "nativeSourceScopeIds": list(
+            values.get("nativeSourceScopeIds") or []
+        )[:bounded],
         "eventScopedRuleSelection": bool(values.get("eventScopedRuleSelection")),
         "eventScopedScopeIds": list(values.get("eventScopedScopeIds") or [])[:bounded],
         "deferredSharedContextScopeIds": list(values.get("deferredSharedContextScopeIds") or [])[:bounded],
@@ -2191,6 +2334,13 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
             "affectedScopeFamilies": list(delta.get("affectedScopeFamilies") or [])[:bounded],
             "changedSymbols": list(delta.get("changedSymbols") or [])[:bounded],
             "directChangedSymbols": list(delta.get("directChangedSymbols") or [])[:bounded],
+            "sourceSymbolsByScope": {
+                str(scope_id or ""): list(symbols or [])[:bounded]
+                for scope_id, symbols in list(
+                    dict(delta.get("sourceSymbolsByScope") or {}).items()
+                )[:bounded]
+                if str(scope_id or "").strip()
+            },
             "dependencyAffectedSymbols": list(delta.get("dependencyAffectedSymbols") or [])[:bounded],
         },
     }

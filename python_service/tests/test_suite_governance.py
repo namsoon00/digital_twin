@@ -62,7 +62,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Physical generation retention additionally protects nodes that remain
         # role players in a different relation generation. Shared crypto scopes
         # retain their native source ownership for authoritative event routing.
-        self.assertLessEqual(total, 923)
+        # Mixed target batches separately prove physical replacement ownership,
+        # while descendant dependency keys keep native crypto rules reachable.
+        self.assertLessEqual(total, 925)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

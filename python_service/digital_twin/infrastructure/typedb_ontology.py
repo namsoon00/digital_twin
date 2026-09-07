@@ -7197,6 +7197,11 @@ class ScopedABoxManifestMixin:
         )
         patch = dict(worldview.get("targetScopedManifestPatch") or {})
         target_symbols = clean_symbols_from_payload(patch.get("targetSymbols") or [])
+        replacement_symbols = clean_symbols_from_payload(
+            patch.get("replacementSymbols")
+            if "replacementSymbols" in patch
+            else target_symbols
+        )
         if persistence_rows is None:
             node_rows, relation_rows = self.graph_persistence_rows(graph)
         else:
@@ -7219,20 +7224,42 @@ class ScopedABoxManifestMixin:
                 graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
                     "status": "local-complete",
                     "mode": "exact-candidate-rows",
-                    "replacedSymbols": target_symbols if target_scoped else [],
+                    "replacedSymbols": replacement_symbols if target_scoped else [],
                     "mergedSymbolCount": len(
                         incoming_index.get("sourceIdsBySymbol") or {}
                     ),
                 }
                 return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
             if target_scoped:
+                if "replacementSymbols" in patch and not replacement_symbols:
+                    active_index = dict(
+                        (active_metadata or {}).get("nativeRuleEvidenceReadIndex")
+                        or {}
+                    )
+                    active_reuse = normalize_native_rule_evidence_read_index(
+                        active_index,
+                        planner_topology=topology,
+                    )
+                    if str(active_reuse.get("status") or "") == "ok":
+                        graph.worldview["nativeRuleEvidenceReadIndex"] = active_index
+                        graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                            "status": "merged",
+                            "mode": "semantic-noop-active-reuse",
+                            "replacedSymbols": [],
+                            "mergedSymbolCount": len(
+                                active_index.get("sourceIdsBySymbol") or {}
+                            ),
+                        }
+                        return dict(
+                            graph.worldview["nativeRuleEvidenceReadIndexMerge"]
+                        )
                 merged_candidate = merge_native_rule_evidence_read_index(
                     dict((active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}),
                     dict((active_metadata or {}).get("nativeRulePlannerTopology") or {}),
                     incoming_index,
                     incoming_topology,
                     topology,
-                    target_symbols,
+                    replacement_symbols,
                     incoming_index_is_candidate_subset=True,
                 )
                 if str(merged_candidate.get("status") or "") == "ok":
@@ -7271,7 +7298,7 @@ class ScopedABoxManifestMixin:
             graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
                 "status": "complete-candidate-index-topology-mismatch",
                 "reason": str(complete_candidate.get("reason") or "")[:220],
-                "replacedSymbols": target_symbols if target_scoped else [],
+                "replacedSymbols": replacement_symbols if target_scoped else [],
                 "mergedSymbolCount": 0,
             }
             return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
@@ -7294,13 +7321,33 @@ class ScopedABoxManifestMixin:
                 "mergedSymbolCount": 0,
             }
 
+        if "replacementSymbols" in patch and not replacement_symbols:
+            active_index = dict(
+                (active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}
+            )
+            active_reuse = normalize_native_rule_evidence_read_index(
+                active_index,
+                planner_topology=topology,
+            )
+            if str(active_reuse.get("status") or "") == "ok":
+                graph.worldview["nativeRuleEvidenceReadIndex"] = active_index
+                graph.worldview["nativeRuleEvidenceReadIndexMerge"] = {
+                    "status": "merged",
+                    "mode": "semantic-noop-active-reuse",
+                    "replacedSymbols": [],
+                    "mergedSymbolCount": len(
+                        active_index.get("sourceIdsBySymbol") or {}
+                    ),
+                }
+                return dict(graph.worldview["nativeRuleEvidenceReadIndexMerge"])
+
         merged = merge_native_rule_evidence_read_index(
             dict((active_metadata or {}).get("nativeRuleEvidenceReadIndex") or {}),
             dict((active_metadata or {}).get("nativeRulePlannerTopology") or {}),
             incoming_index,
             incoming_topology,
             topology,
-            target_symbols,
+            replacement_symbols,
         )
         if str(merged.get("status") or "") != "ok":
             graph.worldview.pop("nativeRuleEvidenceReadIndex", None)

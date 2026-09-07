@@ -3528,6 +3528,11 @@ class PortfolioOntologyProjectionRecorder:
                         not applied_target_patch.get("selectedIncomingScopeIds")
                         and not applied_target_patch.get("retiredScopeIds")
                     )
+                    replacement_symbols = list(
+                        applied_target_patch.get("replacementSymbols")
+                        if "replacementSymbols" in applied_target_patch
+                        else applied_target_patch.get("targetSymbols") or []
+                    )
                     active_planner_topology = dict(
                         active_abox.get("nativeRulePlannerTopology") or {}
                     )
@@ -3557,7 +3562,7 @@ class PortfolioOntologyProjectionRecorder:
                         topology_merge = merge_native_rule_planner_topology(
                             active_planner_topology,
                             incoming_planner_topology,
-                            target_scoped_patch.get("targetSymbols") or [],
+                            replacement_symbols,
                         )
                     merged_topology_available = str(topology_merge.get("status") or "") == "ok"
                     planner_topology = dict(
@@ -3604,6 +3609,10 @@ class PortfolioOntologyProjectionRecorder:
                         "status": "applied",
                         "mode": "incremental-target-scoped-manifest-patch",
                         "targetSymbols": list(applied_target_patch.get("targetSymbols") or []),
+                        "replacementSymbols": replacement_symbols,
+                        "replacementRootScopeIds": list(
+                            applied_target_patch.get("replacementRootScopeIds") or []
+                        ),
                         "selectedIncomingScopeCount": len(
                             applied_target_patch.get("selectedIncomingScopeIds") or []
                         ),
@@ -6741,6 +6750,12 @@ class PortfolioOntologyProjectionRecorder:
                         "status": "applied",
                         "mode": "incremental-target-scoped-manifest-patch",
                         "targetSymbols": list(selection.get("targetSymbols") or []),
+                        "replacementSymbols": list(
+                            selection.get("replacementSymbols") or []
+                        ),
+                        "replacementRootScopeIds": list(
+                            selection.get("replacementRootScopeIds") or []
+                        ),
                         "selectedIncomingScopeCount": len(
                             selection.get("selectedIncomingScopeIds") or []
                         ),
@@ -6787,7 +6802,11 @@ class PortfolioOntologyProjectionRecorder:
                     topology_merge = merge_native_rule_planner_topology(
                         dict(active_market.get("nativeRulePlannerTopology") or {}),
                         incoming_planner_topology,
-                        market_target_patch.get("targetSymbols") or [],
+                        (
+                            market_target_patch.get("replacementSymbols")
+                            if "replacementSymbols" in market_target_patch
+                            else market_target_patch.get("targetSymbols") or []
+                        ),
                     )
                     if str(topology_merge.get("status") or "") != "ok":
                         return {

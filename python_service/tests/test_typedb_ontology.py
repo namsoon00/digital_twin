@@ -159,7 +159,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 ),
                 "targetScopedManifestPatch": {
                     "status": "applied",
-                    "targetSymbols": ["MSTR"],
+                    "targetSymbols": ["AAPL", "MSTR"],
+                    "replacementSymbols": ["MSTR"],
                 },
             },
         )
@@ -219,7 +220,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "nativeRulePlannerTopologyIncoming": incoming_topology,
                 "targetScopedManifestPatch": {
                     "status": "applied",
-                    "targetSymbols": ["MSTR"],
+                    "targetSymbols": ["AAPL", "MSTR"],
+                    "replacementSymbols": ["MSTR"],
                 },
             },
         )

@@ -641,6 +641,111 @@ class OntologyChangeImpactTests(unittest.TestCase):
             plan["diagnostics"]["reasonCodes"],
         )
 
+    def test_native_crypto_owner_and_descendant_dependency_keys_route_rules(self):
+        before = [
+            {
+                "scopeId": "macro:crypto",
+                "generationId": "crypto-a",
+                "nativeSourceSymbols": ["ETH"],
+                "semanticFingerprints": {"macro-crypto": "crypto-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-market-signal:field:change24h": "crypto-a",
+                },
+            },
+            {
+                "scopeId": "symbol:MSTR:exposure",
+                "generationId": "exposure-a",
+                "semanticFingerprints": {"exposure": "exposure-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-exposure:field:change24h": "exposure-a",
+                },
+            },
+        ]
+        after = [
+            {
+                **before[0],
+                "generationId": "crypto-b",
+                "semanticFingerprints": {"macro-crypto": "crypto-b"},
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-market-signal:field:change24h": "crypto-b",
+                },
+            },
+            {
+                **before[1],
+                "generationId": "exposure-b",
+                "semanticFingerprints": {"exposure": "exposure-b"},
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-exposure:field:change24h": "exposure-b",
+                },
+            },
+        ]
+        rules = [
+            {
+                "ruleId": "graph.test.crypto.market.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_CRYPTO_MARKET_SIGNAL",
+                    "targetKind": "crypto-market-signal",
+                }],
+            },
+            {
+                "ruleId": "graph.test.crypto.exposure.v1",
+                "conditions": [{
+                    "kind": "relation",
+                    "relationType": "HAS_CRYPTO_EXPOSURE",
+                    "targetKind": "crypto-exposure",
+                }],
+            },
+        ]
+
+        plan = build_inference_impact_plan(
+            before,
+            after,
+            ["000660", "ETH", "MSTR"],
+            explicit_target_symbols=["000660", "ETH", "MSTR"],
+            rules=rules,
+            requested_fact_families=["market", "exposure"],
+            requested_fact_families_by_symbol={
+                "000660": ["market"],
+                "ETH": ["market"],
+                "MSTR": ["exposure"],
+            },
+            requested_dependency_keys=[
+                "kind:crypto-exposure",
+                "kind:crypto-market-signal",
+            ],
+            requested_dependency_keys_by_symbol={
+                "ETH": ["kind:crypto-market-signal"],
+                "MSTR": ["kind:crypto-exposure"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+
+        self.assertEqual(["ETH", "MSTR"], plan["scopeDelta"]["directChangedSymbols"])
+        self.assertEqual(
+            ["ETH"],
+            plan["scopeDelta"]["sourceSymbolsByScope"]["macro:crypto"],
+        )
+        self.assertTrue(plan["nativeSourceScopeRoutingApplied"])
+        self.assertEqual(["macro:crypto"], plan["nativeSourceScopeIds"])
+        self.assertEqual(
+            [
+                "kind:crypto-exposure:field:change24h",
+                "kind:crypto-market-signal:field:change24h",
+            ],
+            plan["routingDependencyKeys"],
+        )
+        self.assertEqual(
+            {
+                "graph.test.crypto.exposure.v1",
+                "graph.test.crypto.market.v1",
+            },
+            set(plan["candidateRuleIds"]),
+        )
+        self.assertNotIn("macro:crypto", plan["deferredSharedContextScopeIds"])
+
     def test_compact_impact_plan_disables_incremental_selection_when_route_is_incomplete(self):
         compact = compact_inference_impact_plan({
             "candidateRuleIds": ["graph.test.only-one"],

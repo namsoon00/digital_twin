@@ -23,6 +23,7 @@ from .ontology_change_impact import (
     macro_scope_id,
     pack_semantic_dependency_fingerprints,
     scope_family,
+    scope_source_symbols,
     scope_symbol,
     symbol_scope_id,
     unpack_semantic_dependency_fingerprints,
@@ -2141,6 +2142,7 @@ def select_target_scoped_manifest_patch(
     }
     base = {
         "targetSymbols": requested_symbols,
+        "replacementSymbols": [],
         "incomingScopeCount": len(incoming),
         "activeScopeCount": len(active_by_scope),
         "selectedIncomingScopeIds": [],
@@ -2825,6 +2827,85 @@ def select_target_scoped_manifest_patch(
             "missingEndpointScopeIds": sorted(set(missing_endpoints)),
         }
 
+    # Evaluation targets describe every subject requested by the mailbox turn.
+    # Physical replacement targets are narrower: they describe only subjects
+    # whose source-owned facts were selected (plus explicit retirements). Using
+    # the request list for both contracts makes a mixed batch demand candidate
+    # rows for an unchanged subject and fail before TypeDB can evaluate it.
+    replacement_root_scope_ids = sorted(
+        set(relation_rebind_root_scope_ids).intersection(selected)
+    )
+    raw_slot_families_by_symbol = fact_slot_selection.get(
+        "slotFamiliesBySymbol"
+    )
+    slot_families_by_symbol = (
+        raw_slot_families_by_symbol
+        if isinstance(raw_slot_families_by_symbol, Mapping)
+        else {}
+    )
+    shared_slot_families = {
+        _clean(value).lower()
+        for value in fact_slot_selection.get("slotFamilies") or []
+        if _clean(value)
+    }
+
+    def family_matches_slot(family: str, values: Iterable[object]) -> bool:
+        slots = {_clean(value).lower() for value in values or [] if _clean(value)}
+        if family in slots:
+            return True
+        if family.startswith("macro-") and "macro" in slots:
+            return True
+        return family == "macro" and any(
+            value.startswith("macro-") for value in slots
+        )
+
+    def replacement_symbols_for_scope(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> Set[str]:
+        owned = {
+            _symbol(symbol)
+            for symbol in scope_source_symbols(scope_id, item)
+            if _symbol(symbol) in requested_symbols
+        }
+        owned.update({
+            _symbol(scope_symbol(dependency))
+            for dependency in item.get("dependencyScopeIds") or []
+            if _symbol(scope_symbol(dependency)) in requested_symbols
+        })
+        if owned:
+            return owned
+        family = (
+            _clean(item.get("scopeFamily"))
+            or scope_family(scope_id)
+        ).lower()
+        return {
+            symbol
+            for symbol in requested_symbols
+            if family_matches_slot(
+                family,
+                slot_families_by_symbol.get(symbol, shared_slot_families),
+            )
+        }
+
+    replacement_symbols: Set[str] = set()
+    for scope_id in replacement_root_scope_ids:
+        replacement_symbols.update(
+            replacement_symbols_for_scope(scope_id, incoming.get(scope_id) or {})
+        )
+    for scope_id in retired_scope_ids:
+        replacement_symbols.update(
+            replacement_symbols_for_scope(
+                scope_id,
+                active_by_scope.get(scope_id) or {},
+            )
+        )
+    if (replacement_root_scope_ids or retired_scope_ids) and not replacement_symbols:
+        # Legacy/opaque shared scopes have no source-ownership metadata. Keep
+        # their old conservative behavior rather than silently retaining a
+        # topology that may no longer match the selected facts.
+        replacement_symbols.update(requested_symbols)
+
     selected_plan = [incoming[scope_id] for scope_id in sorted(selected)]
     deferred = sorted({
         scope_id
@@ -2889,6 +2970,8 @@ def select_target_scoped_manifest_patch(
         **base,
         "status": "ready",
         "applied": True,
+        "replacementSymbols": sorted(replacement_symbols),
+        "replacementRootScopeIds": replacement_root_scope_ids,
         "selectedIncomingScopeIds": sorted(selected),
         "selectedIncomingScopePlan": selected_plan,
         "reusedActiveScopeIds": sorted(set(retained_active_by_scope) - selected),
@@ -2920,6 +3003,8 @@ def select_target_scoped_manifest_patch(
             ),
             "relationRebindRootScopeIds": sorted(relation_rebind_root_scope_ids),
             "relationRebindRootScopeCount": len(relation_rebind_root_scope_ids),
+            "replacementSymbols": sorted(replacement_symbols),
+            "replacementRootScopeIds": replacement_root_scope_ids,
         },
         "scopeTopologyMigration": topology_migration,
     }
@@ -3058,6 +3143,10 @@ def merge_target_scoped_abox_manifest(
     patch_metadata = {
         "mode": "incremental-target-scoped-manifest-patch",
         "targetSymbols": list(selection.get("targetSymbols") or []),
+        "replacementSymbols": list(selection.get("replacementSymbols") or []),
+        "replacementRootScopeIds": list(
+            selection.get("replacementRootScopeIds") or []
+        ),
         "selectedIncomingScopeIds": list(selection.get("selectedIncomingScopeIds") or []),
         "reusedActiveScopeIds": list(selection.get("reusedActiveScopeIds") or []),
         "deferredScopeIds": list(selection.get("deferredScopeIds") or []),

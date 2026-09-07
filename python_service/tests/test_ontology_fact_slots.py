@@ -91,6 +91,119 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["selectedScopeIds"],
         )
 
+    def test_mixed_crypto_batch_replaces_only_source_owned_changed_symbols(self):
+        def scope_row(scope_id, family, generation, semantic, dependency, **extra):
+            return {
+                "scopeId": scope_id,
+                "scopeType": scope_id.split(":", 1)[0],
+                "scopeFamily": family,
+                "impactScopeFamilies": [family],
+                "baseFingerprint": semantic,
+                "fingerprint": generation,
+                "generationId": generation,
+                "semanticFingerprints": {family: semantic},
+                "semanticDependencyFingerprints": dependency,
+                "dependencyScopeIds": [],
+                **extra,
+            }
+
+        active_plan = [
+            scope_row(
+                "macro:crypto",
+                "macro-crypto",
+                "crypto-g1",
+                "crypto-v1",
+                {"kind:crypto-market-signal:field:change24h": "crypto-v1"},
+                nativeSourceSymbols=["ETH"],
+            ),
+            scope_row(
+                "symbol:MSTR:exposure",
+                "exposure",
+                "mstr-g1",
+                "mstr-v1",
+                {"kind:crypto-exposure:field:change24h": "mstr-v1"},
+            ),
+            scope_row(
+                "symbol:000660:market",
+                "market",
+                "hynix-g1",
+                "hynix-v1",
+                {"kind:stock:field:currentprice": "hynix-v1"},
+            ),
+        ]
+        incoming_plan = deepcopy(active_plan)
+        incoming_plan[0].update({
+            "baseFingerprint": "crypto-v2",
+            "fingerprint": "crypto-g2",
+            "generationId": "crypto-g2",
+            "semanticFingerprints": {"macro-crypto": "crypto-v2"},
+            "semanticDependencyFingerprints": {
+                "kind:crypto-market-signal:field:change24h": "crypto-v2",
+            },
+        })
+        incoming_plan[1].update({
+            "baseFingerprint": "mstr-v2",
+            "fingerprint": "mstr-g2",
+            "generationId": "mstr-g2",
+            "semanticFingerprints": {"exposure": "mstr-v2"},
+            "semanticDependencyFingerprints": {
+                "kind:crypto-exposure:field:change24h": "mstr-v2",
+            },
+        })
+        graph = PortfolioOntology(
+            "main",
+            worldview={
+                "scopePlan": incoming_plan,
+                "targetScopeRetentionMode": "incremental-target-patch",
+            },
+        )
+        fact_slot_plan = build_fact_slot_projection_plan(
+            ["000660", "ETH", "MSTR"],
+            ["market", "exposure"],
+            requested_fact_families_by_symbol={
+                "000660": ["market"],
+                "ETH": ["market"],
+                "MSTR": ["exposure"],
+            },
+            changed_fields_by_symbol={
+                "000660": ["currentPrice"],
+                "ETH": ["external.cryptoMarkets"],
+                "MSTR": ["external.cryptoMarkets"],
+            },
+            event_boundary_authoritative=True,
+            requested_dependency_keys=[
+                "kind:crypto-exposure",
+                "kind:crypto-market-signal",
+                "kind:stock:field:currentprice",
+            ],
+            requested_dependency_keys_by_symbol={
+                "000660": ["kind:stock:field:currentprice"],
+                "ETH": ["kind:crypto-market-signal"],
+                "MSTR": ["kind:crypto-exposure"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+
+        result = select_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok",
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "scopePlan": active_plan,
+            },
+            ["000660", "ETH", "MSTR"],
+            fact_slot_plan=fact_slot_plan,
+        )
+
+        self.assertEqual("ready", result["status"])
+        self.assertEqual(["000660", "ETH", "MSTR"], result["targetSymbols"])
+        self.assertEqual(["ETH", "MSTR"], result["replacementSymbols"])
+        self.assertEqual(
+            ["macro:crypto", "symbol:MSTR:exposure"],
+            result["replacementRootScopeIds"],
+        )
+
     def test_portfolio_risk_uses_stable_benchmark_anchor(self):
         def risk_graph(snapshot_id, beta):
             graph = PortfolioOntology(

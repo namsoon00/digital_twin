@@ -18,7 +18,7 @@ from .hypothesis_outcome_contract import HypothesisOutcomeContract, merge_outcom
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
 
-HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v3"
+HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v4"
 HYPOTHESIS_LIFECYCLE_KEY_VERSION = "v2"
 HYPOTHESIS_LIFECYCLE_KEY_PREFIX = HYPOTHESIS_LIFECYCLE_KEY_VERSION + ":"
 HYPOTHESIS_LIFECYCLE_STATES = (
@@ -38,7 +38,7 @@ HYPOTHESIS_LIFECYCLE_STATE_LABELS = {
     "invalidated": "가설 무효화",
     "expired": "근거 유효기간 만료",
 }
-RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v1"
+RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v2"
 RELATION_LIFECYCLE_CHANGE_KINDS = {
     "observed": "created",
     "maintained": "maintained",
@@ -867,15 +867,34 @@ def has_material_delta(delta: Mapping[str, Sequence[str]]) -> bool:
         "addedRuleIds",
         "removedRuleIds",
     }
-    return any(bool(list((delta or {}).get(key) or [])) for key in material_keys)
+    return any(material_delta_values(delta, key) for key in material_keys)
+
+
+def material_delta_values(
+    delta: Mapping[str, Sequence[str]],
+    key: str,
+) -> List[str]:
+    """Return stable semantic changes, excluding one-time migration slots."""
+
+    return [
+        _text(item)
+        for item in (delta or {}).get(key) or []
+        if _text(item) and ":migration-slot:" not in _text(item)
+    ]
 
 
 def state_for_delta(previous: HypothesisLifecycleRecord, delta: Mapping[str, Sequence[str]]) -> Tuple[str, str]:
-    added_support = bool(delta.get("addedSupportingEvidenceKeys")) or bool(delta.get("addedCausalPathKeys"))
-    removed_support = bool(delta.get("removedSupportingEvidenceKeys")) or bool(delta.get("removedCausalPathKeys"))
-    added_counter = bool(delta.get("addedCounterEvidenceKeys"))
-    removed_counter = bool(delta.get("removedCounterEvidenceKeys"))
-    removed_conditions = bool(delta.get("removedFormationConditionIds"))
+    added_support = bool(
+        material_delta_values(delta, "addedSupportingEvidenceKeys")
+        or material_delta_values(delta, "addedCausalPathKeys")
+    )
+    removed_support = bool(
+        material_delta_values(delta, "removedSupportingEvidenceKeys")
+        or material_delta_values(delta, "removedCausalPathKeys")
+    )
+    added_counter = bool(material_delta_values(delta, "addedCounterEvidenceKeys"))
+    removed_counter = bool(material_delta_values(delta, "removedCounterEvidenceKeys"))
+    removed_conditions = bool(material_delta_values(delta, "removedFormationConditionIds"))
     if (added_support or removed_counter) and not (removed_support or added_counter or removed_conditions):
         return "strengthened", "새 지지 근거 또는 인과 경로가 추가되었습니다."
     if removed_support or added_counter or removed_conditions:
@@ -1085,19 +1104,23 @@ def relation_lifecycle_transition_contract(value: Mapping[str, object]) -> Dict[
     current_state = _text(selected.get("currentState") or selected.get("current_state"))
     previous_state = _text(selected.get("previousState") or selected.get("previous_state"))
     change_kind = RELATION_LIFECYCLE_CHANGE_KINDS.get(current_state, current_state or "unknown")
-    # A newly observed path is a real relation creation even though it has no
-    # evidence delta yet. Maintained is intentionally non-material.
-    material = bool(
-        selected.get("materialChange")
-        or selected.get("material_change")
-        or current_state in {"observed", "strengthened", "weakened", "invalidated", "expired"}
-    )
+    def transition_is_material(item: Mapping[str, object]) -> bool:
+        state = _text(item.get("currentState") or item.get("current_state"))
+        # A newly observed, invalidated, or expired path is independently
+        # meaningful. Strengthened/weakened requires a stable semantic delta;
+        # generation IDs and v2-to-v3 migration slots are audit metadata only.
+        if state in {"observed", "invalidated", "expired"}:
+            return True
+        if state in {"strengthened", "weakened"}:
+            delta = item.get("evidenceDelta") or item.get("evidence_delta") or {}
+            return isinstance(delta, Mapping) and has_material_delta(delta)
+        return bool(item.get("materialChange") or item.get("material_change"))
+
+    material = transition_is_material(selected)
     material_transitions = [
         item
         for item in transitions
-        if bool(item.get("materialChange") or item.get("material_change"))
-        or _text(item.get("currentState") or item.get("current_state"))
-        in {"observed", "strengthened", "weakened", "invalidated", "expired"}
+        if transition_is_material(item)
     ]
     return {
         "version": RELATION_LIFECYCLE_TRANSITION_VERSION,

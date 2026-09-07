@@ -8,6 +8,9 @@ from digital_twin.domain.notification_ai_delivery import (
     final_ai_delivery_decision,
     pre_ai_deferred_delivery_decision,
 )
+from digital_twin.domain.notification_delivery_explanation import (
+    build_customer_delivery_explanation,
+)
 from digital_twin.domain.notification_rules import NotificationRuleDecision
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.ontology_relation_delivery import relation_delivery_diff
@@ -567,6 +570,51 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("suppress", decision["decision"])
         self.assertIn("최종 AI 행동", decision["reason"])
 
+        migration_churn = watchlist_context()
+        migration_churn.update({
+            "cooldownDecision": "meaningful-change",
+            "decisionTransition": {
+                "kind": "relation-strengthened",
+                "material": True,
+                "previousAction": "no_action",
+                "currentAction": "no_action",
+                "relationLifecycleTransition": {
+                    "changeKind": "strengthened",
+                    "material": True,
+                    "evidenceDelta": {
+                        "removedCounterEvidenceKeys": [
+                            "counter:migration-slot:legacy:1",
+                            "counter:migration-slot:legacy:2",
+                        ],
+                        "rotatedAddedSupportingEvidenceIds": ["relation-evidence:new"],
+                        "rotatedRemovedSupportingEvidenceIds": ["relation-evidence:old"],
+                    },
+                },
+            },
+            "investmentNotificationTransition": {
+                "changed": False,
+                "material": False,
+                "kind": "unchanged",
+            },
+        })
+
+        churn_decision = final_ai_delivery_decision(migration_churn)
+
+        self.assertEqual("suppress", churn_decision["decision"])
+        self.assertEqual(
+            "internal_relation_lifecycle_churn",
+            churn_decision["suppressionReason"],
+        )
+        self.assertFalse(churn_decision["observableRelationEvidenceChanged"])
+        self.assertNotIn("deliveryAuthorization", churn_decision)
+        explanation = build_customer_delivery_explanation(
+            message_type="investmentInsight",
+            source_event_name="investment.reasoning.completed",
+            context=migration_churn,
+        )
+        self.assertEqual("invalid", explanation["validation"]["state"])
+        self.assertIn("primary-cause-missing", explanation["validation"]["errors"])
+
     def test_final_ai_action_change_is_sent(self):
         decision = final_ai_delivery_decision(watchlist_context(ai_kind="action-changed"))
 
@@ -652,6 +700,37 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("send", follow_up_decision["decision"])
         self.assertEqual("verified-threshold-transition", follow_up_decision["pushValueClass"])
 
+        market_threshold = watchlist_context()
+        market_threshold.update({
+            "cooldownDecision": "meaningful-change",
+            "deliveryTriggerLedger": [{
+                "triggerId": "repeat-transition:insight_ma60_crossed_above",
+                "conditionId": "insight_ma60_crossed_above",
+                "kind": "verified-market-transition",
+                "status": "matched",
+                "label": "60일 평균 위로 회복",
+                "reason": "60일 평균 위로 회복 -0.4 -> 0.7",
+            }],
+        })
+        threshold_decision = final_ai_delivery_decision(market_threshold)
+
+        self.assertEqual("send", threshold_decision["decision"])
+        self.assertEqual(
+            "verified-market-threshold-transition",
+            threshold_decision["pushValueClass"],
+        )
+        self.assertEqual(1, threshold_decision["verifiedMarketTransitionCount"])
+        explanation = build_customer_delivery_explanation(
+            message_type="investmentInsight",
+            source_event_name="investment.reasoning.completed",
+            context=market_threshold,
+        )
+        self.assertEqual("valid", explanation["validation"]["state"])
+        self.assertEqual(
+            "threshold-crossing",
+            explanation["primaryCause"]["category"],
+        )
+
         context = watchlist_context()
         context["cooldownDecision"] = "scheduled-summary"
         context["decisionTransition"] = {"kind": "unchanged", "material": False}
@@ -699,6 +778,28 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("proceed", proceeded["decision"])
         self.assertEqual("verified-threshold-transition", proceeded["pushValueClass"])
+
+        migration_only = {
+            "preDecisionDeliveryGate": {"reasonCode": "unchanged_graph_inference"},
+            "decisionContinuityPacket": {"followUpConditions": []},
+            "decisionTransition": {
+                "kind": "relation-strengthened",
+                "material": True,
+                "relationLifecycleTransition": {
+                    "evidenceDelta": {
+                        "removedCounterEvidenceKeys": [
+                            "counter:migration-slot:legacy:1",
+                        ],
+                    },
+                },
+            },
+        }
+
+        migration_decision = pre_ai_deferred_delivery_decision(migration_only)
+
+        self.assertEqual("suppress", migration_decision["decision"])
+        self.assertFalse(migration_decision["materialGraphTransition"])
+        self.assertFalse(migration_decision["observableRelationEvidenceChanged"])
 
     def test_holding_and_watchlist_baseline_delivery_boundaries(self):
         context = watchlist_context()

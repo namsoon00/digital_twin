@@ -384,6 +384,52 @@ class HypothesisLifecycleTests(unittest.TestCase):
             rotated.evidence_delta["rotatedAddedSupportingEvidenceIds"],
         )
 
+        legacy_observed, _ = record_for_snapshot(
+            None,
+            lifecycle_snapshot(
+                counter=["counter:legacy:1", "counter:legacy:2", "counter:legacy:3"],
+            ),
+        )
+        legacy_maintained, _ = record_for_snapshot(
+            legacy_observed,
+            lifecycle_snapshot(
+                generation="generation-2",
+                observed_at="2026-07-23T00:01:00Z",
+                counter=["counter:legacy:1", "counter:legacy:2", "counter:legacy:3"],
+            ),
+        )
+        migrated, migration_transition = record_for_snapshot(
+            legacy_maintained,
+            lifecycle_snapshot(
+                generation="generation-3",
+                observed_at="2026-07-23T00:02:00Z",
+                counter=[],
+            ),
+        )
+
+        self.assertEqual("maintained", migrated.state)
+        self.assertFalse(migrated.material_change)
+        self.assertIsNone(migration_transition)
+        self.assertTrue(
+            all(
+                ":migration-slot:" in item
+                for item in migrated.evidence_delta["removedCounterEvidenceKeys"]
+            )
+        )
+        migration_contract = relation_lifecycle_transition_contract({
+            "hypothesisLifecycle": {
+                "transitions": [{
+                    "transitionId": "transition:migration-only",
+                    "previousState": "weakened",
+                    "currentState": "strengthened",
+                    "materialChange": True,
+                    "evidenceDelta": migrated.evidence_delta,
+                }],
+            },
+        })
+        self.assertFalse(migration_contract["material"])
+        self.assertEqual(0, migration_contract["materialTransitionCount"])
+
     def test_lifecycle_expires_when_required_freshness_or_validity_fails(self):
         first = lifecycle_snapshot(policy={
             "formationConditionIds": ["trend-below-ma20"],

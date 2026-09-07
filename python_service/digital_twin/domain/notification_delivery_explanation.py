@@ -6,10 +6,13 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
 from .message_types import INVESTMENT_INSIGHT
-from .notification_ai_delivery import first_holding_review_delivery_is_authorized
+from .notification_ai_delivery import (
+    first_holding_review_delivery_is_authorized,
+    verified_market_transition_triggers,
+)
 
 
-CUSTOMER_DELIVERY_EXPLANATION_VERSION = "customer-delivery-explanation-v1"
+CUSTOMER_DELIVERY_EXPLANATION_VERSION = "customer-delivery-explanation-v2"
 VALID_CAUSE_CATEGORIES = {
     "verification",
     "replay",
@@ -238,16 +241,34 @@ def _relation_transition_cause(context: Mapping[str, object]) -> CustomerDeliver
             source_references=references,
             basis="relation-decision-transition",
         )
-    if transition:
-        return _cause(
-            "relation-decision-transition",
-            "readiness-transition",
-            "사용자 판단 조건이 바뀌어 현재 상태를 다시 확인합니다.",
-            label="판단 조건 변화",
-            source_references=references,
-            basis="relation-decision-transition",
-        )
+    # Relation generation, trace, and lifecycle IDs may change while the
+    # customer-visible action and readiness remain identical. Those changes
+    # stay in the audit trail and cannot be presented as a user decision event.
     return None
+
+
+def _verified_market_transition_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
+    triggers = verified_market_transition_triggers(context)
+    if not triggers:
+        return None
+    trigger = triggers[0]
+    condition_id = _text(trigger.get("conditionId"))
+    relation = _mapping(context.get("ontologyRelationContext"))
+    facts = _mapping(relation.get("facts"))
+    current_value = (
+        context.get("profitLossRate")
+        if "profit_loss" in condition_id
+        else facts.get("ma60Distance")
+    )
+    return _cause(
+        "verified-market-transition:" + condition_id,
+        "threshold-crossing",
+        _text(trigger.get("reason")) or "검증된 시장 임계값 전환이 확인됐습니다.",
+        label=_text(trigger.get("label")) or "시장 조건 변화",
+        current_value=current_value,
+        source_references=[trigger.get("triggerId")],
+        basis="verified-market-transition",
+    )
 
 
 def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
@@ -285,6 +306,9 @@ def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCau
     evidence = _material_evidence_cause(context)
     if evidence is not None:
         return evidence
+    market_transition = _verified_market_transition_cause(context)
+    if market_transition is not None:
+        return market_transition
     relation_transition = _relation_transition_cause(context)
     if relation_transition is not None:
         return relation_transition

@@ -897,6 +897,14 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("meaningful-change", decision.state_decision)
         self.assertIn("권장 대응 변경", decision.state_reason)
+        trigger_ids = {
+            item.get("triggerId")
+            for item in decision.to_context()["deliveryTriggerLedger"]
+        }
+        self.assertIn(
+            "repeat-transition:insight_action_changed",
+            trigger_ids,
+        )
 
     def _assert_profit_loss_change_is_checked_before_unchanged_graph_suppression(self):
         rule = default_notification_rule("investmentInsight")

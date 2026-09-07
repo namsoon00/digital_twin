@@ -5,7 +5,10 @@ from .market_hours import evaluate_market_hours
 from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, ONTOLOGY_OBSERVATION_FOLLOWUP, SYSTEM_MESSAGE_TYPES
 from .context_observation_notifications import typedb_context_observation_contract
 from .notification_ai_context import is_graph_backed_relation_context
-from .notification_ai_delivery import holding_review_baseline_is_deliverable
+from .notification_ai_delivery import (
+    VERIFIED_MARKET_TRANSITION_TRIGGER_IDS,
+    holding_review_baseline_is_deliverable,
+)
 from .ontology_relation_delivery import (
     relation_delivery_diff,
     relation_delivery_metadata,
@@ -1255,6 +1258,22 @@ def apply_state_cooldown_rule(
             material_reason,
         ):
             return decision
+        if matched_bypass:
+            condition, bypass_reason = matched_bypass
+            customer_visible = condition.condition_id in VERIFIED_MARKET_TRANSITION_TRIGGER_IDS
+            decision.add_trigger(
+                "repeat-transition:" + condition.condition_id,
+                "verified-market-transition",
+                condition.label,
+                bypass_reason,
+                triggerCategory="market-transition" if customer_visible else "delivery-policy",
+                customerVisible=customer_visible,
+                conditionId=condition.condition_id,
+                conditionType=condition.condition_type,
+                field=condition.field,
+                threshold=condition.value,
+                status="matched",
+            )
         decision.state_decision = material_decision
         decision.state_reason = material_reason
         decision.similarity_bypassed = True

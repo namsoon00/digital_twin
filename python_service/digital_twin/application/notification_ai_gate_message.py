@@ -339,6 +339,14 @@ def _html_bullet(value: object, level: str = "", prefix: str = "") -> str:
     return "• " + html.escape(text, quote=False)
 
 
+def _html_bullets(values, level: str = "") -> List[str]:
+    return [
+        row
+        for row in (_html_bullet(value, level) for value in values or [])
+        if row
+    ]
+
+
 def _html_row(label: str, value: object, beginner: bool = False, level: str = "", max_len: int = 500) -> str:
     text = _text(value, max_len)
     if not text:
@@ -3115,15 +3123,18 @@ def execution_telegram_message_full(context: Dict[str, object], response: Notifi
     market_rows = market_hours_message_rows(context)
     if market_rows:
         parts.extend(["", "<b>장외 판단 안내</b>", *[_html_bullet(row, level) for row in market_rows]])
-    hypothesis_rows = full_typedb_competing_inference_rows(context, response)
-    parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *[_html_bullet(row, level) for row in hypothesis_rows]])
-    assessment_rows = typedb_decision_assessment_rows(context)
-    parts.extend(["", "<b>온톨로지 판단 영역</b>", *[_html_bullet(row, level) for row in assessment_rows]])
+    hypothesis_rows = _html_bullets(full_typedb_competing_inference_rows(context, response), level)
+    if hypothesis_rows:
+        parts.extend(["", "<b>TypeDB 경쟁 추론</b>", *hypothesis_rows])
+    assessment_rows = _html_bullets(typedb_decision_assessment_rows(context), level)
+    if assessment_rows:
+        parts.extend(["", "<b>온톨로지 판단 영역</b>", *assessment_rows])
     option_rows = holding_strategy_option_rows(context, response, level)
     if option_rows:
         parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])
-    causal_rows = ai_causal_validation_rows(response)
-    parts.extend(["", "<b>AI 인과 검증</b>", *[_html_bullet(row, level) for row in causal_rows]])
+    causal_rows = _html_bullets(ai_causal_validation_rows(response), level)
+    if causal_rows:
+        parts.extend(["", "<b>AI 인과 검증</b>", *causal_rows])
     lifecycle_rows = hypothesis_decision_brief_rows(context, response, level)
     if lifecycle_rows:
         parts.extend(["", "<b>가설 변화와 검증</b>", *lifecycle_rows])
@@ -3477,7 +3488,9 @@ def execution_telegram_message_progressive(
             if context_observation
             else "TypeDB 검토 가설"
         )
-        parts.extend(["", "<b>" + inference_label + "</b>", *[_html_bullet(row, level) for row in packet.inference]])
+        inference_rows = _html_bullets(packet.inference, level)
+        if inference_rows:
+            parts.extend(["", "<b>" + inference_label + "</b>", *inference_rows])
     if packet.company_value:
         parts.extend(["", "<b>회사 가치</b>", *[_html_bullet(row, level) for row in packet.company_value]])
     if packet.next_checks:
@@ -3556,7 +3569,11 @@ def execution_telegram_message_compact_beginner(
     counter_rows = full_decision_evidence_rows(context, response, counter=True)
     if counter_rows:
         parts.extend(["", "<b>반대 근거</b>", *[_html_bullet(row, level) for row in counter_rows]])
-    typedb_rows = canonical_publication_hypothesis_rows(context, response) or full_typedb_competing_inference_rows(context, response)
+    typedb_rows = _html_bullets(
+        canonical_publication_hypothesis_rows(context, response)
+        or full_typedb_competing_inference_rows(context, response),
+        level,
+    )
     publication = context.get("decisionPublication") if isinstance(context.get("decisionPublication"), dict) else {}
     typedb_label = (
         "판단에 사용한 가설"
@@ -3565,9 +3582,11 @@ def execution_telegram_message_compact_beginner(
         if context_observation
         else "TypeDB 경쟁 추론"
     )
-    parts.extend(["", "<b>" + typedb_label + "</b>", *[_html_bullet(row, level) for row in typedb_rows]])
-    assessment_rows = typedb_decision_assessment_rows(context)
-    parts.extend(["", "<b>온톨로지 판단 영역</b>", *[_html_bullet(row, level) for row in assessment_rows]])
+    if typedb_rows:
+        parts.extend(["", "<b>" + typedb_label + "</b>", *typedb_rows])
+    assessment_rows = _html_bullets(typedb_decision_assessment_rows(context), level)
+    if assessment_rows:
+        parts.extend(["", "<b>온톨로지 판단 영역</b>", *assessment_rows])
     option_rows = [] if context_observation else holding_strategy_option_rows(context, response, level)
     if option_rows:
         parts.extend(["", "<b>보유 전략 선택지</b>", *option_rows])

@@ -10,22 +10,26 @@ from .context_observation_notifications import (
     typedb_context_observation_contract,
     typedb_review_observation_contract,
 )
+from .hypothesis_lifecycle import has_material_delta
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v14"
-PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v1"
+FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v15"
+PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v2"
 
 EXPLICIT_DELIVERY_AUTHORIZATIONS = {
     "typedb-profit-loss-change": (
         "profit-loss-threshold-transition",
         "손익 관리 조건 변화가 확인되어 현재 판단을 다시 알립니다.",
     ),
-    "meaningful-change": (
-        "material-observation-transition",
-        "사용자가 확인해야 할 가격·수급·관계 조건 변화가 확인됐습니다.",
-    ),
 }
+
+VERIFIED_MARKET_TRANSITION_TRIGGER_IDS = frozenset({
+    "insight_profit_loss_worsened",
+    "insight_profit_loss_improved",
+    "insight_ma60_crossed_below",
+    "insight_ma60_crossed_above",
+})
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -46,9 +50,9 @@ def explicit_delivery_authorization(context: Mapping[str, object]) -> Dict[str, 
     """Return a delivery authorization already granted by admission policy.
 
     Cooldown and material-change admission run before TypeDB/AI delivery gates.
-    A later unchanged-state gate must not revoke an explicit threshold,
-    observation, or scheduled-review authorization. It may still enforce data,
-    publication, and AI validation contracts.
+    A later unchanged-state gate must not revoke an explicit TypeDB-backed
+    threshold authorization. Generic ``meaningful-change`` is intentionally
+    provisional because internal relation lifecycle churn is not user value.
     """
 
     decision = _text(_mapping(context).get("cooldownDecision")).lower()
@@ -174,6 +178,39 @@ def _material_source_event_keys(context: Mapping[str, object]):
     )
 
 
+def verified_market_transition_triggers(context: Mapping[str, object]):
+    """Return exact market-threshold edges recorded by admission policy."""
+
+    rows = []
+    for item in _mapping(context).get("deliveryTriggerLedger") or []:
+        if not isinstance(item, Mapping):
+            continue
+        trigger_id = _text(item.get("conditionId"))
+        if not trigger_id:
+            raw_trigger_id = _text(item.get("triggerId"))
+            trigger_id = raw_trigger_id.rsplit(":", 1)[-1]
+        if (
+            trigger_id not in VERIFIED_MARKET_TRANSITION_TRIGGER_IDS
+            or _text(item.get("status")).lower() not in {"matched", "released"}
+        ):
+            continue
+        rows.append({**dict(item), "conditionId": trigger_id})
+    return rows
+
+
+def _relation_lifecycle_evidence_delta(context: Mapping[str, object]) -> Dict[str, object]:
+    values = _mapping(context)
+    transition = _mapping(values.get("decisionTransition")) or _mapping(
+        _mapping(values.get("ontologyRelationDiff")).get("decisionTransition")
+    )
+    lifecycle = _mapping(transition.get("relationLifecycleTransition"))
+    return _mapping(lifecycle.get("evidenceDelta"))
+
+
+def _has_user_observable_relation_delta(context: Mapping[str, object]) -> bool:
+    return has_material_delta(_relation_lifecycle_evidence_delta(context))
+
+
 def pre_ai_deferred_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
     """Resolve an unchanged graph candidate after decision continuity is loaded.
 
@@ -198,20 +235,38 @@ def pre_ai_deferred_delivery_decision(context: Mapping[str, object]) -> Dict[str
         return base
 
     follow_ups = verified_follow_up_transitions(values)
+    market_transitions = verified_market_transition_triggers(values)
     material_sources = _material_source_event_keys(values)
     graph_transition = _mapping(values.get("decisionTransition")) or _mapping(
         _mapping(values.get("ontologyRelationDiff")).get("decisionTransition")
     )
-    material_graph_transition = bool(graph_transition.get("material"))
+    graph_transition_kind = _text(graph_transition.get("kind")).lower()
+    observable_relation_delta = _has_user_observable_relation_delta(values)
+    material_graph_transition = bool(
+        graph_transition.get("material")
+        and (
+            graph_transition_kind not in {"relation-strengthened", "relation-weakened"}
+            or observable_relation_delta
+        )
+    )
     base.update({
         "verifiedFollowUpTransitionCount": len(follow_ups),
+        "verifiedMarketTransitionCount": len(market_transitions),
         "materialSourceEventCount": len(material_sources),
         "materialGraphTransition": material_graph_transition,
+        "observableRelationEvidenceChanged": observable_relation_delta,
     })
     if follow_ups:
         base.update({
             "reason": "직전 판단의 확인 조건이 거짓에서 참으로 전환되어 AI 재판단을 진행합니다.",
             "pushValueClass": "verified-threshold-transition",
+        })
+        return base
+    if market_transitions:
+        base.update({
+            "reason": _text(market_transitions[0].get("reason"))
+            or "검증된 시장 임계값 전환이 확인되어 AI 재판단을 진행합니다.",
+            "pushValueClass": "verified-market-threshold-transition",
         })
         return base
     if material_sources or material_graph_transition:
@@ -287,6 +342,8 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     execution_status = _text(execution_audit.get("status")).lower()
     adoption_state = _text(execution_audit.get("adoptionState")).lower()
     verified_follow_ups = _verified_follow_up_transitions(context)
+    verified_market_transitions = verified_market_transition_triggers(context)
+    observable_relation_delta = _has_user_observable_relation_delta(context)
     canonical_subject = bool(
         publication
         or context.get("investmentSubjectDecisionCaseId")
@@ -309,6 +366,8 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "publicationOutcome": publication_outcome,
         "aiAdoptionState": adoption_state,
         "verifiedFollowUpTransitionCount": len(verified_follow_ups),
+        "verifiedMarketTransitionCount": len(verified_market_transitions),
+        "observableRelationEvidenceChanged": observable_relation_delta,
         "pushValueClass": "undetermined",
         "customerActionContractGaps": action_contract_gaps,
     }
@@ -407,6 +466,15 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         })
         return base
     if (
+        verified_market_transitions
+        and _text(ai_transition.get("kind")).lower() != "action-changed"
+    ):
+        trigger = verified_market_transitions[0]
+        base["reason"] = _text(trigger.get("reason")) or "검증된 시장 임계값 전환이 확인됐습니다."
+        base["pushValueClass"] = "verified-market-threshold-transition"
+        base["deliveryAuthorization"] = "market-transition:" + _text(trigger.get("conditionId"))
+        return base
+    if (
         _text(context.get("cooldownDecision")).lower() == "scheduled-summary"
         and _text(ai_transition.get("kind")).lower() != "action-changed"
         and not bool(user_transition.get("material"))
@@ -486,6 +554,23 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     if material_sources:
         base["reason"] = "최종 행동은 유지됐지만 판단 변경 원문이 새로 확인됐습니다."
         base["pushValueClass"] = "material-source-evidence"
+        return base
+    if (
+        _text(ai_transition.get("kind")).lower() == "unchanged"
+        and bool(graph_transition.get("material"))
+        and _text(graph_transition.get("kind")).lower()
+        in {"relation-strengthened", "relation-weakened"}
+        and not observable_relation_delta
+    ):
+        base.update({
+            "decision": "suppress",
+            "suppressionReason": "internal_relation_lifecycle_churn",
+            "reason": (
+                "최종 행동과 검증된 가격·수급 조건은 유지됐고, 그래프 세대 교체에 따른 "
+                "내부 관계 이력만 달라져 웹 판단 이력에만 기록합니다."
+            ),
+            "pushValueClass": "web-only-internal-relation-change",
+        })
         return base
     if (
         user_transition.get("changed")

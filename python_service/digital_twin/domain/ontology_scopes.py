@@ -2382,7 +2382,10 @@ def select_target_scoped_manifest_patch(
             active_item = active_by_scope.get(scope_id) or {}
             dependencies = {
                 _clean(value)
-                for value in item.get("dependencyScopeIds") or []
+                for value in (
+                    list(item.get("dependencyScopeIds") or [])
+                    + list(active_item.get("dependencyScopeIds") or [])
+                )
                 if _clean(value)
             }
             if (
@@ -2393,8 +2396,6 @@ def select_target_scoped_manifest_patch(
                 ).lower() == "quality"
                 and dependencies.intersection(selected)
                 and assertion_changed_from_active(scope_id, item)
-                and int(item.get("relationCount") or 0)
-                != int(active_item.get("relationCount") or 0)
             ):
                 selected.add(scope_id)
                 complete_source_quality_replacements.add(scope_id)

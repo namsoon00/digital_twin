@@ -10119,6 +10119,7 @@ class ScopedABoxManifestMixin:
             seen_retired_generation_ids.add(generation_id)
             retired_generation_ids.append(generation_id)
         generation_cleanup_rows = []
+        protected_external_reference_generation_ids = []
         cleanup_partial = selected_metadata_missing
         time_budget_exhausted = False
         resume_generation_id = ""
@@ -10168,6 +10169,15 @@ class ScopedABoxManifestMixin:
             remaining_batch_budget = max(0, remaining_batch_budget - deleted)
             if str(cleanup.get("status") or "") == "ok":
                 removed_generation_ids.append(generation_id)
+            elif str(cleanup.get("status") or "") == "protected-external-relation-reference":
+                # A node generation may still be a role player in a relation
+                # generation selected later in this same maintenance slice, or
+                # in the active/rollback graph. Keep the node intact and keep
+                # draining other retired relation generations. A later pass can
+                # reclaim it once the final external relation is gone.
+                cleanup_partial = True
+                protected_external_reference_generation_ids.append(generation_id)
+                resume_generation_id = resume_generation_id or generation_id
             else:
                 cleanup_partial = True
                 time_budget_exhausted = bool(cleanup.get("timeBudgetExhausted"))
@@ -10242,6 +10252,12 @@ class ScopedABoxManifestMixin:
             "attemptedRetiredScopeGenerationIds": attempted_generation_ids[:100],
             "removedRetiredScopeGenerationCount": len(removed_generation_ids),
             "removedRetiredScopeGenerationIds": removed_generation_ids[:100],
+            "protectedExternalRelationGenerationCount": len(
+                protected_external_reference_generation_ids
+            ),
+            "protectedExternalRelationGenerationIds": (
+                protected_external_reference_generation_ids[:100]
+            ),
             "deduplicatedScopeGenerationReferenceCount": max(
                 0,
                 len(removable_generation_references) - len(set(removable_generation_references)),
@@ -15308,6 +15324,57 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
             + "; limit " + str(max(1, int(batch_size or 1))) + "; delete " + variable + ";"
         )
 
+    def box_snapshot_external_relation_references(
+        self,
+        driver,
+        imported,
+        box: str,
+        snapshot_id: str,
+        limit: int = 5,
+    ) -> List[Dict[str, object]]:
+        """Return relations in other generations that still use these nodes.
+
+        TypeDB role players are physical entities. Deleting a retired node
+        generation while a relation from another generation still links to it
+        silently damages that relation, even when the relation's own generation
+        remains protected by the active Manifest. Generation retention must
+        therefore close over physical role-player references, not only direct
+        Manifest generation ids.
+        """
+
+        clean_box = str(box or "").strip()
+        clean_snapshot_id = str(snapshot_id or "").strip()
+        if not clean_box or not clean_snapshot_id:
+            return []
+        _TypeDB, _Credentials, _DriverOptions, _DriverTlsConfig, TransactionType = imported[0]
+        bounded_limit = max(1, min(20, int(limit or 5)))
+        query = (
+            "match "
+            "$n isa ontology-node, "
+            "has ontology-box " + typedb_string(clean_box) + ", "
+            "has ontology-snapshot-id " + typedb_string(clean_snapshot_id) + ", "
+            "has ontology-storage-id $nodeStorageId; "
+            "$r isa ontology-assertion, "
+            "has ontology-box $relationBox, "
+            "has ontology-snapshot-id $relationSnapshotId, "
+            "has ontology-storage-id $relationStorageId; "
+            "{ $r links (source: $n); } or { $r links (target: $n); }; "
+            "$relationSnapshotId != " + typedb_string(clean_snapshot_id) + "; "
+            "limit " + str(bounded_limit) + ";"
+        )
+        with driver.transaction(self.database, TransactionType.READ) as tx:
+            return self.read_rows_in_transaction(
+                tx,
+                query,
+                [
+                    "nodeStorageId",
+                    "relationBox",
+                    "relationSnapshotId",
+                    "relationStorageId",
+                ],
+                label="typedb.abox-generation-external-relation-reference",
+            )
+
     def delete_box_snapshot_rows_in_batches(
         self,
         driver,
@@ -15336,6 +15403,31 @@ class TypeDBOntologyGraphRepository(GraphStoreOntologyRowMapperMixin, ScopedABox
         deleted_batches = 0
         remaining_types: List[str] = []
         time_budget_exhausted = False
+        external_references = self.box_snapshot_external_relation_references(
+            driver,
+            imported,
+            clean_box,
+            clean_snapshot_id,
+        )
+        if external_references:
+            return {
+                "status": "protected-external-relation-reference",
+                "ontologyBox": clean_box,
+                "aboxSnapshotId": clean_snapshot_id,
+                "batchSize": safe_batch_size,
+                "maxBatches": safe_max_batches,
+                "deletedBatchCount": 0,
+                "remainingRowTypes": ["ontology-node"],
+                "timeBudgetExhausted": False,
+                "resumeRequired": True,
+                "externalRelationReferenceCount": len(external_references),
+                "externalRelationReferences": external_references,
+                "reason": (
+                    "The ABox node generation is still referenced by a relation "
+                    "in another physical generation."
+                ),
+                "durationMs": int((time.monotonic() - started_at) * 1000),
+            }
         for type_label in ["ontology-assertion", "ontology-node"]:
             while True:
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:

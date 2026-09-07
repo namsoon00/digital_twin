@@ -59,7 +59,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Transactional quote-alert admission separately protects stale anchor,
         # material follow-up, and cooldown-disabled concurrency paths. Browser
         # process ownership also keeps its independent runtime regression.
-        self.assertLessEqual(total, 917)
+        # Physical generation retention additionally protects nodes that remain
+        # role players in a different relation generation.
+        self.assertLessEqual(total, 918)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

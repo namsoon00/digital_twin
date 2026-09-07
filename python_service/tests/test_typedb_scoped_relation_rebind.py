@@ -1,5 +1,7 @@
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
@@ -462,6 +464,45 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
 
         self.assertEqual("ok", result["status"])
         self.assertEqual(["evidence:MSTR:price"], [row["id"] for row in result["nodeRows"]])
+
+    def test_retention_protects_nodes_used_by_another_relation_generation(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        driver = MagicMock()
+        tx = driver.transaction.return_value.__enter__.return_value
+        imported = ((None, None, None, None, SimpleNamespace(READ="read", WRITE="write")), "")
+        external_reference = {
+            "nodeStorageId": "ontology-storage:state-old",
+            "relationBox": "ABox",
+            "relationSnapshotId": self.old_link_generation,
+            "relationStorageId": "ontology-storage:link-old",
+        }
+
+        with patch.object(
+            repository,
+            "read_rows_in_transaction",
+            return_value=[external_reference],
+        ) as read_rows, patch.object(
+            repository,
+            "box_snapshot_instance_exists",
+        ) as instance_exists:
+            result = repository.delete_box_snapshot_rows_in_batches(
+                driver,
+                imported,
+                "ABox",
+                self.old_state_generation,
+            )
+
+        self.assertEqual("protected-external-relation-reference", result["status"])
+        self.assertEqual(0, result["deletedBatchCount"])
+        self.assertTrue(result["resumeRequired"])
+        self.assertEqual([external_reference], result["externalRelationReferences"])
+        instance_exists.assert_not_called()
+        driver.transaction.assert_called_once_with(repository.database, "read")
+        query = read_rows.call_args.args[1]
+        self.assertIn("links (source: $n)", query)
+        self.assertIn("links (target: $n)", query)
+        self.assertIn("$relationSnapshotId !=", query)
+        tx.query.assert_not_called()
 
 
 if __name__ == "__main__":

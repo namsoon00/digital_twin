@@ -838,6 +838,23 @@ def select_fact_slot_scope_ids(
             "fallbackReason": "scope-fact-family-unavailable",
         }
     if candidates and not selected:
+        if event_boundary_authoritative and not fallback_targets:
+            # The source owns the declared fact-family boundary, but the
+            # current graph contains no changed row in that boundary. This is
+            # a proven no-op (for example, a reference-only dividend schedule
+            # removed by decision-eligibility filtering), not permission to
+            # widen the write to unrelated volatile portfolio scopes.
+            return {
+                **base,
+                "enabled": True,
+                "status": "applied-noop-authoritative-slot-unchanged",
+                "selectedScopeIds": [],
+                "deferredScopeIds": list(candidates),
+                "dependencyMatchedScopeIds": [],
+                "directSelectedScopeIds": [],
+                "reverseDependencySelectedScopeIds": [],
+                "fallbackReason": "",
+            }
         return {
             **base,
             "enabled": False,

@@ -917,6 +917,110 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["deferredScopeIds"],
         )
 
+        family_only_plan = build_fact_slot_projection_plan(
+            ["005380"],
+            ["capital", "evidence"],
+            requested_fact_families_by_symbol={
+                "005380": ["capital", "evidence"],
+            },
+            changed_fields_by_symbol={
+                "005380": ["external.corporateActions"],
+            },
+            event_boundary_authoritative=True,
+        )
+        unrelated_scopes = {
+            "episode:default:world": {
+                "scopeFamily": "episode",
+                "semanticFingerprints": {"state": "cycle-v2"},
+            },
+            "link:account:default:state:old-cycle": {
+                "scopeFamily": "state",
+                "semanticFingerprints": {"state": "cycle-link-v2"},
+                "dependencyScopeIds": ["episode:default:world"],
+            },
+        }
+
+        family_only_selection = select_fact_slot_scope_ids(
+            unrelated_scopes,
+            unrelated_scopes.keys(),
+            family_only_plan,
+        )
+
+        self.assertTrue(family_only_selection["enabled"])
+        self.assertEqual(
+            "applied-noop-authoritative-slot-unchanged",
+            family_only_selection["status"],
+        )
+        self.assertEqual([], family_only_selection["selectedScopeIds"])
+        self.assertEqual(
+            sorted(unrelated_scopes),
+            family_only_selection["deferredScopeIds"],
+        )
+
+        active_plan = [
+            {
+                "scopeId": "symbol:005380:capital",
+                "scopeType": "symbol",
+                "scopeFamily": "capital",
+                "impactScopeFamilies": ["capital"],
+                "baseFingerprint": "capital-v1",
+                "fingerprint": "capital-g1",
+                "generationId": "capital-g1",
+                "semanticFingerprints": {"capital": "capital-v1"},
+                "semanticDependencyFingerprints": {
+                    "kind:capital-structure-change": "capital-v1",
+                },
+                "dependencyScopeIds": [],
+            },
+            {
+                "scopeId": "episode:default:world",
+                "scopeType": "episode",
+                "scopeFamily": "episode",
+                "impactScopeFamilies": ["episode"],
+                "baseFingerprint": "cycle-v1",
+                "fingerprint": "cycle-g1",
+                "generationId": "cycle-g1",
+                "semanticFingerprints": {"episode": "cycle-v1"},
+                "semanticDependencyFingerprints": {
+                    "kind:portfolio-decision-cycle": "cycle-v1",
+                },
+                "dependencyScopeIds": [],
+            },
+        ]
+        incoming_plan = deepcopy(active_plan)
+        incoming_plan[1].update({
+            "baseFingerprint": "cycle-v2",
+            "fingerprint": "cycle-g2",
+            "generationId": "cycle-g2",
+            "semanticFingerprints": {"episode": "cycle-v2"},
+            "semanticDependencyFingerprints": {
+                "kind:portfolio-decision-cycle": "cycle-v2",
+            },
+        })
+        graph = PortfolioOntology(
+            "main",
+            worldview={
+                "scopePlan": incoming_plan,
+                "targetScopeRetentionMode": "incremental-target-patch",
+            },
+        )
+        patch = select_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok",
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "scopePlan": active_plan,
+            },
+            ["005380"],
+            fact_slot_plan=family_only_plan,
+        )
+
+        self.assertEqual("ready", patch["status"])
+        self.assertEqual([], patch["selectedIncomingScopeIds"])
+        self.assertIn("episode:default:world", patch["deferredScopeIds"])
+        self.assertEqual([], patch["replacementRootScopeIds"])
+
     def test_authoritative_dependency_overrides_physical_scope_family(self):
         plan = build_fact_slot_projection_plan(
             ["MSTR"],

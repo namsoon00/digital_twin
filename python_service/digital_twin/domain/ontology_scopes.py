@@ -2358,7 +2358,11 @@ def select_target_scoped_manifest_patch(
             ),
             "factSlot": dict(fact_slot_selection),
         }
-    selected = set(fact_slot_selection.get("selectedScopeIds") or selected)
+    # An authoritative fact-slot selector can prove that the incoming event
+    # is already current or has no decision-eligible row. Preserve that empty
+    # selection; using ``or selected`` widened the no-op back to every changed
+    # runtime scope and rebuilt unrelated portfolio decision-cycle facts.
+    selected = set(fact_slot_selection.get("selectedScopeIds", selected))
     fact_slot_deferred_scope_ids = {
         _clean(scope_id)
         for scope_id in fact_slot_selection.get("deferredScopeIds") or []

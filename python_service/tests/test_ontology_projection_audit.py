@@ -155,6 +155,53 @@ def abox_graph():
 
 
 class OntologyProjectionAuditTests(unittest.TestCase):
+    def test_projection_audits_distinguish_evaluation_and_replacement_symbols(self):
+        result = {
+            "status": "ok",
+            "projectionScope": {
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "mode": "target-scoped-manifest-patch",
+                    "targetSymbols": ["000660", "035420"],
+                    "replacementSymbols": ["035420"],
+                    "replacementRootScopeIds": [
+                        "symbol:035420:market",
+                        "symbol:035420:evidence",
+                    ],
+                },
+            },
+        }
+
+        summary = projection_result_summary(result)
+        summary_patch = summary["targetScopedManifestPatch"]
+        self.assertEqual(["000660", "035420"], summary_patch["targetSymbols"])
+        self.assertEqual(["035420"], summary_patch["replacementSymbols"])
+        self.assertEqual(
+            ["symbol:035420:evidence", "symbol:035420:market"],
+            summary_patch["replacementRootScopeIds"],
+        )
+
+        observation = build_projection_runtime_observation(
+            SimpleNamespace(
+                run_id="projection-run-replacement-scope",
+                account_id="default",
+                started_at="2026-09-07T00:00:00Z",
+                completed_at="2026-09-07T00:00:01Z",
+                abox_snapshot_id="abox-replacement-scope",
+                entity_count=0,
+                relation_count=0,
+            ),
+            result,
+        )
+        observation_patch = observation["scope"]["targetScopedManifestPatch"]
+        self.assertEqual(2, observation_patch["targetSymbolCount"])
+        self.assertEqual(1, observation_patch["replacementSymbolCount"])
+        self.assertEqual(["035420"], observation_patch["replacementSymbols"])
+        self.assertEqual(
+            ["symbol:035420:market", "symbol:035420:evidence"],
+            observation_patch["replacementRootScopeIds"],
+        )
+
     def test_projection_summary_keeps_candidate_endpoint_failure_details(self):
         summary = projection_result_summary({
             "status": "candidate-relation-endpoint-missing",

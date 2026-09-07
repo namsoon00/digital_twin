@@ -742,6 +742,14 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                 target_patch.get("factSlotDeferredScopeCount") or 0
             ),
             "targetSymbols": _clean_symbols(target_patch.get("targetSymbols") or []),
+            "replacementSymbols": _clean_symbols(
+                target_patch.get("replacementSymbols") or []
+            ),
+            "replacementRootScopeIds": sorted({
+                str(scope_id or "").strip()
+                for scope_id in target_patch.get("replacementRootScopeIds") or []
+                if str(scope_id or "").strip()
+            })[:80],
             "selectedIncomingScopeCount": int(target_patch.get("selectedIncomingScopeCount") or 0),
             "reusedActiveScopeCount": int(target_patch.get("reusedActiveScopeCount") or 0),
             "deferredScopeCount": int(target_patch.get("deferredScopeCount") or 0),

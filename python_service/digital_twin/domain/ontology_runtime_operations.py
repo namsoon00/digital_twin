@@ -1507,6 +1507,21 @@ def build_projection_runtime_observation(
                     for symbol in (target_patch.get("targetSymbols") or [])[:20]
                     if _text(symbol)
                 ],
+                "replacementSymbolCount": len(
+                    target_patch.get("replacementSymbols") or []
+                ),
+                "replacementSymbols": [
+                    _text(symbol).upper()
+                    for symbol in (target_patch.get("replacementSymbols") or [])[:20]
+                    if _text(symbol)
+                ],
+                "replacementRootScopeIds": [
+                    _text(scope_id)
+                    for scope_id in (
+                        target_patch.get("replacementRootScopeIds") or []
+                    )[:80]
+                    if _text(scope_id)
+                ],
                 "selectedIncomingScopeCount": _integer(target_patch.get("selectedIncomingScopeCount")),
                 "reusedActiveScopeCount": _integer(target_patch.get("reusedActiveScopeCount")),
                 "deferredScopeCount": _integer(target_patch.get("deferredScopeCount")),

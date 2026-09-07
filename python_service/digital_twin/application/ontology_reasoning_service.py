@@ -4438,6 +4438,7 @@ class OntologyReasoningRunner:
                             ).items()
                             if key in {
                                 "status", "fallbackReason", "targetSymbols",
+                                "replacementSymbols", "replacementRootScopeIds",
                                 "missingEndpointScopeIds", "removedRelevantScopeIds",
                                 "sharedRemovedScopeIds", "retiredScopeIds",
                                 "retainedDependencyScopeIds", "selectedDependencyScopeIds",
@@ -4745,6 +4746,17 @@ class OntologyReasoningRunner:
                 "mode": str(target_patch.get("mode") or ""),
                 "fallbackReason": str(target_patch.get("fallbackReason") or ""),
                 "targetSymbolCount": int(float_value(target_patch.get("targetSymbolCount"), 0.0)),
+                "targetSymbols": list(target_patch.get("targetSymbols") or [])[:20],
+                "replacementSymbolCount": int(float_value(
+                    target_patch.get("replacementSymbolCount"),
+                    0.0,
+                )),
+                "replacementSymbols": list(
+                    target_patch.get("replacementSymbols") or []
+                )[:20],
+                "replacementRootScopeIds": list(
+                    target_patch.get("replacementRootScopeIds") or []
+                )[:80],
                 "selectedIncomingScopeCount": int(float_value(target_patch.get("selectedIncomingScopeCount"), 0.0)),
                 "reusedActiveScopeCount": int(float_value(target_patch.get("reusedActiveScopeCount"), 0.0)),
                 "deferredScopeCount": int(float_value(target_patch.get("deferredScopeCount"), 0.0)),

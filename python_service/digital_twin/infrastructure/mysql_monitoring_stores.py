@@ -27,6 +27,8 @@ from ..domain.market_observations import (
     apply_market_observation_outbox_baselines,
     apply_market_observation_reasoning_baselines,
     hydrate_market_observation_baselines,
+    market_observation_delivery_admission,
+    market_observation_delivery_cadence_minutes,
     market_observation_reasoning_candidates,
     market_observation_reasoning_symbols,
 )
@@ -602,6 +604,39 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         for row in rows:
             previous[row["account_id"]] = _json_loads(row["payload_json"], {})
         return previous
+
+    def lock_previous_states_with_connection(
+        self,
+        connection,
+        account_ids: Iterable[str],
+    ) -> Dict[str, Dict[str, object]]:
+        """Lock and load the authoritative account snapshots for one cycle.
+
+        Monitor workers keep an in-memory read model for fast detection. That
+        cache is intentionally not a concurrency primitive: another process
+        may have advanced an alert anchor since this worker started. Locking
+        the account rows in stable order serializes the final outbox admission
+        and prevents a stale cycle from restoring an older anchor.
+        """
+
+        accounts = sorted({
+            str(account_id or "").strip()
+            for account_id in account_ids or []
+            if str(account_id or "").strip()
+        })
+        if not accounts:
+            return {}
+        placeholders = ", ".join(["%s"] * len(accounts))
+        rows = connection.execute(
+            "SELECT account_id, payload_json FROM monitor_snapshots "
+            "WHERE account_id IN (" + placeholders + ") ORDER BY account_id FOR UPDATE",
+            tuple(accounts),
+        ).fetchall()
+        return {
+            str(row.get("account_id") or ""): dict(_json_loads(row.get("payload_json"), {}) or {})
+            for row in rows or []
+            if str(row.get("account_id") or "").strip()
+        }
 
     def snapshot_metadata(self, account_id: str) -> Dict[str, object]:
         """Read the snapshot boundary without decoding its full payload.
@@ -1228,6 +1263,70 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             accounts[account.account_id] = account
         return accounts
 
+    def guard_market_observation_delivery_with_connection(
+        self,
+        connection,
+        events: Iterable[AlertEvent],
+        previous_states: Dict[str, Dict[str, object]],
+        now: datetime = None,
+    ):
+        """Apply a transactionally authoritative raw quote duplicate guard."""
+
+        source_events = list(events or [])
+        current = now or datetime.now(timezone.utc)
+        cadence_minutes = market_observation_delivery_cadence_minutes(self.runtime_settings)
+        accepted: List[AlertEvent] = []
+        suppressed: List[Dict[str, object]] = []
+        for event in source_events:
+            if str(getattr(event, "rule", "") or "") != MARKET_OBSERVATION:
+                accepted.append(event)
+                continue
+            admission = market_observation_delivery_admission(
+                event,
+                previous_states.get(str(getattr(event, "account_id", "") or "")) or {},
+            )
+            if not bool(admission.get("accepted")):
+                suppressed.append(admission)
+                continue
+            cadence_key = event.cadence_key()
+            row = connection.execute(
+                "SELECT sent_key, sent_at FROM monitor_sent "
+                "WHERE sent_key_hash = %s LIMIT 1 FOR UPDATE",
+                (_sent_key_hash(cadence_key),),
+            ).fetchone() or {}
+            sent_at = str(row.get("sent_at") or "")
+            sent_key = str(row.get("sent_key") or "")
+            elapsed_seconds = None
+            if sent_at and sent_key == cadence_key:
+                try:
+                    parsed = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+                    if not parsed.tzinfo:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    elapsed_seconds = max(
+                        0.0,
+                        (current.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds(),
+                    )
+                except ValueError:
+                    elapsed_seconds = None
+            if elapsed_seconds is not None and elapsed_seconds < cadence_minutes * 60:
+                suppressed.append({
+                    **admission,
+                    "accepted": False,
+                    "reasonCode": "market-observation-cadence",
+                    "cadenceMinutes": cadence_minutes,
+                    "elapsedSeconds": round(elapsed_seconds, 3),
+                })
+                continue
+            accepted.append(event)
+        return accepted, {
+            "status": "applied",
+            "inputCount": len(source_events),
+            "acceptedCount": len(accepted),
+            "suppressedCount": len(suppressed),
+            "cadenceMinutes": cadence_minutes,
+            "suppressions": suppressed[:20],
+        }
+
     def record_cycle(
         self,
         account_ids: List[str],
@@ -1251,19 +1350,6 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         observation_candidates_by_account: Dict[str, List[Dict[str, object]]] = {}
         if not source_snapshot_replay:
             live_snapshots = [snapshot for snapshot in snapshots if snapshot.has_live_account_data()]
-            for snapshot in live_snapshots:
-                prepare_market_signal_transition_metadata(
-                    snapshot,
-                    previous_states.get(snapshot.account_id) or {},
-                    self.runtime_settings,
-                )
-            snapshot_states = {
-                snapshot.account_id: snapshot_state_for_persistence(
-                    snapshot,
-                    self.monitor_store.previous.get(snapshot.account_id),
-                )
-                for snapshot in snapshots
-            }
             observation_candidates_by_account = {
                 snapshot.account_id: market_observation_reasoning_candidates(
                     snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
@@ -1278,7 +1364,38 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         account_contexts = self.account_context_map() if alert_events else {}
         guarded_events = list(alert_events or [])
         delivery_guard_result: Dict[str, object] = {"status": "not-applied"}
+        market_observation_guard_result: Dict[str, object] = {"status": "not-applied"}
         with self.transaction() as connection:
+            if live_snapshots:
+                self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
+            for snapshot in live_snapshots:
+                insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
+            if not source_snapshot_replay:
+                authoritative_states = self.monitor_store.lock_previous_states_with_connection(
+                    connection,
+                    account_ids,
+                )
+                previous_states.update(authoritative_states)
+                for snapshot in live_snapshots:
+                    prepare_market_signal_transition_metadata(
+                        snapshot,
+                        previous_states.get(snapshot.account_id) or {},
+                        self.runtime_settings,
+                    )
+                snapshot_states = {
+                    snapshot.account_id: snapshot_state_for_persistence(
+                        snapshot,
+                        previous_states.get(snapshot.account_id),
+                    )
+                    for snapshot in snapshots
+                }
+                guarded_events, market_observation_guard_result = (
+                    self.guard_market_observation_delivery_with_connection(
+                        connection,
+                        guarded_events,
+                        previous_states,
+                    )
+                )
             if callable(delivery_guard) and guarded_events:
                 try:
                     guard_value = delivery_guard(connection, list(guarded_events))
@@ -1309,10 +1426,6 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     ) from error
             delivered = bool(guarded_events)
             alert_source_event = alerts_detected_event(guarded_events) if guarded_events else None
-            if live_snapshots:
-                self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
-            for snapshot in live_snapshots:
-                insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             outboxed_events: List[AlertEvent] = []
             if alert_source_event:
                 insert_domain_event_with_connection(connection, alert_source_event)
@@ -1378,7 +1491,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 ]))
                 reasoning_event = verified_monitor_snapshot_reasoning_event(
                     snapshot,
-                    self.monitor_store.previous.get(snapshot.account_id),
+                    previous_states.get(snapshot.account_id),
                     self.runtime_settings,
                     observation_followup_symbols=followup_symbols,
                 )
@@ -1406,6 +1519,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             delivered_events=list(guarded_events),
             details={
                 "deliveryGuard": delivery_guard_result,
+                "marketObservationGuard": market_observation_guard_result,
                 "inputEventCount": len(alert_events or []),
                 "deliveredEventCount": len(guarded_events),
                 "suppressedEventCount": max(0, len(alert_events or []) - len(guarded_events)),

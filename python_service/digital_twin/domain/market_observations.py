@@ -7,15 +7,33 @@ is delivered through the notification outbox.
 """
 
 from copy import deepcopy
+from math import isclose
 from typing import Dict, Iterable
 
 from .market_data import number
-from .message_types import MARKET_OBSERVATION
+from .message_types import MARKET_OBSERVATION, MIN_CADENCE_MINUTES
 from .portfolio import AlertEvent
 
 
 MARKET_OBSERVATION_BASELINES_KEY = "marketObservationBaselines"
 MARKET_OBSERVATION_CANDIDATES_KEY = "marketObservationReasoningCandidates"
+
+
+def market_observation_delivery_cadence_minutes(settings: Dict[str, object] = None) -> int:
+    """Return the raw quote alert's dedicated duplicate-protection window.
+
+    This cadence is an operational safety boundary. It remains active when the
+    account's ordinary notification cooldown is disabled because two monitor
+    workers may observe the same material quote move at nearly the same time.
+    """
+
+    source = settings if isinstance(settings, dict) else {}
+    raw = source.get("marketObservationImmediateCadenceMinutes")
+    try:
+        value = int(float(str(raw).strip())) if str(raw or "").strip() else MIN_CADENCE_MINUTES
+    except (TypeError, ValueError):
+        value = MIN_CADENCE_MINUTES
+    return max(MIN_CADENCE_MINUTES, value)
 
 
 def _state_positions(state: Dict[str, object]) -> Dict[str, Dict[str, object]]:
@@ -96,6 +114,69 @@ def market_observation_baseline(
     if stored_currency and current_currency and stored_currency != current_currency:
         return {}
     return value
+
+
+def market_observation_delivery_admission(
+    event: AlertEvent,
+    authoritative_state: Dict[str, object],
+) -> Dict[str, object]:
+    """Revalidate one raw quote alert against the latest durable outbox anchor.
+
+    Detection happens before the monitoring transaction opens. A concurrent
+    worker can therefore advance the outbox anchor after this event was built.
+    The transaction boundary must reject that stale candidate instead of
+    treating its new event id as a new price move.
+    """
+
+    if str(getattr(event, "rule", "") or "") != MARKET_OBSERVATION:
+        return {"accepted": True, "reasonCode": "not-market-observation"}
+    metadata = dict(getattr(event, "metadata", {}) or {})
+    if bool(metadata.get("deliveryDeferred")):
+        return {"accepted": True, "reasonCode": "delivery-deferred"}
+    observation = (
+        dict(metadata.get("marketObservation") or {})
+        if isinstance(metadata.get("marketObservation"), dict)
+        else {}
+    )
+    symbol = str(getattr(event, "symbol", "") or "").upper().strip()
+    currency = str(observation.get("currency") or "").upper().strip()
+    current_price = number(observation.get("currentPrice"))
+    candidate_anchor = (
+        number(observation.get("outboxBaselinePrice"))
+        or number(observation.get("baselinePrice"))
+    )
+    threshold = (
+        number(observation.get("deliveryThresholdPct"))
+        or number(observation.get("immediateThresholdPct"))
+        or number(observation.get("thresholdPct"))
+    )
+    baseline = market_observation_baseline(authoritative_state or {}, symbol, currency)
+    authoritative_anchor = (
+        number(baseline.get("outboxPrice"))
+        or number(baseline.get("initialPrice"))
+        or number(baseline.get("price"))
+    )
+    details = {
+        "symbol": symbol,
+        "candidateAnchorPrice": candidate_anchor,
+        "authoritativeAnchorPrice": authoritative_anchor,
+        "currentPrice": current_price,
+        "thresholdPct": threshold,
+    }
+    if current_price <= 0 or candidate_anchor <= 0 or threshold <= 0:
+        return {**details, "accepted": False, "reasonCode": "invalid-market-observation"}
+    if authoritative_anchor <= 0:
+        return {**details, "accepted": True, "reasonCode": "no-authoritative-anchor"}
+    if not isclose(candidate_anchor, authoritative_anchor, rel_tol=1e-9, abs_tol=1e-8):
+        return {**details, "accepted": False, "reasonCode": "stale-outbox-anchor"}
+    change_pct = (current_price - authoritative_anchor) / abs(authoritative_anchor) * 100.0
+    details["authoritativeChangePct"] = round(change_pct, 6)
+    if abs(change_pct) < threshold:
+        return {**details, "accepted": False, "reasonCode": "below-delivery-threshold"}
+    expected_direction = "up" if change_pct > 0 else "down" if change_pct < 0 else "flat"
+    if str(observation.get("direction") or "").strip().lower() != expected_direction:
+        return {**details, "accepted": False, "reasonCode": "stale-direction"}
+    return {**details, "accepted": True, "reasonCode": "current-outbox-anchor"}
 
 
 def hydrate_market_observation_baselines(

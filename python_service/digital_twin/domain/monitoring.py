@@ -8,7 +8,11 @@ from .data_freshness import data_freshness_required, freshness_from_position, fr
 from .external_api_sources import external_api_source_metadata
 from .external_signal_deltas import external_signals_with_deltas
 from .market_data import number
-from .market_observations import MARKET_OBSERVATION_CANDIDATES_KEY, market_observation_baseline
+from .market_observations import (
+    MARKET_OBSERVATION_CANDIDATES_KEY,
+    market_observation_baseline,
+    market_observation_delivery_cadence_minutes,
+)
 from .message_types import (
     DEFAULT_ALERT_RULES,
     DEFAULT_ALERT_THRESHOLDS,
@@ -282,12 +286,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         if event.rule == MARKET_OBSERVATION:
             metadata = dict(event.metadata or {}) if isinstance(event.metadata, dict) else {}
             if not bool(metadata.get("deliveryDeferred")):
-                raw = self.settings.get("marketObservationImmediateCadenceMinutes")
-                try:
-                    value = int(float(str(raw).strip())) if str(raw or "").strip() else MIN_CADENCE_MINUTES
-                except ValueError:
-                    value = MIN_CADENCE_MINUTES
-                return max(MIN_CADENCE_MINUTES, value)
+                return market_observation_delivery_cadence_minutes(self.settings)
         if event.rule == INVESTMENT_INSIGHT:
             raw = self.settings.get("notificationCooldownMinutes")
             if str(raw or "").strip():

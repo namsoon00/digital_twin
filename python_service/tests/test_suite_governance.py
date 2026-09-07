@@ -56,7 +56,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # extension fields when a graph store is restored. Candidate Manifest
         # closure also verifies unchanged endpoint reuse, unrelated relation
         # exclusion, model-signal scope isolation, and bounded failure audit.
-        self.assertLessEqual(total, 913)
+        # Transactional quote-alert admission separately protects stale anchor,
+        # material follow-up, and cooldown-disabled concurrency paths. Browser
+        # process ownership also keeps its independent runtime regression.
+        self.assertLessEqual(total, 917)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -9,6 +9,7 @@ import time
 import json
 import calendar
 import plistlib
+import shlex
 import uuid
 from pathlib import Path
 from typing import Dict, List
@@ -1204,6 +1205,155 @@ def is_running(pid: int, spec: Dict[str, object]) -> bool:
     if os.name != "nt":
         return is_worker_command(command_for_pid(pid), spec)
     return True
+
+
+def project_worker_signature_from_tokens(tokens) -> tuple:
+    """Return the application command after this project's service entrypoint."""
+
+    normalized = [str(token or "") for token in (tokens or [])]
+    for index, token in enumerate(normalized):
+        if token.replace("\\", "/").endswith("python_service/service.py"):
+            return tuple(normalized[index + 1:])
+    return ()
+
+
+def project_worker_signature_from_command(command: str) -> tuple:
+    try:
+        tokens = shlex.split(str(command or ""))
+    except ValueError:
+        return ()
+    return project_worker_signature_from_tokens(tokens)
+
+
+def project_worker_signature(spec: Dict[str, object]) -> tuple:
+    # Web processes can intentionally be started outside this manager on the
+    # canonical port. Preserve that documented workflow and reconcile only the
+    # background Python worker fleet.
+    if str((spec or {}).get("role") or "").strip() == "web":
+        return ()
+    return project_worker_signature_from_tokens((spec or {}).get("command") or [])
+
+
+def process_working_directory(pid: int) -> str:
+    """Read another process cwd without inspecting its private environment."""
+
+    if not pid:
+        return ""
+    proc_cwd = Path("/proc") / str(pid) / "cwd"
+    if proc_cwd.exists():
+        try:
+            return str(proc_cwd.resolve())
+        except OSError:
+            return ""
+    lsof = shutil.which("lsof")
+    if not lsof:
+        return ""
+    try:
+        output = subprocess.check_output(
+            [lsof, "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    for line in output.splitlines():
+        if line.startswith("n") and len(line) > 1:
+            try:
+                return str(Path(line[1:]).resolve())
+            except OSError:
+                return ""
+    return ""
+
+
+def is_owned_project_worker_process(pid: int, spec: Dict[str, object]) -> bool:
+    expected_signature = project_worker_signature(spec)
+    if not expected_signature or pid == os.getpid() or not pid_exists(pid):
+        return False
+    if project_worker_signature_from_command(command_for_pid(pid)) != expected_signature:
+        return False
+    return process_working_directory(pid) == str(Path(ROOT_DIR).resolve())
+
+
+def owned_project_worker_pids(spec: Dict[str, object]) -> List[int]:
+    """Find exact same-role workers launched from this checkout."""
+
+    expected_signature = project_worker_signature(spec)
+    if not expected_signature or os.name == "nt":
+        return []
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    matches = []
+    for line in output.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        if project_worker_signature_from_command(parts[1]) != expected_signature:
+            continue
+        if process_working_directory(pid) == str(Path(ROOT_DIR).resolve()):
+            matches.append(pid)
+    return sorted(set(matches))
+
+
+def reconcile_owned_project_worker_duplicates(
+    spec: Dict[str, object],
+    keep_pid: int = 0,
+    wait_seconds: float = 5.0,
+) -> Dict[str, object]:
+    """Terminate PID-file orphans for one exact project worker role."""
+
+    targets = [pid for pid in owned_project_worker_pids(spec) if pid != int(keep_pid or 0)]
+    if not targets:
+        return {"found": [], "stopped": [], "remaining": []}
+    signaled = []
+    for pid in targets:
+        if not is_owned_project_worker_process(pid, spec):
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            signaled.append(pid)
+        except ProcessLookupError:
+            continue
+    deadline = time.monotonic() + max(0.1, float(wait_seconds or 0))
+    while signaled and time.monotonic() < deadline:
+        if not any(pid_exists(pid) for pid in signaled):
+            break
+        time.sleep(0.1)
+    remaining = []
+    for pid in signaled:
+        if not pid_exists(pid):
+            continue
+        if not is_owned_project_worker_process(pid, spec):
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        if pid_exists(pid):
+            remaining.append(pid)
+    stopped = [pid for pid in targets if pid not in remaining]
+    append_log(
+        spec["log"],
+        "reconcile duplicate project workers found=" + ",".join(map(str, targets))
+        + " stopped=" + ",".join(map(str, stopped))
+        + (" remaining=" + ",".join(map(str, remaining)) if remaining else ""),
+    )
+    print(
+        str(spec["label"]) + " duplicate project workers reconciled. stopped="
+        + ",".join(map(str, stopped))
+    )
+    return {"found": targets, "stopped": stopped, "remaining": remaining}
 
 
 def remove_pid(path: Path) -> None:
@@ -3887,7 +4037,18 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
     log_path = spec["log"]
     role = str(spec.get("role") or "")
     existing = read_pid(pid_path)
-    if is_running(existing, spec):
+    existing_running = is_running(existing, spec)
+    reconciliation = reconcile_owned_project_worker_duplicates(
+        spec,
+        keep_pid=existing if existing_running else 0,
+    )
+    if reconciliation.get("remaining"):
+        print(
+            str(spec["label"]) + " not started. Duplicate project workers could not be stopped: "
+            + ",".join(map(str, reconciliation["remaining"]))
+        )
+        return 1
+    if existing_running:
         print(str(spec["label"]) + " already running.")
         if role == "typedb":
             if not wait_for_ready:
@@ -4009,9 +4170,19 @@ def stop_worker(spec: Dict[str, object]) -> int:
     if str(spec.get("role") or "").strip() == "typedb":
         clear_typedb_startup_readiness()
     pid = read_pid(pid_path)
+    pid_running = is_running(pid, spec)
+    reconciliation = reconcile_owned_project_worker_duplicates(
+        spec,
+        keep_pid=pid if pid_running else 0,
+    )
+    if reconciliation.get("remaining"):
+        print(
+            str(spec["label"]) + " duplicate project workers remain: "
+            + ",".join(map(str, reconciliation["remaining"]))
+        )
     if not pid:
         print(str(spec["label"]) + " is not running.")
-        return 0
+        return 1 if reconciliation.get("remaining") else 0
     # `is_running` deliberately treats an unmanaged web listener on the
     # canonical port as healthy.  A stale managed PID must not inherit that
     # listener's health and receive a signal after its process has exited.

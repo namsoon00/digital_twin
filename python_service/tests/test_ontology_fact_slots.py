@@ -1553,6 +1553,18 @@ class OntologyFactSlotTests(unittest.TestCase):
             fact_slot_plan=fact_slot_plan,
             source_graph_complete=False,
         )
+        manifest_only_partial_graph = deepcopy(compact_partial_graph)
+        manifest_only_partial_graph.worldview["scopePlan"].append({
+            **graph.worldview["scopePlan"][2],
+            "dependencyScopeIds": [],
+        })
+        manifest_only_partial = select_target_scoped_manifest_patch(
+            manifest_only_partial_graph,
+            active,
+            ["005380"],
+            fact_slot_plan=fact_slot_plan,
+            source_graph_complete=False,
+        )
 
         self.assertEqual("ready", complete["status"])
         self.assertEqual(
@@ -1579,6 +1591,14 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn(
             evidence_scope,
             compact_partial["missingEndpointScopeIds"],
+        )
+        self.assertEqual(
+            "skipped-incomplete-link-endpoint-source",
+            manifest_only_partial["status"],
+        )
+        self.assertIn(
+            evidence_scope,
+            manifest_only_partial["missingEndpointScopeIds"],
         )
 
     def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):

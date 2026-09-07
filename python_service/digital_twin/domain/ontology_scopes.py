@@ -2706,13 +2706,14 @@ def select_target_scoped_manifest_patch(
         bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
         and not source_graph_complete
     ):
-        # Target compaction can omit a retained quality-link scope entirely.
-        # The repository will still rebind that active relation when one of
-        # its endpoint scopes changes. A partial graph cannot prove that the
-        # old derived quality endpoint still exists in the replacement scope,
-        # so rebuild the complete source before attempting the write.
+        # Target compaction can omit a retained quality relation while still
+        # carrying either no link Manifest row or a row whose dependency list
+        # was compacted. The repository will nevertheless rebind the active
+        # relation when one of its verified endpoint scopes changes. Use that
+        # active dependency boundary to decide whether the complete source is
+        # required before attempting the write.
         for scope_id, active_row in active_by_scope.items():
-            if scope_id in incoming or _scope_type(scope_id) != "link":
+            if _scope_type(scope_id) != "link":
                 continue
             if (
                 _clean(active_row.get("scopeFamily"))

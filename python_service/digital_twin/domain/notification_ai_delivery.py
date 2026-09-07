@@ -11,10 +11,15 @@ from .context_observation_notifications import (
     typedb_review_observation_contract,
 )
 from .hypothesis_lifecycle import has_material_delta
+from .investment_reasoning.decision_delta import DecisionDelta
+from .notification.delivery_policy import (
+    DeliveryPolicyContext,
+    FINAL_AI_DELIVERY_POLICY_VERSION,
+    evaluate_final_decision_delivery,
+)
 from .ontology_decision_state import REVIEW_LEVEL_RANK
 
 
-FINAL_AI_DELIVERY_POLICY_VERSION = "final-ai-delivery-v15"
 PRE_AI_DEFERRED_DELIVERY_POLICY_VERSION = "pre-ai-deferred-delivery-v2"
 
 EXPLICIT_DELIVERY_AUTHORIZATIONS = {
@@ -166,7 +171,7 @@ def verified_follow_up_transitions(context: Mapping[str, object]):
     return _verified_follow_up_transitions(context)
 
 
-def _material_source_event_keys(context: Mapping[str, object]):
+def material_source_event_keys(context: Mapping[str, object]):
     values = _mapping(context)
     insight = _mapping(values.get("ontologyInsight"))
     semantic = _mapping(insight.get("semanticComponents"))
@@ -207,7 +212,7 @@ def _relation_lifecycle_evidence_delta(context: Mapping[str, object]) -> Dict[st
     return _mapping(lifecycle.get("evidenceDelta"))
 
 
-def _has_user_observable_relation_delta(context: Mapping[str, object]) -> bool:
+def has_user_observable_relation_delta(context: Mapping[str, object]) -> bool:
     return has_material_delta(_relation_lifecycle_evidence_delta(context))
 
 
@@ -236,12 +241,12 @@ def pre_ai_deferred_delivery_decision(context: Mapping[str, object]) -> Dict[str
 
     follow_ups = verified_follow_up_transitions(values)
     market_transitions = verified_market_transition_triggers(values)
-    material_sources = _material_source_event_keys(values)
+    material_sources = material_source_event_keys(values)
     graph_transition = _mapping(values.get("decisionTransition")) or _mapping(
         _mapping(values.get("ontologyRelationDiff")).get("decisionTransition")
     )
     graph_transition_kind = _text(graph_transition.get("kind")).lower()
-    observable_relation_delta = _has_user_observable_relation_delta(values)
+    observable_relation_delta = has_user_observable_relation_delta(values)
     material_graph_transition = bool(
         graph_transition.get("material")
         and (
@@ -285,7 +290,7 @@ def pre_ai_deferred_delivery_decision(context: Mapping[str, object]) -> Dict[str
     return base
 
 
-def _customer_action_contract_gaps(validated: Mapping[str, object]):
+def customer_action_contract_gaps(validated: Mapping[str, object]):
     response = _mapping(validated)
     gaps = []
     if not _text(response.get("action")):
@@ -310,7 +315,7 @@ def _customer_action_contract_gaps(validated: Mapping[str, object]):
     return gaps
 
 
-def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
+def _legacy_final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
     """Suppress candidate churn when the final user action did not move.
 
     TypeDB owns the candidate and action envelope. The AI owns the final user
@@ -332,7 +337,7 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         _mapping(context.get("ontologyRelationDiff")).get("decisionTransition")
     )
     semantic = _mapping(_mapping(context.get("ontologyInsight")).get("semanticComponents"))
-    material_sources = _material_source_event_keys(context)
+    material_sources = material_source_event_keys(context)
     target_role = _text(envelope.get("targetRole") or relation.get("targetRole")).lower()
     readiness = _mapping(envelope.get("dataReadiness"))
     selected_rule_id = _text(envelope.get("selectedRuleId"))
@@ -343,13 +348,13 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     adoption_state = _text(execution_audit.get("adoptionState")).lower()
     verified_follow_ups = _verified_follow_up_transitions(context)
     verified_market_transitions = verified_market_transition_triggers(context)
-    observable_relation_delta = _has_user_observable_relation_delta(context)
+    observable_relation_delta = has_user_observable_relation_delta(context)
     canonical_subject = bool(
         publication
         or context.get("investmentSubjectDecisionCaseId")
         or context.get("investmentSubjectDecisionCase")
     )
-    action_contract_gaps = _customer_action_contract_gaps(validated)
+    action_contract_gaps = customer_action_contract_gaps(validated)
     base = {
         "version": FINAL_AI_DELIVERY_POLICY_VERSION,
         "decision": "send",
@@ -610,3 +615,154 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
         "pushValueClass": "web-only-context-change",
     })
     return base
+
+
+def decision_delta_from_context(context: Mapping[str, object]) -> DecisionDelta:
+    """Translate the compatibility context into one canonical decision delta."""
+
+    values = _mapping(context)
+    validated = _mapping(values.get("notificationAiValidatedResponse"))
+    execution_audit = _mapping(values.get("notificationAiExecutionAudit"))
+    publication = _mapping(values.get("decisionPublication"))
+    writer = _mapping(values.get("notificationWriterProvenance"))
+    ai_transition = _mapping(values.get("aiDecisionTransition"))
+    user_transition = _mapping(values.get("investmentNotificationTransition"))
+    relation = _mapping(values.get("ontologyRelationContext"))
+    envelope = _mapping(relation.get("actionEnvelope"))
+    graph_transition = _mapping(values.get("decisionTransition")) or _mapping(
+        _mapping(values.get("ontologyRelationDiff")).get("decisionTransition")
+    )
+    readiness = _mapping(envelope.get("dataReadiness"))
+    selected_rule_id = _text(envelope.get("selectedRuleId"))
+    eligible_rule_ids = {_text(item) for item in _items(readiness.get("eligibleRuleIds"))}
+    verified_follow_ups = _verified_follow_up_transitions(values)
+    verified_market_transitions = verified_market_transition_triggers(values)
+    market_transition = verified_market_transitions[0] if verified_market_transitions else {}
+    material_sources = material_source_event_keys(values)
+    execution_status = _text(execution_audit.get("status")).lower()
+    return DecisionDelta(
+        target_role=_text(envelope.get("targetRole") or relation.get("targetRole")).lower(),
+        final_action=_text(validated.get("action")).upper(),
+        previous_final_action=_text(ai_transition.get("previousAction")).upper(),
+        ai_transition_kind=_text(ai_transition.get("kind")).lower(),
+        history_available=bool(ai_transition.get("historyAvailable")),
+        graph_transition_present=bool(graph_transition),
+        graph_transition_kind=_text(graph_transition.get("kind")).lower(),
+        graph_transition_material=bool(graph_transition.get("material")),
+        user_state_transition_kind=_text(user_transition.get("kind")).lower(),
+        user_state_changed=bool(user_transition.get("changed")),
+        user_state_material=bool(user_transition.get("material")),
+        selected_core_inference_eligible=bool(
+            selected_rule_id and selected_rule_id in eligible_rule_ids
+        ),
+        typedb_fallback=execution_status == "typedb-fallback",
+        publication_outcome=_text(publication.get("outcomeKind")).upper(),
+        execution_status=execution_status,
+        ai_adoption_state=_text(execution_audit.get("adoptionState")).lower(),
+        ai_authored=bool(writer.get("aiAuthored")),
+        canonical_subject=bool(
+            publication
+            or values.get("investmentSubjectDecisionCaseId")
+            or values.get("investmentSubjectDecisionCase")
+        ),
+        validated_response_present=bool(validated),
+        customer_action_contract_gaps=tuple(customer_action_contract_gaps(validated)),
+        verified_follow_up_transition_count=len(verified_follow_ups),
+        verified_market_transition_count=len(verified_market_transitions),
+        verified_market_transition_id=_text(market_transition.get("conditionId")),
+        verified_market_transition_reason=_text(market_transition.get("reason")),
+        material_source_event_count=len(material_sources),
+        observable_relation_evidence_changed=has_user_observable_relation_delta(values),
+    )
+
+
+def delivery_policy_context_from_context(
+    context: Mapping[str, object],
+) -> DeliveryPolicyContext:
+    """Translate only notification-owned state for the delivery policy."""
+
+    values = _mapping(context)
+    authorization = explicit_delivery_authorization(values)
+    return DeliveryPolicyContext(
+        cooldown_decision=_text(values.get("cooldownDecision")).lower(),
+        state_transition_notifications_enabled=(
+            values.get("investmentStateTransitionNotificationsEnabled") is not False
+        ),
+        first_holding_review_authorized=first_holding_review_delivery_is_authorized(values),
+        explicit_delivery_authorization=_text(authorization.get("decision")).lower(),
+        explicit_delivery_value_class=_text(authorization.get("pushValueClass")),
+        explicit_delivery_reason=_text(authorization.get("reason")),
+    )
+
+
+def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, object]:
+    """Apply typed delivery policy with a compatibility parity guard."""
+
+    values = _mapping(context)
+    delta = decision_delta_from_context(values)
+    policy_context = delivery_policy_context_from_context(values)
+    legacy = _legacy_final_ai_delivery_decision(values)
+    publication_outcome = delta.publication_outcome
+    is_specialized_observation = bool(
+        (
+            typedb_context_observation_contract(values)
+            and publication_outcome == "OBSERVATION"
+        )
+        or (
+            typedb_review_observation_contract(values)
+            and publication_outcome == "REVIEW_ONLY"
+        )
+    )
+    if is_specialized_observation:
+        return {
+            **legacy,
+            "decisionDelta": delta.to_dict(),
+            "deliveryPolicyContext": policy_context.to_dict(),
+            "effectiveDeliveryPolicy": "specialized-observation-policy",
+            "deliveryPolicyParity": {
+                "version": "decision-delta-parity-v1",
+                "status": "not-applicable-specialized-observation",
+            },
+        }
+
+    typed = evaluate_final_decision_delivery(delta, policy_context).to_dict(
+        delta,
+        policy_context,
+    )
+    parity_keys = (
+        "decision",
+        "suppressionReason",
+        "pushValueClass",
+        "deliveryAuthorization",
+    )
+    differences = {
+        key: {
+            "legacy": legacy.get(key),
+            "typed": typed.get(key),
+        }
+        for key in parity_keys
+        if legacy.get(key) != typed.get(key)
+    }
+    parity = {
+        "version": "decision-delta-parity-v1",
+        "status": "match" if not differences else "mismatch",
+        "differences": differences,
+    }
+    if differences:
+        # Preserve the established decision while the typed contract records
+        # the exact mismatch. This is a bounded migration guard, not a second
+        # permanent policy path.
+        return {
+            **legacy,
+            "decisionDelta": delta.to_dict(),
+            "effectiveDeliveryPolicy": "legacy-parity-guard",
+            "deliveryPolicyParity": parity,
+        }
+    return {
+        **typed,
+        # Keep existing customer-facing wording while the classification and
+        # audit state come from the typed policy.
+        "reason": legacy.get("reason") or typed.get("reason"),
+        "effectiveDeliveryPolicy": "decision-delta-v1",
+        "deliveryPolicyParity": parity,
+    }

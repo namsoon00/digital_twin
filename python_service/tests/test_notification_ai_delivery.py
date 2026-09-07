@@ -611,6 +611,14 @@ class FinalAIDeliveryTests(unittest.TestCase):
         )
         self.assertFalse(churn_decision["observableRelationEvidenceChanged"])
         self.assertNotIn("deliveryAuthorization", churn_decision)
+        self.assertEqual(
+            "decision-delta-v1",
+            churn_decision["effectiveDeliveryPolicy"],
+        )
+        self.assertEqual(
+            "match",
+            churn_decision["deliveryPolicyParity"]["status"],
+        )
         explanation = build_customer_delivery_explanation(
             message_type="investmentInsight",
             source_event_name="investment.reasoning.completed",
@@ -623,6 +631,8 @@ class FinalAIDeliveryTests(unittest.TestCase):
         decision = final_ai_delivery_decision(watchlist_context(ai_kind="action-changed"))
 
         self.assertEqual("send", decision["decision"])
+        self.assertEqual("decision-delta-v1", decision["effectiveDeliveryPolicy"])
+        self.assertEqual("match", decision["deliveryPolicyParity"]["status"])
 
         canonical = watchlist_context(ai_kind="action-changed")
         canonical.update({

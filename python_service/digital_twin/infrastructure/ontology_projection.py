@@ -56,7 +56,7 @@ from ..domain.ontology_scopes import (
     apply_scoped_manifest_plan,
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
-    select_target_scoped_manifest_patch,
+    plan_target_scoped_manifest_patch,
     scoped_manifest_id,
     target_scope_manifest_fingerprint,
 )
@@ -3691,6 +3691,9 @@ class PortfolioOntologyProjectionRecorder:
                             (applied_target_patch.get("factSlot") or {}).get("fallbackReason") or ""
                         ),
                         "scopeSelectionTrace": scope_selection_trace,
+                        "manifestPatchContract": dict(
+                            applied_target_patch.get("manifestPatchContract") or {}
+                        ),
                         "scopeIntegrityAuditIntervalMinutes": self.scope_integrity_audit_interval_minutes(),
                         "scopeIntegrityAuditDue": bool(
                             target_scoped_patch.get("scopeIntegrityAuditDue")
@@ -3742,6 +3745,12 @@ class PortfolioOntologyProjectionRecorder:
                             )[:50],
                             "retiredScopeIds": list(
                                 applied_target_patch.get("retiredScopeIds") or []
+                            )[:50],
+                            "manifestPatchContract": dict(
+                                applied_target_patch.get("manifestPatchContract") or {}
+                            ),
+                            "patchPlanViolations": list(
+                                applied_target_patch.get("patchPlanViolations") or []
                             )[:50],
                             "scopeTopologyMigration": dict(
                                 applied_target_patch.get("scopeTopologyMigration") or {}
@@ -6739,7 +6748,7 @@ class PortfolioOntologyProjectionRecorder:
             if kind == "premise":
                 update.worldview["inferenceTargetSymbols"] = list(target_symbols)
             if str(source_patch.get("status") or "") == "applied" and target_symbols:
-                selection = select_target_scoped_manifest_patch(
+                selection = plan_target_scoped_manifest_patch(
                     update,
                     active_market,
                     target_symbols,
@@ -6763,6 +6772,9 @@ class PortfolioOntologyProjectionRecorder:
                             selection.get("reusedActiveScopeIds") or []
                         ),
                         "deferredScopeCount": len(selection.get("deferredScopeIds") or []),
+                        "manifestPatchContract": dict(
+                            selection.get("manifestPatchContract") or {}
+                        ),
                     }
                 else:
                     market_target_patch = {

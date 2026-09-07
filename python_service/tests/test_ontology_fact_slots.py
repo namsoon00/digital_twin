@@ -14,6 +14,7 @@ from digital_twin.domain.ontology_scopes import (
     SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
     apply_scoped_abox_identity,
     merge_target_scoped_abox_manifest,
+    plan_target_scoped_manifest_patch,
     select_target_scoped_manifest_patch,
 )
 
@@ -1514,7 +1515,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             "eventBoundaryAuthoritative": True,
         }
 
-        complete = select_target_scoped_manifest_patch(
+        complete = plan_target_scoped_manifest_patch(
             graph,
             active,
             ["005380"],
@@ -1533,7 +1534,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             "generationId": "quality-link-active",
             "relationCount": 2,
         })
-        partial = select_target_scoped_manifest_patch(
+        partial = plan_target_scoped_manifest_patch(
             partial_graph,
             active,
             ["005380"],
@@ -1547,7 +1548,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             for item in compact_partial_graph.worldview["scopePlan"]
             if item["scopeId"] != quality_link_scope
         ]
-        compact_partial = select_target_scoped_manifest_patch(
+        compact_partial = plan_target_scoped_manifest_patch(
             compact_partial_graph,
             active,
             ["005380"],
@@ -1559,7 +1560,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             **graph.worldview["scopePlan"][2],
             "dependencyScopeIds": [],
         })
-        manifest_only_partial = select_target_scoped_manifest_patch(
+        manifest_only_partial = plan_target_scoped_manifest_patch(
             manifest_only_partial_graph,
             active,
             ["005380"],
@@ -1579,6 +1580,19 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn(
             "complete-source-derived-quality-replacement",
             selected_trace[quality_link_scope]["reasons"],
+        )
+        self.assertTrue(
+            complete["manifestPatchContract"]["validation"]["valid"]
+        )
+        quality_directive = next(
+            item
+            for item in complete["manifestPatchContract"]["relationDirectives"]
+            if item["scopeId"] == quality_link_scope
+        )
+        self.assertEqual("replace", quality_directive["disposition"])
+        self.assertEqual(
+            "derived-companion",
+            quality_directive["relationLifecycle"],
         )
         self.assertEqual(
             "skipped-incomplete-link-endpoint-source",
@@ -1600,6 +1614,10 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertIn(
             evidence_scope,
             manifest_only_partial["missingEndpointScopeIds"],
+        )
+        self.assertEqual(
+            "partial",
+            partial["manifestPatchContract"]["changeSet"]["sourceCompleteness"],
         )
 
     def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):

@@ -14,6 +14,8 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
+from .abox_lifecycle import ABoxChangeSet, finalize_manifest_patch_plan
+from .abox_lifecycle.contracts import relation_lifecycle_for_scope
 from .ontology_change_impact import (
     DEPENDENCY_FINGERPRINT_VERSION,
     SYMBOL_SCOPE_FAMILIES,
@@ -1739,6 +1741,11 @@ def apply_scoped_abox_identity(
     generations: Dict[str, str] = {}
     for scope_id in scope_ids:
         dependencies = scope_dependencies(scope_id)
+        relation_lifecycle = relation_lifecycle_for_scope(
+            _scope_type(scope_id),
+            scope_family(scope_id),
+            payloads[scope_id]["relations"],
+        )
         fingerprint_payload = {
             "baseFingerprint": base_fingerprints[scope_id],
             "dependencyBaseFingerprints": [
@@ -1755,6 +1762,13 @@ def apply_scoped_abox_identity(
             "scopeId": scope_id,
             "scopeType": _scope_type(scope_id),
             "scopeFamily": scope_family(scope_id),
+            "lifecycleOwnerScopeId": scope_id,
+            "relationLifecycle": relation_lifecycle,
+            "deletionSemantics": (
+                "complete-source-assertion-presence"
+                if relation_lifecycle == "derived-companion"
+                else "retain-on-omission"
+            ),
             "nativeSourceSymbols": _native_source_symbols_for_scope(
                 payloads[scope_id]
             ),
@@ -3237,6 +3251,38 @@ def apply_scoped_manifest_plan(
     }
 
 
+def plan_target_scoped_manifest_patch(
+    graph: PortfolioOntology,
+    active_metadata: Mapping[str, object],
+    target_symbols: Iterable[object],
+    fact_slot_plan: Mapping[str, object] = None,
+    source_graph_complete: bool = True,
+) -> Dict[str, object]:
+    """Return a typed and validated plan without mutating the graph."""
+
+    selection = select_target_scoped_manifest_patch(
+        graph,
+        active_metadata,
+        target_symbols,
+        fact_slot_plan=fact_slot_plan,
+        source_graph_complete=source_graph_complete,
+    )
+    worldview = dict(graph.worldview or {})
+    active = dict(active_metadata or {})
+    change_set = ABoxChangeSet.from_inputs(
+        target_symbols,
+        fact_slot_plan=fact_slot_plan,
+        source_graph_complete=source_graph_complete,
+        retention_mode=worldview.get("targetScopeRetentionMode"),
+    )
+    return finalize_manifest_patch_plan(
+        selection,
+        change_set,
+        worldview.get("scopePlan") or [],
+        active.get("scopePlan") or [],
+    )
+
+
 def merge_target_scoped_abox_manifest(
     graph: PortfolioOntology,
     active_metadata: Mapping[str, object],
@@ -3246,7 +3292,7 @@ def merge_target_scoped_abox_manifest(
 ) -> Dict[str, object]:
     """Replace only target-symbol scopes while retaining active generations."""
 
-    selection = select_target_scoped_manifest_patch(
+    selection = plan_target_scoped_manifest_patch(
         graph,
         active_metadata,
         target_symbols,
@@ -3300,6 +3346,9 @@ def merge_target_scoped_abox_manifest(
         "scopeTopologyMigration": dict(
             selection.get("scopeTopologyMigration") or {}
         ) if isinstance(selection.get("scopeTopologyMigration"), Mapping) else {},
+        "manifestPatchContract": dict(
+            selection.get("manifestPatchContract") or {}
+        ) if isinstance(selection.get("manifestPatchContract"), Mapping) else {},
     }
     graph.worldview["targetScopedManifestPatch"] = patch_metadata
     return {

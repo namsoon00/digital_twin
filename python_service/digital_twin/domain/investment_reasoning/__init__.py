@@ -35,6 +35,7 @@ from .contracts import (
     rule_evaluation_records_from_projection_results,
 )
 from .hypotheses import GraphHypothesisManager
+from .decision_delta import DECISION_DELTA_VERSION, DecisionDelta
 from .synthesis import decision_synthesis_from_relation_context
 from .rule_inventory import reasoning_rule_inventory
 from .subject_case import (
@@ -79,6 +80,8 @@ __all__ = [
     "CASE_VALIDATED",
     "FactDelta",
     "DecisionSynthesis",
+    "DECISION_DELTA_VERSION",
+    "DecisionDelta",
     "FinalDecision",
     "GraphHypothesisManager",
     "HypothesisRecord",

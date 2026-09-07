@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache, wraps
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from ..domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
 from ..domain.ontology_contracts import OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from ..domain.ontology_current_state import (
     CURRENT_STATE_ABOX_PERSISTENCE_MODE,
@@ -8289,6 +8290,25 @@ class ScopedABoxManifestMixin:
             current_state_mode
             and current_state_persistence_mode == CURRENT_STATE_ABOX_PERSISTENCE_MODE
         )
+        target_patch = dict(worldview.get("targetScopedManifestPatch") or {})
+        if str(target_patch.get("mode") or "") == "incremental-target-scoped-manifest-patch":
+            patch_contract = dict(target_patch.get("manifestPatchContract") or {})
+            patch_validation = dict(patch_contract.get("validation") or {})
+            if (
+                str(patch_contract.get("version") or "")
+                != MANIFEST_PATCH_BOUNDARY_VERSION
+                or not bool(patch_validation.get("valid"))
+                or str(patch_validation.get("status") or "") != "valid"
+            ):
+                return {
+                    "configured": True,
+                    "saved": False,
+                    "status": "invalid-manifest-patch-contract",
+                    "graphStore": "typedb",
+                    "preservedActiveGeneration": True,
+                    "reason": "Incremental ABox persistence requires a validated Manifest patch contract.",
+                    "manifestPatchContract": patch_contract,
+                }
         topology_migration = dict(
             (worldview.get("targetScopedManifestPatch") or {}).get("scopeTopologyMigration") or {}
         ) if isinstance(worldview.get("targetScopedManifestPatch"), dict) else {}
@@ -8538,7 +8558,6 @@ class ScopedABoxManifestMixin:
                 "reason": "A scoped ABox Manifest must change whenever its scope generation changes.",
                 "writeLeaseRelease": release,
             }
-        target_patch = dict(worldview.get("targetScopedManifestPatch") or {})
         deferred_scope_ids = {
             str(value or "").strip()
             for value in target_patch.get("deferredScopeIds") or []

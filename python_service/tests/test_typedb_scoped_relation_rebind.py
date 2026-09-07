@@ -3,6 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from digital_twin.domain.ontology_contracts import PortfolioOntology
 from digital_twin.infrastructure.typedb_ontology import (
     TypeDBOntologyGraphRepository,
     ontology_storage_id,
@@ -171,6 +172,44 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
             "endpointNodeRows": [self.active_stock, self.active_news],
             "relationRows": [self.active_relation],
         }
+
+    def test_incremental_save_rejects_unvalidated_manifest_patch_contract(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        graph = PortfolioOntology(
+            "invalid-patch-contract",
+            worldview={
+                "worldId": "portfolio:local:main",
+                "worldviewManifestId": "abox-manifest:test",
+                "persistenceMode": "immutable-scoped-manifest",
+                "scopePlan": [{
+                    "scopeId": "symbol:MSTR:state",
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "generationId": "abox-scope:test",
+                    "fingerprint": "test",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                }],
+                "targetScopedManifestPatch": {
+                    "status": "applied",
+                    "mode": "incremental-target-scoped-manifest-patch",
+                    "targetSymbols": ["MSTR"],
+                    "manifestPatchContract": {
+                        "version": "abox-manifest-patch-boundary-v1",
+                        "validation": {
+                            "status": "invalid",
+                            "valid": False,
+                        },
+                    },
+                },
+            },
+        )
+
+        result = repository.save_scoped_abox_graph(graph)
+
+        self.assertEqual("invalid-manifest-patch-contract", result["status"])
+        self.assertFalse(result["saved"])
+        self.assertTrue(result["preservedActiveGeneration"])
 
     def test_rebind_preserves_active_relation_semantics(self):
         result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(

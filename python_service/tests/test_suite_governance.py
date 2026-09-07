@@ -64,7 +64,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # retain their native source ownership for authoritative event routing.
         # Mixed target batches separately prove physical replacement ownership,
         # while descendant dependency keys keep native crypto rules reachable.
-        self.assertLessEqual(total, 926)
+        # Explicit ABox change/patch contracts now fail closed before TypeDB
+        # writes, while DecisionDelta keeps investment meaning independent from
+        # delivery policy and verifies compatibility against persisted cases.
+        self.assertLessEqual(total, 935)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -2036,6 +2036,39 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             "graph.temporal.stale_observation.block.v1",
             projection["blockingRuleId"],
         )
+        self._assert_unchanged_scoped_manifest_is_a_normal_no_change_completion()
+
+    def _assert_unchanged_scoped_manifest_is_a_normal_no_change_completion(self):
+        class UnchangedExecutor:
+            def execute(self, request, snapshots):
+                del request, snapshots
+                return {
+                    "acct": {
+                        "saved": False,
+                        "status": "unchanged-scoped-manifest",
+                        "activeAbox": {"aboxSnapshotId": "abox:active"},
+                    }
+                }
+
+        class CandidateBuilderMustNotRun:
+            def build(self, *_args, **_kwargs):
+                raise AssertionError("An unchanged graph must not create judgment candidates")
+
+        engine = V2ReasoningEngine(
+            descriptor(),
+            FakeAssembler(),
+            UnchangedExecutor(),
+            CandidateBuilderMustNotRun(),
+            delivery_authorized_provider=lambda: False,
+        )
+
+        result = engine.consume([source_event()])
+
+        self.assertEqual("excluded", result["status"])
+        self.assertEqual("unchanged-scoped-manifest", result["reason_code"])
+        self.assertEqual([], result["candidate_events"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual("ready", engine.health()["status"])
 
     def test_persisted_projection_result_keeps_performance_contract_summary(self):
         compact = compact_projection_result({

@@ -35,6 +35,10 @@ VERIFIED_PROJECTION_STATUSES = {
     "reused-shared-account-inference",
 }
 
+NO_CHANGE_PROJECTION_STATUSES = {
+    "unchanged-scoped-manifest",
+}
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1403,7 +1407,17 @@ class V2ReasoningEngine:
             for account_id, value in projection_results.items()
         }
         verified_accounts = [account_id for account_id, value in identities.items() if value["verified"]]
-        failed_accounts = [account_id for account_id, value in identities.items() if not value["verified"]]
+        unchanged_accounts = [
+            account_id
+            for account_id, value in identities.items()
+            if str(value.get("status") or "").lower() in NO_CHANGE_PROJECTION_STATUSES
+        ]
+        failed_accounts = [
+            account_id
+            for account_id, value in identities.items()
+            if not value["verified"] and account_id not in unchanged_accounts
+        ]
+        unchanged_only = bool(identities) and len(unchanged_accounts) == len(identities)
         compact_projections = {
             account_id: compact_projection_result(value)
             for account_id, value in projection_results.items()
@@ -1437,12 +1451,22 @@ class V2ReasoningEngine:
             )
         candidate_started = time.perf_counter()
         progress("candidate_build.start")
-        candidates = self.candidate_builder.build(
-            request,
-            snapshots,
-            assembled.get("previousByAccount") or {},
-            projection_results,
-            force=force,
+        candidates = (
+            {
+                "detected": [],
+                "judgmentReady": [],
+                "deliveryReady": [],
+                "hypothesisCandidates": [],
+                "syntheses": [],
+            }
+            if unchanged_only
+            else self.candidate_builder.build(
+                request,
+                snapshots,
+                assembled.get("previousByAccount") or {},
+                projection_results,
+                force=force,
+            )
         )
         stages["candidateBuildMs"] = int((time.perf_counter() - candidate_started) * 1000)
         detected_events = list(candidates.get("detected") or [])
@@ -1581,7 +1605,9 @@ class V2ReasoningEngine:
             "",
         ))
         status = (
-            "ok"
+            "excluded"
+            if unchanged_only
+            else "ok"
             if verified_accounts and not failed_accounts
             else "deferred"
             if retryable
@@ -1589,7 +1615,10 @@ class V2ReasoningEngine:
             if verified_accounts
             else "blocked"
         )
-        if status == "ok":
+        if status == "excluded" and unchanged_only:
+            reason = "The verified source is already represented by the active scoped Manifest."
+            reason_code = "unchanged-scoped-manifest"
+        elif status == "ok":
             reason = "Independent V2 TypeDB inference completed."
         elif status == "partial":
             reason = "Independent V2 completed only part of the requested account scope."
@@ -1605,7 +1634,13 @@ class V2ReasoningEngine:
                 "Independent V2 TypeDB inference is not ready.",
             ))
         if reasoning_case is not None:
-            if not verified_accounts:
+            if unchanged_only:
+                reasoning_case = self.reasoning_orchestrator.complete_without_ai(
+                    reasoning_case.case_id,
+                    "현재 검증 스냅샷이 활성 그래프와 동일해 새 판단이나 알림을 만들지 않았습니다.",
+                    source="typedb-unchanged-scope",
+                )
+            elif not verified_accounts:
                 reasoning_case = self.reasoning_orchestrator.defer(
                     reasoning_case.case_id,
                     reason,

@@ -1330,7 +1330,7 @@ def reconcile_owned_project_worker_duplicates(
         if not any(pid_exists(pid) for pid in signaled):
             break
         time.sleep(0.1)
-    remaining = []
+    forced = []
     for pid in signaled:
         if not pid_exists(pid):
             continue
@@ -1338,10 +1338,15 @@ def reconcile_owned_project_worker_duplicates(
             continue
         try:
             os.kill(pid, signal.SIGKILL)
+            forced.append(pid)
         except ProcessLookupError:
             continue
-        if pid_exists(pid):
-            remaining.append(pid)
+    forced_deadline = time.monotonic() + 2.0
+    while forced and time.monotonic() < forced_deadline:
+        if not any(is_owned_project_worker_process(pid, spec) for pid in forced):
+            break
+        time.sleep(0.1)
+    remaining = [pid for pid in forced if is_owned_project_worker_process(pid, spec)]
     stopped = [pid for pid in targets if pid not in remaining]
     append_log(
         spec["log"],

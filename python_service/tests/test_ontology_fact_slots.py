@@ -1541,8 +1541,11 @@ class OntologyFactSlotTests(unittest.TestCase):
             "complete-source-derived-quality-replacement",
             selected_trace[quality_link_scope]["reasons"],
         )
-        self.assertEqual([evidence_scope], partial["selectedIncomingScopeIds"])
-        self.assertIn(quality_link_scope, partial["deferredRelationScopeIds"])
+        self.assertEqual(
+            "skipped-incomplete-link-endpoint-source",
+            partial["status"],
+        )
+        self.assertIn(evidence_scope, partial["missingEndpointScopeIds"])
 
     def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):
         state_scope = "symbol:035720:market:bucket:00"

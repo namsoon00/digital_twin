@@ -2752,6 +2752,11 @@ def select_target_scoped_manifest_patch(
             if scope_id in selected or _scope_type(scope_id) != "link":
                 continue
             assertion_changed = assertion_changed_from_active(scope_id, row)
+            dependencies = {
+                _clean(value)
+                for value in row.get("dependencyScopeIds") or []
+                if _clean(value)
+            }
             if (
                 bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
                 and (
@@ -2759,6 +2764,27 @@ def select_target_scoped_manifest_patch(
                     or outside_authoritative_fact_slot(scope_id)
                 )
             ):
+                if (
+                    not source_graph_complete
+                    and assertion_changed
+                    and (
+                        _clean(row.get("scopeFamily"))
+                        or scope_family(scope_id)
+                    ).lower() == "quality"
+                    and dependencies.intersection(relation_rebind_root_scope_ids)
+                ):
+                    # A partial graph cannot prove which active quality
+                    # relations disappeared with a changed source fact. Ask
+                    # the projection coordinator for its existing bounded
+                    # complete-source repair instead of attempting a rebind
+                    # against potentially absent evidence endpoints.
+                    incomplete_source_endpoint_scopes.extend(
+                        dependencies.intersection(relation_rebind_root_scope_ids)
+                    )
+                    selection_reasons.setdefault(scope_id, set()).add(
+                        "complete-source-required-derived-quality-replacement"
+                    )
+                    continue
                 # This source event does not own the relation, even when a
                 # separately collected fact made its in-memory assertion look
                 # newer. Preserve the verified active assertion. The repository
@@ -2769,11 +2795,6 @@ def select_target_scoped_manifest_patch(
                 )
                 forced_deferred_relation_scope_ids.add(scope_id)
                 continue
-            dependencies = {
-                _clean(value)
-                for value in row.get("dependencyScopeIds") or []
-                if _clean(value)
-            }
             if not dependencies.intersection(relation_rebind_root_scope_ids):
                 continue
             include_missing_dependency(

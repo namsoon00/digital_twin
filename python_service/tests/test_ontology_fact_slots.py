@@ -19,6 +19,78 @@ from digital_twin.domain.ontology_scopes import (
 
 
 class OntologyFactSlotTests(unittest.TestCase):
+    def test_shared_crypto_scope_records_native_source_ownership(self):
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("crypto-asset:ETH", "Ethereum", "crypto-asset", {
+                    "ontologyBox": "ABox", "symbol": "ETH", "price": 4200,
+                }),
+                OntologyEntity(
+                    "crypto-market-signal:ethereum",
+                    "Ethereum market",
+                    "crypto-market-signal",
+                    {"ontologyBox": "ABox", "symbol": "ETH", "change24h": 4.2},
+                ),
+            ],
+        )
+
+        identity = apply_scoped_abox_identity(graph, account_id="main")
+        scope = next(
+            item for item in identity["scopePlan"]
+            if item["scopeId"] == "macro:crypto"
+        )
+
+        self.assertEqual(["ETH"], scope["nativeSourceSymbols"])
+
+    def test_authoritative_crypto_event_selects_owned_shared_scope(self):
+        plan = build_fact_slot_projection_plan(
+            ["ETH", "MSTR"],
+            ["market"],
+            requested_fact_families_by_symbol={
+                "ETH": ["market"],
+                "MSTR": ["market"],
+            },
+            changed_fields_by_symbol={
+                "ETH": ["cryptoMarketTransition", "external.cryptoMarkets"],
+                "MSTR": ["cryptoMarketTransition", "external.cryptoMarkets"],
+            },
+            event_boundary_authoritative=True,
+            requested_dependency_keys=[
+                "kind:crypto-exposure",
+                "kind:crypto-market-signal",
+            ],
+            requested_dependency_keys_by_symbol={
+                "ETH": ["kind:crypto-market-signal"],
+                "MSTR": ["kind:crypto-exposure"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+        scopes = {
+            "macro:crypto": {
+                "scopeFamily": "macro-crypto",
+                "nativeSourceSymbols": ["ETH"],
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-market-signal": "eth-v2",
+                },
+            },
+            "symbol:MSTR:exposure": {
+                "scopeFamily": "exposure",
+                "semanticDependencyFingerprints": {
+                    "kind:crypto-exposure": "mstr-v2",
+                },
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertTrue(selection["enabled"])
+        self.assertEqual("applied", selection["status"])
+        self.assertEqual(
+            ["macro:crypto", "symbol:MSTR:exposure"],
+            selection["selectedScopeIds"],
+        )
+
     def test_portfolio_risk_uses_stable_benchmark_anchor(self):
         def risk_graph(snapshot_id, beta):
             graph = PortfolioOntology(

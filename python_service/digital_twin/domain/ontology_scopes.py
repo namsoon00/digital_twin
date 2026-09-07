@@ -1498,6 +1498,36 @@ def scoped_manifest_id(account_id: str, scope_generations: Mapping[str, str], wo
     return "abox-manifest:" + digest
 
 
+def _native_source_symbols_for_scope(
+    payload: Mapping[str, object],
+) -> List[str]:
+    """Return RuleBox source symbols physically owned by one scope.
+
+    Most instrument scopes encode their subject in the scope id. Crypto
+    sources intentionally live in the shared ``macro:crypto`` scope, so the
+    id alone cannot associate that scope with an ETH or BTC mailbox event.
+    Persist the ownership alongside the scope plan without making it part of
+    the immutable generation fingerprint.
+    """
+
+    symbols: Set[str] = set()
+    for item in payload.get("entities") or []:
+        row = dict(item or {})
+        kind = _clean(row.get("kind")).lower()
+        if kind not in {"stock", "crypto-asset"}:
+            continue
+        properties = dict(row.get("properties") or {})
+        symbol = _symbol(properties.get("symbol"))
+        if not symbol:
+            entity_id = _clean(row.get("id"))
+            prefix = kind + ":"
+            if entity_id.lower().startswith(prefix):
+                symbol = _symbol(entity_id[len(prefix):].split(":", 1)[0])
+        if symbol:
+            symbols.add(symbol)
+    return sorted(symbols)
+
+
 def apply_scoped_abox_identity(
     graph: PortfolioOntology,
     account_id: str = "",
@@ -1724,6 +1754,9 @@ def apply_scoped_abox_identity(
             "scopeId": scope_id,
             "scopeType": _scope_type(scope_id),
             "scopeFamily": scope_family(scope_id),
+            "nativeSourceSymbols": _native_source_symbols_for_scope(
+                payloads[scope_id]
+            ),
             "impactScopeFamilies": sorted(scope_impact_families.get(scope_id) or {scope_family(scope_id)}),
             "semanticFingerprints": dict(sorted(semantic_fingerprints.get(scope_id, {}).items())),
             "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,

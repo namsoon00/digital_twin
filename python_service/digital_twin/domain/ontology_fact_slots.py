@@ -18,7 +18,7 @@ from .ontology_change_impact import (
 )
 
 
-FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v3-semantic-dependency-routing"
+FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v4-native-source-ownership"
 
 # A source event can update values derived into adjacent factual families.
 # The closure keeps those derived facts coherent while excluding unrelated
@@ -568,7 +568,12 @@ def select_fact_slot_scope_ids(
         direct_symbol = scope_symbol(scope_id)
         if direct_symbol in target_symbols:
             return {direct_symbol}
-        return {
+        owned_symbols = {
+            _clean(symbol).upper()
+            for symbol in item.get("nativeSourceSymbols") or []
+            if _clean(symbol).upper() in target_symbols
+        }
+        dependency_symbols = {
             dependency_symbol
             for dependency_symbol in (
                 scope_symbol(dependency)
@@ -576,6 +581,7 @@ def select_fact_slot_scope_ids(
             )
             if dependency_symbol in target_symbols
         }
+        return owned_symbols | dependency_symbols
 
     def applicable_values_for_scope(
         scope_id: str,

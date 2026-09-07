@@ -140,8 +140,15 @@ class ReasoningIngressRouterTests(unittest.TestCase):
     def test_market_facts_infer_work_class_for_verified_snapshot_boundary(self):
         market_event = event()
         market_event.payload.update({
-            "factTypes": ["ExecutionFlow", "MarketQuote", "TechnicalIndicator"],
+            "factTypes": [
+                "CapitalStructureChange",
+                "ExecutionFlow",
+                "MarketQuote",
+                "ResearchEvidence",
+                "TechnicalIndicator",
+            ],
             "trigger": "verified-monitor-snapshot",
+            "sourceEventName": "monitoring.snapshot_collected",
             "sourceObservedAt": "2026-08-18T00:59:30Z",
             "verifiedSourceSnapshot": {
                 "snapshotId": "reasoning-source:market",

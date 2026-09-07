@@ -961,6 +961,18 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             or ""
         ).strip()
         occurred_at = str(getattr(event, "occurred_at", "") or "").strip()
+        trigger = str(payload.get("trigger") or "").strip().lower()
+        source_event_name = str(payload.get("sourceEventName") or "").strip().lower()
+        monitor_owned = bool(
+            trigger == "verified-monitor-snapshot"
+            or source_event_name == "monitoring.snapshot_collected"
+        )
+        # A monitor request is inserted after its verified source packet in
+        # the same transaction. Mixed research or capital facts describe the
+        # packet's contents and must not move this boundary to the event's
+        # later outbox timestamp.
+        if monitor_owned and source_at:
+            return source_at
         work_class = str(payload.get("workClass") or "").strip().upper()
         if not work_class:
             work_class = work_class_for_fact_types(
@@ -968,10 +980,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 trigger=payload.get("trigger"),
                 full_reconciliation=bool(payload.get("fullReconciliation")),
             )
-        # Monitor-owned market/portfolio events are emitted immediately after
-        # their verified snapshot. Other facts need the first monitor packet
-        # created after collection so the new fact cannot be paired with an
-        # older world state.
+        # Other explicit market/portfolio events can name their verified
+        # observation directly. Research facts need the first monitor packet
+        # created after collection so they cannot use an older world state.
         if work_class in {"MARKET", "PORTFOLIO"} and source_at:
             return source_at
         return max(source_at, occurred_at) if source_at and occurred_at else source_at or occurred_at or iso_utc()

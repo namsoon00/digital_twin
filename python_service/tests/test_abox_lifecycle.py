@@ -25,6 +25,8 @@ class ABoxLifecycleContractTests(unittest.TestCase):
                 "baseFingerprint": "evidence-old",
                 "dependencyScopeIds": [],
                 "entityCount": 2,
+                "nodeInventoryVersion": "scope-node-inventory-v1",
+                "nodeIds": ["research:035420:news:1"],
             },
             {
                 "scopeId": self.link_scope,
@@ -34,6 +36,10 @@ class ABoxLifecycleContractTests(unittest.TestCase):
                 "baseFingerprint": "quality-old",
                 "dependencyScopeIds": [self.evidence_scope],
                 "relationCount": 2,
+                "relationEndpointBindingVersion": "relation-endpoint-binding-v1",
+                "relationEndpointNodeIdsByScope": {
+                    self.evidence_scope: ["research:035420:news:1"],
+                },
             },
         ]
         self.incoming = [
@@ -115,6 +121,20 @@ class ABoxLifecycleContractTests(unittest.TestCase):
         )
         self.assertEqual("replace", directive["disposition"])
 
+        missing_endpoint_plan = [dict(item) for item in self.incoming]
+        missing_endpoint_plan[0]["nodeIds"] = []
+        blocked = finalize_manifest_patch_plan(
+            self.selection([self.evidence_scope, self.link_scope]),
+            self.change_set,
+            missing_endpoint_plan,
+            self.active,
+        )
+        self.assertEqual("blocked-invalid-manifest-patch-plan", blocked["status"])
+        self.assertIn(
+            "relation-endpoint-missing-from-final-scope",
+            [item["code"] for item in blocked["patchPlanViolations"]],
+        )
+
     def test_change_set_distinguishes_partial_source_from_deletion(self):
         change_set = ABoxChangeSet.from_inputs(
             ["035420"],
@@ -166,6 +186,82 @@ class ABoxLifecycleContractTests(unittest.TestCase):
         self.assertEqual(
             "complete-source-assertion-presence",
             relation_scope["deletionSemantics"],
+        )
+
+        reference_graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity(
+                    "stock:035420",
+                    "NAVER",
+                    "stock",
+                    {"ontologyBox": "ABox", "symbol": "035420"},
+                ),
+                OntologyEntity(
+                    "news-event-type:general",
+                    "general",
+                    "news-event-type",
+                    {
+                        "ontologyBox": "ABox",
+                        "symbol": "035420",
+                        "materialityPassed": True,
+                        "reviewLevel": "check",
+                    },
+                ),
+            ],
+            relations=[
+                OntologyRelation(
+                    "stock:035420",
+                    "news-event-type:general",
+                    "HAS_EVENT_TYPE",
+                    properties={"ontologyBox": "ABox"},
+                )
+            ],
+        )
+        reference_result = apply_scoped_abox_identity(reference_graph)
+        reference_entity = reference_graph.entities[1]
+        reference_scope_id = reference_entity.properties["aboxScopeId"]
+        self.assertTrue(reference_scope_id.startswith("reference:item:"))
+        self.assertEqual("global", reference_entity.properties["referenceScope"])
+        self.assertNotIn("symbol", reference_entity.properties)
+        self.assertNotIn("materialityPassed", reference_entity.properties)
+        reference_relation_scope = next(
+            item
+            for item in reference_result["scopePlan"]
+            if item["relationCount"] == 1
+        )
+        self.assertIn(
+            reference_scope_id,
+            reference_relation_scope["dependencyScopeIds"],
+        )
+        self.assertEqual(
+            ["news-event-type:general"],
+            reference_relation_scope["relationEndpointNodeIdsByScope"][
+                reference_scope_id
+            ],
+        )
+
+        second_graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity(
+                    "stock:TSLA",
+                    "Tesla",
+                    "stock",
+                    {"ontologyBox": "ABox", "symbol": "TSLA"},
+                ),
+                OntologyEntity(
+                    "news-event-type:general",
+                    "general",
+                    "news-event-type",
+                    {"ontologyBox": "ABox", "symbol": "TSLA"},
+                ),
+            ],
+        )
+        apply_scoped_abox_identity(second_graph)
+        self.assertEqual(
+            reference_scope_id,
+            second_graph.entities[1].properties["aboxScopeId"],
         )
 
 

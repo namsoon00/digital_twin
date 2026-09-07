@@ -189,6 +189,12 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
                     "fingerprint": "test",
                     "dependencyScopeIds": [],
                     "entityCount": 1,
+                    "nodeInventoryVersion": "scope-node-inventory-v1",
+                    "nodeIds": ["stock:MSTR"],
+                    "relationEndpointBindingVersion": "relation-endpoint-binding-v1",
+                    "relationEndpointNodeIdsByScope": {
+                        "symbol:MSTR:state": ["stock:MSTR"],
+                    },
                 }],
                 "targetScopedManifestPatch": {
                     "status": "applied",
@@ -210,6 +216,16 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
         self.assertEqual("invalid-manifest-patch-contract", result["status"])
         self.assertFalse(result["saved"])
         self.assertTrue(result["preservedActiveGeneration"])
+        normalized_scope = repository.scoped_abox_plan(graph)[0]
+        self.assertEqual(
+            "scope-node-inventory-v1",
+            normalized_scope["nodeInventoryVersion"],
+        )
+        self.assertEqual(["stock:MSTR"], normalized_scope["nodeIds"])
+        self.assertEqual(
+            {"symbol:MSTR:state": ["stock:MSTR"]},
+            normalized_scope["relationEndpointNodeIdsByScope"],
+        )
 
     def test_rebind_preserves_active_relation_semantics(self):
         result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(

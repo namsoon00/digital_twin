@@ -11,6 +11,8 @@ ABOX_CHANGE_SET_VERSION = "abox-change-set-v1"
 MANIFEST_PATCH_PLAN_VERSION = "manifest-patch-plan-v1"
 PATCH_PLAN_VALIDATION_VERSION = "manifest-patch-validation-v1"
 MANIFEST_PATCH_BOUNDARY_VERSION = "abox-manifest-patch-boundary-v1"
+SCOPE_NODE_INVENTORY_VERSION = "scope-node-inventory-v1"
+RELATION_ENDPOINT_BINDING_VERSION = "relation-endpoint-binding-v1"
 DERIVED_COMPANION_RELATION_TYPES = frozenset({
     "HAS_DATA_QUALITY",
     "HAS_EVIDENCE",
@@ -36,6 +38,19 @@ def _texts(values: object, uppercase: bool = False) -> Tuple[str, ...]:
         if _text(value)
     }
     return tuple(sorted(cleaned))
+
+
+def _endpoint_bindings(value: object) -> Tuple[Tuple[str, Tuple[str, ...]], ...]:
+    if not isinstance(value, Mapping):
+        return ()
+    return tuple(sorted(
+        (
+            _text(scope_id),
+            _texts(node_ids),
+        )
+        for scope_id, node_ids in value.items()
+        if _text(scope_id) and _texts(node_ids)
+    ))
 
 
 class SourceGraphCompleteness(str, Enum):
@@ -154,6 +169,10 @@ class ScopePlanEntry:
     relation_lifecycle: str = "not-a-relation"
     lifecycle_owner_scope_id: str = ""
     deletion_semantics: str = "retain-on-omission"
+    node_inventory_version: str = ""
+    node_ids: Tuple[str, ...] = ()
+    relation_endpoint_binding_version: str = ""
+    relation_endpoint_bindings: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "ScopePlanEntry":
@@ -193,6 +212,14 @@ class ScopePlanEntry:
                     if lifecycle == "derived-companion"
                     else "retain-on-omission"
                 )
+            ),
+            node_inventory_version=_text(row.get("nodeInventoryVersion")),
+            node_ids=_texts(row.get("nodeIds") or []),
+            relation_endpoint_binding_version=_text(
+                row.get("relationEndpointBindingVersion")
+            ),
+            relation_endpoint_bindings=_endpoint_bindings(
+                row.get("relationEndpointNodeIdsByScope")
             ),
         )
 

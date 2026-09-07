@@ -4326,6 +4326,28 @@ class ScopedABoxManifestMixin:
                     for value in item.get("dependencyScopeIds") or []
                     if str(value or "").strip()
                 ],
+                "nodeInventoryVersion": str(
+                    item.get("nodeInventoryVersion") or ""
+                ).strip(),
+                "nodeIds": sorted({
+                    str(value or "").strip()
+                    for value in item.get("nodeIds") or []
+                    if str(value or "").strip()
+                }),
+                "relationEndpointBindingVersion": str(
+                    item.get("relationEndpointBindingVersion") or ""
+                ).strip(),
+                "relationEndpointNodeIdsByScope": {
+                    str(endpoint_scope_id or "").strip(): sorted({
+                        str(value or "").strip()
+                        for value in endpoint_node_ids or []
+                        if str(value or "").strip()
+                    })
+                    for endpoint_scope_id, endpoint_node_ids in dict(
+                        item.get("relationEndpointNodeIdsByScope") or {}
+                    ).items()
+                    if str(endpoint_scope_id or "").strip()
+                },
                 "generationId": generation_id,
                 "entityCount": int(number_or_none(item.get("entityCount")) or 0),
                 "relationCount": int(number_or_none(item.get("relationCount")) or 0),

@@ -398,6 +398,9 @@ class NewsAnalysisDomainTests(unittest.TestCase):
                 "relevanceScore": 96,
                 "sourceReliability": 90,
                 "materialityScore": 88,
+                "eventType": "earnings",
+                "topicTags": ["earnings"],
+                "mentionedPeers": ["Microsoft"],
                 "aiAnalysis": {
                     "version": "news-ai-analysis-v1",
                     "model": "unit",
@@ -431,6 +434,19 @@ class NewsAnalysisDomainTests(unittest.TestCase):
         self.assertEqual("ArticleAIAnalysis", ai_entities[0].properties["tboxClass"])
         self.assertEqual("risk", ai_entities[0].properties["impactPolarity"])
         self.assertTrue(any(item.relation_type == "HAS_ANALYSIS" for item in graph.relations))
+        reference_entities = [
+            item
+            for item in graph.entities
+            if item.kind in {"news-event-type", "news-topic", "peer-company"}
+        ]
+        self.assertEqual(3, len(reference_entities))
+        for item in reference_entities:
+            self.assertEqual("global", item.properties["referenceScope"])
+            self.assertNotIn("symbol", item.properties)
+            self.assertNotIn("materialityPassed", item.properties)
+            self.assertNotIn("relationScope", item.properties)
+            self.assertNotIn("reviewLevel", item.properties)
+            self.assertNotIn("dataState", item.properties)
 
     def test_ontology_projection_materializes_official_document_analysis(self):
         evidence = ResearchEvidence(

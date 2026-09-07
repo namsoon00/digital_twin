@@ -15,7 +15,11 @@ from copy import deepcopy
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
 from .abox_lifecycle import ABoxChangeSet, finalize_manifest_patch_plan
-from .abox_lifecycle.contracts import relation_lifecycle_for_scope
+from .abox_lifecycle.contracts import (
+    RELATION_ENDPOINT_BINDING_VERSION,
+    SCOPE_NODE_INVENTORY_VERSION,
+    relation_lifecycle_for_scope,
+)
 from .ontology_change_impact import (
     DEPENDENCY_FINGERPRINT_VERSION,
     SYMBOL_SCOPE_FAMILIES,
@@ -38,7 +42,7 @@ from .ontology_worlds import world_scoped_scope_id
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
 SCOPED_ABOX_PERSISTENCE_MODE = "immutable-scoped-manifest"
-SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v12-stable-benchmark-anchor"
+SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION = "granular-v13-static-reference-endpoints"
 
 REFERENCE_SCOPE_ID = "reference:global"
 MACRO_SCOPE_ID = "macro:global"
@@ -183,6 +187,21 @@ _POLICY_ITEM_KINDS = {
 _REFERENCE_ITEM_KINDS = {
     "catalog-entry",
     "factor",
+}
+
+_IMMUTABLE_REFERENCE_ITEM_KINDS = {
+    "news-event-type",
+    "news-topic",
+    "peer-company",
+}
+
+_IMMUTABLE_REFERENCE_TRANSIENT_PROPERTY_KEYS = {
+    "dataState",
+    "materialityPassed",
+    "relationScope",
+    "reviewLevel",
+    "symbol",
+    "validationState",
 }
 
 _GENERATED_SCOPE_PROPERTY_KEYS = {
@@ -485,10 +504,12 @@ def _is_stable_active_anchor_id(entity_id: object) -> bool:
 
 def _explicit_entity_scope(entity: OntologyEntity, account_id: str) -> str:
     properties = dict(entity.properties or {})
+    kind = _clean(entity.kind).lower()
+    if kind in _IMMUTABLE_REFERENCE_ITEM_KINDS:
+        return entity_item_scope_id("reference", "", entity.entity_id)
     explicit = _clean(properties.get("aboxScopeId"))
     if explicit:
         return explicit
-    kind = _clean(entity.kind).lower()
     family = family_for_entity(kind, properties, entity.entity_id)
     # Market-wide instruments can carry a ticker-like identifier (BTC, an FX
     # pair, an index). Their world ownership is still macro, not a portfolio
@@ -554,6 +575,17 @@ def _seed_entity_scopes(graph: PortfolioOntology) -> Dict[str, str]:
         if scope_id:
             scopes[_clean(entity.entity_id)] = scope_id
     return scopes
+
+
+def _normalize_immutable_reference_entities(graph: PortfolioOntology) -> None:
+    """Keep shared taxonomy identity independent from one observation."""
+
+    for entity in graph.entities:
+        if _clean(entity.kind).lower() not in _IMMUTABLE_REFERENCE_ITEM_KINDS:
+            continue
+        for key in _IMMUTABLE_REFERENCE_TRANSIENT_PROPERTY_KEYS:
+            entity.properties.pop(key, None)
+        entity.properties["referenceScope"] = "global"
 
 
 def _scope_rank(scope_id: str) -> Tuple[int, str]:
@@ -1551,6 +1583,7 @@ def apply_scoped_abox_identity(
     clean_world_id = _clean(world_id)
     clean_tenant_id = _clean(tenant_id)
     clean_world_type = _clean(world_type)
+    _normalize_immutable_reference_entities(clone)
     if clean_world_id:
         for entity in clone.entities:
             if _clean((entity.properties or {}).get("ontologyBox")) in {"", "ABox"}:
@@ -1674,6 +1707,36 @@ def apply_scoped_abox_identity(
         ).hexdigest()
         for scope_id, payload in payloads.items()
     }
+    node_scope_ids_by_id: Dict[str, Set[str]] = defaultdict(set)
+    for scope_id, payload in payloads.items():
+        for item in list(payload["entities"]) + list(payload["evidence"]):
+            node_id = _clean(item.get("id"))
+            if node_id:
+                node_scope_ids_by_id[node_id].add(scope_id)
+
+    def node_ids_for_scope(scope_id: str) -> List[str]:
+        return sorted({
+            _clean(item.get("id"))
+            for item in list(payloads[scope_id]["entities"])
+            + list(payloads[scope_id]["evidence"])
+            if _clean(item.get("id"))
+        })
+
+    def relation_endpoint_nodes_by_scope(scope_id: str) -> Dict[str, List[str]]:
+        endpoint_ids_by_scope: Dict[str, Set[str]] = defaultdict(set)
+        for relation in payloads[scope_id]["relations"]:
+            for endpoint_id in (
+                _clean(relation.get("source")),
+                _clean(relation.get("target")),
+            ):
+                for endpoint_scope_id in node_scope_ids_by_id.get(endpoint_id) or []:
+                    endpoint_ids_by_scope[endpoint_scope_id].add(endpoint_id)
+        return {
+            endpoint_scope_id: sorted(endpoint_ids)
+            for endpoint_scope_id, endpoint_ids in sorted(
+                endpoint_ids_by_scope.items()
+            )
+        }
     dependency_graph: Dict[str, Set[str]] = {scope_id: set() for scope_id in scope_ids}
     scope_impact_families: Dict[str, Set[str]] = {
         scope_id: {scope_family(scope_id)}
@@ -1781,6 +1844,12 @@ def apply_scoped_abox_identity(
             "fingerprint": fingerprint,
             "baseFingerprint": base_fingerprints[scope_id],
             "dependencyScopeIds": dependencies,
+            "nodeInventoryVersion": SCOPE_NODE_INVENTORY_VERSION,
+            "nodeIds": node_ids_for_scope(scope_id),
+            "relationEndpointBindingVersion": RELATION_ENDPOINT_BINDING_VERSION,
+            "relationEndpointNodeIdsByScope": relation_endpoint_nodes_by_scope(
+                scope_id
+            ),
             "generationId": generation_id,
             "entityCount": len(payloads[scope_id]["entities"]),
             "relationCount": len(payloads[scope_id]["relations"]),

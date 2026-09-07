@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Dict, Iterable, Mapping, Set, Tuple
 
 from .contracts import (
+    RELATION_ENDPOINT_BINDING_VERSION,
+    SCOPE_NODE_INVENTORY_VERSION,
     ABoxChangeSet,
     ManifestPatchPlan,
     PatchPlanValidation,
@@ -135,6 +137,67 @@ def validate_manifest_patch_plan(
                 scope_id,
                 dependency_id,
             )
+
+    node_scope_ids: Dict[str, Set[str]] = {}
+    for scope_id, entry in final_entries.items():
+        if entry.node_inventory_version != SCOPE_NODE_INVENTORY_VERSION:
+            continue
+        for node_id in entry.node_ids:
+            node_scope_ids.setdefault(node_id, set()).add(scope_id)
+    for node_id, owner_scope_ids in sorted(node_scope_ids.items()):
+        if len(owner_scope_ids) <= 1:
+            continue
+        add(
+            "logical-node-owned-by-multiple-final-scopes",
+            detail=node_id + " owned by " + ", ".join(sorted(owner_scope_ids)),
+        )
+
+    for relation_scope_id, entry in sorted(final_entries.items()):
+        if (
+            not entry.is_relation_scope
+            or entry.relation_endpoint_binding_version
+            != RELATION_ENDPOINT_BINDING_VERSION
+        ):
+            continue
+        dependencies = set(entry.dependency_scope_ids)
+        for endpoint_scope_id, endpoint_node_ids in entry.relation_endpoint_bindings:
+            if endpoint_scope_id not in final_entries:
+                add(
+                    "relation-endpoint-scope-missing-from-final-manifest",
+                    relation_scope_id,
+                    endpoint_scope_id,
+                )
+                continue
+            if (
+                endpoint_scope_id != relation_scope_id
+                and endpoint_scope_id not in dependencies
+            ):
+                add(
+                    "relation-endpoint-scope-not-declared-as-dependency",
+                    relation_scope_id,
+                    endpoint_scope_id,
+                )
+            endpoint_entry = final_entries[endpoint_scope_id]
+            if endpoint_entry.node_inventory_version != SCOPE_NODE_INVENTORY_VERSION:
+                continue
+            available_node_ids = set(endpoint_entry.node_ids)
+            for node_id in endpoint_node_ids:
+                if node_id in available_node_ids:
+                    continue
+                observed_scope_ids = sorted(node_scope_ids.get(node_id) or [])
+                add(
+                    "relation-endpoint-missing-from-final-scope",
+                    relation_scope_id,
+                    endpoint_scope_id,
+                    (
+                        node_id
+                        + (
+                            " exists in " + ", ".join(observed_scope_ids)
+                            if observed_scope_ids
+                            else " is absent from the final node inventory"
+                        )
+                    ),
+                )
 
     # A complete source owns removal of its derived companions. Rebinding an
     # older assertion after its source fact changed can reference an entity

@@ -691,10 +691,7 @@ def add_research_evidence_concepts(
             event_type_id = add_entity(graph, "news-event-type", event_type, event_type, {
                 "tboxClass": "NewsEventType",
                 "eventType": event_type,
-                "symbol": symbol,
-                "materialityPassed": materiality_passed,
-                "reviewLevel": evidence_state.get("reviewLevel"),
-                "dataState": evidence_state.get("dataState"),
+                "referenceScope": "global",
             })
             add_relation(graph, event_id, event_type_id, "HAS_EVENT_TYPE", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
             add_relation(graph, event_type_id, stock_id, "AFFECTS", weight=1.0, evidence_ids=[item.evidence_id], properties=props)
@@ -720,8 +717,7 @@ def add_research_evidence_concepts(
             topic_id = add_entity(graph, "news-topic", str(topic), str(topic), {
                 "tboxClass": "NewsTopic",
                 "topic": str(topic),
-                "symbol": symbol,
-                "relationScope": relation_scope,
+                "referenceScope": "global",
             })
             add_relation(graph, event_id, topic_id, "HAS_TOPIC", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
             add_relation(graph, topic_id, stock_id, "AFFECTS", weight=1.0, evidence_ids=[item.evidence_id], properties=props)
@@ -730,7 +726,7 @@ def add_research_evidence_concepts(
             peer_id = add_entity(graph, "peer-company", str(peer), str(peer), {
                 "tboxClass": "PeerCompanyMention",
                 "peerName": str(peer),
-                "symbol": symbol,
+                "referenceScope": "global",
             })
             add_relation(graph, event_id, peer_id, "MENTIONS_PEER", weight=relation_weight, evidence_ids=[item.evidence_id], properties=props)
             add_relation(graph, peer_id, stock_id, "AFFECTS", weight=1.0, evidence_ids=[item.evidence_id], properties=props)

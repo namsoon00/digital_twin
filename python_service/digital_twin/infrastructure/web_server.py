@@ -5941,7 +5941,7 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         if detail in {"status", "freshness"}:
             pending_payload.pop("portfolio", None)
             pending_payload.pop("tossDecision", None)
-            pending_payload["dataFreshness"] = flow_lens_data_freshness(None, runtime_settings())
+            pending_payload["dataFreshness"] = flow_lens_data_freshness(None, {})
         return pending_payload
     payload = dict(result.snapshot)
     payload["readModel"] = result.metadata()

@@ -10,7 +10,7 @@ from .notification_ai_context import is_graph_backed_relation_context
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
-CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v2"
+CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v3"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v1"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
 REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v3"
@@ -430,8 +430,9 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         authorization_sources.append("verified-source-document")
     if notification_intent_rule_ids:
         authorization_sources.append("typedb-notification-intent")
-    if lifecycle_transition and bool(lifecycle_transition.get("material")):
-        authorization_sources.append("material-relation-lifecycle")
+    # Lifecycle changes remain visible in the graph audit, but do not grant a
+    # push by themselves. A source document, verified threshold, or explicit
+    # TypeDB notification-intent rule must provide the user-facing reason.
 
     decision = {
         "version": CONTEXT_OBSERVATION_DELIVERY_VERSION,

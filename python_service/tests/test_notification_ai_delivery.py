@@ -224,19 +224,23 @@ def lifecycle_observation_context(outcome="OBSERVATION"):
 
 
 class FinalAIDeliveryTests(unittest.TestCase):
-    def _assert_relation_lifecycle_observation_is_deliverable_without_action(self):
+    def _assert_relation_lifecycle_observation_is_web_only_without_user_evidence(self):
         decision = final_ai_delivery_decision(lifecycle_observation_context())
 
-        self.assertEqual("send", decision["decision"])
+        self.assertEqual("suppress", decision["decision"])
         self.assertEqual("NO_ACTION", decision.get("finalAction"))
-        self.assertIn("material-relation-lifecycle", decision["authorizationSources"])
+        self.assertEqual([], decision["authorizationSources"])
+        self.assertEqual(
+            "context_observation_web_history",
+            decision["suppressionReason"],
+        )
         self.assertEqual(
             "resolved",
             decision["relationLifecycleTransition"]["changeKind"],
         )
 
     def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
-        self._assert_relation_lifecycle_observation_is_deliverable_without_action()
+        self._assert_relation_lifecycle_observation_is_web_only_without_user_evidence()
         policy = NotificationAdmissionPolicy()
         context = graph_risk_context(material=False)
         context["investmentSubjectDecisionCaseId"] = "subject-case:unchanged"

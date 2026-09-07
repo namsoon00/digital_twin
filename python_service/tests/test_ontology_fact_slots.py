@@ -1414,6 +1414,135 @@ class OntologyFactSlotTests(unittest.TestCase):
         )
         self.assertEqual(new_assessment_id, graph.relations[0].target)
         self.assertNotEqual(old_assessment_id, graph.relations[0].target)
+        self._assert_complete_evidence_source_replaces_changed_quality_relation_count()
+
+    def _assert_complete_evidence_source_replaces_changed_quality_relation_count(self):
+        state_scope = "symbol:005380:state"
+        evidence_scope = "symbol:005380:evidence:bucket:19"
+        quality_link_scope = "link:symbol:005380:quality:bucket:06"
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity("stock:005380", "Hyundai", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "005380",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity("article-quality-risk:current", "Current risk", "article-quality-risk", {
+                    "ontologyBox": "ABox",
+                    "symbol": "005380",
+                    "aboxScopeId": evidence_scope,
+                }),
+            ],
+            relations=[OntologyRelation(
+                "stock:005380",
+                "article-quality-risk:current",
+                "HAS_DATA_QUALITY",
+                properties={"ontologyBox": "ABox", "aboxScopeId": quality_link_scope},
+            )],
+        )
+        graph.worldview = {
+            "targetScopeRetentionMode": "incremental-target-patch",
+            "scopePlan": [
+                {
+                    "scopeId": state_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "state",
+                    "baseFingerprint": "state-stable",
+                    "fingerprint": "state-stable",
+                    "generationId": "state-active",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": evidence_scope,
+                    "scopeType": "symbol",
+                    "scopeFamily": "evidence",
+                    "baseFingerprint": "evidence-current",
+                    "fingerprint": "evidence-current",
+                    "generationId": "evidence-current",
+                    "dependencyScopeIds": [],
+                    "entityCount": 1,
+                    "relationCount": 0,
+                },
+                {
+                    "scopeId": quality_link_scope,
+                    "scopeType": "link",
+                    "scopeFamily": "quality",
+                    "impactScopeFamilies": ["quality"],
+                    "baseFingerprint": "quality-link-current",
+                    "fingerprint": "quality-link-current",
+                    "generationId": "quality-link-current",
+                    "dependencyScopeIds": [state_scope, evidence_scope],
+                    "entityCount": 0,
+                    "relationCount": 1,
+                },
+            ],
+        }
+        active = {
+            "status": "ok",
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            "scopePlan": [
+                dict(graph.worldview["scopePlan"][0]),
+                {
+                    **graph.worldview["scopePlan"][1],
+                    "baseFingerprint": "evidence-active",
+                    "fingerprint": "evidence-active",
+                    "generationId": "evidence-active",
+                    "entityCount": 2,
+                },
+                {
+                    **graph.worldview["scopePlan"][2],
+                    "baseFingerprint": "quality-link-active",
+                    "fingerprint": "quality-link-active",
+                    "generationId": "quality-link-active",
+                    "relationCount": 2,
+                },
+            ],
+        }
+        fact_slot_plan = {
+            "enabled": True,
+            "status": "ready",
+            "targetSymbols": ["005380"],
+            "requestedFactFamilies": ["evidence"],
+            "requestedFactFamiliesBySymbol": {"005380": ["evidence"]},
+            "slotFamilies": ["evidence"],
+            "slotFamiliesBySymbol": {"005380": ["evidence"]},
+            "eventBoundaryAuthoritative": True,
+        }
+
+        complete = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["005380"],
+            fact_slot_plan=fact_slot_plan,
+            source_graph_complete=True,
+        )
+        partial = select_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["005380"],
+            fact_slot_plan=fact_slot_plan,
+            source_graph_complete=False,
+        )
+
+        self.assertEqual("ready", complete["status"])
+        self.assertEqual(
+            {evidence_scope, quality_link_scope},
+            set(complete["selectedIncomingScopeIds"]),
+        )
+        selected_trace = {
+            item["scopeId"]: item
+            for item in complete["scopeSelectionTrace"]["selected"]
+        }
+        self.assertIn(
+            "complete-source-derived-quality-replacement",
+            selected_trace[quality_link_scope]["reasons"],
+        )
+        self.assertEqual([evidence_scope], partial["selectedIncomingScopeIds"])
+        self.assertIn(quality_link_scope, partial["deferredRelationScopeIds"])
 
     def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):
         state_scope = "symbol:035720:market:bucket:00"

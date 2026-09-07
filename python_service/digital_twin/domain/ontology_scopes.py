@@ -2343,6 +2343,7 @@ def select_target_scoped_manifest_patch(
             })
             if _scope_type(scope_id) == "link" and not scope_symbol(scope_id):
                 reasons.add("deferred-shared-persistence-rebind")
+    fact_slot_candidate_scope_ids = set(selected)
     fact_slot_selection = select_fact_slot_scope_ids(
         incoming,
         selected,
@@ -2363,6 +2364,52 @@ def select_target_scoped_manifest_patch(
     # selection; using ``or selected`` widened the no-op back to every changed
     # runtime scope and rebuilt unrelated portfolio decision-cycle facts.
     selected = set(fact_slot_selection.get("selectedScopeIds", selected))
+    complete_source_quality_replacements: Set[str] = set()
+    if (
+        source_graph_complete
+        and bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
+        and selected
+    ):
+        # Data-quality links are derived integrity companions of their source
+        # facts. When a complete source removes one of those relations, keeping
+        # the active relation as a generation-only rebind leaves it pointing at
+        # a retired evidence node. Select only structural count changes whose
+        # dependency is already owned by this event; equal-count replacements
+        # from another fact slot remain deferred and are reconciled by the
+        # repository's exact-endpoint fallback.
+        for scope_id in sorted(fact_slot_candidate_scope_ids - selected):
+            item = incoming.get(scope_id) or {}
+            active_item = active_by_scope.get(scope_id) or {}
+            dependencies = {
+                _clean(value)
+                for value in item.get("dependencyScopeIds") or []
+                if _clean(value)
+            }
+            if (
+                _scope_type(scope_id) == "link"
+                and (
+                    _clean(item.get("scopeFamily"))
+                    or scope_family(scope_id)
+                ).lower() == "quality"
+                and dependencies.intersection(selected)
+                and assertion_changed_from_active(scope_id, item)
+                and int(item.get("relationCount") or 0)
+                != int(active_item.get("relationCount") or 0)
+            ):
+                selected.add(scope_id)
+                complete_source_quality_replacements.add(scope_id)
+                selection_reasons.setdefault(scope_id, set()).add(
+                    "complete-source-derived-quality-replacement"
+                )
+        if complete_source_quality_replacements:
+            fact_slot_selection["selectedScopeIds"] = sorted(selected)
+            fact_slot_selection["deferredScopeIds"] = sorted(
+                set(fact_slot_selection.get("deferredScopeIds") or [])
+                - complete_source_quality_replacements
+            )
+            fact_slot_selection["derivedQualityReplacementScopeIds"] = sorted(
+                complete_source_quality_replacements
+            )
     fact_slot_deferred_scope_ids = {
         _clean(scope_id)
         for scope_id in fact_slot_selection.get("deferredScopeIds") or []

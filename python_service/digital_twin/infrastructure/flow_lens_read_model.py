@@ -52,12 +52,14 @@ class FlowLensReadModel:
         snapshot_provider: Callable[[bool, str], Dict[str, object]],
         persisted_provider: Callable[[str], Optional[Dict[str, object]]],
         on_refresh: Callable[[Dict[str, object]], None] = None,
+        persisted_validator: Callable[[Dict[str, object]], bool] = None,
         cache_ttl_seconds: float = 30.0,
         now_fn: Callable[[], float] = None,
     ):
         self.snapshot_provider = snapshot_provider
         self.persisted_provider = persisted_provider
         self.on_refresh = on_refresh
+        self.persisted_validator = persisted_validator
         self.cache_ttl_seconds = max(0.0, float(cache_ttl_seconds or 0.0))
         self.now_fn = now_fn or time.monotonic
         self._cache: Dict[str, Tuple[Dict[str, object], str, str, float]] = {}
@@ -122,6 +124,8 @@ class FlowLensReadModel:
             if prefer_persisted:
                 snapshot = self.persisted_provider(watchlist_symbols)
                 source = "monitor-snapshot"
+                if snapshot and self.persisted_validator and not self.persisted_validator(snapshot):
+                    snapshot = None
             if not snapshot:
                 snapshot = self.snapshot_provider(mock, watchlist_symbols)
                 source = "live-refresh"

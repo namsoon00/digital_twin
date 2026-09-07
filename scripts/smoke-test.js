@@ -421,6 +421,15 @@ function checkWorkflowConsoleContract() {
       && styles.indexOf("Final app-shell cascade lock") >= 0,
     "웹 앱 설치, 연결 상태, 모바일 뷰포트 또는 아이콘 하단 탐색 계약이 없습니다."
   );
+  assertOk(
+    code.indexOf("function ensureFreshSnapshot") >= 0
+      && code.indexOf("function snapshotFreshnessExpired") >= 0
+      && code.indexOf("function snapshotRefreshInProgress") >= 0
+      && code.indexOf('detail: "status"') >= 0
+      && code.indexOf('document.addEventListener("visibilitychange"') >= 0
+      && code.indexOf('ensureFreshSnapshot("initial-entry"') >= 0,
+    "페이지 진입·복귀 자동 신선도 확인 또는 경량 갱신 완료 재조회 계약이 없습니다."
+  );
   assertOk(code.indexOf("loadInstrumentTimeline") >= 0 && code.indexOf("initInstrumentTimelineChart") >= 0, "종목 실제 시계열 차트 흐름이 연결되지 않았습니다.");
   assertOk(
     code.indexOf("function instrumentChartEventProjection") >= 0
@@ -3288,6 +3297,12 @@ async function checkNormalMode(port, context) {
   assertOk(tossPayload.portfolio.total > 2700000, "미국장 USD 평가액이 KRW 기준 총 평가액에 환산되지 않았습니다.");
   assertOk(!Array.isArray(tossPayload.news), "토스 전용 판단 API가 뉴스 배열을 내려주고 있습니다.");
   assertOk(!Array.isArray(tossPayload.social), "토스 전용 판단 API가 소셜 배열을 내려주고 있습니다.");
+
+  const tossLensStatus = await requestReadyFlowLens(port, "/api/flow-lens?mock=1&detail=status");
+  const tossLensStatusPayload = JSON.parse(tossLensStatus.body);
+  assertOk(tossLensStatus.statusCode === 200, "토스 판단 신선도 상태 API 응답 코드가 200이 아닙니다.");
+  assertOk(tossLensStatusPayload.readModel && tossLensStatusPayload.dataFreshness, "토스 판단 신선도 상태 API 메타데이터가 없습니다.");
+  assertOk(!tossLensStatusPayload.portfolio && !tossLensStatusPayload.tossDecision && !tossLensStatusPayload.capitalFlow, "토스 판단 신선도 상태 API가 대용량 화면 데이터를 포함합니다.");
 
   const dashboardSummary = await request(port, "/api/dashboard/summary?mock=1");
   assertOk(dashboardSummary.statusCode === 200, "오늘 요약 API 응답 코드가 200이 아닙니다: " + dashboardSummary.statusCode);

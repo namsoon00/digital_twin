@@ -142,6 +142,31 @@ class WebServerPortFallbackTests(unittest.TestCase):
         self.assertEqual(2, refreshed.snapshot["portfolio"]["invested"])
         self.assertEqual([], live_calls)
 
+    def test_flow_lens_read_model_rejects_stale_persisted_snapshot(self):
+        calls = []
+        model = FlowLensReadModel(
+            snapshot_provider=lambda _mock, _symbols: calls.append("live") or {
+                "generatedAt": "2026-09-07T00:00:00Z",
+                "portfolio": {"invested": 2},
+            },
+            persisted_provider=lambda _symbols: {
+                "generatedAt": "2026-09-01T00:00:00Z",
+                "portfolio": {"invested": 1},
+            },
+            persisted_validator=lambda snapshot: snapshot.get("generatedAt") == "2026-09-07T00:00:00Z",
+        )
+
+        model.read()
+        for _ in range(40):
+            refreshed = model.read()
+            if refreshed.snapshot:
+                break
+            sleep(0.01)
+
+        self.assertEqual("live-refresh", refreshed.source)
+        self.assertEqual(2, refreshed.snapshot["portfolio"]["invested"])
+        self.assertEqual(["live"], calls)
+
 
 if __name__ == "__main__":
     unittest.main()

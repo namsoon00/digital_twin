@@ -5891,6 +5891,14 @@ def persisted_flow_lens_snapshot(watchlist_symbols: str = "") -> Dict[str, objec
         return {}
 
 
+def persisted_flow_lens_snapshot_is_fresh(snapshot: Dict[str, object]) -> bool:
+    """Prevent an old monitor projection from satisfying a live refresh."""
+    if not isinstance(snapshot, dict):
+        return False
+    freshness = flow_lens_data_freshness(snapshot.get("generatedAt"), operational_read_settings())
+    return freshness.get("status") == "fresh"
+
+
 def flow_lens_read_model() -> FlowLensReadModel:
     global FLOW_LENS_READ_MODEL
     with FLOW_LENS_READ_MODEL_LOCK:
@@ -5908,6 +5916,7 @@ def flow_lens_read_model() -> FlowLensReadModel:
                 snapshot_provider=refresh_snapshot,
                 persisted_provider=persisted_flow_lens_snapshot,
                 on_refresh=notify_ready,
+                persisted_validator=persisted_flow_lens_snapshot_is_fresh,
             )
         return FLOW_LENS_READ_MODEL
 
@@ -5922,16 +5931,28 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         refresh=refresh,
     )
     if not result.snapshot:
-        return {
+        pending_payload = {
             "generatedAt": now(),
             "dataMode": "pending",
             "readModel": result.metadata(),
             "portfolio": {},
             "tossDecision": {},
         }
+        if detail in {"status", "freshness"}:
+            pending_payload.pop("portfolio", None)
+            pending_payload.pop("tossDecision", None)
+            pending_payload["dataFreshness"] = flow_lens_data_freshness(None, runtime_settings())
+        return pending_payload
     payload = dict(result.snapshot)
     payload["readModel"] = result.metadata()
     payload["dataFreshness"] = flow_lens_data_freshness(payload.get("generatedAt"), runtime_settings())
+    if detail in {"status", "freshness"}:
+        return {
+            "generatedAt": payload.get("generatedAt"),
+            "dataMode": payload.get("dataMode"),
+            "readModel": payload.get("readModel"),
+            "dataFreshness": payload.get("dataFreshness"),
+        }
     try:
         payload["capitalFlow"] = capital_flow_api_payload(query, snapshot=payload)
     except Exception as error:  # noqa: BLE001 - portfolio snapshot remains available when the analytical store is down.

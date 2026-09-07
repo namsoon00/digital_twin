@@ -388,6 +388,11 @@
   var symbolUniverseRefreshLoadedJobId = "";
   var symbolUniverseRefreshNotifiedJobId = "";
   var snapshotPollTimer = null;
+  var snapshotLoadPromise = null;
+  var snapshotLastCheckedAt = 0;
+  var snapshotPollAttempts = 0;
+  var SNAPSHOT_RESUME_CHECK_INTERVAL_MS = 60000;
+  var SNAPSHOT_REFRESH_POLL_LIMIT = 18;
   var scheduledRenderFrame = 0;
   var activeJsonRequests = {};
   var jsonResponseCache = {};
@@ -2070,7 +2075,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260907-investment-case-route-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260907-auto-freshness-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -11881,6 +11886,7 @@
 
   function load(options) {
     options = options || {};
+    if (snapshotLoadPromise) return snapshotLoadPromise;
     state.loading = !state.snapshot;
     state.refreshing = Boolean(state.snapshot);
     state.error = "";
@@ -11890,9 +11896,11 @@
       ? Promise.resolve(staticPreviewSnapshot())
       : requestJson(tossLensPath(options), { key: "flow-lens", timeoutMs: 8000, force: true });
 
-    return loadPromise
+    snapshotLoadPromise = loadPromise
       .then(function (snapshot) {
         var readModel = snapshot && snapshot.readModel && typeof snapshot.readModel === "object" ? snapshot.readModel : {};
+        var previousGeneratedAt = String((state.snapshot || {}).generatedAt || "");
+        snapshotLastCheckedAt = Date.now();
         state.readModel = readModel;
         if (!readModel.ready && readModel.status === "pending") {
           state.error = readModel.error || "";
@@ -11903,32 +11911,114 @@
         state.snapshotFromCache = false;
         state.ontologyStrategyDetailLoaded = snapshotHasFullOntologyDetail(snapshot);
         state.ontologyStrategyDetailError = "";
-        state.error = "";
+        state.error = readModel.error || "";
         writeCachedSnapshot(snapshot);
-        if (options.refresh) {
+        var snapshotChanged = Boolean(previousGeneratedAt && previousGeneratedAt !== String(snapshot.generatedAt || ""));
+        if (snapshotChanged || (options.refresh && !snapshotRefreshInProgress(readModel))) {
           state.dashboardSummary = null;
           state.marketReadModel = null;
           state.portfolioReadModels = {};
           state.operationsHealth = null;
         }
         primeActiveTabData(state.activeTab);
+        if (snapshotRefreshInProgress(readModel)) {
+          scheduleSnapshotPoll();
+        } else {
+          snapshotPollAttempts = 0;
+        }
+        return snapshot;
       })
       .catch(function (error) {
         state.error = error.message;
+        if (snapshotRefreshInProgress(state.readModel)) scheduleSnapshotPoll();
       })
       .finally(function () {
         state.loading = Boolean(!state.snapshot && state.readModel && state.readModel.status === "pending");
-        state.refreshing = Boolean(state.readModel && state.readModel.refreshing);
+        state.refreshing = snapshotRefreshInProgress(state.readModel);
+        snapshotLoadPromise = null;
         render();
       });
+    return snapshotLoadPromise;
+  }
+
+  function snapshotRefreshInProgress(readModel) {
+    var model = readModel && typeof readModel === "object" ? readModel : {};
+    return Boolean(model.refreshing || model.status === "pending");
+  }
+
+  function snapshotFreshnessExpired(snapshot) {
+    snapshot = snapshot || {};
+    if (!snapshot.generatedAt) return true;
+    var age = timestampAgeMinutes(snapshot.generatedAt);
+    var freshness = snapshot.dataFreshness && typeof snapshot.dataFreshness === "object" ? snapshot.dataFreshness : {};
+    var maxAge = Math.max(1, Number(freshness.maxAgeMinutes || settingValue("marketDataMaxAgeMinutes") || settingValue("dataFreshnessDefaultMaxAgeMinutes") || 30));
+    return freshness.status === "stale" || age == null || age > maxAge;
+  }
+
+  function ensureFreshSnapshot(reason, force) {
+    if (isStaticPreviewHost()) {
+      return snapshotLastCheckedAt ? Promise.resolve(state.snapshot) : load({ reason: reason || "static-entry" });
+    }
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve(state.snapshot);
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return Promise.resolve(state.snapshot);
+    var now = Date.now();
+    var recentlyChecked = snapshotLastCheckedAt && now - snapshotLastCheckedAt < SNAPSHOT_RESUME_CHECK_INTERVAL_MS;
+    var shouldForce = Boolean(force || state.snapshotFromCache || (state.snapshot && snapshotFreshnessExpired(state.snapshot)));
+    if (state.snapshot && recentlyChecked && !shouldForce && !snapshotRefreshInProgress(state.readModel)) {
+      return Promise.resolve(state.snapshot);
+    }
+    return load({ refresh: shouldForce, background: Boolean(state.snapshot), reason: reason || "automatic" });
   }
 
   function scheduleSnapshotPoll() {
     if (snapshotPollTimer || isStaticPreviewHost()) return;
+    if (snapshotPollAttempts >= SNAPSHOT_REFRESH_POLL_LIMIT) {
+      state.refreshing = false;
+      state.error = state.error || "최신 데이터 갱신이 지연되고 있습니다. 직전 데이터를 유지합니다.";
+      render();
+      return;
+    }
+    var delay = Math.min(5000, 1400 + snapshotPollAttempts * 250);
     snapshotPollTimer = setTimeout(function () {
       snapshotPollTimer = null;
-      if (!state.snapshot || (state.readModel && state.readModel.status === "pending")) load();
-    }, 1800);
+      if (!snapshotRefreshInProgress(state.readModel)) {
+        snapshotPollAttempts = 0;
+        return;
+      }
+      snapshotPollAttempts += 1;
+      requestJson(tossLensPath({ detail: "status" }), {
+        key: "flow-lens-status",
+        timeoutMs: 5000,
+        force: true,
+        silent: true
+      }).then(function (status) {
+        var readModel = status && status.readModel && typeof status.readModel === "object" ? status.readModel : {};
+        snapshotLastCheckedAt = Date.now();
+        state.readModel = readModel;
+        if (snapshotRefreshInProgress(readModel)) {
+          state.refreshing = true;
+          scheduleSnapshotPoll();
+          return null;
+        }
+        if (readModel.error) {
+          state.refreshing = false;
+          state.error = readModel.error;
+          snapshotPollAttempts = 0;
+          render();
+          return null;
+        }
+        snapshotPollAttempts = 0;
+        return load({ background: true, reason: "refresh-complete" });
+      }).catch(function (error) {
+        if (snapshotPollAttempts >= SNAPSHOT_REFRESH_POLL_LIMIT) {
+          state.refreshing = false;
+          state.error = error.message || "최신 데이터 확인이 지연되고 있습니다.";
+          render();
+          return;
+        }
+        scheduleSnapshotPoll();
+      });
+    }, delay);
   }
 
   function textareaMinimumHeight(field) {
@@ -36419,15 +36509,16 @@
       appShellStatus.online = true;
       showSnackbar("연결이 복구되었습니다. 최신 데이터를 확인합니다.", "success");
       render();
-      if (!state.refreshing) load({ refresh: true });
+      ensureFreshSnapshot("online", true);
     });
     window.addEventListener("offline", function () {
       appShellStatus.online = false;
       render();
     });
     window.addEventListener("popstate", syncTabFromLocation);
-    window.addEventListener("pageshow", function () {
+    window.addEventListener("pageshow", function (event) {
       syncRenderedOverlayPageState();
+      ensureFreshSnapshot(event && event.persisted ? "page-restore" : "page-entry", Boolean(event && event.persisted));
     });
     window.addEventListener("scroll", function () {
       notePageScrollActivity();
@@ -36499,6 +36590,12 @@
     });
   }
 
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") ensureFreshSnapshot("app-resume", false);
+    });
+  }
+
   bindNetworkActivityControls();
   bindDelegatedConsoleActions();
   bindRenderedScrollActivity();
@@ -36515,7 +36612,7 @@
   if (state.workDetailLayer && state.workDetailLayer.type === "notification-job" && state.workDetailLayer.key) {
     loadNotificationJobDetail(state.workDetailLayer.key);
   }
-  var snapshotLoadTask = load();
+  var snapshotLoadTask = ensureFreshSnapshot("initial-entry", false);
   var snapshotPrerequisites = [loadServerSettings(), loadServiceAccounts()];
   Promise.all(snapshotPrerequisites.map(function (task) {
     return task.catch(function () {

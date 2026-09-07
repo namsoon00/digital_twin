@@ -2702,6 +2702,55 @@ def select_target_scoped_manifest_patch(
 
     missing_endpoints: List[str] = []
     incomplete_source_endpoint_scopes: List[str] = []
+    if (
+        bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
+        and not source_graph_complete
+    ):
+        # Target compaction can omit a retained quality-link scope entirely.
+        # The repository will still rebind that active relation when one of
+        # its endpoint scopes changes. A partial graph cannot prove that the
+        # old derived quality endpoint still exists in the replacement scope,
+        # so rebuild the complete source before attempting the write.
+        for scope_id, active_row in active_by_scope.items():
+            if scope_id in incoming or _scope_type(scope_id) != "link":
+                continue
+            if (
+                _clean(active_row.get("scopeFamily"))
+                or scope_family(scope_id)
+            ).lower() != "quality":
+                continue
+            active_dependencies = {
+                _clean(value)
+                for value in active_row.get("dependencyScopeIds") or []
+                if _clean(value)
+            }
+            selected_non_anchor_dependencies = {
+                dependency_id
+                for dependency_id in active_dependencies.intersection(
+                    relation_rebind_root_scope_ids
+                )
+                if (
+                    _clean((incoming.get(dependency_id) or {}).get("scopeFamily"))
+                    or _clean(
+                        (active_by_scope.get(dependency_id) or {}).get("scopeFamily")
+                    )
+                    or scope_family(dependency_id)
+                ).lower() not in {
+                    "state",
+                    "market",
+                    "temporal",
+                    "flow",
+                    "position",
+                }
+            }
+            if not selected_non_anchor_dependencies:
+                continue
+            incomplete_source_endpoint_scopes.extend(
+                selected_non_anchor_dependencies
+            )
+            selection_reasons.setdefault(scope_id, set()).add(
+                "complete-source-required-omitted-active-quality-link"
+            )
     # An authoritative event can assemble a newer in-memory endpoint for a
     # relation that belongs to another fact slot.  The relation scope itself
     # may remain byte-for-byte unchanged, so the ordinary changed-scope list

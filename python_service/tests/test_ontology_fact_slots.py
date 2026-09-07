@@ -1539,6 +1539,20 @@ class OntologyFactSlotTests(unittest.TestCase):
             fact_slot_plan=fact_slot_plan,
             source_graph_complete=False,
         )
+        compact_partial_graph = deepcopy(graph)
+        compact_partial_graph.relations = []
+        compact_partial_graph.worldview["scopePlan"] = [
+            item
+            for item in compact_partial_graph.worldview["scopePlan"]
+            if item["scopeId"] != quality_link_scope
+        ]
+        compact_partial = select_target_scoped_manifest_patch(
+            compact_partial_graph,
+            active,
+            ["005380"],
+            fact_slot_plan=fact_slot_plan,
+            source_graph_complete=False,
+        )
 
         self.assertEqual("ready", complete["status"])
         self.assertEqual(
@@ -1558,6 +1572,14 @@ class OntologyFactSlotTests(unittest.TestCase):
             partial["status"],
         )
         self.assertIn(evidence_scope, partial["missingEndpointScopeIds"])
+        self.assertEqual(
+            "skipped-incomplete-link-endpoint-source",
+            compact_partial["status"],
+        )
+        self.assertIn(
+            evidence_scope,
+            compact_partial["missingEndpointScopeIds"],
+        )
 
     def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):
         state_scope = "symbol:035720:market:bucket:00"

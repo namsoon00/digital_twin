@@ -2757,6 +2757,18 @@ def select_target_scoped_manifest_patch(
                 for value in row.get("dependencyScopeIds") or []
                 if _clean(value)
             }
+            selected_dependencies = dependencies.intersection(
+                relation_rebind_root_scope_ids
+            )
+            selected_non_anchor_dependencies = {
+                dependency_id
+                for dependency_id in selected_dependencies
+                if (
+                    _clean((incoming.get(dependency_id) or {}).get("scopeFamily"))
+                    or _clean((active_by_scope.get(dependency_id) or {}).get("scopeFamily"))
+                    or scope_family(dependency_id)
+                ).lower() not in {"state", "market", "temporal", "flow", "position"}
+            }
             if (
                 bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
                 and (
@@ -2766,12 +2778,11 @@ def select_target_scoped_manifest_patch(
             ):
                 if (
                     not source_graph_complete
-                    and assertion_changed
                     and (
                         _clean(row.get("scopeFamily"))
                         or scope_family(scope_id)
                     ).lower() == "quality"
-                    and dependencies.intersection(relation_rebind_root_scope_ids)
+                    and selected_non_anchor_dependencies
                 ):
                     # A partial graph cannot prove which active quality
                     # relations disappeared with a changed source fact. Ask
@@ -2779,7 +2790,7 @@ def select_target_scoped_manifest_patch(
                     # complete-source repair instead of attempting a rebind
                     # against potentially absent evidence endpoints.
                     incomplete_source_endpoint_scopes.extend(
-                        dependencies.intersection(relation_rebind_root_scope_ids)
+                        selected_non_anchor_dependencies
                     )
                     selection_reasons.setdefault(scope_id, set()).add(
                         "complete-source-required-derived-quality-replacement"

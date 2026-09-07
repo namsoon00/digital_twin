@@ -1520,8 +1520,20 @@ class OntologyFactSlotTests(unittest.TestCase):
             fact_slot_plan=fact_slot_plan,
             source_graph_complete=True,
         )
+        partial_graph = deepcopy(graph)
+        partial_quality_scope = next(
+            item
+            for item in partial_graph.worldview["scopePlan"]
+            if item["scopeId"] == quality_link_scope
+        )
+        partial_quality_scope.update({
+            "baseFingerprint": "quality-link-active",
+            "fingerprint": "quality-link-active",
+            "generationId": "quality-link-active",
+            "relationCount": 2,
+        })
         partial = select_target_scoped_manifest_patch(
-            graph,
+            partial_graph,
             active,
             ["005380"],
             fact_slot_plan=fact_slot_plan,

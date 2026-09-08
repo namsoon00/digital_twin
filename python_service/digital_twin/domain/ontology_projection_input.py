@@ -665,6 +665,7 @@ def _compact_corporate_actions(value: object) -> Dict[str, object]:
         key=lambda item: (
             1 if str(item[1].get("eventLifecycleState") or "") in {"upcoming", "active"} else 0,
             event_date(item[1]),
+            item[0],
         ),
         reverse=True,
     )

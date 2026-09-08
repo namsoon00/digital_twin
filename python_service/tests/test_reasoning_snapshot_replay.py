@@ -124,6 +124,36 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertIsNone(event)
         self.assertEqual(corporate_action, reasoning_snapshot.external_signals["corporateActions"]["AAPL"])
 
+    def test_corporate_action_map_order_cannot_create_a_reasoning_delta(self):
+        event_ids = ["dividend:AAPL:" + str(index).zfill(2) for index in range(24)]
+        actions = {
+            event_id: {
+                "eventId": event_id,
+                "eventType": "dividend",
+                "recordDate": "20260730",
+                "eventLifecycleState": "completed",
+                "cashDividendPerCommonShare": 1.0,
+            }
+            for event_id in event_ids
+        }
+        previous = monitor_state("2026-07-29T00:01:00Z")
+        previous["externalSignals"] = {
+            "corporateActions": {"AAPL": dict(reversed(list(actions.items())))},
+        }
+        previous = account_snapshot_from_monitor_state(previous).to_monitor_state()
+        persisted = monitor_state("2026-07-29T00:02:00Z")
+        persisted["externalSignals"] = {
+            "corporateActions": {"AAPL": actions},
+        }
+
+        reasoning_snapshot = reasoning_snapshot_for_persisted_boundary(
+            account_snapshot_from_monitor_state(persisted),
+            persisted,
+        )
+        event = verified_monitor_snapshot_reasoning_event(reasoning_snapshot, previous)
+
+        self.assertIsNone(event)
+
     def test_background_workers_ignore_rollback_candidate_backlog(self):
         class Registry:
             def control(self):

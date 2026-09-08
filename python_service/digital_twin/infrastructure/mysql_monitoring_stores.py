@@ -150,9 +150,16 @@ def reasoning_snapshot_for_persisted_boundary(
     though two consecutive durable snapshots were identical.
     """
 
-    persisted = account_snapshot_from_monitor_state(
-        copy.deepcopy(persisted_state) if isinstance(persisted_state, dict) else {}
+    # ``monitor_snapshots.payload_json`` is written with sorted object keys.
+    # Canonicalize the in-memory copy the same way before running the delta
+    # gate; otherwise a bounded map can select different rows solely because a
+    # provider returned the same object in another insertion order.
+    canonical_state = (
+        json.loads(json_dumps(persisted_state))
+        if isinstance(persisted_state, dict)
+        else {}
     )
+    persisted = account_snapshot_from_monitor_state(canonical_state)
     return persisted or snapshot
 
 

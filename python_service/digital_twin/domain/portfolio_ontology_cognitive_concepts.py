@@ -3,6 +3,7 @@ from typing import Dict, Iterable, List
 from .ontology_contracts import PortfolioOntology, entity_id
 from .ontology_schema import add_entity, add_relation
 from .hypothesis_review import outcome_assessments_from_episodes
+from .hypothesis_outcome_contract import outcome_contract_completeness
 from .decision_performance import (
     action_adjusted_return,
     action_return_state,
@@ -940,6 +941,18 @@ def add_hypothesis_calibration_concepts(
         symbol = str(episode.get("symbol") or "").upper().strip()
         if not symbol:
             continue
+        facts = (
+            episode.get("factsAtDecision")
+            if isinstance(episode.get("factsAtDecision"), dict)
+            else {}
+        )
+        episode_contract = (
+            facts.get("hypothesisOutcomeContract")
+            if isinstance(facts.get("hypothesisOutcomeContract"), dict)
+            else {}
+        )
+        if not outcome_contract_completeness(episode_contract).get("complete"):
+            continue
         hypothesis_set = episode.get("hypothesisSet") if isinstance(episode.get("hypothesisSet"), dict) else {}
         selected_id = str(episode.get("selectedHypothesisId") or "")
         selected = next((
@@ -951,6 +964,14 @@ def add_hypothesis_calibration_concepts(
             if isinstance(item, dict)
             and isinstance(item.get("payload"), dict)
             and str((item.get("payload") or {}).get("calibrationEligibility") or "") == "eligible"
+            and outcome_contract_completeness(
+                (item.get("payload") or {}).get("hypothesisOutcomeContract")
+                if isinstance(
+                    (item.get("payload") or {}).get("hypothesisOutcomeContract"),
+                    dict,
+                )
+                else episode_contract
+            ).get("complete")
         ]
         if not selected or not outcomes:
             continue

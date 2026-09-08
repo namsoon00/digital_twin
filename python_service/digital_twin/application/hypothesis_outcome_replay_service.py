@@ -2,6 +2,7 @@
 
 from typing import Dict, Iterable, Mapping
 
+from ..domain.hypothesis_outcome_contract import outcome_contract_completeness
 from ..domain.investment_brain import parse_investment_timestamp
 
 
@@ -21,13 +22,29 @@ class HypothesisOutcomeReplayService:
         self.quality_review_service = quality_review_service
 
     def run(self, account_id: str = "", symbol: str = "", limit: int = 500) -> Dict[str, object]:
-        if not self.decision_episode_store or not hasattr(self.decision_episode_store, "list"):
+        outcome_loader = getattr(self.decision_episode_store, "performance_episodes", None)
+        recent_loader = getattr(self.decision_episode_store, "list", None)
+        if not callable(outcome_loader) and not callable(recent_loader):
             return {
                 "status": "unavailable",
                 "reason": "결정 에피소드 저장소가 구성되지 않았습니다.",
                 "mutated": False,
             }
-        rows = self.decision_episode_store.list(account_id=account_id, symbol=symbol, limit=max(1, min(2000, int(limit or 500))))
+        bounded_limit = max(1, min(2000, int(limit or 500)))
+        if callable(outcome_loader):
+            rows = outcome_loader(
+                account_id=account_id,
+                symbol=symbol,
+                limit=bounded_limit,
+            )
+            history_selection = "outcome-led-bounded-history"
+        else:
+            rows = recent_loader(
+                account_id=account_id,
+                symbol=symbol,
+                limit=bounded_limit,
+            )
+            history_selection = "recent-decision-fallback"
         episodes = [as_dict(item) for item in rows]
         integrity = self.integrity(episodes)
         # Episode integrity can scan a broad history, while graph-backed
@@ -50,6 +67,7 @@ class HypothesisOutcomeReplayService:
             "decisionEligibility": "historical-replay-only",
             "accountId": account_id,
             "symbol": str(symbol or "").upper(),
+            "historySelection": history_selection,
             "episodeCount": len(episodes),
             "outcomeCount": observed,
             "integrity": integrity,
@@ -67,21 +85,38 @@ class HypothesisOutcomeReplayService:
 
         hypotheses: Dict[str, Dict[str, object]] = {}
         rules: Dict[str, Dict[str, object]] = {}
+        observed_outcome_count = 0
+        eligible_outcome_count = 0
+        excluded_outcome_count = 0
+        incomplete_contract_outcome_count = 0
 
-        def observe(bucket: Dict[str, Dict[str, object]], key: str, status: str, eligible: bool):
+        def observe(
+            bucket: Dict[str, Dict[str, object]],
+            key: str,
+            status: str,
+            eligible: bool,
+            stored_eligible: bool,
+        ):
             if not key:
                 return
             row = bucket.setdefault(key, {
                 "id": key,
                 "observedCount": 0,
+                "storedEligibleCount": 0,
                 "eligibleCount": 0,
+                "excludedCount": 0,
                 "corroboratedCount": 0,
                 "contradictedCount": 0,
                 "inconclusiveCount": 0,
             })
             row["observedCount"] += 1
+            if stored_eligible:
+                row["storedEligibleCount"] += 1
             if eligible:
                 row["eligibleCount"] += 1
+            else:
+                row["excludedCount"] += 1
+                return
             if "corroborated" in status:
                 row["corroboratedCount"] += 1
             elif "contradicted" in status:
@@ -91,22 +126,54 @@ class HypothesisOutcomeReplayService:
 
         for raw in episodes or []:
             episode = as_dict(raw)
-            hypothesis_id = str(episode.get("selectedHypothesisId") or "").strip()
             facts = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), Mapping) else {}
-            contract = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), Mapping) else {}
-            rule_ids = [str(item or "").strip() for item in contract.get("sourceRuleIds") or [] if str(item or "").strip()]
+            episode_contract = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), Mapping) else {}
             for raw_outcome in episode.get("outcomes") or []:
+                observed_outcome_count += 1
                 outcome = as_dict(raw_outcome)
                 payload = outcome.get("payload") if isinstance(outcome.get("payload"), Mapping) else {}
+                contract = (
+                    payload.get("hypothesisOutcomeContract")
+                    if isinstance(payload.get("hypothesisOutcomeContract"), Mapping)
+                    else episode_contract
+                )
+                contract_complete = bool(
+                    outcome_contract_completeness(contract).get("complete")
+                )
+                hypothesis_id = str(
+                    payload.get("selectedHypothesisId")
+                    or episode.get("selectedHypothesisId")
+                    or ""
+                ).strip()
+                rule_ids = [
+                    str(item or "").strip()
+                    for item in contract.get("sourceRuleIds") or []
+                    if str(item or "").strip()
+                ]
                 status = str(
                     outcome.get("selectedHypothesisStatus")
                     or payload.get("selectedHypothesisStatus")
                     or "inconclusive"
                 ).lower()
-                eligible = str(payload.get("calibrationEligibility") or "") == "eligible"
-                observe(hypotheses, hypothesis_id, status, eligible)
+                stored_eligible = str(
+                    payload.get("calibrationEligibility") or ""
+                ) == "eligible"
+                eligible = stored_eligible and contract_complete
+                if eligible:
+                    eligible_outcome_count += 1
+                else:
+                    excluded_outcome_count += 1
+                if not contract_complete:
+                    incomplete_contract_outcome_count += 1
+                observe(
+                    hypotheses,
+                    hypothesis_id,
+                    status,
+                    eligible,
+                    stored_eligible,
+                )
                 for rule_id in rule_ids:
-                    observe(rules, rule_id, status, eligible)
+                    observe(rules, rule_id, status, eligible, stored_eligible)
 
         def rows(bucket: Dict[str, Dict[str, object]]):
             values = []
@@ -136,6 +203,10 @@ class HypothesisOutcomeReplayService:
                 "ruleCount": len(rules),
                 "observedHypothesisCount": len(hypothesis_rows),
                 "observedRuleCount": len(rule_rows),
+                "observedOutcomeCount": observed_outcome_count,
+                "eligibleOutcomeCount": eligible_outcome_count,
+                "excludedOutcomeCount": excluded_outcome_count,
+                "incompleteContractOutcomeCount": incomplete_contract_outcome_count,
                 "thresholdPolicyApplied": False,
                 "automaticDeployment": False,
             },
@@ -149,6 +220,10 @@ class HypothesisOutcomeReplayService:
         legacy_contract_count = 0
         structured_contract_count = 0
         fingerprint_contract_count = 0
+        complete_contract_episode_count = 0
+        complete_contract_outcome_count = 0
+        incomplete_contract_outcome_count = 0
+        stored_eligible_count = 0
         legacy_directional_outcome_count = 0
         criterion_data_gap_outcome_count = 0
         duplicate_keys = []
@@ -168,6 +243,8 @@ class HypothesisOutcomeReplayService:
                     structured_contract_count += 1
                 if contract.get("contractFingerprint"):
                     fingerprint_contract_count += 1
+                if outcome_contract_completeness(contract).get("complete"):
+                    complete_contract_episode_count += 1
             else:
                 legacy_contract_count += 1
             decided_at = parse_investment_timestamp(episode.get("decidedAt"))
@@ -184,6 +261,18 @@ class HypothesisOutcomeReplayService:
                 if decided_at and observed_at and observed_at < decided_at and episode_id not in invalid_time_episode_ids:
                     invalid_time_episode_ids.append(episode_id)
                 eligibility = str(payload.get("calibrationEligibility") or "")
+                outcome_contract = (
+                    payload.get("hypothesisOutcomeContract")
+                    if isinstance(payload.get("hypothesisOutcomeContract"), Mapping)
+                    else contract
+                )
+                contract_complete = bool(
+                    outcome_contract_completeness(outcome_contract).get("complete")
+                )
+                if contract_complete:
+                    complete_contract_outcome_count += 1
+                else:
+                    incomplete_contract_outcome_count += 1
                 if str(payload.get("mode") or "legacy-directional-fallback") == "legacy-directional-fallback":
                     legacy_directional_outcome_count += 1
                 if payload.get("missingRequiredMetricIds"):
@@ -198,20 +287,30 @@ class HypothesisOutcomeReplayService:
                     duplicate_independence_keys.append(independence_horizon_key)
                 seen_independence.add(independence_horizon_key)
                 if eligibility == "eligible":
+                    stored_eligible_count += 1
+                if eligibility == "eligible" and contract_complete:
                     eligible_count += 1
                 else:
                     excluded_count += 1
-                    reason = eligibility or "legacy-eligibility-not-recorded"
+                    reason = (
+                        "excluded-incomplete-prediction-contract"
+                        if not contract_complete
+                        else eligibility or "legacy-eligibility-not-recorded"
+                    )
                     exclusion_reasons[reason] = int(exclusion_reasons.get(reason) or 0) + 1
         return {
             "outcomeCount": outcome_count,
             "eligibleOutcomeCount": eligible_count,
+            "storedEligibleOutcomeCount": stored_eligible_count,
             "excludedOutcomeCount": excluded_count,
             "exclusionReasons": exclusion_reasons,
             "contractSnapshotEpisodeCount": contract_snapshot_count,
             "legacyContractEpisodeCount": legacy_contract_count,
             "structuredContractEpisodeCount": structured_contract_count,
             "fingerprintedContractEpisodeCount": fingerprint_contract_count,
+            "completeContractEpisodeCount": complete_contract_episode_count,
+            "completeContractOutcomeCount": complete_contract_outcome_count,
+            "incompleteContractOutcomeCount": incomplete_contract_outcome_count,
             "legacyDirectionalOutcomeCount": legacy_directional_outcome_count,
             "criterionDataGapOutcomeCount": criterion_data_gap_outcome_count,
             "duplicateEpisodeHorizonKeys": duplicate_keys[:100],
@@ -220,8 +319,8 @@ class HypothesisOutcomeReplayService:
             "scopeSeparation": "market-and-account-lifecycles-reviewed-separately",
             "passed": not duplicate_keys and not invalid_time_episode_ids,
             "migrationState": (
-                "structured-contract-ready"
-                if contract_snapshot_count and structured_contract_count == contract_snapshot_count
+                "complete-contract-ready"
+                if contract_snapshot_count and complete_contract_episode_count == contract_snapshot_count
                 else "legacy-contracts-retained"
             ),
         }

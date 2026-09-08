@@ -41,6 +41,7 @@ TEMPORAL_AI_KEYS = (
     "smartMoneyTradingValueRatioPct", "smartMoneyPositiveSessionRatio",
     "smartMoneyNegativeSessionRatio", "smartMoneyFlowPersistenceRatio",
     "smartMoneyFlowAcceleration", "smartMoneyFlowDirection", "smartMoneyFlowBasis",
+    "eventCount", "riskEventCount", "supportEventCount",
 )
 
 

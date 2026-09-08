@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -112,8 +113,8 @@ class OntologyRuleBoxTests(unittest.TestCase):
         executable = default_graph_inference_rules()
 
         self.assertEqual([], rulebox_semantic_violations(rules))
-        self.assertEqual(109, sum(item.enabled for item in executable))
-        self.assertEqual(63, sum(
+        self.assertEqual(108, sum(item.enabled for item in executable))
+        self.assertEqual(60, sum(
             item.resolved_knowledge_basis.rule_kind == "predictive-hypothesis"
             and item.resolved_knowledge_basis.migration_disposition == "model-signal-production"
             for item in executable
@@ -122,7 +123,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             item for item in executable
             if item.resolved_knowledge_basis.migration_disposition == "awaiting-governed-model-scorer"
         ]
-        self.assertEqual(11, len(awaiting_flow_model))
+        self.assertEqual(12, len(awaiting_flow_model))
         self.assertTrue(all(not item.enabled for item in awaiting_flow_model))
         disclosure = rules_by_id["graph.disclosure.event_risk.v1"]
         self.assertEqual("context-observation", disclosure.resolved_knowledge_basis.rule_kind)
@@ -131,6 +132,7 @@ class OntologyRuleBoxTests(unittest.TestCase):
             not derivation.candidate_action
             for derivation in disclosure.derivations
         ))
+
         self.assertEqual(
             {
                 "group": ["dartDisclosures", "secFilings"],
@@ -211,6 +213,27 @@ class OntologyRuleBoxTests(unittest.TestCase):
         invalid_rules[0]["conditions"][0].pop("evidence_group_key", None)
         with self.assertRaisesRegex(ValueError, "evidence_group_key"):
             rulebox_rules_from_payload({"rules": invalid_rules}, strict_governance=True)
+
+    def test_predictive_rule_rejects_a_model_signal_from_another_thesis_family(self):
+        rule = next(
+            item for item in default_graph_inference_rules()
+            if item.rule_id == "graph.price.rebound.failure.v1"
+        )
+        mismatched = replace(
+            rule,
+            knowledge_basis=replace(
+                rule.resolved_knowledge_basis,
+                thesis_family="trend-break",
+            ),
+        )
+
+        violations = rulebox_semantic_violations([mismatched])
+
+        self.assertTrue(any(
+            "model signal thesis family failed-recovery does not match claim thesis family trend-break"
+            in item
+            for item in violations
+        ))
 
     def test_model_input_routing_contract_survives_rulebox_graph_round_trip(self):
         original = next(

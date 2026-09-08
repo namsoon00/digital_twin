@@ -41,6 +41,19 @@ def _stable_id(*parts: object) -> str:
     return "decision-synthesis:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
 
+def _action_is_admissible(
+    action: object,
+    allowed_actions: Iterable[str],
+    blocked_actions: Iterable[str],
+) -> bool:
+    candidate = str(action or "").upper().strip()
+    if candidate in {"", "UNSPECIFIED", "NO_ACTION"}:
+        return False
+    allowed = set(allowed_actions or ())
+    blocked = set(blocked_actions or ())
+    return candidate not in blocked and (not allowed or candidate in allowed)
+
+
 def _hypotheses(relation_context: Mapping[str, object]) -> Tuple[Dict[str, object], ...]:
     relation = _mapping(relation_context)
     brain = _mapping(relation.get("investmentBrain"))
@@ -267,15 +280,27 @@ def decision_synthesis_from_relation_context(
         or ""
     ).lower().strip()
     decision_disposition = str(envelope.get("decisionDisposition") or "").lower().strip()
-    comparison_required = bool(
+    allowed_actions = _texts(
+        relation.get("allowedActions")
+        or decision.get("allowedActions")
+        or envelope.get("allowedActions"),
+        uppercase=True,
+    )
+    blocked_actions = _texts(
+        relation.get("blockedActions")
+        or decision.get("blockedActions")
+        or envelope.get("blockedActions"),
+        uppercase=True,
+    )
+    overlap = tuple(action for action in allowed_actions if action in set(blocked_actions))
+    allowed_actions = tuple(action for action in allowed_actions if action not in set(blocked_actions))
+    raw_comparison_required = bool(
         opinion_assessment.get("actionConflict")
         and len(_texts(opinion_assessment.get("candidateActions"), uppercase=True)) > 1
     )
-    if comparison_required:
-        selected_decision_effect = "support"
     action_authority = (
         "originate"
-        if (selected_decision_effect == "support" or comparison_required)
+        if (selected_decision_effect == "support" or raw_comparison_required)
         and bool(envelope.get("investmentJudgementAvailable", True))
         else "modify"
         if selected_decision_effect in {"constrain", "defer", "block"}
@@ -328,12 +353,16 @@ def decision_synthesis_from_relation_context(
                 hypothesis,
                 bool(assessment.get("eligible")),
                 bool(assessment.get("executionEligible")),
+                _action_is_admissible(action, allowed_actions, blocked_actions),
             ))
         for warning in assessment.get("qualificationWarnings") or []:
             if warning not in qualification_reasons:
                 qualification_reasons.append(str(warning))
         (eligible_ids if assessment.get("eligible") else reference_ids).append(hypothesis_id)
-        if assessment.get("executionEligible"):
+        if assessment.get("executionEligible") and any(
+            _action_is_admissible(action, allowed_actions, blocked_actions)
+            for action in actions
+        ):
             execution_eligible_ids.append(hypothesis_id)
 
     selected_path_eligible = any(
@@ -347,13 +376,21 @@ def decision_synthesis_from_relation_context(
                 or []
             )
         }
-        for _action, hypothesis, eligible, _execution_eligible in hypothesis_paths
+        for _action, hypothesis, eligible, _execution_eligible, admissible in hypothesis_paths
+        if admissible
     )
     eligible_comparison_paths = {
         action
-        for action, _hypothesis, eligible, _execution_eligible in hypothesis_paths
-        if eligible and action not in {"", "UNSPECIFIED", "NO_ACTION"}
+        for action, _hypothesis, eligible, _execution_eligible, admissible in hypothesis_paths
+        if eligible and admissible
     }
+    comparison_required = bool(
+        raw_comparison_required
+        and len(eligible_comparison_paths) > 1
+        and execution_eligible_ids
+    )
+    if comparison_required:
+        selected_decision_effect = "support"
     selected_path_execution_eligible = any(
         execution_eligible
         and selected_rule_id
@@ -365,12 +402,14 @@ def decision_synthesis_from_relation_context(
                 or []
             )
         }
-        for _action, hypothesis, _eligible, execution_eligible in hypothesis_paths
+        for _action, hypothesis, _eligible, execution_eligible, admissible in hypothesis_paths
+        if admissible
     )
     if not selected_rule_id and comparison_required:
         selected_path_execution_eligible = any(
             execution_eligible
-            for _action, _hypothesis, _eligible, execution_eligible in hypothesis_paths
+            for _action, _hypothesis, _eligible, execution_eligible, admissible in hypothesis_paths
+            if admissible
         )
     if (
         action_authority == "originate"
@@ -382,7 +421,7 @@ def decision_synthesis_from_relation_context(
         execution_action = "NO_ACTION"
 
     alternatives = []
-    for action, hypothesis, eligible, execution_eligible in sorted(
+    for action, hypothesis, eligible, execution_eligible, admissible in sorted(
         hypothesis_paths,
         key=lambda item: (str(item[0]), str(item[1].get("hypothesisId") or item[1].get("hypothesis_id") or "")),
     ):
@@ -404,8 +443,8 @@ def decision_synthesis_from_relation_context(
             counter_evidence_ids=counter_evidence_ids,
             evidence_conflict_ids=evidence_conflicts,
             invalidation_conditions=_texts(hypothesis.get("invalidationConditions") or hypothesis.get("invalidation_conditions")),
-            decision_eligible=eligible and not evidence_conflicts,
-            execution_eligible=execution_eligible and not evidence_conflicts,
+            decision_eligible=eligible and admissible and not evidence_conflicts,
+            execution_eligible=execution_eligible and admissible and not evidence_conflicts,
         ))
 
     symbol = str(subject.get("symbol") or relation.get("symbol") or "").upper().strip()
@@ -416,20 +455,6 @@ def decision_synthesis_from_relation_context(
         relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId") or ""
     )
     traces = [item for item in graph.get("traces") or [] if isinstance(item, Mapping)]
-    allowed_actions = _texts(
-        relation.get("allowedActions")
-        or decision.get("allowedActions")
-        or envelope.get("allowedActions"),
-        uppercase=True,
-    )
-    blocked_actions = _texts(
-        relation.get("blockedActions")
-        or decision.get("blockedActions")
-        or envelope.get("blockedActions"),
-        uppercase=True,
-    )
-    overlap = tuple(action for action in allowed_actions if action in set(blocked_actions))
-    allowed_actions = tuple(action for action in allowed_actions if action not in set(blocked_actions))
     candidate_contract_conflict = bool(
         investment_view_action
         and (
@@ -479,6 +504,15 @@ def decision_synthesis_from_relation_context(
         investment_view_action=investment_view_action,
         comparison_required=comparison_required,
         data_gaps=data_gaps,
+    )
+    ai_state = (
+        "BLOCKED"
+        if judgement_blocked
+        else "JUDGEMENT_READY"
+        if disposition_code in {"ACTIONABLE_DECISION", "HYPOTHESIS_COMPARISON_REQUIRED"}
+        else "INTERPRETATION_READY"
+        if disposition_code == "CONTEXT_OBSERVATION"
+        else "RESEARCH_ONLY"
     )
     return DecisionSynthesis(
         synthesis_id=_stable_id(
@@ -553,7 +587,7 @@ def decision_synthesis_from_relation_context(
             if investment_view_action
             else "NOT_APPLICABLE"
         ),
-        ai_state="BLOCKED" if judgement_blocked else ("INTERPRETATION_READY" if no_eligible_thesis else "JUDGEMENT_READY"),
+        ai_state=ai_state,
     )
 
 

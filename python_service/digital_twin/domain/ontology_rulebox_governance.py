@@ -37,6 +37,7 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
         knowledge_basis = rule.resolved_knowledge_basis
         violations.extend(knowledge_basis_violations(knowledge_basis, rule_id))
         violations.extend(rule_claim_contract_violations(rule.resolved_claim_contract, rule_id))
+        violations.extend(rule_model_signal_family_violations(rule))
         if not str(rule.hypothesis_family_key or "").strip():
             violations.append(rule_id + ": hypothesis_family_key is required")
         lifecycle = rule.resolved_hypothesis_lifecycle()
@@ -101,6 +102,38 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
         if len(rule_ids) > 1:
             violations.append("duplicate enabled rule conditions: " + ", ".join(sorted(rule_ids)))
     return sorted(set(violations))
+
+
+def rule_model_signal_family_violations(rule: GraphInferenceRule) -> List[str]:
+    """Reject model evidence that proves a different hypothesis family."""
+
+    basis = rule.resolved_knowledge_basis
+    if basis.rule_kind != "predictive-hypothesis":
+        return []
+
+    # The model release catalog consumes RuleBox contracts as well, so keep
+    # these imports local and avoid a module initialization cycle.
+    from .statistical_signals.registry import signal_hypothesis_family
+    from .statistical_signals.rule_contracts import rule_statistical_signal_contract
+
+    rule_id = str(rule.rule_id or "").strip() or "<missing-rule-id>"
+    signal_types = list(rule_statistical_signal_contract(rule).get("signalTypes") or [])
+    if not signal_types:
+        return [rule_id + ": predictive rule has no governed model signal type"]
+    signal_families = sorted({
+        signal_hypothesis_family(signal_type)
+        for signal_type in signal_types
+        if signal_hypothesis_family(signal_type)
+    })
+    if len(signal_families) != 1 or signal_families[0] != basis.thesis_family:
+        return [
+            rule_id
+            + ": model signal thesis family "
+            + (",".join(signal_families) or "<unmapped>")
+            + " does not match claim thesis family "
+            + (basis.thesis_family or "<missing>")
+        ]
+    return []
 
 
 def validate_rulebox_semantics(rules: Iterable[GraphInferenceRule]) -> None:

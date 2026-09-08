@@ -15,7 +15,7 @@ DEFAULT_OUTCOME_HORIZON_MINUTES = (60, 1440, 10080)
 DEFAULT_MINIMUM_INDEPENDENT_EPISODES = 3
 DEFAULT_MAXIMUM_OBSERVATION_DELAY_MINUTES = 180
 DEFAULT_REQUIRED_OBSERVATION_DOMAINS = ("quote",)
-HYPOTHESIS_OUTCOME_CONTRACT_VERSION = "rulebox-hypothesis-outcome-contract-v2"
+HYPOTHESIS_OUTCOME_CONTRACT_VERSION = "rulebox-hypothesis-outcome-contract-v3"
 SUPPORTED_OBSERVATION_DOMAINS = (
     "quote",
     "trend",
@@ -355,6 +355,25 @@ def resolved_outcome_contract(
     ).to_dict()
 
 
+def uncovered_outcome_horizons(contract: HypothesisOutcomeContract) -> List[int]:
+    """Return scheduled horizons that have no directional evaluation rule."""
+
+    horizons = set(contract.outcome_horizon_minutes or [])
+    directional = [
+        criterion
+        for criterion in contract.criteria or []
+        if criterion.required and criterion.role in {"result", "invalidation"}
+    ]
+    if any(int(criterion.horizon_minutes or 0) == 0 for criterion in directional):
+        return []
+    covered = {
+        int(criterion.horizon_minutes or 0)
+        for criterion in directional
+        if int(criterion.horizon_minutes or 0) > 0
+    }
+    return sorted(horizons - covered)
+
+
 def outcome_contract_completeness(value: Mapping[str, object] = None) -> Dict[str, object]:
     """Validate an authored prediction contract without applying fallbacks."""
 
@@ -367,6 +386,8 @@ def outcome_contract_completeness(value: Mapping[str, object] = None) -> Dict[st
         missing.append("contract-version")
     if not text(source.get("contractFingerprint")):
         missing.append("contract-fingerprint")
+    elif text(source.get("contractFingerprint")) != outcome_contract_fingerprint(source):
+        missing.append("contract-fingerprint-mismatch")
     if not text(source.get("selectedHypothesisId")):
         missing.append("selected-hypothesis")
     if not unique_strings(list_values(source.get("sourceRuleIds"))):
@@ -390,6 +411,9 @@ def outcome_contract_completeness(value: Mapping[str, object] = None) -> Dict[st
     ]
     if not directional:
         missing.append("directional-result-or-invalidation-criterion")
+    uncovered_horizons = uncovered_outcome_horizons(parsed)
+    if directional and uncovered_horizons:
+        missing.append("criterion-horizon-coverage")
     for field_name, key in [
         ("prediction-target", "predictionTarget"),
         ("expected-direction", "expectedDirection"),
@@ -403,6 +427,7 @@ def outcome_contract_completeness(value: Mapping[str, object] = None) -> Dict[st
         "missing": missing,
         "criteriaCount": len(parsed.criteria),
         "directionalCriterionCount": len(directional),
+        "uncoveredOutcomeHorizonMinutes": uncovered_horizons,
     }
 
 

@@ -8,6 +8,8 @@ from digital_twin.domain.hypothesis_review import (
     lifecycle_review_item,
     outcome_assessment_for_lifecycle,
 )
+from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
+from digital_twin.domain.hypothesis_quality_review import quality_review_for_item
 from digital_twin.domain.notification_ai import notification_ai_prompt_context
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_ai_gate_validation import build_notification_ai_gate_prompt
@@ -22,12 +24,41 @@ MARKET_ID = "market:AAPL:trend-recovery"
 
 def episode(episode_id, account_id, status, eligible=True, horizon_minutes=60, market_independence_key=""):
     selected_id = "hypothesis:" + episode_id
+    contract = {
+        "contractVersion": "rulebox-hypothesis-outcome-contract-v3",
+        "criteriaOrigin": "rulebox",
+        "selectedHypothesisId": selected_id,
+        "sourceRuleIds": ["graph.aapl.trend-recovery.v1"],
+        "inferenceGenerationId": "generation:" + episode_id,
+        "outcomeHorizonMinutes": [horizon_minutes],
+        "requiredObservationDomains": ["quote"],
+        "minimumIndependentEpisodes": 2,
+        "maximumObservationDelayMinutes": 180,
+        "predictionTarget": "instrument-return",
+        "expectedDirection": "support",
+        "expectedOutcome": "positive material return",
+        "outcomeMetric": "instrumentReturnPct",
+        "falsificationContract": "negative material return invalidates support",
+        "criteria": [{
+            "criterionId": "support-result",
+            "label": "positive return",
+            "role": "result",
+            "metric": "instrumentReturnPct",
+            "operator": ">=",
+            "threshold": 0.5,
+            "horizonMinutes": horizon_minutes,
+            "required": True,
+            "requiredObservationDomains": ["quote"],
+        }],
+    }
+    contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
     return {
         "episodeId": episode_id,
         "accountId": account_id,
         "symbol": "AAPL",
         "subjectName": "Apple",
         "selectedHypothesisId": selected_id,
+        "factsAtDecision": {"hypothesisOutcomeContract": contract},
         "hypothesisSet": {
             "hypotheses": [{
                 "hypothesisId": selected_id,
@@ -199,6 +230,32 @@ class HypothesisReviewTests(unittest.TestCase):
         self.assertEqual(1, assessment["sampleCount"])
         self.assertEqual(2, assessment["matchedEpisodeCount"])
         self.assertEqual("insufficient-sample", assessment["outcomeState"])
+
+    def test_stored_eligible_outcome_with_incomplete_contract_is_excluded(self):
+        incomplete = deepcopy(self.account_one)
+        incomplete["factsAtDecision"]["hypothesisOutcomeContract"] = {
+            "sourceRuleIds": ["graph.aapl.trend-recovery.v1"],
+        }
+
+        assessment = outcome_assessment_for_lifecycle(
+            account_lifecycle(),
+            [incomplete],
+            minimum_samples=1,
+        )
+
+        self.assertEqual(0, assessment["sampleCount"])
+        self.assertEqual(1, assessment["excludedOutcomeCount"])
+        self.assertEqual(
+            1,
+            assessment["excludedOutcomeReasons"]["excluded-incomplete-prediction-contract"],
+        )
+        self.assertIn("contract-version", assessment["missingOutcomeContractFields"])
+        review = quality_review_for_item({
+            **account_lifecycle(),
+            "outcomeAssessment": assessment,
+        })
+        self.assertEqual("coverage-gap", review["qualityState"])
+        self.assertEqual("repair-outcome-contract-coverage", review["changeType"])
 
     def test_workspace_exposes_lifecycle_and_outcomes_without_action_selector(self):
         service = HypothesisReviewService(

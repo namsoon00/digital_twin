@@ -21,8 +21,8 @@ class RuleClaimContractTests(unittest.TestCase):
         self.assertEqual(0, coverage["orphanRuleCount"])
         self.assertEqual(0, coverage["duplicateClaimCount"])
         self.assertEqual(0, coverage["violationCount"])
-        self.assertEqual(74, coverage["predictiveClaimCount"])
-        self.assertEqual(74, coverage["structuredOutcomeContractCount"])
+        self.assertEqual(72, coverage["predictiveClaimCount"])
+        self.assertEqual(72, coverage["structuredOutcomeContractCount"])
         self.assertTrue(coverage["complete"])
 
     def test_claim_contract_round_trips_with_rulebox_payload(self):
@@ -36,6 +36,13 @@ class RuleClaimContractTests(unittest.TestCase):
         self.assertEqual(original.resolved_claim_contract, restored.resolved_claim_contract)
         self.assertFalse(rule_claim_contract_violations(restored.resolved_claim_contract, restored.rule_id))
         self.assertEqual(2, len(restored.resolved_hypothesis_lifecycle().outcome_contract.criteria))
+        self.assertEqual(
+            {0},
+            {
+                item.horizon_minutes
+                for item in restored.resolved_hypothesis_lifecycle().outcome_contract.criteria
+            },
+        )
 
     def test_non_predictive_rule_is_claimed_without_becoming_market_hypothesis(self):
         rule = next(
@@ -92,11 +99,11 @@ class RuleClaimContractTests(unittest.TestCase):
         criteria = [item for item in graph.entities if item.kind == "hypothesis-outcome-criterion"]
         relation_types = [item.relation_type for item in graph.relations]
         self.assertEqual(122, len(claims))
-        self.assertEqual(74, len(outcomes))
-        self.assertEqual(148, len(criteria))
+        self.assertEqual(72, len(outcomes))
+        self.assertEqual(144, len(criteria))
         self.assertEqual(122, relation_types.count("GOVERNED_BY_CLAIM"))
-        self.assertEqual(74, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
-        self.assertEqual(148, relation_types.count("HAS_OUTCOME_CRITERION"))
+        self.assertEqual(72, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
+        self.assertEqual(144, relation_types.count("HAS_OUTCOME_CRITERION"))
 
 
 if __name__ == "__main__":

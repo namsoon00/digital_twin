@@ -5,6 +5,7 @@ import json
 import re
 from typing import Dict, Iterable, List, Optional
 
+from .decision_evidence_assertion import trace_evidence_ids
 from .decision_evidence_contract import (
     decision_eligible_hypothesis_payload,
     hypothesis_decision_eligibility,
@@ -1611,6 +1612,7 @@ def build_competing_hypotheses(
             matches_for_rule(match_rows, rule_id),
             relation_rows,
             scope_context,
+            all_traces=trace_rows,
         )
         for rule_id in rule_keys
     ]
@@ -1766,6 +1768,7 @@ def hypothesis_from_inference_rule(
     matches: List[Dict[str, object]],
     all_rows: List[Dict[str, object]],
     scope_context: Dict[str, str] = None,
+    all_traces: List[Dict[str, object]] = None,
 ) -> Optional[InvestmentHypothesis]:
     if not rule_id or not (rows or traces or matches):
         return None
@@ -1774,7 +1777,7 @@ def hypothesis_from_inference_rule(
         return None
     stance = hypothesis_stance(rows, matches)
     evidence_rows = primary_inference_rows(rows)
-    evidence_ids = relation_ids(evidence_rows)
+    evidence_ids = trace_evidence_ids(traces) or relation_ids(evidence_rows)
     causal_paths = unique_texts(
         [item.get("id") or item.get("inferenceTraceId") for item in traces + rows],
         16,
@@ -1786,6 +1789,12 @@ def hypothesis_from_inference_rule(
         if row_rule_id(item) != rule_id
         and relation_polarity(item) in ({"support"} if stance == "risk" else {"risk"} if stance == "support" else {"risk", "support"})
     ]
+    opposite_rule_ids = unique_texts([row_rule_id(item) for item in opposite_rows], 32)
+    opposite_traces = [
+        item for item in (all_traces or [])
+        if row_rule_id(item) in set(opposite_rule_ids)
+    ]
+    counter_evidence_ids = trace_evidence_ids(opposite_traces) or relation_ids(opposite_rows)
     condition_ids = trace_condition_ids(traces)
     requirements = trace_requirements(traces)
     label = causal_label(name, rows, traces, matches)
@@ -1854,9 +1863,9 @@ def hypothesis_from_inference_rule(
         evidence_state=evidence_state,
         evidence_state_label=HYPOTHESIS_EVIDENCE_STATE_LABELS[evidence_state],
         supporting_evidence_ids=evidence_ids,
-        counter_evidence_ids=relation_ids(opposite_rows),
+        counter_evidence_ids=counter_evidence_ids,
         supporting_rule_ids=[rule_id],
-        counter_rule_ids=unique_texts([row_rule_id(item) for item in opposite_rows]),
+        counter_rule_ids=opposite_rule_ids,
         assumptions=[
             "TypeDB 성립 조건 " + ", ".join(condition_ids[:6]) + "이 판단 기간에도 유효합니다."
         ] if condition_ids else ["현재 TypeDB 추론 경로와 원천 데이터의 유효시각이 판단 기간에도 유효합니다."],

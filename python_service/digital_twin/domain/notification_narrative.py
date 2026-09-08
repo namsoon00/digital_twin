@@ -16,6 +16,7 @@ from typing import Dict, Iterable, List, Mapping, Tuple
 
 from .context_observation_notifications import typedb_context_observation_contract
 from .customer_evidence_explanation import build_customer_evidence_explanations
+from .decision_evidence_assertion import inference_evidence_assertions
 from .notification_ai_context import relation_context_value
 
 
@@ -180,6 +181,7 @@ class NarrativeEvidence:
     value: object = None
     source: str = ""
     source_as_of: str = ""
+    fetched_at: str = ""
     freshness: str = ""
     rule_ids: Tuple[str, ...] = ()
     hypothesis_ids: Tuple[str, ...] = ()
@@ -197,6 +199,7 @@ class NarrativeEvidence:
             "value": payload.pop("value"),
             "source": payload.pop("source"),
             "sourceAsOf": payload.pop("source_as_of"),
+            "fetchedAt": payload.pop("fetched_at"),
             "freshness": payload.pop("freshness"),
             "ruleIds": list(payload.pop("rule_ids")),
             "hypothesisIds": list(payload.pop("hypothesis_ids")),
@@ -331,6 +334,7 @@ def build_decision_core_evidence_ledger(
     rules: Iterable[Mapping[str, object]],
     hypotheses: Iterable[Mapping[str, object]],
     temporal: Mapping[str, object] = None,
+    evidence_assertions: Iterable[Mapping[str, object]] = (),
     external_evidence: Iterable[Mapping[str, object]] = (),
     data_limits: Iterable[Mapping[str, object]] = (),
     reference_date: object = "",
@@ -362,6 +366,32 @@ def build_decision_core_evidence_ledger(
             source=source,
             source_as_of=source_as_of,
             freshness=freshness,
+        )
+
+    for item in evidence_assertions or []:
+        if not isinstance(item, Mapping):
+            continue
+        evidence_id = _text(item.get("evidenceId"), 220)
+        if not evidence_id:
+            continue
+        rule_id = _text(item.get("ruleId"), 180)
+        rows[evidence_id] = NarrativeEvidence(
+            evidence_id=evidence_id,
+            role="context",
+            kind=_text(item.get("kind") or "ontology-assertion", 80),
+            label=_text(item.get("label") or evidence_id, 220),
+            value=item.get("value"),
+            source=_text(item.get("source") or "TypeDB", 120),
+            source_as_of=_text(item.get("sourceAsOf"), 100),
+            fetched_at=_text(item.get("fetchedAt"), 100),
+            freshness=_text(item.get("freshness"), 80),
+            rule_ids=(rule_id,) if rule_id else (),
+            related_evidence_ids=tuple(_unique(item.get("relatedFactIds") or [], 16)),
+            judgement_eligible=bool(item.get("judgementEligible", True)),
+            detail=_text(" / ".join(filter(None, [
+                str(item.get("relationType") or ""),
+                str(item.get("conditionId") or ""),
+            ])), 240),
         )
 
     rule_fact_links: Dict[str, List[str]] = {}
@@ -417,6 +447,7 @@ def build_decision_core_evidence_ledger(
                         value=existing.value,
                         source=existing.source,
                         source_as_of=existing.source_as_of,
+                        fetched_at=existing.fetched_at,
                         freshness=existing.freshness,
                         rule_ids=existing.rule_ids,
                         hypothesis_ids=hypotheses_for_evidence,
@@ -447,6 +478,7 @@ def build_decision_core_evidence_ledger(
                 value=existing.value,
                 source=existing.source,
                 source_as_of=existing.source_as_of,
+                fetched_at=existing.fetched_at,
                 freshness=existing.freshness,
                 rule_ids=existing.rule_ids,
                 hypothesis_ids=tuple(_unique([*existing.hypothesis_ids, hypothesis_id], 16)),
@@ -465,6 +497,7 @@ def build_decision_core_evidence_ledger(
                         value=fact.value,
                         source=fact.source,
                         source_as_of=fact.source_as_of,
+                        fetched_at=fact.fetched_at,
                         freshness=fact.freshness,
                         rule_ids=tuple(_unique([*fact.rule_ids, str(rule_id)], 16)),
                         hypothesis_ids=tuple(_unique([*fact.hypothesis_ids, hypothesis_id], 16)),
@@ -557,6 +590,20 @@ def context_evidence_ledger(context: Mapping[str, object], response: object = No
             ):
                 item.setdefault("evidenceRole", "support")
     hypotheses = list(getattr(response, "hypotheses", []) or [])
+    graph_inference = _mapping(relation.get("graphStoreInference"))
+    referenced_evidence_ids = _unique([
+        evidence_id
+        for hypothesis in hypotheses
+        if isinstance(hypothesis, Mapping)
+        for key in ("supportingEvidenceIds", "counterEvidenceIds")
+        for evidence_id in hypothesis.get(key) or []
+    ], 256)
+    evidence_assertions = inference_evidence_assertions(
+        graph_inference.get("traces") or [],
+        graph_inference.get("relations") or [],
+        facts,
+        referenced_evidence_ids,
+    )
     missing = relation.get("missingData") or facts.get("missingData") or []
     missing_rows = []
     for item in missing:
@@ -569,6 +616,7 @@ def context_evidence_ledger(context: Mapping[str, object], response: object = No
         rules=active_rules,
         hypotheses=hypotheses,
         temporal={"windows": facts.get("temporalWindows") or []},
+        evidence_assertions=evidence_assertions,
         data_limits=missing_rows,
         reference_date=relation.get("inferenceGenerationAt") or _mapping(context).get("referenceDate"),
     )

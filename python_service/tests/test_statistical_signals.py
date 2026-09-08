@@ -362,12 +362,12 @@ class StatisticalSignalTests(unittest.TestCase):
         ]
 
         self.assertTrue(validation["valid"])
-        self.assertEqual(74, len(predictive))
+        self.assertEqual(72, len(predictive))
         self.assertTrue(all((item.get("statisticalSignalContract") or {}).get("signalTypes") for item in predictive))
         reverse_index = rule_dependency_reverse_index(rules)
         migration = reverse_index["statisticalSignals"]["byMigrationState"]
-        self.assertEqual(48, len(migration["not-applicable"]))
-        self.assertEqual(74, len(migration["model-signal-production"]))
+        self.assertEqual(50, len(migration["not-applicable"]))
+        self.assertEqual(72, len(migration["model-signal-production"]))
         self.assertEqual([], migration.get("shadow-signal-required") or [])
         flow_rule = next(
             item for item in predictive
@@ -464,7 +464,7 @@ class StatisticalSignalTests(unittest.TestCase):
                 rule_id,
             )
 
-    def test_all_six_model_families_emit_exact_contract_evidence(self):
+    def test_all_applicable_model_families_emit_exact_contract_evidence(self):
         snapshot = flow_feature_snapshot(1)
         graph = PortfolioOntology("portfolio:account-1")
         graph.entities.append(OntologyEntity(
@@ -551,10 +551,19 @@ class StatisticalSignalTests(unittest.TestCase):
 
         snapshots = result["signalSnapshots"]
         self.assertEqual(set(release_ids), {item.model_release_id for item in snapshots})
+        applicable_snapshots = [
+            item for item in snapshots
+            if item.model_release_id != DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID
+        ]
         self.assertTrue(all(
             any(signal.hypothesis_contract_ids for signal in item.signals)
-            for item in snapshots
+            for item in applicable_snapshots
         ))
+        authored = next(
+            item for item in snapshots
+            if item.model_release_id == DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID
+        )
+        self.assertEqual([], list(authored.signals))
         exact_contract_ids = {
             contract_id
             for signal in result["signalBundle"].signals
@@ -563,7 +572,6 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertTrue({
             "graph.temporal.persistent_decline.risk.v1",
             "graph.security_line.leveraged_flow_amplification.v1",
-            "graph.averaging_down.risk_guard.v1",
             "graph.fx.usdkrw.exposure.regime.v1",
             "graph.earnings.surprise.risk.v1",
             "graph.valuation.negative_margin.risk.v1",

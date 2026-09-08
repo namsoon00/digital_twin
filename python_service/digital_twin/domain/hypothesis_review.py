@@ -17,11 +17,14 @@ from .hypothesis_lifecycle import (
     lifecycle_key_for_hypothesis,
     parse_timestamp,
 )
-from .hypothesis_outcome_contract import resolved_outcome_contract
+from .hypothesis_outcome_contract import (
+    outcome_contract_completeness,
+    resolved_outcome_contract,
+)
 from .ontology_rulebox_contracts import HypothesisLifecyclePolicy
 
 
-HYPOTHESIS_OUTCOME_REVIEW_VERSION = "hypothesis-outcome-review-v2"
+HYPOTHESIS_OUTCOME_REVIEW_VERSION = "hypothesis-outcome-review-v3"
 OUTCOME_STATES = (
     "supported",
     "contradicted",
@@ -219,6 +222,7 @@ def eligible_outcome_rows(
     matched_episode_count = 0
     excluded_by_reason: Dict[str, int] = {}
     missing_domains: List[str] = []
+    missing_contract_fields: List[str] = []
     matched_episode_ids: List[str] = []
     seen = set()
     scope = text(lifecycle.get("scope")) or "account"
@@ -230,16 +234,38 @@ def eligible_outcome_rows(
         episode_id = text(episode.get("episodeId"))
         if episode_id and episode_id not in matched_episode_ids:
             matched_episode_ids.append(episode_id)
+        facts = (
+            episode.get("factsAtDecision")
+            if isinstance(episode.get("factsAtDecision"), Mapping)
+            else {}
+        )
+        episode_contract = (
+            facts.get("hypothesisOutcomeContract")
+            if isinstance(facts.get("hypothesisOutcomeContract"), Mapping)
+            else {}
+        )
         for raw_outcome in episode.get("outcomes") or []:
             outcome = as_dict(raw_outcome)
             payload = outcome.get("payload") if isinstance(outcome.get("payload"), Mapping) else {}
             eligibility = text(payload.get("calibrationEligibility"))
-            if eligibility != "eligible":
+            outcome_contract = (
+                payload.get("hypothesisOutcomeContract")
+                if isinstance(payload.get("hypothesisOutcomeContract"), Mapping)
+                else episode_contract
+            )
+            contract_check = outcome_contract_completeness(outcome_contract)
+            effective_eligibility = eligibility
+            if eligibility == "eligible" and not contract_check.get("complete"):
+                effective_eligibility = "excluded-incomplete-prediction-contract"
+                for field_name in values(contract_check.get("missing")):
+                    if field_name not in missing_contract_fields:
+                        missing_contract_fields.append(field_name)
+            if effective_eligibility != "eligible":
                 excluded_count += 1
                 # Older decision episodes predate the outcome contract. They
                 # are intentionally excluded, but must remain distinguishable
                 # from a new data-quality or timing failure.
-                reason = eligibility or "legacy-eligibility-not-recorded"
+                reason = effective_eligibility or "legacy-eligibility-not-recorded"
                 excluded_by_reason[reason] = int(excluded_by_reason.get(reason) or 0) + 1
                 for domain in values(payload.get("missingObservationDomains")):
                     if domain not in missing_domains:
@@ -277,6 +303,7 @@ def eligible_outcome_rows(
         "excludedOutcomeCount": excluded_count,
         "excludedOutcomeReasons": excluded_by_reason,
         "missingObservationDomains": missing_domains,
+        "missingOutcomeContractFields": missing_contract_fields,
     }
 
 
@@ -393,6 +420,7 @@ def outcome_assessment_for_lifecycle(
         "excludedOutcomeCount": gathered["excludedOutcomeCount"],
         "excludedOutcomeReasons": gathered["excludedOutcomeReasons"],
         "missingObservationDomains": gathered["missingObservationDomains"],
+        "missingOutcomeContractFields": gathered["missingOutcomeContractFields"],
         "horizonAssessments": horizon_assessments,
         "evaluationModeCounts": evaluation_mode_counts,
         "criterionStateCounts": criterion_state_counts,

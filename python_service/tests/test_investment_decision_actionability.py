@@ -221,6 +221,76 @@ class InvestmentDecisionActionabilityTests(unittest.TestCase):
         self.assertEqual("BUY", active.execution_action)
         self.assertTrue(active.alternatives[0].execution_eligible)
 
+    def test_blocked_action_does_not_create_a_false_hypothesis_comparison(self):
+        hold = hypothesis("shadow")
+        hold.update({
+            "hypothesisId": "hypothesis:hold",
+            "candidateAction": "HOLD",
+            "supportingRuleIds": ["graph.hold.v1"],
+            "claimContract": {
+                **hold["claimContract"],
+                "ruleId": "graph.hold.v1",
+            },
+        })
+        add = hypothesis("shadow")
+        add.update({
+            "hypothesisId": "hypothesis:add",
+            "candidateAction": "ADD",
+            "supportingRuleIds": ["graph.add.v1"],
+            "claimContract": {
+                **add["claimContract"],
+                "ruleId": "graph.add.v1",
+            },
+        })
+        synthesis = decision_synthesis_from_relation_context("account:main", {
+            "accountId": "account:main",
+            "subject": {"symbol": "000660", "name": "SK하이닉스"},
+            "sourceAboxSnapshotId": "abox:blocked-action",
+            "inferenceGenerationId": "generation:blocked-action",
+            "generationAligned": True,
+            "assessmentBundle": {
+                "investmentOpinion": {
+                    "candidateAction": "HOLD",
+                    "selectedRuleId": "graph.hold.v1",
+                    "decisionEffect": "support",
+                    "actionConflict": True,
+                    "candidateActions": ["HOLD", "ADD"],
+                },
+            },
+            "actionEnvelope": {
+                "investmentViewAction": "HOLD",
+                "executionAction": "HOLD",
+                "selectedRuleId": "graph.hold.v1",
+                "selectedDecisionEffect": "support",
+                "investmentJudgementAvailable": True,
+                "allowedActions": ["HOLD"],
+                "blockedActions": ["ADD"],
+            },
+            "hypothesisSet": {"hypotheses": [hold, add]},
+            "graphStoreInference": {
+                "sourceAboxSnapshotId": "abox:blocked-action",
+                "inferenceGenerationId": "generation:blocked-action",
+                "relations": [
+                    {"ruleId": "graph.hold.v1", "candidateAction": "HOLD"},
+                    {"ruleId": "graph.add.v1", "candidateAction": "ADD"},
+                ],
+                "traces": [
+                    {"traceId": "trace:hold", "ruleId": "graph.hold.v1"},
+                    {"traceId": "trace:add", "ruleId": "graph.add.v1"},
+                ],
+            },
+        })
+
+        alternatives = {item.action: item for item in synthesis.alternatives}
+        self.assertEqual("HYPOTHESIS_QUALIFICATION_PENDING", synthesis.disposition_code)
+        self.assertEqual("hypothesis-qualification-required", synthesis.execution_disposition)
+        self.assertEqual("RESEARCH_ONLY", synthesis.ai_state)
+        self.assertNotEqual("COMPARISON_REQUIRED", synthesis.action_state)
+        self.assertTrue(alternatives["HOLD"].decision_eligible)
+        self.assertFalse(alternatives["ADD"].decision_eligible)
+        self.assertFalse(alternatives["ADD"].execution_eligible)
+        self.assertEqual((), synthesis.execution_eligible_hypothesis_ids)
+
     def test_active_hypothesis_with_complete_contract_is_actionable(self):
         assessment = investment_decision_actionability(context(), complete_response())
 

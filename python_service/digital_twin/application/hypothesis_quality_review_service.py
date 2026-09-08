@@ -43,6 +43,7 @@ class HypothesisQualityReviewService:
                         "falsificationContract": item.get("falsificationContract"),
                         "horizonAssessments": item.get("horizonAssessments") or [],
                         "missingObservationDomains": item.get("missingObservationDomains") or [],
+                        "missingOutcomeContractFields": item.get("missingOutcomeContractFields") or [],
                         "freshnessProblemDomains": item.get("freshnessProblemDomains") or [],
                         "nextCheck": item.get("nextCheck"),
                         "reviewedBy": str(reviewed_by or ""),

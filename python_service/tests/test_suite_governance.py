@@ -77,7 +77,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # shadow hypothesis outcomes, atomic relation-generation rebind, and
         # persisted-snapshot material routing now protect the customer alert
         # boundary and the queue ingress that feeds it.
-        self.assertLessEqual(total, 965)
+        # Exact TypeDB evidence assertions, admissible-action comparison, and
+        # fingerprinted multi-horizon outcome replay add independent fail-closed
+        # coverage for the inference-to-learning boundary.
+        self.assertLessEqual(total, 975)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

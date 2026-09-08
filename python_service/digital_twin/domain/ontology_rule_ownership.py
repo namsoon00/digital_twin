@@ -47,7 +47,6 @@ class RuleOwnershipContract:
 
 STATISTICAL_MODEL_RULE_IDS = frozenset({
     "graph.aggressive.loss_recovery.add_buy_review.v1",
-    "graph.averaging_down.risk_guard.v1",
     "graph.company.capital.dilution.risk.v1",
     "graph.company.market.forward_expectation.review.v1",
     "graph.company.market.fragile_rally.risk.v1",
@@ -70,7 +69,6 @@ STATISTICAL_MODEL_RULE_IDS = frozenset({
     "graph.flow.sell_pressure.v1",
     "graph.fx.usdkrw.exposure.regime.v1",
     "graph.holding.trend_transition.risk.v1",
-    "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1",
     "graph.instrument_profile.cyclical_growth.recovery_add_review.v1",
     "graph.instrument_profile.preferred_income.rate_sensitivity.v1",
     "graph.investor_flow.retail_dip_buying_risk.v1",
@@ -139,9 +137,11 @@ ONTOLOGY_SEMANTIC_RULE_IDS = frozenset({
     "graph.market_proxy.observation.risk_context.v1",
     "graph.market_proxy.observation.support_context.v1",
     "graph.news.direct_material_context.v1",
+    "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1",
 })
 
 PORTFOLIO_POLICY_RULE_IDS = frozenset({
+    "graph.averaging_down.risk_guard.v1",
     "graph.factor.position_crowding.v1",
     "graph.instrument_profile.averaging_down_policy.v1",
     "graph.instrument_profile.strategy_fit.support.v1",

@@ -16,11 +16,12 @@ from .hypothesis_catalog import hypothesis_family_definition
 from .hypothesis_outcome_contract import (
     HypothesisOutcomeContract,
     HypothesisOutcomeCriterion,
+    uncovered_outcome_horizons,
 )
 from .ontology_rule_knowledge import RuleKnowledgeBasis, resolved_rule_knowledge_basis
 
 
-RULE_CLAIM_CONTRACT_VERSION = "rule-claim-contract-v1"
+RULE_CLAIM_CONTRACT_VERSION = "rule-claim-contract-v2"
 HYPOTHESIS_QUALIFICATION_POLICY_VERSION = "hypothesis-auto-qualification-v1"
 
 CLAIM_TYPES = frozenset({
@@ -251,7 +252,6 @@ def predictive_outcome_contract(thesis_family: str, direction: str) -> Hypothesi
         ([1440, 10080], 0.75, ("quote", "trend")),
     )
     risk = _text(direction).lower() == "risk"
-    primary_horizon = int(horizons[0])
     criteria = [
         HypothesisOutcomeCriterion(
             criterion_id=thesis_family + ":expected-direction",
@@ -260,7 +260,10 @@ def predictive_outcome_contract(thesis_family: str, direction: str) -> Hypothesi
             metric="instrumentReturnPct",
             operator="<=" if risk else ">=",
             threshold=-abs(material_move) if risk else abs(material_move),
-            horizon_minutes=primary_horizon,
+            # Zero means this pre-registered material-move test applies to
+            # every horizon in the contract. A scheduled horizon must never
+            # produce an observation that has no evaluation criterion.
+            horizon_minutes=0,
             required=True,
             required_observation_domains=["quote"],
             source_policy=["point-in-time-market-observation"],
@@ -273,7 +276,7 @@ def predictive_outcome_contract(thesis_family: str, direction: str) -> Hypothesi
             metric="instrumentReturnPct",
             operator=">=" if risk else "<=",
             threshold=abs(material_move) if risk else -abs(material_move),
-            horizon_minutes=primary_horizon,
+            horizon_minutes=0,
             required=True,
             required_observation_domains=["quote"],
             source_policy=["point-in-time-market-observation"],
@@ -311,6 +314,7 @@ def authored_outcome_contract_complete(contract: HypothesisOutcomeContract) -> b
             criterion.required and criterion.role in {"result", "invalidation"}
             for criterion in contract.criteria or []
         )
+        and not uncovered_outcome_horizons(contract)
     )
 
 

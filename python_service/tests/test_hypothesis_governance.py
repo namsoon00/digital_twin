@@ -6,6 +6,7 @@ from digital_twin.application.hypothesis_outcome_replay_service import Hypothesi
 from digital_twin.application.hypothesis_policy_governance_service import HypothesisPolicyGovernanceService
 from digital_twin.application.hypothesis_quality_review_service import HypothesisQualityReviewService
 from digital_twin.domain.hypothesis_review import outcome_assessment_for_lifecycle
+from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
 from digital_twin.domain.ontology_rulebox_catalog import default_graph_inference_rules
 from digital_twin.domain.ontology_rulebox_governance import rulebox_version_payload
 from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules
@@ -27,6 +28,38 @@ def lifecycle(policy=None):
     }
 
 
+def complete_outcome_contract():
+    contract = {
+        "contractVersion": "rulebox-hypothesis-outcome-contract-v3",
+        "criteriaOrigin": "rulebox",
+        "selectedHypothesisId": "hypothesis:trend",
+        "sourceRuleIds": ["graph.loss_guard.breakdown.v1"],
+        "inferenceGenerationId": "generation:test",
+        "outcomeHorizonMinutes": [60],
+        "requiredObservationDomains": ["quote"],
+        "minimumIndependentEpisodes": 3,
+        "maximumObservationDelayMinutes": 180,
+        "predictionTarget": "instrument-return",
+        "expectedDirection": "risk",
+        "expectedOutcome": "negative material return",
+        "outcomeMetric": "instrumentReturnPct",
+        "falsificationContract": "positive material return invalidates risk",
+        "criteria": [{
+            "criterionId": "risk-result",
+            "label": "negative return",
+            "role": "result",
+            "metric": "instrumentReturnPct",
+            "operator": "<=",
+            "threshold": -0.5,
+            "horizonMinutes": 60,
+            "required": True,
+            "requiredObservationDomains": ["quote"],
+        }],
+    }
+    contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
+    return contract
+
+
 def episode(episode_id="episode-1", eligibility="eligible", missing=None):
     return {
         "episodeId": episode_id,
@@ -34,9 +67,7 @@ def episode(episode_id="episode-1", eligibility="eligible", missing=None):
         "symbol": "AAPL",
         "selectedHypothesisId": "hypothesis:trend",
         "factsAtDecision": {
-            "hypothesisOutcomeContract": {
-                "sourceRuleIds": ["graph.loss_guard.breakdown.v1"],
-            },
+            "hypothesisOutcomeContract": complete_outcome_contract(),
         },
         "hypothesisSet": {
             "hypotheses": [{
@@ -110,6 +141,7 @@ class EpisodeStore:
     def __init__(self, rows):
         self.rows = list(rows)
         self.proposals = []
+        self.performance_calls = 0
 
     def list(self, account_id="", symbol="", limit=500):
         rows = list(self.rows)
@@ -118,6 +150,10 @@ class EpisodeStore:
         if symbol:
             rows = [item for item in rows if item.get("symbol") == symbol]
         return rows[:limit]
+
+    def performance_episodes(self, account_id="", symbol="", limit=500):
+        self.performance_calls += 1
+        return self.list(account_id=account_id, symbol=symbol, limit=limit)
 
     def save_learning_proposal(self, proposal):
         self.proposals.append(proposal)
@@ -256,6 +292,32 @@ class HypothesisGovernanceTests(unittest.TestCase):
         self.assertEqual("graph.loss_guard.breakdown.v1", replay["performanceByRule"][0]["id"])
         self.assertEqual(1.0, replay["performanceByRule"][0]["corroborationRate"])
         self.assertFalse(replay["performanceSummary"]["automaticDeployment"])
+        self.assertEqual("outcome-led-bounded-history", replay["historySelection"])
+        self.assertEqual(1, store.performance_calls)
+
+    def test_replay_excludes_stored_eligible_outcome_with_incomplete_contract(self):
+        valid = episode("episode-valid")
+        incomplete = episode("episode-incomplete")
+        incomplete["factsAtDecision"]["hypothesisOutcomeContract"] = {
+            "sourceRuleIds": ["graph.loss_guard.breakdown.v1"],
+        }
+        replay = HypothesisOutcomeReplayService(
+            EpisodeStore([valid, incomplete]),
+        ).run(account_id="demo", symbol="AAPL")
+
+        self.assertEqual(2, replay["integrity"]["storedEligibleOutcomeCount"])
+        self.assertEqual(1, replay["integrity"]["eligibleOutcomeCount"])
+        self.assertEqual(1, replay["integrity"]["incompleteContractOutcomeCount"])
+        self.assertEqual(
+            1,
+            replay["integrity"]["exclusionReasons"][
+                "excluded-incomplete-prediction-contract"
+            ],
+        )
+        hypothesis = replay["performanceByHypothesis"][0]
+        self.assertEqual(2, hypothesis["observedCount"])
+        self.assertEqual(1, hypothesis["eligibleCount"])
+        self.assertEqual(1, hypothesis["excludedCount"])
 
 
 if __name__ == "__main__":

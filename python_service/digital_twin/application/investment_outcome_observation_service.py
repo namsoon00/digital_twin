@@ -91,11 +91,12 @@ class InvestmentOutcomeObservationService:
             {
                 "requestId": str(target.get("requestId") or "") + ":instrument-start",
                 "symbol": str(target.get("symbol") or "").upper(),
-                "targetAt": target.get("decidedAt"),
+                "targetAt": target.get("baselineAt") or target.get("decidedAt"),
                 "maximumObservationDelayMinutes": target.get("maximumObservationDelayMinutes"),
             }
             for target in targets
             if target.get("requiresInstrumentBaseline")
+            and self.optional_number(target.get("decisionPrice")) is None
             and str(target.get("requestId") or "")
             and str(target.get("symbol") or "").strip()
         ]
@@ -119,7 +120,11 @@ class InvestmentOutcomeObservationService:
                 "maximumObservationDelayMinutes": target.get("maximumObservationDelayMinutes"),
             }
             benchmark_requests.extend([
-                {**common, "requestId": request_id + ":benchmark-start", "targetAt": target.get("decidedAt")},
+                {
+                    **common,
+                    "requestId": request_id + ":benchmark-start",
+                    "targetAt": target.get("baselineAt") or target.get("decidedAt"),
+                },
                 {**common, "requestId": request_id + ":benchmark-end", "targetAt": target.get("targetAt")},
             ])
         benchmark_observations = self.market_time_series_store.load_outcome_observations(
@@ -148,15 +153,20 @@ class InvestmentOutcomeObservationService:
                 start = instrument_start_observations.get(
                     request_id + ":instrument-start"
                 ) or {}
-                decision_price = self.optional_number(start.get("currentPrice"))
+                decision_price = self.optional_number(
+                    target.get("decisionPrice"),
+                    start.get("currentPrice"),
+                )
                 if decision_price is None:
                     missing_count += 1
                     continue
                 facts["decisionPrice"] = decision_price
                 facts["decisionPriceSourceAsOf"] = (
-                    start.get("sourceAsOf")
+                    target.get("decisionPriceSourceAsOf")
+                    or start.get("sourceAsOf")
                     or start.get("generatedAt")
                     or start.get("updatedAt")
+                    or target.get("baselineAt")
                     or ""
                 )
             facts.setdefault(

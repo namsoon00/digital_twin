@@ -10,9 +10,14 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List
 
+from .decision_evidence_assertion import (
+    inference_evidence_assertions,
+    rebind_hypothesis_evidence_ids,
+)
 from .decision_evidence_contract import (
     decision_readiness_contract,
     hypothesis_decision_eligibility,
+    hypothesis_set_evidence_summary,
     temporal_evidence_summary,
 )
 from .decision_continuity import compact_decision_continuity_packet
@@ -346,6 +351,33 @@ def notification_ai_decision_brief(
         _mapping(relation.get("hypothesisSet")),
         canonical_hypothesis_set,
     )
+    graph_inference = _mapping(canonical_relation.get("graphStoreInference"))
+    hypothesis_set = rebind_hypothesis_evidence_ids(
+        hypothesis_set,
+        graph_inference.get("traces") or [],
+    )
+    for hypothesis in hypothesis_set.get("hypotheses") or []:
+        if not isinstance(hypothesis, dict):
+            continue
+        assessment = hypothesis_decision_eligibility(hypothesis)
+        hypothesis["decisionUse"] = assessment.get("decisionUse")
+        hypothesis["executionEligible"] = assessment.get("executionEligible")
+    hypothesis_set["decisionEvidenceSummary"] = hypothesis_set_evidence_summary(
+        hypothesis_set
+    )
+    referenced_evidence_ids = _unique([
+        evidence_id
+        for hypothesis in hypothesis_set.get("hypotheses") or []
+        if isinstance(hypothesis, dict)
+        for key in ("supportingEvidenceIds", "counterEvidenceIds")
+        for evidence_id in hypothesis.get(key) or []
+    ], 256)
+    evidence_assertions = inference_evidence_assertions(
+        graph_inference.get("traces") or [],
+        graph_inference.get("relations") or [],
+        canonical_facts,
+        referenced_evidence_ids,
+    )
     research_cycle = _mapping(relation.get("researchCycle"))
     research_plan = _mapping(canonical_brain.get("researchPlan")) or _mapping(relation.get("researchPlan"))
 
@@ -422,6 +454,7 @@ def notification_ai_decision_brief(
             "whyNow": relation.get("whyNow") or {},
             "signalConflicts": relation.get("signalConflicts") or {},
             "hypothesisSet": hypothesis_set,
+            "evidenceAssertions": evidence_assertions,
             "epistemicState": relation.get("epistemicState") or {},
         },
         "evidence": {
@@ -526,6 +559,7 @@ TEMPORAL_DECISION_FIELDS = (
     "smartMoneyNetCumulative", "smartMoneyNetAmountCumulative",
     "smartMoneyTradingValueRatioPct", "smartMoneyFlowPersistenceRatio",
     "smartMoneyFlowAcceleration", "smartMoneyFlowDirection", "smartMoneyFlowBasis",
+    "eventCount", "riskEventCount", "supportEventCount",
 )
 
 HYPOTHESIS_DECISION_FIELDS = (
@@ -581,6 +615,13 @@ EVIDENCE_DECISION_FIELDS = (
     "sourceAsOf", "sourceRevision", "documentHash", "disclosureAnalysis",
     "reportName", "receiptDate", "documentVerificationState",
     "documentAnalysisState", "evidenceEligibilityState",
+)
+
+EVIDENCE_ASSERTION_FIELDS = (
+    "version", "evidenceId", "ruleId", "label", "kind", "polarity", "value",
+    "source", "sourceAsOf", "fetchedAt", "freshness", "relationType",
+    "conditionId", "evidenceIndependenceKey", "relatedFactIds",
+    "judgementEligible",
 )
 
 ACCOUNT_STRATEGY_FIELDS = (
@@ -1060,6 +1101,9 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
                 string_limit=160,
                 list_limit=4,
                 dict_limit=18,
+            ),
+            "evidenceAssertions": _compact_dict_rows(
+                inference.get("evidenceAssertions"), EVIDENCE_ASSERTION_FIELDS, 24,
             ),
             "hypothesisSet": {
                 **{
@@ -1764,6 +1808,11 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
             "executionPlan": execution_plan_payload,
             "decisionDrivers": _minimum_driver_rows(
                 inference.get("decisionDrivers"), emergency=emergency,
+            ),
+            "evidenceAssertions": _compact_dict_rows(
+                inference.get("evidenceAssertions"),
+                EVIDENCE_ASSERTION_FIELDS,
+                12 if emergency else 24,
             ),
             "hypothesisSet": {
                 **_selected_fields(

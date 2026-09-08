@@ -129,7 +129,7 @@ class OntologyInferenceContextTests(unittest.TestCase):
         }
         with patch(
             "digital_twin.domain.investment_reasoning.synthesis.hypothesis_decision_eligibility",
-            return_value={"eligible": True},
+            return_value={"eligible": True, "executionEligible": True},
         ):
             synthesis = decision_synthesis_from_relation_context("acct", relation_context)
 

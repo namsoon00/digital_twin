@@ -29,6 +29,10 @@ CORE_FACT_KEYS = (
     "institutionNetVolume", "individualNetVolume", "smartMoneyNetVolume",
     "ma5", "ma20", "ma60", "ma5Distance", "ma20Distance", "ma60Distance",
     "ma20Slope", "ma60Slope", "priceChangeRate", "currency", "market",
+    "macroDgs10", "macroDgs2", "macroDff", "macroYieldSpread10y2y",
+    "macroDgs10DeltaBp", "macroDgs2DeltaBp", "macroYieldSpreadDeltaBp",
+    "usdKrwRate", "usdKrwDeltaPct", "usdKrw7dDeltaPct",
+    "btcPrice", "btcChange24h", "btcChange7d",
 )
 
 VALUATION_MARKERS = (
@@ -149,10 +153,11 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
             item,
             (
                 "ruleId", "label", "relationType", "evidenceRole", "dataState",
-                "reviewLevel", "ruleRequiredFacts",
+                "reviewLevel", "ruleRequiredFacts", "claimContract",
+                "qualification", "knowledgeBasis",
             ),
         )
-        claim_contract = _mapping(row.get("claimContract"))
+        claim_contract = _mapping(item.get("claimContract"))
         if claim_contract:
             row["claimContract"] = _selected(
                 claim_contract,
@@ -162,13 +167,23 @@ def _active_rule_rows(inference: Dict[str, object], envelope: Dict[str, object])
                     "outcomeMetric", "falsificationContract", "decisionAuthority",
                 ),
             )
-        qualification = _mapping(row.get("qualification"))
+        qualification = _mapping(item.get("qualification"))
         if qualification:
             row["qualification"] = _selected(
                 qualification,
                 (
                     "status", "decisionAuthority", "reason", "decisiveOutcomeCount",
                     "directionalHitRate", "averageActionAdjustedReturnPct",
+                ),
+            )
+        knowledge_basis = _mapping(item.get("knowledgeBasis"))
+        if knowledge_basis:
+            row["knowledgeBasis"] = _selected(
+                knowledge_basis,
+                (
+                    "ruleKind", "theoryFamily", "thesisFamily",
+                    "decisionEligibility", "evidenceIndependenceKey",
+                    "validationStatus", "decisionAuthority",
                 ),
             )
         applied = _unique(
@@ -274,6 +289,38 @@ def _hypothesis_rows(inference: Dict[str, object]) -> Tuple[Dict[str, object], L
         "referenceHypothesisCount": int(source_summary.get("referenceHypothesisCount") or 0),
     }
     return metadata, rows
+
+
+def _evidence_assertion_rows(
+    inference: Dict[str, object],
+    hypotheses: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    referenced_ids = {
+        str(evidence_id or "").strip()
+        for hypothesis in hypotheses
+        for key in ("supportingEvidenceIds", "counterEvidenceIds")
+        for evidence_id in hypothesis.get(key) or []
+        if str(evidence_id or "").strip()
+    }
+    rows = []
+    for item in inference.get("evidenceAssertions") or []:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = str(item.get("evidenceId") or "").strip()
+        if not evidence_id or (referenced_ids and evidence_id not in referenced_ids):
+            continue
+        row = _selected(
+            item,
+            (
+                "version", "evidenceId", "ruleId", "label", "kind", "polarity",
+                "value", "source", "sourceAsOf", "fetchedAt", "freshness",
+                "relationType", "conditionId", "evidenceIndependenceKey",
+                "relatedFactIds", "judgementEligible",
+            ),
+        )
+        if row:
+            rows.append(row)
+    return rows[:32]
 
 
 def _market_evidence_profile(value: object, facts: Dict[str, object]) -> Dict[str, object]:
@@ -618,6 +665,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     decision_state = _mapping(brief.get("decisionState"))
     envelope = _mapping(decision_state.get("actionEnvelope"))
     hypothesis_metadata, hypotheses = _hypothesis_rows(inference)
+    evidence_assertions = _evidence_assertion_rows(inference, hypotheses)
     rules = _active_rule_rows(inference, envelope)
     drivers = []
     seen_drivers = set()
@@ -688,6 +736,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         facts=facts,
         rules=rules,
         hypotheses=hypotheses,
+        evidence_assertions=evidence_assertions,
         temporal=temporal,
         external_evidence=external_evidence,
         data_limits=core.get("dataLimits") or [],
@@ -732,6 +781,7 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             "companyReferenceOnly": bool(company_reference),
             "continuityDelta": bool(core.get("continuityDelta")),
             "evidenceLedgerCount": len(core.get("evidenceLedger") or []),
+            "evidenceAssertionCount": len(evidence_assertions),
         },
         "excluded": {
             "unmatchedTemporalWindowCount": max(0, len(current.get("temporalWindows") or []) - len(temporal.get("windows") or [])),
@@ -798,8 +848,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         _selected(
             item,
             (
-                "evidenceId", "role", "kind", "label", "source", "sourceAsOf",
-                "freshness", "ruleIds", "hypothesisIds", "judgementEligible",
+                "evidenceId", "role", "kind", "label", "value", "source",
+                "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
+                "hypothesisIds", "relatedEvidenceIds", "judgementEligible",
             ),
         )
         for item in compact_ledger(10)
@@ -886,7 +937,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         "actionEnvelope": _selected(
             decision.get("actionEnvelope"),
             (
-                "status", "executionAction", "executionDisposition",
+                "status", "investmentViewAction", "executionAction",
+                "executionDisposition", "allowedActions", "blockedActions",
+                "aiAllowedActions",
                 "judgementBlocked", "selectedRuleId", "drivingRuleIds",
                 "executionConstraintRuleIds", "dataQualityRuleIds", "targetRole",
             ),
@@ -955,7 +1008,27 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
             if isinstance(item, dict)
         ],
     }
-    fitted["rules"] = list(fitted.get("rules") or [])[:3]
+    fitted["rules"] = [
+        {
+            **_selected(
+                item,
+                ("ruleId", "label", "evidenceRole", "appliedFactFields"),
+            ),
+            "claimContract": _selected(
+                _mapping(item.get("claimContract")),
+                (
+                    "claimContractId", "thesisFamily", "expectedDirection",
+                    "decisionAuthority",
+                ),
+            ),
+            "qualification": _selected(
+                _mapping(item.get("qualification")),
+                ("status", "decisionAuthority"),
+            ),
+        }
+        for item in list(fitted.get("rules") or [])[:3]
+        if isinstance(item, dict)
+    ]
     fitted["externalEvidence"] = list(fitted.get("externalEvidence") or [])[:1]
     fitted["decisionDrivers"] = list(fitted.get("decisionDrivers") or [])[:2]
     fitted["dataLimits"] = list(fitted.get("dataLimits") or [])[:2]
@@ -963,8 +1036,9 @@ def fit_notification_ai_decision_core(core: Dict[str, object], budget_bytes: int
         _selected(
             item,
             (
-                "evidenceId", "role", "kind", "label", "sourceAsOf",
-                "ruleIds", "hypothesisIds", "judgementEligible",
+                "evidenceId", "role", "kind", "label", "value", "source",
+                "sourceAsOf", "fetchedAt", "freshness", "ruleIds",
+                "hypothesisIds", "relatedEvidenceIds", "judgementEligible",
             ),
         )
         for item in compact_ledger(3)

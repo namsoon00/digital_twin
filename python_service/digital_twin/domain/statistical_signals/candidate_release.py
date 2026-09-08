@@ -36,6 +36,7 @@ MODEL_SIGNAL_LABELS = {
     "price-trend-break-risk": "가격 경로 추세 훼손 신호",
     "price-downside-acceleration-risk": "가격 경로 하락 가속 신호",
     "price-recovery-support": "가격 경로 회복 신호",
+    "price-failed-recovery-risk": "가격 반등 실패 신호",
     "flow-accumulation-support": "수급 축적 신호",
     "flow-distribution-risk": "수급 분산 신호",
     "flow-price-divergence-risk": "가격·수급 괴리 신호",

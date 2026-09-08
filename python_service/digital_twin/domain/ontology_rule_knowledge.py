@@ -60,6 +60,37 @@ CANDIDATE_OWNER_CONTRACTS = {
 }
 
 
+# Exact semantic overrides are preferable to token inference for rules whose
+# identifiers describe both a trigger and an outcome. Release validation also
+# checks these families against the rule's bound statistical model signal.
+PREDICTIVE_RULE_FAMILY_OVERRIDES = {
+    "graph.instrument_profile.preferred_income.rate_sensitivity.v1": (
+        "cross-asset-and-regime-transmission", "cross-asset-risk",
+    ),
+    "graph.price.rebound.failure.v1": (
+        "behavioral-mean-reversion", "failed-recovery",
+    ),
+    "graph.temporal.failed_recovery.risk.v1": (
+        "behavioral-mean-reversion", "failed-recovery",
+    ),
+    "graph.temporal.decline_deceleration.defense.v1": (
+        "behavioral-mean-reversion", "mean-reversion",
+    ),
+    "graph.temporal.weakness_accumulation.defense.v1": (
+        "market-microstructure-and-investor-flow", "flow-accumulation",
+    ),
+    "graph.temporal.risk_event_absorption.support.v1": (
+        "event-information-diffusion", "event-support",
+    ),
+    "graph.valuation.high_beta_or_expensive.review.v1": (
+        "fundamental-valuation-and-factors", "fundamental-deterioration",
+    ),
+    "graph.security_line.leveraged_flow_amplification.v1": (
+        "market-microstructure-and-investor-flow", "flow-distribution",
+    ),
+}
+
+
 def _text(value: object) -> str:
     return " ".join(str(value or "").strip().split())
 
@@ -369,6 +400,9 @@ def _rule_kind(rule: object) -> str:
 
 def _theory_family(rule: object, rule_kind: str) -> str:
     rule_id = _rule_id(rule)
+    override = PREDICTIVE_RULE_FAMILY_OVERRIDES.get(rule_id)
+    if rule_kind == "predictive-hypothesis" and override:
+        return override[0]
     action_group = _action_group(rule)
     if rule_kind == "context-observation" and (
         rule_id.startswith("graph.notification.")
@@ -398,6 +432,9 @@ def _theory_family(rule: object, rule_kind: str) -> str:
 
 def _thesis_family(rule: object, rule_kind: str, theory_family: str) -> str:
     rule_id = _rule_id(rule)
+    override = PREDICTIVE_RULE_FAMILY_OVERRIDES.get(rule_id)
+    if rule_kind == "predictive-hypothesis" and override:
+        return override[1]
     effects = set(_decision_effects(rule))
     risk_path = bool(effects.intersection({"constrain", "block"})) or any(
         token in rule_id for token in ("risk", "decline", "break", "failure", "outflow", "distribution", "dilution")

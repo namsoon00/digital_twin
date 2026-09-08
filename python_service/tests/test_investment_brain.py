@@ -18,6 +18,7 @@ from digital_twin.domain.investment_brain import (
     hypothesis_set_from_relation_context,
 )
 from digital_twin.domain.investment_evidence_governance import ResearchRun, governed_evidence
+from digital_twin.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
 from digital_twin.domain.decision_performance import (
     contradiction_learning_candidates,
     evaluate_decision_performance,
@@ -244,9 +245,8 @@ class FakeDecisionEpisodeStore:
 
 
 def governed_outcome_contract(hypothesis_id, rule_id, horizon=60):
-    return {
-        "contractVersion": "rulebox-hypothesis-outcome-contract-v2",
-        "contractFingerprint": "sha256:test-contract",
+    contract = {
+        "contractVersion": "rulebox-hypothesis-outcome-contract-v3",
         "criteriaOrigin": "rulebox",
         "selectedHypothesisId": hypothesis_id,
         "sourceRuleIds": [rule_id],
@@ -257,6 +257,7 @@ def governed_outcome_contract(hypothesis_id, rule_id, horizon=60):
         "maximumObservationDelayMinutes": 180,
         "predictionTarget": "instrument-return",
         "expectedDirection": "directional",
+        "expectedOutcome": "material return in the registered direction",
         "outcomeMetric": "instrumentReturnPct",
         "falsificationContract": "opposite material return invalidates the hypothesis",
         "criteria": [{
@@ -271,6 +272,8 @@ def governed_outcome_contract(hypothesis_id, rule_id, horizon=60):
             "requiredObservationDomains": ["quote"],
         }],
     }
+    contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
+    return contract
 
 
 class FakeEvidenceStore:
@@ -1279,6 +1282,40 @@ class InvestmentBrainTest(unittest.TestCase):
             if item.entity_id == entity_id("hypothesis-template", template_id)
         ]))
         self.assertIn("CALIBRATED_BY_OUTCOME", {item.relation_type for item in graph.relations})
+
+    def test_hypothesis_calibration_excludes_incomplete_legacy_contract(self):
+        brain = hypothesis_set_from_relation_context(relation_context())
+        hypothesis_set = brain["hypothesisSet"]
+        selected = hypothesis_set["hypotheses"][0]
+        legacy = {
+            "episodeId": "episode-legacy-eligible",
+            "symbol": "005930",
+            "subjectName": "삼성전자",
+            "selectedHypothesisId": selected["hypothesisId"],
+            "factsAtDecision": {
+                "hypothesisOutcomeContract": {
+                    "sourceRuleIds": selected.get("supportingRuleIds") or ["rule:test"],
+                },
+            },
+            "hypothesisSet": hypothesis_set,
+            "outcomes": [{
+                "outcomeId": "outcome-legacy-eligible",
+                "observedAt": "2026-08-01T01:00:00Z",
+                "selectedHypothesisStatus": "directionally-corroborated",
+                "payload": {
+                    "calibrationEligibility": "eligible",
+                    "accountIndependenceKey": "legacy-market-event",
+                    "horizonMinutes": 60,
+                },
+            }],
+        }
+
+        graph = PortfolioOntology("account-1")
+        add_investment_brain_concepts(graph, "account-1", [legacy])
+
+        self.assertFalse(any(
+            item.kind == "hypothesis-calibration" for item in graph.entities
+        ))
 
     def test_historical_outcomes_calibrate_without_replaying_old_decisions(self):
         brain = hypothesis_set_from_relation_context(relation_context())

@@ -429,11 +429,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         )
         if not eligible:
             reason = str(
-                calibration.get("reason")
-                or ("outcome-contract-incomplete" if not completeness.get("complete") else "calibration-ineligible")
+                "no-selected-hypothesis"
+                if not episode.selected_hypothesis_id
+                else "outcome-contract-incomplete"
+                if not completeness.get("complete")
+                else calibration.get("reason") or "calibration-ineligible"
             )[:191]
             target_id = stable_id("decision-outcome-target-excluded", episode.episode_id)
             payload = {
+                "episodeKind": "decision",
                 "requestId": target_id,
                 "episodeId": episode.episode_id,
                 "symbol": episode.symbol,
@@ -466,6 +470,12 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         )
         fingerprint = str(contract.get("contractFingerprint") or "")
         maximum_delay = int(contract.get("maximumObservationDelayMinutes") or 0)
+        fact_delta = facts.get("factDelta") if isinstance(facts.get("factDelta"), dict) else {}
+        baseline_at = canonical_investment_timestamp(
+            fact_delta.get("source_observed_at")
+            or fact_delta.get("sourceObservedAt")
+            or facts.get("sourceAsOf")
+        ) or episode.decided_at
         target_count = 0
         for horizon_minutes in self.episode_outcome_horizons(episode):
             target_at = outcome_target_at(episode, horizon_minutes)
@@ -478,6 +488,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 fingerprint,
             )
             payload = {
+                "episodeKind": "decision",
                 "requestId": target_id,
                 "episodeId": episode.episode_id,
                 "symbol": episode.symbol,
@@ -486,11 +497,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 "currency": str(facts.get("currency") or ""),
                 "horizonMinutes": horizon_minutes,
                 "decidedAt": episode.decided_at,
+                "baselineAt": baseline_at,
                 "targetAt": target_at,
                 "maximumObservationDelayMinutes": maximum_delay,
                 "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
                 "hypothesisOutcomeContract": contract,
                 "benchmarkSymbol": contract_benchmark_symbol(contract, facts),
+                "requiresInstrumentBaseline": True,
+                **({"decisionPrice": number(facts.get("currentPrice"))} if number(facts.get("currentPrice")) > 0 else {}),
+                **({"decisionPriceSourceAsOf": facts.get("sourceAsOf")} if facts.get("sourceAsOf") else {}),
             }
             self.upsert_outcome_target(
                 connection,
@@ -627,6 +642,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 "currency": episode.currency,
                 "horizonMinutes": horizon_minutes,
                 "decidedAt": episode.observed_from_at,
+                "baselineAt": episode.observed_from_at,
                 "targetAt": target_at,
                 "maximumObservationDelayMinutes": maximum_delay,
                 "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
@@ -812,17 +828,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         account_id: str,
         limit: int = 1000,
     ) -> Dict[str, object]:
-        """Realign legacy pending targets with the inferred market session.
+        """Realign valid targets and retire targets with invalid contracts.
 
         Older decision payloads sometimes omitted market and currency. Their
         short horizon was therefore scheduled during closed hours and a later
         ingestion of the unchanged close could be mistaken for a new quote.
-        Only pending targets are mutable; observed and excluded audit rows are
-        deliberately left untouched.
+        Older prediction contracts can also lack a criterion for one of their
+        scheduled horizons. Only pending targets are mutable; observed and
+        excluded audit rows are deliberately left untouched.
         """
 
         maximum = max(1, min(5000, int(limit or 1000)))
         repaired = []
+        excluded = []
         stamp = utc_now_iso()
         with self.transaction() as connection:
             rows = connection.execute(
@@ -847,11 +865,76 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     horizon_minutes = int(float(row.get("horizon_minutes") or 0))
                 except (TypeError, ValueError):
                     horizon_minutes = 0
-                target_at = outcome_target_at(episode, horizon_minutes)
-                if not target_at or target_at == canonical_investment_timestamp(row.get("target_at")):
-                    continue
                 target_payload = _json_loads(row.get("target_json"), {})
+                original_payload = dict(target_payload)
+                completeness = self.episode_outcome_contract_completeness(episode)
+                facts = (
+                    episode.facts_at_decision
+                    if isinstance(episode.facts_at_decision, dict)
+                    else {}
+                )
+                calibration = (
+                    facts.get("calibrationPolicy")
+                    if isinstance(facts.get("calibrationPolicy"), dict)
+                    else {}
+                )
+                if (
+                    not completeness.get("complete")
+                    or calibration.get("eligible") is not True
+                ):
+                    reason = str(
+                        "no-selected-hypothesis"
+                        if not episode.selected_hypothesis_id
+                        else "outcome-contract-incomplete"
+                        if not completeness.get("complete")
+                        else calibration.get("reason") or "calibration-ineligible"
+                    )[:191]
+                    target_payload.update({
+                        "status": "excluded",
+                        "exclusionReason": reason,
+                        "predictionContractCompleteness": completeness,
+                    })
+                    cursor = connection.execute(
+                        "UPDATE investment_decision_outcome_targets "
+                        "SET status = 'excluded', exclusion_reason = %s, "
+                        "payload_json = %s, updated_at = %s "
+                        "WHERE target_id = %s AND status = 'pending'",
+                        (
+                            reason,
+                            json_dumps(target_payload),
+                            stamp,
+                            str(row.get("target_id") or ""),
+                        ),
+                    )
+                    if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+                        excluded.append(str(row.get("target_id") or ""))
+                    continue
+                target_at = outcome_target_at(episode, horizon_minutes)
+                if not target_at:
+                    continue
+                target_payload.setdefault("episodeKind", "decision")
+                target_payload.setdefault("requiresInstrumentBaseline", True)
                 target_payload["targetAt"] = target_at
+                fact_delta = (
+                    facts.get("factDelta")
+                    if isinstance(facts.get("factDelta"), dict)
+                    else {}
+                )
+                baseline_at = canonical_investment_timestamp(
+                    fact_delta.get("source_observed_at")
+                    or fact_delta.get("sourceObservedAt")
+                    or facts.get("sourceAsOf")
+                )
+                if baseline_at:
+                    target_payload.setdefault("baselineAt", baseline_at)
+                decision_price = number(facts.get("currentPrice"))
+                if decision_price > 0:
+                    target_payload.setdefault("decisionPrice", decision_price)
+                    if facts.get("sourceAsOf"):
+                        target_payload.setdefault(
+                            "decisionPriceSourceAsOf",
+                            facts.get("sourceAsOf"),
+                        )
                 inferred_market = infer_market_from_context(
                     "investmentInsight",
                     {
@@ -866,6 +949,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     target_payload["currency"] = (
                         "KRW" if inferred_market == "KR" else "USD" if inferred_market == "US" else ""
                     )
+                target_changed = (
+                    target_at != canonical_investment_timestamp(row.get("target_at"))
+                )
+                if not target_changed and target_payload == original_payload:
+                    continue
                 cursor = connection.execute(
                     "UPDATE investment_decision_outcome_targets SET target_at = %s, "
                     "payload_json = %s, updated_at = %s "
@@ -879,11 +967,96 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 )
                 if int(getattr(cursor, "rowcount", 0) or 0) > 0:
                     repaired.append(str(row.get("target_id") or ""))
+
+            shadow_rows = connection.execute(
+                "SELECT targets.target_id, targets.horizon_minutes, targets.target_at, "
+                "targets.payload_json AS target_json, episodes.payload_json AS episode_json "
+                "FROM investment_hypothesis_observation_targets AS targets "
+                "JOIN investment_hypothesis_observation_episodes AS episodes "
+                "ON episodes.episode_id = targets.observation_episode_id "
+                "WHERE targets.account_id = %s AND targets.status = 'pending' "
+                "ORDER BY targets.target_at ASC, targets.target_id ASC LIMIT %s",
+                (str(account_id or ""), maximum),
+            ).fetchall()
+            for row in shadow_rows or []:
+                episode_payload = _json_loads(row.get("episode_json"), {})
+                episode = ShadowHypothesisObservationEpisode.from_dict(
+                    episode_payload
+                )
+                target_payload = _json_loads(row.get("target_json"), {})
+                original_payload = dict(target_payload)
+                completeness = outcome_contract_completeness(
+                    episode.outcome_contract
+                )
+                if not episode.observation_eligible or not completeness.get("complete"):
+                    reason = str(
+                        "outcome-contract-incomplete"
+                        if not completeness.get("complete")
+                        else (episode.readiness or {}).get("reason")
+                        or "observation-ineligible"
+                    )[:191]
+                    target_payload.update({
+                        "status": "excluded",
+                        "exclusionReason": reason,
+                        "predictionContractCompleteness": completeness,
+                    })
+                    cursor = connection.execute(
+                        "UPDATE investment_hypothesis_observation_targets "
+                        "SET status = 'excluded', exclusion_reason = %s, "
+                        "payload_json = %s, updated_at = %s "
+                        "WHERE target_id = %s AND status = 'pending'",
+                        (
+                            reason,
+                            json_dumps(target_payload),
+                            stamp,
+                            str(row.get("target_id") or ""),
+                        ),
+                    )
+                    if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+                        excluded.append(str(row.get("target_id") or ""))
+                    continue
+                try:
+                    horizon_minutes = int(float(row.get("horizon_minutes") or 0))
+                except (TypeError, ValueError):
+                    horizon_minutes = 0
+                target_at = market_outcome_target_at(
+                    episode.observed_from_at,
+                    episode.symbol,
+                    episode.market,
+                    episode.currency,
+                    horizon_minutes,
+                )
+                if not target_at:
+                    continue
+                target_payload.setdefault("episodeKind", "shadow-hypothesis")
+                target_payload.setdefault("requiresInstrumentBaseline", True)
+                target_payload.setdefault("baselineAt", episode.observed_from_at)
+                target_payload["targetAt"] = target_at
+                target_changed = (
+                    target_at != canonical_investment_timestamp(row.get("target_at"))
+                )
+                if not target_changed and target_payload == original_payload:
+                    continue
+                cursor = connection.execute(
+                    "UPDATE investment_hypothesis_observation_targets "
+                    "SET target_at = %s, payload_json = %s, updated_at = %s "
+                    "WHERE target_id = %s AND status = 'pending'",
+                    (
+                        target_at,
+                        json_dumps(target_payload),
+                        stamp,
+                        str(row.get("target_id") or ""),
+                    ),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+                    repaired.append(str(row.get("target_id") or ""))
         return {
-            "status": "repaired" if repaired else "unchanged",
-            "checkedCount": len(rows or []),
+            "status": "repaired" if repaired or excluded else "unchanged",
+            "checkedCount": len(rows or []) + len(shadow_rows or []),
             "repairedCount": len(repaired),
+            "excludedCount": len(excluded),
             "targetIds": repaired,
+            "excludedTargetIds": excluded,
         }
 
     def outcome_horizons(self) -> List[int]:
@@ -1742,10 +1915,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         with self.connect() as connection:
             decision_rows = connection.execute(
                 """
-                SELECT payload_json
-                FROM investment_decision_outcome_targets
-                WHERE account_id = %s AND status = 'pending' AND target_at <= %s
-                ORDER BY target_at ASC, target_id ASC
+                SELECT targets.payload_json,
+                       episodes.payload_json AS episode_json
+                FROM investment_decision_outcome_targets AS targets
+                JOIN investment_decision_episodes AS episodes
+                  ON episodes.episode_id = targets.episode_id
+                WHERE targets.account_id = %s
+                  AND targets.status = 'pending'
+                  AND targets.target_at <= %s
+                ORDER BY targets.target_at ASC, targets.target_id ASC
                 LIMIT %s
                 """,
                 (normalized_account_id, observed_stamp, target_limit),
@@ -1761,9 +1939,47 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 (normalized_account_id, observed_stamp, target_limit),
             ).fetchall()
         targets: List[Dict[str, object]] = []
-        for row in list(decision_rows or []) + list(shadow_rows or []):
+        for row in decision_rows or []:
             payload = _json_loads(row.get("payload_json"), {})
             if payload:
+                # Older pending decision targets predate the explicit baseline
+                # flag. They still need the quote at decidedAt because V2
+                # decision episodes intentionally keep large market facts out
+                # of their compact immutable payload.
+                payload.setdefault("episodeKind", "decision")
+                payload.setdefault("requiresInstrumentBaseline", True)
+                episode_payload = _json_loads(row.get("episode_json"), {})
+                facts = (
+                    episode_payload.get("factsAtDecision")
+                    if isinstance(episode_payload.get("factsAtDecision"), dict)
+                    else {}
+                )
+                fact_delta = (
+                    facts.get("factDelta")
+                    if isinstance(facts.get("factDelta"), dict)
+                    else {}
+                )
+                baseline_at = canonical_investment_timestamp(
+                    fact_delta.get("source_observed_at")
+                    or fact_delta.get("sourceObservedAt")
+                    or facts.get("sourceAsOf")
+                )
+                if baseline_at:
+                    payload.setdefault("baselineAt", baseline_at)
+                decision_price = number(facts.get("currentPrice"))
+                if decision_price > 0:
+                    payload.setdefault("decisionPrice", decision_price)
+                    if facts.get("sourceAsOf"):
+                        payload.setdefault(
+                            "decisionPriceSourceAsOf",
+                            facts.get("sourceAsOf"),
+                        )
+                targets.append(payload)
+        for row in shadow_rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if payload:
+                payload.setdefault("episodeKind", "shadow-hypothesis")
+                payload.setdefault("requiresInstrumentBaseline", True)
                 targets.append(payload)
         return sorted(
             targets,
@@ -1896,7 +2112,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 int(item.get("count") or 0) for item in shadow_states.values()
             ),
             "shadowDueTargetCount": int((shadow_due or {}).get("count") or 0),
-            "contract": "durable-decision-and-shadow-hypothesis-outcome-target-v2",
+            "contract": "durable-decision-and-shadow-hypothesis-outcome-target-v3",
         }
 
     def record_observation(
@@ -2084,7 +2300,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 continue
             facts = dict(item["facts"] or {})
             current_price = number(facts.get("currentPrice"))
-            decision_price = number((episode.facts_at_decision or {}).get("currentPrice"))
+            decision_price = number(
+                facts.get("decisionPrice")
+                or (episode.facts_at_decision or {}).get("currentPrice")
+            )
             change_pct = round(((current_price / decision_price) - 1) * 100, 4) if current_price and decision_price else 0.0
             selected_hypothesis = selected_hypothesis_payload(episode)
             stance = str(selected_hypothesis.get("stance") or "uncertain")
@@ -2130,6 +2349,8 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                     "outcomeMetric": selected_hypothesis.get("outcomeMetric") or "",
                     "falsificationContract": selected_hypothesis.get("falsificationContract") or "",
                     "inferenceGenerationId": facts.get("inferenceGenerationId") or "",
+                    "decisionPrice": decision_price,
+                    "decisionPriceSourceAsOf": facts.get("decisionPriceSourceAsOf") or "",
                     "observationBasis": str(facts.get("observationBasis") or "subsequent-market-observation"),
                     "observationSource": str(facts.get("observationSource") or facts.get("provider") or ""),
                     "sourceAsOf": canonical_investment_timestamp(facts.get("sourceAsOf")) or observed_at,

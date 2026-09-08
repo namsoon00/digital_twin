@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -10,6 +11,9 @@ from digital_twin.application.investment_reasoning.episode_projection import (
     decision_episode_outcome_contract_readiness,
     hypothesis_coverage_gap_request_from_subject_case,
     shadow_hypothesis_observation_episodes,
+)
+from digital_twin.application.investment_outcome_observation_service import (
+    InvestmentOutcomeObservationService,
 )
 from digital_twin.domain.hypothesis_observation import (
     ShadowHypothesisObservationEpisode,
@@ -59,6 +63,25 @@ class QueryRowsConnection(RecordingConnection):
         return SimpleNamespace(fetchall=lambda: list(self.rows))
 
 
+class PendingRepairConnection(RecordingConnection):
+    def __init__(self, decision_rows=None, shadow_rows=None):
+        super().__init__()
+        self.decision_rows = list(decision_rows or [])
+        self.shadow_rows = list(shadow_rows or [])
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, tuple(params)))
+        if normalized.startswith("SELECT targets.target_id"):
+            rows = (
+                self.shadow_rows
+                if "investment_hypothesis_observation_targets" in normalized
+                else self.decision_rows
+            )
+            return SimpleNamespace(fetchall=lambda: list(rows))
+        return SimpleNamespace(rowcount=1)
+
+
 def predictive_contract():
     payload = {
         "contractVersion": HYPOTHESIS_OUTCOME_CONTRACT_VERSION,
@@ -82,7 +105,7 @@ def predictive_contract():
             "metric": "instrumentReturnPct",
             "operator": ">=",
             "threshold": 0.5,
-            "horizonMinutes": 60,
+            "horizonMinutes": 0,
             "required": True,
             "requiredObservationDomains": ["quote"],
             "sourcePolicy": ["point-in-time-market-observation"],
@@ -103,6 +126,7 @@ def episode(contract=None, eligible=None):
         decided_at="2026-08-25T00:00:00Z",
         facts_at_decision={
             **({"hypothesisOutcomeContract": contract} if contract else {}),
+            "factDelta": {"source_observed_at": "2026-08-24T23:58:00Z"},
             "calibrationPolicy": {
                 "eligible": eligible,
                 "reason": "selected-predictive-rulebox-contract-frozen" if eligible else "no-selected-hypothesis",
@@ -165,6 +189,89 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertEqual("scheduled", result["status"])
         self.assertEqual(2, result["targetCount"])
         self.assertEqual(2, len(inserts))
+        target_payload = json.loads(next(
+            params[10]
+            for sql, params in connection.statements
+            if sql.startswith("INSERT INTO investment_decision_outcome_targets")
+        ))
+        self.assertEqual("decision", target_payload["episodeKind"])
+        self.assertTrue(target_payload["requiresInstrumentBaseline"])
+        self.assertEqual("2026-08-24T23:58:00Z", target_payload["baselineAt"])
+
+    def test_contract_rejects_a_scheduled_horizon_without_a_criterion(self):
+        contract = predictive_contract()
+        contract["criteria"][0]["horizonMinutes"] = 60
+        contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
+
+        readiness = decision_episode_outcome_contract_readiness(episode(contract))
+
+        self.assertFalse(readiness["ready"])
+        self.assertIn("criterion-horizon-coverage", readiness["missing"])
+
+    def test_observation_loads_the_price_at_the_source_baseline(self):
+        target = {
+            "requestId": "target:1",
+            "episodeId": "episode:1",
+            "episodeKind": "decision",
+            "symbol": "NVDA",
+            "horizonMinutes": 60,
+            "decidedAt": "2026-08-25T00:00:00Z",
+            "baselineAt": "2026-08-24T23:58:00Z",
+            "targetAt": "2026-08-25T01:00:00Z",
+            "maximumObservationDelayMinutes": 180,
+            "requiresInstrumentBaseline": True,
+        }
+
+        class Store:
+            def __init__(self):
+                self.records = []
+
+            def pending_outcome_targets(self, *_args, **_kwargs):
+                return [target]
+
+            def record_outcome_observations(self, _account_id, records):
+                self.records = list(records)
+                return []
+
+        class TimeSeries:
+            def __init__(self):
+                self.requests = []
+
+            def load_outcome_observations(self, _account_id, requests, **_kwargs):
+                rows = list(requests)
+                self.requests.append(rows)
+                result = {}
+                for request in rows:
+                    request_id = request["requestId"]
+                    baseline = request_id.endswith(":instrument-start")
+                    result[request_id] = {
+                        "currentPrice": 100 if baseline else 110,
+                        "sourceAsOf": request["targetAt"],
+                        "dataQuality": "fresh",
+                        "observationBasis": "historical-market-time-series",
+                    }
+                return result
+
+        store = Store()
+        time_series = TimeSeries()
+        service = InvestmentOutcomeObservationService(store, time_series)
+        snapshot = SimpleNamespace(
+            account_id="account:1",
+            generated_at="2026-08-25T01:01:00Z",
+            positions=[],
+            watchlist=[],
+            has_live_account_data=lambda: True,
+        )
+
+        service.observe_snapshot(snapshot)
+
+        baseline_request = time_series.requests[1][0]
+        self.assertEqual("2026-08-24T23:58:00Z", baseline_request["targetAt"])
+        self.assertEqual(100.0, store.records[0]["facts"]["decisionPrice"])
+        self.assertEqual(
+            "2026-08-24T23:58:00Z",
+            store.records[0]["facts"]["decisionPriceSourceAsOf"],
+        )
 
     def test_shadow_hypothesis_projection_deduplicates_repeated_snapshot_generation(self):
         claim_contract = {
@@ -479,6 +586,63 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         store.pending_outcome_targets("account:1")
         store.pending_outcome_targets("account:1")
         self.assertEqual(["account:1"], backfill_calls)
+
+    def test_pending_target_with_uncovered_horizon_is_retired(self):
+        contract = predictive_contract()
+        contract["criteria"][0]["horizonMinutes"] = 60
+        contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
+        episode_payload = {
+            "episodeId": "episode:legacy-gap",
+            "accountId": "account:1",
+            "symbol": "NVDA",
+            "selectedHypothesisId": "hypothesis:trend:1",
+            "decidedAt": "2026-08-25T00:00:00Z",
+            "factsAtDecision": {
+                "hypothesisOutcomeContract": contract,
+                "calibrationPolicy": {"eligible": True},
+            },
+        }
+        connection = PendingRepairConnection(decision_rows=[{
+            "target_id": "target:legacy-gap",
+            "horizon_minutes": 1440,
+            "target_at": "2026-08-26T00:00:00Z",
+            "target_json": json.dumps({
+                "requestId": "target:legacy-gap",
+                "episodeId": "episode:legacy-gap",
+            }),
+            "episode_json": json.dumps(episode_payload),
+            "episode_status": "active",
+            "decided_at": "2026-08-25T00:00:00Z",
+        }])
+        store = self.store()
+
+        @contextmanager
+        def transaction():
+            yield connection
+
+        store.transaction = transaction
+
+        result = store.repair_pending_outcome_target_schedules("account:1")
+
+        self.assertEqual("repaired", result["status"])
+        self.assertEqual(1, result["excludedCount"])
+        update = next(
+            (sql, params)
+            for sql, params in connection.statements
+            if sql.startswith("UPDATE investment_decision_outcome_targets")
+        )
+        self.assertIn("status = 'excluded'", update[0])
+        self.assertEqual("outcome-contract-incomplete", update[1][0])
+        shadow_select = next(
+            sql
+            for sql, _params in connection.statements
+            if sql.startswith("SELECT targets.target_id")
+            and "investment_hypothesis_observation_targets" in sql
+        )
+        self.assertIn(
+            "episodes.episode_id = targets.observation_episode_id",
+            shadow_select,
+        )
 
     def test_market_symbol_without_metadata_aligns_outcome_to_next_session(self):
         value = episode(predictive_contract())

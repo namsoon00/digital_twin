@@ -66,9 +66,13 @@ def quality_review_for_item(item: Mapping[str, object]) -> Dict[str, object]:
     sample_count = int(outcome.get("sampleCount") or 0)
     minimum = int(outcome.get("minimumSampleCount") or 1)
     missing_domains = values(outcome.get("missingObservationDomains"))
+    missing_contract_fields = values(outcome.get("missingOutcomeContractFields"))
     excluded_reasons = outcome.get("excludedOutcomeReasons") if isinstance(outcome.get("excludedOutcomeReasons"), Mapping) else {}
     legacy_outcome_count = int(excluded_reasons.get("legacy-eligibility-not-recorded") or 0)
     criterion_gap_count = int(excluded_reasons.get("excluded-criterion-data-gap") or 0)
+    incomplete_contract_count = int(
+        excluded_reasons.get("excluded-incomplete-prediction-contract") or 0
+    )
     freshness_domains = required_freshness_problem(source)
     lifecycle_state = text(source.get("state")) or "observed"
     state = "stable"
@@ -80,6 +84,17 @@ def quality_review_for_item(item: Mapping[str, object]) -> Dict[str, object]:
         reason = "독립된 사후 관측에서 가설과 반대 방향의 결과가 더 많이 확인됐습니다."
         next_check = "원문 근거, 반대 근거, 관측 계약과 TypeDB 규칙 미리보기를 함께 검토합니다."
         change_type = "review-hypothesis-explanation-and-evidence-coverage"
+    elif missing_contract_fields or incomplete_contract_count:
+        state = "coverage-gap"
+        reason = (
+            "사후 검증 계약이 완전하지 않아 결과 "
+            + str(incomplete_contract_count)
+            + "건을 표본에서 제외했습니다: "
+            + (", ".join(missing_contract_fields) or "계약 세부 항목 확인 필요")
+            + "."
+        )
+        next_check = "새 추론 세대가 완전한 계약과 지문을 동결하고 사후 관측하는지 확인합니다."
+        change_type = "repair-outcome-contract-coverage"
     elif missing_domains or criterion_gap_count:
         state = "coverage-gap"
         reason = (
@@ -135,6 +150,7 @@ def quality_review_for_item(item: Mapping[str, object]) -> Dict[str, object]:
         "sampleCount": sample_count,
         "minimumSampleCount": minimum,
         "missingObservationDomains": missing_domains,
+        "missingOutcomeContractFields": missing_contract_fields,
         "freshnessProblemDomains": freshness_domains,
         "automaticDeployment": False,
         "decisionEligibility": "quality-review-only",

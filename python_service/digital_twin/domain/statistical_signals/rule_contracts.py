@@ -51,12 +51,13 @@ PRODUCTION_RULE_SIGNAL_TYPES = {
     "graph.flow.price_up_smart_money_outflow.divergence.v1": "flow-price-divergence-risk",
     "graph.profit_harvest.path_deceleration.v1": "price-trend-break-risk",
     "graph.profit_protect.short_term_recovery.counter.v1": "price-recovery-support",
-    "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1": "cross-asset-residual-support",
+    "graph.price.rebound.failure.v1": "price-failed-recovery-risk",
+    "graph.temporal.failed_recovery.risk.v1": "price-failed-recovery-risk",
     "graph.instrument_profile.preferred_income.rate_sensitivity.v1": "regime-transition-risk",
     "graph.security_line.leveraged_flow_amplification.v1": "flow-distribution-risk",
     "graph.watchlist.pullback.entry.v1": "price-recovery-support",
-    "graph.temporal.weakness_accumulation.defense.v1": "price-recovery-support",
-    "graph.temporal.risk_event_absorption.support.v1": "price-recovery-support",
+    "graph.temporal.weakness_accumulation.defense.v1": "flow-accumulation-support",
+    "graph.temporal.risk_event_absorption.support.v1": "event-abnormal-return-support",
     "graph.valuation.high_beta_or_expensive.review.v1": "valuation-relative-stretch-risk",
 }
 
@@ -65,6 +66,7 @@ PRICE_TREND_SIGNALS = (
     "price-trend-break-risk",
     "price-downside-acceleration-risk",
     "price-recovery-support",
+    "price-failed-recovery-risk",
 )
 FLOW_SIGNALS = (
     "flow-accumulation-support",

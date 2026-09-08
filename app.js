@@ -15358,12 +15358,43 @@
     });
   }
 
+  function consoleTodayDecisionWindowHours() {
+    return Math.max(1, Number((((state.dashboardSummary || {}).taskSummary || {}).freshnessWindowHours) || 96));
+  }
+
+  function consoleTodayRecordIsCurrent(record, windowMinutes) {
+    var changedAt = recordChangedAtValue(record);
+    if (!changedAt) return false;
+    return changedAt >= Date.now() - Math.max(1, Number(windowMinutes || 0)) * 60 * 1000;
+  }
+
+  function consoleTodayDecisionIsCurrent(row) {
+    return consoleTodayRecordIsCurrent(row, consoleTodayDecisionWindowHours() * 60);
+  }
+
+  function consoleTodayNotificationIsActionable(job) {
+    if (!job || job.acknowledgedAt) return false;
+    if (typeof job.priorityQueueEligible === "boolean") return job.priorityQueueEligible;
+    if (job.recoverableProcessing) return true;
+    if (job.status !== "failed") return false;
+    return consoleTodayRecordIsCurrent(job, Number(job.priorityQueueWindowMinutes || 60));
+  }
+
+  function consoleTodayHistoricalCount() {
+    var taskSummary = ((state.dashboardSummary || {}).taskSummary || {});
+    var decisionHistory = Math.max(0, Number(taskSummary.historical || 0));
+    var notificationHistory = (state.notificationJobItems || []).filter(function (job) {
+      return job.status === "failed" && !consoleTodayNotificationIsActionable(job);
+    }).length;
+    return decisionHistory + notificationHistory;
+  }
+
   function selectConsoleTodayTasks(snapshot, options) {
     options = options || {};
     var tasks = [];
     var dashboardTasks = Array.isArray((state.dashboardSummary || {}).tasks) ? state.dashboardSummary.tasks : [];
     if (dashboardTasks.length || (state.dashboardSummary || {}).version) {
-      dashboardTasks.forEach(function (row) {
+      dashboardTasks.filter(consoleTodayDecisionIsCurrent).forEach(function (row) {
         var action = decisionActionMeta(row.action, row.action);
         tasks.push({
           key: "decision:" + (row.id || row.symbol),
@@ -15380,7 +15411,7 @@
         });
       });
     } else {
-      selectConsoleDecisionRows(snapshot).forEach(function (row) {
+      selectConsoleDecisionRows(snapshot).filter(consoleTodayDecisionIsCurrent).forEach(function (row) {
         tasks.push({
           key: "decision:" + row.key,
           priority: row.tone === "danger" ? 1 : (row.tone === "caution" ? 2 : 3),
@@ -15396,9 +15427,7 @@
         });
       });
     }
-    (state.notificationJobItems || []).filter(function (job) {
-      return job.status === "failed" || job.status === "pending" || job.recoverableProcessing;
-    }).forEach(function (job, index) {
+    (state.notificationJobItems || []).filter(consoleTodayNotificationIsActionable).forEach(function (job, index) {
       var jobKey = notificationJobKey(job) || String(index);
       tasks.push({
         key: "notification:" + jobKey,
@@ -15479,6 +15508,7 @@
 
   function todayQueueWorkDetailPayload() {
     var tasks = selectConsoleTodayTasks(state.snapshot || {}, { collapseCalendar: false });
+    var historicalCount = consoleTodayHistoricalCount();
     var page = consolePageSlice(tasks, "today", 12);
     var body = page.items.length
       ? '<div class="oa-work-list" data-console-keyed-list="today-full">' + page.items.map(renderConsoleTaskRow).join("") + '</div>'
@@ -15486,7 +15516,7 @@
     return editorWorkDetailPayload(
       "Priority Queue",
       "전체 작업 큐",
-      "판단·알림·일정·데이터 이상 " + tasks.length + "건",
+      "현재 " + tasks.length + "건" + (historicalCount ? " · 이전 기록 " + historicalCount + "건은 이력에 보관" : ""),
       '<section class="oa-detail-queue">' + renderConsoleLiveRegion("today-full-body", body) + renderConsolePager("today", page) + '</section>'
     );
   }
@@ -15496,6 +15526,7 @@
     var dashboard = state.dashboardSummary || {};
     var dashboardPortfolio = dashboard.portfolio || {};
     var tasks = selectConsoleTodayTasks(snapshot, { collapseCalendar: true });
+    var historicalCount = consoleTodayHistoricalCount();
     var urgent = tasks.filter(function (task) { return task.priority <= 2; }).length;
     var upcoming = Array.isArray(dashboard.upcomingEvents) && dashboard.upcomingEvents.length ? dashboard.upcomingEvents : investmentCalendarUpcomingEvents();
     var blockers = Array.isArray(dashboard.blockerGroups) ? dashboard.blockerGroups : [];
@@ -15521,7 +15552,7 @@
     ].join("");
     return renderConsoleManagedPage("overview", metrics, [
       '<div class="oa-console-grid oa-console-grid-primary">',
-      renderConsoleSurface({ kicker: "PRIORITY QUEUE", title: "지금 처리할 일", description: "실행 또는 재확인이 필요한 판단과 전달 실패만 최대 3개 표시합니다.", meta: Math.min(tasks.length, 3) + " / " + tasks.length + "건", actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
+      renderConsoleSurface({ kicker: "PRIORITY QUEUE", title: "지금 처리할 일", description: "최근 " + consoleTodayDecisionWindowHours() + "시간의 판단과 아직 조치 가능한 전달 실패만 표시합니다. 이전 기록은 판단·알림 이력에 남습니다.", meta: "현재 " + tasks.length + "건" + (historicalCount ? " · 이전 " + historicalCount + "건" : ""), actions: tasks.length > 3 ? renderWorkDetailButton("today-work-queue", "", "전체 보기", "text-button compact") : "", body: renderConsoleLiveRegion("today-primary-body", taskBody) }),
       renderConsoleSurface({ kicker: "BLOCKER GROUPS", title: "공통 확인 원인", description: "같은 원인으로 막힌 종목을 데이터·추론·AI 단계별로 묶습니다.", body: renderConsoleLiveRegion("today-context-body", contextBody) }),
       '</div>'
     ].join(""));

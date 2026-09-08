@@ -955,6 +955,10 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
                     "modelSignalBridgeReadCount",
                     "eliminatedModelSignalPolicyQueryCount",
                     "ignoredContractIds",
+                    "sourceRowCount",
+                    "dispatchedMatchCount",
+                    "matchedContractIds",
+                    "matchedSymbols",
                     "subjectCount",
                 ]
                 if key in model_signal_bridge_execution

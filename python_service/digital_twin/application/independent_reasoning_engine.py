@@ -335,10 +335,26 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(values.get("performanceAssessment"), Mapping)
         else {}
     )
-    model_signal_bridge_execution = (
+    rulebox_execution = (
+        values.get("ruleboxExecution")
+        if isinstance(values.get("ruleboxExecution"), Mapping)
+        else {}
+    )
+    direct_model_signal_bridge_execution = (
         values.get("modelSignalBridgeExecution")
         if isinstance(values.get("modelSignalBridgeExecution"), Mapping)
         else {}
+    )
+    nested_model_signal_bridge_execution = (
+        rulebox_execution.get("modelSignalBridgeExecution")
+        if isinstance(
+            rulebox_execution.get("modelSignalBridgeExecution"), Mapping
+        )
+        else {}
+    )
+    model_signal_bridge_execution = (
+        direct_model_signal_bridge_execution
+        or nested_model_signal_bridge_execution
     )
     shared_model_signal_bridge_execution = (
         shared_execution.get("modelSignalBridgeExecution")

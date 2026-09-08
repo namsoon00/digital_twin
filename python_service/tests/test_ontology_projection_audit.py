@@ -205,6 +205,15 @@ class OntologyProjectionAuditTests(unittest.TestCase):
     def test_projection_summary_keeps_candidate_endpoint_failure_details(self):
         summary = projection_result_summary({
             "status": "candidate-relation-endpoint-missing",
+            "ruleboxExecution": {
+                "modelSignalBridgeExecution": {
+                    "status": "ok",
+                    "sourceRowCount": 3,
+                    "dispatchedMatchCount": 1,
+                    "matchedContractIds": ["graph.price.recovery.v1"],
+                    "matchedSymbols": ["035720"],
+                },
+            },
             "candidateSemanticReconciliationFailure": {
                 "status": "candidate-relation-endpoint-missing",
                 "scopeId": "link:symbol:035720:evidence:bucket:20",
@@ -219,6 +228,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual("HAS_ARTICLE_ANALYSIS", failure["relationType"])
         self.assertEqual(["abox-scope:old"], failure["knownEndpointGenerationIds"])
         self.assertNotIn("unboundedDebugPayload", failure)
+        bridge = summary["ruleboxExecution"]["modelSignalBridgeExecution"]
+        self.assertEqual(3, bridge["sourceRowCount"])
+        self.assertEqual(1, bridge["dispatchedMatchCount"])
+        self.assertEqual(["035720"], bridge["matchedSymbols"])
 
     def assert_abox_runtime_modes_are_not_coerced_into_numeric_stages(self):
         stages = {}

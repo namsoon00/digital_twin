@@ -2168,6 +2168,15 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                     "privatePayload": {"large": "payload"},
                 },
             },
+            "ruleboxExecution": {
+                "modelSignalBridgeExecution": {
+                    "status": "ok",
+                    "sourceRowCount": 4,
+                    "dispatchedMatchCount": 2,
+                    "matchedContractIds": ["graph.price.recovery.v1"],
+                    "matchedSymbols": ["000660"],
+                },
+            },
         })
 
         performance = compact["performanceAssessment"]
@@ -2180,6 +2189,11 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(["symbol:000680:flow"], patch["missingEndpointScopeIds"])
         self.assertEqual("missing-endpoint", patch["patchPlanViolations"][0]["code"])
         self.assertNotIn("privatePayload", patch["repairInputFallback"])
+        self.assertEqual(4, compact["modelSignalBridgeExecution"]["sourceRowCount"])
+        self.assertEqual(
+            ["graph.price.recovery.v1"],
+            compact["modelSignalBridgeExecution"]["matchedContractIds"],
+        )
         self._assert_compact_projection_preserves_bounded_rule_match_proof()
         self._assert_inference_trace_preserves_exact_match_target_for_batched_run()
         self._assert_compact_match_identity_resolves_symbol_token_in_source_id()

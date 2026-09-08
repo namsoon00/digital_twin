@@ -641,6 +641,115 @@ class OntologyChangeImpactTests(unittest.TestCase):
             plan["diagnostics"]["reasonCodes"],
         )
 
+        model_rule = next(
+            rule
+            for rule in default_graph_inference_rules()
+            if rule.rule_id == "graph.price.reclaim.thesis_support.v1"
+        )
+        model_profile = rule_dependency_profile(model_rule)
+        self.assertNotIn("model-signal", model_profile["scopeFamilies"])
+        self.assertEqual(
+            ["model-signal"],
+            model_profile["derivedScopeFamilies"],
+        )
+        derived_before = [
+            {
+                "scopeId": "symbol:028260:flow",
+                "generationId": "flow-a",
+                "semanticFingerprints": {"flow": "flow-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {
+                    "relation:has-trade-flow": "flow-a",
+                },
+            },
+            {
+                "scopeId": "symbol:028260:model-signal",
+                "generationId": "signal-a",
+                "semanticFingerprints": {"model-signal": "signal-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {
+                    "relation:has-model-signal:field:hypothesiscontractid": "signal-a",
+                },
+            },
+            {
+                "scopeId": "symbol:028260:profile",
+                "generationId": "profile-a",
+                "semanticFingerprints": {"profile": "profile-a"},
+                "semanticDependencyFingerprintVersion": DEPENDENCY_FINGERPRINT_VERSION,
+                "semanticDependencyFingerprints": {
+                    "kind:stock:field:source": "profile-a",
+                },
+            },
+        ]
+        derived_after = [
+            {
+                **item,
+                "generationId": str(item["generationId"])[:-1] + "b",
+                "semanticFingerprints": {
+                    family: value[:-1] + "b"
+                    for family, value in item["semanticFingerprints"].items()
+                },
+                "semanticDependencyFingerprints": {
+                    key: value[:-1] + "b"
+                    for key, value in item["semanticDependencyFingerprints"].items()
+                },
+            }
+            for item in derived_before
+        ]
+
+        derived_plan = build_inference_impact_plan(
+            derived_before,
+            derived_after,
+            ["028260"],
+            explicit_target_symbols=["028260"],
+            rules=[model_rule],
+            requested_fact_families=["flow"],
+            requested_fact_families_by_symbol={"028260": ["flow"]},
+        )
+
+        self.assertTrue(derived_plan["eventScopedRuleSelection"])
+        self.assertTrue(derived_plan["derivedScopeRoutingApplied"])
+        self.assertEqual(
+            ["flow", "model-signal"],
+            derived_plan["routingScopeFamilies"],
+        )
+        self.assertEqual(
+            ["symbol:028260:model-signal"],
+            derived_plan["derivedScopeIds"],
+        )
+        self.assertEqual(
+            ["graph.price.reclaim.thesis_support.v1"],
+            derived_plan["candidateRuleIds"],
+        )
+        exact_derived_plan = build_inference_impact_plan(
+            derived_before,
+            derived_after,
+            ["028260"],
+            explicit_target_symbols=["028260"],
+            rules=[model_rule],
+            requested_fact_families=["flow"],
+            requested_fact_families_by_symbol={"028260": ["flow"]},
+            requested_dependency_keys=["relation:has-trade-flow"],
+            requested_dependency_keys_by_symbol={
+                "028260": ["relation:has-trade-flow"],
+            },
+            dependency_boundary_authoritative=True,
+        )
+        self.assertTrue(exact_derived_plan["eventDependencyKeyRoutingApplied"])
+        self.assertIn(
+            "relation:has-model-signal:field:hypothesiscontractid",
+            exact_derived_plan["routingDependencyKeys"],
+        )
+        self.assertEqual(
+            ["graph.price.reclaim.thesis_support.v1"],
+            exact_derived_plan["candidateRuleIds"],
+        )
+        self.assertTrue(
+            compact_inference_impact_plan(derived_plan)[
+                "derivedScopeRoutingApplied"
+            ]
+        )
+
     def test_native_crypto_owner_and_descendant_dependency_keys_route_rules(self):
         before = [
             {

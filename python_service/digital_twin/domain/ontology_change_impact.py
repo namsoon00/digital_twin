@@ -24,10 +24,15 @@ from .fact_changes import scope_families_for_fact_types
 # shared facts that happened to be present in the latest persisted snapshot.
 # TypeDB still evaluates every selected RuleBox function; Python only avoids
 # scheduling rules whose actual inputs did not change for this event.
-CHANGE_IMPACT_VERSION = "abox-change-impact-v16-native-source-routing"
+CHANGE_IMPACT_VERSION = "abox-change-impact-v17-derived-signal-routing"
 LEGACY_DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v3"
 DEPENDENCY_FINGERPRINT_VERSION = "rule-input-v4-packed"
 DYNAMIC_INFERENCE_PREFLIGHT_VERSION = "dynamic-inference-preflight-v1"
+
+# These facts are recomputed synchronously from a verified source snapshot.
+# They are not part of the producer's original event boundary, but a changed
+# target-owned scope must still reopen the RuleBox adapters that consume it.
+SYNCHRONOUS_DERIVED_SCOPE_FAMILIES = {"model-signal"}
 
 
 def pack_semantic_dependency_fingerprints(
@@ -732,12 +737,18 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
         if isinstance(item, Mapping)
     ]
     if model_profiles:
+        derived_condition_profiles = [
+            item for item in executable_profiles
+            if str(item.get("targetKind") or "")
+            == "statistical-model-hypothesis-evidence"
+        ]
         condition_profiles = [
             item for item in executable_profiles
             if str(item.get("targetKind") or "")
             != "statistical-model-hypothesis-evidence"
         ] + model_profiles
     else:
+        derived_condition_profiles = []
         condition_profiles = executable_profiles
     families = sorted({family for item in condition_profiles for family in item["scopeFamilies"]})
     dependency_keys = sorted({
@@ -749,12 +760,27 @@ def rule_dependency_profile(rule: object) -> Dict[str, object]:
     conservative = any(bool(item.get("conservative")) for item in condition_profiles) or not families
     if conservative and "unknown" not in families:
         families.append("unknown")
+    derived_families = sorted({
+        family
+        for item in derived_condition_profiles
+        for family in item.get("scopeFamilies") or []
+        if _clean(family)
+    })
+    derived_dependency_keys = sorted({
+        key
+        for item in derived_condition_profiles
+        for key in item.get("dependencyKeys") or []
+        if _clean(key)
+    })
     return {
         "ruleId": rule_id,
         "enabled": enabled,
         "scopeFamilies": sorted(families),
         "dependencyKeys": dependency_keys,
         "conditionProfiles": condition_profiles,
+        "derivedScopeFamilies": derived_families,
+        "derivedDependencyKeys": derived_dependency_keys,
+        "derivedConditionProfiles": derived_condition_profiles,
         "conservative": conservative,
     }
 
@@ -1072,7 +1098,11 @@ def _rule_may_depend_on(
     dependency_fingerprint_coverage_complete: bool = False,
     capability: str = "either",
 ) -> bool:
-    families = {str(value or "") for value in profile.get("scopeFamilies") or []}
+    families = {
+        str(value or "")
+        for value in list(profile.get("scopeFamilies") or [])
+        + list(profile.get("derivedScopeFamilies") or [])
+    }
     if not changed_families or "unknown" in families or "state" in changed_families:
         return True
     family_intersects = _families_intersect(families, changed_families)
@@ -1092,7 +1122,13 @@ def _rule_may_depend_on(
     conditions = [
         item for item in profile.get("conditionProfiles") or []
         if isinstance(item, Mapping)
-        and (
+    ] + [
+        item for item in profile.get("derivedConditionProfiles") or []
+        if isinstance(item, Mapping)
+    ]
+    conditions = [
+        item for item in conditions
+        if (
             capability == "either"
             or capability == "trigger" and bool(item.get("canTriggerEvaluation", True))
             or capability == "invalidation" and bool(item.get("canInvalidatePriorResult", True))
@@ -1465,6 +1501,9 @@ def event_scoped_routing_inputs(
             "eventDependencyKeyRoutingApplied": False,
             "eventDependencyKeyNarrowed": False,
             "nativeSourceScopeRoutingApplied": False,
+            "derivedScopeRoutingApplied": False,
+            "derivedScopeIds": [],
+            "derivedScopeFamilies": [],
             "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
@@ -1490,6 +1529,9 @@ def event_scoped_routing_inputs(
     selected_dependency_keys: Set[str] = set()
     selected_dependency_keys_all: Set[str] = set()
     requested_dependency_keys_for_selected_scopes: Set[str] = set()
+    selected_derived_scope_ids: Set[str] = set()
+    selected_derived_families: Set[str] = set()
+    selected_derived_dependency_keys: Set[str] = set()
     deferred_shared_scope_ids: List[str] = []
     deferred_shared_families: Set[str] = set()
     native_source_scope_ids: Set[str] = set()
@@ -1544,6 +1586,11 @@ def event_scoped_routing_inputs(
             for family in semantic
             if _families_intersect({family}, target_requested)
         }
+        derived_target_families = (
+            semantic.intersection(SYNCHRONOUS_DERIVED_SCOPE_FAMILIES)
+            if is_target_scope
+            else set()
+        )
         if is_target_scope:
             # Legacy requests carry only a batch-wide provenance list, so
             # preserve the conservative target-wide path for them. New
@@ -1555,6 +1602,7 @@ def event_scoped_routing_inputs(
                 if symbol_specific_family_routing
                 else semantic
             )
+            included_families.update(derived_target_families)
             # Exact event dependencies are stronger than coarse physical
             # families. A shared crypto observation is stored as macro-crypto
             # even when the source event is named market/exposure.
@@ -1572,6 +1620,10 @@ def event_scoped_routing_inputs(
         if included_families:
             selected_scope_ids.append(scope_id)
             selected_families.update(included_families)
+            if derived_target_families:
+                selected_derived_scope_ids.add(scope_id)
+                selected_derived_families.update(derived_target_families)
+                selected_derived_dependency_keys.update(scope_dependency_keys)
             # Dependency fingerprints are currently scoped, not family-keyed.
             # When a new per-symbol request intentionally narrows one scope,
             # retain safe family-level selection instead of incorrectly using
@@ -1607,6 +1659,9 @@ def event_scoped_routing_inputs(
             "eventDependencyKeyRoutingApplied": False,
             "eventDependencyKeyNarrowed": False,
             "nativeSourceScopeRoutingApplied": False,
+            "derivedScopeRoutingApplied": False,
+            "derivedScopeIds": [],
+            "derivedScopeFamilies": [],
             "targetScopeNarrowed": False,
             "deferredSharedScopeIds": [],
             "deferredSharedScopeFamilies": [],
@@ -1625,7 +1680,10 @@ def event_scoped_routing_inputs(
         and exact_event_dependency_keys != selected_dependency_keys_all
     )
     if event_dependency_key_routing_applied:
-        selected_dependency_keys = set(exact_event_dependency_keys)
+        selected_dependency_keys = (
+            set(exact_event_dependency_keys)
+            | selected_derived_dependency_keys
+        )
     dependency_keys_complete = bool(
         event_dependency_key_routing_applied
         or not target_scope_narrowed
@@ -1647,6 +1705,9 @@ def event_scoped_routing_inputs(
         "eventDependencyKeyNarrowed": event_dependency_key_narrowed,
         "nativeSourceScopeRoutingApplied": bool(native_source_scope_ids),
         "nativeSourceScopeIds": sorted(native_source_scope_ids),
+        "derivedScopeRoutingApplied": bool(selected_derived_scope_ids),
+        "derivedScopeIds": sorted(selected_derived_scope_ids),
+        "derivedScopeFamilies": sorted(selected_derived_families),
         "requestedDependencyKeys": sorted(
             requested_dependency_keys_for_selected_scopes
         ),
@@ -1992,6 +2053,17 @@ def build_inference_impact_plan(
         diagnostics["reasonCodes"] = list(diagnostics.get("reasonCodes") or []) + [
             "event-boundary-deferred-unrelated-global-context"
         ]
+    if event_routing.get("derivedScopeRoutingApplied"):
+        diagnostics.update({
+            "derivedScopeRoutingApplied": True,
+            "derivedScopeCount": len(event_routing.get("derivedScopeIds") or []),
+            "derivedScopeFamilies": list(
+                event_routing.get("derivedScopeFamilies") or []
+            ),
+        })
+        diagnostics["reasonCodes"] = list(diagnostics.get("reasonCodes") or []) + [
+            "synchronous-derived-signal-routing"
+        ]
     impact_domains: List[str] = []
     if target_symbols or explicit_symbols:
         impact_domains.append("SUBJECT")
@@ -2075,6 +2147,13 @@ def build_inference_impact_plan(
         ),
         "nativeSourceScopeIds": list(
             event_routing.get("nativeSourceScopeIds") or []
+        ),
+        "derivedScopeRoutingApplied": bool(
+            event_routing.get("derivedScopeRoutingApplied")
+        ),
+        "derivedScopeIds": list(event_routing.get("derivedScopeIds") or []),
+        "derivedScopeFamilies": list(
+            event_routing.get("derivedScopeFamilies") or []
         ),
         "eventScopedRuleSelection": event_scoped_rule_selection,
         "eventScopedScopeIds": list(event_routing.get("scopeIds") or []),
@@ -2205,6 +2284,13 @@ def compact_inference_impact_plan(plan: Mapping[str, object], limit: int = 80) -
         ),
         "nativeSourceScopeIds": list(
             values.get("nativeSourceScopeIds") or []
+        )[:bounded],
+        "derivedScopeRoutingApplied": bool(
+            values.get("derivedScopeRoutingApplied")
+        ),
+        "derivedScopeIds": list(values.get("derivedScopeIds") or [])[:bounded],
+        "derivedScopeFamilies": list(
+            values.get("derivedScopeFamilies") or []
         )[:bounded],
         "eventScopedRuleSelection": bool(values.get("eventScopedRuleSelection")),
         "eventScopedScopeIds": list(values.get("eventScopedScopeIds") or [])[:bounded],

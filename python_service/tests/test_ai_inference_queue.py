@@ -157,11 +157,85 @@ class AIInferenceQueueTests(unittest.TestCase):
 
     def test_subject_decision_ai_is_independent_idempotent_and_delivery_gated(self):
         self.assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist()
+        self.assert_review_only_subject_queues_narrative_without_action_transition()
         self.assert_subject_decision_ai_exists_before_notification_and_promotes_after_completion()
         self.assert_subject_decision_ai_web_only_result_never_creates_notification()
         self.assert_subject_decision_notification_admission_is_reflected_in_episode()
         self.assert_subject_decision_ai_failure_never_creates_notification()
         self.assert_subject_decision_queue_coalesces_same_material_meaning()
+
+    def assert_review_only_subject_queues_narrative_without_action_transition(self):
+        class Queue:
+            def __init__(self):
+                self.requests = []
+
+            def enqueue_subject_decision(self, job, request):
+                self.requests.append((job, request))
+                return {
+                    "status": "awaiting-ai-insight",
+                    "requestId": request.request_id,
+                    "notificationJobId": "",
+                    "reservedNotificationJobId": request.notification_job_id,
+                }
+
+        class Orchestrator:
+            ai_queue_transitions = 0
+
+            def capture_ai_context(self, _subject_case_id, context):
+                return dict(context)
+
+            def ai_queued(self, *_args):
+                self.ai_queue_transitions += 1
+
+            def case_superseded(self, *_args):
+                raise AssertionError("narrative-only subjects must keep their terminal publication")
+
+        job, _request = self.create_detached_request("subject:detached:review-only")
+        job.context.pop("investmentAIInsightHandoff", None)
+        job.context["investmentSubjectDecisionCase"]["stage"] = "REVIEW_ONLY"
+        job.context["investmentSubjectDecisionCase"]["publication"] = {
+            "outcomeKind": "REVIEW_ONLY",
+        }
+        rule = {
+            "ruleId": "graph.company.risk.review.v1",
+            "knowledgeBasis": {
+                "owner": "ontology-semantic",
+                "ruleKind": "predictive-hypothesis",
+                "decisionEligibility": "conditional",
+                "requiresHypothesis": True,
+            },
+        }
+        relation = job.context["ontologyRelationContext"]
+        relation.update({
+            "source": "typedbInferenceBox",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "activeRules": [rule],
+            "matchedRules": [rule],
+            "decision": {
+                "selectedRuleId": rule["ruleId"],
+                "basis": "typedbInferenceBox",
+            },
+        })
+        job.context["v2DecisionSynthesis"] = {
+            "selected_rule_id": rule["ruleId"],
+            "eligible_hypothesis_ids": ["hypothesis:review-only"],
+            "action_authority": "modify",
+        }
+        queue = Queue()
+        orchestrator = Orchestrator()
+
+        outcome = NotificationAIRequestEnqueuer(
+            queue,
+            reasoning_orchestrator=orchestrator,
+        ).enqueue_subject_decision(job)
+
+        self.assertEqual("awaiting-ai-insight", outcome["status"])
+        self.assertEqual(1, len(queue.requests))
+        queued_request = queue.requests[0][1]
+        self.assertEqual("context-narrative", queued_request.review_mode)
+        self.assertTrue(queued_request.detached_from_notification)
+        self.assertEqual(0, orchestrator.ai_queue_transitions)
 
     def assert_subject_decision_ai_exists_before_notification_and_promotes_after_completion(self):
         self.setUp()

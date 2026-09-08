@@ -83,6 +83,9 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   and delivery policy, and create a notification job only when that final
   reconciliation is admitted. A failed, stale, duplicate, or web-only AI
   attempt must remain auditable without manufacturing a customer notification.
+  A graph-proven `REVIEW_ONLY` or `OBSERVATION` subject may request AI narrative
+  interpretation, but that request must retain `context-narrative` mode and may
+  never originate an investment action.
 - A reasoning request bound to `verifiedSourceSnapshot.generatedAt` must read
   that exact MySQL snapshot-history row. Never substitute a newer snapshot.
   If the point-in-time row is unavailable, defer or reject the request with an

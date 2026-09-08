@@ -531,12 +531,7 @@ class NotificationAIRequestEnqueuer:
             raise ValueError("Detached AI insight requires a persisted subject decision case.")
 
         context["notificationAiReviewMode"] = notification_ai_review_mode(context)
-        if context["notificationAiReviewMode"] == "context-narrative":
-            return {
-                "status": "web-only-context-observation",
-                "notificationJobId": "",
-                "subjectCaseId": subject_case_id,
-            }
+        narrative_only = context["notificationAiReviewMode"] == "context-narrative"
         context = self.reasoning_orchestrator.capture_ai_context(
             subject_case_id,
             context,
@@ -550,14 +545,19 @@ class NotificationAIRequestEnqueuer:
             else {}
         )
         captured_stage = str(captured_subject.get("stage") or "").strip().upper()
-        if captured_stage in {
+        terminal_stages = {
             SUBJECT_ABSTAINED,
             SUBJECT_BLOCKED,
             SUBJECT_OBSERVATION,
             SUBJECT_PUBLISHED,
             SUBJECT_REVIEW_ONLY,
             SUBJECT_SUPPRESSED,
-        }:
+        }
+        narrative_source_stages = {SUBJECT_OBSERVATION, SUBJECT_REVIEW_ONLY}
+        if (
+            captured_stage in terminal_stages
+            and not (narrative_only and captured_stage in narrative_source_stages)
+        ):
             return {
                 "status": "web-only-terminal-subject",
                 "notificationJobId": "",
@@ -567,7 +567,7 @@ class NotificationAIRequestEnqueuer:
 
         action_eligibility = notification_ai_action_eligibility(context)
         context["notificationAiActionEligibility"] = action_eligibility
-        if not action_eligibility.get("eligible"):
+        if not narrative_only and not action_eligibility.get("eligible"):
             reason = str(
                 action_eligibility.get("reason")
                 or "TypeDB action contract is incomplete."
@@ -640,22 +640,29 @@ class NotificationAIRequestEnqueuer:
         )
         outcome = self.queue.enqueue_subject_decision(job, request)
         status = str(outcome.get("status") or "")
-        if status in {"awaiting-ai-insight", "pending", "processing", "retry"}:
+        if (
+            not narrative_only
+            and status in {"awaiting-ai-insight", "pending", "processing", "retry"}
+        ):
             self.reasoning_orchestrator.ai_queued(
                 subject_case_id,
                 str(outcome.get("requestId") or request.request_id),
                 "",
             )
-        elif status in {"coalesced-material", "coalesced-identical", "coalesced-active"}:
+        elif (
+            not narrative_only
+            and status in {"coalesced-material", "coalesced-identical", "coalesced-active"}
+        ):
             self.reasoning_orchestrator.case_superseded(
                 subject_case_id,
                 "동일한 판단 의미의 AI 인사이트가 이미 처리 중이거나 완료됐습니다.",
             )
-        for superseded_case_id in outcome.get("supersededReasoningCaseIds") or []:
-            self.reasoning_orchestrator.case_superseded(
-                str(superseded_case_id or ""),
-                "더 최신인 AI 인사이트 요청이 이 판단 건을 대체했습니다.",
-            )
+        if not narrative_only:
+            for superseded_case_id in outcome.get("supersededReasoningCaseIds") or []:
+                self.reasoning_orchestrator.case_superseded(
+                    str(superseded_case_id or ""),
+                    "더 최신인 AI 인사이트 요청이 이 판단 건을 대체했습니다.",
+                )
         return outcome
 
 

@@ -2297,6 +2297,15 @@ def select_target_scoped_manifest_patch(
         symbol = scope_symbol(scope_id)
         return symbol in requested_symbols or not symbol
 
+    def is_target_owned_scope(scope_id: str) -> bool:
+        direct_symbol = _symbol(scope_symbol(scope_id))
+        if direct_symbol in requested_symbols:
+            return True
+        return any(
+            ("symbol:" + symbol + ":") in _clean(scope_id)
+            for symbol in requested_symbols
+        )
+
     def changed_from_active(scope_id: str, item: Mapping[str, object]) -> bool:
         active_item = active_by_scope.get(scope_id)
         if not active_item:
@@ -2325,6 +2334,23 @@ def select_target_scoped_manifest_patch(
         return bool(
             changed_mapping_keys(active_item, item, "semanticFingerprints")
         )
+
+    def scope_relation_lifecycle(
+        scope_id: str,
+        item: Mapping[str, object],
+    ) -> str:
+        explicit = _clean(item.get("relationLifecycle"))
+        if explicit:
+            return explicit
+        family = (
+            _clean(item.get("scopeFamily"))
+            or scope_family(scope_id)
+        ).lower()
+        # Active manifests created before lifecycle metadata used quality as
+        # the implicit derived-companion contract.
+        if _scope_type(scope_id) == "link" and family == "quality":
+            return "derived-companion"
+        return "source-owned" if _scope_type(scope_id) == "link" else "not-a-relation"
 
     def changed_mapping_keys(
         active_item: Mapping[str, object],
@@ -2447,19 +2473,20 @@ def select_target_scoped_manifest_patch(
     # selection; using ``or selected`` widened the no-op back to every changed
     # runtime scope and rebuilt unrelated portfolio decision-cycle facts.
     selected = set(fact_slot_selection.get("selectedScopeIds", selected))
-    complete_source_quality_replacements: Set[str] = set()
+    complete_source_derived_replacements: Set[str] = set()
     if (
         source_graph_complete
         and bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
         and selected
     ):
-        # Data-quality links are derived integrity companions of their source
-        # facts. When a complete source removes one of those relations, keeping
-        # the active relation as a generation-only rebind leaves it pointing at
-        # a retired evidence node. Select only structural count changes whose
-        # dependency is already owned by this event; equal-count replacements
-        # from another fact slot remain deferred and are reconciled by the
-        # repository's exact-endpoint fallback.
+        # Derived links are lifecycle companions of their source facts. When a
+        # complete source changes one of those assertions, keeping the active
+        # relation as a generation-only rebind preserves a semantically stale
+        # row even if every endpoint still exists. Select the changed companion
+        # whenever one of its declared dependencies is already owned by this
+        # event. This contract applies to evidence, quality, portfolio and any
+        # future derived relation family rather than relying on family-specific
+        # exceptions.
         for scope_id in sorted(fact_slot_candidate_scope_ids - selected):
             item = incoming.get(scope_id) or {}
             active_item = active_by_scope.get(scope_id) or {}
@@ -2473,32 +2500,64 @@ def select_target_scoped_manifest_patch(
             }
             if (
                 _scope_type(scope_id) == "link"
-                and (
-                    _clean(item.get("scopeFamily"))
-                    or scope_family(scope_id)
-                ).lower() == "quality"
+                and scope_relation_lifecycle(
+                    scope_id,
+                    {**active_item, **item},
+                ) == "derived-companion"
                 and dependencies.intersection(selected)
                 and assertion_changed_from_active(scope_id, item)
             ):
                 selected.add(scope_id)
-                complete_source_quality_replacements.add(scope_id)
+                complete_source_derived_replacements.add(scope_id)
                 selection_reasons.setdefault(scope_id, set()).add(
-                    "complete-source-derived-quality-replacement"
+                    "complete-source-derived-companion-replacement"
                 )
-        if complete_source_quality_replacements:
+                if (
+                    _clean(item.get("scopeFamily"))
+                    or _clean(active_item.get("scopeFamily"))
+                    or scope_family(scope_id)
+                ).lower() == "quality":
+                    selection_reasons[scope_id].add(
+                        "complete-source-derived-quality-replacement"
+                    )
+        if complete_source_derived_replacements:
             fact_slot_selection["selectedScopeIds"] = sorted(selected)
             fact_slot_selection["deferredScopeIds"] = sorted(
                 set(fact_slot_selection.get("deferredScopeIds") or [])
-                - complete_source_quality_replacements
+                - complete_source_derived_replacements
+            )
+            fact_slot_selection["derivedCompanionReplacementScopeIds"] = sorted(
+                complete_source_derived_replacements
             )
             fact_slot_selection["derivedQualityReplacementScopeIds"] = sorted(
-                complete_source_quality_replacements
+                scope_id
+                for scope_id in complete_source_derived_replacements
+                if (
+                    _clean((incoming.get(scope_id) or {}).get("scopeFamily"))
+                    or _clean((active_by_scope.get(scope_id) or {}).get("scopeFamily"))
+                    or scope_family(scope_id)
+                ).lower() == "quality"
             )
     fact_slot_deferred_scope_ids = {
         _clean(scope_id)
         for scope_id in fact_slot_selection.get("deferredScopeIds") or []
         if _clean(scope_id)
     }
+    removed_complete_derived_companion_scope_ids = sorted(
+        scope_id
+        for scope_id, item in active_by_scope.items()
+        if source_graph_complete
+        and bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
+        and scope_id not in incoming
+        and is_target_owned_scope(scope_id)
+        and _scope_type(scope_id) == "link"
+        and scope_relation_lifecycle(scope_id, item) == "derived-companion"
+        and {
+            _clean(value)
+            for value in item.get("dependencyScopeIds") or []
+            if _clean(value)
+        }.intersection(selected)
+    )
     if topology_migration_required:
         # Replace one complete subject boundary so v7 and v8 copies of the
         # same fact never coexist in the active manifest. Other subjects stay
@@ -2549,17 +2608,20 @@ def select_target_scoped_manifest_patch(
             and scope_symbol(scope_id) in requested_symbols
         )
     elif retain_missing_target_scopes:
-        removed_relevant_scopes = []
+        removed_relevant_scopes = removed_complete_derived_companion_scope_ids
     else:
         removed_relevant_scopes = sorted(
             scope_id
             for scope_id in active_by_scope
             if scope_id not in incoming and is_requested_or_shared(scope_id)
         )
+    removed_relevant_scopes = sorted(set(removed_relevant_scopes).union(
+        removed_complete_derived_companion_scope_ids
+    ))
     retired_scope_ids = sorted(
         scope_id
         for scope_id in removed_relevant_scopes
-        if _symbol(scope_symbol(scope_id)) in requested_symbols
+        if is_target_owned_scope(scope_id)
     )
     shared_removed_scope_ids = sorted(
         set(removed_relevant_scopes) - set(retired_scope_ids)
@@ -2581,15 +2643,9 @@ def select_target_scoped_manifest_patch(
     retired_scope_set = set(retired_scope_ids)
 
     def target_owned_scope(scope_id: str) -> bool:
-        direct_symbol = _symbol(scope_symbol(scope_id))
-        if direct_symbol in requested_symbols:
-            return True
         # Link scope IDs intentionally preserve their owning subject even
         # when ``scope_symbol`` treats the link itself as shared metadata.
-        return any(
-            ("symbol:" + symbol + ":") in _clean(scope_id)
-            for symbol in requested_symbols
-        )
+        return is_target_owned_scope(scope_id)
 
     replaced_dependency_scope_ids: Set[str] = set()
     cascaded_retired_scope_ids: Set[str] = set()
@@ -3318,6 +3374,9 @@ def select_target_scoped_manifest_patch(
         "retiredScopeIds": retired_scope_ids,
         "replacedDependencyScopeIds": sorted(replaced_dependency_scope_ids),
         "cascadedRetiredScopeIds": sorted(cascaded_retired_scope_ids),
+        "removedDerivedCompanionScopeIds": (
+            removed_complete_derived_companion_scope_ids
+        ),
         "removedRelevantScopeIds": removed_relevant_scopes,
         "factSlot": fact_slot_selection,
         "scopeSelectionTrace": {

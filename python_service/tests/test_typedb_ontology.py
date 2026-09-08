@@ -126,6 +126,22 @@ def governed_catalog_rule(rule_id: str) -> GraphInferenceRule:
 
 
 class TypeDBOntologyRepositoryTests(unittest.TestCase):
+    def _assert_empty_model_signal_bridge_reports_zero_coverage_telemetry(self):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+
+        result = repository.execute_typedb_model_signal_bridge_batches(
+            [],
+            world_id="market:test",
+            imported=None,
+            transaction_type=None,
+            deadline=time.monotonic() + 1,
+        )
+
+        self.assertEqual(0, result["sourceRowCount"])
+        self.assertEqual(0, result["dispatchedMatchCount"])
+        self.assertEqual([], result["matchedContractIds"])
+        self.assertEqual([], result["matchedSymbols"])
+
     def _assert_scoped_manifest_indexes_validate_complete_candidate_rows_against_merged_topology(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
 
@@ -378,6 +394,7 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         )
 
     def test_relation_endpoint_verification_reports_missing_physical_nodes(self):
+        self._assert_empty_model_signal_bridge_reports_zero_coverage_telemetry()
         rows = [
             {
                 "source": "stock:MSTR",

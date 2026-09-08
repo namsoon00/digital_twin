@@ -53,7 +53,15 @@ def _hypotheses(relation_context: Mapping[str, object]) -> Tuple[Dict[str, objec
     )
 
 
-def _data_gaps(relation_context: Mapping[str, object]) -> Tuple[DataGap, ...]:
+def decision_data_gaps_from_relation_context(
+    relation_context: Mapping[str, object],
+    selected_rule_id: str = "",
+) -> Tuple[DataGap, ...]:
+    """Return only gaps with an explicit decision/runtime requirement.
+
+    Optional enrichment remains available in the operational source payload,
+    but it must not weaken an unrelated rule, hypothesis, or user message.
+    """
     relation = _mapping(relation_context)
     facts = _mapping(relation.get("facts"))
     availability = _mapping(facts.get("dataAvailability"))
@@ -70,6 +78,18 @@ def _data_gaps(relation_context: Mapping[str, object]) -> Tuple[DataGap, ...]:
         }
         code = str(item.get("key") or item.get("code") or "missing").strip()
         provider = availability_by_code.get(code, {})
+        required_by_rule_ids = _texts(item.get("requiredByRuleIds"))
+        selected_rule_requires_gap = bool(
+            selected_rule_id
+            and (
+                selected_rule_id in set(required_by_rule_ids)
+                or (
+                    code == "valuationInputs"
+                    and selected_rule_id.startswith("graph.valuation.")
+                )
+            )
+        )
+        core_required = code in {"currentPrice", "ontologyInference", "position"}
         raw_status = str(item.get("status") or provider.get("status") or "missing").lower()
         expected_at = str(provider.get("nextProviderUpdateAt") or "")
         provider_update_code = str(provider.get("providerUpdateCode") or "").lower()
@@ -91,10 +111,27 @@ def _data_gaps(relation_context: Mapping[str, object]) -> Tuple[DataGap, ...]:
             state = "session-unavailable"
         else:
             state = "missing"
+        if selected_rule_requires_gap or core_required:
+            requirement_class = "rule-required"
+        elif required_by_rule_ids:
+            requirement_class = "unselected-rule-input"
+        elif state == "not-yet-published":
+            requirement_class = "scheduled-source"
+        elif state == "session-unavailable":
+            requirement_class = "session-bound-source"
+        elif state == "unsupported":
+            requirement_class = "provider-unsupported"
+        else:
+            requirement_class = "optional-context"
+        # Optional enrichment must not make a valid decision look incomplete.
+        # It remains available in the source/operations views and re-enters
+        # this contract as soon as an exact matched rule declares it required.
+        if requirement_class in {"optional-context", "unselected-rule-input"}:
+            continue
         blocking = bool(
             item.get("blocking")
-            or code in {"currentPrice", "ontologyInference", "position"}
-            or state == "failed"
+            or core_required
+            or (state == "failed" and requirement_class == "rule-required")
         )
         details = {
             key: provider.get(key)
@@ -109,6 +146,25 @@ def _data_gaps(relation_context: Mapping[str, object]) -> Tuple[DataGap, ...]:
             )
             if provider.get(key) not in (None, "")
         }
+        details.update({
+            "requirementClass": requirement_class,
+            "actionability": (
+                "resolve-before-decision"
+                if blocking
+                else "wait-for-provider-window"
+                if requirement_class in {"scheduled-source", "session-bound-source"}
+                else "not-required-for-current-decision"
+                if requirement_class == "provider-unsupported"
+                else "improves-current-rule-confidence"
+            ),
+        })
+        decision_impact = (
+            "blocking"
+            if blocking
+            else "not-applicable"
+            if requirement_class == "provider-unsupported"
+            else "advisory"
+        )
         rows.append(DataGap(
             code=code,
             label=str(item.get("label") or code),
@@ -117,8 +173,8 @@ def _data_gaps(relation_context: Mapping[str, object]) -> Tuple[DataGap, ...]:
             source=str(item.get("source") or provider.get("source") or ""),
             expected_at=expected_at,
             blocking=blocking,
-            decision_impact="blocking" if blocking else "advisory",
-            required_by_rule_ids=_texts(item.get("requiredByRuleIds")),
+            decision_impact=decision_impact,
+            required_by_rule_ids=required_by_rule_ids,
             details=details,
         ))
     unique = {}
@@ -198,10 +254,8 @@ def decision_synthesis_from_relation_context(
         or "NO_ACTION"
     ).upper().strip()
     selected_rule_id = str(
-        (
-            opinion_assessment.get("selectedRuleId")
-            if assessments else envelope.get("selectedRuleId")
-        )
+        opinion_assessment.get("selectedRuleId")
+        or envelope.get("selectedRuleId")
         or ""
     )
     context_observation = typedb_context_observation_contract(relation)
@@ -411,7 +465,10 @@ def decision_synthesis_from_relation_context(
         if eligible_ids
         else "reference-only"
     )
-    data_gaps = _data_gaps(relation)
+    data_gaps = decision_data_gaps_from_relation_context(
+        relation,
+        selected_rule_id=selected_rule_id,
+    )
     disposition_code, execution_disposition, rule_coverage_state = _disposition_contract(
         context_observation=context_observation,
         judgement_blocked=judgement_blocked,
@@ -468,8 +525,10 @@ def decision_synthesis_from_relation_context(
             if overlap
             else str(relation.get("conflictState") or "")
         ),
-        missing_data=_texts(
-            relation.get("missingData") or _mapping(relation.get("facts")).get("missingData")
+        missing_data=tuple(
+            item.label
+            for item in data_gaps
+            if item.decision_impact != "not-applicable"
         ),
         data_gaps=data_gaps,
         disposition_code=disposition_code,

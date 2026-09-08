@@ -4,6 +4,9 @@ from .hypothesis_calibration import attach_abox_hypothesis_calibrations
 from .hypothesis_lifecycle import relation_lifecycle_transition_contract
 from .crypto_market_signals import crypto_market_positions
 from .investment_brain import hypothesis_set_from_relation_context
+from .investment_reasoning.synthesis import (
+    decision_data_gaps_from_relation_context,
+)
 from .market_data import number
 from .ontology_decision_state import (
     ACTION_ENVELOPE_STATUS_LABELS,
@@ -42,6 +45,58 @@ from .portfolio import AccountSnapshot, PortfolioSummary, Position
 
 TYPEDB_RELATION_CONTEXT_VERSION = "typedb-inferencebox-relation-context-v1"
 GRAPH_STORE_RELATION_CONTEXT_VERSION = "graph-store-inferencebox-relation-context-v1"
+
+
+def _decision_gap_payload(gap: object) -> Dict[str, object]:
+    details = dict(getattr(gap, "details", {}) or {})
+    return {
+        "key": str(getattr(gap, "code", "") or "missing"),
+        "label": str(getattr(gap, "label", "") or ""),
+        "status": str(getattr(gap, "state", "") or "missing"),
+        "effect": str(getattr(gap, "effect", "") or ""),
+        "source": str(getattr(gap, "source", "") or ""),
+        "expectedAt": str(getattr(gap, "expected_at", "") or ""),
+        "blocking": bool(getattr(gap, "blocking", False)),
+        "decisionImpact": str(
+            getattr(gap, "decision_impact", "") or "advisory"
+        ),
+        "requiredByRuleIds": list(
+            getattr(gap, "required_by_rule_ids", ()) or ()
+        ),
+        "details": details,
+    }
+
+
+def _apply_decision_missing_data_boundary(
+    facts: Dict[str, object],
+    action_envelope: Dict[str, object],
+    assessment_bundle: Dict[str, object],
+) -> List[object]:
+    """Keep operational gaps out of hypothesis and AI decision inputs."""
+
+    raw_missing = list(facts.get("missingData") or [])
+    opinion = (
+        assessment_bundle.get("investmentOpinion")
+        if isinstance(assessment_bundle.get("investmentOpinion"), dict)
+        else {}
+    )
+    selected_rule_id = str(
+        opinion.get("selectedRuleId")
+        or action_envelope.get("selectedRuleId")
+        or ""
+    ).strip()
+    classified = decision_data_gaps_from_relation_context(
+        {"facts": facts},
+        selected_rule_id=selected_rule_id,
+    )
+    facts["operationalMissingData"] = raw_missing
+    facts["missingData"] = [
+        _decision_gap_payload(gap)
+        for gap in classified
+        if str(getattr(gap, "decision_impact", "") or "")
+        != "not-applicable"
+    ]
+    return raw_missing
 
 META_INFERENCE_RELATION_TYPES = {
     "EXPLAINED_BY_TRACE",
@@ -567,6 +622,11 @@ def relation_context_from_inferencebox(
         assessment_bundle=assessment_bundle,
     )
     action_envelope = decision.get("actionEnvelope") if isinstance(decision.get("actionEnvelope"), dict) else {}
+    operational_missing_data = _apply_decision_missing_data_boundary(
+        facts,
+        action_envelope,
+        assessment_bundle,
+    )
     execution_plan = execution_plan_from_relation_context(facts, decision, matches)
     prompt_context = build_ai_prompt_context(prompt_id, facts, matches, settings or {}, execution_plan)
     active_matches = [item for item in matches if item.matched and not item.reference_only]
@@ -663,6 +723,7 @@ def relation_context_from_inferencebox(
         "activeRules": [item.to_dict() for item in active_matches],
         "referenceRules": [item.to_dict() for item in matches if item.reference_only],
         "missingData": list(facts.get("missingData") or []),
+        "operationalMissingData": operational_missing_data,
         "dominantSignals": [item.label for item in active_matches[:3]],
         "reviewLevel": decision_state["reviewLevel"],
         "reviewLevelLabel": decision_state["reviewLevelLabel"],

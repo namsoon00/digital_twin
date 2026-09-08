@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, Iterable, List, Mapping
 
 from ..domain.reasoning_source_facts import ReasoningSourceFact
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -25,26 +25,50 @@ def source_fact_from_row(row) -> ReasoningSourceFact:
     )
 
 
+def append_reasoning_source_facts_with_connection(
+    connection,
+    values: Iterable[Mapping[str, object]],
+) -> Dict[str, object]:
+    facts = [
+        ReasoningSourceFact.from_request_payload(value)
+        for value in values or []
+        if isinstance(value, Mapping)
+    ]
+    inserted_count = 0
+    for fact in facts:
+        cursor = connection.execute(
+            """
+            INSERT IGNORE INTO reasoning_source_facts (
+                fact_id, fact_type, aggregate_id, revision, source_event_id,
+                source_event_name, subject_ids_json, observed_at, ingested_at,
+                valid_from, valid_to, quality_state, contract_version, payload_json
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                fact.fact_id, fact.fact_type, fact.aggregate_id, fact.revision,
+                fact.source_event_id, fact.source_event_name,
+                json_dumps(list(fact.subject_ids)), fact.observed_at, fact.ingested_at,
+                fact.valid_from, fact.valid_to, fact.quality_state, fact.version,
+                json_dumps(fact.payload),
+            ),
+        )
+        inserted_count += int(bool(cursor.rowcount))
+    return {
+        "factCount": len(facts),
+        "insertedCount": inserted_count,
+        "duplicateCount": max(0, len(facts) - inserted_count),
+        "factIds": [fact.fact_id for fact in facts],
+    }
+
+
 class MySQLReasoningSourceFactStore(MySQLOperationalConnection):
     def append(self, fact: ReasoningSourceFact) -> Dict[str, object]:
         with self.transaction() as connection:
-            cursor = connection.execute(
-                """
-                INSERT IGNORE INTO reasoning_source_facts (
-                    fact_id, fact_type, aggregate_id, revision, source_event_id,
-                    source_event_name, subject_ids_json, observed_at, ingested_at,
-                    valid_from, valid_to, quality_state, contract_version, payload_json
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    fact.fact_id, fact.fact_type, fact.aggregate_id, fact.revision,
-                    fact.source_event_id, fact.source_event_name,
-                    json_dumps(list(fact.subject_ids)), fact.observed_at, fact.ingested_at,
-                    fact.valid_from, fact.valid_to, fact.quality_state, fact.version,
-                    json_dumps(fact.payload),
-                ),
+            result = append_reasoning_source_facts_with_connection(
+                connection,
+                [fact.request_payload()],
             )
-        return {"inserted": bool(cursor.rowcount), "fact": fact}
+        return {"inserted": bool(result["insertedCount"]), "fact": fact}
 
     def get(self, fact_id: str):
         with self.connect() as connection:

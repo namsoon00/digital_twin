@@ -19,7 +19,10 @@ from ..domain.independent_reasoning import (
     independent_reasoning_request,
     reasoning_event_scope,
 )
-from ..domain.investment_reasoning import FactDelta
+from ..domain.investment_reasoning import (
+    FactDelta,
+    rule_evaluation_records_from_projection_results,
+)
 from ..domain.market_observation_reasoning import market_observation_completion_scope
 from ..domain.ontology_projection_input import compact_monitor_state_for_ontology
 from ..domain.world_partitioned_reasoning import attach_shared_premise_evidence
@@ -39,6 +42,8 @@ NO_CHANGE_PROJECTION_STATUSES = {
     "unchanged-scoped-manifest",
 }
 
+MAX_PERSISTED_RULE_EVALUATIONS = 160
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -47,6 +52,34 @@ def utc_now_iso() -> str:
 def reasoning_job_runtime_eligibility(job: Mapping[str, object]) -> Dict[str, object]:
     source_event = dict(job.get("sourceEvent") or {})
     payload = dict(source_event.get("payload") or {})
+    boundaries = [
+        dict(value)
+        for value in payload.get("verifiedSourceSnapshots") or []
+        if isinstance(value, Mapping)
+    ]
+    if isinstance(payload.get("verifiedSourceSnapshot"), Mapping):
+        boundaries.append(dict(payload.get("verifiedSourceSnapshot") or {}))
+    incomplete = next(
+        (
+            boundary
+            for boundary in boundaries
+            if boundary.get("sourceFactCoverageComplete") is False
+        ),
+        None,
+    )
+    if incomplete is not None:
+        return {
+            "eligible": False,
+            "status": "ineligible",
+            "reasonCode": "source-fact-capture-incomplete",
+            "reason": "Verified source facts are incomplete for this reasoning boundary.",
+            "expectedSourceFactCount": int(
+                incomplete.get("expectedSourceFactCount") or 0
+            ),
+            "capturedSourceFactCount": int(
+                incomplete.get("capturedSourceFactCount") or 0
+            ),
+        }
     return reasoning_source_facts_runtime_eligibility(payload.get("sourceFacts") or [])
 
 
@@ -332,6 +365,18 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         if isinstance(target_manifest_patch.get("repairInputFallback"), Mapping)
         else {}
     )
+    inference_box = (
+        values.get("inferenceBox")
+        if isinstance(values.get("inferenceBox"), Mapping)
+        else {}
+    )
+    account_id = str(values.get("accountId") or inference_box.get("accountId") or "")
+    rule_evaluations = rule_evaluation_records_from_projection_results({
+        account_id or "projection": values,
+    })
+    stored_rule_evaluations = rule_evaluations[
+        :MAX_PERSISTED_RULE_EVALUATIONS
+    ]
     return {
         "configured": bool(values.get("configured")),
         "saved": bool(values.get("saved")),
@@ -339,7 +384,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "reason": str(values.get("reason") or "")[:500],
         "graphStore": str(values.get("graphStore") or ""),
         "worldId": str(values.get("worldId") or ""),
-        "accountId": str(values.get("accountId") or ""),
+        "accountId": account_id,
         "entityCount": int(values.get("entityCount") or 0),
         "relationCount": int(values.get("relationCount") or 0),
         "sourceAboxSnapshotId": identity["sourceAboxSnapshotId"],
@@ -353,6 +398,16 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "failureReasonCode": retry["reasonCode"],
         "failureStage": retry["failureStage"],
         "blockingRuleId": retry["blockingRuleId"],
+        # Keep only bounded proofs, never the full InferenceBox graph. These
+        # records feed hypothesis coverage repair and later outcome audits.
+        "ruleEvaluations": [
+            item.to_dict() for item in stored_rule_evaluations
+        ],
+        "ruleEvaluationCount": len(rule_evaluations),
+        "ruleEvaluationStoredCount": len(stored_rule_evaluations),
+        "ruleEvaluationCoverageComplete": (
+            len(stored_rule_evaluations) == len(rule_evaluations)
+        ),
         "candidateSemanticReconciliationFailure": {
             str(key): value
             for key, value in candidate_reconciliation_failure.items()
@@ -473,6 +528,10 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                     "modelSignalBridgeReadCount",
                     "eliminatedModelSignalPolicyQueryCount",
                     "ignoredContractIds",
+                    "sourceRowCount",
+                    "dispatchedMatchCount",
+                    "matchedContractIds",
+                    "matchedSymbols",
                     "subjectCount",
                 ]
                 if key in shared_model_signal_bridge_execution
@@ -487,6 +546,10 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
                 "modelSignalBridgeReadCount",
                 "eliminatedModelSignalPolicyQueryCount",
                 "ignoredContractIds",
+                "sourceRowCount",
+                "dispatchedMatchCount",
+                "matchedContractIds",
+                "matchedSymbols",
             ]
             if key in model_signal_bridge_execution
         },

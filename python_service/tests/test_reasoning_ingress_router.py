@@ -46,6 +46,44 @@ def event():
 
 
 class ReasoningIngressRouterTests(unittest.TestCase):
+    def _assert_source_facts_are_persisted_before_queue_publication(self):
+        source = event()
+        source.payload["sourceFacts"] = [{
+            "factId": "reasoning-fact:quote",
+            "factType": "MarketQuote",
+        }]
+        order = []
+
+        with patch(
+            "digital_twin.infrastructure.mysql_reasoning_ingress."
+            "append_reasoning_source_facts_with_connection",
+            side_effect=lambda *_args: order.append("source-facts") or {
+                "factCount": 1,
+                "insertedCount": 1,
+            },
+        ) as append, patch.object(
+            MySQLReasoningEngineJobStore,
+            "bind_source_boundaries_with_connection",
+            side_effect=lambda _connection, value: order.append("bind") or value,
+        ), patch.object(
+            MySQLReasoningEngineJobStore,
+            "ingress_event_with_connection",
+            side_effect=lambda *_args, **_kwargs: order.append("queue") or {
+                "saved": True,
+            },
+        ), patch(
+            "digital_twin.infrastructure.mysql_reasoning_ingress."
+            "MySQLOntologyReasoningMailboxStore.ingress_event_with_connection",
+        ):
+            result = ingress_reasoning_event_with_connection(
+                ActiveConnection("v2"),
+                source,
+            )
+
+        append.assert_called_once()
+        self.assertEqual(["source-facts", "bind", "queue"], order)
+        self.assertEqual(1, result["sourceFacts"]["insertedCount"])
+
     def test_v2_ingress_targets_delivery_and_candidate_deployments(self):
         class Connection:
             def execute(self, sql, params=()):
@@ -83,6 +121,7 @@ class ReasoningIngressRouterTests(unittest.TestCase):
         v2_ingress.assert_called_once()
         self.assertEqual("inactive", result["legacyV1"]["status"])
         self.assertTrue(result["independentV2"]["saved"])
+        self._assert_source_facts_are_persisted_before_queue_publication()
 
     @patch.object(MySQLReasoningEngineJobStore, "bind_source_boundaries_with_connection")
     @patch.object(MySQLReasoningEngineJobStore, "ingress_event_with_connection")

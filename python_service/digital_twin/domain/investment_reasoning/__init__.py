@@ -55,7 +55,10 @@ from .disposition import (
     reasoning_disposition_delivery,
     reasoning_disposition_requires_ai,
 )
-from .synthesis import decision_synthesis_from_relation_context
+from .synthesis import (
+    decision_data_gaps_from_relation_context,
+    decision_synthesis_from_relation_context,
+)
 from .rule_inventory import reasoning_rule_inventory
 from .subject_case import (
     ABSTAIN,
@@ -127,6 +130,7 @@ __all__ = [
     "RuleMatchProof",
     "ReasoningCase",
     "decision_synthesis_from_relation_context",
+    "decision_data_gaps_from_relation_context",
     "reasoning_rule_inventory",
     "rule_evaluation_records_from_projection_results",
     "ABSTAIN",

@@ -25,7 +25,13 @@ from digital_twin.domain.independent_reasoning import (
     reasoning_queue_slot_key,
     shard_reasoning_event,
 )
-from digital_twin.domain.investment_reasoning import DecisionSynthesis
+from digital_twin.domain.ontology_execution_trace import (
+    reasoning_rule_outcome_records,
+)
+from digital_twin.domain.investment_reasoning import (
+    DecisionSynthesis,
+    rule_evaluation_records_from_projection_results,
+)
 from digital_twin.domain.fact_changes import fact_change_contract
 from digital_twin.domain.portfolio import AlertEvent
 from digital_twin.domain.reasoning_engine_versions import (
@@ -730,6 +736,23 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
         self.assertFalse(result["eligible"])
         self.assertEqual("expired-calendar-history", result["reasonCode"])
+        self._assert_reasoning_job_rejects_incomplete_source_fact_boundary()
+
+    def _assert_reasoning_job_rejects_incomplete_source_fact_boundary(self):
+        event = source_event("005930", [])
+        event.payload["verifiedSourceSnapshot"] = {
+            "snapshotId": "snapshot:incomplete",
+            "sourceFactCoverageComplete": False,
+            "expectedSourceFactCount": 6,
+            "capturedSourceFactCount": 5,
+        }
+
+        result = reasoning_job_runtime_eligibility({"sourceEvent": event.to_dict()})
+
+        self.assertFalse(result["eligible"])
+        self.assertEqual("source-fact-capture-incomplete", result["reasonCode"])
+        self.assertEqual(6, result["expectedSourceFactCount"])
+        self.assertEqual(5, result["capturedSourceFactCount"])
 
     def test_semantic_change_set_preserves_bitemporal_source_boundary(self):
         contract = fact_change_contract(
@@ -1889,7 +1912,24 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             "verifiedSourceSnapshot": {
                 "snapshotId": "snapshot:fixed",
                 "generatedAt": "2026-08-16T00:00:00Z",
+                "expectedSourceFactCount": 6,
+                "capturedSourceFactCount": 6,
+                "sourceFactCoverageComplete": True,
             },
+            "sourceFacts": [
+                {
+                    "factId": "source-fact:" + symbol,
+                    "factType": "MarketQuote",
+                    "subjectIds": [symbol],
+                    "payload": {"symbol": symbol},
+                }
+                for symbol in symbols
+            ] + [{
+                "factId": "source-fact:global-macro",
+                "factType": "MacroObservation",
+                "subjectIds": ["US10Y"],
+                "payload": {"series": "US10Y"},
+            }],
             "factChangeContract": {
                 "version": "fact-change-contract-v1",
                 "status": "ready",
@@ -1924,6 +1964,28 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             self.assertEqual(
                 "snapshot:fixed",
                 shard.payload["verifiedSourceSnapshot"]["snapshotId"],
+            )
+            symbol_owned_facts = [
+                fact
+                for fact in shard.payload["sourceFacts"]
+                if str(fact.get("factId") or "") != "source-fact:global-macro"
+            ]
+            self.assertEqual(
+                scoped_symbols,
+                {
+                    fact["subjectIds"][0]
+                    for fact in symbol_owned_facts
+                },
+            )
+            self.assertIn(
+                "source-fact:global-macro",
+                {fact["factId"] for fact in shard.payload["sourceFacts"]},
+            )
+            boundary = shard.payload["verifiedSourceSnapshot"]
+            self.assertTrue(boundary["sourceFactCoverageComplete"])
+            self.assertEqual(
+                len(shard.payload["sourceFacts"]),
+                boundary["expectedSourceFactCount"],
             )
 
     def test_request_preserves_the_authoritative_source_fact_boundary(self):
@@ -2118,6 +2180,118 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual(["symbol:000680:flow"], patch["missingEndpointScopeIds"])
         self.assertEqual("missing-endpoint", patch["patchPlanViolations"][0]["code"])
         self.assertNotIn("privatePayload", patch["repairInputFallback"])
+        self._assert_compact_projection_preserves_bounded_rule_match_proof()
+        self._assert_inference_trace_preserves_exact_match_target_for_batched_run()
+        self._assert_compact_match_identity_resolves_symbol_token_in_source_id()
+
+    def _assert_compact_projection_preserves_bounded_rule_match_proof(self):
+        compact = compact_projection_result({
+            "configured": True,
+            "saved": True,
+            "status": "ok",
+            "accountId": "acct",
+            "inferenceBox": {
+                "accountId": "acct",
+                "sourceAboxSnapshotId": "abox:proof",
+                "inferenceGenerationId": "inference:proof",
+                "nativeTypeDbReasoningCompleted": True,
+                "generationAligned": True,
+                "traces": [{
+                    "id": "trace:price-recovery",
+                    "ruleId": "graph.price.recovery.v1",
+                    "evidenceUsableForJudgement": True,
+                    "matchedConditions": [{
+                        "conditionId": "price-above-ma20",
+                        "kind": "subject_property",
+                        "field": "currentPrice",
+                        "operator": ">",
+                        "expectedValue": 100,
+                        "observedValue": 108,
+                        "sourceFactIds": ["source-fact:quote:1"],
+                        "evidenceIds": ["source-fact:quote:1"],
+                    }],
+                    "evidenceRelationIds": ["relation-evidence:price:1"],
+                    "privateGraph": {"must": "not persist"},
+                }],
+                "relations": [{"large": "graph"}],
+            },
+        })
+
+        self.assertNotIn("inferenceBox", compact)
+        self.assertEqual(1, len(compact["ruleEvaluations"]))
+        self.assertEqual(1, compact["ruleEvaluationCount"])
+        self.assertEqual(1, compact["ruleEvaluationStoredCount"])
+        self.assertTrue(compact["ruleEvaluationCoverageComplete"])
+        restored = rule_evaluation_records_from_projection_results({"acct": compact})
+        self.assertEqual(1, len(restored))
+        self.assertEqual("graph.price.recovery.v1", restored[0].rule_id)
+        self.assertEqual("source-fact:quote:1", restored[0].proof.conditions[0].evidence_ids[0])
+        self.assertNotIn("privateGraph", str(compact["ruleEvaluations"]))
+
+    def _assert_inference_trace_preserves_exact_match_target_for_batched_run(self):
+        rule_id = "graph.portfolio.concentration.review.v1"
+        run = SimpleNamespace(
+            run_id="projection:1",
+            world_id="portfolio:local:default",
+            account_id="default",
+            source_symbols=["000660", "NVDA"],
+            inference_generation_id="generation:1",
+            projection_mode="target-scoped",
+        )
+        records = reasoning_rule_outcome_records(run, {
+            "ruleboxExecution": {
+                "nativeRuleSelectionExecutedRuleIds": [rule_id],
+                "typedbNativeRuleMatchedRuleIds": [rule_id],
+                "executedRules": [{
+                    "ruleId": rule_id,
+                    "status": "matched",
+                    "candidateSymbols": ["000660", "NVDA"],
+                }],
+            },
+            "inferenceBox": {
+                "inferenceGenerationId": "generation:1",
+                "traces": [{
+                    "ruleId": rule_id,
+                    "symbol": "NVDA",
+                    "sourceId": "position:default:NVDA",
+                }],
+            },
+        })
+
+        self.assertEqual(1, len(records))
+        self.assertEqual("matched", records[0]["status"])
+        self.assertEqual(["NVDA"], records[0]["matchedTargetSymbols"])
+
+    def _assert_compact_match_identity_resolves_symbol_token_in_source_id(self):
+        rule_id = "graph.instrument_profile.strategy_fit.support.v1"
+        run = SimpleNamespace(
+            run_id="projection:2",
+            world_id="portfolio:local:default",
+            account_id="default",
+            source_symbols=["000680", "066570"],
+            inference_generation_id="generation:2",
+            projection_mode="target-scoped",
+        )
+        records = reasoning_rule_outcome_records(run, {
+            "ruleboxExecution": {
+                "nativeRuleSelectionExecutedRuleIds": [rule_id],
+                "nativeMatchResult": {
+                    "matches": [{
+                        "ruleId": rule_id,
+                        "sourceId": "instrument-profile:strategy:066570:balanced",
+                    }],
+                    "executedRules": [{
+                        "ruleId": rule_id,
+                        "status": "matched",
+                        "candidateSymbols": ["000680", "066570"],
+                    }],
+                },
+            },
+            "inferenceBox": {"inferenceGenerationId": "generation:2"},
+        })
+
+        self.assertEqual("matched", records[0]["status"])
+        self.assertEqual(["066570"], records[0]["matchedTargetSymbols"])
 
     def test_job_lease_heartbeat_also_refreshes_worker_liveness(self):
         class Queue:

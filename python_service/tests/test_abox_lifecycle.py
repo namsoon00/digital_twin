@@ -10,6 +10,11 @@ from digital_twin.domain.ontology_contracts import (
     PortfolioOntology,
 )
 from digital_twin.domain.ontology_scopes import apply_scoped_abox_identity
+from digital_twin.domain.ontology_scopes import (
+    SCOPED_ABOX_MANIFEST_VERSION,
+    SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+    plan_target_scoped_manifest_patch,
+)
 
 
 class ABoxLifecycleContractTests(unittest.TestCase):
@@ -134,6 +139,131 @@ class ABoxLifecycleContractTests(unittest.TestCase):
             "relation-endpoint-missing-from-final-scope",
             [item["code"] for item in blocked["patchPlanViolations"]],
         )
+        self._assert_complete_source_selector_replaces_every_changed_derived_companion()
+        self._assert_complete_source_retires_omitted_derived_quality_companion()
+
+    def _assert_complete_source_selector_replaces_every_changed_derived_companion(self):
+        graph = PortfolioOntology(
+            "main",
+            worldview={
+                "scopePlan": self.incoming,
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "targetScopeRetentionMode": "incremental-target-patch",
+            },
+        )
+        active = {
+            "status": "ok",
+            "scopePlan": self.active,
+            "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+            "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+        }
+        result = plan_target_scoped_manifest_patch(
+            graph,
+            active,
+            ["035420"],
+            fact_slot_plan={
+                "enabled": True,
+                "eventBoundaryAuthoritative": True,
+                "slotFamilies": ["evidence"],
+                "slotFamiliesBySymbol": {"035420": ["evidence"]},
+                "requestedFactFamilies": ["evidence"],
+                "requestedFactFamiliesBySymbol": {"035420": ["evidence"]},
+            },
+            source_graph_complete=True,
+        )
+
+        self.assertEqual("ready", result["status"])
+        self.assertTrue(result["applied"])
+        self.assertIn(self.link_scope, result["selectedIncomingScopeIds"])
+        self.assertEqual(
+            [self.link_scope],
+            result["factSlot"]["derivedCompanionReplacementScopeIds"],
+        )
+        self.assertTrue(result["manifestPatchContract"]["validation"]["valid"])
+
+    def _assert_complete_source_retires_omitted_derived_quality_companion(self):
+        market_scope = "symbol:MSTR:market:world:test"
+        quality_link_scope = "link:symbol:MSTR:quality:bucket:05:world:test"
+        active_market = {
+            "scopeId": market_scope,
+            "scopeType": "symbol",
+            "scopeFamily": "market",
+            "generationId": "market-old",
+            "baseFingerprint": "market-old",
+            "fingerprint": "market-old",
+            "dependencyScopeIds": [],
+            "entityCount": 2,
+            "nodeInventoryVersion": "scope-node-inventory-v1",
+            "nodeIds": [
+                "stock:MSTR",
+                "data-availability-assessment:MSTR:pricePath",
+            ],
+        }
+        incoming_market = {
+            **active_market,
+            "generationId": "market-new",
+            "baseFingerprint": "market-new",
+            "fingerprint": "market-new",
+            "entityCount": 1,
+            "nodeIds": ["stock:MSTR"],
+        }
+        active_link = {
+            "scopeId": quality_link_scope,
+            "scopeType": "link",
+            "scopeFamily": "quality",
+            "generationId": "quality-old",
+            "baseFingerprint": "quality-old",
+            "fingerprint": "quality-old",
+            "dependencyScopeIds": [market_scope],
+            "relationCount": 1,
+            "relationLifecycle": "derived-companion",
+            "deletionSemantics": "complete-source-assertion-presence",
+            "relationEndpointBindingVersion": "relation-endpoint-binding-v1",
+            "relationEndpointNodeIdsByScope": {
+                market_scope: [
+                    "stock:MSTR",
+                    "data-availability-assessment:MSTR:pricePath",
+                ],
+            },
+        }
+        graph = PortfolioOntology(
+            "main",
+            worldview={
+                "scopePlan": [incoming_market],
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "targetScopeRetentionMode": "incremental-target-patch",
+            },
+        )
+
+        result = plan_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok",
+                "scopePlan": [active_market, active_link],
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            },
+            ["MSTR"],
+            fact_slot_plan={
+                "enabled": True,
+                "eventBoundaryAuthoritative": True,
+                "slotFamilies": ["market"],
+                "slotFamiliesBySymbol": {"MSTR": ["market"]},
+                "requestedFactFamilies": ["market"],
+                "requestedFactFamiliesBySymbol": {"MSTR": ["market"]},
+            },
+            source_graph_complete=True,
+        )
+
+        self.assertEqual("ready", result["status"])
+        self.assertIn(quality_link_scope, result["retiredScopeIds"])
+        self.assertEqual(
+            [quality_link_scope],
+            result["removedDerivedCompanionScopeIds"],
+        )
+        self.assertTrue(result["manifestPatchContract"]["validation"]["valid"])
 
     def test_change_set_distinguishes_partial_source_from_deletion(self):
         change_set = ABoxChangeSet.from_inputs(

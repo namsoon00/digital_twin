@@ -6,6 +6,7 @@ from typing import Dict, Mapping
 
 from .mysql_operational_connection import MySQLOperationalConnection
 from .mysql_reasoning_mailbox import MySQLOntologyReasoningMailboxStore
+from .mysql_reasoning_source_facts import append_reasoning_source_facts_with_connection
 from .mysql_versioned_runtime import MySQLReasoningEngineJobStore
 from .settings import utc_now
 
@@ -50,6 +51,15 @@ def ingress_reasoning_event_with_connection(connection, event) -> Dict[str, obje
     """
 
     active = active_reasoning_engine_with_connection(connection)
+    source_facts = (
+        event.payload.get("sourceFacts")
+        if isinstance(getattr(event, "payload", None), Mapping)
+        else []
+    )
+    source_fact_result = append_reasoning_source_facts_with_connection(
+        connection,
+        source_facts or [],
+    )
     bounded_event = MySQLReasoningEngineJobStore.bind_source_boundaries_with_connection(
         connection,
         event,
@@ -59,6 +69,7 @@ def ingress_reasoning_event_with_connection(connection, event) -> Dict[str, obje
         "activeEngineVersion": active["engineVersion"],
         "legacyV1": {"saved": False, "status": "inactive"},
         "independentV2": {"saved": False, "status": "not-targeted"},
+        "sourceFacts": source_fact_result,
     }
     if active["engineVersion"] == "v1":
         try:

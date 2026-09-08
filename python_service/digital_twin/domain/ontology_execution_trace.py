@@ -323,11 +323,30 @@ def _rule_run_key(rule_id: str, item: Mapping[str, object], index: int) -> str:
 
 
 def _match_symbol(item: Mapping[str, object], source_symbols: Iterable[object]) -> str:
-    source_id = _text(item.get("sourceId")).upper()
+    explicit_symbol = _text(
+        item.get("symbol")
+        or item.get("sourceSymbol")
+        or item.get("subjectSymbol")
+    ).upper()
+    allowed_symbols = _symbols(source_symbols)
+    if explicit_symbol in allowed_symbols:
+        return explicit_symbol
+    source_id = _text(
+        item.get("sourceId") or item.get("subjectId")
+    ).upper()
     if not source_id:
         return ""
-    for symbol in _symbols(source_symbols):
-        if source_id == symbol or source_id.endswith(":" + symbol):
+    for symbol in allowed_symbols:
+        tokens = {
+            token
+            for token in source_id.replace("/", ":").split(":")
+            if token
+        }
+        if (
+            source_id == symbol
+            or source_id.endswith(":" + symbol)
+            or symbol in tokens
+        ):
             return symbol
     return ""
 
@@ -370,10 +389,21 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
     )
     matched_symbols_by_rule: Dict[str, set] = {}
     match_identity_complete_by_rule: Dict[str, bool] = {}
-    for item in native.get("matches") or []:
+    match_rows = [
+        dict(item)
+        for item in native.get("matches") or []
+        if isinstance(item, Mapping)
+    ]
+    inference = _mapping(values.get("inferenceBox"))
+    match_rows.extend(
+        dict(item)
+        for item in inference.get("traces") or []
+        if isinstance(item, Mapping)
+    )
+    for item in match_rows:
         if not isinstance(item, Mapping):
             continue
-        rule_id = _text(item.get("ruleId"))
+        rule_id = _text(item.get("ruleId") or item.get("sourceRuleId"))
         if not rule_id:
             continue
         symbol = _match_symbol(item, source_symbols)
@@ -382,6 +412,11 @@ def reasoning_rule_outcome_records(run: object, result: Mapping[str, object]) ->
             match_identity_complete_by_rule[rule_id] = True
         else:
             match_identity_complete_by_rule.setdefault(rule_id, False)
+    matched_ids.update(
+        _text(item.get("ruleId") or item.get("sourceRuleId"))
+        for item in match_rows
+        if _text(item.get("ruleId") or item.get("sourceRuleId"))
+    )
     raw_rows = []
     for status_group, rows in (
         ("executed", native.get("executedRules") or execution.get("executedRules") or []),

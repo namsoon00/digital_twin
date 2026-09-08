@@ -9,7 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.application.kis_realtime_service import KISRealtimeWebSocketRunner
 from digital_twin.application.ontology_reasoning_service import OntologyReasoningRunner
-from digital_twin.domain.events import DomainEvent, MARKET_DATA_COLLECTED, ontology_reasoning_requested_event
+from digital_twin.domain.events import (
+    MAX_REASONING_SOURCE_FACTS_PER_EVENT,
+    DomainEvent,
+    MARKET_DATA_COLLECTED,
+    ontology_reasoning_requested_event,
+    research_evidence_collected_event,
+)
 from digital_twin.domain.crypto_market_signals import (
     CRYPTO_TRANSITION_BASELINE_METADATA_KEY,
     crypto_transition_baseline,
@@ -19,7 +25,17 @@ from digital_twin.domain.ontology_reasoning_queue import (
     REALTIME_LATEST_STATE_SLOT,
     durable_mailbox_entries,
 )
+from digital_twin.domain.ontology_inference_materializer import grounded_inference_context
+from digital_twin.domain.ontology_rulebox_contracts import (
+    GraphInferenceRule,
+    GraphRuleCondition,
+)
 from digital_twin.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+from digital_twin.domain.portfolio_ontology_builder import build_portfolio_ontology
+from digital_twin.domain.reasoning_source_facts import (
+    ReasoningSourceFact,
+    compact_reasoning_source_fact_payload,
+)
 from digital_twin.domain.verified_snapshot_reasoning import (
     VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
     verified_monitor_snapshot_reasoning_event,
@@ -96,6 +112,170 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertEqual(["AAPL", "MSFT"], event.payload["symbols"])
         self.assertIn("MarketQuote", event.payload["factTypes"])
         self.assertTrue(event.payload["factRevisionsBySymbol"]["AAPL"])
+        self._assert_monitor_source_fact_lineage(current, event)
+        self._assert_source_fact_payload_is_bounded()
+        self._assert_news_request_derives_bounded_document_fact()
+        self._assert_reasoning_request_does_not_truncate_twenty_facts()
+
+    def _assert_monitor_source_fact_lineage(self, current, event):
+        market = next(
+            item for item in event.payload["sourceFacts"]
+            if item["factType"] == "MarketQuote"
+            and item["subjectIds"] == ["AAPL"]
+        )
+        restored = ReasoningSourceFact.from_request_payload(market)
+        self.assertEqual(100.0, restored.payload["position"]["current_price"])
+        self.assertEqual(
+            event.payload["verifiedSourceSnapshot"]["snapshotId"],
+            restored.payload["snapshotId"],
+        )
+        self.assertEqual(
+            {
+                "MarketQuote", "TechnicalIndicator", "ExecutionFlow",
+                "OrderBook", "PortfolioSnapshot", "DataQuality",
+            },
+            {
+                item["factType"]
+                for item in event.payload["sourceFacts"]
+                if item["subjectIds"] == ["AAPL"]
+            },
+        )
+        self.assertTrue(
+            event.payload["verifiedSourceSnapshot"]["sourceFactCoverageComplete"]
+        )
+
+        graph = build_portfolio_ontology(
+            current.positions,
+            current.portfolio,
+            runtime_context={
+                "reasoningSourceFacts": event.payload["sourceFacts"],
+                "asOf": current.generated_at,
+            },
+            include_tbox=False,
+            include_presentation=False,
+        )
+        stock = next(item for item in graph.entities if item.entity_id == "stock:AAPL")
+        rule = GraphInferenceRule(
+            rule_id="test.price.threshold",
+            label="price threshold",
+            version="v1",
+            source_kind="stock",
+            conditions=[GraphRuleCondition(
+                condition_id="price",
+                kind="subject_property",
+                description="price is at least 99",
+                field="currentPrice",
+                operator=">=",
+                value=99,
+            )],
+            derivations=[],
+            action_group="observe",
+            action_level="observe",
+            prompt_hint="",
+        )
+        grounded = grounded_inference_context(
+            graph,
+            rule,
+            stock,
+            {"matchedConditions": [{
+                "conditionId": "price",
+                "kind": "subject_property",
+            }]},
+        )
+        self.assertIn(
+            market["factId"],
+            grounded["matchedConditions"][0]["evidenceIds"],
+        )
+
+    def _assert_source_fact_payload_is_bounded(self):
+        compact = compact_reasoning_source_fact_payload({
+            "title": "  Material   update ",
+            "summary": "verified summary",
+            "body": "full article text",
+            "rawHtml": "<html>full document</html>",
+            "apiKey": "must-not-leak",
+            "headers": {"Authorization": "Bearer secret"},
+            "facts": {"revenue": 1200},
+        })
+        self.assertEqual("Material update", compact["title"])
+        self.assertNotIn("body", compact)
+        self.assertNotIn("rawHtml", compact)
+        self.assertNotIn("apiKey", compact)
+        self.assertEqual({}, compact.get("headers", {}))
+
+    def _assert_news_request_derives_bounded_document_fact(self):
+        collected = research_evidence_collected_event({
+            "savedCount": 1,
+            "symbols": ["AAPL"],
+            "inferenceChangedSymbols": ["AAPL"],
+            "factRevisionsBySymbol": {"AAPL": "evidence-set-r1"},
+            "materialChangedItems": [{
+                "evidenceId": "research:AAPL:wire:1",
+                "symbol": "AAPL",
+                "kind": "news",
+                "source": "Reuters",
+                "title": "Apple updates guidance",
+                "summary": "Apple raised its verified revenue guidance.",
+                "body": "full article must stay in the canonical store",
+                "publishedAt": "2026-09-08T01:00:00Z",
+                "payload": {
+                    "rawHtml": "<html>not allowed</html>",
+                    "evidenceGovernance": {
+                        "investmentJudgmentEligible": True,
+                    },
+                    "promptEvidenceAdmission": {"decisionEligible": True},
+                },
+            }],
+        })
+        requested = ontology_reasoning_requested_event(
+            collected,
+            "research-evidence-update",
+            ["AAPL"],
+            fact_types=["ResearchEvidence", "NewsEvent"],
+            fact_types_by_symbol={"AAPL": ["ResearchEvidence", "NewsEvent"]},
+            fact_revisions_by_symbol={"AAPL": "evidence-set-r1"},
+        )
+        fact = requested.payload["sourceFacts"][0]
+        self.assertEqual("NewsArticle", fact["factType"])
+        self.assertEqual(
+            "Apple raised its verified revenue guidance.",
+            fact["payload"]["summary"],
+        )
+        self.assertNotIn("body", fact["payload"])
+        self.assertNotIn("rawHtml", str(fact["payload"]))
+
+    def _assert_reasoning_request_does_not_truncate_twenty_facts(self):
+        source_event = DomainEvent(
+            name="monitoring.snapshot_collected",
+            aggregate_id="acct",
+            event_id="event:many-facts",
+            occurred_at="2026-09-08T01:00:00Z",
+            payload={},
+        )
+        source_facts = [{
+            "version": "reasoning-source-fact-v1",
+            "factId": "source-fact:" + str(index),
+            "factType": "MarketQuote",
+            "aggregateId": "quote:" + str(index),
+            "subjectIds": ["SYM" + str(index)],
+            "revision": "r1",
+            "sourceEventId": source_event.event_id,
+            "sourceEventName": source_event.name,
+            "observedAt": source_event.occurred_at,
+            "ingestedAt": source_event.occurred_at,
+            "validFrom": source_event.occurred_at,
+            "validTo": "",
+            "qualityState": "verified-source-boundary",
+            "payload": {"currentPrice": index + 1},
+        } for index in range(25)]
+        requested = ontology_reasoning_requested_event(
+            source_event,
+            "many-facts",
+            ["SYM" + str(index) for index in range(25)],
+            source_facts=source_facts,
+        )
+        self.assertGreaterEqual(MAX_REASONING_SOURCE_FACTS_PER_EVENT, 25)
+        self.assertEqual(25, len(requested.payload["sourceFacts"]))
 
     def test_one_quote_change_targets_only_that_symbol(self):
         previous = snapshot()

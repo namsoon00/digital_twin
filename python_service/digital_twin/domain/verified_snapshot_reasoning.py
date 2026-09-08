@@ -16,7 +16,12 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Mapping, Tuple
 
-from .events import DomainEvent, ontology_reasoning_requested_event, snapshot_collected_event
+from .events import (
+    MAX_REASONING_SOURCE_FACTS_PER_EVENT,
+    DomainEvent,
+    ontology_reasoning_requested_event,
+    snapshot_collected_event,
+)
 from .evidence_delta import evidence_inference_signature, inference_eligible
 from .fact_changes import changed_fields, fact_revision_id, fact_signature
 from .crypto_market_signals import (
@@ -30,6 +35,7 @@ from .market_signal_transitions import MARKET_SIGNAL_TRANSITION_RESULTS_KEY
 from .ontology_projection_input import compact_external_signals_for_ontology
 from .portfolio import AccountSnapshot, Position
 from .reasoning_source_snapshot import reasoning_source_snapshot_id
+from .reasoning_source_facts import reasoning_source_fact
 
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
@@ -159,6 +165,45 @@ COMPANY_KNOWLEDGE_SECTION_FACT_TYPES = {
     "capital": {"CapitalStructureChange"},
     "coverage": {"DataQuality"},
 }
+
+SOURCE_FACT_IDENTITY_FIELDS = {
+    "symbol", "source", "market", "currency", "sector",
+}
+SOURCE_FACT_POSITION_FIELDS = {
+    "MarketQuote": SOURCE_FACT_IDENTITY_FIELDS | {
+        "current_price", "change_rate", "quote_status", "data_quality",
+        "source_timestamp_state", "freshness_status", "latency_status",
+        "market_session", "market_session_label", "real_time", "exchange_rate",
+    },
+    "TechnicalIndicator": SOURCE_FACT_IDENTITY_FIELDS | TECHNICAL_FIELDS,
+    "ExecutionFlow": SOURCE_FACT_IDENTITY_FIELDS | FLOW_FIELDS,
+    "OrderBook": SOURCE_FACT_IDENTITY_FIELDS | ORDERBOOK_FIELDS,
+    "PortfolioSnapshot": SOURCE_FACT_IDENTITY_FIELDS | POSITION_CONTEXT_FIELDS | {
+        "market_value", "profit_loss", "profit_loss_rate",
+    },
+    "DataQuality": SOURCE_FACT_IDENTITY_FIELDS | {
+        "quote_status", "data_quality", "source_timestamp_state",
+        "freshness_status", "latency_status", "market_session", "real_time",
+    },
+}
+DECISION_SOURCE_FACT_TYPES = tuple(SOURCE_FACT_POSITION_FIELDS)
+
+
+def _source_fact_types_for_symbol(
+    changed_fact_types: Iterable[str],
+    has_position_boundary: bool,
+) -> List[str]:
+    fact_types = {
+        str(value or "").strip()
+        for value in changed_fact_types or []
+        if str(value or "").strip()
+    }
+    if has_position_boundary:
+        # One durable monitor snapshot is the proof boundary for all inputs a
+        # market/position rule can read. Routing remains limited to the actual
+        # changed families; this bundle only supplies point-in-time lineage.
+        fact_types.update(DECISION_SOURCE_FACT_TYPES)
+    return sorted(fact_types)
 
 
 def _clean_symbol(value: object) -> str:
@@ -578,6 +623,130 @@ def _fact_types_for_change(fields: Iterable[str], external_groups: Iterable[str]
     return sorted(selected or {"PortfolioSnapshot"})
 
 
+def _source_fact_external_payload(
+    fact_type: str,
+    symbol: str,
+    external: Mapping[str, object],
+    groups: Iterable[str],
+) -> Dict[str, object]:
+    selected: Dict[str, object] = {}
+    for group in groups or []:
+        clean_group = str(group or "")
+        if fact_type not in _fact_types_for_change([], [clean_group]):
+            continue
+        root_group, _, section = clean_group.partition(".")
+        value = external.get(root_group)
+        if root_group == "companyKnowledge" and isinstance(value, Mapping):
+            company = value.get(symbol) if isinstance(value.get(symbol), Mapping) else {}
+            if section:
+                section_value = company.get(section)
+                if section_value not in (None, "", [], {}):
+                    material_section_revisions = (
+                        company.get("materialSectionRevisions")
+                        if isinstance(company.get("materialSectionRevisions"), Mapping)
+                        else {}
+                    )
+                    selected[clean_group] = {
+                        "value": section_value,
+                        "materialRevision": company.get("materialRevision"),
+                        "sectionRevision": material_section_revisions.get(section),
+                    }
+            elif company:
+                selected[root_group] = company
+            continue
+        if value not in (None, "", [], {}):
+            selected[root_group] = value
+    return selected
+
+
+def _verified_monitor_source_facts(
+    *,
+    snapshot: AccountSnapshot,
+    source_event: DomainEvent,
+    current_positions: Mapping[str, Mapping[str, object]],
+    previous_positions: Mapping[str, Mapping[str, object]],
+    current_external: Mapping[str, object],
+    changed_symbols: Iterable[str],
+    changed_fields_by_symbol: Mapping[str, Iterable[str]],
+    changed_external_groups_by_symbol: Mapping[str, Iterable[str]],
+    fact_types_by_symbol: Mapping[str, Iterable[str]],
+    revisions_by_symbol: Mapping[str, object],
+    crypto_transitions: Iterable[Mapping[str, object]],
+    settings: Mapping[str, object] = None,
+) -> List[Dict[str, object]]:
+    """Capture exact changed observations without duplicating vendor archives."""
+
+    snapshot_id = reasoning_source_snapshot_id(snapshot.account_id, snapshot.generated_at)
+    transitions = [dict(item) for item in crypto_transitions or [] if isinstance(item, Mapping)]
+    facts: List[Dict[str, object]] = []
+    for symbol in changed_symbols:
+        position = dict(current_positions.get(symbol) or {})
+        previous_position = dict(previous_positions.get(symbol) or {})
+        fields = list(changed_fields_by_symbol.get(symbol) or [])
+        groups = list(changed_external_groups_by_symbol.get(symbol) or [])
+        external = _external_for_symbol(current_external, symbol, settings)
+        symbol_transitions = [
+            item for item in transitions
+            if _clean_symbol(item.get("symbol")) in {symbol, "BTC", "ETH"}
+        ]
+        source_fact_types = _source_fact_types_for_symbol(
+            fact_types_by_symbol.get(symbol) or [],
+            bool(position or previous_position),
+        )
+        for fact_type in source_fact_types:
+            selected_position_fields = SOURCE_FACT_POSITION_FIELDS.get(
+                str(fact_type or ""), SOURCE_FACT_IDENTITY_FIELDS
+            )
+            position_payload = {
+                field: position.get(field)
+                for field in sorted(selected_position_fields)
+                if position.get(field) not in (None, "")
+            }
+            payload: Dict[str, object] = {
+                "symbol": symbol,
+                "snapshotId": snapshot_id,
+                "factTypes": source_fact_types,
+                "triggerFactTypes": list(fact_types_by_symbol.get(symbol) or []),
+                "changedFields": fields,
+                "position": position_payload,
+                "external": _source_fact_external_payload(
+                    str(fact_type or ""), symbol, external, groups
+                ),
+            }
+            if not position and previous_position:
+                payload["positionRemoved"] = True
+                payload["previousPosition"] = {
+                    field: previous_position.get(field)
+                    for field in sorted(SOURCE_FACT_IDENTITY_FIELDS | POSITION_CONTEXT_FIELDS)
+                    if previous_position.get(field) not in (None, "")
+                }
+            if str(fact_type or "") == "MarketQuote" and "cryptoMarkets" in groups:
+                payload["cryptoMarkets"] = current_external.get("cryptoMarkets") or {}
+                payload["cryptoTransitions"] = symbol_transitions
+            quality_state = "verified-source-boundary"
+            if str(position.get("quote_status") or "").lower() in {"error", "failed", "unavailable"}:
+                quality_state = "unavailable-source-boundary"
+            elif str(position.get("data_quality") or "").lower() in {"reference", "estimated", "cached"}:
+                quality_state = "conditional-source-boundary"
+            fact = reasoning_source_fact(
+                fact_type=str(fact_type or "VerifiedMonitorSnapshot"),
+                aggregate_id=(
+                    "monitor:" + str(snapshot.account_id or "default") + ":"
+                    + symbol + ":" + str(fact_type or "snapshot")
+                ),
+                subject_ids=[symbol],
+                source_event=source_event,
+                payload=payload,
+                revision=str(revisions_by_symbol.get(symbol) or ""),
+                observed_at=str(snapshot.generated_at or source_event.occurred_at or ""),
+                quality_state=quality_state,
+            )
+            facts.append(fact.request_payload())
+            if len(facts) >= MAX_REASONING_SOURCE_FACTS_PER_EVENT:
+                return facts
+    return facts
+
+
 def verified_monitor_snapshot_reasoning_event(
     snapshot: AccountSnapshot,
     previous_state: Mapping[str, object] = None,
@@ -812,6 +981,30 @@ def verified_monitor_snapshot_reasoning_event(
 
     external_groups = sorted({group for groups in changed_external_groups_by_symbol.values() for group in groups})
     source_event = snapshot_collected_event(snapshot)
+    source_facts = _verified_monitor_source_facts(
+        snapshot=snapshot,
+        source_event=source_event,
+        current_positions=current_positions,
+        previous_positions=previous_positions,
+        current_external=current_external,
+        changed_symbols=changed_symbols,
+        changed_fields_by_symbol=changed_fields_by_symbol,
+        changed_external_groups_by_symbol=changed_external_groups_by_symbol,
+        fact_types_by_symbol=fact_types_by_symbol,
+        revisions_by_symbol=revisions,
+        crypto_transitions=crypto_transitions,
+        settings=settings,
+    )
+    expected_source_fact_count = sum(
+        len(_source_fact_types_for_symbol(
+            fact_types_by_symbol.get(symbol) or [],
+            bool(
+                current_positions.get(symbol)
+                or previous_positions.get(symbol)
+            ),
+        ))
+        for symbol in changed_symbols
+    )
     return ontology_reasoning_requested_event(
         source_event,
         VERIFIED_MONITOR_SNAPSHOT_TRIGGER,
@@ -845,8 +1038,15 @@ def verified_monitor_snapshot_reasoning_event(
             "cryptoTransitions": crypto_transitions[:12],
             "cryptoTransitionTargetSymbols": transition_targets[:20],
             "systemicMacroTransition": macro_transition,
+            "expectedSourceFactCount": expected_source_fact_count,
+            "capturedSourceFactCount": len(source_facts),
+            "sourceFactCoverageComplete": (
+                len(source_facts) == expected_source_fact_count
+            ),
+            "sourceFactCaptureLimit": MAX_REASONING_SOURCE_FACTS_PER_EVENT,
         },
         observation_followup_symbols=observation_followups,
         importance_gate="materiality-or-context-transition",
         materiality_role="scheduling-gate-only",
+        source_facts=source_facts,
     )

@@ -24,6 +24,83 @@ from .ontology_rule_manifest import rule_domain_manifest
 from .ontology_schema import abox_relation_properties
 
 
+SOURCE_FACT_FIELD_TYPES = {
+    "currentprice": {"MarketQuote"},
+    "changerate": {"MarketQuote"},
+    "pricechangerate": {"MarketQuote"},
+    "quotestatus": {"MarketQuote", "DataQuality"},
+    "freshnessstatus": {"MarketQuote", "DataQuality"},
+    "latencystatus": {"MarketQuote", "DataQuality"},
+    "quantity": {"PortfolioSnapshot"},
+    "sellablequantity": {"PortfolioSnapshot"},
+    "averageprice": {"PortfolioSnapshot"},
+    "marketvalue": {"PortfolioSnapshot"},
+    "profitloss": {"PortfolioSnapshot"},
+    "profitlossrate": {"PortfolioSnapshot"},
+    "volume": {"ExecutionFlow"},
+    "volumeratio": {"ExecutionFlow"},
+    "tradingvalue": {"ExecutionFlow"},
+    "tradestrength": {"ExecutionFlow"},
+    "foreignnetvolume": {"ExecutionFlow"},
+    "institutionnetvolume": {"ExecutionFlow"},
+    "individualnetvolume": {"ExecutionFlow"},
+    "smartmoneynetvolume": {"ExecutionFlow"},
+    "bidaskimbalance": {"OrderBook"},
+}
+
+
+def _condition_source_fact_ids(
+    stock_properties: Mapping[str, object],
+    condition,
+    target_properties: Mapping[str, object] = None,
+) -> List[str]:
+    ids_by_type = (
+        stock_properties.get("sourceFactIdsByType")
+        if isinstance(stock_properties.get("sourceFactIdsByType"), Mapping)
+        else {}
+    )
+    fact_types = set()
+    kind = str(getattr(condition, "kind", "") or "")
+    if kind == "subject_property":
+        field = str(getattr(condition, "field", "") or "")
+        normalized = field.lower().replace("_", "").replace("-", "")
+        fact_types.update(SOURCE_FACT_FIELD_TYPES.get(normalized, set()))
+        if normalized.startswith("ma"):
+            fact_types.add("TechnicalIndicator")
+    elif kind == "relation":
+        semantic = " ".join([
+            str(getattr(condition, "relation_type", "") or ""),
+            str(getattr(condition, "target_kind", "") or ""),
+            str((target_properties or {}).get("tboxClass") or ""),
+        ]).upper()
+        if any(token in semantic for token in ("NEWS", "RESEARCH", "CLAIM", "DOCUMENT")):
+            fact_types.update({"NewsArticle", "ResearchEvidence", "VerifiedClaim"})
+        if any(token in semantic for token in ("DISCLOSURE", "FILING")):
+            fact_types.update({"DisclosureFiling", "ResearchEvidence"})
+        if any(token in semantic for token in ("FINANCIAL", "FUNDAMENTAL", "EARNINGS")):
+            fact_types.add("FinancialFact")
+        if "VALUATION" in semantic:
+            fact_types.update({"ValuationObservation", "FinancialFact"})
+        if any(token in semantic for token in ("CAPITAL", "DILUTION", "CORPORATE-ACTION")):
+            fact_types.add("CapitalStructureChange")
+        if any(token in semantic for token in ("GOVERNANCE", "OWNERSHIP")):
+            fact_types.add("GovernanceChange")
+        if "FX" in semantic or "CURRENCY" in semantic:
+            fact_types.add("FxRate")
+        if any(token in semantic for token in ("INTEREST", "RATE", "MACRO")):
+            fact_types.update({"InterestRate", "MacroIndicator"})
+    result = {
+        str(fact_id or "").strip()
+        for fact_type in fact_types
+        for fact_id in ids_by_type.get(fact_type) or []
+        if str(fact_id or "").strip()
+    }
+    direct_fact_id = str((target_properties or {}).get("sourceFactId") or "").strip()
+    if direct_fact_id:
+        result.add(direct_fact_id)
+    return sorted(result)
+
+
 def shared_premise_original_rule_id(rule_id: str) -> str:
     value = str(rule_id or "")
     for prefix in ("shared.premise.any.", "shared.premise."):
@@ -551,6 +628,15 @@ def grounded_inference_context(
                 stock_observation_properties.setdefault("observationKind", stock.kind)
                 item.update(observation_metadata(stock_observation_properties, observed_value))
                 item["field"] = field
+                source_fact_ids = _condition_source_fact_ids(
+                    stock_observation_properties,
+                    condition,
+                )
+                if source_fact_ids:
+                    item["sourceFactIds"] = source_fact_ids
+                    item["evidenceIds"] = sorted(set(
+                        list(item.get("evidenceIds") or []) + source_fact_ids
+                    ))
             elif str(getattr(condition, "kind", "") or "") == "relation":
                 relation, target = matching_evidence_relation(
                     graph,
@@ -579,6 +665,16 @@ def grounded_inference_context(
                     item["relationType"] = relation.relation_type
                     item["targetId"] = relation.target if relation.source == stock.entity_id else relation.source
                     item["targetKind"] = target.kind if target else ""
+                    source_fact_ids = _condition_source_fact_ids(
+                        stock.properties or {},
+                        condition,
+                        target_properties,
+                    )
+                    if source_fact_ids:
+                        item["sourceFactIds"] = source_fact_ids
+                        item["evidenceIds"] = sorted(set(
+                            list(item.get("evidenceIds") or []) + source_fact_ids
+                        ))
                     if target and target.kind == "shared-market-premise":
                         item["premiseLineage"] = {
                             "premiseProofId": target_properties.get("premiseProofId"),

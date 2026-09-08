@@ -6,9 +6,15 @@ from typing import Dict, Iterable, List, Mapping
 from .accounts import AccountConfig
 from .fact_changes import fact_change_contract
 from .portfolio import AccountSnapshot, AlertEvent, utc_now_iso
+from .reasoning_source_facts import (
+    compact_reasoning_source_fact_payload,
+    reasoning_source_fact,
+)
 
 
 DOMAIN_EVENT_SCHEMA_VERSION = "domain-event-v1"
+MAX_REASONING_SOURCE_FACTS_PER_EVENT = 1200
+MAX_DERIVED_DOCUMENT_SOURCE_FACTS_PER_EVENT = 100
 
 
 ACCOUNT_SAVED = "account.saved"
@@ -849,16 +855,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
     for raw in source.get("sourceFacts") or []:
         if not isinstance(raw, Mapping):
             continue
-        fact_payload = raw.get("payload") if isinstance(raw.get("payload"), Mapping) else {}
-        calendar_payload = {
-            key: fact_payload.get(key)
-            for key in (
-                "eventId", "title", "eventType", "startsAt", "endsAt", "timezone",
-                "allDay", "status", "importance", "symbols", "markets", "accountIds",
-                "source", "sourceUrl", "notes", "payload",
-            )
-            if key in fact_payload
-        }
+        fact_payload = compact_reasoning_source_fact_payload(raw.get("payload") or {})
         source_facts.append({
             "version": _event_text(raw.get("version"), 64),
             "factId": _event_text(raw.get("factId"), 191),
@@ -873,9 +870,9 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
             "validFrom": _event_text(raw.get("validFrom"), 40),
             "validTo": _event_text(raw.get("validTo"), 40),
             "qualityState": _event_text(raw.get("qualityState"), 64),
-            "payload": calendar_payload,
+            "payload": fact_payload if isinstance(fact_payload, Mapping) else {},
         })
-        if len(source_facts) >= 20:
+        if len(source_facts) >= MAX_REASONING_SOURCE_FACTS_PER_EVENT:
             break
     if source_facts:
         compact["sourceFacts"] = source_facts
@@ -1468,6 +1465,113 @@ def investment_validation_changed_event(
     )
 
 
+def _research_source_fact_type(item: Mapping[str, object]) -> str:
+    kind = str(item.get("kind") or "").strip().lower()
+    if "news" in kind:
+        return "NewsArticle"
+    if "disclosure" in kind or "filing" in kind:
+        return "DisclosureFiling"
+    if "financial" in kind or "earning" in kind:
+        return "FinancialFact"
+    return "ResearchEvidence"
+
+
+def _reasoning_source_facts_from_event(
+    source_event: DomainEvent,
+    symbols: Iterable[str],
+    fact_types_by_symbol: Mapping[str, Iterable[str]],
+    revisions_by_symbol: Mapping[str, object],
+) -> List[Dict[str, object]]:
+    """Derive bounded immutable facts from a research/external source event."""
+
+    source_payload = source_event.payload if isinstance(source_event.payload, Mapping) else {}
+    target_symbols = {
+        str(symbol or "").upper().strip()
+        for symbol in symbols or []
+        if str(symbol or "").strip()
+    }
+    raw_items = (
+        source_payload.get("materialChangedItems")
+        or source_payload.get("changedItems")
+        or []
+    )
+    facts: List[Dict[str, object]] = []
+    seen = set()
+    for index, raw in enumerate(raw_items):
+        if not isinstance(raw, Mapping):
+            continue
+        item = compact_research_item_for_event_storage(raw)
+        symbol = str(item.get("symbol") or "").upper().strip()
+        if not symbol or (target_symbols and symbol not in target_symbols):
+            continue
+        aggregate_id = str(item.get("evidenceId") or "").strip()
+        if not aggregate_id:
+            aggregate_id = (str(source_event.aggregate_id or "research") + ":" + symbol + ":" + str(index))[:191]
+        fact_type = _research_source_fact_type(item)
+        key = (fact_type, aggregate_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        governance = item.get("evidenceGovernance") if isinstance(item.get("evidenceGovernance"), Mapping) else {}
+        admission = item.get("promptEvidenceAdmission") if isinstance(item.get("promptEvidenceAdmission"), Mapping) else {}
+        eligible = bool(
+            governance.get("investmentJudgmentEligible")
+            or admission.get("decisionEligible")
+        )
+        observed_at = str(
+            item.get("observedAt")
+            or item.get("sourceAsOf")
+            or item.get("publishedAt")
+            or source_event.occurred_at
+            or ""
+        )
+        fact = reasoning_source_fact(
+            fact_type=fact_type,
+            aggregate_id=aggregate_id,
+            subject_ids=[symbol],
+            source_event=source_event,
+            payload=item,
+            revision=str(
+                item.get("articleEnrichmentRevision")
+                or item.get("sourceRevision")
+                or item.get("documentHash")
+                or revisions_by_symbol.get(symbol)
+                or ""
+            ),
+            observed_at=observed_at,
+            valid_from=str(item.get("publishedAt") or observed_at),
+            quality_state=(
+                "verified-source-boundary" if eligible else "conditional-source-boundary"
+            ),
+        )
+        facts.append(fact.request_payload())
+        if len(facts) >= MAX_DERIVED_DOCUMENT_SOURCE_FACTS_PER_EVENT:
+            break
+
+    if facts or source_event.name != EXTERNAL_FACT_CHANGED:
+        return facts
+
+    # External dataset events intentionally carry metadata, not the canonical
+    # document. Persist that exact revision boundary so delayed workers can
+    # explain which provider fact caused the projection refresh.
+    for symbol in sorted(target_symbols):
+        requested_types = list(fact_types_by_symbol.get(symbol) or []) or ["ExternalFact"]
+        for fact_type in requested_types:
+            fact = reasoning_source_fact(
+                fact_type=str(fact_type or "ExternalFact"),
+                aggregate_id=str(source_event.aggregate_id or ("external:" + symbol)),
+                subject_ids=[symbol],
+                source_event=source_event,
+                payload=source_payload,
+                revision=str(revisions_by_symbol.get(symbol) or source_payload.get("sourceRevision") or ""),
+                observed_at=str(source_payload.get("sourceAsOf") or source_event.occurred_at or ""),
+            )
+            facts.append(fact.request_payload())
+            if len(facts) >= MAX_DERIVED_DOCUMENT_SOURCE_FACTS_PER_EVENT:
+                return facts
+    return facts
+
+
 def ontology_reasoning_requested_event(
     source_event: DomainEvent,
     trigger: str,
@@ -1564,6 +1668,16 @@ def ontology_reasoning_requested_event(
     ]
     raw_deltas = evidence_deltas if evidence_deltas is not None else source_payload.get("evidenceDeltas")
     deltas = compact_evidence_delta_event_payloads(raw_deltas, limit=200)
+    bounded_source_facts = (
+        [dict(item) for item in source_facts or [] if isinstance(item, Mapping)]
+        if source_facts is not None
+        else _reasoning_source_facts_from_event(
+            source_event,
+            clean_symbols,
+            symbol_fact_types,
+            revisions,
+        )
+    )
     return DomainEvent(
         name=ONTOLOGY_REASONING_REQUESTED,
         aggregate_id="ontology:" + (
@@ -1638,7 +1752,7 @@ def ontology_reasoning_requested_event(
             ),
             # Immutable, bounded source facts make delayed/replayed workers
             # reconstruct the exact event that caused this request.
-            "sourceFacts": [dict(item) for item in source_facts or [] if isinstance(item, Mapping)][:20],
+            "sourceFacts": bounded_source_facts[:MAX_REASONING_SOURCE_FACTS_PER_EVENT],
         }),
     )
 

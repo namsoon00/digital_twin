@@ -20707,6 +20707,10 @@ relation ontology-assertion,
                 "failures": [],
                 "dispatchedMatches": [],
                 "ignoredContractIds": [],
+                "sourceRowCount": 0,
+                "dispatchedMatchCount": 0,
+                "matchedContractIds": [],
+                "matchedSymbols": [],
             }
         driver = self.open_native_rule_read_driver(
             imported,
@@ -20721,6 +20725,9 @@ relation ontology-assertion,
         failures: List[Dict[str, object]] = []
         dispatched_matches: List[Dict[str, object]] = []
         ignored_contract_ids: Set[str] = set()
+        source_row_count = 0
+        matched_contract_ids: Set[str] = set()
+        matched_symbols: Set[str] = set()
         try:
             self.ensure_database(driver)
             for batch_index, batch in enumerate(batch_rows):
@@ -20808,6 +20815,7 @@ relation ontology-assertion,
                         })
                     continue
                 dispatch = typedb_dispatch_model_signal_bridge_rows(batch, rows)
+                source_row_count += len(rows)
                 ignored_contract_ids.update(dispatch.get("ignoredContractIds") or [])
                 if str(dispatch.get("status") or "") != "ok":
                     reason = "; ".join(str(item) for item in dispatch.get("failures") or [])
@@ -20830,6 +20838,14 @@ relation ontology-assertion,
                     entry = dict(item.get("entry") or {})
                     rule = entry.get("rule")
                     rule_id = str(getattr(rule, "rule_id", "") or "")
+                    contract_id = model_signal_interpretation_contract_id(rule)
+                    if contract_id:
+                        matched_contract_ids.add(contract_id)
+                    source_symbol = str(
+                        dict(item.get("row") or {}).get("sourceSymbol") or ""
+                    ).upper().strip()
+                    if source_symbol:
+                        matched_symbols.add(source_symbol)
                     signal_condition = model_signal_conditions(rule)[0]
                     signal_condition_payload = (
                         signal_condition.to_dict()
@@ -20907,6 +20923,10 @@ relation ontology-assertion,
             "failures": failures,
             "dispatchedMatches": dispatched_matches,
             "ignoredContractIds": sorted(ignored_contract_ids),
+            "sourceRowCount": source_row_count,
+            "dispatchedMatchCount": len(dispatched_matches),
+            "matchedContractIds": sorted(matched_contract_ids)[:80],
+            "matchedSymbols": sorted(matched_symbols)[:80],
         }
 
     @staticmethod
@@ -21342,6 +21362,26 @@ relation ontology-assertion,
                 for contract_id in item.get("ignoredContractIds") or []
                 if str(contract_id or "")
             }),
+            "sourceRowCount": sum(
+                int(item.get("sourceRowCount") or 0)
+                for item in model_signal_subjects
+            ),
+            "dispatchedMatchCount": sum(
+                int(item.get("dispatchedMatchCount") or 0)
+                for item in model_signal_subjects
+            ),
+            "matchedContractIds": sorted({
+                str(contract_id or "")
+                for item in model_signal_subjects
+                for contract_id in item.get("matchedContractIds") or []
+                if str(contract_id or "")
+            })[:80],
+            "matchedSymbols": sorted({
+                str(symbol or "").upper().strip()
+                for item in model_signal_subjects
+                for symbol in item.get("matchedSymbols") or []
+                if str(symbol or "").strip()
+            })[:80],
             "subjectCount": len(model_signal_subjects),
         }
         return {
@@ -21473,6 +21513,7 @@ relation ontology-assertion,
             "batches": [],
             "regularEntries": [],
         }
+        bridge_batch_result: Dict[str, object] = {}
         model_signal_ignored_contract_ids: List[str] = []
         adaptive_target_sharding_profile_status = str(
             adaptive_target_sharding_profile.get("status") or "not-requested"
@@ -22413,6 +22454,7 @@ relation ontology-assertion,
                     "modelSignalBridgeExecution": typedb_model_signal_bridge_batch_plan_summary(
                         model_signal_batch_plan,
                         ignored_contract_ids=model_signal_ignored_contract_ids,
+                        execution=bridge_batch_result,
                     ),
                     "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                     "ruleContext": rule_context,
@@ -22480,6 +22522,7 @@ relation ontology-assertion,
                 "modelSignalBridgeExecution": typedb_model_signal_bridge_batch_plan_summary(
                     model_signal_batch_plan,
                     ignored_contract_ids=model_signal_ignored_contract_ids,
+                    execution=bridge_batch_result,
                 ),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
                 "ruleContext": rule_context,
@@ -22532,6 +22575,7 @@ relation ontology-assertion,
                 "modelSignalBridgeExecution": typedb_model_signal_bridge_batch_plan_summary(
                     model_signal_batch_plan,
                     ignored_contract_ids=model_signal_ignored_contract_ids,
+                    execution=bridge_batch_result,
                 ),
                 "typedbQueryMetrics": self.query_metrics_snapshot(),
                 "executionPlan": typedb_native_rule_execution_plan_summary(execution_plan),
@@ -24800,6 +24844,24 @@ relation ontology-assertion,
                     "modelSignalBridgeExecution",
                 ]
                 if key in native_match_result
+            } | {
+                # The normalized execution trace and result-slot writer need
+                # exact subject identity. Keep only the bounded identity rows;
+                # condition evidence remains in TypeDB and the InferenceBox.
+                "matches": [
+                    {
+                        key: item.get(key)
+                        for key in [
+                            "ruleId", "sourceId", "sourceLabel",
+                            "sourceSymbol", "subjectId", "subjectSymbol",
+                        ]
+                        if item.get(key) not in (None, "")
+                    }
+                    for item in native_match_result.get("matches") or []
+                    if isinstance(item, dict)
+                    and str(item.get("ruleId") or "").strip()
+                    and str(item.get("sourceId") or item.get("subjectId") or "").strip()
+                ],
             },
             "typedbQueryMetrics": self.query_metrics_snapshot(),
             "inferenceBox": inferencebox_payload,
@@ -29339,10 +29401,16 @@ def typedb_model_signal_bridge_batch_plan_summary(
     plan: Dict[str, object],
     *,
     ignored_contract_ids: Iterable[str] = None,
+    execution: Dict[str, object] = None,
 ) -> Dict[str, object]:
     payload = dict(plan or {})
+    execution_payload = dict(execution or {})
     return {
-        "status": str(payload.get("status") or "not-planned"),
+        "status": str(
+            execution_payload.get("status")
+            or payload.get("status")
+            or "not-planned"
+        ),
         "logicalModelSignalPolicyCount": int(payload.get("logicalModelSignalPolicyCount") or 0),
         "batchedSimplePolicyCount": int(payload.get("batchedSimplePolicyCount") or 0),
         "constrainedPolicyCount": int(payload.get("constrainedPolicyCount") or 0),
@@ -29362,6 +29430,14 @@ def typedb_model_signal_bridge_batch_plan_summary(
             for item in ignored_contract_ids or []
             if str(item or "").strip()
         }),
+        "sourceRowCount": int(execution_payload.get("sourceRowCount") or 0),
+        "dispatchedMatchCount": int(
+            execution_payload.get("dispatchedMatchCount") or 0
+        ),
+        "matchedContractIds": list(
+            execution_payload.get("matchedContractIds") or []
+        )[:80],
+        "matchedSymbols": list(execution_payload.get("matchedSymbols") or [])[:80],
     }
 
 

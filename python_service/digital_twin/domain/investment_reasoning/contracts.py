@@ -742,15 +742,62 @@ class RuleEvaluationRecord:
 def rule_evaluation_records_from_projection_results(
     projection_results: Mapping[str, object],
 ) -> Tuple[RuleEvaluationRecord, ...]:
-    """Project already-returned InferenceBox traces into compact audit records."""
+    """Project matched TypeDB proofs into compact, replayable audit records.
+
+    Projection persistence deliberately drops the full InferenceBox graph.  A
+    compact projection therefore carries prebuilt ``ruleEvaluations`` while a
+    live projection still exposes raw traces.  Accept both shapes so proof
+    lineage survives the application boundary without retaining the graph.
+    """
 
     records = []
     seen = set()
     for account_id, raw_projection in (projection_results or {}).items():
         projection = _mapping(raw_projection)
         inference = _mapping(projection.get("inferenceBox"))
+        effective_account_id = str(
+            projection.get("accountId")
+            or inference.get("accountId")
+            or account_id
+            or ""
+        )
         snapshot_id = str(inference.get("sourceAboxSnapshotId") or projection.get("sourceAboxSnapshotId") or "")
         generation_id = str(inference.get("inferenceGenerationId") or projection.get("inferenceGenerationId") or "")
+        for raw_evaluation in projection.get("ruleEvaluations") or projection.get("rule_evaluations") or []:
+            if not isinstance(raw_evaluation, Mapping):
+                continue
+            evaluation = RuleEvaluationRecord.from_dict(raw_evaluation)
+            rule_id = str(evaluation.rule_id or evaluation.proof.rule_id or "")
+            if not rule_id:
+                continue
+            trace_id = str(evaluation.proof.trace_id or evaluation.proof.proof_id or "")
+            record_account_id = str(evaluation.account_id or effective_account_id)
+            key = (record_account_id, rule_id, trace_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append(RuleEvaluationRecord(
+                evaluation_id=(
+                    evaluation.evaluation_id
+                    or _stable_id(
+                        "rule-evaluation",
+                        record_account_id,
+                        evaluation.inference_generation_id or generation_id,
+                        rule_id,
+                        trace_id,
+                    )
+                ),
+                account_id=record_account_id,
+                rule_id=rule_id,
+                source_abox_snapshot_id=evaluation.source_abox_snapshot_id or snapshot_id,
+                inference_generation_id=evaluation.inference_generation_id or generation_id,
+                matched=evaluation.matched,
+                selected=evaluation.selected,
+                decision_eligible=evaluation.decision_eligible,
+                failure_reason=evaluation.failure_reason,
+                proof=evaluation.proof,
+                version=evaluation.version,
+            ))
         shared_lineage = {
             "sharedGenerationId": inference.get("sharedPremiseInferenceGenerationId"),
             "sourceAboxSnapshotId": inference.get("sharedPremiseSourceAboxSnapshotId"),
@@ -763,7 +810,7 @@ def rule_evaluation_records_from_projection_results(
             trace_id = str(merged.get("traceId") or merged.get("id") or merged.get("inferenceTraceId") or "")
             if not rule_id:
                 continue
-            key = (str(account_id), rule_id, trace_id)
+            key = (effective_account_id, rule_id, trace_id)
             if key in seen:
                 continue
             seen.add(key)
@@ -786,10 +833,10 @@ def rule_evaluation_records_from_projection_results(
                 "conditions": merged.get("matchedConditions") or [],
                 "premiseLineage": lineage,
             })
-            evaluation_id = _stable_id("rule-evaluation", account_id, generation_id, rule_id, trace_id)
+            evaluation_id = _stable_id("rule-evaluation", effective_account_id, generation_id, rule_id, trace_id)
             records.append(RuleEvaluationRecord(
                 evaluation_id=evaluation_id,
-                account_id=str(account_id),
+                account_id=effective_account_id,
                 rule_id=rule_id,
                 source_abox_snapshot_id=snapshot_id,
                 inference_generation_id=generation_id,

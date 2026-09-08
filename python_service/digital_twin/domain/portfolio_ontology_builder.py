@@ -80,6 +80,7 @@ from .portfolio_ontology_outputs import (
     dedupe_evidence,
     dedupe_relations,
 )
+from .reasoning_source_facts import reasoning_source_fact_lineage_for_symbol
 from .portfolio_ontology_state import add_fact_change_concepts
 from .portfolio_ontology_structure import (
     add_instrument_identity_concepts,
@@ -283,6 +284,10 @@ def build_portfolio_ontology(
         ma5_distance = moving_average_distance(position.ma5, getattr(position, "ma5_distance", 0.0))
         ma20_distance = moving_average_distance(position.ma20, position.ma20_distance)
         ma60_distance = moving_average_distance(position.ma60, position.ma60_distance)
+        source_fact_lineage = reasoning_source_fact_lineage_for_symbol(
+            runtime_context.get("reasoningSourceFacts") or [],
+            symbol,
+        )
         graph.entities.append(OntologyEntity(stock_id, position.name or symbol, "stock", abox_properties({
             "symbol": symbol,
             "market": position.market,
@@ -342,6 +347,7 @@ def build_portfolio_ontology(
             **quote_observation,
             "tboxClass": "Stock",
             "tboxClasses": stock_tbox_classes,
+            **source_fact_lineage,
             **strategy_fact_props,
         })))
         position_id = add_entity(graph, "position", portfolio_id + ":" + symbol, (position.name or symbol) + (" 관심 행" if source == "watchlist" else " 보유 행"), {

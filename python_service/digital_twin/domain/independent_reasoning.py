@@ -6,7 +6,11 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping, Tuple
 
-from .events import DomainEvent, ONTOLOGY_REASONING_REQUESTED
+from .events import (
+    MAX_REASONING_SOURCE_FACTS_PER_EVENT,
+    DomainEvent,
+    ONTOLOGY_REASONING_REQUESTED,
+)
 from .fact_changes import FACT_CHANGE_CONTRACT_VERSION, fact_change_contract
 from .ontology_execution_units import revision_vector_for_change
 from .semantic_fact_plane import semantic_change_set
@@ -163,6 +167,56 @@ def _filter_symbol_maps(value: object, symbols: Tuple[str, ...]) -> object:
     return filtered
 
 
+def _source_fact_symbols(
+    source_fact: Mapping[str, object],
+    event_symbols: Iterable[str],
+) -> set:
+    event_scope = {
+        str(symbol or "").upper().strip()
+        for symbol in event_symbols or []
+        if str(symbol or "").strip()
+    }
+    payload = (
+        source_fact.get("payload")
+        if isinstance(source_fact.get("payload"), Mapping)
+        else {}
+    )
+    candidates = {
+        str(value or "").upper().strip()
+        for value in [
+            payload.get("symbol"),
+            payload.get("ticker"),
+            payload.get("subjectSymbol"),
+            source_fact.get("symbol"),
+        ]
+        if str(value or "").strip()
+    }
+    candidates.update(
+        str(value or "").upper().strip()
+        for value in source_fact.get("subjectIds") or []
+        if str(value or "").strip()
+    )
+    return candidates.intersection(event_scope)
+
+
+def _filter_shard_source_facts(
+    values: object,
+    shard_symbols: Tuple[str, ...],
+    event_symbols: Tuple[str, ...],
+) -> List[object]:
+    allowed = set(shard_symbols)
+    rows = []
+    for value in values or []:
+        if not isinstance(value, Mapping):
+            continue
+        owned_symbols = _source_fact_symbols(value, event_symbols)
+        # Facts with no event-symbol ownership are shared premises. Preserve
+        # them in every shard; symbol-owned facts stay with their own shard.
+        if not owned_symbols or owned_symbols.intersection(allowed):
+            rows.append(deepcopy(dict(value)))
+    return rows
+
+
 def shard_reasoning_event(event: object, max_symbols: int) -> Tuple[DomainEvent, ...]:
     """Split one source event without changing its point-in-time boundary.
 
@@ -183,6 +237,33 @@ def shard_reasoning_event(event: object, max_symbols: int) -> Tuple[DomainEvent,
     shards: List[DomainEvent] = []
     for index, chunk in enumerate(chunks):
         payload = _filter_symbol_maps(source.payload, chunk)
+        if "sourceFacts" in source.payload:
+            payload["sourceFacts"] = _filter_shard_source_facts(
+                (source.payload or {}).get("sourceFacts") or [],
+                chunk,
+                symbols,
+            )
+        snapshot_boundary = (
+            payload.get("verifiedSourceSnapshot")
+            if isinstance(payload.get("verifiedSourceSnapshot"), Mapping)
+            else None
+        )
+        original_boundary = (
+            (source.payload or {}).get("verifiedSourceSnapshot")
+            if isinstance((source.payload or {}).get("verifiedSourceSnapshot"), Mapping)
+            else None
+        )
+        if snapshot_boundary is not None and original_boundary is not None:
+            captured_count = len(payload.get("sourceFacts") or [])
+            snapshot_boundary = dict(snapshot_boundary)
+            snapshot_boundary["capturedSourceFactCount"] = captured_count
+            if original_boundary.get("sourceFactCoverageComplete") is True:
+                snapshot_boundary["expectedSourceFactCount"] = captured_count
+                snapshot_boundary["sourceFactCoverageComplete"] = True
+            elif original_boundary.get("sourceFactCoverageComplete") is False:
+                snapshot_boundary["sourceFactCoverageComplete"] = False
+                snapshot_boundary["sourceFactCoverageInheritedIncomplete"] = True
+            payload["verifiedSourceSnapshot"] = snapshot_boundary
         for key in ("affectedSymbols", "symbols", "targetSymbols"):
             if key in payload:
                 payload[key] = list(chunk)
@@ -526,18 +607,37 @@ def independent_reasoning_request(
     revision_vectors_by_symbol = {}
     fact_change_contracts = []
     source_facts = []
+    source_fact_coverage_declared = False
+    source_fact_coverage_complete = True
+    source_fact_expected_count = 0
+    source_fact_truncated = False
     authoritative_fact_boundary = True
     authoritative_dependency_boundary = True
     for event, scope in zip(events, scopes):
         payload = dict(event.payload or {})
+        boundary = (
+            payload.get("verifiedSourceSnapshot")
+            if isinstance(payload.get("verifiedSourceSnapshot"), Mapping)
+            else {}
+        )
+        if "sourceFactCoverageComplete" in boundary:
+            source_fact_coverage_declared = True
+            source_fact_coverage_complete = bool(
+                source_fact_coverage_complete
+                and boundary.get("sourceFactCoverageComplete") is True
+            )
+            source_fact_expected_count += int(
+                boundary.get("expectedSourceFactCount") or 0
+            )
         for source_fact in payload.get("sourceFacts") or []:
             if not isinstance(source_fact, Mapping):
                 continue
             fact_id = str(source_fact.get("factId") or "").strip()
+            if len(source_facts) >= MAX_REASONING_SOURCE_FACTS_PER_EVENT:
+                source_fact_truncated = True
+                break
             if fact_id and not any(str(item.get("factId") or "") == fact_id for item in source_facts):
                 source_facts.append(dict(source_fact))
-            if len(source_facts) >= 100:
-                break
         contract = canonical_fact_change_contract(payload)
         if not isinstance(contract, Mapping):
             authoritative_fact_boundary = False
@@ -693,6 +793,20 @@ def independent_reasoning_request(
         "revisionVectorsBySymbol": revision_vectors_by_symbol,
         "factChangeContracts": fact_change_contracts,
         "sourceFacts": source_facts,
+        "sourceFactCoverage": {
+            "declared": source_fact_coverage_declared,
+            "complete": bool(
+                not source_fact_truncated
+                and (
+                    source_fact_coverage_complete
+                    if source_fact_coverage_declared
+                    else True
+                )
+            ),
+            "expectedCount": source_fact_expected_count,
+            "capturedCount": len(source_facts),
+            "truncated": source_fact_truncated,
+        },
         "eventFactBoundaryAuthoritative": authoritative_fact_boundary,
         "eventDependencyBoundaryAuthoritative": authoritative_dependency_boundary,
         "verifiedSourceSnapshots": [

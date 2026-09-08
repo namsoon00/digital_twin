@@ -7,6 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.ontology_inference_context import (
+    _apply_decision_missing_data_boundary,
     action_envelope_from_inference,
     decision_from_inference,
     matches_from_inference,
@@ -543,6 +544,97 @@ class OntologyInferenceContextTests(unittest.TestCase):
         )
         self.assertEqual("RULE_COVERAGE_GAP_CANDIDATE", materialization_gap.disposition_code)
         self.assertEqual("candidate-gap", materialization_gap.rule_coverage_state)
+        self._assert_optional_valuation_gap_does_not_downgrade_unrelated_decision()
+        self._assert_optional_gap_is_kept_for_operations_but_removed_from_ai_facts()
+        self._assert_action_envelope_rule_survives_incomplete_assessment_bundle()
+        self._assert_rule_required_gap_retains_requirement_class()
+
+    def _assert_optional_valuation_gap_does_not_downgrade_unrelated_decision(self):
+        synthesis = decision_synthesis_from_relation_context("acct", {
+            "accountId": "acct",
+            "subject": {"symbol": "AAPL"},
+            "sourceAboxSnapshotId": "abox:optional",
+            "inferenceGenerationId": "inference:optional",
+            "generationAligned": True,
+            "missingData": [{
+                "key": "valuationInputs",
+                "label": "밸류에이션 입력값",
+                "status": "missing",
+                "effect": "피어 또는 과거 PER 표본 부족",
+            }],
+            "actionEnvelope": {"status": "NO_ELIGIBLE_THESIS"},
+            "graphStoreInference": {"relations": [], "traces": []},
+        })
+
+        self.assertEqual((), synthesis.data_gaps)
+        self.assertEqual((), synthesis.missing_data)
+        self.assertEqual("NO_MATERIAL_PREDICTIVE_RULE_MATCH", synthesis.disposition_code)
+
+    def _assert_optional_gap_is_kept_for_operations_but_removed_from_ai_facts(self):
+        facts = {
+            "missingData": [{
+                "key": "valuationInputs",
+                "label": "밸류에이션 입력값",
+                "status": "missing",
+            }],
+        }
+
+        operational = _apply_decision_missing_data_boundary(
+            facts,
+            {"selectedRuleId": "graph.trend.hold.v1"},
+            {},
+        )
+
+        self.assertEqual("valuationInputs", operational[0]["key"])
+        self.assertEqual(operational, facts["operationalMissingData"])
+        self.assertEqual([], facts["missingData"])
+
+    def _assert_action_envelope_rule_survives_incomplete_assessment_bundle(self):
+        synthesis = decision_synthesis_from_relation_context("acct", {
+            "accountId": "acct",
+            "subject": {"symbol": "AAPL"},
+            "sourceAboxSnapshotId": "abox:selected-rule",
+            "inferenceGenerationId": "inference:selected-rule",
+            "generationAligned": True,
+            "assessmentBundle": {
+                "investmentOpinion": {"candidateAction": "HOLD"},
+            },
+            "actionEnvelope": {
+                "investmentViewAction": "HOLD",
+                "selectedRuleId": "graph.trend.hold.v1",
+            },
+            "graphStoreInference": {"relations": [], "traces": []},
+        })
+
+        self.assertEqual("graph.trend.hold.v1", synthesis.selected_rule_id)
+        self.assertEqual("RULE_COVERAGE_GAP_CANDIDATE", synthesis.disposition_code)
+
+    def _assert_rule_required_gap_retains_requirement_class(self):
+        synthesis = decision_synthesis_from_relation_context("acct", {
+            "accountId": "acct",
+            "subject": {"symbol": "AAPL"},
+            "sourceAboxSnapshotId": "abox:required",
+            "inferenceGenerationId": "inference:required",
+            "generationAligned": True,
+            "missingData": [{
+                "key": "valuationInputs",
+                "label": "밸류에이션 입력값",
+                "status": "missing",
+                "requiredByRuleIds": ["graph.valuation.margin.v1"],
+            }],
+            "actionEnvelope": {
+                "status": "NO_ELIGIBLE_THESIS",
+                "selectedRuleId": "graph.valuation.margin.v1",
+            },
+            "graphStoreInference": {"relations": [], "traces": []},
+        })
+
+        self.assertEqual(1, len(synthesis.data_gaps))
+        self.assertEqual(
+            "rule-required",
+            synthesis.data_gaps[0].details["requirementClass"],
+        )
+        self.assertEqual(("밸류에이션 입력값",), synthesis.missing_data)
 
     def test_blocking_provider_failure_takes_priority_over_hypothesis_coverage_gap(self):
         synthesis = decision_synthesis_from_relation_context("acct", {

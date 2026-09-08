@@ -8,7 +8,9 @@ import json
 from typing import List, Optional
 
 from ..domain.investment_reasoning import SubjectDecisionCase
+from ..domain.events import investment_inference_episode_completed_event
 from .mysql_operational_connection import MySQLOperationalConnection
+from .mysql_operational_events import insert_domain_event_with_connection
 from .mysql_operational_helpers import _json_loads
 from .operational_common import json_dumps
 
@@ -41,6 +43,11 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
     @staticmethod
     def save_with_connection(connection, subject_case: SubjectDecisionCase) -> None:
         candidate = subject_case.candidate_set
+        existing_subject = connection.execute(
+            "SELECT subject_case_id FROM investment_subject_decision_cases "
+            "WHERE subject_case_id = %s",
+            (subject_case.subject_case_id,),
+        ).fetchone()
         existing_candidate = connection.execute(
             "SELECT fingerprint FROM decision_candidate_snapshots WHERE candidate_set_id = %s",
             (candidate.candidate_set_id,),
@@ -158,6 +165,11 @@ class MySQLSubjectDecisionCaseStore(MySQLOperationalConnection):
             connection,
             subject_case,
         )
+        if not existing_subject:
+            insert_domain_event_with_connection(
+                connection,
+                investment_inference_episode_completed_event(subject_case),
+            )
 
     @staticmethod
     def save_audit_entry_with_connection(connection, subject_case: SubjectDecisionCase) -> None:

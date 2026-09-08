@@ -23,6 +23,11 @@ from ..domain.investment_reasoning.subject_case import (
     SUBJECT_REVIEW_ONLY,
     SUBJECT_SUPPRESSED,
 )
+from ..domain.investment_reasoning.ai_insight import (
+    AIInsightHandoff,
+    ai_insight_handoff,
+    decision_reconciliation,
+)
 from ..domain.message_types import INVESTMENT_INSIGHT
 from ..domain.notification_ai_decision_brief import (
     AI_DECISION_CONTRACT_VERSION,
@@ -34,7 +39,10 @@ from ..domain.notification_ai_gate_validation import (
     local_validated_ai_response,
 )
 from ..domain.notification_ai_inference_packet import build_notification_ai_inference_packet
-from ..domain.notification_ai_delivery import pre_ai_deferred_delivery_decision
+from ..domain.notification_ai_delivery import (
+    final_ai_delivery_decision,
+    pre_ai_deferred_delivery_decision,
+)
 from ..domain.notification_narrative import narrative_fingerprint
 from ..domain.ontology_decision_quality import build_ontology_decision_quality_snapshot
 from ..domain.notifications import NotificationJob
@@ -481,6 +489,175 @@ class NotificationAIRequestEnqueuer:
                 )
         return outcome
 
+    def enqueue_subject_decision(self, job: NotificationJob) -> Dict[str, object]:
+        """Start AI interpretation before a notification job exists."""
+
+        if self.context_preparer:
+            self.context_preparer(job)
+        context = dict(job.context or {})
+        context.setdefault("messageType", job.message_type)
+        context.setdefault("accountId", job.account_id)
+        context.setdefault("accountLabel", job.account_label)
+        context.setdefault("jobId", job.job_id)
+        context["notificationAiDecisionContractVersion"] = AI_DECISION_CONTRACT_VERSION
+        if job.message_type == INVESTMENT_INSIGHT:
+            context = context_with_previous_investment_decision(
+                context,
+                self.decision_episode_store,
+                self.continuity_service,
+                account_id=job.account_id,
+            )
+        reasoning_case_context = (
+            context.get("investmentReasoningCase")
+            if isinstance(context.get("investmentReasoningCase"), dict)
+            else {}
+        )
+        reasoning_case_id = str(
+            context.get("investmentReasoningCaseId")
+            or reasoning_case_context.get("caseId")
+            or ""
+        )
+        subject_context = (
+            context.get("investmentSubjectDecisionCase")
+            if isinstance(context.get("investmentSubjectDecisionCase"), dict)
+            else {}
+        )
+        subject_case_id = str(
+            context.get("investmentSubjectDecisionCaseId")
+            or subject_context.get("subjectCaseId")
+            or ""
+        )
+        if not subject_case_id or self.reasoning_orchestrator is None:
+            raise ValueError("Detached AI insight requires a persisted subject decision case.")
+
+        context["notificationAiReviewMode"] = notification_ai_review_mode(context)
+        if context["notificationAiReviewMode"] == "context-narrative":
+            return {
+                "status": "web-only-context-observation",
+                "notificationJobId": "",
+                "subjectCaseId": subject_case_id,
+            }
+        context = self.reasoning_orchestrator.capture_ai_context(
+            subject_case_id,
+            context,
+        )
+        subject_case_id = str(
+            context.get("investmentSubjectDecisionCaseId") or subject_case_id
+        )
+        captured_subject = (
+            dict(context.get("investmentSubjectDecisionCase") or {})
+            if isinstance(context.get("investmentSubjectDecisionCase"), dict)
+            else {}
+        )
+        captured_stage = str(captured_subject.get("stage") or "").strip().upper()
+        if captured_stage in {
+            SUBJECT_ABSTAINED,
+            SUBJECT_BLOCKED,
+            SUBJECT_OBSERVATION,
+            SUBJECT_PUBLISHED,
+            SUBJECT_REVIEW_ONLY,
+            SUBJECT_SUPPRESSED,
+        }:
+            return {
+                "status": "web-only-terminal-subject",
+                "notificationJobId": "",
+                "subjectCaseId": subject_case_id,
+                "subjectStage": captured_stage,
+            }
+
+        action_eligibility = notification_ai_action_eligibility(context)
+        context["notificationAiActionEligibility"] = action_eligibility
+        if not action_eligibility.get("eligible"):
+            reason = str(
+                action_eligibility.get("reason")
+                or "TypeDB action contract is incomplete."
+            )
+            self.reasoning_orchestrator.notification_suppressed(
+                {
+                    **context,
+                    "notificationJobId": "",
+                },
+                reason,
+            )
+            return {
+                "status": "web-only-no-action-authority",
+                "notificationJobId": "",
+                "subjectCaseId": subject_case_id,
+                "reasonCode": str(action_eligibility.get("reasonCode") or ""),
+            }
+
+        deferred_delivery = pre_ai_deferred_delivery_decision(context)
+        context["preAiDeferredDeliveryDecision"] = deferred_delivery
+        if deferred_delivery.get("decision") == "suppress":
+            reason = str(
+                deferred_delivery.get("reason")
+                or "직전 판단 대비 새 결정 가치가 없어 웹 이력에만 저장합니다."
+            )
+            self.reasoning_orchestrator.notification_suppressed(context, reason)
+            return {
+                "status": "web-only-no-decision-value",
+                "notificationJobId": "",
+                "subjectCaseId": subject_case_id,
+                "reason": reason,
+            }
+
+        quality_snapshot = build_ontology_decision_quality_snapshot(context)
+        if quality_snapshot:
+            context["ontologyDecisionQuality"] = quality_snapshot
+        context["ontologyQualityGate"] = ontology_quality_gate_context(
+            context,
+            self.settings,
+        )
+        execution_profile = notification_ai_execution_profile(context, self.settings)
+        # Investment judgment is intentionally pinned to the configured top
+        # model and max effort; lower-effort repair remains a separate bounded
+        # contract-repair pass.
+        execution_profile["reasoningEffort"] = "max"
+        context["notificationAiExecutionProfile"] = execution_profile
+        model = "gpt-5.6-sol"
+        context["notificationAiReplayManifest"] = {
+            "promptVersion": AI_DECISION_PROMPT_VERSION,
+            "modelVersion": model,
+            "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
+            "reasoningEffort": "max",
+        }
+        job.context = context
+        handoff = AIInsightHandoff.create(context, job.to_dict())
+        if not handoff.valid:
+            raise ValueError(
+                "Detached AI insight handoff is incomplete: "
+                + ", ".join(handoff.validation_errors)
+            )
+        context["investmentAIInsightHandoff"] = handoff.to_dict()
+        job.context = context
+        request = AIInferenceRequest.create_for_subject_decision(
+            job,
+            context,
+            handoff,
+            model=model,
+            reasoning_effort="max",
+            prompt_version=AI_DECISION_PROMPT_VERSION,
+        )
+        outcome = self.queue.enqueue_subject_decision(job, request)
+        status = str(outcome.get("status") or "")
+        if status in {"awaiting-ai-insight", "pending", "processing", "retry"}:
+            self.reasoning_orchestrator.ai_queued(
+                subject_case_id,
+                str(outcome.get("requestId") or request.request_id),
+                "",
+            )
+        elif status in {"coalesced-material", "coalesced-identical", "coalesced-active"}:
+            self.reasoning_orchestrator.case_superseded(
+                subject_case_id,
+                "동일한 판단 의미의 AI 인사이트가 이미 처리 중이거나 완료됐습니다.",
+            )
+        for superseded_case_id in outcome.get("supersededReasoningCaseIds") or []:
+            self.reasoning_orchestrator.case_superseded(
+                str(superseded_case_id or ""),
+                "더 최신인 AI 인사이트 요청이 이 판단 건을 대체했습니다.",
+            )
+        return outcome
+
 
 class AIInferenceQueueRunner:
     """Run one leased request at a time; parallelism comes from worker count."""
@@ -619,6 +796,7 @@ class AIInferenceQueueRunner:
         canonical_subject_publication = bool(
             subject_case_id and self.reasoning_orchestrator is not None
         )
+        detached_subject_insight = bool(request.detached_from_notification)
         atomic_canonical_publication = bool(
             canonical_subject_publication
             and getattr(self.queue, "supports_atomic_subject_publication", False)
@@ -1064,6 +1242,14 @@ class AIInferenceQueueRunner:
                 enriched["notificationAiExecutionAudit"] = execution_audit
         if atomic_canonical_publication:
             def publish_subject_with_queue(connection):
+                if detached_subject_insight:
+                    handoff = ai_insight_handoff(enriched)
+                    if handoff is None or not handoff.valid:
+                        raise RuntimeError("Detached AI insight handoff is invalid at reconciliation.")
+                    enriched["decisionReconciliation"] = decision_reconciliation(
+                        handoff,
+                        final_ai_delivery_decision(enriched),
+                    )
                 if fallback_reason:
                     canonical_case = self.reasoning_orchestrator.ai_fallback_completed(
                         request,
@@ -1085,6 +1271,20 @@ class AIInferenceQueueRunner:
                 enriched["investmentSubjectDecisionCase"] = canonical_case.to_dict()
                 if canonical_case.publication.decision_episode_id:
                     enriched["investmentDecisionEpisodeId"] = canonical_case.publication.decision_episode_id
+                if detached_subject_insight:
+                    enriched["decisionReconciliation"] = decision_reconciliation(
+                        handoff,
+                        final_ai_delivery_decision(enriched),
+                    )
+
+            def record_subject_delivery(connection, delivery_outcome):
+                if not detached_subject_insight:
+                    return
+                self.reasoning_orchestrator.decision_delivery_reconciled(
+                    enriched,
+                    delivery_outcome,
+                    connection=connection,
+                )
 
             published = self.storage_call_with_retry(
                 lambda: self.queue.complete(
@@ -1093,6 +1293,7 @@ class AIInferenceQueueRunner:
                     result,
                     enriched,
                     before_complete=publish_subject_with_queue,
+                    after_complete=record_subject_delivery,
                 )
             )
         else:
@@ -1277,6 +1478,14 @@ class AIInferenceQueueRunner:
                 }
         if atomic_canonical_publication:
             def publish_review_with_queue(connection):
+                if request.detached_from_notification:
+                    handoff = ai_insight_handoff(enriched)
+                    if handoff is None or not handoff.valid:
+                        raise RuntimeError("Detached AI insight handoff is invalid at fallback reconciliation.")
+                    enriched["decisionReconciliation"] = decision_reconciliation(
+                        handoff,
+                        final_ai_delivery_decision(enriched),
+                    )
                 canonical_case = self.reasoning_orchestrator.ai_fallback_completed(
                     request,
                     enriched,
@@ -1288,6 +1497,20 @@ class AIInferenceQueueRunner:
                     raise RuntimeError("Canonical review-only publication was not created.")
                 enriched["decisionPublication"] = canonical_case.publication.to_dict()
                 enriched["investmentSubjectDecisionCase"] = canonical_case.to_dict()
+                if request.detached_from_notification:
+                    enriched["decisionReconciliation"] = decision_reconciliation(
+                        handoff,
+                        final_ai_delivery_decision(enriched),
+                    )
+
+            def record_review_delivery(connection, delivery_outcome):
+                if not request.detached_from_notification:
+                    return
+                self.reasoning_orchestrator.decision_delivery_reconciled(
+                    enriched,
+                    delivery_outcome,
+                    connection=connection,
+                )
 
             published = self.storage_call_with_retry(
                 lambda: self.queue.complete(
@@ -1296,6 +1519,7 @@ class AIInferenceQueueRunner:
                     result,
                     enriched,
                     before_complete=publish_review_with_queue,
+                    after_complete=record_review_delivery,
                 )
             )
         else:

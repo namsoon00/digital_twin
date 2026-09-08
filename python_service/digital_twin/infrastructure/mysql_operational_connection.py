@@ -1302,6 +1302,9 @@ MYSQL_SCHEMA = [
     CREATE TABLE IF NOT EXISTS ai_inference_requests (
         request_id VARCHAR(191) PRIMARY KEY,
         notification_job_id VARCHAR(191) NOT NULL,
+        origin_kind VARCHAR(32) NOT NULL DEFAULT 'notification',
+        origin_id VARCHAR(191) NOT NULL DEFAULT '',
+        material_fingerprint CHAR(64) NOT NULL DEFAULT '',
         account_id VARCHAR(191) NOT NULL DEFAULT '',
         account_label VARCHAR(255) NOT NULL DEFAULT '',
         message_type VARCHAR(191) NOT NULL DEFAULT '',
@@ -1329,6 +1332,7 @@ MYSQL_SCHEMA = [
         UNIQUE KEY idx_ai_inference_requests_notification (notification_job_id),
         KEY idx_ai_inference_requests_ready (status, available_at, priority, created_at, request_id),
         KEY idx_ai_inference_requests_subject (subject_key, status, updated_at, request_id),
+        KEY idx_ai_inference_requests_origin (origin_kind, origin_id, created_at),
         KEY idx_ai_inference_requests_lease (status, lease_expires_at, request_id),
         KEY idx_ai_inference_requests_completed (status, completed_at, request_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -1353,6 +1357,30 @@ MYSQL_SCHEMA = [
         UNIQUE KEY idx_ai_inference_results_request (request_id),
         KEY idx_ai_inference_results_notification (notification_job_id, created_at),
         KEY idx_ai_inference_results_created (created_at, result_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_ai_insight_episodes (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        request_id VARCHAR(191) NOT NULL,
+        result_id VARCHAR(191) NOT NULL,
+        handoff_id VARCHAR(191) NOT NULL,
+        subject_case_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        candidate_fingerprint CHAR(64) NOT NULL DEFAULT '',
+        model VARCHAR(120) NOT NULL DEFAULT '',
+        reasoning_effort VARCHAR(32) NOT NULL DEFAULT 'max',
+        validation_state VARCHAR(32) NOT NULL DEFAULT 'conditional',
+        notification_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_ai_insight_episode_request (request_id),
+        UNIQUE KEY uq_ai_insight_episode_result (result_id),
+        UNIQUE KEY uq_ai_insight_episode_subject (subject_case_id),
+        KEY idx_ai_insight_episode_scope_time (account_id, symbol, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

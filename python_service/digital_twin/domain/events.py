@@ -30,6 +30,11 @@ NOTIFICATION_JOB_QUEUED = "notification.job_queued"
 AI_INFERENCE_REQUESTED = "ai_inference.requested"
 AI_INFERENCE_COMPLETED = "ai_inference.completed"
 AI_INFERENCE_SUPERSEDED = "ai_inference.superseded"
+INVESTMENT_INFERENCE_EPISODE_COMPLETED = "investment.inference_episode_completed"
+INVESTMENT_AI_INSIGHT_REQUESTED = "investment.ai_insight_requested"
+INVESTMENT_AI_INSIGHT_COMPLETED = "investment.ai_insight_completed"
+INVESTMENT_AI_INSIGHT_FAILED = "investment.ai_insight_failed"
+INVESTMENT_DECISION_RECONCILED = "investment.decision_reconciled"
 APP_PROFILE_UPDATED = "app.profile_updated"
 APP_MEMORY_RECORDED = "app.memory_recorded"
 APP_MEMORY_UPDATED = "app.memory_updated"
@@ -143,6 +148,139 @@ def ai_inference_event(
             "supersededBy": str(superseded_by or "")[:191],
         },
         correlation_id="ai-inference:" + str(notification_job_id or request_id or "")[:160],
+    )
+
+
+def _stable_reasoning_event_id(name: str, *parts: object) -> str:
+    material = "|".join([str(name or ""), *[str(part or "") for part in parts]])
+    return "event:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def investment_inference_episode_completed_event(subject_case) -> DomainEvent:
+    """Publish the immutable TypeDB subject boundary independently of AI."""
+
+    payload = (
+        subject_case.to_dict()
+        if callable(getattr(subject_case, "to_dict", None))
+        else dict(subject_case or {})
+    )
+    subject_case_id = str(payload.get("subjectCaseId") or "")
+    account_id = str(payload.get("accountId") or "")
+    symbol = str(payload.get("symbol") or "").upper()
+    candidate = dict(payload.get("candidateSet") or {})
+    candidate_set_id = str(
+        candidate.get("candidateSetId") or payload.get("candidateSetId") or ""
+    )
+    candidate_fingerprint = str(
+        candidate.get("fingerprint") or payload.get("candidateFingerprint") or ""
+    )
+    return DomainEvent(
+        name=INVESTMENT_INFERENCE_EPISODE_COMPLETED,
+        aggregate_id=("inference-episode:" + subject_case_id)[:191],
+        event_id=_stable_reasoning_event_id(
+            INVESTMENT_INFERENCE_EPISODE_COMPLETED,
+            subject_case_id,
+            candidate_fingerprint,
+        ),
+        payload={
+            "subjectCaseId": subject_case_id,
+            "batchCaseId": str(payload.get("batchCaseId") or ""),
+            "accountId": account_id,
+            "symbol": symbol,
+            "sourceAboxSnapshotId": str(payload.get("sourceAboxSnapshotId") or ""),
+            "inferenceGenerationId": str(payload.get("inferenceGenerationId") or ""),
+            "candidateSetId": candidate_set_id,
+            "candidateFingerprint": candidate_fingerprint,
+            "eligibleHypothesisIds": list(
+                candidate.get("eligibleHypothesisIds")
+                or payload.get("eligibleHypothesisIds")
+                or []
+            ),
+            "allowedActions": list(
+                candidate.get("allowedActions") or payload.get("allowedActions") or []
+            ),
+            "blockedActions": list(
+                candidate.get("blockedActions") or payload.get("blockedActions") or []
+            ),
+            "stage": str(payload.get("stage") or ""),
+            "source": "typedb-subject-decision-case",
+        },
+        correlation_id=str(payload.get("batchCaseId") or subject_case_id)[:191],
+    )
+
+
+def investment_ai_insight_event(
+    name: str,
+    handoff,
+    *,
+    request=None,
+    episode=None,
+    error: object = "",
+) -> DomainEvent:
+    handoff_payload = (
+        handoff.to_dict()
+        if callable(getattr(handoff, "to_dict", None))
+        else dict(handoff or {})
+    )
+    episode_payload = (
+        episode.to_dict()
+        if callable(getattr(episode, "to_dict", None))
+        else dict(episode or {})
+    )
+    request_id = str(
+        getattr(request, "request_id", "")
+        or episode_payload.get("requestId")
+        or ""
+    )
+    subject_case_id = str(handoff_payload.get("subjectCaseId") or "")
+    return DomainEvent(
+        name=str(name or INVESTMENT_AI_INSIGHT_REQUESTED),
+        aggregate_id=("ai-insight:" + (request_id or subject_case_id))[:191],
+        event_id=_stable_reasoning_event_id(
+            str(name or INVESTMENT_AI_INSIGHT_REQUESTED),
+            request_id,
+            subject_case_id,
+            episode_payload.get("episodeId"),
+        ),
+        payload={
+            "requestId": request_id,
+            "episodeId": str(episode_payload.get("episodeId") or ""),
+            "handoffId": str(handoff_payload.get("handoffId") or ""),
+            "subjectCaseId": subject_case_id,
+            "accountId": str(handoff_payload.get("accountId") or ""),
+            "symbol": str(handoff_payload.get("symbol") or "").upper(),
+            "sourceAboxSnapshotId": str(handoff_payload.get("sourceAboxSnapshotId") or ""),
+            "inferenceGenerationId": str(handoff_payload.get("inferenceGenerationId") or ""),
+            "candidateFingerprint": str(handoff_payload.get("candidateFingerprint") or ""),
+            "model": str(getattr(request, "model", "") or episode_payload.get("model") or ""),
+            "reasoningEffort": str(
+                getattr(request, "reasoning_effort", "")
+                or episode_payload.get("reasoningEffort")
+                or ""
+            ),
+            "validationState": str(episode_payload.get("validationState") or ""),
+            "notificationJobId": str(episode_payload.get("notificationJobId") or ""),
+            "error": str(error or "")[:500],
+        },
+        correlation_id=str(handoff_payload.get("batchCaseId") or subject_case_id)[:191],
+    )
+
+
+def investment_decision_reconciled_event(reconciliation: Mapping[str, object]) -> DomainEvent:
+    payload = dict(reconciliation or {})
+    subject_case_id = str(payload.get("subjectCaseId") or "")
+    fingerprint = str(payload.get("candidateFingerprint") or "")
+    return DomainEvent(
+        name=INVESTMENT_DECISION_RECONCILED,
+        aggregate_id=("decision-reconciliation:" + subject_case_id)[:191],
+        event_id=_stable_reasoning_event_id(
+            INVESTMENT_DECISION_RECONCILED,
+            subject_case_id,
+            fingerprint,
+            payload.get("notificationDecision"),
+        ),
+        payload=payload,
+        correlation_id=subject_case_id[:191],
     )
 
 

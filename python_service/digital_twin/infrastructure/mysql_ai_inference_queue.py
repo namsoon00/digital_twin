@@ -24,7 +24,18 @@ from ..domain.events import (
     AI_INFERENCE_COMPLETED as AI_INFERENCE_COMPLETED_EVENT,
     AI_INFERENCE_REQUESTED,
     AI_INFERENCE_SUPERSEDED as AI_INFERENCE_SUPERSEDED_EVENT,
+    INVESTMENT_AI_INSIGHT_COMPLETED,
+    INVESTMENT_AI_INSIGHT_FAILED,
+    INVESTMENT_AI_INSIGHT_REQUESTED,
     ai_inference_event,
+    investment_ai_insight_event,
+    investment_decision_reconciled_event,
+)
+from ..domain.investment_reasoning.ai_insight import (
+    AIInsightEpisode,
+    SUBJECT_DECISION_ORIGIN,
+    ai_insight_handoff,
+    reconciliation_after_delivery,
 )
 from ..domain.notifications import NotificationJob
 from .mysql_operational_connection import MySQLOperationalConnection
@@ -110,6 +121,12 @@ def compact_ai_queue_context(context: Mapping[str, object]) -> Dict[str, object]
     """
 
     values = dict(context or {})
+    handoff = ai_insight_handoff(values)
+    if handoff is not None:
+        # A detached decision request has no notification row to rehydrate.
+        # Its context is transient and is cleared after the durable insight
+        # episode is committed.
+        return values
     embedded_case = (
         dict(values.get("investmentReasoningCase") or {})
         if isinstance(values.get("investmentReasoningCase"), Mapping)
@@ -171,6 +188,12 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
     supports_atomic_subject_publication = True
 
     """Atomically coordinate AI work and its source notification outbox row."""
+
+    def __init__(self, settings=None):
+        super().__init__(settings)
+        from .mysql_notification_jobs import MySQLNotificationJobStore
+
+        self.notification_store = MySQLNotificationJobStore(self.runtime_settings)
 
     def enqueue(self, job: NotificationJob, request: AIInferenceRequest) -> Dict[str, object]:
         stamp = utc_now()
@@ -436,25 +459,184 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             "supersededReasoningCaseIds": superseded_case_ids,
         }
 
+    def enqueue_subject_decision(
+        self,
+        job: NotificationJob,
+        request: AIInferenceRequest,
+    ) -> Dict[str, object]:
+        """Queue AI analysis without creating a notification outbox row."""
+
+        handoff = ai_insight_handoff(request.context)
+        if request.origin_kind != SUBJECT_DECISION_ORIGIN or handoff is None:
+            raise ValueError("A subject-decision AI handoff is required.")
+        if not handoff.valid:
+            raise ValueError(
+                "Invalid subject-decision AI handoff: "
+                + ", ".join(handoff.validation_errors)
+            )
+        if (
+            request.origin_id != handoff.subject_case_id
+            or request.notification_job_id != job.job_id
+            or handoff.reserved_notification_job_id != job.job_id
+            or request.inference_generation_id != handoff.inference_generation_id
+        ):
+            raise ValueError("Subject-decision AI request identity does not match its handoff.")
+
+        stamp = utc_now()
+        superseded_case_ids = []
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM ai_inference_requests "
+                "WHERE origin_kind = %s AND origin_id = %s "
+                "ORDER BY created_at DESC, request_id DESC LIMIT 1 FOR UPDATE",
+                (SUBJECT_DECISION_ORIGIN, request.origin_id),
+            ).fetchone()
+            if existing:
+                restored = self.request_from_row(existing)
+                return {
+                    "status": restored.status,
+                    "requestId": restored.request_id,
+                    "notificationJobId": "",
+                    "reservedNotificationJobId": restored.notification_job_id,
+                    "subjectKey": restored.subject_key,
+                    "subjectCaseId": request.origin_id,
+                    "existing": True,
+                }
+
+            completed_episode = connection.execute(
+                "SELECT request_id, notification_job_id, candidate_fingerprint "
+                "FROM investment_ai_insight_episodes "
+                "WHERE subject_case_id = %s FOR UPDATE",
+                (request.origin_id,),
+            ).fetchone()
+            if completed_episode:
+                stored_fingerprint = _clean(completed_episode.get("candidate_fingerprint"))
+                if stored_fingerprint != handoff.candidate_fingerprint:
+                    raise ValueError(
+                        "Persisted AI insight candidate fingerprint does not match its subject case."
+                    )
+                return {
+                    "status": "completed-insight",
+                    "requestId": _clean(completed_episode.get("request_id")),
+                    "notificationJobId": _clean(completed_episode.get("notification_job_id")),
+                    "subjectKey": request.subject_key,
+                    "subjectCaseId": request.origin_id,
+                    "existing": True,
+                }
+
+            connection.execute(
+                """
+                INSERT IGNORE INTO ai_inference_subject_heads
+                    (subject_key, latest_request_id, updated_at)
+                VALUES (%s, '', %s)
+                """,
+                (request.subject_key, stamp),
+            )
+            head = connection.execute(
+                "SELECT latest_request_id FROM ai_inference_subject_heads "
+                "WHERE subject_key = %s FOR UPDATE",
+                (request.subject_key,),
+            ).fetchone()
+            latest_id = _clean(head.get("latest_request_id") if head else "")
+            latest = None
+            if latest_id:
+                latest = connection.execute(
+                    "SELECT * FROM ai_inference_requests "
+                    "WHERE request_id = %s FOR UPDATE",
+                    (latest_id,),
+                ).fetchone()
+
+            same_material = bool(
+                latest
+                and request.material_fingerprint
+                and _clean(latest.get("material_fingerprint"))
+                == request.material_fingerprint
+            )
+            if latest and same_material and _clean(latest.get("status")) in (
+                *ACTIVE_STATES,
+                AI_INFERENCE_COMPLETED,
+            ):
+                return {
+                    "status": "coalesced-material",
+                    "requestId": latest_id,
+                    "notificationJobId": "",
+                    "reservedNotificationJobId": job.job_id,
+                    "subjectKey": request.subject_key,
+                    "subjectCaseId": request.origin_id,
+                    "existing": True,
+                    "materialFingerprint": request.material_fingerprint,
+                }
+
+            self.insert_request_with_connection(connection, request)
+            if latest:
+                superseded_case_id = self.supersede_request_with_connection(
+                    connection,
+                    latest,
+                    request.request_id,
+                    stamp,
+                )
+                if superseded_case_id:
+                    superseded_case_ids.append(superseded_case_id)
+            connection.execute(
+                "UPDATE ai_inference_subject_heads "
+                "SET latest_request_id = %s, updated_at = %s WHERE subject_key = %s",
+                (request.request_id, stamp, request.subject_key),
+            )
+            insert_domain_event_with_connection(
+                connection,
+                ai_inference_event(
+                    AI_INFERENCE_REQUESTED,
+                    request.request_id,
+                    account_id=request.account_id,
+                    symbol=request.symbol,
+                    inference_generation_id=request.inference_generation_id,
+                    model=request.model,
+                    reasoning_effort=request.reasoning_effort,
+                    status=AI_INFERENCE_PENDING,
+                ),
+            )
+            insert_domain_event_with_connection(
+                connection,
+                investment_ai_insight_event(
+                    INVESTMENT_AI_INSIGHT_REQUESTED,
+                    handoff,
+                    request=request,
+                ),
+            )
+        return {
+            "status": "awaiting-ai-insight",
+            "requestId": request.request_id,
+            "notificationJobId": "",
+            "reservedNotificationJobId": request.notification_job_id,
+            "subjectKey": request.subject_key,
+            "subjectCaseId": request.origin_id,
+            "existing": False,
+            "supersededReasoningCaseIds": superseded_case_ids,
+        }
+
     def insert_request_with_connection(self, connection, request: AIInferenceRequest) -> None:
         durable_context = compact_ai_queue_context(request.context)
         connection.execute(
             """
             INSERT INTO ai_inference_requests (
-                request_id, notification_job_id, account_id, account_label,
+                request_id, notification_job_id, origin_kind, origin_id,
+                material_fingerprint, account_id, account_label,
                 message_type, subject_key, symbol, inference_generation_id,
                 context_hash, prompt_version, model, reasoning_effort, priority,
                 status, attempts, available_at, lease_owner, lease_expires_at,
                 heartbeat_at, superseded_by, created_at, updated_at, started_at,
                 completed_at, last_error, context_json
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
                 request.request_id,
                 request.notification_job_id,
+                request.origin_kind,
+                request.origin_id,
+                request.material_fingerprint,
                 request.account_id,
                 request.account_label,
                 request.message_type,
@@ -509,7 +691,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "UPDATE ai_inference_requests SET superseded_by = %s, updated_at = %s WHERE request_id = %s",
                 (superseded_by, stamp, request_id),
             )
-        if notification_job_id:
+        detached = _clean(row.get("origin_kind")) == SUBJECT_DECISION_ORIGIN
+        if notification_job_id and not detached:
             self.set_notification_status_with_connection(
                 connection,
                 notification_job_id,
@@ -523,7 +706,7 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ai_inference_event(
                 AI_INFERENCE_SUPERSEDED_EVENT,
                 request_id,
-                notification_job_id=notification_job_id,
+                notification_job_id="" if detached else notification_job_id,
                 account_id=_clean(row.get("account_id")),
                 symbol=_clean(row.get("symbol")),
                 inference_generation_id=_clean(row.get("inference_generation_id")),
@@ -603,9 +786,13 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 JOIN ai_inference_subject_heads head
                   ON head.subject_key = request.subject_key
                  AND head.latest_request_id = request.request_id
-                JOIN notification_jobs notification
+                LEFT JOIN notification_jobs notification
                   ON notification.job_id = request.notification_job_id
                 WHERE request.status IN (%s, %s) AND request.available_at <= %s
+                  AND (
+                    request.origin_kind = 'subject-decision'
+                    OR notification.job_id IS NOT NULL
+                  )
                 ORDER BY request.priority DESC, request.created_at ASC, request.request_id ASC
                 LIMIT %s FOR UPDATE SKIP LOCKED
                 """,
@@ -791,8 +978,10 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         result: AIInferenceResult,
         notification_context: Dict[str, object],
         before_complete=None,
+        after_complete=None,
     ) -> bool:
         stamp = utc_now()
+        detached = request.detached_from_notification
         with self.transaction() as connection:
             head = connection.execute(
                 "SELECT latest_request_id FROM ai_inference_subject_heads WHERE subject_key = %s FOR UPDATE",
@@ -802,16 +991,21 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "SELECT status, lease_owner FROM ai_inference_requests WHERE request_id = %s FOR UPDATE",
                 (request.request_id,),
             ).fetchone()
-            source = connection.execute(
-                "SELECT status FROM notification_jobs WHERE job_id = %s FOR UPDATE",
-                (request.notification_job_id,),
-            ).fetchone()
+            source = None
+            if not detached:
+                source = connection.execute(
+                    "SELECT status FROM notification_jobs WHERE job_id = %s FOR UPDATE",
+                    (request.notification_job_id,),
+                ).fetchone()
             publishable = bool(
                 current
                 and _clean(current.get("status")) == AI_INFERENCE_PROCESSING
                 and _clean(current.get("lease_owner")) == _clean(worker_id)
                 and _clean(head.get("latest_request_id") if head else "") == request.request_id
-                and _clean(source.get("status") if source else "") == "awaiting_ai"
+                and (
+                    detached
+                    or _clean(source.get("status") if source else "") == "awaiting_ai"
+                )
             )
             if not publishable:
                 if current and _clean(current.get("status")) == AI_INFERENCE_PROCESSING:
@@ -827,6 +1021,8 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
 
             if callable(before_complete):
                 before_complete(connection)
+
+            insight_episode = None
 
             execution_audit = dict((notification_context or {}).get("notificationAiExecutionAudit") or {})
             fallback = dict(execution_audit.get("fallback") or {})
@@ -957,14 +1153,57 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 "promptBytes": result.prompt_bytes,
                 "completedAt": stamp,
             }
-            updated = self.set_notification_status_with_connection(
-                connection,
-                request.notification_job_id,
-                "pending",
-                "",
-                replacement_context=completed_context,
-                only_if_statuses=("awaiting_ai",),
-            )
+            delivery_outcome = {
+                "status": "released-existing-notification",
+                "notificationJobId": request.notification_job_id,
+                "queued": True,
+            }
+            if detached:
+                reconciliation = dict(completed_context.get("decisionReconciliation") or {})
+                delivery_outcome = {
+                    "status": "web-only",
+                    "notificationJobId": "",
+                    "queued": False,
+                    "reason": str(reconciliation.get("reason") or ""),
+                }
+                if str(reconciliation.get("notificationDecision") or "").lower() == "send":
+                    handoff = ai_insight_handoff(completed_context)
+                    draft = dict(handoff.notification_draft if handoff else {})
+                    delivery_job = NotificationJob.from_dict({
+                        **draft,
+                        "jobId": request.notification_job_id,
+                        "context": completed_context,
+                        "status": "pending",
+                        "updatedAt": stamp,
+                    })
+                    accepted = self.notification_store.enqueue_with_connection(
+                        connection,
+                        delivery_job,
+                        persist_suppressed=False,
+                    )
+                    delivery_outcome = {
+                        "status": "notification-queued" if accepted else "notification-suppressed",
+                        "notificationJobId": delivery_job.job_id,
+                        "queued": bool(accepted),
+                        "reason": str(delivery_job.last_error or reconciliation.get("reason") or ""),
+                    }
+                completed_context["decisionReconciliation"] = reconciliation_after_delivery(
+                    reconciliation,
+                    delivery_outcome,
+                )
+                notification_context["decisionReconciliation"] = dict(
+                    completed_context["decisionReconciliation"]
+                )
+                updated = True
+            else:
+                updated = self.set_notification_status_with_connection(
+                    connection,
+                    request.notification_job_id,
+                    "pending",
+                    "",
+                    replacement_context=completed_context,
+                    only_if_statuses=("awaiting_ai",),
+                )
             if not updated:
                 connection.execute(
                     """
@@ -975,6 +1214,49 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     (AI_INFERENCE_SUPERSEDED, stamp, stamp, request.request_id),
                 )
                 return False
+            if detached:
+                insight_episode = AIInsightEpisode.create(
+                    request,
+                    result,
+                    completed_context,
+                )
+                completed_context["investmentAIInsightEpisode"] = insight_episode.to_dict()
+                notification_context["investmentAIInsightEpisode"] = insight_episode.to_dict()
+                connection.execute(
+                    """
+                    INSERT INTO investment_ai_insight_episodes (
+                        episode_id, request_id, result_id, handoff_id,
+                        subject_case_id, account_id, symbol,
+                        source_abox_snapshot_id, inference_generation_id,
+                        candidate_fingerprint, model, reasoning_effort,
+                        validation_state, notification_job_id, payload_json,
+                        created_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        insight_episode.episode_id,
+                        insight_episode.request_id,
+                        insight_episode.result_id,
+                        insight_episode.handoff_id,
+                        insight_episode.subject_case_id,
+                        insight_episode.account_id,
+                        insight_episode.symbol,
+                        insight_episode.source_abox_snapshot_id,
+                        insight_episode.inference_generation_id,
+                        insight_episode.candidate_fingerprint,
+                        insight_episode.model,
+                        insight_episode.reasoning_effort,
+                        insight_episode.validation_state,
+                        insight_episode.notification_job_id,
+                        json_dumps(insight_episode.to_dict()),
+                        insight_episode.created_at,
+                    ),
+                )
+            if callable(after_complete):
+                after_complete(connection, delivery_outcome)
             insert_domain_event_with_connection(
                 connection,
                 ai_inference_event(
@@ -989,6 +1271,23 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                     status=AI_INFERENCE_COMPLETED,
                 ),
             )
+            if insight_episode is not None:
+                handoff = ai_insight_handoff(completed_context)
+                insert_domain_event_with_connection(
+                    connection,
+                    investment_ai_insight_event(
+                        INVESTMENT_AI_INSIGHT_COMPLETED,
+                        handoff,
+                        request=request,
+                        episode=insight_episode,
+                    ),
+                )
+                reconciliation = dict(completed_context.get("decisionReconciliation") or {})
+                if reconciliation:
+                    insert_domain_event_with_connection(
+                        connection,
+                        investment_decision_reconciled_event(reconciliation),
+                    )
         return True
 
     def suppress_source_notification(self, notification_job_id: str, reason: object) -> bool:
@@ -1044,14 +1343,27 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 """,
                 (AI_INFERENCE_FAILED, stamp, stamp, _clean(reason)[:2000], request.request_id),
             )
-            self.set_notification_status_with_connection(
-                connection,
-                request.notification_job_id,
-                "failed",
-                "AI 추론 큐 처리 실패: " + _clean(reason)[:1000],
-                {"notificationAiQueue": {"status": AI_INFERENCE_FAILED, "requestId": request.request_id}},
-                only_if_statuses=("awaiting_ai",),
-            )
+            if request.detached_from_notification:
+                handoff = ai_insight_handoff(request.context)
+                if handoff is not None:
+                    insert_domain_event_with_connection(
+                        connection,
+                        investment_ai_insight_event(
+                            INVESTMENT_AI_INSIGHT_FAILED,
+                            handoff,
+                            request=request,
+                            error=reason,
+                        ),
+                    )
+            else:
+                self.set_notification_status_with_connection(
+                    connection,
+                    request.notification_job_id,
+                    "failed",
+                    "AI 추론 큐 처리 실패: " + _clean(reason)[:1000],
+                    {"notificationAiQueue": {"status": AI_INFERENCE_FAILED, "requestId": request.request_id}},
+                    only_if_statuses=("awaiting_ai",),
+                )
         return True
 
     def set_notification_status_with_connection(
@@ -1239,10 +1551,11 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             active_failure_row = connection.execute(
                 "SELECT COUNT(*) AS count, MIN(request.updated_at) AS oldest_at "
                 "FROM ai_inference_requests request "
-                "JOIN notification_jobs notification "
+                "LEFT JOIN notification_jobs notification "
                 "ON notification.job_id = request.notification_job_id "
                 "WHERE request.status = %s AND request.updated_at >= %s "
-                "AND notification.status = 'failed'",
+                "AND (request.origin_kind = 'subject-decision' "
+                "OR notification.status = 'failed')",
                 (AI_INFERENCE_FAILED, active_cutoff),
             ).fetchone()
             effectiveness_row = connection.execute(

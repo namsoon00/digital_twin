@@ -75,6 +75,14 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
   Observations, suppressions, AI failures, and incomplete comparisons persist
   abstention or review-only outcomes and must never manufacture `HOLD`,
   `WATCH`, or `NO_ACTION` decision history.
+- Keep AI insight generation independent from notification transport. Persist
+  the `SubjectDecisionCase` and publish its inference-completed event before
+  creating an `AIInsightHandoff`; this handoff may enter the AI queue without
+  any notification outbox row. Persist the validated result as an
+  `AIInsightEpisode`, reconcile it against the current candidate fingerprint
+  and delivery policy, and create a notification job only when that final
+  reconciliation is admitted. A failed, stale, duplicate, or web-only AI
+  attempt must remain auditable without manufacturing a customer notification.
 - A reasoning request bound to `verifiedSourceSnapshot.generatedAt` must read
   that exact MySQL snapshot-history row. Never substitute a newer snapshot.
   If the point-in-time row is unavailable, defer or reject the request with an

@@ -1334,6 +1334,7 @@ class V2ReasoningEngine:
         release_identity=None,
         reasoning_orchestrator=None,
         shared_inference_service=None,
+        ai_insight_handoff_service=None,
     ):
         self._descriptor = descriptor
         self.input_assembler = input_assembler
@@ -1345,6 +1346,7 @@ class V2ReasoningEngine:
         self._release_identity = dict(release_identity or {})
         self.reasoning_orchestrator = reasoning_orchestrator
         self.shared_inference_service = shared_inference_service
+        self.ai_insight_handoff_service = ai_insight_handoff_service
         self.last_result = None
         self.results_by_request_id = {}
 
@@ -1646,7 +1648,20 @@ class V2ReasoningEngine:
         delivery_authorized = bool(self.delivery_authorized_provider())
         delivery_events = []
         ai_handoff_status = "shadow-delivery-blocked"
-        if delivery_authorized and self.cycle_recorder is not None:
+        if delivery_authorized and self.ai_insight_handoff_service is not None:
+            delivery_started = time.perf_counter()
+            handoff = self.ai_insight_handoff_service.enqueue(ready_events)
+            delivery_events = list(handoff.get("queuedEvents") or [])
+            if int(handoff.get("queuedCount") or 0):
+                ai_handoff_status = "ai-insight-queue-enqueued"
+            elif ready_events:
+                ai_handoff_status = "ai-insight-web-only"
+            else:
+                ai_handoff_status = "no-decision-candidate"
+            stages["aiInsightHandoffMs"] = int(
+                (time.perf_counter() - delivery_started) * 1000
+            )
+        elif delivery_authorized and self.cycle_recorder is not None:
             delivery_started = time.perf_counter()
             cycle = self.cycle_recorder.record_cycle(
                 [str(getattr(snapshot, "account_id", "") or "") for snapshot in snapshots],
@@ -1728,7 +1743,10 @@ class V2ReasoningEngine:
             elif (
                 not delivery_authorized
                 or not ready_events
-                or ai_handoff_status != "notification-queue-enqueued"
+                or ai_handoff_status not in {
+                    "notification-queue-enqueued",
+                    "ai-insight-queue-enqueued",
+                }
             ):
                 if not delivery_authorized:
                     completion_reason = "현재 v2 배포는 알림 발송 권한이 없어 TypeDB 판단까지만 완료했습니다."
@@ -1736,8 +1754,11 @@ class V2ReasoningEngine:
                 elif not ready_events:
                     completion_reason = "새롭거나 중요한 판단 변화가 없어 AI 판단 요청을 생성하지 않았습니다."
                     completion_source = "typedb-no-material-change"
+                elif ai_handoff_status == "ai-insight-web-only":
+                    completion_reason = "현재 후보는 행동 권한이나 직전 판단 대비 새 가치가 부족해 AI 요청과 푸시 없이 웹 이력으로 완료했습니다."
+                    completion_source = "typedb-ai-insight-web-only"
                 elif ai_handoff_status == "notification-admission-suppressed":
-                    completion_reason = "알림 입구에서 판단 후보를 큐에 저장하지 못했습니다. 발송 정책과 무관한 판단 경로를 점검해야 합니다."
+                    completion_reason = "알림 발송 정책이 현재 후보를 억제해 새 푸시를 만들지 않았습니다."
                     completion_source = "typedb-notification-admission-suppressed"
                 else:
                     completion_reason = "반복·쿨다운·발송 정책을 통과한 새 알림이 없어 AI 판단 요청을 생성하지 않았습니다."
@@ -1750,7 +1771,7 @@ class V2ReasoningEngine:
             else:
                 reasoning_case = self.reasoning_orchestrator.batch_handoff_completed(
                     reasoning_case.case_id,
-                    "종목별 판단 케이스가 알림·AI 처리 경계로 전달됐습니다.",
+                    "종목별 TypeDB 판단 케이스가 독립 AI 인사이트 처리 경계로 전달됐습니다.",
                 )
         source_ids = tuple(
             value["sourceAboxSnapshotId"] for value in identities.values()

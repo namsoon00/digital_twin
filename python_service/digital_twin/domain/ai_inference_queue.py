@@ -16,6 +16,7 @@ from typing import Dict, Iterable, Mapping
 
 from .notification_ai_gate_contracts import NOTIFICATION_AI_GATE_VERSION
 from .context_observation_notifications import typedb_narrative_only_contract
+from .investment_reasoning.ai_insight import SUBJECT_DECISION_ORIGIN, AIInsightHandoff
 from .notifications import NotificationJob
 from .portfolio import utc_now_iso
 
@@ -358,6 +359,9 @@ class AIInferenceRequest:
     symbol: str
     inference_generation_id: str
     context_hash: str
+    origin_kind: str = "notification"
+    origin_id: str = ""
+    material_fingerprint: str = ""
     review_mode: str = AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
     context: Dict[str, object] = field(default_factory=dict)
     prompt_version: str = NOTIFICATION_AI_GATE_VERSION
@@ -402,6 +406,9 @@ class AIInferenceRequest:
             symbol=subject["symbol"],
             inference_generation_id=subject["inferenceGenerationId"],
             context_hash=_canonical_hash(captured),
+            origin_kind="notification",
+            origin_id=job.job_id,
+            material_fingerprint=notification_ai_material_fingerprint(captured),
             review_mode=review_mode,
             context=captured,
             prompt_version=_clean(prompt_version) or NOTIFICATION_AI_GATE_VERSION,
@@ -412,6 +419,43 @@ class AIInferenceRequest:
             created_at=stamp,
             updated_at=stamp,
         )
+
+    @classmethod
+    def create_for_subject_decision(
+        cls,
+        job: NotificationJob,
+        context: Dict[str, object],
+        handoff: AIInsightHandoff,
+        *,
+        model: str = "gpt-5.6-sol",
+        reasoning_effort: str = "max",
+        prompt_version: str = NOTIFICATION_AI_GATE_VERSION,
+    ) -> "AIInferenceRequest":
+        if not handoff.valid:
+            raise ValueError(
+                "Invalid AI insight handoff: " + ", ".join(handoff.validation_errors)
+            )
+        if handoff.reserved_notification_job_id != job.job_id:
+            raise ValueError("AI insight handoff notification reservation does not match the draft.")
+        captured = dict(context or {})
+        captured["investmentAIInsightHandoff"] = handoff.to_dict()
+        request = cls.create(
+            job,
+            captured,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            prompt_version=prompt_version,
+        )
+        request.origin_kind = SUBJECT_DECISION_ORIGIN
+        request.origin_id = handoff.subject_case_id
+        request.context = captured
+        request.context_hash = _canonical_hash(captured)
+        request.material_fingerprint = notification_ai_material_fingerprint(captured)
+        return request
+
+    @property
+    def detached_from_notification(self) -> bool:
+        return self.origin_kind == SUBJECT_DECISION_ORIGIN
 
     @classmethod
     def from_dict(cls, payload: Dict[str, object]) -> "AIInferenceRequest":
@@ -425,6 +469,9 @@ class AIInferenceRequest:
             "subjectKey": "subject_key",
             "inferenceGenerationId": "inference_generation_id",
             "contextHash": "context_hash",
+            "originKind": "origin_kind",
+            "originId": "origin_id",
+            "materialFingerprint": "material_fingerprint",
             "reviewMode": "review_mode",
             "promptVersion": "prompt_version",
             "reasoningEffort": "reasoning_effort",
@@ -452,6 +499,11 @@ class AIInferenceRequest:
         })
         normalized["priority"] = int(normalized.get("priority") or 20)
         normalized["attempts"] = int(normalized.get("attempts") or 0)
+        normalized["origin_kind"] = _clean(normalized.get("origin_kind")) or "notification"
+        normalized["origin_id"] = _clean(normalized.get("origin_id"))
+        normalized["material_fingerprint"] = _clean(
+            normalized.get("material_fingerprint")
+        ) or notification_ai_material_fingerprint(normalized["context"])
         return cls(**normalized)
 
     def to_dict(self) -> Dict[str, object]:
@@ -465,6 +517,9 @@ class AIInferenceRequest:
             "subject_key": "subjectKey",
             "inference_generation_id": "inferenceGenerationId",
             "context_hash": "contextHash",
+            "origin_kind": "originKind",
+            "origin_id": "originId",
+            "material_fingerprint": "materialFingerprint",
             "review_mode": "reviewMode",
             "prompt_version": "promptVersion",
             "reasoning_effort": "reasoningEffort",

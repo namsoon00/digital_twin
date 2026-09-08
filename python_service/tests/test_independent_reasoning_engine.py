@@ -145,6 +145,22 @@ class FakeCycleRecorder:
         )
 
 
+class FakeAIInsightHandoffService:
+    def __init__(self):
+        self.events = []
+
+    def enqueue(self, events):
+        self.events = list(events or [])
+        return {
+            "status": "queued",
+            "candidateCount": len(self.events),
+            "queuedCount": len(self.events),
+            "webOnlyCount": 0,
+            "queuedEvents": list(self.events),
+            "outcomes": [{"status": "awaiting-ai-insight"}],
+        }
+
+
 class IndependentReasoningEngineTests(unittest.TestCase):
     def _assert_target_scope_repair_is_retryable_without_duplicate_flag(self):
         policy = projection_retry_policy({
@@ -2056,6 +2072,28 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("shadow-delivery-blocked", result["ai_handoff_status"])
         self.assertEqual(0, recorder.calls)
         self.assertFalse(engine.health()["monitorRunnerUsed"])
+        self.assert_active_v2_hands_subject_to_ai_before_notification_recorder()
+
+    def assert_active_v2_hands_subject_to_ai_before_notification_recorder(self):
+        recorder = FakeCycleRecorder()
+        handoff = FakeAIInsightHandoffService()
+        engine = V2ReasoningEngine(
+            descriptor(),
+            FakeAssembler(),
+            FakeExecutor(),
+            FakeCandidateBuilder(),
+            cycle_recorder=recorder,
+            delivery_authorized_provider=lambda: True,
+            ai_insight_handoff_service=handoff,
+        )
+
+        result = engine.consume([source_event()])
+
+        self.assertEqual("ok", result["status"])
+        self.assertEqual("ai-insight-queue-enqueued", result["ai_handoff_status"])
+        self.assertEqual(1, len(handoff.events))
+        self.assertEqual(0, recorder.calls)
+        self.assertEqual(1, len(result["delivery_events"]))
 
     def test_native_rule_failure_is_deferred_instead_of_completed_as_blocked(self):
         class RetryableNativeFailureExecutor:

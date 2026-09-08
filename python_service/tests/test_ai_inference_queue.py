@@ -12,8 +12,13 @@ from digital_twin.application.ai_inference_queue_service import (
     preserve_verified_ai_narrative,
     typedb_inference_fallback_response,
 )
+from digital_twin.application.notification.admission import NotificationAdmissionOutcome
 from digital_twin.application.notification_service import NotificationQueueRunner
 from digital_twin.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
+from digital_twin.domain.investment_reasoning.ai_insight import (
+    AIInsightHandoff,
+    decision_reconciliation,
+)
 from digital_twin.domain.notification_ai_gate_contracts import NotificationAIValidatedResponse
 from digital_twin.domain.notification_ai_inference_packet import build_notification_ai_inference_packet
 from digital_twin.domain.notifications import NotificationJob
@@ -86,7 +91,58 @@ class RecordingDecisionStore:
 
 
 class AIInferenceQueueTests(unittest.TestCase):
-    def test_prompt_budget_failure_is_non_retryable_and_safe_to_persist(self):
+    def create_detached_request(self, subject_case_id="subject:detached:1"):
+        job = NotificationJob.create(
+            "detached AI insight draft",
+            account_id="main",
+            account_label="메인",
+            message_type="investmentInsight",
+            source_event_id="event:inference:detached",
+            source_event_name="investment.inference_episode_completed",
+            context={
+                "messageType": "investmentInsight",
+                "accountId": "main",
+                "rawSymbol": "005930",
+                "investmentReasoningCaseId": "case:detached",
+                "investmentSubjectDecisionCaseId": subject_case_id,
+                "investmentSubjectDecisionCase": {
+                    "subjectCaseId": subject_case_id,
+                    "batchCaseId": "case:detached",
+                    "stage": "READY",
+                    "accountId": "main",
+                    "symbol": "005930",
+                    "sourceAboxSnapshotId": "abox:detached",
+                    "inferenceGenerationId": "generation:detached",
+                    "candidateSetId": "candidate-set:detached",
+                    "candidateFingerprint": "a" * 64,
+                },
+                "decisionCandidateFingerprint": "a" * 64,
+                "ontologyRelationContext": {
+                    "subject": {"symbol": "005930", "name": "삼성전자"},
+                    "sourceAboxSnapshotId": "abox:detached",
+                    "inferenceGenerationId": "generation:detached",
+                    "reviewLevel": "act",
+                    "changeState": "new-condition",
+                    "actionEnvelope": {
+                        "executionAction": "HOLD",
+                        "allowedActions": ["HOLD", "ADD"],
+                    },
+                },
+            },
+        )
+        handoff = AIInsightHandoff.create(job.context, job.to_dict())
+        context = {**job.context, "investmentAIInsightHandoff": handoff.to_dict()}
+        job.context = context
+        request = AIInferenceRequest.create_for_subject_decision(
+            job,
+            context,
+            handoff,
+            model="gpt-5.6-sol",
+            reasoning_effort="max",
+        )
+        return job, request
+
+    def assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist(self):
         diagnostic = ai_failure_diagnostic(
             ValueError(
                 "AI decision core cannot preserve TypeDB hypotheses within 6145 bytes "
@@ -98,6 +154,289 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("prompt-contract-budget", diagnostic["category"])
         self.assertFalse(diagnostic["retryable"])
         self.assertIn("6145 bytes", diagnostic["safeDetail"])
+
+    def test_subject_decision_ai_is_independent_idempotent_and_delivery_gated(self):
+        self.assert_prompt_budget_failure_is_non_retryable_and_safe_to_persist()
+        self.assert_subject_decision_ai_exists_before_notification_and_promotes_after_completion()
+        self.assert_subject_decision_ai_web_only_result_never_creates_notification()
+        self.assert_subject_decision_notification_admission_is_reflected_in_episode()
+        self.assert_subject_decision_ai_failure_never_creates_notification()
+        self.assert_subject_decision_queue_coalesces_same_material_meaning()
+
+    def assert_subject_decision_ai_exists_before_notification_and_promotes_after_completion(self):
+        self.setUp()
+        job, request = self.create_detached_request()
+
+        outcome = self.queue.enqueue_subject_decision(job, request)
+
+        self.assertEqual("awaiting-ai-insight", outcome["status"])
+        self.assertEqual("", outcome["notificationJobId"])
+        self.assertEqual(job.job_id, outcome["reservedNotificationJobId"])
+        fail_closed = decision_reconciliation(
+            AIInsightHandoff.from_dict(job.context["investmentAIInsightHandoff"]),
+            {},
+        )
+        self.assertEqual("suppress", fail_closed["notificationDecision"])
+        self.assertEqual("", fail_closed["notificationJobId"])
+        self.assertIsNone(self.notifications.get(job.job_id))
+        claimed = self.queue.claim("worker-detached", 1, 60)[0]
+        result = AIInferenceResult.create(
+            claimed,
+            {"action": "HOLD", "summary": "보유 조건이 유지됩니다."},
+            source="fake max AI",
+            validation_state="ready",
+            latency_ms=10,
+            prompt_bytes=100,
+        )
+        completed_context = {
+            **claimed.context,
+            "notificationAiValidatedResponse": result.response,
+            "decisionReconciliation": {
+                "version": "investment-decision-reconciliation-v1",
+                "status": "reconciled",
+                "subjectCaseId": request.origin_id,
+                "candidateFingerprint": "a" * 64,
+                "inferenceGenerationId": "generation:detached",
+                "notificationDecision": "send",
+                "notificationJobId": job.job_id,
+                "reason": "새 최종 판단을 전달합니다.",
+            },
+        }
+
+        self.assertTrue(
+            self.queue.complete(
+                claimed,
+                "worker-detached",
+                result,
+                completed_context,
+            )
+        )
+        self.assertIsNotNone(self.notifications.get(job.job_id))
+        row = mysql_fetchone(
+            self.seed,
+            "SELECT model, reasoning_effort, notification_job_id "
+            "FROM investment_ai_insight_episodes WHERE request_id = %s",
+            (request.request_id,),
+        )
+        self.assertEqual(("gpt-5.6-sol", "max", job.job_id), tuple(row))
+        repeat_job, repeat = self.create_detached_request("subject:detached:completed-repeat")
+        repeat_outcome = self.queue.enqueue_subject_decision(repeat_job, repeat)
+        self.assertEqual("coalesced-material", repeat_outcome["status"])
+        self.assertIsNone(self.notifications.get(repeat_job.job_id))
+        mysql_execute(
+            self.seed,
+            "UPDATE ai_inference_requests SET completed_at = %s WHERE request_id = %s",
+            ("2000-01-01T00:00:00Z", request.request_id),
+        )
+        self.assertEqual(1, self.queue.prune_terminal(retention_hours=1))
+        self.assertIsNone(self.queue.get(request.request_id))
+        durable_job, durable = self.create_detached_request(request.origin_id)
+        durable_outcome = self.queue.enqueue_subject_decision(durable_job, durable)
+        self.assertEqual("completed-insight", durable_outcome["status"])
+        self.assertIsNone(self.notifications.get(durable_job.job_id))
+        request_count = mysql_fetchone(
+            self.seed,
+            "SELECT COUNT(*) FROM ai_inference_requests",
+        )
+        self.assertEqual(0, int(request_count[0]))
+
+    def assert_subject_decision_ai_web_only_result_never_creates_notification(self):
+        self.setUp()
+        job, request = self.create_detached_request("subject:detached:web-only")
+        self.queue.enqueue_subject_decision(job, request)
+        claimed = self.queue.claim("worker-web-only", 1, 60)[0]
+        result = AIInferenceResult.create(
+            claimed,
+            {"action": "HOLD", "summary": "판단 변화가 없습니다."},
+            source="fake max AI",
+            validation_state="ready",
+            latency_ms=10,
+            prompt_bytes=100,
+        )
+        completed_context = {
+            **claimed.context,
+            "decisionReconciliation": {
+                "version": "investment-decision-reconciliation-v1",
+                "status": "reconciled",
+                "subjectCaseId": request.origin_id,
+                "candidateFingerprint": "a" * 64,
+                "inferenceGenerationId": "generation:detached",
+                "notificationDecision": "suppress",
+                "notificationJobId": "",
+                "reason": "직전 판단과 동일합니다.",
+            },
+        }
+
+        self.assertTrue(
+            self.queue.complete(
+                claimed,
+                "worker-web-only",
+                result,
+                completed_context,
+            )
+        )
+        self.assertIsNone(self.notifications.get(job.job_id))
+        row = mysql_fetchone(
+            self.seed,
+            "SELECT notification_job_id FROM investment_ai_insight_episodes "
+            "WHERE request_id = %s",
+            (request.request_id,),
+        )
+        self.assertEqual("", row[0])
+
+    def assert_subject_decision_notification_admission_is_reflected_in_episode(self):
+        self.setUp()
+        job, request = self.create_detached_request("subject:detached:admission")
+        handoff = AIInsightHandoff.create(job.context, job.to_dict())
+        job.context["investmentAIInsightHandoff"] = handoff.to_dict()
+        request = AIInferenceRequest.create_for_subject_decision(
+            job,
+            job.context,
+            handoff,
+            model="gpt-5.6-sol",
+            reasoning_effort="max",
+        )
+        self.queue.enqueue_subject_decision(job, request)
+        claimed = self.queue.claim("worker-admission", 1, 60)[0]
+        result = AIInferenceResult.create(
+            claimed,
+            {"action": "HOLD", "summary": "판단은 유효하지만 중복 발송은 하지 않습니다."},
+            source="fake max AI",
+            validation_state="ready",
+            latency_ms=10,
+            prompt_bytes=100,
+        )
+        completed_context = {
+            **claimed.context,
+            "decisionReconciliation": {
+                "version": "investment-decision-reconciliation-v1",
+                "status": "reconciled",
+                "subjectCaseId": request.origin_id,
+                "candidateFingerprint": "a" * 64,
+                "inferenceGenerationId": "generation:detached",
+                "notificationDecision": "send",
+                "notificationJobId": job.job_id,
+                "reason": "새 최종 판단을 전달합니다.",
+            },
+        }
+
+        def reject_delivery(delivery_job, _decision, _settings=None):
+            delivery_job.status = "suppressed"
+            delivery_job.last_error = "final admission rejected"
+            return NotificationAdmissionOutcome(
+                accepted=False,
+                persisted=True,
+                status="suppressed",
+                reason=delivery_job.last_error,
+            )
+
+        with patch.object(
+            self.queue.notification_store.admission_policy,
+            "apply_result",
+            side_effect=reject_delivery,
+        ):
+            self.assertTrue(
+                self.queue.complete(
+                    claimed,
+                    "worker-admission",
+                    result,
+                    completed_context,
+                )
+            )
+        self.assertIsNone(self.notifications.get(job.job_id))
+        self.assertEqual(
+            0,
+            int(mysql_fetchone(self.seed, "SELECT COUNT(*) FROM notification_jobs")[0]),
+        )
+        payload = json.loads(mysql_fetchone(
+            self.seed,
+            "SELECT payload_json FROM investment_ai_insight_episodes WHERE request_id = %s",
+            (request.request_id,),
+        )[0])
+        reconciliation = payload["reconciliation"]
+        self.assertEqual("send", reconciliation["semanticNotificationDecision"])
+        self.assertEqual("suppress", reconciliation["notificationDecision"])
+        self.assertEqual("", reconciliation["notificationJobId"])
+        self.assertFalse(reconciliation["deliveryOutcome"]["queued"])
+        self.assertEqual("final admission rejected", reconciliation["deliveryOutcome"]["reason"])
+
+    def assert_subject_decision_ai_failure_never_creates_notification(self):
+        self.setUp()
+        job, request = self.create_detached_request("subject:detached:failed")
+        self.queue.enqueue_subject_decision(job, request)
+        claimed = self.queue.claim("worker-failed", 1, 60)[0]
+
+        self.assertTrue(self.queue.fail(claimed, "worker-failed", "model unavailable"))
+        self.assertIsNone(self.notifications.get(job.job_id))
+        self.assertEqual("failed", self.queue.get(request.request_id).status)
+        row = mysql_fetchone(
+            self.seed,
+            "SELECT COUNT(*) FROM domain_events WHERE name = %s",
+            ("investment.ai_insight_failed",),
+        )
+        self.assertEqual(1, int(row[0]))
+
+    def assert_subject_decision_queue_coalesces_same_material_meaning(self):
+        self.setUp()
+        first_job, first = self.create_detached_request("subject:detached:first")
+        second_job, second = self.create_detached_request("subject:detached:second")
+        self.queue.enqueue_subject_decision(first_job, first)
+
+        outcome = self.queue.enqueue_subject_decision(second_job, second)
+
+        self.assertEqual("coalesced-material", outcome["status"])
+        self.assertEqual("", outcome["notificationJobId"])
+        self.assertEqual(second_job.job_id, outcome["reservedNotificationJobId"])
+        row = mysql_fetchone(self.seed, "SELECT COUNT(*) FROM ai_inference_requests")
+        self.assertEqual(1, int(row[0]))
+        stale = self.queue.claim("worker-stale-material", 1, 60)[0]
+
+        changed_job, changed = self.create_detached_request("subject:detached:changed")
+        changed_job.context["ontologyRelationContext"]["actionEnvelope"] = {
+            "executionAction": "TRIM",
+            "allowedActions": ["HOLD", "TRIM"],
+        }
+        changed_handoff = AIInsightHandoff.create(changed_job.context, changed_job.to_dict())
+        changed_job.context["investmentAIInsightHandoff"] = changed_handoff.to_dict()
+        changed = AIInferenceRequest.create_for_subject_decision(
+            changed_job,
+            changed_job.context,
+            changed_handoff,
+            model="gpt-5.6-sol",
+            reasoning_effort="max",
+        )
+
+        changed_outcome = self.queue.enqueue_subject_decision(changed_job, changed)
+
+        self.assertEqual("awaiting-ai-insight", changed_outcome["status"])
+        self.assertEqual("superseded", self.queue.get(first.request_id).status)
+        stale_result = AIInferenceResult.create(
+            stale,
+            {"action": "HOLD", "summary": "이미 대체된 과거 판단입니다."},
+            source="fake max AI",
+            validation_state="ready",
+            latency_ms=10,
+            prompt_bytes=100,
+        )
+        self.assertFalse(
+            self.queue.complete(
+                stale,
+                "worker-stale-material",
+                stale_result,
+                {
+                    **stale.context,
+                    "decisionReconciliation": {
+                        "notificationDecision": "send",
+                        "notificationJobId": first_job.job_id,
+                    },
+                },
+            )
+        )
+        self.assertIsNone(self.notifications.get(first_job.job_id))
+        self.assertEqual(
+            changed.request_id,
+            self.queue.claim("worker-material-change", 1, 60)[0].request_id,
+        )
 
     def test_verified_ai_narrative_survives_action_contract_fallback(self):
         reviewed = NotificationAIValidatedResponse(
@@ -211,6 +550,8 @@ class AIInferenceQueueTests(unittest.TestCase):
 
     def setUp(self):
         for table in (
+            "investment_ai_insight_episodes",
+            "domain_events",
             "ai_inference_execution_audits",
             "ai_inference_results",
             "ai_inference_requests",

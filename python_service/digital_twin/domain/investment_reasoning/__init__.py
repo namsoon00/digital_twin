@@ -72,6 +72,17 @@ from .subject_case import (
     SubjectDecisionCase,
     publication_for_subject_case,
 )
+from .ai_insight import (
+    AI_INSIGHT_EPISODE_VERSION,
+    AI_INSIGHT_HANDOFF_VERSION,
+    DECISION_RECONCILIATION_VERSION,
+    SUBJECT_DECISION_ORIGIN,
+    AIInsightEpisode,
+    AIInsightHandoff,
+    ai_insight_handoff,
+    decision_reconciliation,
+    reconciliation_after_delivery,
+)
 from ..semantic_fact_plane import (
     FactEnvelope,
     FactRevisionVector,
@@ -143,6 +154,15 @@ __all__ = [
     "DecisionPublication",
     "SubjectDecisionCase",
     "publication_for_subject_case",
+    "AI_INSIGHT_EPISODE_VERSION",
+    "AI_INSIGHT_HANDOFF_VERSION",
+    "DECISION_RECONCILIATION_VERSION",
+    "SUBJECT_DECISION_ORIGIN",
+    "AIInsightEpisode",
+    "AIInsightHandoff",
+    "ai_insight_handoff",
+    "decision_reconciliation",
+    "reconciliation_after_delivery",
     "FactEnvelope",
     "FactRevisionVector",
     "FactSlice",

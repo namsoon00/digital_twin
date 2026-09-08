@@ -26,6 +26,7 @@ from ..application.operational_storage_capacity_service import (
     OperationalStorageCapacityService,
 )
 from ..application.investment_analysis_service import InvestmentAnalysisService
+from ..application.investment_ai_insight_service import InvestmentAIInsightHandoffService
 from ..application.independent_reasoning_engine import (
     IndependentReasoningInputAssembler,
     IndependentReasoningJobRunner,
@@ -93,6 +94,7 @@ from ..application.notification.workflow import (
     NotificationInstrumentIdentityEnricher,
     NotificationQueueRunner,
 )
+from ..application.notification.intake import NotificationIngressService
 from ..application.official_calendar_sync_service import OfficialCalendarSyncService
 from ..application.ontology_reasoning_service import (
     OntologyReasoningRunner,
@@ -2759,6 +2761,57 @@ def build_v2_reasoning_engine(
             and str(deployment.get("status") or "") == "active"
         )
 
+    decision_episode_store = stores.investment_decision_episode_store(store_settings)
+    subject_decision_orchestrator = InvestmentReasoningOrchestrator(
+        stores.investment_reasoning_case_store(store_settings),
+        decision_episode_store=decision_episode_store,
+        hypothesis_proposal_request_store=stores.investment_research_store(store_settings),
+        subject_case_repository=stores.subject_decision_case_store(store_settings),
+    )
+    decision_continuity = DecisionContinuityService(
+        decision_episode_store,
+        stores.investment_domain_store(store_settings),
+    )
+    ai_context_preparer = CompositeNotificationContextEnricher(
+        NotificationInstrumentIdentityEnricher(
+            stores.symbol_universe_store(store_settings)
+        ),
+        NotificationHoldingSnapshotEnricher(
+            subscription_state_store.load_previous,
+            RealtimeMonitor(candidate_settings),
+        ),
+        DisclosureAnalysisNotificationEnricher(
+            disclosure_analyzer_from_settings(candidate_settings),
+            candidate_settings,
+        ),
+        NotificationHypothesisResearchEnricher(
+            build_investment_brain_service(store_settings),
+            candidate_settings,
+        ),
+        NotificationAIOpinionEnricher(candidate_settings),
+        NotificationAIDecisionContextEnricher(
+            delivery_time_series_store,
+            candidate_settings,
+            investment_domain_store=stores.investment_domain_store(store_settings),
+        ),
+    )
+    detached_ai_enqueuer = NotificationAIRequestEnqueuer(
+        stores.ai_inference_queue_store(store_settings),
+        ai_context_preparer,
+        candidate_settings,
+        decision_episode_store=decision_episode_store,
+        continuity_service=decision_continuity,
+        reasoning_orchestrator=subject_decision_orchestrator,
+    )
+    ai_insight_handoff_service = InvestmentAIInsightHandoffService(
+        NotificationIngressService(
+            template_renderer=stores.notification_template_store(store_settings).render,
+            settings=candidate_settings,
+        ),
+        detached_ai_enqueuer,
+        account_repository=account_repository,
+    )
+
     return V2ReasoningEngine(
         descriptor=descriptor,
         input_assembler=IndependentReasoningInputAssembler(
@@ -2791,13 +2844,9 @@ def build_v2_reasoning_engine(
         delivery_authorized_provider=delivery_authorized,
         settings=candidate_settings,
         release_identity=release_identity,
-        reasoning_orchestrator=InvestmentReasoningOrchestrator(
-            stores.investment_reasoning_case_store(store_settings),
-            decision_episode_store=stores.investment_decision_episode_store(store_settings),
-            hypothesis_proposal_request_store=stores.investment_research_store(store_settings),
-            subject_case_repository=stores.subject_decision_case_store(store_settings),
-        ),
+        reasoning_orchestrator=subject_decision_orchestrator,
         shared_inference_service=shared_inference_service,
+        ai_insight_handoff_service=ai_insight_handoff_service,
     )
 
 

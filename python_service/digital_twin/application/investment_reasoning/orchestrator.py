@@ -592,7 +592,14 @@ class InvestmentReasoningOrchestrator:
             return subject_case
         subject_case.ai_judgment = judgment
         subject_case.ai_request_id = judgment.request_id
-        subject_case.notification_job_id = str(getattr(request, "notification_job_id", "") or "")
+        requested_notification_job_id = str(
+            getattr(request, "notification_job_id", "") or ""
+        )
+        if bool(getattr(request, "detached_from_notification", False)):
+            # Publication is independent of transport. The subject receives the
+            # real job id only after notification outbox admission succeeds.
+            requested_notification_job_id = ""
+        subject_case.notification_job_id = requested_notification_job_id
         subject_case.mark(SUBJECT_AI_COMPLETED)
         valid, reason = self.validate_judgment(subject_case, judgment)
         if not valid:
@@ -733,6 +740,35 @@ class InvestmentReasoningOrchestrator:
         ):
             subject_case.mark(SUBJECT_PUBLISHED)
         self._persist_subject(subject_case)
+        return subject_case
+
+    def decision_delivery_reconciled(
+        self,
+        context: Mapping[str, object],
+        delivery_outcome: Mapping[str, object],
+        *,
+        connection=None,
+    ) -> Optional[SubjectDecisionCase]:
+        """Record post-AI delivery disposition without changing the decision."""
+
+        subject_case_id = self.subject_case_id_from_context(context)
+        if not subject_case_id:
+            return None
+        subject_case = self.required_subject(subject_case_id, context)
+        outcome = _mapping(delivery_outcome)
+        queued = bool(outcome.get("queued"))
+        notification_job_id = str(outcome.get("notificationJobId") or "")
+        subject_case.notification_job_id = notification_job_id if queued else ""
+        _mark_subject_delivery(
+            subject_case,
+            "queued" if queued else "suppressed",
+            str(outcome.get("reason") or outcome.get("status") or ""),
+            {
+                **dict(context or {}),
+                "notificationJobId": notification_job_id if queued else "",
+            },
+        )
+        self._persist_subject(subject_case, connection=connection)
         return subject_case
 
     def context_observation_validated(
@@ -943,9 +979,12 @@ class InvestmentReasoningOrchestrator:
         if subject_case.publication is not None:
             return subject_case
         subject_case.ai_request_id = str(getattr(request, "request_id", "") or "")
-        subject_case.notification_job_id = str(
+        requested_notification_job_id = str(
             getattr(request, "notification_job_id", "") or ""
         )
+        if bool(getattr(request, "detached_from_notification", False)):
+            requested_notification_job_id = ""
+        subject_case.notification_job_id = requested_notification_job_id
         reason_text = str(reason or "AI unavailable")
         contract_invalid = any(
             token in reason_text.lower()

@@ -1841,7 +1841,13 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
             relation_previous_context=relation_previous_context,
         )
 
-    def enqueue_with_connection(self, connection, job: NotificationJob) -> bool:
+    def enqueue_with_connection(
+        self,
+        connection,
+        job: NotificationJob,
+        *,
+        persist_suppressed: bool = True,
+    ) -> bool:
         if not job.text.strip():
             return False
         existing = connection.execute("SELECT job_id FROM notification_jobs WHERE job_id = %s", (job.job_id,)).fetchone()
@@ -1871,6 +1877,8 @@ class MySQLNotificationJobStore(MySQLOperationalConnection):
         decision = self.evaluate_job_with_connection(connection, job)
         policy = getattr(self, "admission_policy", None) or NotificationAdmissionPolicy()
         outcome = policy.apply_result(job, decision, self.runtime_settings)
+        if not outcome.accepted and not persist_suppressed:
+            return False
         if job.status == "suppressed":
             job.updated_at = utc_now()
         try:

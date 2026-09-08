@@ -13,12 +13,13 @@ class MySQLIndexDefinition:
     table: str
     name: str
     columns_sql: str
+    unique: bool = False
 
     def alter_sql(self) -> str:
         return (
             "ALTER TABLE "
             + quote_identifier(self.table)
-            + " ADD INDEX "
+            + (" ADD UNIQUE INDEX " if self.unique else " ADD INDEX ")
             + quote_identifier(self.name)
             + " ("
             + self.columns_sql
@@ -308,6 +309,19 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "ai_inference_requests",
             "idx_ai_inference_requests_completed",
             "`status`, `completed_at`, `request_id`",
+        ),
+        MySQLIndexDefinition(
+            "ai_inference_requests",
+            "idx_ai_inference_requests_origin",
+            "`origin_kind`, `origin_id`, `created_at`",
+        ),
+    ),
+    "investment_ai_insight_episodes": (
+        MySQLIndexDefinition(
+            "investment_ai_insight_episodes",
+            "uq_ai_insight_episode_subject",
+            "`subject_case_id`",
+            unique=True,
         ),
     ),
     "ai_inference_results": (
@@ -604,6 +618,23 @@ MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS: Sequence[MySQLUniqueIndexRetirementD
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "ai_inference_requests": (
+        MySQLColumnDefinition(
+            "ai_inference_requests",
+            "origin_kind",
+            "VARCHAR(32) NOT NULL DEFAULT 'notification'",
+        ),
+        MySQLColumnDefinition(
+            "ai_inference_requests",
+            "origin_id",
+            "VARCHAR(191) NOT NULL DEFAULT ''",
+        ),
+        MySQLColumnDefinition(
+            "ai_inference_requests",
+            "material_fingerprint",
+            "CHAR(64) NOT NULL DEFAULT ''",
+        ),
+    ),
     "ai_inference_results": (
         MySQLColumnDefinition("ai_inference_results", "publication_mode", "VARCHAR(32) NOT NULL DEFAULT 'unknown'"),
         MySQLColumnDefinition("ai_inference_results", "ai_authored", "TINYINT NOT NULL DEFAULT 0"),

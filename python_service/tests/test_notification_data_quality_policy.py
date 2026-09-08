@@ -465,7 +465,7 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_send)
         self.assertEqual("validation_blocked", decision.suppression_reason)
 
-    def test_no_eligible_thesis_can_reach_ai_as_non_action_interpretation(self):
+    def test_no_eligible_thesis_stays_in_web_history_without_ai_or_push(self):
         context = self._typedb_relation_context({
             "messageType": INVESTMENT_INSIGHT,
             "ontologyInsight": {
@@ -501,9 +501,36 @@ class NotificationDataQualityPolicyTests(unittest.TestCase):
 
         decision = evaluate_notification_rule(job, default_notification_rule(INVESTMENT_INSIGHT))
 
-        self.assertTrue(decision.should_send)
-        self.assertEqual("conditional", decision.gate_state)
-        self.assertIn("행동을 만들지 않고", decision.gate_reason)
+        self.assertFalse(decision.should_send)
+        self.assertEqual("validation_blocked", decision.suppression_reason)
+        self.assertIn("검증이 차단", decision.gate_reason)
+
+    def test_structured_no_match_disposition_cannot_reach_customer_ai(self):
+        context = self._typedb_relation_context({
+            "messageType": INVESTMENT_INSIGHT,
+            "v2DecisionSynthesis": {
+                "disposition_code": "NO_MATERIAL_PREDICTIVE_RULE_MATCH",
+                "hypothesis_state": "NO_ELIGIBLE_THESIS",
+                "ai_state": "INTERPRETATION_READY",
+            },
+        })
+        job = NotificationJob.create(
+            "Tesla 무의미한 관계 변화",
+            account_id="main",
+            message_type=INVESTMENT_INSIGHT,
+            context=context,
+        )
+
+        decision = evaluate_notification_rule(
+            job,
+            default_notification_rule(INVESTMENT_INSIGHT),
+        )
+
+        self.assertFalse(decision.should_send)
+        self.assertEqual(
+            "no_material_predictive_rule_match",
+            decision.suppression_reason,
+        )
 
     @staticmethod
     def _typedb_relation_context(context):

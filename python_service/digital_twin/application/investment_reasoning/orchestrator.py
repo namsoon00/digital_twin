@@ -54,10 +54,16 @@ from ...domain.investment_reasoning.subject_case import (
 )
 from ...domain.investment_alert_coverage import derive_delivery_eligibility
 from ...domain.investment_decision_actionability import investment_decision_actionability
+from ...domain.investment_reasoning.disposition import (
+    CONTEXT_OBSERVATION,
+    NO_MATERIAL_PREDICTIVE_RULE_MATCH,
+)
 from .episode_projection import (
     decision_episode_from_subject_case,
     decision_episode_outcome_contract_readiness,
     hypothesis_gap_request_from_subject_case,
+    hypothesis_coverage_gap_request_from_subject_case,
+    shadow_hypothesis_observation_episodes,
 )
 
 
@@ -401,6 +407,14 @@ class InvestmentReasoningOrchestrator:
                 indexed[synthesis.synthesis_id] = synthesis
         reasoning_case.decision_syntheses = tuple(indexed[key] for key in sorted(indexed))
         subject_case_ids = []
+        shadow_observation_count = 0
+        coverage_gap_request_count = 0
+        coverage_gap_request_failure_count = 0
+        enqueue_gap = getattr(
+            self.hypothesis_proposal_request_store,
+            "enqueue_hypothesis_proposal_request",
+            None,
+        )
         for synthesis in reasoning_case.decision_syntheses:
             candidate = SubjectDecisionCase.create(
                 reasoning_case,
@@ -417,6 +431,28 @@ class InvestmentReasoningOrchestrator:
             else:
                 subject_case = candidate
                 self._persist_subject(subject_case)
+            shadow_episodes = shadow_hypothesis_observation_episodes(
+                reasoning_case,
+                subject_case,
+            )
+            save_shadow = getattr(
+                self.decision_episode_store,
+                "save_shadow_hypothesis_observations",
+                None,
+            )
+            if callable(save_shadow) and shadow_episodes:
+                saved_shadow = save_shadow(shadow_episodes)
+                shadow_observation_count += len(saved_shadow or [])
+            gap_request = hypothesis_coverage_gap_request_from_subject_case(
+                reasoning_case,
+                subject_case,
+            )
+            if callable(enqueue_gap) and gap_request:
+                try:
+                    enqueue_gap(gap_request)
+                    coverage_gap_request_count += 1
+                except Exception:  # noqa: BLE001 - research backlog must not block live reasoning.
+                    coverage_gap_request_failure_count += 1
             subject_case_ids.append(subject_case.subject_case_id)
         reasoning_case.subject_case_ids = tuple(sorted(subject_case_ids))
         if reasoning_case.stage == CASE_HYPOTHESES_READY:
@@ -431,6 +467,9 @@ class InvestmentReasoningOrchestrator:
                         for synthesis in reasoning_case.decision_syntheses
                         for hypothesis_id in synthesis.eligible_hypothesis_ids
                     }),
+                    "shadowHypothesisObservationCount": shadow_observation_count,
+                    "hypothesisCoverageGapRequestCount": coverage_gap_request_count,
+                    "hypothesisCoverageGapRequestFailureCount": coverage_gap_request_failure_count,
                 },
             )
         self._persist(reasoning_case)
@@ -970,18 +1009,30 @@ class InvestmentReasoningOrchestrator:
                 SUBJECT_BLOCKED,
             }:
                 continue
+            disposition_code = subject_case.candidate_set.disposition_code
             outcome = (
                 OBSERVATION
-                if not subject_case.candidate_set.eligible_hypothesis_ids
-                and subject_case.synthesis.graph_candidate_action == "NO_ACTION"
+                if disposition_code in {
+                    CONTEXT_OBSERVATION,
+                    NO_MATERIAL_PREDICTIVE_RULE_MATCH,
+                }
                 else SUPPRESSED
             )
             target_stage = SUBJECT_OBSERVATION if outcome == OBSERVATION else SUBJECT_SUPPRESSED
-            subject_case.mark(target_stage, reason, {"source": source})
+            disposition_details = {
+                "source": source,
+                "dispositionCode": disposition_code,
+                "ruleCoverageState": subject_case.candidate_set.rule_coverage_state,
+                "dataGaps": [item.to_dict() for item in subject_case.candidate_set.data_gaps],
+            }
+            subject_case.mark(target_stage, reason, disposition_details)
             subject_case.publication = publication_for_subject_case(
                 subject_case,
                 outcome,
-                explanation_snapshot={"reason": str(reason or ""), "source": source},
+                explanation_snapshot={
+                    "reason": str(reason or ""),
+                    **disposition_details,
+                },
             )
             self._persist_subject(subject_case)
         if reasoning_case.stage in {

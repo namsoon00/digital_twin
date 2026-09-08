@@ -53,7 +53,12 @@ from ..domain.ontology_projection_input import (
     compact_monitor_state_for_reasoning_symbol,
     reasoning_snapshot_symbols,
 )
-from ..domain.portfolio import AccountSnapshot, AlertEvent, monitor_state_has_live_account_data
+from ..domain.portfolio import (
+    AccountSnapshot,
+    AlertEvent,
+    account_snapshot_from_monitor_state,
+    monitor_state_has_live_account_data,
+)
 from ..domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 from ..domain.repositories import MonitoringCycleRecordResult
 from ..domain.symbol_universe import ListedSymbol, normalize_market, normalize_symbol, utc_now_iso as symbol_utc_now_iso
@@ -131,6 +136,24 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
     metadata["lastConnectionFailure"] = failure
     retained["metadata"] = metadata
     return retained
+
+
+def reasoning_snapshot_for_persisted_boundary(
+    snapshot: AccountSnapshot,
+    persisted_state: Dict[str, object],
+) -> AccountSnapshot:
+    """Rehydrate the exact normalized source boundary used by TypeDB.
+
+    Provider objects can contain representation details that are normalized by
+    monitor persistence. Comparing those mutable objects with a JSON-loaded
+    previous state produced false company and corporate-action deltas even
+    though two consecutive durable snapshots were identical.
+    """
+
+    persisted = account_snapshot_from_monitor_state(
+        copy.deepcopy(persisted_state) if isinstance(persisted_state, dict) else {}
+    )
+    return persisted or snapshot
 
 
 def market_observation_followup_symbols(
@@ -1489,8 +1512,12 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                         snapshot.account_id,
                     ),
                 ]))
-                reasoning_event = verified_monitor_snapshot_reasoning_event(
+                reasoning_snapshot = reasoning_snapshot_for_persisted_boundary(
                     snapshot,
+                    snapshot_states.get(snapshot.account_id) or {},
+                )
+                reasoning_event = verified_monitor_snapshot_reasoning_event(
+                    reasoning_snapshot,
                     previous_states.get(snapshot.account_id),
                     self.runtime_settings,
                     observation_followup_symbols=followup_symbols,

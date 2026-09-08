@@ -317,6 +317,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             inference_generation_id="inference:1",
             graph_candidate_action="HOLD",
             eligible_hypothesis_ids=("hypothesis:1",),
+            execution_eligible_hypothesis_ids=("hypothesis:1",),
+            disposition_code="ACTIONABLE_DECISION",
         )
         projection = {"acct": {"inferenceBox": {
             "generationAligned": True,
@@ -570,6 +572,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             inference_generation_id="inference:holding",
             graph_candidate_action="HOLD",
             eligible_hypothesis_ids=("hypothesis:holding",),
+            execution_eligible_hypothesis_ids=("hypothesis:holding",),
+            disposition_code="ACTIONABLE_DECISION",
             review_level="check",
         )
         projection = {"acct": {"inferenceBox": {

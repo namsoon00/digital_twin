@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
+from .investment_reasoning.disposition import reasoning_disposition_delivery
+
 
 ALERT_COVERAGE_CONTRACT_VERSION = "investment-alert-coverage-v1"
 
@@ -183,6 +185,16 @@ def derive_delivery_eligibility(values: Mapping[str, object]) -> Dict[str, objec
             "determined": True,
             "reasonCode": _text(final_gate.get("suppressionReason")) or "final-ai-web-only",
             "pushValueClass": push_value_class,
+        }
+
+    disposition = reasoning_disposition_delivery(facts)
+    if disposition.get("decision") == "suppress":
+        return {
+            "eligible": False,
+            "determined": True,
+            "reasonCode": _text(disposition.get("suppressionReason"))
+            or "reasoning-disposition-web-only",
+            "pushValueClass": _text(disposition.get("pushValueClass")),
         }
 
     cooldown_decision = _text(facts.get("cooldownDecision")).lower()

@@ -18,7 +18,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v3"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v6"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v7"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -381,6 +381,49 @@ class ActionAlternative:
 
 
 @dataclass(frozen=True)
+class DataGap:
+    """One missing or degraded input with its operational meaning intact."""
+
+    code: str
+    label: str = ""
+    state: str = "missing"
+    effect: str = ""
+    source: str = ""
+    expected_at: str = ""
+    blocking: bool = False
+    decision_impact: str = "advisory"
+    required_by_rule_ids: Tuple[str, ...] = ()
+    details: Dict[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "DataGap":
+        payload = dict(value or {})
+        return cls(
+            code=str(payload.get("code") or payload.get("key") or payload.get("id") or "missing"),
+            label=str(payload.get("label") or payload.get("name") or ""),
+            state=str(payload.get("state") or payload.get("status") or "missing").lower(),
+            effect=str(payload.get("effect") or payload.get("reason") or ""),
+            source=str(payload.get("source") or ""),
+            expected_at=str(payload.get("expected_at") or payload.get("expectedAt") or ""),
+            blocking=bool(payload.get("blocking")),
+            decision_impact=str(
+                payload.get("decision_impact")
+                or payload.get("decisionImpact")
+                or ("blocking" if payload.get("blocking") else "advisory")
+            ).lower(),
+            required_by_rule_ids=_texts(
+                payload.get("required_by_rule_ids") or payload.get("requiredByRuleIds")
+            ),
+            details=dict(payload.get("details") or {}),
+        )
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["required_by_rule_ids"] = list(self.required_by_rule_ids)
+        return payload
+
+
+@dataclass(frozen=True)
 class DecisionSynthesis:
     """Stable handoff from TypeDB alternatives to the AI judgement boundary."""
 
@@ -411,6 +454,9 @@ class DecisionSynthesis:
     change_state: str = ""
     conflict_state: str = ""
     missing_data: Tuple[str, ...] = ()
+    data_gaps: Tuple[DataGap, ...] = ()
+    disposition_code: str = "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
+    rule_coverage_state: str = "no-material-match"
     next_checks: Tuple[str, ...] = ()
     reversal_conditions: Tuple[str, ...] = ()
     execution_qualified: bool = False
@@ -462,6 +508,21 @@ class DecisionSynthesis:
             change_state=str(payload.get("change_state") or payload.get("changeState") or ""),
             conflict_state=str(payload.get("conflict_state") or payload.get("conflictState") or ""),
             missing_data=_texts(payload.get("missing_data") or payload.get("missingData")),
+            data_gaps=tuple(
+                DataGap.from_dict(item)
+                for item in payload.get("data_gaps") or payload.get("dataGaps") or []
+                if isinstance(item, Mapping)
+            ),
+            disposition_code=str(
+                payload.get("disposition_code")
+                or payload.get("dispositionCode")
+                or "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
+            ).upper(),
+            rule_coverage_state=str(
+                payload.get("rule_coverage_state")
+                or payload.get("ruleCoverageState")
+                or "no-material-match"
+            ).lower(),
             next_checks=_texts(payload.get("next_checks") or payload.get("nextChecks")),
             reversal_conditions=_texts(payload.get("reversal_conditions") or payload.get("reversalConditions")),
             execution_qualified=bool(
@@ -497,6 +558,7 @@ class DecisionSynthesis:
         ]:
             payload[key] = list(payload[key])
         payload["alternatives"] = [item.to_dict() for item in self.alternatives]
+        payload["data_gaps"] = [item.to_dict() for item in self.data_gaps]
         return payload
 
 

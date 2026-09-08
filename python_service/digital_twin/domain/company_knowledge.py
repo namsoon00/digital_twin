@@ -39,6 +39,21 @@ VALUATION_MATERIAL_REVISION_DIGITS = {
     "beta": 2,
 }
 
+# These multiples are recomputed from the current market price by upstream
+# vendors. MarketWorld already schedules a reasoning turn when that price move
+# is material, and the turn reads the latest values below. Keeping them in the
+# company-fact routing fingerprint would create a second TypeDB turn for the
+# same quote tick. The values remain in CompanyKnowledge and factRevision.
+MARKET_DERIVED_VALUATION_FIELDS = {
+    "peRatio",
+    "forwardPE",
+    "pbr",
+    "pegRatio",
+    "enterpriseToEbitda",
+    "dividendYield",
+    "dividendYieldPct",
+}
+
 COMPANY_VALUATION_RULE_ID_FRAGMENTS = (
     "quality_valuation",
     "valuation_stretch",
@@ -643,6 +658,12 @@ def _material_section_revisions(payload: Mapping[str, object]) -> Dict[str, str]
     """
 
     material = _material_revision_payload(payload)
+    valuation = material.get("valuation") if isinstance(material.get("valuation"), Mapping) else {}
+    structural_valuation = {
+        key: value
+        for key, value in valuation.items()
+        if key not in MARKET_DERIVED_VALUATION_FIELDS
+    }
     sections = {
         "identity": {
             "companyName": material.get("companyName"),
@@ -655,7 +676,7 @@ def _material_section_revisions(payload: Mapping[str, object]) -> Dict[str, str]
         "listing": material.get("listing") or {},
         "relationships": material.get("relationships") or {},
         "valuation": {
-            "valuation": material.get("valuation") or {},
+            "valuation": structural_valuation,
             "valuationUnits": material.get("valuationUnits") or {},
         },
         "financials": material.get("financials") or {},

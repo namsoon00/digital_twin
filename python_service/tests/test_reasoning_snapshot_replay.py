@@ -12,7 +12,11 @@ from digital_twin.domain.monitoring import RealtimeMonitor
 from digital_twin.domain.portfolio import AlertEvent, AccountSnapshot, PortfolioSummary, Position, account_snapshot_from_monitor_state
 from digital_twin.domain.repositories import MonitoringCycleRecordResult
 from digital_twin.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
-from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitoringCycleRecorder
+from digital_twin.infrastructure.mysql_monitoring_stores import (
+    MySQLMonitoringCycleRecorder,
+    reasoning_snapshot_for_persisted_boundary,
+)
+from digital_twin.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
 from digital_twin.infrastructure.reasoning_snapshot_source import LatestMonitorSnapshotReasoningSource
 from digital_twin.infrastructure.service_factory import (
@@ -95,6 +99,31 @@ def monitor_state(generated_at="2026-07-29T00:02:00Z"):
 
 
 class ReasoningSnapshotReplayTests(unittest.TestCase):
+    def test_reasoning_delta_uses_the_exact_persisted_snapshot_boundary(self):
+        previous = monitor_state("2026-07-29T00:01:00Z")
+        corporate_action = {
+            "dividend:AAPL:20260730": {
+                "eventId": "dividend:AAPL:20260730",
+                "eventType": "dividend",
+                "recordDate": "20260730",
+                "cashDividendPerCommonShare": 1.0,
+            },
+        }
+        previous["externalSignals"] = {"corporateActions": {"AAPL": corporate_action}}
+        previous = account_snapshot_from_monitor_state(previous).to_monitor_state()
+        persisted = deepcopy(previous)
+        persisted["generatedAt"] = "2026-07-29T00:02:00Z"
+        collected = account_snapshot_from_monitor_state(persisted)
+        # Simulate a provider-native object that was normalized/reconciled by
+        # the monitor persistence boundary before reasoning ingress.
+        collected.external_signals = {"corporateActions": {"AAPL": {}}}
+
+        reasoning_snapshot = reasoning_snapshot_for_persisted_boundary(collected, persisted)
+        event = verified_monitor_snapshot_reasoning_event(reasoning_snapshot, previous)
+
+        self.assertIsNone(event)
+        self.assertEqual(corporate_action, reasoning_snapshot.external_signals["corporateActions"]["AAPL"])
+
     def test_background_workers_ignore_rollback_candidate_backlog(self):
         class Registry:
             def control(self):

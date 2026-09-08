@@ -87,6 +87,27 @@ class InvestmentOutcomeObservationService:
             targets,
             max_delay_minutes=self.max_delay_minutes(),
         )
+        instrument_start_requests = [
+            {
+                "requestId": str(target.get("requestId") or "") + ":instrument-start",
+                "symbol": str(target.get("symbol") or "").upper(),
+                "targetAt": target.get("decidedAt"),
+                "maximumObservationDelayMinutes": target.get("maximumObservationDelayMinutes"),
+            }
+            for target in targets
+            if target.get("requiresInstrumentBaseline")
+            and str(target.get("requestId") or "")
+            and str(target.get("symbol") or "").strip()
+        ]
+        instrument_start_observations = (
+            self.market_time_series_store.load_outcome_observations(
+                snapshot.account_id,
+                instrument_start_requests,
+                max_delay_minutes=self.max_delay_minutes(),
+            )
+            if instrument_start_requests
+            else {}
+        )
         benchmark_requests = []
         for target in targets:
             benchmark_symbol = str(target.get("benchmarkSymbol") or "").upper().strip()
@@ -123,6 +144,21 @@ class InvestmentOutcomeObservationService:
             if not facts:
                 missing_count += 1
                 continue
+            if target.get("requiresInstrumentBaseline"):
+                start = instrument_start_observations.get(
+                    request_id + ":instrument-start"
+                ) or {}
+                decision_price = self.optional_number(start.get("currentPrice"))
+                if decision_price is None:
+                    missing_count += 1
+                    continue
+                facts["decisionPrice"] = decision_price
+                facts["decisionPriceSourceAsOf"] = (
+                    start.get("sourceAsOf")
+                    or start.get("generatedAt")
+                    or start.get("updatedAt")
+                    or ""
+                )
             facts.setdefault(
                 "observationSourcePolicy",
                 "point-in-time-market-observation",
@@ -141,6 +177,7 @@ class InvestmentOutcomeObservationService:
                     facts["benchmarkEndAsOf"] = end.get("sourceAsOf") or end.get("generatedAt") or ""
             records.append({
                 "episodeId": target.get("episodeId"),
+                "episodeKind": target.get("episodeKind") or "decision",
                 "horizonMinutes": target.get("horizonMinutes"),
                 "observedAt": facts.get("sourceAsOf") or facts.get("generatedAt") or facts.get("updatedAt") or observed_at,
                 "facts": facts,

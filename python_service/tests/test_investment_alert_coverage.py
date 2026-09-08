@@ -189,6 +189,16 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
         self.assertTrue(explicit_transition["eligible"])
         self.assertEqual("material-source-evidence", authorized["pushValueClass"])
 
+        internal_only = derive_delivery_eligibility({
+            "candidatePresent": True,
+            "v2DecisionSynthesis": {
+                "dispositionCode": "RULE_COVERAGE_GAP_CANDIDATE",
+            },
+        })
+        self.assertFalse(internal_only["eligible"])
+        self.assertTrue(internal_only["determined"])
+        self.assertEqual("rule_hypothesis_coverage_gap", internal_only["reasonCode"])
+
 
 if __name__ == "__main__":
     unittest.main()

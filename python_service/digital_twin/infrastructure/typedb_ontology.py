@@ -94,6 +94,7 @@ from ..domain.hypothesis_calibration import hypothesis_calibration_snapshot_from
 from ..domain.ontology_scopes import (
     SCOPED_ABOX_MANIFEST_VERSION,
     SCOPED_ABOX_PERSISTENCE_MODE,
+    SCOPE_NODE_INVENTORY_VERSION,
     support_relation_key,
 )
 from ..domain.ontology_worlds import (
@@ -5802,6 +5803,31 @@ class ScopedABoxManifestMixin:
             if node_id:
                 all_nodes_by_id.setdefault(node_id, []).append(row)
 
+        candidate_relation_endpoint_ids = {
+            str(row.get(prefix) or "").strip()
+            for row in [*current_relations, *active_relations]
+            for prefix in ("source", "target")
+            if str(row.get("scopeId") or "").strip() in (
+                semantic_changed | deferred | rebind_only
+            )
+            and str(row.get(prefix) or "").strip()
+        }
+
+        def node_declared_by_candidate_manifest(row: Dict[str, object]) -> bool:
+            scope_id = str(row.get("scopeId") or "").strip()
+            node_id = str(row.get("id") or "").strip()
+            planned = plan_by_scope.get(scope_id) or {}
+            return bool(
+                node_id
+                and str(planned.get("nodeInventoryVersion") or "").strip()
+                == SCOPE_NODE_INVENTORY_VERSION
+                and node_id in {
+                    str(value or "").strip()
+                    for value in planned.get("nodeIds") or []
+                    if str(value or "").strip()
+                }
+            )
+
         candidate_nodes_by_id: Dict[str, Dict[str, object]] = {}
         for row in active_nodes:
             node_id = str(row.get("id") or "").strip()
@@ -5813,16 +5839,28 @@ class ScopedABoxManifestMixin:
                 # exact planned generation is sufficient proof that it belongs
                 # to the candidate Manifest.
                 candidate_nodes_by_id[node_id] = row
+        integrity_companion_node_ids_set: Set[str] = set()
         for row in current_nodes:
             node_id = str(row.get("id") or "").strip()
             scope_id = str(row.get("scopeId") or "").strip()
+            integrity_companion = bool(
+                scope_id not in physical_changed
+                and node_id in candidate_relation_endpoint_ids
+                and node_declared_by_candidate_manifest(row)
+            )
             if (
                 node_id
-                and scope_id in physical_changed
+                and (
+                    scope_id in physical_changed
+                    or integrity_companion
+                )
                 and scope_id not in deferred
                 and node_matches_candidate_plan(row)
             ):
+                if integrity_companion and node_id not in candidate_nodes_by_id:
+                    integrity_companion_node_ids_set.add(node_id)
                 candidate_nodes_by_id[node_id] = row
+        integrity_companion_node_ids = sorted(integrity_companion_node_ids_set)
 
         class CandidateRelationEndpointError(ValueError):
             def __init__(self, details: Dict[str, object]):
@@ -6086,6 +6124,8 @@ class ScopedABoxManifestMixin:
             "reusedActiveNodeCount": len(active_nodes),
             "reusedActiveRelationCount": len(active_relations),
             "reboundRelationCount": len(rebound_relations),
+            "integrityCompanionNodeIds": integrity_companion_node_ids,
+            "integrityCompanionNodeCount": len(integrity_companion_node_ids),
         }
 
     def scoped_abox_manifest_generation_references(self, world_id: str = "") -> Dict[str, object]:

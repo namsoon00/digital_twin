@@ -2444,6 +2444,140 @@ class OntologyFactSlotTests(unittest.TestCase):
             for value in selected
         ))
 
+    def test_complete_patch_replaces_stale_relation_endpoint_binding_atomically(self):
+        state_scope = "symbol:AAPL:state"
+        quality_scope = "symbol:AAPL:quality:bucket:01"
+        link_scope = "link:symbol:AAPL:quality:bucket:01"
+        stock_id = "stock:AAPL"
+        old_assessment_id = "data-availability-assessment:AAPL:pricePath"
+        new_assessment_id = "data-availability-assessment:AAPL:marketPrice"
+
+        def scope_row(
+            scope_id,
+            family,
+            generation,
+            node_ids,
+            dependencies=(),
+            endpoint_bindings=None,
+            relation_count=0,
+        ):
+            return {
+                "scopeId": scope_id,
+                "scopeType": "link" if scope_id.startswith("link:") else "symbol",
+                "scopeFamily": family,
+                "baseFingerprint": generation,
+                "fingerprint": generation,
+                "generationId": generation,
+                "semanticFingerprints": {family: generation},
+                "dependencyScopeIds": list(dependencies),
+                "entityCount": len(node_ids),
+                "relationCount": relation_count,
+                "nodeInventoryVersion": "scope-node-inventory-v1",
+                "nodeIds": list(node_ids),
+                "relationEndpointBindingVersion": "relation-endpoint-binding-v1",
+                "relationEndpointNodeIdsByScope": dict(endpoint_bindings or {}),
+            }
+
+        active_plan = [
+            scope_row(state_scope, "state", "state-g1", [stock_id]),
+            scope_row(quality_scope, "quality", "quality-g1", [old_assessment_id]),
+            scope_row(
+                link_scope,
+                "quality",
+                "link-g1",
+                [],
+                dependencies=[state_scope, quality_scope],
+                endpoint_bindings={
+                    state_scope: [stock_id],
+                    quality_scope: [old_assessment_id],
+                },
+                relation_count=1,
+            ),
+        ]
+        incoming_plan = [
+            scope_row(state_scope, "state", "state-g1", [stock_id]),
+            scope_row(quality_scope, "quality", "quality-g2", [new_assessment_id]),
+            scope_row(
+                link_scope,
+                "quality",
+                "link-g2",
+                [],
+                dependencies=[state_scope, quality_scope],
+                endpoint_bindings={
+                    state_scope: [stock_id],
+                    quality_scope: [new_assessment_id],
+                },
+                relation_count=1,
+            ),
+        ]
+        for plan, generation in ((active_plan, "link-g1"), (incoming_plan, "link-g2")):
+            link = next(item for item in plan if item["scopeId"] == link_scope)
+            link.update({
+                "scopeFamily": "assessment-link",
+                "baseFingerprint": "link-assertion-stable",
+                "fingerprint": generation,
+                "generationId": generation,
+                "semanticFingerprints": {"assessment-link": "link-assertion-stable"},
+            })
+        graph = PortfolioOntology(
+            "main",
+            entities=[
+                OntologyEntity(stock_id, "Apple", "stock", {
+                    "ontologyBox": "ABox",
+                    "symbol": "AAPL",
+                    "aboxScopeId": state_scope,
+                }),
+                OntologyEntity(new_assessment_id, "Market price quality", "data-quality", {
+                    "ontologyBox": "ABox",
+                    "symbol": "AAPL",
+                    "aboxScopeId": quality_scope,
+                }),
+            ],
+            relations=[
+                OntologyRelation(
+                    stock_id,
+                    new_assessment_id,
+                    "HAS_DATA_QUALITY",
+                    properties={"ontologyBox": "ABox", "aboxScopeId": link_scope},
+                ),
+            ],
+            worldview={"scopePlan": incoming_plan},
+        )
+
+        result = plan_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok",
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "scopePlan": active_plan,
+            },
+            ["AAPL"],
+            fact_slot_plan={
+                "enabled": True,
+                "status": "ready",
+                "targetSymbols": ["AAPL"],
+                "requestedFactFamilies": ["quality"],
+                "requestedFactFamiliesBySymbol": {"AAPL": ["quality"]},
+                "slotFamilies": ["quality"],
+                "slotFamiliesBySymbol": {"AAPL": ["quality"]},
+                "eventBoundaryAuthoritative": True,
+            },
+            source_graph_complete=True,
+        )
+
+        self.assertEqual("ready", result["status"])
+        self.assertTrue(result["manifestPatchContract"]["validation"]["valid"])
+        self.assertIn(link_scope, result["selectedIncomingScopeIds"])
+        trace = {
+            item["scopeId"]: item
+            for item in result["scopeSelectionTrace"]["selected"]
+        }
+        self.assertIn(
+            "repair-stale-relation-endpoint-binding",
+            trace[link_scope]["reasons"],
+        )
+
     def test_v8_online_migration_replaces_only_the_requested_subject(self):
         graph = PortfolioOntology(
             "main",

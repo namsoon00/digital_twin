@@ -18,6 +18,10 @@ from ...domain.hypothesis_outcome_contract import (
     outcome_contract_fingerprint,
 )
 from ...domain.investment_decision_actionability import investment_decision_actionability
+from ...domain.hypothesis_observation import (
+    ShadowHypothesisObservationEpisode,
+    hypothesis_observation_bucket,
+)
 from ...domain.rule_claim_contract import (
     RuleClaimContract,
     authored_outcome_contract_complete,
@@ -34,6 +38,7 @@ from ...domain.investment_reasoning import (
     ReasoningCase,
     SubjectDecisionCase,
 )
+from ...domain.investment_reasoning.disposition import RULE_COVERAGE_GAP_CANDIDATE
 
 
 PROJECTABLE_STAGES = {
@@ -201,7 +206,7 @@ def _hypothesis_scope_payloads(hypotheses) -> Dict[str, List[Dict[str, object]]]
     }
 
 
-def _selected_hypothesis_outcome_contract(
+def frozen_hypothesis_outcome_contract(
     hypothesis,
     inference_generation_id: str,
     effective_at: str,
@@ -281,6 +286,95 @@ def _selected_hypothesis_outcome_contract(
     }
 
 
+def shadow_hypothesis_observation_episodes(
+    reasoning_case: ReasoningCase,
+    subject_case: SubjectDecisionCase,
+) -> Tuple[ShadowHypothesisObservationEpisode, ...]:
+    """Freeze non-executable predictive candidates for research-only outcomes."""
+
+    candidate_set = subject_case.candidate_set
+    research_ids = set(candidate_set.eligible_hypothesis_ids) - set(
+        candidate_set.execution_eligible_hypothesis_ids
+    )
+    if not research_ids:
+        return ()
+    effective_at = canonical_investment_timestamp(
+        reasoning_case.fact_delta.source_observed_at
+        or reasoning_case.updated_at
+        or reasoning_case.created_at
+    )
+    episodes = []
+    for hypothesis in candidate_set.hypotheses:
+        if hypothesis.hypothesis_id not in research_ids:
+            continue
+        preliminary_contract, preliminary_readiness = frozen_hypothesis_outcome_contract(
+            hypothesis,
+            subject_case.synthesis.inference_generation_id,
+            effective_at,
+        )
+        horizons = []
+        for raw in preliminary_contract.get("outcomeHorizonMinutes") or []:
+            try:
+                value = int(float(raw))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                horizons.append(value)
+        independence_bucket = hypothesis_observation_bucket(
+            effective_at,
+            min(horizons) if horizons else 60,
+        )
+        outcome_contract, readiness = frozen_hypothesis_outcome_contract(
+            hypothesis,
+            subject_case.synthesis.inference_generation_id,
+            effective_at,
+            source_fact_independence_key=independence_bucket,
+        )
+        if not outcome_contract:
+            outcome_contract = preliminary_contract
+            readiness = preliminary_readiness
+        claim = RuleClaimContract.from_dict(hypothesis.claim_contract)
+        claim_identity = (
+            claim.claim_contract_id
+            or hypothesis.causal_signature
+            or hypothesis.family_id
+            or hypothesis.hypothesis_id
+        )
+        payload = _hypothesis_payload(hypothesis)
+        stance = str(payload.get("stance") or "context")
+        episode_id = stable_id(
+            "shadow-hypothesis-observation",
+            subject_case.account_id,
+            subject_case.symbol,
+            claim_identity,
+            independence_bucket,
+        )
+        episodes.append(ShadowHypothesisObservationEpisode(
+            episode_id=episode_id,
+            candidate_set_id=candidate_set.candidate_set_id,
+            account_id=subject_case.account_id,
+            symbol=subject_case.symbol,
+            hypothesis_id=hypothesis.hypothesis_id,
+            claim_identity=claim_identity,
+            family_id=hypothesis.family_id,
+            claim_contract_id=claim.claim_contract_id,
+            source_abox_snapshot_id=subject_case.synthesis.source_abox_snapshot_id,
+            inference_generation_id=subject_case.synthesis.inference_generation_id,
+            observed_from_at=effective_at,
+            independence_bucket=independence_bucket,
+            market_independence_key=str(outcome_contract.get("marketIndependenceKey") or ""),
+            account_independence_key=str(outcome_contract.get("accountIndependenceKey") or ""),
+            candidate_action=hypothesis.candidate_action or "NO_ACTION",
+            stance=stance,
+            market=hypothesis.market_id,
+            outcome_contract=outcome_contract,
+            hypothesis=payload,
+            readiness=readiness,
+            status="scheduled" if readiness.get("eligible") else "excluded",
+        ))
+    return tuple(episodes)
+
+
 def decision_episode_from_reasoning_case(
     reasoning_case: ReasoningCase,
     account_id: str,
@@ -348,7 +442,7 @@ def decision_episode_from_reasoning_case(
         symbol,
         list(reasoning_case.fact_delta.fact_types),
     ) if reasoning_case.fact_delta.source_event_ids else inference_generation_id
-    outcome_contract, calibration_policy = _selected_hypothesis_outcome_contract(
+    outcome_contract, calibration_policy = frozen_hypothesis_outcome_contract(
         selected,
         inference_generation_id,
         decided_at,
@@ -560,6 +654,164 @@ def decision_episode_outcome_contract_readiness(episode: DecisionEpisode) -> Dic
         "contractFingerprint": actual_fingerprint,
         "expectedContractFingerprint": expected_fingerprint,
         "horizonCount": len(contract.get("outcomeHorizonMinutes") or []),
+    }
+
+
+def hypothesis_coverage_gap_request_from_subject_case(
+    reasoning_case: ReasoningCase,
+    subject_case: SubjectDecisionCase,
+) -> Dict[str, object]:
+    """Queue research only from an exact, evidence-bearing rule-match proof."""
+
+    synthesis = subject_case.synthesis
+    if synthesis.disposition_code != RULE_COVERAGE_GAP_CANDIDATE:
+        return {}
+    selected_rule_id = _text(synthesis.selected_rule_id)
+    if not selected_rule_id:
+        return {}
+
+    traces = []
+    relations = []
+    source_snapshot_ids = []
+    inference = reasoning_case.inference_result
+    for evaluation in list(getattr(inference, "rule_evaluations", ()) or ()):
+        if _text(evaluation.account_id) != _text(subject_case.account_id):
+            continue
+        if _text(evaluation.rule_id) != selected_rule_id:
+            continue
+        if _text(evaluation.inference_generation_id) != _text(
+            subject_case.inference_generation_id
+        ):
+            continue
+        proof = evaluation.proof
+        if (
+            not evaluation.matched
+            or not proof.matched
+            or _text(proof.rule_id) != selected_rule_id
+            or _text(proof.status).lower() in {"", "unavailable", "legacy-unavailable"}
+            or not (proof.conditions or proof.evidence_ids)
+        ):
+            continue
+        source_snapshot_id = _text(evaluation.source_abox_snapshot_id)
+        if source_snapshot_id and source_snapshot_id not in source_snapshot_ids:
+            source_snapshot_ids.append(source_snapshot_id)
+        trace_id = _text(proof.trace_id or proof.proof_id) or stable_id(
+            "coverage-gap-rule-proof",
+            subject_case.account_id,
+            subject_case.symbol,
+            selected_rule_id,
+        )
+        traces.append({
+            **proof.to_dict(),
+            "id": trace_id,
+            "ruleId": selected_rule_id,
+            "selected": bool(evaluation.selected),
+        })
+        for condition in proof.conditions:
+            relation_id = _text(condition.relation_id) or stable_id(
+                "coverage-gap-condition-evidence",
+                subject_case.symbol,
+                selected_rule_id,
+                condition.condition_id,
+                condition.field,
+                condition.source,
+            )
+            relations.append({
+                "id": relation_id,
+                "type": "RULE_CONDITION_EVIDENCE",
+                "ruleId": selected_rule_id,
+                "conditionId": condition.condition_id,
+                "field": condition.field,
+                "operator": condition.operator,
+                "expectedValue": condition.expected_value,
+                "observedValue": condition.observed_value,
+                "source": condition.source,
+                "sourceAsOf": condition.source_as_of,
+                "freshness": condition.freshness,
+            })
+        known_relation_ids = {_text(item.get("id")) for item in relations}
+        relations.extend(
+            {
+                "id": evidence_id,
+                "type": "GRAPH_EVIDENCE_REFERENCE",
+                "ruleId": selected_rule_id,
+            }
+            for evidence_id in proof.evidence_ids
+            if _text(evidence_id) and _text(evidence_id) not in known_relation_ids
+        )
+
+    if not traces or not relations:
+        return {}
+    gap_dimensions = sorted({
+        (item.code, item.state, item.decision_impact)
+        for item in subject_case.candidate_set.data_gaps
+    })
+    gap_fingerprint = stable_id(
+        "rule-hypothesis-coverage-gap",
+        subject_case.symbol,
+        selected_rule_id,
+        synthesis.investment_view_action,
+        gap_dimensions,
+    )
+    question_id = stable_id(
+        "investment-question",
+        subject_case.account_id,
+        subject_case.symbol,
+        selected_rule_id,
+        "rule-hypothesis-coverage-gap",
+    )
+    request_id = stable_id(
+        "hypothesis-proposal-request",
+        subject_case.account_id,
+        subject_case.symbol,
+        gap_fingerprint,
+    )
+    return {
+        "requestId": request_id,
+        "accountId": subject_case.account_id,
+        "symbol": subject_case.symbol,
+        "gapFingerprint": gap_fingerprint,
+        "gapReasons": ["matched-predictive-rule-without-materialized-hypothesis"],
+        "sourceSubjectDecisionCaseId": subject_case.subject_case_id,
+        "sourceDecisionEpisodeId": "",
+        "inferenceGenerationId": subject_case.inference_generation_id,
+        "evidenceReadiness": {
+            "status": "verified-rule-match-proof",
+            "traceCount": len(traces),
+            "relationCount": len(relations),
+            "sourceAboxSnapshotIds": source_snapshot_ids,
+        },
+        "question": {
+            "questionId": question_id,
+            "text": (
+                subject_case.symbol + "에서 " + selected_rule_id
+                + " 규칙이 성립했지만 가설이 생성되지 않은 원인과 검증 가능한 인과 가설 후보는 무엇인가?"
+            ),
+            "intent": "rule-hypothesis-coverage-repair",
+            "subjectSymbol": subject_case.symbol,
+            "subjectName": subject_case.symbol,
+            "horizon": "multi-horizon",
+            "accountId": subject_case.account_id,
+            "askedAt": subject_case.created_at,
+            "source": "reasoning-coverage-gap",
+        },
+        "hypothesisSet": {
+            "questionId": question_id,
+            "hypotheses": [],
+            "candidateSetId": subject_case.candidate_set.candidate_set_id,
+            "dispositionCode": synthesis.disposition_code,
+            "selectedRuleId": selected_rule_id,
+            "dataGaps": [item.to_dict() for item in subject_case.candidate_set.data_gaps],
+        },
+        "researchRun": {},
+        "relationContext": {
+            "inferenceGenerationId": subject_case.inference_generation_id,
+            "graphStoreInference": {
+                "relations": relations[:40],
+                "traces": traces[:20],
+            },
+        },
+        "governance": "review-required-no-automatic-rulebox-deployment",
     }
 
 

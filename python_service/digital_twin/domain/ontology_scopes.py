@@ -3025,6 +3025,126 @@ def select_target_scoped_manifest_patch(
                     )
         changed = len(selected) != before
 
+    # Fact-slot ownership can deliberately defer a relation whose assertion
+    # belongs to another source family. That is safe only while the retained
+    # relation still binds to nodes present in the final endpoint inventories.
+    # A complete source gives us the current relation and endpoint rows, so
+    # repair this mixed-generation state atomically instead of discovering it
+    # after the patch has already reached persistence validation.
+    integrity_repaired_relation_scope_ids: Set[str] = set()
+    integrity_repaired_endpoint_scope_ids: Set[str] = set()
+
+    def prospective_scope_entry(scope_id: str) -> Mapping[str, object]:
+        if scope_id in selected:
+            return incoming.get(scope_id) or {}
+        return retained_active_by_scope.get(scope_id) or {}
+
+    def relation_endpoint_bindings(
+        item: Mapping[str, object],
+    ) -> Dict[str, Set[str]]:
+        if (
+            _clean(item.get("relationEndpointBindingVersion"))
+            != RELATION_ENDPOINT_BINDING_VERSION
+        ):
+            return {}
+        raw = item.get("relationEndpointNodeIdsByScope")
+        if not isinstance(raw, Mapping):
+            return {}
+        return {
+            _clean(scope_id): {
+                _clean(node_id)
+                for node_id in node_ids or []
+                if _clean(node_id)
+            }
+            for scope_id, node_ids in raw.items()
+            if _clean(scope_id)
+        }
+
+    if source_graph_complete:
+        changed = True
+        while changed:
+            changed = False
+            final_scope_ids = (
+                set(retained_active_by_scope)
+                | selected
+            ) - retired_scope_set
+            for relation_scope_id in sorted(final_scope_ids):
+                relation_entry = prospective_scope_entry(relation_scope_id)
+                if (
+                    _scope_type(relation_scope_id) != "link"
+                    or int(relation_entry.get("relationCount") or 0) <= 0
+                ):
+                    continue
+                bindings = relation_endpoint_bindings(relation_entry)
+                stale_bindings = []
+                for endpoint_scope_id, endpoint_node_ids in bindings.items():
+                    endpoint_entry = prospective_scope_entry(endpoint_scope_id)
+                    available_node_ids = {
+                        _clean(node_id)
+                        for node_id in endpoint_entry.get("nodeIds") or []
+                        if _clean(node_id)
+                    }
+                    if endpoint_scope_id not in final_scope_ids or not endpoint_node_ids.issubset(
+                        available_node_ids
+                    ):
+                        stale_bindings.append((endpoint_scope_id, endpoint_node_ids))
+                if not stale_bindings:
+                    continue
+
+                incoming_relation = incoming.get(relation_scope_id) or {}
+                if not incoming_relation:
+                    continue
+                if relation_scope_id not in selected:
+                    selected.add(relation_scope_id)
+                    forced_deferred_relation_scope_ids.discard(relation_scope_id)
+                    integrity_repaired_relation_scope_ids.add(relation_scope_id)
+                    selection_reasons.setdefault(relation_scope_id, set()).add(
+                        "repair-stale-relation-endpoint-binding"
+                    )
+                    changed = True
+
+                for endpoint_scope_id, endpoint_node_ids in relation_endpoint_bindings(
+                    incoming_relation
+                ).items():
+                    endpoint_entry = prospective_scope_entry(endpoint_scope_id)
+                    available_node_ids = {
+                        _clean(node_id)
+                        for node_id in endpoint_entry.get("nodeIds") or []
+                        if _clean(node_id)
+                    }
+                    if endpoint_node_ids.issubset(available_node_ids):
+                        continue
+                    incoming_endpoint = incoming.get(endpoint_scope_id) or {}
+                    incoming_node_ids = {
+                        _clean(node_id)
+                        for node_id in incoming_endpoint.get("nodeIds") or []
+                        if _clean(node_id)
+                    }
+                    if (
+                        endpoint_scope_id not in selected
+                        and endpoint_node_ids.issubset(incoming_node_ids)
+                    ):
+                        selected.add(endpoint_scope_id)
+                        integrity_repaired_endpoint_scope_ids.add(endpoint_scope_id)
+                        selection_reasons.setdefault(endpoint_scope_id, set()).add(
+                            "repair-missing-relation-endpoint-inventory"
+                        )
+                        changed = True
+
+        repaired_scope_ids = (
+            integrity_repaired_relation_scope_ids
+            | integrity_repaired_endpoint_scope_ids
+        )
+        if repaired_scope_ids and bool(fact_slot_selection.get("enabled")):
+            fact_slot_selection["selectedScopeIds"] = sorted(selected)
+            fact_slot_selection["deferredScopeIds"] = sorted(
+                set(fact_slot_selection.get("deferredScopeIds") or [])
+                - repaired_scope_ids
+            )
+            fact_slot_selection["integrityRepairScopeIds"] = sorted(
+                repaired_scope_ids
+            )
+
     if incomplete_source_endpoint_scopes:
         return {
             **base,
@@ -3222,6 +3342,12 @@ def select_target_scoped_manifest_patch(
             "relationRebindRootScopeCount": len(relation_rebind_root_scope_ids),
             "replacementSymbols": sorted(replacement_symbols),
             "replacementRootScopeIds": replacement_root_scope_ids,
+            "integrityRepairedRelationScopeIds": sorted(
+                integrity_repaired_relation_scope_ids
+            ),
+            "integrityRepairedEndpointScopeIds": sorted(
+                integrity_repaired_endpoint_scope_ids
+            ),
         },
         "scopeTopologyMigration": topology_migration,
     }

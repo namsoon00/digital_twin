@@ -8,6 +8,18 @@ from digital_twin.domain.hypothesis_outcome_contract import (
 )
 from digital_twin.application.investment_reasoning.episode_projection import (
     decision_episode_outcome_contract_readiness,
+    hypothesis_coverage_gap_request_from_subject_case,
+    shadow_hypothesis_observation_episodes,
+)
+from digital_twin.domain.hypothesis_observation import (
+    ShadowHypothesisObservationEpisode,
+)
+from digital_twin.domain.investment_reasoning import (
+    ConditionEvidence,
+    DataGap,
+    HypothesisRecord,
+    RuleEvaluationRecord,
+    RuleMatchProof,
 )
 from digital_twin.domain.hypothesis_outcome_evaluation import (
     evaluate_hypothesis_outcome,
@@ -128,7 +140,10 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         widened = ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS)
 
         self.assertEqual(
-            ["investment_decision_outcome_targets.contract_fingerprint"],
+            [
+                "investment_decision_outcome_targets.contract_fingerprint",
+                "investment_hypothesis_observation_targets.contract_fingerprint",
+            ],
             widened,
         )
         self.assertIn(
@@ -150,6 +165,258 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertEqual("scheduled", result["status"])
         self.assertEqual(2, result["targetCount"])
         self.assertEqual(2, len(inserts))
+
+    def test_shadow_hypothesis_projection_deduplicates_repeated_snapshot_generation(self):
+        claim_contract = {
+            "claimContractId": "claim:trend:1",
+            "ruleId": "graph.trend.test.v1",
+            "claimType": "market-hypothesis",
+            "decisionAuthority": "conditional-investment-evidence",
+            "evidenceIndependenceKey": "trend-price-path",
+            "predictionTarget": "price-path",
+            "expectedDirection": "support",
+            "expectedOutcome": "positive return",
+            "outcomeMetric": "instrumentReturnPct",
+            "falsificationContract": "opposite return",
+            "outcomeContract": predictive_contract(),
+        }
+        hypothesis = HypothesisRecord(
+            hypothesis_id="hypothesis:trend:1",
+            family_id="trend-continuation",
+            label="추세가 이어진다",
+            candidate_action="ADD",
+            supporting_rule_ids=("graph.trend.test.v1",),
+            claim_contract=claim_contract,
+            qualification={"status": "shadow"},
+            account_id="account:1",
+            subject_symbol="NVDA",
+            inference_generation_id="generation:1",
+        )
+
+        def projection(observed_at, generation_id):
+            candidate_set = SimpleNamespace(
+                candidate_set_id="candidate:" + generation_id,
+                hypotheses=(hypothesis,),
+                eligible_hypothesis_ids=(hypothesis.hypothesis_id,),
+                execution_eligible_hypothesis_ids=(),
+            )
+            subject_case = SimpleNamespace(
+                account_id="account:1",
+                symbol="NVDA",
+                candidate_set=candidate_set,
+                synthesis=SimpleNamespace(
+                    source_abox_snapshot_id="abox:" + generation_id,
+                    inference_generation_id=generation_id,
+                ),
+            )
+            reasoning_case = SimpleNamespace(
+                fact_delta=SimpleNamespace(source_observed_at=observed_at),
+                updated_at=observed_at,
+                created_at=observed_at,
+            )
+            return shadow_hypothesis_observation_episodes(
+                reasoning_case,
+                subject_case,
+            )[0]
+
+        first = projection("2026-08-25T00:01:00Z", "generation:1")
+        repeated = projection("2026-08-25T00:59:00Z", "generation:2")
+
+        self.assertTrue(first.observation_eligible)
+        self.assertEqual("scheduled", first.status)
+        self.assertEqual(first.episode_id, repeated.episode_id)
+        self.assertEqual(first.independence_bucket, repeated.independence_bucket)
+        self.assertEqual(first.market_independence_key, repeated.market_independence_key)
+
+    def test_shadow_hypothesis_target_and_outcome_are_research_only(self):
+        contract = predictive_contract()
+        contract["marketIndependenceKey"] = "market-event:1"
+        contract["accountIndependenceKey"] = "account-event:1"
+        episode_value = ShadowHypothesisObservationEpisode(
+            episode_id="shadow:1",
+            candidate_set_id="candidate:1",
+            account_id="account:1",
+            symbol="BTC",
+            hypothesis_id="hypothesis:trend:1",
+            claim_identity="claim:trend:1",
+            family_id="trend-continuation",
+            claim_contract_id="claim:trend:1",
+            observed_from_at="2026-08-25T00:00:00Z",
+            independence_bucket="2026-08-25T00:00:00Z/60m",
+            market_independence_key="market-event:1",
+            account_independence_key="account-event:1",
+            candidate_action="ADD",
+            stance="support",
+            market="CRYPTO",
+            outcome_contract=contract,
+            hypothesis={
+                "hypothesisId": "hypothesis:trend:1",
+                "familyId": "trend-continuation",
+                "stance": "support",
+            },
+            readiness={"eligible": True},
+        )
+        store = self.store()
+        connection = RecordingConnection()
+
+        schedule = store.sync_shadow_hypothesis_observation_targets(
+            connection,
+            episode_value,
+            "2026-08-25T00:01:00Z",
+        )
+
+        self.assertEqual("scheduled", schedule["status"])
+        self.assertEqual(2, schedule["targetCount"])
+        self.assertEqual(2, len([
+            sql for sql, _params in connection.statements
+            if sql.startswith("INSERT INTO investment_hypothesis_observation_targets")
+        ]))
+
+        @contextmanager
+        def transaction():
+            yield connection
+
+        store.transaction = transaction
+        store.shadow_observation_episodes_by_ids = lambda _ids: {
+            episode_value.episode_id: episode_value
+        }
+        outcomes = store.record_shadow_hypothesis_outcome_observations(
+            "account:1",
+            [{
+                "episodeId": episode_value.episode_id,
+                "horizonMinutes": 60,
+                "observedAt": "2026-08-25T01:05:00Z",
+                "facts": {
+                    "currentPrice": 101,
+                    "decisionPrice": 100,
+                    "sourceAsOf": "2026-08-25T01:05:00Z",
+                    "observationBasis": "historical-market-time-series",
+                    "dataQuality": "fresh",
+                },
+            }],
+        )
+
+        self.assertEqual(1, len(outcomes))
+        self.assertEqual(
+            "directionally-corroborated",
+            outcomes[0].selected_hypothesis_status,
+        )
+        self.assertEqual(
+            "shadow-hypothesis",
+            outcomes[0].payload["episodeKind"],
+        )
+        self.assertTrue(any(
+            sql.startswith("INSERT INTO investment_hypothesis_observation_outcomes")
+            for sql, _params in connection.statements
+        ))
+
+    def test_unproven_rule_without_hypothesis_does_not_create_research_request(self):
+        synthesis = SimpleNamespace(
+            disposition_code="RULE_COVERAGE_GAP_CANDIDATE",
+            selected_rule_id="graph.trend.coverage.test.v1",
+            investment_view_action="ADD",
+        )
+        subject_case = SimpleNamespace(
+            subject_case_id="subject:generation:1",
+            account_id="account:1",
+            symbol="NVDA",
+            inference_generation_id="generation:1",
+            created_at="2026-08-25T00:00:00Z",
+            synthesis=synthesis,
+            candidate_set=SimpleNamespace(
+                candidate_set_id="candidate:generation:1",
+                data_gaps=(DataGap("investorFlow", state="missing"),),
+            ),
+        )
+
+        request = hypothesis_coverage_gap_request_from_subject_case(
+            SimpleNamespace(
+                inference_result=SimpleNamespace(rule_evaluations=()),
+            ),
+            subject_case,
+        )
+
+        self.assertEqual({}, request)
+
+    def test_evidence_backed_coverage_gap_creates_deduplicated_research_request(self):
+        def request_for(generation_id):
+            synthesis = SimpleNamespace(
+                disposition_code="RULE_COVERAGE_GAP_CANDIDATE",
+                selected_rule_id="graph.trend.coverage.test.v1",
+                investment_view_action="ADD",
+            )
+            candidate_set = SimpleNamespace(
+                candidate_set_id="candidate:" + generation_id,
+                data_gaps=(DataGap("investorFlow", state="missing"),),
+            )
+            subject_case = SimpleNamespace(
+                subject_case_id="subject:" + generation_id,
+                account_id="account:1",
+                symbol="NVDA",
+                inference_generation_id=generation_id,
+                created_at="2026-08-25T00:00:00Z",
+                synthesis=synthesis,
+                candidate_set=candidate_set,
+            )
+            proof = RuleMatchProof(
+                proof_id="proof:" + generation_id,
+                rule_id="graph.trend.coverage.test.v1",
+                trace_id="trace:" + generation_id,
+                subject_id="NVDA",
+                matched=True,
+                conditions=(ConditionEvidence(
+                    condition_id="ma20-positive",
+                    field="ma20GapPct",
+                    operator=">",
+                    expected_value=0,
+                    observed_value=8.6,
+                    relation_id="relation:price-recovery",
+                    source="KIS",
+                    source_as_of="2026-08-25T00:00:00Z",
+                    freshness="fresh",
+                    evidence_ids=("relation:price-recovery",),
+                ),),
+                evidence_ids=("relation:price-recovery",),
+                status="available",
+            )
+            reasoning_case = SimpleNamespace(
+                inference_result=SimpleNamespace(rule_evaluations=(
+                    RuleEvaluationRecord(
+                        evaluation_id="evaluation:" + generation_id,
+                        account_id="account:1",
+                        rule_id="graph.trend.coverage.test.v1",
+                        source_abox_snapshot_id="abox:" + generation_id,
+                        inference_generation_id=generation_id,
+                        matched=True,
+                        selected=True,
+                        proof=proof,
+                    ),
+                )),
+            )
+            return hypothesis_coverage_gap_request_from_subject_case(
+                reasoning_case,
+                subject_case,
+            )
+
+        first = request_for("generation:1")
+        repeated = request_for("generation:2")
+
+        self.assertTrue(first)
+        self.assertEqual(first["requestId"], repeated["requestId"])
+        self.assertEqual(first["gapFingerprint"], repeated["gapFingerprint"])
+        self.assertEqual([], first["hypothesisSet"]["hypotheses"])
+        self.assertEqual(
+            "RULE_CONDITION_EVIDENCE",
+            first["relationContext"]["graphStoreInference"]["relations"][0]["type"],
+        )
+        self.assertEqual(
+            "verified-rule-match-proof",
+            first["evidenceReadiness"]["status"],
+        )
+        self.assertEqual(
+            "review-required-no-automatic-rulebox-deployment",
+            first["governance"],
+        )
 
     def test_final_decision_contract_readiness_requires_exact_fingerprint(self):
         contract = predictive_contract()

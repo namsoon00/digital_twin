@@ -73,7 +73,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Durable outcome scheduling, source-time admission, monitor-owned
         # observation, and compact long-history calibration independently
         # protect the feedback path that qualifies those hypotheses.
-        self.assertLessEqual(total, 951)
+        # Reasoning disposition ownership, evidence-backed coverage repair,
+        # shadow hypothesis outcomes, atomic relation-generation rebind, and
+        # persisted-snapshot material routing now protect the customer alert
+        # boundary and the queue ingress that feeds it.
+        self.assertLessEqual(total, 964)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

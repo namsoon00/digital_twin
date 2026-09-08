@@ -216,6 +216,24 @@ class InvestmentCaseQueryService:
         judgment = item_dict(case.get("aiJudgment"))
         stage = text(case.get("stage")).upper() or "READY"
         symbol = text(case.get("symbol")).upper()
+        disposition_code = text(
+            candidate_set.get("dispositionCode")
+            or synthesis.get("disposition_code")
+            or synthesis.get("dispositionCode")
+        ).upper()
+        rule_coverage_state = text(
+            candidate_set.get("ruleCoverageState")
+            or synthesis.get("rule_coverage_state")
+            or synthesis.get("ruleCoverageState")
+        ).lower()
+        data_gaps = [
+            dict(item)
+            for item in candidate_set.get("dataGaps")
+            or synthesis.get("data_gaps")
+            or synthesis.get("dataGaps")
+            or []
+            if isinstance(item, Mapping)
+        ][:12]
         action = text(
             final.get("action")
             or synthesis.get("investment_view_action")
@@ -224,7 +242,12 @@ class InvestmentCaseQueryService:
             or synthesis.get("graphCandidateAction")
             or "NO_ACTION"
         ).upper()
-        blocked = stage == "BLOCKED" or bool(synthesis.get("judgement_blocked") or synthesis.get("judgementBlocked"))
+        blocked = bool(
+            stage == "BLOCKED"
+            or synthesis.get("judgement_blocked")
+            or synthesis.get("judgementBlocked")
+            or disposition_code in {"DATA_SOURCE_FAILURE", "JUDGEMENT_BLOCKED"}
+        )
         has_final = bool(final)
         has_candidate = bool(
             candidate_set.get("eligibleHypothesisIds")
@@ -236,6 +259,12 @@ class InvestmentCaseQueryService:
             attention_state, attention_label = "blocked", "판단 보류"
         elif has_final and action in {"BUY", "ADD", "TRIM", "SELL", "AVOID"}:
             attention_state, attention_label = "action", "행동 검토"
+        elif disposition_code == "RULE_COVERAGE_GAP_CANDIDATE":
+            attention_state, attention_label = "observe", "내부 가설 보완 중"
+        elif disposition_code in {"HYPOTHESIS_QUALIFICATION_PENDING", "HYPOTHESIS_RESEARCH_ONLY"}:
+            attention_state, attention_label = "observe", "가설 성과 관측 중"
+        elif disposition_code == "WAITING_FOR_SCHEDULED_SOURCE":
+            attention_state, attention_label = "observe", "예정 자료 대기"
         elif has_candidate:
             attention_state, attention_label = "review", "TypeDB 후보 검토"
         else:
@@ -243,6 +272,12 @@ class InvestmentCaseQueryService:
         readiness = "blocked" if blocked else "pass" if has_final else "warning"
         next_checks = list(synthesis.get("next_checks") or synthesis.get("nextChecks") or [])
         missing_data = list(candidate_set.get("missingData") or [])
+        if not missing_data:
+            missing_data = [
+                text(item.get("label") or item.get("code"))
+                for item in data_gaps
+                if text(item.get("label") or item.get("code"))
+            ]
         hypotheses = [
             {
                 "hypothesisId": text(item.get("hypothesisId") or item.get("hypothesis_id")),
@@ -257,12 +292,44 @@ class InvestmentCaseQueryService:
         ][:8]
         selected_rule = text(synthesis.get("selected_rule_id") or synthesis.get("selectedRuleId"))
         candidate_label = action if action != "NO_ACTION" else "관계 관찰"
-        headline = (
+        disposition_headlines = {
+            "RULE_COVERAGE_GAP_CANDIDATE": "규칙은 성립했지만 가설 생성이 누락되어 내부 보완 작업을 등록했습니다.",
+            "HYPOTHESIS_QUALIFICATION_PENDING": "가설은 성립했으며 독립적인 사후 성과를 관측 중입니다.",
+            "HYPOTHESIS_RESEARCH_ONLY": "현재 가설은 연구용이며 투자 판단에는 아직 사용하지 않습니다.",
+            "WAITING_FOR_SCHEDULED_SOURCE": "필수 자료의 예정 발표 시각을 기다리고 있습니다.",
+            "DATA_SOURCE_FAILURE": "필수 원천 데이터 조회 실패로 이번 투자 판단을 차단했습니다.",
+            "JUDGEMENT_BLOCKED": "필수 판단 조건이 충족되지 않아 이번 판단을 차단했습니다.",
+            "NO_MATERIAL_PREDICTIVE_RULE_MATCH": "현재 행동을 바꿀 예측 규칙이 성립하지 않았습니다.",
+        }
+        headline = disposition_headlines.get(disposition_code) or (
             "AI가 확정한 " + candidate_label + " 의견"
             if has_final
             else "TypeDB가 " + candidate_label + " 후보를 생성했으며 최종 행동은 아직 확정하지 않았습니다."
             if has_candidate
             else "TypeDB 추론은 완료됐지만 행동을 바꿀 가설은 성립하지 않았습니다."
+        )
+        expected_at = next((
+            text(item.get("expected_at") or item.get("expectedAt"))
+            for item in data_gaps
+            if text(item.get("expected_at") or item.get("expectedAt"))
+        ), "")
+        default_next_actions = {
+            "RULE_COVERAGE_GAP_CANDIDATE": "내부 가설 제안과 검증이 끝날 때까지 투자 행동에 사용하지 않습니다.",
+            "HYPOTHESIS_QUALIFICATION_PENDING": "shadow 관측이 최소 표본을 채우면 가설 자격을 다시 평가합니다.",
+            "HYPOTHESIS_RESEARCH_ONLY": "가설 승인과 사후 성과 검증이 끝나면 판단 후보로 다시 평가합니다.",
+            "WAITING_FOR_SCHEDULED_SOURCE": (
+                expected_at + " 이후 새 자료를 수집해 다시 판단합니다."
+                if expected_at else "예정 자료가 공개된 뒤 자동으로 다시 판단합니다."
+            ),
+            "DATA_SOURCE_FAILURE": "공급자 복구와 최신 원천 데이터 확인 뒤 자동으로 다시 판단합니다.",
+            "JUDGEMENT_BLOCKED": "차단한 필수 조건이 해소된 뒤 자동으로 다시 판단합니다.",
+            "NO_MATERIAL_PREDICTIVE_RULE_MATCH": "새 중요 근거나 임계값 전이가 생길 때만 다시 판단합니다.",
+        }
+        next_action = text(
+            next_checks[0]
+            if next_checks
+            else default_next_actions.get(disposition_code)
+            or "다음 사실 변경에서 같은 가설과 반대 근거를 다시 비교합니다."
         )
         scope_account = text(case.get("accountId")) or "default"
         canonical = self._with_canonical_subject({
@@ -287,7 +354,7 @@ class InvestmentCaseQueryService:
             "readinessState": readiness,
             "readinessLabel": "판단 가능" if has_final else "최종 판단 전" if not blocked else "판단 보류",
             "headline": headline,
-            "nextAction": text(next_checks[0] if next_checks else "다음 사실 변경에서 같은 가설과 반대 근거를 다시 비교합니다."),
+            "nextAction": next_action,
             "decidedAt": text(case.get("completedAt") or case.get("updatedAt")),
             "updatedAt": text(case.get("updatedAt") or case.get("createdAt")),
             "facts": {"dataState": text(synthesis.get("data_state") or synthesis.get("dataState")) or "partial"},
@@ -300,6 +367,8 @@ class InvestmentCaseQueryService:
                 "validationState": "ready" if has_final else "conditional",
                 "state": readiness,
                 "stateLabel": "AI 최종 판단" if has_final else "TypeDB 후보",
+                "dispositionCode": disposition_code,
+                "ruleCoverageState": rule_coverage_state,
             },
             "outcome": {"state": "pending", "count": 0},
             "statusDimensions": [
@@ -337,6 +406,9 @@ class InvestmentCaseQueryService:
                 "allowedActions": list(candidate_set.get("allowedActions") or []),
                 "blockedActions": list(candidate_set.get("blockedActions") or []),
                 "missingData": missing_data[:8],
+                "dataGaps": data_gaps,
+                "dispositionCode": disposition_code,
+                "ruleCoverageState": rule_coverage_state,
                 "nextChecks": next_checks[:8],
                 "hypotheses": hypotheses,
             },

@@ -423,6 +423,58 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
         self.assertEqual("target", result["endpointRole"])
         self.assertEqual([self.evidence_scope], result["knownEndpointScopeIds"])
 
+    def test_manifest_declared_current_endpoint_is_candidate_integrity_companion(self):
+        benchmark_scope = "reference:benchmark-index"
+        benchmark_generation = "abox-current-cow:benchmark-stable"
+        benchmark = self._node(
+            "benchmark-index:benchmark:KOSPI",
+            "benchmark-index",
+            benchmark_scope,
+            benchmark_generation,
+            symbol="KOSPI",
+        )
+        relation = self._relation(
+            "stock:MSTR",
+            benchmark["id"],
+            self.new_link_generation,
+        )
+        relation["type"] = "BENCHMARKED_BY"
+        relation["targetStorageId"] = ontology_storage_id(
+            benchmark,
+            benchmark["id"],
+            "node",
+        )
+        plan = [dict(item) for item in self.physical_scope_plan]
+        plan.append({
+            "scopeId": benchmark_scope,
+            "scopeType": "reference",
+            "generationId": benchmark_generation,
+            "logicalGenerationId": "logical-benchmark-stable",
+            "physicalGenerationChanged": False,
+            "entityCount": 1,
+            "relationCount": 0,
+            "nodeInventoryVersion": "scope-node-inventory-v1",
+            "nodeIds": [benchmark["id"]],
+        })
+
+        result = TypeDBOntologyGraphRepository.scoped_abox_candidate_persistence_rows(
+            [self.current_stock, benchmark],
+            [relation],
+            self._active_context(),
+            plan,
+            [self.state_scope, self.link_scope],
+            [self.state_scope, self.link_scope],
+            [],
+            self.manifest_id,
+        )
+
+        self.assertEqual("ok", result["status"])
+        candidate_node_ids = {row["id"] for row in result["candidateNodeRows"]}
+        self.assertIn(benchmark["id"], candidate_node_ids)
+        self.assertEqual([benchmark["id"]], result["integrityCompanionNodeIds"])
+        self.assertEqual(1, result["integrityCompanionNodeCount"])
+        self.assertNotIn(benchmark["id"], {row["id"] for row in result["nodeRows"]})
+
     def test_selected_relation_can_reuse_unchanged_active_endpoint(self):
         current_relation = self._relation(
             "stock:MSTR",

@@ -5,6 +5,11 @@ from .market_hours import evaluate_market_hours
 from .message_types import INVESTMENT_INSIGHT, NEWS_DIGEST, ONTOLOGY_OBSERVATION_FOLLOWUP, SYSTEM_MESSAGE_TYPES
 from .context_observation_notifications import typedb_context_observation_contract
 from .notification_ai_context import is_graph_backed_relation_context
+from .investment_reasoning.disposition import (
+    disposition_code_from_context,
+    reasoning_disposition_delivery,
+    reasoning_disposition_requires_ai,
+)
 from .notification_ai_delivery import (
     VERIFIED_MARKET_TRANSITION_TRIGGER_IDS,
     holding_review_baseline_is_deliverable,
@@ -207,11 +212,15 @@ def typedb_interpretation_eligible(context: Dict[str, object]) -> bool:
         or ""
     ).strip().upper()
     ai_state = str(synthesis.get("ai_state") or synthesis.get("aiState") or "").strip().upper()
+    disposition_code = disposition_code_from_context(context)
+    if disposition_code:
+        return reasoning_disposition_requires_ai(context)
     return bool(
         decision.get("aiInterpretationEligible")
-        or envelope.get("status") == "NO_ELIGIBLE_THESIS"
+        or ai_state == "JUDGEMENT_READY"
+    ) and not bool(
+        envelope.get("status") == "NO_ELIGIBLE_THESIS"
         or hypothesis_state == "NO_ELIGIBLE_THESIS"
-        or ai_state == "INTERPRETATION_READY"
     )
 
 
@@ -1045,6 +1054,13 @@ def evaluate_notification_rule(job: NotificationJob, config: NotificationRuleCon
             decision.gate_reason = (
                 "TypeDB가 행동 판단과 분리된 참고용 관계 변화를 검증했습니다. "
                 "매수·매도 결론 없이 확인된 변화와 자료 한계만 전달합니다."
+            )
+            return decision
+        disposition_gate = reasoning_disposition_delivery(job.context or {})
+        if disposition_gate.get("decision") == "suppress":
+            decision.mark_suppressed(
+                str(disposition_gate.get("suppressionReason") or "reasoning_disposition_web_only"),
+                str(disposition_gate.get("reason") or "현재 추론 결과는 고객 투자 알림 대상이 아닙니다."),
             )
             return decision
         if typedb_interpretation_eligible(job.context or {}):

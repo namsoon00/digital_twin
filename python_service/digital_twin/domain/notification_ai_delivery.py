@@ -13,6 +13,7 @@ from .context_observation_notifications import (
 from .hypothesis_lifecycle import has_material_delta
 from .investment_decision_actionability import investment_decision_actionability
 from .investment_reasoning.decision_delta import DecisionDelta
+from .investment_reasoning.disposition import reasoning_disposition_delivery
 from .notification.delivery_policy import (
     DeliveryPolicyContext,
     FINAL_AI_DELIVERY_POLICY_VERSION,
@@ -686,7 +687,6 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
     values = _mapping(context)
     delta = decision_delta_from_context(values)
     policy_context = delivery_policy_context_from_context(values)
-    legacy = _legacy_final_ai_delivery_decision(values)
     publication_outcome = delta.publication_outcome
     is_specialized_observation = bool(
         (
@@ -698,6 +698,25 @@ def final_ai_delivery_decision(context: Mapping[str, object]) -> Dict[str, objec
             and publication_outcome == "REVIEW_ONLY"
         )
     )
+    disposition = reasoning_disposition_delivery(values)
+    if (
+        disposition.get("decision") == "suppress"
+        and not delta.typedb_fallback
+        and not is_specialized_observation
+    ):
+        return {
+            **disposition,
+            "finalAction": delta.final_action,
+            "authorizationSources": [],
+            "decisionDelta": delta.to_dict(),
+            "deliveryPolicyContext": policy_context.to_dict(),
+            "effectiveDeliveryPolicy": "reasoning-disposition-v1",
+            "deliveryPolicyParity": {
+                "version": "decision-delta-parity-v1",
+                "status": "not-applicable-internal-disposition",
+            },
+        }
+    legacy = _legacy_final_ai_delivery_decision(values)
     if is_specialized_observation:
         return {
             **legacy,

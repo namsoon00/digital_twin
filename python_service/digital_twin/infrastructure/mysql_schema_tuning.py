@@ -964,6 +964,14 @@ MYSQL_OPERATIONAL_COLUMN_WIDTHS: Dict[str, Sequence[MySQLColumnWidthDefinition]]
             "VARCHAR(96) NOT NULL DEFAULT ''",
         ),
     ),
+    "investment_hypothesis_observation_targets": (
+        MySQLColumnWidthDefinition(
+            "investment_hypothesis_observation_targets",
+            "contract_fingerprint",
+            71,
+            "VARCHAR(96) NOT NULL DEFAULT ''",
+        ),
+    ),
 }
 
 

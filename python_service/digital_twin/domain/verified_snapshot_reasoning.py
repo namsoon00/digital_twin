@@ -34,7 +34,7 @@ from .reasoning_source_snapshot import reasoning_source_snapshot_id
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v4-company-section-routing"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v5-persisted-material-routing"
 
 
 # Deliberately keep the source contract close to the Position domain object.

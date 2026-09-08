@@ -7,7 +7,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 
 from ..context_observation_notifications import typedb_context_observation_contract
 from ..decision_evidence_contract import hypothesis_decision_eligibility
-from .contracts import ActionAlternative, DecisionSynthesis
+from .contracts import ActionAlternative, DataGap, DecisionSynthesis
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -50,6 +50,121 @@ def _hypotheses(relation_context: Mapping[str, object]) -> Tuple[Dict[str, objec
         for item in hypothesis_set.get("hypotheses") or []
         if isinstance(item, Mapping)
         and str(item.get("hypothesisId") or item.get("hypothesis_id") or "").strip()
+    )
+
+
+def _data_gaps(relation_context: Mapping[str, object]) -> Tuple[DataGap, ...]:
+    relation = _mapping(relation_context)
+    facts = _mapping(relation.get("facts"))
+    availability = _mapping(facts.get("dataAvailability"))
+    availability_by_code = {
+        "tradeStrength": _mapping(availability.get("tradeStrength")),
+        "executionVolume": _mapping(availability.get("executionVolume")),
+        "investorFlow": _mapping(availability.get("investorFlow")),
+    }
+    rows = []
+    for raw in relation.get("missingData") or facts.get("missingData") or []:
+        item = dict(raw) if isinstance(raw, Mapping) else {
+            "key": str(raw or "missing"),
+            "label": str(raw or ""),
+        }
+        code = str(item.get("key") or item.get("code") or "missing").strip()
+        provider = availability_by_code.get(code, {})
+        raw_status = str(item.get("status") or provider.get("status") or "missing").lower()
+        expected_at = str(provider.get("nextProviderUpdateAt") or "")
+        provider_update_code = str(provider.get("providerUpdateCode") or "").lower()
+        if code == "valuationInputs":
+            state = "unvalidated-model-input"
+        elif raw_status in {"error", "failed", "unavailable"}:
+            state = "failed"
+        elif raw_status in {"unsupported", "not-supported", "provider-unsupported"}:
+            state = "unsupported"
+        elif raw_status in {"stale", "unknown", "latency"}:
+            state = "stale"
+        elif expected_at or provider_update_code in {
+            "before-first-publication",
+            "outside-publication-window",
+            "scheduled-later",
+        }:
+            state = "not-yet-published"
+        elif raw_status in {"session-unavailable", "market-closed"}:
+            state = "session-unavailable"
+        else:
+            state = "missing"
+        blocking = bool(
+            item.get("blocking")
+            or code in {"currentPrice", "ontologyInference", "position"}
+            or state == "failed"
+        )
+        details = {
+            key: provider.get(key)
+            for key in (
+                "providerUpdateSlot",
+                "providerUpdateCode",
+                "latencyStatus",
+                "latencyReason",
+                "freshnessStatus",
+                "sourceAsOf",
+                "fetchedAt",
+            )
+            if provider.get(key) not in (None, "")
+        }
+        rows.append(DataGap(
+            code=code,
+            label=str(item.get("label") or code),
+            state=state,
+            effect=str(item.get("effect") or provider.get("reason") or ""),
+            source=str(item.get("source") or provider.get("source") or ""),
+            expected_at=expected_at,
+            blocking=blocking,
+            decision_impact="blocking" if blocking else "advisory",
+            required_by_rule_ids=_texts(item.get("requiredByRuleIds")),
+            details=details,
+        ))
+    unique = {}
+    for item in rows:
+        unique[(item.code, item.state, item.source)] = item
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _disposition_contract(
+    *,
+    context_observation: Mapping[str, object],
+    judgement_blocked: bool,
+    hypotheses: Tuple[Dict[str, object], ...],
+    eligible_ids: Iterable[str],
+    execution_eligible_ids: Iterable[str],
+    selected_rule_id: str,
+    investment_view_action: str,
+    comparison_required: bool,
+    data_gaps: Tuple[DataGap, ...],
+) -> Tuple[str, str, str]:
+    if context_observation:
+        return "CONTEXT_OBSERVATION", "context-observation", "context-only"
+    if judgement_blocked and any(item.blocking and item.state == "failed" for item in data_gaps):
+        return "DATA_SOURCE_FAILURE", "data-source-failure", "blocked"
+    if not hypotheses and (selected_rule_id or investment_view_action):
+        return "RULE_COVERAGE_GAP_CANDIDATE", "hypothesis-materialization-gap", "candidate-gap"
+    if judgement_blocked:
+        return "JUDGEMENT_BLOCKED", "judgement-blocked", "blocked"
+    if comparison_required:
+        return "HYPOTHESIS_COMPARISON_REQUIRED", "comparison-required", "covered"
+    if execution_eligible_ids:
+        return "ACTIONABLE_DECISION", "action-ready", "covered"
+    if eligible_ids:
+        return (
+            "HYPOTHESIS_QUALIFICATION_PENDING",
+            "hypothesis-qualification-required",
+            "covered",
+        )
+    if hypotheses:
+        return "HYPOTHESIS_RESEARCH_ONLY", "hypothesis-research-only", "research-only"
+    if any(item.state == "not-yet-published" for item in data_gaps):
+        return "WAITING_FOR_SCHEDULED_SOURCE", "waiting-for-scheduled-source", "data-wait"
+    return (
+        "NO_MATERIAL_PREDICTIVE_RULE_MATCH",
+        "no-material-predictive-rule-match",
+        "no-material-match",
     )
 
 
@@ -296,6 +411,18 @@ def decision_synthesis_from_relation_context(
         if eligible_ids
         else "reference-only"
     )
+    data_gaps = _data_gaps(relation)
+    disposition_code, execution_disposition, rule_coverage_state = _disposition_contract(
+        context_observation=context_observation,
+        judgement_blocked=judgement_blocked,
+        hypotheses=hypotheses,
+        eligible_ids=eligible_ids,
+        execution_eligible_ids=execution_eligible_ids,
+        selected_rule_id=selected_rule_id,
+        investment_view_action=investment_view_action,
+        comparison_required=comparison_required,
+        data_gaps=data_gaps,
+    )
     return DecisionSynthesis(
         synthesis_id=_stable_id(
             account_id,
@@ -311,13 +438,7 @@ def decision_synthesis_from_relation_context(
         graph_candidate_action=graph_candidate_action,
         investment_view_action=investment_view_action,
         execution_action=execution_action,
-        execution_disposition=str(
-            "hypothesis-qualification-required"
-            if not execution_qualified
-            else envelope.get("executionDisposition")
-            or recommended_plan.get("status")
-            or "judgement-blocked"
-        ),
+        execution_disposition=execution_disposition,
         decision_effect=selected_decision_effect or ("support" if comparison_required else ""),
         decision_disposition=decision_disposition,
         action_authority=action_authority,
@@ -347,7 +468,12 @@ def decision_synthesis_from_relation_context(
             if overlap
             else str(relation.get("conflictState") or "")
         ),
-        missing_data=_texts(relation.get("missingData")),
+        missing_data=_texts(
+            relation.get("missingData") or _mapping(relation.get("facts")).get("missingData")
+        ),
+        data_gaps=data_gaps,
+        disposition_code=disposition_code,
+        rule_coverage_state=rule_coverage_state,
         next_checks=_texts(decision.get("nextChecks") or envelope.get("nextChecks")),
         reversal_conditions=_texts(
             decision.get("weakenConditions") or envelope.get("invalidationConditions")

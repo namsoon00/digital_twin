@@ -13,6 +13,7 @@ from ..domain.investment_brain import (
     utc_now_iso,
 )
 from ..domain.investment_decision_history import compact_decision_episode_memory
+from ..domain.hypothesis_observation import ShadowHypothesisObservationEpisode
 from ..domain.investment_decision_actionability import persisted_decision_authorization
 from ..domain.decision_follow_up import evaluate_follow_up_conditions
 from ..domain.hypothesis_outcome_contract import (
@@ -506,6 +507,196 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             )
             target_count += 1
         return {"status": "scheduled", "targetCount": target_count}
+
+    def save_shadow_hypothesis_observations(
+        self,
+        episodes: Iterable[ShadowHypothesisObservationEpisode],
+    ) -> List[ShadowHypothesisObservationEpisode]:
+        """Persist research-only predictions without creating decision authority."""
+
+        rows = [
+            item
+            for item in episodes or []
+            if isinstance(item, ShadowHypothesisObservationEpisode)
+            and item.episode_id
+        ]
+        if not rows:
+            return []
+        stamp = utc_now_iso()
+        with self.transaction() as connection:
+            for episode in rows:
+                payload = episode.to_dict()
+                connection.execute(
+                    """
+                    INSERT INTO investment_hypothesis_observation_episodes (
+                        episode_id, candidate_set_id, account_id, symbol,
+                        hypothesis_id, claim_identity, family_id, claim_contract_id,
+                        source_abox_snapshot_id, inference_generation_id,
+                        independence_bucket, market_independence_key,
+                        account_independence_key, status, observed_from_at,
+                        payload_json, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        candidate_set_id = VALUES(candidate_set_id),
+                        hypothesis_id = VALUES(hypothesis_id),
+                        source_abox_snapshot_id = VALUES(source_abox_snapshot_id),
+                        inference_generation_id = VALUES(inference_generation_id),
+                        status = IF(
+                            investment_hypothesis_observation_episodes.status = 'observed',
+                            investment_hypothesis_observation_episodes.status,
+                            VALUES(status)
+                        ),
+                        payload_json = VALUES(payload_json),
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        episode.episode_id,
+                        episode.candidate_set_id,
+                        episode.account_id,
+                        episode.symbol,
+                        episode.hypothesis_id,
+                        episode.claim_identity,
+                        episode.family_id,
+                        episode.claim_contract_id,
+                        episode.source_abox_snapshot_id,
+                        episode.inference_generation_id,
+                        episode.independence_bucket,
+                        episode.market_independence_key,
+                        episode.account_independence_key,
+                        episode.status,
+                        episode.observed_from_at,
+                        json_dumps(payload),
+                        stamp,
+                        stamp,
+                    ),
+                )
+                if episode.observation_eligible:
+                    self.sync_shadow_hypothesis_observation_targets(
+                        connection,
+                        episode,
+                        stamp,
+                    )
+        return rows
+
+    def sync_shadow_hypothesis_observation_targets(
+        self,
+        connection,
+        episode: ShadowHypothesisObservationEpisode,
+        stamp: str = "",
+    ) -> Dict[str, object]:
+        contract = dict(episode.outcome_contract or {})
+        completeness = outcome_contract_completeness(contract)
+        if not episode.observation_eligible or not completeness.get("complete"):
+            return {
+                "status": "excluded",
+                "targetCount": 0,
+                "reason": str((episode.readiness or {}).get("reason") or "outcome-contract-incomplete"),
+            }
+        stamp = canonical_investment_timestamp(stamp) or utc_now_iso()
+        fingerprint = str(contract.get("contractFingerprint") or "")
+        maximum_delay = int(
+            contract.get("maximumObservationDelayMinutes")
+            or self.outcome_max_delay_minutes()
+        )
+        target_count = 0
+        for horizon_minutes in outcome_horizon_minutes(
+            contract.get("outcomeHorizonMinutes")
+        ):
+            target_at = market_outcome_target_at(
+                episode.observed_from_at,
+                episode.symbol,
+                episode.market,
+                episode.currency,
+                horizon_minutes,
+            )
+            if not target_at:
+                continue
+            target_id = stable_id(
+                "shadow-hypothesis-observation-target",
+                episode.episode_id,
+                horizon_minutes,
+                fingerprint,
+            )
+            payload = {
+                "episodeKind": "shadow-hypothesis",
+                "requestId": target_id,
+                "episodeId": episode.episode_id,
+                "shadowObservationEpisodeId": episode.episode_id,
+                "symbol": episode.symbol,
+                "market": episode.market,
+                "currency": episode.currency,
+                "horizonMinutes": horizon_minutes,
+                "decidedAt": episode.observed_from_at,
+                "targetAt": target_at,
+                "maximumObservationDelayMinutes": maximum_delay,
+                "requiredObservationDomains": contract.get("requiredObservationDomains") or [],
+                "hypothesisOutcomeContract": contract,
+                "benchmarkSymbol": contract_benchmark_symbol(contract),
+                "requiresInstrumentBaseline": True,
+            }
+            connection.execute(
+                """
+                INSERT INTO investment_hypothesis_observation_targets (
+                    target_id, observation_episode_id, account_id, symbol,
+                    horizon_minutes, target_at, maximum_delay_minutes,
+                    contract_fingerprint, status, exclusion_reason, outcome_id,
+                    payload_json, created_at, updated_at, observed_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', '', '', %s, %s, %s, '')
+                ON DUPLICATE KEY UPDATE
+                    target_at = VALUES(target_at),
+                    maximum_delay_minutes = VALUES(maximum_delay_minutes),
+                    payload_json = VALUES(payload_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (
+                    target_id,
+                    episode.episode_id,
+                    episode.account_id,
+                    episode.symbol,
+                    horizon_minutes,
+                    target_at,
+                    maximum_delay,
+                    fingerprint,
+                    json_dumps(payload),
+                    stamp,
+                    stamp,
+                ),
+            )
+            target_count += 1
+        return {"status": "scheduled", "targetCount": target_count}
+
+    def shadow_observation_episodes_by_ids(
+        self,
+        episode_ids: Iterable[str],
+    ) -> Dict[str, ShadowHypothesisObservationEpisode]:
+        clean_ids = list(dict.fromkeys(
+            str(item or "").strip()
+            for item in episode_ids or []
+            if str(item or "").strip()
+        ))
+        if not clean_ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(clean_ids))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json, status, observed_from_at "
+                "FROM investment_hypothesis_observation_episodes "
+                "WHERE episode_id IN (" + placeholders + ")",
+                tuple(clean_ids),
+            ).fetchall()
+        result = {}
+        for row in rows or []:
+            payload = _json_loads(row.get("payload_json"), {})
+            if not payload:
+                continue
+            payload["status"] = str(row.get("status") or payload.get("status") or "")
+            payload["observedFromAt"] = canonical_investment_timestamp(
+                row.get("observed_from_at") or payload.get("observedFromAt")
+            )
+            episode = ShadowHypothesisObservationEpisode.from_dict(payload)
+            if episode.episode_id:
+                result[episode.episode_id] = episode
+        return result
 
     @staticmethod
     def upsert_outcome_target(
@@ -1262,7 +1453,15 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 "SELECT COUNT(*) AS count FROM investment_decision_episodes" + where,
                 tuple(params),
             ).fetchone() or {}
-        return max(0, int(row.get("count") or 0))
+            shadow_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM investment_hypothesis_observation_episodes"
+                + where.replace("decided_at", "observed_from_at"),
+                tuple(params),
+            ).fetchone() or {}
+        return max(
+            0,
+            int(row.get("count") or 0) + int(shadow_row.get("count") or 0),
+        )
 
     def performance_episodes(
         self,
@@ -1366,6 +1565,98 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 "outcomes": [],
             })
             episode["outcomes"].append(outcome)
+        combined = list(grouped.values())
+        combined.extend(self.shadow_performance_episodes(
+            account_id=account_id,
+            symbol=symbol,
+            limit=outcome_limit,
+            as_of=as_of,
+        ))
+
+        def latest_observation(item: Dict[str, object]) -> str:
+            return max((
+                str(outcome.get("observedAt") or "")
+                for outcome in item.get("outcomes") or []
+                if isinstance(outcome, dict)
+            ), default="")
+
+        return sorted(
+            combined,
+            key=lambda item: (
+                latest_observation(item),
+                str(item.get("episodeId") or ""),
+            ),
+            reverse=True,
+        )[:outcome_limit]
+
+    def shadow_performance_episodes(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 500,
+        as_of: str = "",
+    ) -> List[Dict[str, object]]:
+        clauses = []
+        params: List[object] = []
+        if account_id:
+            clauses.append("episodes.account_id = %s")
+            params.append(str(account_id))
+        if symbol:
+            clauses.append("episodes.symbol = %s")
+            params.append(str(symbol).upper())
+        normalized_as_of = canonical_investment_timestamp(as_of)
+        if normalized_as_of:
+            clauses.append("outcomes.observed_at <= %s")
+            params.append(normalized_as_of)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(5000, int(limit or 500))))
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT outcomes.observation_episode_id AS episode_id, "
+                "outcomes.observed_at, outcomes.payload_json AS outcome_json, "
+                "episodes.payload_json AS episode_json "
+                "FROM investment_hypothesis_observation_outcomes AS outcomes "
+                "JOIN investment_hypothesis_observation_episodes AS episodes "
+                "ON episodes.episode_id = outcomes.observation_episode_id"
+                + where
+                + " ORDER BY outcomes.observed_at DESC, outcomes.outcome_id DESC LIMIT %s",
+                tuple(params),
+            ).fetchall()
+        grouped: Dict[str, Dict[str, object]] = {}
+        for row in rows or []:
+            episode_payload = _json_loads(row.get("episode_json"), {})
+            outcome = _json_loads(row.get("outcome_json"), {})
+            episode_id = str(
+                row.get("episode_id") or episode_payload.get("episodeId") or ""
+            ).strip()
+            if not episode_id or not episode_payload or not outcome:
+                continue
+            if not outcome.get("observedAt"):
+                outcome["observedAt"] = canonical_investment_timestamp(
+                    row.get("observed_at")
+                )
+            hypothesis = dict(episode_payload.get("hypothesis") or {})
+            contract = dict(episode_payload.get("outcomeContract") or {})
+            item = grouped.setdefault(episode_id, {
+                "episodeId": episode_id,
+                "episodeKind": "shadow-hypothesis",
+                "accountId": str(episode_payload.get("accountId") or ""),
+                "symbol": str(episode_payload.get("symbol") or "").upper(),
+                "subjectName": str(episode_payload.get("symbol") or ""),
+                "action": str(
+                    episode_payload.get("candidateAction") or "HOLD"
+                ).upper(),
+                "selectedHypothesisId": str(
+                    episode_payload.get("hypothesisId") or ""
+                ),
+                "decidedAt": canonical_investment_timestamp(
+                    episode_payload.get("observedFromAt")
+                ),
+                "hypothesisSet": {"hypotheses": [hypothesis]},
+                "factsAtDecision": {"hypothesisOutcomeContract": contract},
+                "outcomes": [],
+            })
+            item["outcomes"].append(outcome)
         return list(grouped.values())
 
     def outcome_history_for_symbols(
@@ -1449,7 +1740,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             repaired_accounts.add(normalized_account_id)
             self._outcome_target_schedule_repair_completed_accounts = repaired_accounts
         with self.connect() as connection:
-            rows = connection.execute(
+            decision_rows = connection.execute(
                 """
                 SELECT payload_json
                 FROM investment_decision_outcome_targets
@@ -1459,12 +1750,28 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 """,
                 (normalized_account_id, observed_stamp, target_limit),
             ).fetchall()
+            shadow_rows = connection.execute(
+                """
+                SELECT payload_json
+                FROM investment_hypothesis_observation_targets
+                WHERE account_id = %s AND status = 'pending' AND target_at <= %s
+                ORDER BY target_at ASC, target_id ASC
+                LIMIT %s
+                """,
+                (normalized_account_id, observed_stamp, target_limit),
+            ).fetchall()
         targets: List[Dict[str, object]] = []
-        for row in rows or []:
+        for row in list(decision_rows or []) + list(shadow_rows or []):
             payload = _json_loads(row.get("payload_json"), {})
             if payload:
                 targets.append(payload)
-        return targets
+        return sorted(
+            targets,
+            key=lambda item: (
+                str(item.get("targetAt") or ""),
+                str(item.get("requestId") or ""),
+            ),
+        )[:target_limit]
 
     def outcome_target_summary(self, account_id: str = "", symbol: str = "") -> Dict[str, object]:
         clauses = []
@@ -1496,7 +1803,24 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 + where,
                 tuple(params),
             ).fetchone()
-        states = {
+            shadow_rows = connection.execute(
+                "SELECT status, COUNT(*) AS count, MIN(target_at) AS oldest_target_at, "
+                "MAX(updated_at) AS latest_updated_at "
+                "FROM investment_hypothesis_observation_targets" + where + " GROUP BY status",
+                tuple(params),
+            ).fetchall()
+            shadow_due = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(target_at) AS oldest_target_at "
+                "FROM investment_hypothesis_observation_targets WHERE status = 'pending' "
+                "AND target_at <= %s" + due_clause,
+                tuple([now] + params),
+            ).fetchone()
+            shadow_latest = connection.execute(
+                "SELECT MAX(observed_at) AS latest_observed_at "
+                "FROM investment_hypothesis_observation_outcomes" + where,
+                tuple(params),
+            ).fetchone()
+        decision_states = {
             str(row.get("status") or "unknown"): {
                 "count": int(row.get("count") or 0),
                 "oldestTargetAt": str(row.get("oldest_target_at") or ""),
@@ -1504,7 +1828,55 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             }
             for row in rows or []
         }
-        due_count = int((due or {}).get("count") or 0)
+        shadow_states = {
+            str(row.get("status") or "unknown"): {
+                "count": int(row.get("count") or 0),
+                "oldestTargetAt": str(row.get("oldest_target_at") or ""),
+                "latestUpdatedAt": str(row.get("latest_updated_at") or ""),
+            }
+            for row in shadow_rows or []
+        }
+        states = {}
+        for state in sorted(set(decision_states) | set(shadow_states)):
+            decision_state = decision_states.get(state) or {}
+            shadow_state = shadow_states.get(state) or {}
+            states[state] = {
+                "count": int(decision_state.get("count") or 0)
+                + int(shadow_state.get("count") or 0),
+                "oldestTargetAt": min(
+                    [
+                        value
+                        for value in (
+                            str(decision_state.get("oldestTargetAt") or ""),
+                            str(shadow_state.get("oldestTargetAt") or ""),
+                        )
+                        if value
+                    ],
+                    default="",
+                ),
+                "latestUpdatedAt": max(
+                    str(decision_state.get("latestUpdatedAt") or ""),
+                    str(shadow_state.get("latestUpdatedAt") or ""),
+                ),
+            }
+        due_count = int((due or {}).get("count") or 0) + int(
+            (shadow_due or {}).get("count") or 0
+        )
+        oldest_due = min(
+            [
+                value
+                for value in (
+                    str((due or {}).get("oldest_target_at") or ""),
+                    str((shadow_due or {}).get("oldest_target_at") or ""),
+                )
+                if value
+            ],
+            default="",
+        )
+        latest_observed = max(
+            str((latest or {}).get("latest_observed_at") or ""),
+            str((shadow_latest or {}).get("latest_observed_at") or ""),
+        )
         return {
             "status": "warning" if due_count else "ok",
             "checkedAt": now,
@@ -1512,12 +1884,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             "symbol": str(symbol or "").upper(),
             "pendingTargetCount": int((states.get("pending") or {}).get("count") or 0),
             "dueTargetCount": due_count,
-            "oldestDueTargetAt": str((due or {}).get("oldest_target_at") or ""),
+            "oldestDueTargetAt": oldest_due,
             "observedTargetCount": int((states.get("observed") or {}).get("count") or 0),
             "excludedTargetCount": int((states.get("excluded") or {}).get("count") or 0),
-            "latestOutcomeObservedAt": str((latest or {}).get("latest_observed_at") or ""),
+            "latestOutcomeObservedAt": latest_observed,
             "states": states,
-            "contract": "durable-decision-outcome-target-v1",
+            "decisionTargetCount": sum(
+                int(item.get("count") or 0) for item in decision_states.values()
+            ),
+            "shadowHypothesisTargetCount": sum(
+                int(item.get("count") or 0) for item in shadow_states.values()
+            ),
+            "shadowDueTargetCount": int((shadow_due or {}).get("count") or 0),
+            "contract": "durable-decision-and-shadow-hypothesis-outcome-target-v2",
         }
 
     def record_observation(
@@ -1668,16 +2047,27 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
                 continue
             normalized.append({
                 "episodeId": episode_id,
+                "episodeKind": str(item.get("episodeKind") or "decision"),
                 "horizonMinutes": horizon_minutes,
                 "facts": facts,
                 "observedAt": observed_at,
             })
         if not normalized:
             return []
-        episodes = self.episodes_by_ids(item["episodeId"] for item in normalized)
+        decision_observations = [
+            item for item in normalized
+            if item.get("episodeKind") != "shadow-hypothesis"
+        ]
+        shadow_observations = [
+            item for item in normalized
+            if item.get("episodeKind") == "shadow-hypothesis"
+        ]
+        episodes = self.episodes_by_ids(
+            item["episodeId"] for item in decision_observations
+        )
         outcomes: List[ObservedOutcome] = []
         changed_symbols = set()
-        for item in normalized:
+        for item in decision_observations:
             episode = episodes.get(item["episodeId"])
             if not episode or str(episode.account_id or "") != str(account_id or ""):
                 continue
@@ -1773,9 +2163,223 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             self.save_outcome(episode, outcome)
             outcomes.append(outcome)
             changed_symbols.add(episode.symbol)
+        outcomes.extend(
+            self.record_shadow_hypothesis_outcome_observations(
+                account_id,
+                shadow_observations,
+            )
+        )
         for symbol in sorted(changed_symbols):
             self.propose_learning_from_outcomes(account_id, symbol)
         return outcomes
+
+    def record_shadow_hypothesis_outcome_observations(
+        self,
+        account_id: str,
+        observations: Iterable[Dict[str, object]],
+    ) -> List[ObservedOutcome]:
+        rows = [dict(item or {}) for item in observations or []]
+        episodes = self.shadow_observation_episodes_by_ids(
+            item.get("episodeId") for item in rows
+        )
+        outcomes = []
+        for item in rows:
+            episode = episodes.get(str(item.get("episodeId") or ""))
+            if not episode or episode.account_id != str(account_id or ""):
+                continue
+            horizon_minutes = int(item.get("horizonMinutes") or 0)
+            contract = dict(episode.outcome_contract or {})
+            completeness = outcome_contract_completeness(contract)
+            if (
+                horizon_minutes not in outcome_horizon_minutes(
+                    contract.get("outcomeHorizonMinutes")
+                )
+                or not completeness.get("complete")
+            ):
+                continue
+            target_at = market_outcome_target_at(
+                episode.observed_from_at,
+                episode.symbol,
+                episode.market,
+                episode.currency,
+                horizon_minutes,
+            )
+            observed_at = str(item.get("observedAt") or "")
+            target_time = parse_datetime(target_at)
+            observed_time = parse_datetime(observed_at)
+            if not target_time or not observed_time or observed_time < target_time:
+                continue
+            facts = dict(item.get("facts") or {})
+            current_price = number(facts.get("currentPrice"))
+            decision_price = number(facts.get("decisionPrice"))
+            if not current_price or not decision_price:
+                continue
+            change_pct = round(((current_price / decision_price) - 1) * 100, 4)
+            contract_observation = observation_domain_status(facts, contract)
+            evaluation = evaluate_hypothesis_outcome(
+                contract,
+                episode.stance,
+                facts,
+                change_pct,
+                horizon_minutes,
+            )
+            missing_metrics = list(evaluation.get("missingRequiredMetricIds") or [])
+            delay_minutes = max(
+                0.0,
+                (observed_time - target_time).total_seconds() / 60.0,
+            )
+            maximum_delay = int(
+                contract.get("maximumObservationDelayMinutes")
+                or self.outcome_max_delay_minutes()
+            )
+            calibration_eligible = bool(
+                delay_minutes <= maximum_delay
+                and not list(contract_observation.get("missingObservationDomains") or [])
+                and not missing_metrics
+            )
+            eligibility = (
+                "eligible"
+                if calibration_eligible
+                else "excluded-contract-data-gap"
+                if contract_observation.get("missingObservationDomains")
+                else "excluded-criterion-data-gap"
+                if missing_metrics
+                else "excluded-delayed-observation"
+            )
+            hypothesis = dict(episode.hypothesis or {})
+            outcome = ObservedOutcome(
+                outcome_id=stable_id(
+                    "shadow-hypothesis-outcome",
+                    episode.episode_id,
+                    horizon_minutes,
+                ),
+                episode_id=episode.episode_id,
+                observed_at=observed_at,
+                price=current_price,
+                profit_loss_rate=0.0,
+                price_change_from_decision_pct=change_pct,
+                selected_hypothesis_status=str(
+                    evaluation.get("selectedHypothesisStatus") or "inconclusive"
+                ),
+                payload={
+                    "episodeKind": "shadow-hypothesis",
+                    "selectedHypothesisId": episode.hypothesis_id,
+                    "selectedHypothesisStance": episode.stance,
+                    "hypothesisFamilyId": episode.family_id,
+                    "hypothesisTemplateId": hypothesis.get("templateId") or episode.family_id,
+                    "hypothesisTemplateLabel": hypothesis.get("templateLabel") or hypothesis.get("claim") or "",
+                    "predictionTarget": hypothesis.get("predictionTarget") or contract.get("predictionTarget") or "",
+                    "expectedDirection": hypothesis.get("expectedDirection") or contract.get("expectedDirection") or "",
+                    "expectedOutcome": hypothesis.get("expectedOutcome") or contract.get("expectedOutcome") or "",
+                    "outcomeMetric": hypothesis.get("outcomeMetric") or contract.get("outcomeMetric") or "",
+                    "falsificationContract": hypothesis.get("falsificationContract") or contract.get("falsificationContract") or "",
+                    "hypothesisOutcomeContract": contract,
+                    "contractFingerprint": contract.get("contractFingerprint") or "",
+                    "marketIndependenceKey": episode.market_independence_key,
+                    "accountIndependenceKey": episode.account_independence_key,
+                    "independenceBucket": episode.independence_bucket,
+                    "sourceAboxSnapshotId": episode.source_abox_snapshot_id,
+                    "inferenceGenerationId": episode.inference_generation_id,
+                    "decisionPrice": decision_price,
+                    "decisionPriceSourceAsOf": facts.get("decisionPriceSourceAsOf") or "",
+                    "observationBasis": str(
+                        facts.get("observationBasis") or "historical-market-time-series"
+                    ),
+                    "observationSource": str(
+                        facts.get("observationSource") or facts.get("provider") or ""
+                    ),
+                    "sourceAsOf": canonical_investment_timestamp(
+                        facts.get("sourceAsOf")
+                    ) or observed_at,
+                    "dataQuality": str(facts.get("dataQuality") or "unknown"),
+                    **contract_observation,
+                    **evaluation,
+                    "missingRequiredMetricIds": missing_metrics,
+                    "benchmarkSymbol": contract_benchmark_symbol(contract),
+                    "benchmarkReturnPct": facts.get("benchmarkReturnPct"),
+                    "excessReturnPct": (
+                        round(change_pct - number(facts.get("benchmarkReturnPct")), 6)
+                        if facts.get("benchmarkReturnPct") not in (None, "")
+                        else None
+                    ),
+                    "horizonMinutes": horizon_minutes,
+                    "targetAt": target_at,
+                    "actualElapsedMinutes": round(
+                        (
+                            observed_time
+                            - parse_datetime(episode.observed_from_at)
+                        ).total_seconds()
+                        / 60.0,
+                        2,
+                    ),
+                    "observationDelayMinutes": round(delay_minutes, 2),
+                    "observationTiming": (
+                        "on-time" if delay_minutes <= maximum_delay else "delayed"
+                    ),
+                    "calibrationEligibility": eligibility,
+                    "predictionContractCompleteness": completeness,
+                },
+            )
+            self.save_shadow_hypothesis_outcome(episode, outcome)
+            outcomes.append(outcome)
+        return outcomes
+
+    def save_shadow_hypothesis_outcome(
+        self,
+        episode: ShadowHypothesisObservationEpisode,
+        outcome: ObservedOutcome,
+    ) -> ObservedOutcome:
+        payload = outcome.to_dict()
+        stamp = utc_now_iso()
+        horizon_minutes = int((outcome.payload or {}).get("horizonMinutes") or 0)
+        fingerprint = str((outcome.payload or {}).get("contractFingerprint") or "")
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO investment_hypothesis_observation_outcomes (
+                    outcome_id, observation_episode_id, account_id, symbol,
+                    observed_at, selected_hypothesis_status, price,
+                    price_change_from_decision_pct, payload_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    selected_hypothesis_status = VALUES(selected_hypothesis_status),
+                    price = VALUES(price),
+                    price_change_from_decision_pct = VALUES(price_change_from_decision_pct),
+                    payload_json = VALUES(payload_json)
+                """,
+                (
+                    outcome.outcome_id,
+                    episode.episode_id,
+                    episode.account_id,
+                    episode.symbol,
+                    outcome.observed_at,
+                    outcome.selected_hypothesis_status,
+                    outcome.price,
+                    outcome.price_change_from_decision_pct,
+                    json_dumps(payload),
+                    stamp,
+                ),
+            )
+            connection.execute(
+                "UPDATE investment_hypothesis_observation_episodes "
+                "SET status = 'observed', updated_at = %s WHERE episode_id = %s",
+                (stamp, episode.episode_id),
+            )
+            connection.execute(
+                "UPDATE investment_hypothesis_observation_targets "
+                "SET status = 'observed', outcome_id = %s, observed_at = %s, updated_at = %s "
+                "WHERE observation_episode_id = %s AND horizon_minutes = %s "
+                "AND contract_fingerprint = %s",
+                (
+                    outcome.outcome_id,
+                    outcome.observed_at,
+                    stamp,
+                    episode.episode_id,
+                    horizon_minutes,
+                    fingerprint,
+                ),
+            )
+        return outcome
 
     def outcome_max_delay_minutes(self) -> int:
         try:
@@ -2050,18 +2654,34 @@ def outcome_horizon_recorded(episode: DecisionEpisode, horizon_minutes: int) -> 
 
 
 def outcome_target_at(episode: DecisionEpisode, horizon_minutes: int) -> str:
-    decided = parse_datetime(episode.decided_at)
+    facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
+    return market_outcome_target_at(
+        episode.decided_at,
+        episode.symbol,
+        str(facts.get("market") or ""),
+        str(facts.get("currency") or ""),
+        horizon_minutes,
+    )
+
+
+def market_outcome_target_at(
+    decided_at: str,
+    symbol: str,
+    market: str,
+    currency: str,
+    horizon_minutes: int,
+) -> str:
+    decided = parse_datetime(decided_at)
     if not decided or int(horizon_minutes or 0) <= 0:
         return ""
     target = decided + timedelta(minutes=int(horizon_minutes))
-    facts = episode.facts_at_decision if isinstance(episode.facts_at_decision, dict) else {}
-    market = str(facts.get("market") or "").upper().strip()
-    currency = str(facts.get("currency") or "").upper().strip()
+    market = str(market or "").upper().strip()
+    currency = str(currency or "").upper().strip()
     if not market:
         market = infer_market_from_context(
             "investmentInsight",
             {
-                "symbol": episode.symbol,
+                "symbol": symbol,
                 "market": market,
                 "currency": currency,
             },

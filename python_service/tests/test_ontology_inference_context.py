@@ -482,12 +482,93 @@ class OntologyInferenceContextTests(unittest.TestCase):
         )
 
         self.assertEqual("NO_ELIGIBLE_THESIS", envelope["status"])
+        self.assertEqual(
+            "no-material-predictive-rule-match",
+            envelope["executionDisposition"],
+        )
         self.assertEqual("partial", envelope["dataReadiness"]["dataState"])
         self.assertFalse(envelope["judgementBlocked"])
         self.assertEqual("typedbNoEligibleHypothesis", decision["stagePolicySource"])
         self.assertEqual("NO_ELIGIBLE_THESIS", decision["hypothesisState"])
         self.assertTrue(decision["aiInterpretationEligible"])
         self.assertFalse(decision["judgementBlocked"])
+
+    def test_synthesis_distinguishes_scheduled_source_wait_from_rule_gap(self):
+        scheduled = decision_synthesis_from_relation_context("acct", {
+            "accountId": "acct",
+            "subject": {"symbol": "000660"},
+            "sourceAboxSnapshotId": "abox:1",
+            "inferenceGenerationId": "inference:1",
+            "generationAligned": True,
+            "missingData": [{
+                "key": "investorFlow",
+                "label": "투자자별 수급",
+                "status": "missing",
+                "source": "KIS investor",
+            }],
+            "facts": {
+                "dataAvailability": {
+                    "investorFlow": {
+                        "status": "missing",
+                        "nextProviderUpdateAt": "2026-09-08T09:20:00+09:00",
+                        "providerUpdateCode": "scheduled-later",
+                    },
+                },
+            },
+            "actionEnvelope": {
+                "status": "NO_ELIGIBLE_THESIS",
+                "executionDisposition": "no-material-predictive-rule-match",
+            },
+            "graphStoreInference": {"relations": [], "traces": []},
+        })
+        materialization_gap = decision_synthesis_from_relation_context("acct", {
+            "accountId": "acct",
+            "subject": {"symbol": "AAPL"},
+            "sourceAboxSnapshotId": "abox:2",
+            "inferenceGenerationId": "inference:2",
+            "generationAligned": True,
+            "actionEnvelope": {
+                "status": "HOLDING_REVIEW",
+                "investmentViewAction": "HOLD",
+                "selectedRuleId": "graph.trend.hold.v1",
+            },
+            "graphStoreInference": {"relations": [], "traces": []},
+        })
+
+        self.assertEqual("WAITING_FOR_SCHEDULED_SOURCE", scheduled.disposition_code)
+        self.assertEqual("not-yet-published", scheduled.data_gaps[0].state)
+        self.assertEqual(
+            "2026-09-08T09:20:00+09:00",
+            scheduled.data_gaps[0].expected_at,
+        )
+        self.assertEqual("RULE_COVERAGE_GAP_CANDIDATE", materialization_gap.disposition_code)
+        self.assertEqual("candidate-gap", materialization_gap.rule_coverage_state)
+
+    def test_blocking_provider_failure_takes_priority_over_hypothesis_coverage_gap(self):
+        synthesis = decision_synthesis_from_relation_context("acct", {
+            "accountId": "acct",
+            "subject": {"symbol": "AAPL"},
+            "sourceAboxSnapshotId": "abox:failed-source",
+            "inferenceGenerationId": "inference:failed-source",
+            "generationAligned": True,
+            "missingData": [{
+                "key": "currentPrice",
+                "label": "현재가",
+                "status": "failed",
+                "source": "quote-provider",
+            }],
+            "actionEnvelope": {
+                "status": "JUDGEMENT_BLOCKED",
+                "judgementBlocked": True,
+                "investmentViewAction": "HOLD",
+                "selectedRuleId": "graph.trend.hold.v1",
+            },
+            "graphStoreInference": {"relations": [], "traces": []},
+        })
+
+        self.assertEqual("DATA_SOURCE_FAILURE", synthesis.disposition_code)
+        self.assertEqual("data-source-failure", synthesis.execution_disposition)
+        self.assertEqual("failed", synthesis.data_gaps[0].state)
 
     def test_missing_typedb_decision_effect_blocks_action_envelope(self):
         relations = [{

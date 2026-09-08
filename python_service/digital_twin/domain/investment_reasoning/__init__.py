@@ -24,6 +24,7 @@ from .contracts import (
     AIJudgmentResult,
     ActionAlternative,
     ConditionEvidence,
+    DataGap,
     DecisionSynthesis,
     FactDelta,
     FinalDecision,
@@ -36,6 +37,24 @@ from .contracts import (
 )
 from .hypotheses import GraphHypothesisManager
 from .decision_delta import DECISION_DELTA_VERSION, DecisionDelta
+from .disposition import (
+    ACTIONABLE_DECISION,
+    AI_JUDGEMENT_DISPOSITIONS,
+    CONTEXT_OBSERVATION,
+    DATA_SOURCE_FAILURE,
+    HYPOTHESIS_COMPARISON_REQUIRED,
+    HYPOTHESIS_QUALIFICATION_PENDING,
+    HYPOTHESIS_RESEARCH_ONLY,
+    INTERNAL_ONLY_DISPOSITIONS,
+    JUDGEMENT_BLOCKED,
+    NO_MATERIAL_PREDICTIVE_RULE_MATCH,
+    RULE_COVERAGE_GAP_CANDIDATE,
+    WAITING_FOR_SCHEDULED_SOURCE,
+    decision_synthesis_payload,
+    disposition_code_from_context,
+    reasoning_disposition_delivery,
+    reasoning_disposition_requires_ai,
+)
 from .synthesis import decision_synthesis_from_relation_context
 from .rule_inventory import reasoning_rule_inventory
 from .subject_case import (
@@ -61,6 +80,7 @@ __all__ = [
     "AIJudgmentResult",
     "ActionAlternative",
     "ConditionEvidence",
+    "DataGap",
     "CASE_AI_COMPLETED",
     "CASE_AI_PENDING",
     "CASE_BLOCKED",
@@ -82,6 +102,22 @@ __all__ = [
     "DecisionSynthesis",
     "DECISION_DELTA_VERSION",
     "DecisionDelta",
+    "ACTIONABLE_DECISION",
+    "AI_JUDGEMENT_DISPOSITIONS",
+    "CONTEXT_OBSERVATION",
+    "DATA_SOURCE_FAILURE",
+    "HYPOTHESIS_COMPARISON_REQUIRED",
+    "HYPOTHESIS_QUALIFICATION_PENDING",
+    "HYPOTHESIS_RESEARCH_ONLY",
+    "INTERNAL_ONLY_DISPOSITIONS",
+    "JUDGEMENT_BLOCKED",
+    "NO_MATERIAL_PREDICTIVE_RULE_MATCH",
+    "RULE_COVERAGE_GAP_CANDIDATE",
+    "WAITING_FOR_SCHEDULED_SOURCE",
+    "decision_synthesis_payload",
+    "disposition_code_from_context",
+    "reasoning_disposition_delivery",
+    "reasoning_disposition_requires_ai",
     "FinalDecision",
     "GraphHypothesisManager",
     "HypothesisRecord",

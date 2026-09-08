@@ -13,6 +13,10 @@ from ...domain.data_freshness import freshness_from_snapshot_subject
 from ...domain.hypothesis_lifecycle import relation_lifecycle_transition_contract
 from ...domain.independent_reasoning import IndependentReasoningRequest
 from ...domain.investment_reasoning import decision_synthesis_from_relation_context
+from ...domain.investment_reasoning.disposition import (
+    reasoning_disposition_delivery,
+    reasoning_disposition_requires_ai,
+)
 from ...domain.message_types import (
     CRYPTO_ONTOLOGY_SIGNAL,
     DEFAULT_CADENCE,
@@ -187,12 +191,16 @@ class V2GraphDecisionCandidateBuilder:
         context_observation = typedb_context_observation_contract(contract_payload)
         review_observation = typedb_review_observation_contract(contract_payload)
         narrative_observation = context_observation or review_observation
+        disposition_delivery = reasoning_disposition_delivery(contract_payload)
+        requires_ai_judgement = reasoning_disposition_requires_ai(contract_payload)
         lifecycle_transition = _mapping(
             narrative_observation.get("relationLifecycleTransition")
             if narrative_observation
             else relation_lifecycle_transition_contract(relation)
         )
         first_holding_review = (
+            requires_ai_judgement
+            and
             holding_review_baseline_is_deliverable({
                 "ontologyRelationContext": dict(relation),
                 "v2DecisionSynthesis": synthesis.to_dict(),
@@ -207,6 +215,8 @@ class V2GraphDecisionCandidateBuilder:
         if not severity and lifecycle_transition.get("material"):
             severity = "WATCH"
         if not severity:
+            return None
+        if not narrative_observation and disposition_delivery.get("decision") == "suppress":
             return None
         if not narrative_observation and not synthesis.eligible_hypothesis_ids:
             return None
@@ -282,6 +292,7 @@ class V2GraphDecisionCandidateBuilder:
             "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
             "firstHoldingReviewCandidate": first_holding_review,
             "relationLifecycleTransition": lifecycle_transition,
+            "reasoningDispositionDelivery": disposition_delivery,
         }
         if narrative_observation:
             metadata.update({
@@ -289,6 +300,8 @@ class V2GraphDecisionCandidateBuilder:
                 "notificationDecisionMode": narrative_observation["decisionMode"],
                 "requiresAiJudgement": False,
             })
+        else:
+            metadata["requiresAiJudgement"] = requires_ai_judgement
         return AlertEvent(
             snapshot.account_id,
             snapshot.account_label,

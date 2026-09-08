@@ -1733,6 +1733,21 @@ def action_envelope_from_inference(
         if execution_action not in {"", "NO_ACTION", "HOLD"}
         else "hold"
     )
+    disposition_by_status = {
+        "HYPOTHESIS_COMPARISON_REQUIRED": "comparison-required",
+        "CONTEXT_OBSERVATION": "context-observation",
+        "NO_ELIGIBLE_THESIS": "no-material-predictive-rule-match",
+        "JUDGEMENT_BLOCKED": "judgement-blocked",
+    }
+    execution_disposition = disposition_by_status.get(status, "")
+    if not execution_disposition:
+        execution_disposition = str(recommended_plan.get("status") or "").strip()
+    if not execution_disposition:
+        execution_disposition = (
+            "action-ready"
+            if execution_action not in {"", "NO_ACTION", "HOLD"}
+            else "holding-review"
+        )
     return {
         "version": "typedb-action-envelope-v5",
         "source": "typedb-materialized-decision-effects",
@@ -1742,7 +1757,7 @@ def action_envelope_from_inference(
         "actionPolicy": action_policy,
         "investmentViewAction": investment_view_action,
         "executionAction": execution_action,
-        "executionDisposition": str(recommended_plan.get("status") or "judgement-blocked"),
+        "executionDisposition": execution_disposition,
         "preferredAction": preferred_action,
         "allowedActions": allowed_actions,
         "blockedActions": blocked_actions,

@@ -73,6 +73,18 @@ def snapshot(
 
 
 class VerifiedSnapshotReasoningTests(unittest.TestCase):
+    @staticmethod
+    def company_overview(*, pe=20.0, pbr=4.0, eps=5.0, book_value=25.0):
+        return {
+            "provider": "Alpha Vantage",
+            "name": "Apple",
+            "fetchedAt": "2026-07-29T00:00:00Z",
+            "peRatio": pe,
+            "pbr": pbr,
+            "trailingEPS": eps,
+            "bookValue": book_value,
+        }
+
     def test_first_snapshot_creates_a_replayable_latest_state_request(self):
         current = snapshot()
 
@@ -244,6 +256,34 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertIsNone(
             verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
         )
+
+    def test_price_derived_valuation_refresh_does_not_enqueue_a_company_turn(self):
+        previous = snapshot(external_signals={
+            "companyOverviews": {"AAPL": self.company_overview(pe=20.0, pbr=4.0)},
+        })
+        current = snapshot(external_signals={
+            "companyOverviews": {"AAPL": self.company_overview(pe=20.4, pbr=4.1)},
+        })
+
+        self.assertIsNone(
+            verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+        )
+
+    def test_structural_valuation_input_refresh_enqueues_a_company_turn(self):
+        previous = snapshot(external_signals={
+            "companyOverviews": {"AAPL": self.company_overview(eps=5.0)},
+        })
+        current = snapshot(external_signals={
+            "companyOverviews": {"AAPL": self.company_overview(eps=5.5)},
+        })
+
+        event = verified_monitor_snapshot_reasoning_event(current, previous.to_monitor_state())
+
+        self.assertEqual(
+            ["external.companyKnowledge.valuation"],
+            event.payload["changedFieldsBySymbol"]["AAPL"],
+        )
+        self.assertEqual(["ValuationObservation"], event.payload["factTypesBySymbol"]["AAPL"])
 
     def test_company_knowledge_section_revision_routes_only_changed_fact_family(self):
         base_company = {

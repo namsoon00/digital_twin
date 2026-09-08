@@ -2721,6 +2721,88 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_observation_episodes (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        candidate_set_id VARCHAR(191) NOT NULL DEFAULT '',
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        hypothesis_id VARCHAR(191) NOT NULL DEFAULT '',
+        claim_identity VARCHAR(191) NOT NULL DEFAULT '',
+        family_id VARCHAR(191) NOT NULL DEFAULT '',
+        claim_contract_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_abox_snapshot_id VARCHAR(191) NOT NULL DEFAULT '',
+        inference_generation_id VARCHAR(191) NOT NULL DEFAULT '',
+        independence_bucket VARCHAR(64) NOT NULL DEFAULT '',
+        market_independence_key VARCHAR(191) NOT NULL DEFAULT '',
+        account_independence_key VARCHAR(191) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'scheduled',
+        observed_from_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        UNIQUE KEY uq_hypothesis_observation_independence (
+            account_id, symbol, claim_identity, independence_bucket
+        ),
+        KEY idx_hypothesis_observation_subject_time (
+            account_id, symbol, observed_from_at, episode_id
+        ),
+        KEY idx_hypothesis_observation_claim_status (
+            claim_contract_id, status, observed_from_at
+        )
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_observation_outcomes (
+        outcome_id VARCHAR(191) PRIMARY KEY,
+        observation_episode_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        observed_at VARCHAR(40) NOT NULL,
+        selected_hypothesis_status VARCHAR(64) NOT NULL DEFAULT 'pending',
+        price DOUBLE NOT NULL DEFAULT 0,
+        price_change_from_decision_pct DOUBLE NOT NULL DEFAULT 0,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_hypothesis_observation_outcome_episode (
+            observation_episode_id, observed_at
+        ),
+        KEY idx_hypothesis_observation_outcome_subject (
+            account_id, symbol, observed_at
+        ),
+        KEY idx_hypothesis_observation_outcome_status (
+            selected_hypothesis_status, observed_at
+        )
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_hypothesis_observation_targets (
+        target_id VARCHAR(191) PRIMARY KEY,
+        observation_episode_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        symbol VARCHAR(64) NOT NULL DEFAULT '',
+        horizon_minutes INT NOT NULL DEFAULT 0,
+        target_at VARCHAR(40) NOT NULL DEFAULT '',
+        maximum_delay_minutes INT NOT NULL DEFAULT 0,
+        contract_fingerprint VARCHAR(96) NOT NULL DEFAULT '',
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        exclusion_reason VARCHAR(191) NOT NULL DEFAULT '',
+        outcome_id VARCHAR(191) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        observed_at VARCHAR(40) NOT NULL DEFAULT '',
+        UNIQUE KEY uq_hypothesis_observation_target_contract (
+            observation_episode_id, horizon_minutes, contract_fingerprint
+        ),
+        KEY idx_hypothesis_observation_targets_due (
+            account_id, status, target_at, target_id
+        ),
+        KEY idx_hypothesis_observation_targets_subject (
+            account_id, symbol, status, target_at
+        )
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_decision_outcome_targets (
         target_id VARCHAR(191) PRIMARY KEY,
         episode_id VARCHAR(191) NOT NULL,

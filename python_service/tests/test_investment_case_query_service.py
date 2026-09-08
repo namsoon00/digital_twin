@@ -288,6 +288,46 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("NO_ACTION", item["decision"]["action"])
         self.assertEqual(1, result["summary"]["reviewRequired"])
 
+    def test_subject_case_explains_rule_gap_without_requesting_user_action(self):
+        subject_case = {
+            "subjectCaseId": "subject:coverage-gap",
+            "batchCaseId": "batch:coverage-gap",
+            "accountId": "default",
+            "symbol": "AAPL",
+            "stage": "SUPPRESSED",
+            "updatedAt": "2026-08-20T03:00:00Z",
+            "candidateSet": {
+                "fingerprint": "candidate:coverage-gap",
+                "dispositionCode": "RULE_COVERAGE_GAP_CANDIDATE",
+                "ruleCoverageState": "candidate-gap",
+                "dataGaps": [{
+                    "code": "investorFlow",
+                    "label": "투자자 수급",
+                    "state": "missing",
+                    "decisionImpact": "advisory",
+                }],
+            },
+            "synthesis": {
+                "selectedRuleId": "graph.rule.without.hypothesis.v1",
+                "graphCandidateAction": "NO_ACTION",
+                "dispositionCode": "RULE_COVERAGE_GAP_CANDIDATE",
+            },
+        }
+        result = InvestmentCaseQueryService(
+            FakeDecisionStore([episode()]),
+            subject_case_repository=FakeSubjectCaseStore([subject_case]),
+        ).list_cases()
+
+        item = result["items"][0]
+        self.assertEqual("내부 가설 보완 중", item["attention"]["label"])
+        self.assertFalse(item["attention"]["userAttentionRequired"])
+        self.assertIn("내부 보완 작업", item["headline"])
+        self.assertEqual(
+            "RULE_COVERAGE_GAP_CANDIDATE",
+            item["subjectDecisionCase"]["dispositionCode"],
+        )
+        self.assertEqual("missing", item["subjectDecisionCase"]["dataGaps"][0]["state"])
+
     def test_exact_episode_exposes_frozen_current_state_and_integrity(self):
         row = episode()
         row["factsAtDecision"] = {

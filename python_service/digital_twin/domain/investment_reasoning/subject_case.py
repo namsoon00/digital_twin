@@ -8,11 +8,11 @@ import hashlib
 import json
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
-from .contracts import AIJudgmentResult, DecisionSynthesis, FinalDecision, HypothesisRecord
+from .contracts import AIJudgmentResult, DataGap, DecisionSynthesis, FinalDecision, HypothesisRecord
 
 
 SUBJECT_CASE_VERSION = "investment-subject-decision-case-v3"
-CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v2"
+CANDIDATE_SET_VERSION = "investment-candidate-set-snapshot-v3"
 PUBLICATION_VERSION = "investment-decision-publication-v1"
 
 SUBJECT_CREATED = "CREATED"
@@ -71,6 +71,9 @@ class CandidateSetSnapshot:
     allowed_actions: Tuple[str, ...] = ()
     blocked_actions: Tuple[str, ...] = ()
     missing_data: Tuple[str, ...] = ()
+    data_gaps: Tuple[DataGap, ...] = ()
+    disposition_code: str = "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
+    rule_coverage_state: str = "no-material-match"
     validation_errors: Tuple[str, ...] = ()
     created_at: str = ""
     version: str = CANDIDATE_SET_VERSION
@@ -141,6 +144,9 @@ class CandidateSetSnapshot:
             "blockedActions": list(_texts(synthesis.blocked_actions)),
             "hypotheses": [item.to_dict() for item in scoped],
             "missingData": list(_texts(synthesis.missing_data)),
+            "dataGaps": [item.to_dict() for item in synthesis.data_gaps],
+            "dispositionCode": synthesis.disposition_code,
+            "ruleCoverageState": synthesis.rule_coverage_state,
         }
         fingerprint = _fingerprint(material)
         return cls(
@@ -158,6 +164,9 @@ class CandidateSetSnapshot:
             allowed_actions=_texts(synthesis.allowed_actions),
             blocked_actions=_texts(synthesis.blocked_actions),
             missing_data=_texts(synthesis.missing_data),
+            data_gaps=tuple(synthesis.data_gaps),
+            disposition_code=synthesis.disposition_code,
+            rule_coverage_state=synthesis.rule_coverage_state,
             validation_errors=_texts(scope_errors),
             created_at=_now(),
         )
@@ -178,6 +187,9 @@ class CandidateSetSnapshot:
             "allowedActions": list(self.allowed_actions),
             "blockedActions": list(self.blocked_actions),
             "missingData": list(self.missing_data),
+            "dataGaps": [item.to_dict() for item in self.data_gaps],
+            "dispositionCode": self.disposition_code,
+            "ruleCoverageState": self.rule_coverage_state,
             "validationErrors": list(self.validation_errors),
             "createdAt": self.created_at,
             "version": self.version,
@@ -207,6 +219,18 @@ class CandidateSetSnapshot:
             allowed_actions=_texts(payload.get("allowedActions") or []),
             blocked_actions=_texts(payload.get("blockedActions") or []),
             missing_data=_texts(payload.get("missingData") or []),
+            data_gaps=tuple(
+                DataGap.from_dict(item)
+                for item in payload.get("dataGaps") or []
+                if isinstance(item, Mapping)
+            ),
+            disposition_code=str(
+                payload.get("dispositionCode")
+                or "NO_MATERIAL_PREDICTIVE_RULE_MATCH"
+            ).upper(),
+            rule_coverage_state=str(
+                payload.get("ruleCoverageState") or "no-material-match"
+            ).lower(),
             validation_errors=_texts(payload.get("validationErrors") or []),
             created_at=str(payload.get("createdAt") or ""),
             version=str(payload.get("version") or CANDIDATE_SET_VERSION),

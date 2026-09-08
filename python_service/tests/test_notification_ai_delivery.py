@@ -444,6 +444,25 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertTrue(decision.should_send)
         self.assertEqual("new-condition", decision.state_decision)
         self.assertNotEqual("initial_graph_baseline", decision.suppression_reason)
+        explanation = build_customer_delivery_explanation(
+            message_type="investmentInsight",
+            source_event_name="investment.inference_episode_completed",
+            source_event_id="event:nvda:review-completed",
+            context=context,
+        )
+        self.assertEqual("valid", explanation["validation"]["state"])
+        self.assertEqual(
+            "material-review-observation",
+            explanation["primaryCause"]["code"],
+        )
+        self.assertEqual(
+            "material-evidence",
+            explanation["primaryCause"]["category"],
+        )
+        self.assertIn(
+            "revision:nvda:price:2",
+            explanation["primaryCause"]["sourceReferences"],
+        )
 
         fallback_context = initial_holding_review_context(ai_status="typedb-fallback")
         self.assertEqual(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
+from .context_observation_notifications import review_observation_delivery_decision
 from .message_types import INVESTMENT_INSIGHT
 from .notification_ai_delivery import (
     first_holding_review_delivery_is_authorized,
@@ -271,6 +272,82 @@ def _verified_market_transition_cause(context: Mapping[str, object]) -> Customer
     )
 
 
+def _review_observation_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
+    """Explain the concrete trigger that authorized a review-only push."""
+
+    decision = review_observation_delivery_decision(context)
+    if _text(decision.get("decision")).lower() != "send":
+        return None
+    authorizations = {
+        _text(item).lower()
+        for item in _items(decision.get("authorizationSources"))
+        if _text(item)
+    }
+    trigger = _mapping(decision.get("reasoningDeliveryTrigger"))
+    continuity = _mapping(context.get("decisionContinuityPacket"))
+    follow_ups = [
+        _mapping(item)
+        for item in _items(continuity.get("followUpConditions"))
+        if isinstance(item, Mapping)
+        and item.get("transitionVerified") is True
+        and _text(item.get("transitionAt"))
+        and _text(item.get("status")).lower()
+        in {"satisfied", "invalidated", "expired"}
+    ]
+    insight = _mapping(context.get("ontologyInsight"))
+    semantic = _mapping(insight.get("semanticComponents"))
+    material_source_keys = _unique(
+        semantic.get("materialSourceEventKeys")
+        or insight.get("materialSourceEventKeys")
+        or context.get("materialSourceEventKeys")
+        or []
+    )
+    lifecycle = _mapping(decision.get("relationLifecycleTransition"))
+    references = _unique([
+        *_items(trigger.get("materialRevisionKeys")),
+        *_items(trigger.get("sourceEventIds")),
+        *material_source_keys,
+        *(item.get("conditionId") for item in follow_ups),
+        lifecycle.get("lifecycleKey"),
+        decision.get("selectedRuleId"),
+    ])
+    observed_at = _text(
+        trigger.get("observedAt")
+        or (follow_ups[0].get("transitionAt") if follow_ups else "")
+        or context.get("reasoningSourceObservedAt")
+    )
+    if "verified-follow-up-transition" in authorizations and follow_ups:
+        return _cause(
+            "verified-review-follow-up-transition",
+            "threshold-crossing",
+            "직전 판단에서 확인하기로 한 시장 조건이 새로 바뀌어 보유 근거와 반대 근거를 다시 비교했습니다.",
+            label="확인 조건 변화",
+            current_value=follow_ups[0].get("status"),
+            observed_at=observed_at,
+            source_references=references,
+            basis="review-observation-delivery",
+        )
+    if "material-source-event" in authorizations:
+        summary = "새 뉴스·공시 등 판단 자료가 확인되어 보유 근거와 반대 근거를 다시 비교했습니다."
+        label = "새 판단 자료"
+    elif "verified-reasoning-trigger" in authorizations:
+        summary = "새 가격·거래량 등 시장 관찰이 확인되어 보유 근거와 반대 근거를 다시 비교했습니다."
+        label = "새 시장 관찰"
+    else:
+        summary = "검토 중인 투자 가설의 근거 상태가 바뀌어 보유 근거와 반대 근거를 다시 비교했습니다."
+        label = "가설 근거 변화"
+    return _cause(
+        "material-review-observation",
+        "material-evidence",
+        summary,
+        label=label,
+        current_value=(material_source_keys[0] if material_source_keys else observed_at),
+        observed_at=observed_at,
+        source_references=references,
+        basis="review-observation-delivery",
+    )
+
+
 def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCause | None:
     values = _transition_values(context)
     previous_action = str(values["previousAction"] or "")
@@ -309,6 +386,9 @@ def _normal_delivery_cause(context: Mapping[str, object]) -> CustomerDeliveryCau
     market_transition = _verified_market_transition_cause(context)
     if market_transition is not None:
         return market_transition
+    review_observation = _review_observation_cause(context)
+    if review_observation is not None:
+        return review_observation
     relation_transition = _relation_transition_cause(context)
     if relation_transition is not None:
         return relation_transition

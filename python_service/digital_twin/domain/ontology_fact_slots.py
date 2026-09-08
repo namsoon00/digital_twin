@@ -18,7 +18,7 @@ from .ontology_change_impact import (
 )
 
 
-FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v4-native-source-ownership"
+FACT_SLOT_PROJECTION_VERSION = "fact-slot-projection-v5-explicit-derived-closure"
 
 # A source event can update values derived into adjacent factual families.
 # The closure keeps those derived facts coherent while excluding unrelated
@@ -233,6 +233,7 @@ def build_fact_slot_projection_plan(
     requested_dependency_keys: Iterable[object] = None,
     requested_dependency_keys_by_symbol: Mapping[str, Iterable[object]] = None,
     dependency_boundary_authoritative: bool = False,
+    derived_fact_families_by_symbol: Mapping[str, Iterable[object]] = None,
 ) -> Dict[str, object]:
     """Build a conservative write-routing plan from mailbox provenance."""
     targets = sorted({
@@ -277,6 +278,16 @@ def build_fact_slot_projection_plan(
     dependency_keys_by_symbol: Dict[str, Set[str]] = {
         _clean(symbol).upper(): _family_values(values)
         for symbol, values in raw_dependency_keys_by_symbol.items()
+        if _clean(symbol).upper() in targets
+    }
+    raw_derived_families_by_symbol = (
+        derived_fact_families_by_symbol
+        if isinstance(derived_fact_families_by_symbol, Mapping)
+        else {}
+    )
+    derived_families_by_symbol: Dict[str, Set[str]] = {
+        _clean(symbol).upper(): _family_values(values)
+        for symbol, values in raw_derived_families_by_symbol.items()
         if _clean(symbol).upper() in targets
     }
     unknown = sorted({
@@ -334,6 +345,11 @@ def build_fact_slot_projection_plan(
             if event_boundary_authoritative
             else FACT_SLOT_DEPENDENCY_FAMILIES[family]
         )
+    slots.update({
+        family
+        for values in derived_families_by_symbol.values()
+        for family in values
+    })
     # Link ownership is derived from the selected fact scopes below. Treating
     # every link as a direct fact slot turns one valuation or calendar event
     # into a rewrite of every relation touching the stock.
@@ -409,6 +425,7 @@ def build_fact_slot_projection_plan(
                 symbol_slots.update(FACT_SLOT_DEPENDENCY_FAMILIES[family])
             if unclassified_fields:
                 unclassified_fields_by_symbol[symbol] = unclassified_fields
+        symbol_slots.update(derived_families_by_symbol.get(symbol, set()))
         slots_by_symbol[symbol] = symbol_slots
     # Shared scopes must follow the same field-level contract as symbol scopes.
     # Keeping the legacy batch-wide closure here caused precise market events to
@@ -447,6 +464,10 @@ def build_fact_slot_projection_plan(
         "requestedDependencyKeysBySymbol": {
             symbol: sorted(dependency_keys_by_symbol.get(symbol, dependency_keys))
             for symbol in targets
+        },
+        "derivedFactFamiliesBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(derived_families_by_symbol.items())
         },
         "dependencyBoundaryAuthoritative": bool(
             dependency_boundary_authoritative and dependency_keys
@@ -499,6 +520,17 @@ def select_fact_slot_scope_ids(
         for symbol, values in raw_dependency_keys_by_symbol.items()
         if _clean(symbol)
     }
+    raw_derived_families_by_symbol = plan.get("derivedFactFamiliesBySymbol")
+    raw_derived_families_by_symbol = (
+        raw_derived_families_by_symbol
+        if isinstance(raw_derived_families_by_symbol, Mapping)
+        else {}
+    )
+    derived_families_by_symbol = {
+        _clean(symbol).upper(): _family_values(values)
+        for symbol, values in raw_derived_families_by_symbol.items()
+        if _clean(symbol)
+    }
     dependency_boundary_authoritative = bool(
         plan.get("dependencyBoundaryAuthoritative") and dependency_keys
     )
@@ -531,6 +563,10 @@ def select_fact_slot_scope_ids(
         "requestedDependencyKeysBySymbol": {
             symbol: sorted(values)
             for symbol, values in sorted(dependency_keys_by_symbol.items())
+        },
+        "derivedFactFamiliesBySymbol": {
+            symbol: sorted(values)
+            for symbol, values in sorted(derived_families_by_symbol.items())
         },
         "dependencyBoundaryAuthoritative": dependency_boundary_authoritative,
         "dependencyMatchedScopeIds": [],
@@ -720,6 +756,15 @@ def select_fact_slot_scope_ids(
                 for requested_key in applicable_dependency_keys
             )
         )
+        derived_family_match = bool(
+            families
+            & applicable_values_for_scope(
+                scope_id,
+                item,
+                derived_families_by_symbol,
+                set(),
+            )
+        )
         # Exact dependency identities describe the field that changed, while
         # scope families describe its semantic use. A stock anchor is stored
         # in the physical ``state`` scope even though currentPrice and volume
@@ -727,7 +772,7 @@ def select_fact_slot_scope_ids(
         # rejects valid exact dependencies. Use the family boundary only for
         # events that do not carry an authoritative dependency contract.
         selected_by_boundary = (
-            dependency_match
+            dependency_match or derived_family_match
             if dependency_boundary_authoritative
             else bool(families & applicable_slots)
         )
@@ -746,7 +791,7 @@ def select_fact_slot_scope_ids(
             if scope_id not in candidate_set
             and scope_matches_requested_dependency(scope_id, item)
         )
-    if dependency_boundary_authoritative and dependency_matched:
+    if dependency_boundary_authoritative and selected:
         # Relation scopes normally own links while their dependency list owns
         # the event entity. Include changed reverse dependants so an exact
         # event slice remains connected to the instrument in the active world.

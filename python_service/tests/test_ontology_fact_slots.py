@@ -1053,6 +1053,7 @@ class OntologyFactSlotTests(unittest.TestCase):
             ["symbol:MSTR:state"],
             selection["selectedScopeIds"],
         )
+        self._assert_authoritative_source_boundary_keeps_explicit_model_signal_derivative()
 
         # A price-only event must not pull a changed news relation back into the
         # semantic write set through its physical dependency on instrument state.
@@ -1109,6 +1110,76 @@ class OntologyFactSlotTests(unittest.TestCase):
             selection["directSelectedScopeIds"],
         )
         self.assertEqual([], selection["reverseDependencySelectedScopeIds"])
+
+    def _assert_authoritative_source_boundary_keeps_explicit_model_signal_derivative(self):
+        plan = build_fact_slot_projection_plan(
+            ["000660"],
+            ["market"],
+            requested_dependency_keys=["kind:stock:field:currentprice"],
+            requested_dependency_keys_by_symbol={
+                "000660": ["kind:stock:field:currentprice"],
+            },
+            dependency_boundary_authoritative=True,
+            event_boundary_authoritative=True,
+            derived_fact_families_by_symbol={
+                "000660": ["model-signal"],
+            },
+        )
+        scopes = {
+            "symbol:000660:state": {
+                "scopeFamily": "state",
+                "semanticDependencyFingerprints": {
+                    "kind:stock:field:currentprice": "price-v5",
+                },
+            },
+            "symbol:000660:model-signal": {
+                "scopeFamily": "model-signal",
+                "semanticDependencyFingerprints": {
+                    "field:currentprice": "model-v5",
+                },
+            },
+            "link:symbol:000660:model-signal": {
+                "scopeFamily": "model-signal",
+                "semanticDependencyFingerprints": {
+                    "relation:has-model-signal": "model-link-v5",
+                },
+                "dependencyScopeIds": [
+                    "symbol:000660:state",
+                    "symbol:000660:model-signal",
+                ],
+            },
+        }
+
+        selection = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+
+        self.assertEqual(
+            [
+                "link:symbol:000660:model-signal",
+                "symbol:000660:model-signal",
+                "symbol:000660:state",
+            ],
+            selection["selectedScopeIds"],
+        )
+        self.assertEqual(
+            {"000660": ["model-signal"]},
+            selection["derivedFactFamiliesBySymbol"],
+        )
+        derived_only = select_fact_slot_scope_ids(
+            scopes,
+            [
+                "link:symbol:000660:model-signal",
+                "symbol:000660:model-signal",
+            ],
+            plan,
+        )
+        self.assertTrue(derived_only["enabled"])
+        self.assertEqual(
+            [
+                "link:symbol:000660:model-signal",
+                "symbol:000660:model-signal",
+            ],
+            derived_only["selectedScopeIds"],
+        )
 
     def _assert_crypto_dependency_selects_shared_market_and_symbol_exposure(self):
         plan = build_fact_slot_projection_plan(

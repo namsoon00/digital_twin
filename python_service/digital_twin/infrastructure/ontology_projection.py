@@ -34,6 +34,7 @@ from ..domain.ontology_change_impact import (
     build_dynamic_inference_preflight,
     build_inference_impact_plan,
     compact_inference_impact_plan,
+    scope_symbol,
 )
 from ..domain.ontology_world_routing import route_world_impact
 from ..domain.ontology_performance_contract import ontology_performance_assessment
@@ -8957,6 +8958,17 @@ class PortfolioOntologyProjectionRecorder:
                         "eventDependencyBoundaryAuthoritative"
                     )
                 ),
+                derived_fact_families_by_symbol={
+                    symbol: ["model-signal"]
+                    for symbol in inferred
+                    if any(
+                        str(item.get("scopeFamily") or "").strip().lower()
+                        == "model-signal"
+                        and scope_symbol(item.get("scopeId")) == symbol
+                        for item in (scoped_identity or {}).get("scopePlan") or []
+                        if isinstance(item, dict)
+                    )
+                },
             ),
         }
         # A reasoning worker can intentionally schedule one subject even when

@@ -430,6 +430,18 @@ function checkWorkflowConsoleContract() {
       && code.indexOf('ensureFreshSnapshot("initial-entry"') >= 0,
     "페이지 진입·복귀 자동 신선도 확인 또는 경량 갱신 완료 재조회 계약이 없습니다."
   );
+  assertOk(
+    code.indexOf("function scheduleTabDataPreload") >= 0
+      && code.indexOf("function runTabDataPreloadQueue") >= 0
+      && code.indexOf("TAB_DATA_PRELOAD_MAX_CONCURRENCY = 2") >= 0
+      && code.indexOf("TAB_DATA_PRELOAD_STALE_MS = 120000") >= 0
+      && code.indexOf('window.requestIdleCallback(start, { timeout: 1200 })') >= 0
+      && code.indexOf("snapshotRefreshInProgress(state.readModel)") >= 0
+      && code.indexOf('loadPortfolioReadModel("summary", force, { prefetch: true })') >= 0
+      && code.indexOf('scheduleTabDataPreload({ reason: "startup-prerequisites" })') >= 0
+      && code.indexOf('reason: options.reason || "snapshot-ready"') >= 0,
+    "Cloudflare 웹의 저동시성 탭 데이터 선로드 또는 스냅샷 기반 재검증 계약이 없습니다."
+  );
   assertOk(code.indexOf("loadInstrumentTimeline") >= 0 && code.indexOf("initInstrumentTimelineChart") >= 0, "종목 실제 시계열 차트 흐름이 연결되지 않았습니다.");
   assertOk(
     code.indexOf("function instrumentChartEventProjection") >= 0

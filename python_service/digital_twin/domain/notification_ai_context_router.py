@@ -17,8 +17,8 @@ from .notification_narrative import (
 from .prompt_evidence_admission import assess_prompt_evidence
 
 
-AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v2"
-AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v1"
+AI_DECISION_CONTEXT_ROUTE_VERSION = "notification-ai-context-route-v3"
+AI_DECISION_CORE_VERSION = "investment-ai-decision-core-v2"
 
 
 CORE_FACT_KEYS = (
@@ -688,6 +688,8 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
     temporal = _temporal_evidence(current)
     data_coverage = _mapping(brief.get("dataCoverage"))
     assessment = _mapping(brief.get("assessmentBundle"))
+    reasoning_trigger = _mapping(current.get("reasoningDeliveryTrigger"))
+    relation_lifecycle = _mapping(current.get("relationLifecycleTransition"))
     core = {
         "schemaVersion": AI_DECISION_CORE_VERSION,
         "notificationIntent": brief.get("notificationIntent"),
@@ -718,6 +720,8 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
             "recommendedPlanStatus": _mapping(assessment.get("recommendedPlan")).get("status"),
         },
         "continuityDelta": _continuity_delta(brief.get("decisionContinuity")),
+        "reasoningTrigger": reasoning_trigger,
+        "relationLifecycle": relation_lifecycle,
         "facts": facts,
         "temporalEvidence": temporal,
         "companyEvidence": company,
@@ -742,6 +746,39 @@ def route_notification_ai_decision_context(brief: Dict[str, object]) -> Tuple[Di
         data_limits=core.get("dataLimits") or [],
         reference_date=_mapping(brief.get("subject")).get("referenceDate"),
     )
+    if reasoning_trigger:
+        core["evidenceLedger"].insert(0, {
+            "evidenceId": "transition:reasoning-trigger",
+            "role": "context",
+            "kind": "decision-transition",
+            "label": "현재 TypeDB 추론을 시작한 검증된 시장·근거 변화",
+            "value": reasoning_trigger,
+            "source": ", ".join(reasoning_trigger.get("sourceEventNames") or [])
+            or "reasoning-source-event",
+            "sourceAsOf": reasoning_trigger.get("observedAt")
+            or _mapping(brief.get("subject")).get("referenceDate"),
+            "freshness": "source-bound",
+            "ruleIds": [],
+            "hypothesisIds": [],
+            "judgementEligible": True,
+            "detail": "",
+        })
+    if relation_lifecycle:
+        core["evidenceLedger"].insert(0, {
+            "evidenceId": "transition:relation-lifecycle",
+            "role": "context",
+            "kind": "decision-transition",
+            "label": "TypeDB 가설 관계의 현재 수명주기 변화",
+            "value": relation_lifecycle,
+            "source": "TypeDB",
+            "sourceAsOf": relation_lifecycle.get("occurredAt")
+            or _mapping(brief.get("subject")).get("referenceDate"),
+            "freshness": "inference-generation-bound",
+            "ruleIds": [],
+            "hypothesisIds": [],
+            "judgementEligible": True,
+            "detail": "",
+        })
     transition = _mapping(_mapping(core.get("decision")).get("transition"))
     if transition and str(transition.get("kind") or "").strip():
         core["evidenceLedger"].insert(0, {

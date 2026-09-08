@@ -295,6 +295,44 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         )
         self.assertEqual("decision-history", transition["source"])
 
+        context["reasoningDeliveryTrigger"] = {
+            "version": "reasoning-delivery-trigger-v1",
+            "status": "verified-material-transition",
+            "material": True,
+            "userObservable": True,
+            "kinds": ["verified-market-observation-followup"],
+            "reasons": ["verified-observation-followup"],
+            "materialRevisionKeys": ["revision:naver:price:2"],
+            "observedAt": "2026-09-09T00:00:00Z",
+        }
+        context["relationLifecycleTransition"] = {
+            "version": "relation-lifecycle-transition-v1",
+            "material": True,
+            "changeKind": "strengthened",
+            "previousState": "observed",
+            "currentState": "strengthened",
+            "occurredAt": "2026-09-09T00:00:01Z",
+            "evidenceDelta": {
+                "addedSupportingEvidenceKeys": ["price-above-ma20"],
+            },
+        }
+
+        enriched_packet = build_notification_ai_inference_packet(context, {})
+
+        self.assertEqual(
+            "verified-material-transition",
+            enriched_packet.decision_core["reasoningTrigger"]["status"],
+        )
+        self.assertEqual(
+            "strengthened",
+            enriched_packet.decision_core["relationLifecycle"]["changeKind"],
+        )
+        change_ids = enriched_packet.decision_core[
+            "narrativeClaimContract"
+        ]["allowedEvidenceIdsBySection"]["change"]
+        self.assertIn("transition:reasoning-trigger", change_ids)
+        self.assertIn("transition:relation-lifecycle", change_ids)
+
     def test_shared_service_validates_against_the_same_packet_ledger(self):
         class Reviewer:
             calls = 0

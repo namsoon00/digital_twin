@@ -47,7 +47,7 @@ from .notification_decision_policy import (
 )
 
 
-AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v4"
+AI_DECISION_BRIEF_VERSION = "investment-ai-decision-brief-v5"
 AI_PROFILE_STANDARD = "standard"
 AI_PROFILE_DEEP_RESEARCH = "deepResearch"
 VALID_REASONING_EFFORTS = {"low", "medium", "high", "max"}
@@ -55,6 +55,15 @@ VALID_REASONING_EFFORTS = {"low", "medium", "high", "max"}
 
 def _mapping(value: object) -> Dict[str, object]:
     return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _first_mapping(value: object) -> Dict[str, object]:
+    if isinstance(value, dict):
+        return dict(value)
+    for item in value or [] if isinstance(value, (list, tuple)) else []:
+        if isinstance(item, dict):
+            return dict(item)
+    return {}
 
 
 def _clean(value: object, limit: int = 320) -> str:
@@ -281,6 +290,21 @@ def notification_ai_decision_brief(
     canonical_relation = _mapping(decision_context.get("ontologyRelationContext"))
     canonical_brain = _mapping(canonical_relation.get("investmentBrain"))
     canonical_facts = _mapping(canonical_relation.get("facts"))
+    metadata = _mapping(decision_context.get("metadata"))
+    hypothesis_lifecycle = (
+        _first_mapping(decision_context.get("hypothesisLifecycle"))
+        or _mapping(canonical_relation.get("hypothesisLifecycle"))
+        or _first_mapping(metadata.get("hypothesisLifecycle"))
+    )
+    relation_lifecycle_transition = (
+        _first_mapping(decision_context.get("relationLifecycleTransition"))
+        or _mapping(canonical_relation.get("relationLifecycleTransition"))
+        or _first_mapping(metadata.get("relationLifecycleTransition"))
+    )
+    reasoning_delivery_trigger = (
+        _first_mapping(decision_context.get("reasoningDeliveryTrigger"))
+        or _first_mapping(metadata.get("reasoningDeliveryTrigger"))
+    )
     prompt_context = {
         "facts": {
             "messageType": message_type,
@@ -425,6 +449,9 @@ def notification_ai_decision_brief(
             "rawAlert": decision_input.get("rawAlert") or {},
             "relationFacts": relation.get("relationFacts") or {},
             "trendDynamics": relation.get("trendDynamics") or {},
+            "reasoningDeliveryTrigger": reasoning_delivery_trigger,
+            "relationLifecycleTransition": relation_lifecycle_transition,
+            "hypothesisLifecycle": hypothesis_lifecycle,
             "temporalWindows": internal.get("temporalWindows") or [],
             "temporalEvidenceSummary": temporal_summary,
             "companyContext": relation.get("companyContext") or {},
@@ -1055,6 +1082,24 @@ def _critical_decision_brief(brief: Dict[str, object]) -> Dict[str, object]:
                 string_limit=160,
                 list_limit=6,
                 dict_limit=24,
+            ),
+            "reasoningDeliveryTrigger": _bounded_value(
+                current.get("reasoningDeliveryTrigger") or {},
+                string_limit=160,
+                list_limit=8,
+                dict_limit=20,
+            ),
+            "relationLifecycleTransition": _bounded_value(
+                current.get("relationLifecycleTransition") or {},
+                string_limit=160,
+                list_limit=8,
+                dict_limit=20,
+            ),
+            "hypothesisLifecycle": _bounded_value(
+                current.get("hypothesisLifecycle") or {},
+                string_limit=140,
+                list_limit=8,
+                dict_limit=20,
             ),
             "temporalWindows": temporal_windows,
             "temporalEvidenceSummary": _bounded_value(
@@ -1768,6 +1813,18 @@ def _minimum_decision_brief(critical: Dict[str, object], *, emergency: bool = Fa
         ),
         "assessmentBundle": assessment_payload,
         "currentSituation": {
+            "reasoningDeliveryTrigger": _bounded_value(
+                current.get("reasoningDeliveryTrigger") or {},
+                string_limit=100,
+                list_limit=4,
+                dict_limit=12,
+            ),
+            "relationLifecycleTransition": _bounded_value(
+                current.get("relationLifecycleTransition") or {},
+                string_limit=100,
+                list_limit=4,
+                dict_limit=12,
+            ),
             "relationFacts": _bounded_value(
                 (
                     _minimum_relation_facts(current.get("relationFacts"), 20)

@@ -4830,6 +4830,16 @@ class PythonServiceTests(unittest.TestCase):
                         action_level="review",
                         decision_stage="ADD_BUY_BLOCKED",
                     ),
+                    "relationLifecycleTransition": {
+                        "material": True,
+                        "changeKind": "strengthened",
+                        "currentState": "strengthened",
+                    },
+                    "reasoningDeliveryTrigger": {
+                        "material": True,
+                        "userObservable": True,
+                        "materialRevisionKeys": ["revision:005380:price"],
+                    },
                     "dataFreshness": self.fresh_data_freshness("unit-test-position"),
                 },
             )
@@ -4848,6 +4858,14 @@ class PythonServiceTests(unittest.TestCase):
         self.assertIn("relationRuleIds=trend.breakdown_acceleration.v1", first_insight["semanticSignature"])
         self.assertEqual("95", first_insight["scoreBucket"])
         self.assertEqual("100", second_insight["scoreBucket"])
+        self.assertEqual(
+            "strengthened",
+            first.metadata["relationLifecycleTransition"]["changeKind"],
+        )
+        self.assertEqual(
+            ["revision:005380:price"],
+            first.metadata["reasoningDeliveryTrigger"]["materialRevisionKeys"],
+        )
 
     def test_investment_insight_semantic_signature_includes_material_news_event(self):
         snapshot = AccountSnapshot(

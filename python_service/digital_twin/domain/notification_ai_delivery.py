@@ -10,7 +10,10 @@ from .context_observation_notifications import (
     typedb_context_observation_contract,
     typedb_review_observation_contract,
 )
-from .hypothesis_lifecycle import has_material_delta
+from .hypothesis_lifecycle import (
+    has_material_delta,
+    relation_lifecycle_transition_contract,
+)
 from .investment_decision_actionability import investment_decision_actionability
 from .investment_reasoning.decision_delta import DecisionDelta
 from .investment_reasoning.disposition import reasoning_disposition_delivery
@@ -210,7 +213,14 @@ def _relation_lifecycle_evidence_delta(context: Mapping[str, object]) -> Dict[st
     transition = _mapping(values.get("decisionTransition")) or _mapping(
         _mapping(values.get("ontologyRelationDiff")).get("decisionTransition")
     )
-    lifecycle = _mapping(transition.get("relationLifecycleTransition"))
+    lifecycle = (
+        _mapping(values.get("relationLifecycleTransition"))
+        or _mapping(_mapping(values.get("metadata")).get("relationLifecycleTransition"))
+        or _mapping(transition.get("relationLifecycleTransition"))
+        or relation_lifecycle_transition_contract(
+            _mapping(values.get("ontologyRelationContext"))
+        )
+    )
     return _mapping(lifecycle.get("evidenceDelta"))
 
 

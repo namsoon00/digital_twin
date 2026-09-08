@@ -16,6 +16,10 @@ from typing import Dict, Iterable, Mapping
 
 from .notification_ai_gate_contracts import NOTIFICATION_AI_GATE_VERSION
 from .context_observation_notifications import typedb_narrative_only_contract
+from .hypothesis_lifecycle import (
+    material_delta_values,
+    relation_lifecycle_transition_contract,
+)
 from .investment_reasoning.ai_insight import SUBJECT_DECISION_ORIGIN, AIInsightHandoff
 from .notifications import NotificationJob
 from .portfolio import utc_now_iso
@@ -148,6 +152,75 @@ def _rule_ids(values: object) -> list:
     )
 
 
+def _first_mapping(value: object) -> Dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    for item in _items(value):
+        if isinstance(item, Mapping):
+            return dict(item)
+    return {}
+
+
+def _material_reasoning_trigger(values: Mapping[str, object]) -> Dict[str, object]:
+    payload = dict(values or {})
+    trigger = _first_mapping(payload.get("reasoningDeliveryTrigger")) or _first_mapping(
+        _mapping(payload.get("metadata")).get("reasoningDeliveryTrigger")
+    )
+    if not (
+        trigger.get("material") is True
+        and trigger.get("userObservable") is True
+    ):
+        return {}
+    revision_identity = _texts(trigger.get("materialRevisionKeys") or [])
+    if not revision_identity:
+        revision_identity = _texts(trigger.get("sourceEventIds") or [])
+    return {
+        "kinds": _texts(trigger.get("kinds") or []),
+        "reasons": _texts(trigger.get("reasons") or []),
+        "matchedConditions": _texts(trigger.get("matchedConditions") or []),
+        "changedFields": _texts(trigger.get("changedFields") or []),
+        "materialRevisionKeys": revision_identity,
+        "observationFollowup": bool(trigger.get("observationFollowup")),
+    }
+
+
+def _material_lifecycle_contract(
+    values: Mapping[str, object],
+    relation: Mapping[str, object],
+) -> Dict[str, object]:
+    payload = dict(values or {})
+    transition = _first_mapping(payload.get("relationLifecycleTransition"))
+    if not transition:
+        transition = relation_lifecycle_transition_contract(relation)
+    if not transition or not bool(transition.get("material")):
+        return {}
+    raw_delta = _mapping(transition.get("evidenceDelta"))
+    stable_delta = {
+        key: material_delta_values(raw_delta, key)
+        for key in (
+            "addedSupportingEvidenceKeys",
+            "removedSupportingEvidenceKeys",
+            "addedCounterEvidenceKeys",
+            "removedCounterEvidenceKeys",
+            "addedCausalPathKeys",
+            "removedCausalPathKeys",
+            "addedFormationConditionIds",
+            "removedFormationConditionIds",
+            "addedRuleIds",
+            "removedRuleIds",
+        )
+        if material_delta_values(raw_delta, key)
+    }
+    return {
+        "changeKind": _clean(transition.get("changeKind")),
+        "lifecycleKey": _clean(transition.get("lifecycleKey")),
+        "scope": _clean(transition.get("scope")),
+        "previousState": _clean(transition.get("previousState")),
+        "currentState": _clean(transition.get("currentState")),
+        "evidenceDelta": stable_delta,
+    }
+
+
 def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str, object]:
     """Return the semantic fields that justify replacing active AI work.
 
@@ -220,6 +293,8 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
         or relation.get("materialSourceEventKeys")
         or []
     )
+    reasoning_trigger = _material_reasoning_trigger(values)
+    lifecycle_transition = _material_lifecycle_contract(values, relation)
     return {
         "reviewMode": notification_ai_review_mode(values),
         "targetRole": _clean(relation.get("targetRole")),
@@ -253,6 +328,8 @@ def notification_ai_material_contract(context: Mapping[str, object]) -> Dict[str
         "activeRuleIds": _rule_ids(relation.get("activeRules")),
         "hypothesisFamilies": hypothesis_families,
         "materialSourceEventKeys": source_events,
+        "reasoningDeliveryTrigger": reasoning_trigger,
+        "relationLifecycleTransition": lifecycle_transition,
         "transition": {
             "kind": _clean(transition.get("kind")),
             "currentAction": _clean(transition.get("currentAction")).upper(),

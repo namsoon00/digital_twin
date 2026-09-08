@@ -56,6 +56,7 @@ from ...domain.investment_alert_coverage import derive_delivery_eligibility
 from ...domain.investment_decision_actionability import investment_decision_actionability
 from ...domain.investment_reasoning.disposition import (
     CONTEXT_OBSERVATION,
+    HYPOTHESIS_QUALIFICATION_PENDING,
     NO_MATERIAL_PREDICTIVE_RULE_MATCH,
 )
 from .episode_projection import (
@@ -845,8 +846,20 @@ class InvestmentReasoningOrchestrator:
         ]
         if not selected_syntheses:
             raise ValueError("TypeDB review observation subjects were not found in the decision synthesis.")
-        if any(synthesis.action_authority == "originate" for synthesis in selected_syntheses):
-            raise ValueError("Action-originating synthesis cannot use the review-only path.")
+        invalid_originating = [
+            synthesis
+            for synthesis in selected_syntheses
+            if synthesis.action_authority == "originate"
+            and not (
+                synthesis.disposition_code == HYPOTHESIS_QUALIFICATION_PENDING
+                and synthesis.eligible_hypothesis_ids
+                and not synthesis.execution_eligible_hypothesis_ids
+            )
+        ]
+        if invalid_originating:
+            raise ValueError(
+                "Execution-qualified action-originating synthesis cannot use the review-only path."
+            )
         if reasoning_case.stage not in {CASE_HYPOTHESES_READY, CASE_DECISION_SYNTHESIZED}:
             raise ValueError("Review observation cannot be validated from stage " + reasoning_case.stage + ".")
         selected_symbols = {synthesis.symbol for synthesis in selected_syntheses}

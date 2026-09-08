@@ -239,6 +239,22 @@ class FinalAIDeliveryTests(unittest.TestCase):
             decision["relationLifecycleTransition"]["changeKind"],
         )
 
+        triggered = lifecycle_observation_context()
+        triggered["reasoningDeliveryTrigger"] = {
+            "version": "reasoning-delivery-trigger-v1",
+            "status": "verified-material-transition",
+            "material": True,
+            "userObservable": True,
+            "kinds": ["verified-market-observation-followup"],
+            "materialRevisionKeys": ["revision:mstr:price:2"],
+        }
+        triggered_decision = final_ai_delivery_decision(triggered)
+        self.assertEqual("send", triggered_decision["decision"])
+        self.assertEqual(
+            ["verified-reasoning-trigger"],
+            triggered_decision["authorizationSources"],
+        )
+
     def test_unchanged_graph_is_deferred_until_follow_up_conditions_are_loaded(self):
         self._assert_relation_lifecycle_observation_is_web_only_without_user_evidence()
         policy = NotificationAdmissionPolicy()
@@ -433,6 +449,50 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("send", material_decision["decision"])
         self.assertEqual("material-review-observation", material_decision["pushValueClass"])
         self.assertEqual(["material-source-event"], material_decision["authorizationSources"])
+
+        qualification_review = review_observation_context()
+        qualification_review["v2DecisionSynthesis"].update({
+            "action_authority": "originate",
+            "disposition_code": "HYPOTHESIS_QUALIFICATION_PENDING",
+            "execution_eligible_hypothesis_ids": [],
+        })
+        qualification_review.update({
+            "notificationAiExecutionAudit": {
+                "status": "completed",
+                "adoptionState": "narrative-adopted-action-not-applicable",
+            },
+            "reasoningDeliveryTrigger": {
+                "version": "reasoning-delivery-trigger-v1",
+                "status": "verified-material-transition",
+                "material": True,
+                "userObservable": True,
+                "kinds": ["verified-market-observation-followup"],
+                "materialRevisionKeys": ["revision:mstr:price:2"],
+            },
+            "preDecisionDeliveryCadence": {
+                "eligible": True,
+                "minutes": 60,
+            },
+            "notificationAiValidatedResponse": {
+                "action": "NO_ACTION",
+                "nextChecks": ["다음 거래일 거래량과 가격 회복 여부를 확인합니다."],
+            },
+        })
+        qualification_decision = final_ai_delivery_decision(qualification_review)
+        self.assertEqual("send", qualification_decision["decision"])
+        self.assertTrue(qualification_decision["qualificationPending"])
+        self.assertEqual(
+            ["verified-reasoning-trigger"],
+            qualification_decision["authorizationSources"],
+        )
+
+        qualification_review["preDecisionDeliveryCadence"]["eligible"] = False
+        cadence_decision = final_ai_delivery_decision(qualification_review)
+        self.assertEqual("suppress", cadence_decision["decision"])
+        self.assertEqual(
+            "review_observation_delivery_cooldown",
+            cadence_decision["suppressionReason"],
+        )
 
         review_only = watchlist_context(ai_kind="action-changed")
         review_only.update({

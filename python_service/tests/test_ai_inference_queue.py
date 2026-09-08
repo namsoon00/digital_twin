@@ -14,7 +14,11 @@ from digital_twin.application.ai_inference_queue_service import (
 )
 from digital_twin.application.notification.admission import NotificationAdmissionOutcome
 from digital_twin.application.notification_service import NotificationQueueRunner
-from digital_twin.domain.ai_inference_queue import AIInferenceRequest, AIInferenceResult
+from digital_twin.domain.ai_inference_queue import (
+    AIInferenceRequest,
+    AIInferenceResult,
+    notification_ai_material_fingerprint,
+)
 from digital_twin.domain.investment_reasoning.ai_insight import (
     AIInsightHandoff,
     decision_reconciliation,
@@ -163,6 +167,59 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assert_subject_decision_notification_admission_is_reflected_in_episode()
         self.assert_subject_decision_ai_failure_never_creates_notification()
         self.assert_subject_decision_queue_coalesces_same_material_meaning()
+        self.assert_material_source_and_lifecycle_changes_replace_ai_work()
+
+    def assert_material_source_and_lifecycle_changes_replace_ai_work(self):
+        job, _request = self.create_detached_request("subject:detached:fingerprint")
+        baseline = json.loads(json.dumps(job.context))
+        triggered = json.loads(json.dumps(baseline))
+        triggered["reasoningDeliveryTrigger"] = {
+            "material": True,
+            "userObservable": True,
+            "kinds": ["verified-market-observation-followup"],
+            "reasons": ["verified-observation-followup"],
+            "changedFields": ["marketObservationFollowup"],
+            "materialRevisionKeys": ["revision:price:1"],
+            "observedAt": "2026-09-09T00:00:00Z",
+        }
+        repeated = json.loads(json.dumps(triggered))
+        repeated["reasoningDeliveryTrigger"]["observedAt"] = "2026-09-09T00:01:00Z"
+        changed = json.loads(json.dumps(triggered))
+        changed["reasoningDeliveryTrigger"]["materialRevisionKeys"] = ["revision:price:2"]
+
+        self.assertNotEqual(
+            notification_ai_material_fingerprint(baseline),
+            notification_ai_material_fingerprint(triggered),
+        )
+        self.assertEqual(
+            notification_ai_material_fingerprint(triggered),
+            notification_ai_material_fingerprint(repeated),
+        )
+        self.assertNotEqual(
+            notification_ai_material_fingerprint(triggered),
+            notification_ai_material_fingerprint(changed),
+        )
+
+        lifecycle = json.loads(json.dumps(baseline))
+        lifecycle["relationLifecycleTransition"] = {
+            "material": True,
+            "changeKind": "created",
+            "lifecycleKey": "v2:account:price-recovery",
+            "previousState": "",
+            "currentState": "observed",
+            "occurredAt": "2026-09-09T00:00:00Z",
+        }
+        invalidated = json.loads(json.dumps(lifecycle))
+        invalidated["relationLifecycleTransition"].update({
+            "changeKind": "resolved",
+            "previousState": "observed",
+            "currentState": "invalidated",
+            "occurredAt": "2026-09-09T01:00:00Z",
+        })
+        self.assertNotEqual(
+            notification_ai_material_fingerprint(lifecycle),
+            notification_ai_material_fingerprint(invalidated),
+        )
 
     def assert_review_only_subject_queues_narrative_without_action_transition(self):
         class Queue:
@@ -771,10 +828,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual(request.request_id, prompt_audit["requestId"])
         self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
-        self.assertEqual("investment-ai-decision-brief-v4", prompt_audit["decisionBriefVersion"])
-        self.assertEqual("investment-ai-decision-core-v1", prompt_audit["decisionCore"]["schemaVersion"])
-        self.assertEqual("notification-ai-context-route-v2", prompt_audit["contextRouting"]["version"])
-        self.assertEqual("investment-ai-judge-v14", prompt_audit["promptRelease"]["version"])
+        self.assertEqual("investment-ai-decision-brief-v5", prompt_audit["decisionBriefVersion"])
+        self.assertEqual("investment-ai-decision-core-v2", prompt_audit["decisionCore"]["schemaVersion"])
+        self.assertEqual("notification-ai-context-route-v3", prompt_audit["contextRouting"]["version"])
+        self.assertEqual("investment-ai-judge-v15", prompt_audit["promptRelease"]["version"])
         self.assertEqual("wait-until-complete", prompt_audit["executionSpans"]["completionPolicy"])
         self.assertIn("queueWaitMs", prompt_audit["executionSpans"])
         self.assertIn("promptPreparationMs", prompt_audit["executionSpans"])

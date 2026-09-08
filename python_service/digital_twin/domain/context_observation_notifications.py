@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Mapping
 
-from .hypothesis_lifecycle import relation_lifecycle_transition_contract
+from .hypothesis_lifecycle import (
+    has_material_delta,
+    relation_lifecycle_transition_contract,
+)
 from .notification_ai_context import is_graph_backed_relation_context
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
 CONTEXT_OBSERVATION_DECISION_MODE = "typedb-context-observation"
-CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v3"
+CONTEXT_OBSERVATION_DELIVERY_VERSION = "typedb-context-observation-delivery-v4"
 REVIEW_OBSERVATION_NOTIFICATION_VERSION = "typedb-review-observation-notification-v1"
 REVIEW_OBSERVATION_DECISION_MODE = "typedb-review-observation"
-REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v3"
+REVIEW_OBSERVATION_DELIVERY_VERSION = "typedb-review-observation-delivery-v4"
 
 DELIVERY_POLICY_BLOCKING_DECISIONS = {
     "baseline",
@@ -32,6 +35,16 @@ def _text(value: object) -> str:
 
 
 def _delivery_policy_block_reason(payload: Mapping[str, object]) -> str:
+    cadence = _mapping(payload.get("preDecisionDeliveryCadence")) or _mapping(
+        _mapping(payload.get("metadata")).get("preDecisionDeliveryCadence")
+    )
+    if cadence and cadence.get("eligible") is False:
+        minutes = _text(cadence.get("minutes"))
+        return (
+            "같은 종목의 추론 알림 간격"
+            + (" " + minutes + "분" if minutes else "")
+            + "이 지나지 않아 AI 해석은 웹 이력에만 저장합니다."
+        )
     decision = _text(payload.get("cooldownDecision")).lower()
     if payload.get("cooldownSuppressed") is True or decision in DELIVERY_POLICY_BLOCKING_DECISIONS:
         return _text(payload.get("cooldownReason")) or (
@@ -51,6 +64,29 @@ def _relation_context(value: object) -> Dict[str, object]:
         return relation
     if payload.get("graphStoreInference") or payload.get("graphStoreUsed"):
         return payload
+    return {}
+
+
+def _reasoning_delivery_trigger(value: object) -> Dict[str, object]:
+    payload = _mapping(value)
+    trigger = _mapping(payload.get("reasoningDeliveryTrigger"))
+    if not trigger:
+        trigger = _mapping(_mapping(payload.get("metadata")).get("reasoningDeliveryTrigger"))
+    return trigger
+
+
+def _material_review_lifecycle_transition(value: object) -> Dict[str, object]:
+    payload = _mapping(value)
+    transition = _mapping(payload.get("relationLifecycleTransition"))
+    relation = _relation_context(payload)
+    if not transition:
+        transition = relation_lifecycle_transition_contract(relation)
+    if not transition or not bool(transition.get("material")):
+        return {}
+    current_state = _text(transition.get("currentState")).lower()
+    evidence_delta = _mapping(transition.get("evidenceDelta"))
+    if current_state in {"observed", "invalidated", "expired"} or has_material_delta(evidence_delta):
+        return transition
     return {}
 
 
@@ -217,9 +253,10 @@ def is_typedb_context_observation_notification(value: object) -> bool:
 def typedb_review_observation_contract(value: object) -> Dict[str, object]:
     """Return an actionless contract for TypeDB hypotheses that cannot act alone.
 
-    A risk or constraint hypothesis can be useful enough to notify, but it may
-    not manufacture HOLD/BUY/SELL.  The persisted synthesis action authority is
-    the boundary: only ``originate`` may enter the investment-judgement path.
+    A risk, constraint, or still-unqualified predictive hypothesis can be
+    useful enough for an AI explanation, but it may not manufacture
+    HOLD/BUY/SELL. Execution-qualified ``originate`` syntheses remain on the
+    investment-judgement path; shadow qualification stays review-only.
     """
 
     payload = _mapping(value)
@@ -232,7 +269,24 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
     action_authority = _text(
         synthesis.get("action_authority") or synthesis.get("actionAuthority")
     ).lower()
-    if action_authority not in {"modify", "observe"}:
+    disposition_code = _text(
+        synthesis.get("disposition_code") or synthesis.get("dispositionCode")
+    ).upper()
+    execution_eligible_hypothesis_ids = [
+        _text(item)
+        for item in (
+            synthesis.get("execution_eligible_hypothesis_ids")
+            or synthesis.get("executionEligibleHypothesisIds")
+            or []
+        )
+        if _text(item)
+    ]
+    qualification_pending = bool(
+        action_authority == "originate"
+        and disposition_code == "HYPOTHESIS_QUALIFICATION_PENDING"
+        and not execution_eligible_hypothesis_ids
+    )
+    if action_authority not in {"modify", "observe"} and not qualification_pending:
         return {}
     selected_rule_id = _text(
         synthesis.get("selected_rule_id")
@@ -252,11 +306,16 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         return {}
     subject = _mapping(relation.get("subject"))
     facts = _mapping(relation.get("facts"))
+    lifecycle_transition = relation_lifecycle_transition_contract(relation)
     return {
         "schemaVersion": REVIEW_OBSERVATION_NOTIFICATION_VERSION,
         "status": "eligible",
         "decisionMode": REVIEW_OBSERVATION_DECISION_MODE,
-        "messageClass": "typedb-risk-or-constraint-review",
+        "messageClass": (
+            "typedb-hypothesis-qualification-review"
+            if qualification_pending
+            else "typedb-risk-or-constraint-review"
+        ),
         "selectedRuleId": selected_rule_id,
         "ruleKind": "review-observation",
         "decisionEligibility": "review-only",
@@ -265,10 +324,16 @@ def typedb_review_observation_contract(value: object) -> Dict[str, object]:
         "requiresAiNarrative": True,
         "actionAuthority": action_authority,
         "action": "NO_ACTION",
-        "validationState": "review-only",
+        "validationState": (
+            "qualification-pending" if qualification_pending else "review-only"
+        ),
         "symbol": _text(subject.get("symbol") or facts.get("symbol")).upper(),
         "market": _text(subject.get("market") or facts.get("market")).upper(),
         "eligibleHypothesisIds": eligible_hypothesis_ids,
+        "executionEligibleHypothesisIds": execution_eligible_hypothesis_ids,
+        "qualificationPending": qualification_pending,
+        "dispositionCode": disposition_code,
+        "relationLifecycleTransition": lifecycle_transition,
         "graphSource": _text(relation.get("source")),
         "graphStore": _text(relation.get("graphStore")),
     }
@@ -421,6 +486,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     })
     verified_evidence = context_observation_evidence_presentation(payload)
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
+    reasoning_trigger = _reasoning_delivery_trigger(payload)
     authorization_sources = []
     if material_source_keys:
         authorization_sources.append("material-source-event")
@@ -430,6 +496,11 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         authorization_sources.append("verified-source-document")
     if notification_intent_rule_ids:
         authorization_sources.append("typedb-notification-intent")
+    if (
+        reasoning_trigger.get("material") is True
+        and reasoning_trigger.get("userObservable") is True
+    ):
+        authorization_sources.append("verified-reasoning-trigger")
     # Lifecycle changes remain visible in the graph audit, but do not grant a
     # push by themselves. A source document, verified threshold, or explicit
     # TypeDB notification-intent rule must provide the user-facing reason.
@@ -450,6 +521,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "verifiedFollowUpTransitionCount": len(verified_follow_ups),
         "notificationIntentRuleIds": notification_intent_rule_ids,
         "verifiedEvidenceId": _text(verified_evidence.get("evidenceId")),
+        "reasoningDeliveryTrigger": reasoning_trigger,
         "relationLifecycleTransition": lifecycle_transition,
     }
     if outcome != "OBSERVATION":
@@ -492,6 +564,8 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
     relation_transition = _mapping(payload.get("decisionTransition")) or _mapping(
         _mapping(payload.get("ontologyRelationDiff")).get("decisionTransition")
     )
+    lifecycle_transition = _material_review_lifecycle_transition(payload)
+    reasoning_trigger = _reasoning_delivery_trigger(payload)
     insight = _mapping(payload.get("ontologyInsight"))
     semantic = _mapping(insight.get("semanticComponents"))
     material_source_keys = sorted({
@@ -525,6 +599,13 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         authorization_sources.append("material-source-event")
     if verified_follow_ups:
         authorization_sources.append("verified-follow-up-transition")
+    if (
+        reasoning_trigger.get("material") is True
+        and reasoning_trigger.get("userObservable") is True
+    ):
+        authorization_sources.append("verified-reasoning-trigger")
+    if lifecycle_transition:
+        authorization_sources.append("material-hypothesis-transition")
 
     decision = {
         "version": REVIEW_OBSERVATION_DELIVERY_VERSION,
@@ -539,7 +620,10 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
         "verifiedFollowUpTransitionCount": len(verified_follow_ups),
         "nextConditionAvailable": next_condition_available,
         "relationTransitionMaterial": bool(relation_transition.get("material")),
+        "reasoningDeliveryTrigger": reasoning_trigger,
+        "relationLifecycleTransition": lifecycle_transition,
         "actionAuthority": contract.get("actionAuthority"),
+        "qualificationPending": bool(contract.get("qualificationPending")),
     }
     if outcome != "REVIEW_ONLY":
         decision.update({
@@ -557,7 +641,7 @@ def review_observation_delivery_decision(value: object) -> Dict[str, object]:
     if authorization_sources and (next_condition_available or verified_follow_ups):
         decision.update({
             "decision": "send",
-            "reason": "새 중요 원문 또는 검증된 후속 조건 전환과 다음 확인 항목이 연결됐습니다.",
+            "reason": "검증된 시장·근거 변화와 AI가 제시한 다음 확인 조건이 연결됐습니다.",
             "suppressionReason": "",
             "pushValueClass": "material-review-observation",
         })

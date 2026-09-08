@@ -311,6 +311,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
         self._assert_non_originating_hypothesis_routes_to_review_observation()
+        self._assert_qualification_pending_originating_hypothesis_routes_to_ai_review()
         self._assert_target_scope_repair_is_retryable_without_duplicate_flag()
         self._assert_target_scope_repair_uses_bounded_subject_local_wait()
         self._assert_failure_recovery_allows_only_repairable_blocked_results()
@@ -434,6 +435,102 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertFalse(event.metadata["requiresAiJudgement"])
         self.assertEqual("NO_ACTION", event.metadata["contextObservationDecision"]["action"])
         self._assert_relation_resolution_without_hypothesis_routes_to_observation()
+
+    def _assert_qualification_pending_originating_hypothesis_routes_to_ai_review(self):
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+        snapshot = SimpleNamespace(
+            account_id="acct",
+            account_label="Test",
+            generated_at="2026-09-09T00:00:00Z",
+        )
+        rule = {
+            "ruleId": "graph.temporal.failed_recovery.risk.v1",
+            "matched": True,
+            "knowledgeBasis": {
+                "ruleKind": "predictive-hypothesis",
+                "decisionEligibility": "conditional",
+                "requiresHypothesis": True,
+            },
+        }
+        transition = {
+            "transitionId": "transition:nvda:observed",
+            "lifecycleKey": "v2:account:nvda-recovery",
+            "lifecycleId": "hypothesis:nvda:recovery",
+            "scope": "account",
+            "previousState": "",
+            "currentState": "observed",
+            "occurredAt": "2026-09-09T00:00:00Z",
+            "reason": "가격 관찰 뒤 회복 위험 관계가 새로 성립했습니다.",
+            "materialChange": True,
+        }
+        relation = {
+            "source": "typedbInferenceBox",
+            "graphStore": "typedb",
+            "graphStoreUsed": True,
+            "fallbackUsed": False,
+            "sourceAboxSnapshotId": "abox:nvda:review",
+            "inferenceGenerationId": "generation:nvda:review",
+            "generationAligned": True,
+            "subject": {"symbol": "NVDA", "name": "NVIDIA", "market": "US"},
+            "facts": {"currentPrice": 225.45, "source": "holding"},
+            "decision": {
+                "selectedRuleId": rule["ruleId"],
+                "label": "가격 회복 위험 재검토",
+                "basis": "typedbInferenceBox",
+            },
+            "activeRules": [rule],
+            "matchedRules": [rule],
+            "hypothesisLifecycle": {"transitions": [transition]},
+            "graphStoreInference": {
+                "graphStore": "typedb",
+                "sourceAboxSnapshotId": "abox:nvda:review",
+                "inferenceGenerationId": "generation:nvda:review",
+                "relations": [rule],
+                "traces": [{"traceId": "trace:nvda:review", **rule}],
+            },
+        }
+        synthesis = DecisionSynthesis(
+            synthesis_id="synthesis:nvda:qualification",
+            account_id="acct",
+            symbol="NVDA",
+            source_abox_snapshot_id="abox:nvda:review",
+            inference_generation_id="generation:nvda:review",
+            graph_candidate_action="HOLD",
+            eligible_hypothesis_ids=("hypothesis:nvda:recovery",),
+            execution_eligible_hypothesis_ids=(),
+            action_authority="originate",
+            review_level="check",
+            disposition_code="HYPOTHESIS_QUALIFICATION_PENDING",
+        )
+        source_trigger = {
+            "version": "reasoning-delivery-trigger-v1",
+            "status": "verified-material-transition",
+            "material": True,
+            "userObservable": True,
+            "symbol": "NVDA",
+            "kinds": ["verified-market-observation-followup"],
+            "reasons": ["verified-observation-followup"],
+            "materialRevisionKeys": ["revision:nvda:price:2"],
+            "observationFollowup": True,
+        }
+
+        event = builder._base_event(
+            snapshot,
+            relation,
+            synthesis,
+            source_trigger=source_trigger,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual("WATCH", event.severity)
+        self.assertEqual("typedb-review-observation", event.metadata["notificationDecisionMode"])
+        self.assertTrue(event.metadata["contextObservationDecision"]["qualificationPending"])
+        self.assertFalse(event.metadata["requiresAiJudgement"])
+        self.assertEqual(source_trigger, event.metadata["reasoningDeliveryTrigger"])
+        self.assertEqual(
+            "created",
+            event.metadata["relationLifecycleTransition"]["changeKind"],
+        )
 
     def _assert_relation_resolution_without_hypothesis_routes_to_observation(self):
         builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))

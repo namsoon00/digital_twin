@@ -7,9 +7,11 @@ from digital_twin.application.investment_reasoning.orchestrator import (
 from digital_twin.domain.investment_reasoning.subject_case import (
     ABSTAIN,
     OBSERVATION,
+    REVIEW_ONLY,
     SUBJECT_ABSTAINED,
     SUBJECT_OBSERVATION,
     SUBJECT_READY,
+    SUBJECT_REVIEW_ONLY,
 )
 from digital_twin.domain.investment_reasoning import CASE_DECISION_SYNTHESIZED
 
@@ -174,6 +176,38 @@ class SubjectDecisionRecoveryTests(unittest.TestCase):
         self.assertEqual(OBSERVATION, observation.publication.outcome_kind)
         self.assertEqual(SUBJECT_READY, actionable.stage)
         self.assertIsNone(actionable.publication)
+
+        qualification_pending = StaleCase()
+        qualification_pending.subject_case_id = "subject:nvda:qualification"
+        qualification_pending.batch_case_id = "case:qualification"
+        qualification_pending.symbol = "NVDA"
+        qualification_case = SimpleNamespace(
+            case_id="case:qualification",
+            stage=CASE_DECISION_SYNTHESIZED,
+            inference_result=SimpleNamespace(trace_complete=True),
+            decision_syntheses=(SimpleNamespace(
+                symbol="NVDA",
+                action_authority="originate",
+                disposition_code="HYPOTHESIS_QUALIFICATION_PENDING",
+                eligible_hypothesis_ids=("hypothesis:nvda",),
+                execution_eligible_hypothesis_ids=(),
+            ),),
+        )
+        qualification_orchestrator = InvestmentReasoningOrchestrator(
+            Repository(qualification_case),
+            subject_case_repository=MixedSubjectStore([qualification_pending]),
+        )
+
+        qualification_orchestrator.review_observation_validated(
+            qualification_case.case_id,
+            subject_symbols=["NVDA"],
+        )
+
+        self.assertEqual(SUBJECT_REVIEW_ONLY, qualification_pending.stage)
+        self.assertEqual(
+            REVIEW_ONLY,
+            qualification_pending.publication.outcome_kind,
+        )
 
 
 if __name__ == "__main__":

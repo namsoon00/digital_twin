@@ -18,6 +18,7 @@ from digital_twin.domain.investment_alert_coverage import (
     derive_coverage_outcome,
     evaluate_alert_coverage_health,
     material_event_assessment,
+    reasoning_delivery_trigger,
 )
 
 
@@ -48,6 +49,38 @@ class InvestmentAlertCoverageTests(unittest.TestCase):
         }, "MSTR")
         self.assertFalse(quiet)
         self.assertEqual("상태 유지", quiet_reason)
+
+        trigger = reasoning_delivery_trigger([{
+            "eventId": "reasoning:event:1",
+            "name": "ontology.reasoning_requested",
+            "occurredAt": "2026-09-09T00:00:00Z",
+            "payload": {
+                "observationFollowupSymbols": ["028260"],
+                "changedFieldsBySymbol": {
+                    "028260": ["marketObservationFollowup"],
+                },
+                "factRevisionsBySymbol": {"028260": "revision:price:2"},
+                "sourceObservedAt": "2026-09-08T23:59:00Z",
+            },
+        }], "028260")
+        self.assertEqual("verified-material-transition", trigger["status"])
+        self.assertTrue(trigger["observationFollowup"])
+        self.assertEqual(["revision:price:2"], trigger["materialRevisionKeys"])
+        self.assertEqual(
+            ["marketObservationFollowup"],
+            trigger["changedFields"],
+        )
+        self.assertEqual({}, reasoning_delivery_trigger([{
+            "eventId": "reasoning:event:quiet",
+            "payload": {
+                "symbols": ["028260"],
+                "materialityAssessments": [{
+                    "subject": "028260",
+                    "passed": False,
+                    "reason": "상태 유지",
+                }],
+            },
+        }], "028260"))
 
     def test_terminal_outcomes_are_explicit(self):
         self.assertEqual(DELIVERED, derive_coverage_outcome({"notificationStatus": "done"})["state"])

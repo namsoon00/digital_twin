@@ -1828,7 +1828,9 @@ def compact_relation_context_for_ai(context: object) -> Dict[str, object]:
         "decisionState", "evidenceState", "whyNow", "signalConflicts",
         "inferenceTimeline", "inferenceGenerationId", "inferenceGenerationAt", "ruleboxRulesHash",
         "targetRole", "actionPolicy", "allowedActions", "blockedActions", "decision", "actionEnvelope", "executionPlan",
-        "hypothesisTemplates", "hypothesisSet", "hypothesisCalibration", "hypothesisDecisionBrief", "researchPlan", "selfQuestions", "epistemicState",
+        "hypothesisTemplates", "hypothesisSet", "hypothesisCalibration", "hypothesisDecisionBrief",
+        "hypothesisLifecycle", "relationLifecycleTransition",
+        "researchPlan", "selfQuestions", "epistemicState",
     ]
     compact = {key: context.get(key) for key in keep_keys if context.get(key) not in (None, "", [], {})}
     compact["activeRules"] = compact_rule_rows(context.get("activeRules") or context.get("matchedRules") or [], 16)

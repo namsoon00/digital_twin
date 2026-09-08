@@ -12,6 +12,7 @@ from ...domain.context_observation_notifications import (
 from ...domain.data_freshness import freshness_from_snapshot_subject
 from ...domain.hypothesis_lifecycle import relation_lifecycle_transition_contract
 from ...domain.independent_reasoning import IndependentReasoningRequest
+from ...domain.investment_alert_coverage import reasoning_delivery_trigger
 from ...domain.investment_reasoning import decision_synthesis_from_relation_context
 from ...domain.investment_reasoning.disposition import (
     reasoning_disposition_delivery,
@@ -178,10 +179,11 @@ class V2GraphDecisionCandidateBuilder:
         ).upper()
         return severity if severity in {"ALERT", "WATCH"} else ""
 
-    def _base_event(self, snapshot, relation, synthesis):
+    def _base_event(self, snapshot, relation, synthesis, source_trigger=None):
         subject = _mapping(relation.get("subject"))
         facts = _mapping(relation.get("facts"))
         decision = _mapping(relation.get("decision"))
+        source_trigger = _mapping(source_trigger)
         rule = V2GraphDecisionCandidateBuilder._signal_rule(relation)
         severity = V2GraphDecisionCandidateBuilder._notification_severity(relation)
         contract_payload = {
@@ -196,8 +198,8 @@ class V2GraphDecisionCandidateBuilder:
         lifecycle_transition = _mapping(
             narrative_observation.get("relationLifecycleTransition")
             if narrative_observation
-            else relation_lifecycle_transition_contract(relation)
-        )
+            else {}
+        ) or relation_lifecycle_transition_contract(relation)
         first_holding_review = (
             requires_ai_judgement
             and
@@ -213,6 +215,8 @@ class V2GraphDecisionCandidateBuilder:
         if not severity and first_holding_review:
             severity = "WATCH"
         if not severity and lifecycle_transition.get("material"):
+            severity = "WATCH"
+        if not severity and source_trigger.get("material"):
             severity = "WATCH"
         if not severity:
             return None
@@ -236,6 +240,14 @@ class V2GraphDecisionCandidateBuilder:
                     "TypeDB 관계 검토: " + label,
                     "투자 행동: 이 관계만으로 매수·매도 판단을 만들지 않음",
                 ]
+            if source_trigger:
+                trigger_reasons = [
+                    _text(item) for item in source_trigger.get("reasons") or [] if _text(item)
+                ]
+                lines.append(
+                    "추론 시작 근거: "
+                    + (", ".join(trigger_reasons[:3]) or "검증된 시장·근거 변화")
+                )
         else:
             lines = [
                 "TypeDB 판단 후보: " + label,
@@ -291,7 +303,9 @@ class V2GraphDecisionCandidateBuilder:
             "dataFreshnessRequired": True,
             "reasoningSourceObservedAt": _text(getattr(snapshot, "generated_at", "")),
             "firstHoldingReviewCandidate": first_holding_review,
+            "hypothesisLifecycle": _mapping(relation.get("hypothesisLifecycle")),
             "relationLifecycleTransition": lifecycle_transition,
+            "reasoningDeliveryTrigger": source_trigger,
             "reasoningDispositionDelivery": disposition_delivery,
         }
         if narrative_observation:
@@ -367,7 +381,19 @@ class V2GraphDecisionCandidateBuilder:
                 hypothesis_candidates.append({
                     "context": {"ontologyRelationContext": dict(relation)},
                 })
-                event = self._base_event(snapshot, relation, synthesis)
+                source_trigger = reasoning_delivery_trigger(
+                    request.source_events,
+                    symbol,
+                    changed_fields_by_symbol=_mapping(request.context).get(
+                        "changedFieldsBySymbol"
+                    ),
+                )
+                event = self._base_event(
+                    snapshot,
+                    relation,
+                    synthesis,
+                    source_trigger=source_trigger,
+                )
                 if event is not None:
                     base_events.append(event)
 

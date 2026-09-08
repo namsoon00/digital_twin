@@ -5,7 +5,12 @@ from digital_twin.domain.ontology_fact_slots import (
     build_fact_slot_projection_plan,
     select_fact_slot_scope_ids,
 )
-from digital_twin.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+from digital_twin.domain.ontology_contracts import (
+    OntologyEntity,
+    OntologyRelation,
+    PortfolioOntology,
+    entity_id,
+)
 from digital_twin.domain.portfolio_ontology_lifecycle_concepts import (
     add_portfolio_lifecycle_concepts,
 )
@@ -466,19 +471,20 @@ class OntologyFactSlotTests(unittest.TestCase):
         self.assertTrue(compact_scope.startswith("reference:item:"))
 
     def test_dynamic_account_facts_use_independent_item_scopes(self):
+        self.assertEqual(
+            "portfolio-decision-cycle:main:1",
+            entity_id(
+                "portfolio-decision-cycle",
+                "portfolio-decision-cycle:main:1",
+            ),
+        )
         graph = PortfolioOntology(
             "main",
             entities=[
                 OntologyEntity(
-                    "inferred-portfolio-activity:main:1",
-                    "Portfolio activity",
-                    "inferred-portfolio-activity",
-                    {"ontologyBox": "ABox"},
-                ),
-                OntologyEntity(
-                    "portfolio-action-candidate:main:1",
-                    "Action candidate",
-                    "portfolio-action-candidate",
+                    "portfolio:main",
+                    "Portfolio",
+                    "portfolio",
                     {"ontologyBox": "ABox"},
                 ),
                 OntologyEntity(
@@ -488,6 +494,51 @@ class OntologyFactSlotTests(unittest.TestCase):
                     {"ontologyBox": "ABox", "exposureKey": "MSTR"},
                 ),
             ],
+        )
+        add_portfolio_lifecycle_concepts(
+            graph,
+            "portfolio:main",
+            {"portfolioLifecycle": {
+                "inferredActivities": [{
+                    "entryId": "inferred-portfolio-activity:main:1",
+                    "instrumentName": "Cash",
+                }],
+                "portfolioRiskSnapshot": {
+                    "riskSnapshotId": "portfolio-risk-snapshot:main:1",
+                    "positions": [],
+                },
+                "rebalanceProposal": {
+                    "proposalId": "rebalance-proposal:main:1",
+                    "scenarios": [{
+                        "scenario_id": "rebalance-scenario:main:1",
+                        "label": "Scenario",
+                    }],
+                },
+                "portfolioDecisionCycle": {
+                    "cycleId": "portfolio-decision-cycle:main:1",
+                    "candidates": [{
+                        "candidate_id": "portfolio-action-candidate:main:1",
+                        "candidate_type": "HOLD",
+                        "label": "Hold",
+                    }],
+                    "dataState": "complete",
+                },
+            }},
+        )
+
+        entity_ids = {item.entity_id for item in graph.entities}
+        self.assertFalse(any(
+            item.entity_id.startswith(item.kind + ":" + item.kind + ":")
+            for item in graph.entities
+        ))
+        self.assertEqual(
+            set(),
+            {
+                endpoint
+                for relation in graph.relations
+                for endpoint in (relation.source, relation.target)
+                if endpoint not in entity_ids
+            },
         )
 
         apply_scoped_abox_identity(graph, account_id="main")

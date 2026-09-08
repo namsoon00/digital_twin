@@ -159,4 +159,7 @@ class PortfolioOntology:
 
 def entity_id(kind: str, value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9가-힣_.:-]+", "-", str(value or "").strip())
-    return kind + ":" + (normalized or "unknown")
+    prefix = str(kind or "").strip() + ":"
+    if normalized.startswith(prefix):
+        return normalized
+    return prefix + (normalized or "unknown")

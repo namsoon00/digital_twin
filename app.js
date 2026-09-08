@@ -393,6 +393,17 @@
   var snapshotPollAttempts = 0;
   var SNAPSHOT_RESUME_CHECK_INTERVAL_MS = 60000;
   var SNAPSHOT_REFRESH_POLL_LIMIT = 18;
+  var tabDataPreloadTimer = null;
+  var tabDataPreloadIdleHandle = null;
+  var tabDataPreloadPromise = null;
+  var tabDataPreloadRequested = false;
+  var tabDataPreloadForcePending = false;
+  var tabDataPreloadPrerequisitesReady = false;
+  var tabDataPreloadLastIdentity = "";
+  var tabDataPreloadLastAt = 0;
+  var tabDataPreloadRequestStarting = false;
+  var TAB_DATA_PRELOAD_STALE_MS = 120000;
+  var TAB_DATA_PRELOAD_MAX_CONCURRENCY = 2;
   var scheduledRenderFrame = 0;
   var activeJsonRequests = {};
   var jsonResponseCache = {};
@@ -1079,7 +1090,7 @@
     var controller = typeof window.AbortController === "function" ? new window.AbortController() : null;
     var timeoutMs = Math.max(1000, Number(options.timeoutMs || REQUEST_TIMEOUT_MS));
     var timeout = controller ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
-    var activityId = options.silent ? "" : beginNetworkActivity(path, "GET");
+    var activityId = (options.silent || tabDataPreloadRequestStarting) ? "" : beginNetworkActivity(path, "GET");
     var requestMetric = runtimePerformance ? runtimePerformance.begin("api-request", { path: path, key: key }) : "";
     var responseStatus = 0;
     var requestOutcome = "ok";
@@ -2124,7 +2135,7 @@
 
   function registerOrbitAlphaServiceWorker() {
     if (window.location.protocol === "file:" || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("service-worker.js?v=20260907-auto-freshness-v1", { updateViaCache: "none" }).then(function (registration) {
+    navigator.serviceWorker.register("service-worker.js?v=20260909-tab-preload-v1", { updateViaCache: "none" }).then(function (registration) {
       appServiceWorkerRegistration = registration;
       if (registration.waiting && navigator.serviceWorker.controller) {
         appShellStatus.updateAvailable = true;
@@ -3487,42 +3498,179 @@
     });
   }
 
-  function primeActiveTabData(tab) {
+  function primeActiveTabData(tab, force) {
     if (!state.snapshot) return;
     var active = normalizeTabId(tab || state.activeTab);
+    force = Boolean(force);
     if (!state.symbolUniverseRefreshStatusLoaded && !state.symbolUniverseRefreshStatusLoading) {
       loadSymbolUniverseRefreshStatus(false);
     }
-    if ((active === "overview" || active === "calendar") && !state.investmentCalendar && !state.investmentCalendarLoading) {
-      loadInvestmentCalendar(false);
+    if ((active === "overview" || active === "calendar") && (force || !state.investmentCalendar) && !state.investmentCalendarLoading) {
+      loadInvestmentCalendar(force);
     }
-    if (active === "overview" && !state.dashboardSummary && !state.dashboardSummaryLoading) loadDashboardSummary(false);
-    if (active === "portfolio") loadPortfolioReadModel(state.activePortfolioView, false);
+    if (active === "overview" && (force || !state.dashboardSummary) && !state.dashboardSummaryLoading) loadDashboardSummary(force);
+    if (active === "portfolio") loadPortfolioReadModel(state.activePortfolioView, force);
     if (active === "feed") {
-      if (!state.marketReadModel && !state.marketReadModelLoading) loadMarketReadModel(false);
-      if (!state.researchEvidence && !state.researchEvidenceLoading) loadResearchEvidence(false);
+      if ((force || !state.marketReadModel) && !state.marketReadModelLoading) loadMarketReadModel(force);
+      if ((force || !state.researchEvidence) && !state.researchEvidenceLoading) loadResearchEvidence(force);
       if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
       if (normalizeMarketWorkspaceMode(state.marketWorkspaceMode) === "universe" && !state.symbolUniverseLoaded && !state.symbolUniverseLoading) {
         loadSymbolUniverse();
       }
     }
     if (active === "notifications") {
-      if (!state.notificationJobsLoaded && !state.notificationJobsLoading) loadNotificationJobs();
+      var notificationFirstPageRefresh = force
+        && Number(state.notificationJobsOffset || 0) === 0
+        && !state.notificationJobsCursor;
+      if ((!state.notificationJobsLoaded || notificationFirstPageRefresh) && !state.notificationJobsLoading) loadNotificationJobs();
     }
     if (active === "settings") {
       if (!state.serverSettingsLoaded && !state.serverSettingsLoading) loadServerSettings();
       if (!state.serviceAccountsLoaded && !state.serviceAccountsLoading) loadServiceAccounts();
     }
-    if (active === "operations" && !state.operationsHealthLoading && operationsHealthIsStale(120000)) {
-      loadOperationsHealth(Boolean(state.operationsHealth));
+    if (active === "operations" && !state.operationsHealthLoading && (force || operationsHealthIsStale(120000))) {
+      loadOperationsHealth(force || Boolean(state.operationsHealth));
     }
     if (active === "modeling" || active === "experiments") {
-      if ((!state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) loadInvestmentFlow(false);
-      if (shouldLoadStrategyProposals() && strategyProposalsNeedLoad() && !state.strategyProposalsLoading) loadStrategyProposals(false);
-      if (shouldLoadHypothesisWorkspace() && !state.hypothesisWorkspaceLoaded && !state.hypothesisWorkspaceLoading) loadHypothesisWorkspace(false);
-      if (shouldLoadOntologyInferenceLedger() && !state.ontologyInferenceLedgerLoaded && !state.ontologyInferenceLedgerLoading) loadOntologyInferenceLedger(false);
-      if (shouldLoadOntologyStrategyDetail() && !snapshotHasFullOntologyDetail(state.snapshot) && !state.ontologyStrategyDetailLoading) loadOntologyStrategyDetail(false);
+      if ((force || !state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()) && !state.investmentFlowLoading) loadInvestmentFlow(force);
+      if (shouldLoadStrategyProposals() && (force || strategyProposalsNeedLoad()) && !state.strategyProposalsLoading) loadStrategyProposals(force);
+      if (shouldLoadHypothesisWorkspace() && (force || !state.hypothesisWorkspaceLoaded) && !state.hypothesisWorkspaceLoading) loadHypothesisWorkspace(force);
+      if (shouldLoadOntologyInferenceLedger() && (force || !state.ontologyInferenceLedgerLoaded) && !state.ontologyInferenceLedgerLoading) loadOntologyInferenceLedger(force);
+      if (shouldLoadOntologyStrategyDetail() && (force || !snapshotHasFullOntologyDetail(state.snapshot)) && !state.ontologyStrategyDetailLoading) loadOntologyStrategyDetail(force);
     }
+  }
+
+  function tabDataPreloadIdentity() {
+    var snapshot = state.snapshot || {};
+    return [
+      String(snapshot.generatedAt || "snapshot"),
+      String(consoleReadModelAccountId() || "default")
+    ].join("|");
+  }
+
+  function tabDataPreloadTasks(force) {
+    var tasks = [];
+    var add = function (id, needed, loader) {
+      if (needed) tasks.push({ id: id, load: loader });
+    };
+    var portfolioView = normalizePortfolioView(state.activePortfolioView || "summary");
+    var canRefreshNotificationPage = !state.notificationJobsLoading
+      && (!state.notificationJobsLoaded || (
+        force
+        && Number(state.notificationJobsOffset || 0) === 0
+        && !state.notificationJobsCursor
+      ));
+
+    add("dashboard-summary", !state.dashboardSummaryLoading && (force || !state.dashboardSummary), function () {
+      return loadDashboardSummary(force);
+    });
+    add("portfolio-summary", !portfolioReadModelBusy("summary") && (force || !state.portfolioReadModels.summary), function () {
+      return loadPortfolioReadModel("summary", force, { prefetch: true });
+    });
+    if (portfolioView !== "summary") {
+      add("portfolio-" + portfolioView, !portfolioReadModelBusy(portfolioView) && (force || !state.portfolioReadModels[portfolioView]), function () {
+        return loadPortfolioReadModel(portfolioView, force, { prefetch: true });
+      });
+    }
+    add("market-instruments", !state.marketReadModelLoading && (force || !state.marketReadModel), function () {
+      return loadMarketReadModel(force);
+    });
+    add("investment-calendar", !state.investmentCalendarLoading && (force || !state.investmentCalendar), function () {
+      return loadInvestmentCalendar(force);
+    });
+    add("investment-cases", !state.investmentFlowLoading && (force || !state.investmentFlowLoaded || state.investmentFlowAccountId !== activeOntologyAccountId()), function () {
+      if (state.investmentFlowLoading) return Promise.resolve(state.investmentFlow);
+      return loadInvestmentFlow(force);
+    });
+    add("research-evidence", !state.researchEvidenceLoading && (force || !state.researchEvidence), function () {
+      return loadResearchEvidence(force);
+    });
+    add("notification-jobs", canRefreshNotificationPage, function () {
+      if (state.notificationJobsLoading) return Promise.resolve();
+      if (state.notificationJobsLoaded && (Number(state.notificationJobsOffset || 0) > 0 || state.notificationJobsCursor)) return Promise.resolve();
+      return loadNotificationJobs();
+    });
+    add("strategy-proposals", !state.strategyProposalsLoading && (force || !state.strategyProposalsLoaded), function () {
+      if (state.strategyProposalsLoading) return Promise.resolve(state.strategyProposals);
+      return loadStrategyProposals(force);
+    });
+    add("operations-health", !state.operationsHealthLoading && (force || operationsHealthIsStale(TAB_DATA_PRELOAD_STALE_MS)), function () {
+      return loadOperationsHealth(force || Boolean(state.operationsHealth));
+    });
+    return tasks;
+  }
+
+  function runTabDataPreloadQueue(tasks) {
+    var cursor = 0;
+    var workerCount = Math.min(TAB_DATA_PRELOAD_MAX_CONCURRENCY, tasks.length);
+    var workers = [];
+    var runNext = function () {
+      var task = tasks[cursor];
+      cursor += 1;
+      if (!task) return Promise.resolve();
+      var request;
+      tabDataPreloadRequestStarting = true;
+      try {
+        request = Promise.resolve(task.load());
+      } catch (error) {
+        request = Promise.reject(error);
+      } finally {
+        tabDataPreloadRequestStarting = false;
+      }
+      return request
+        .catch(function () { return null; })
+        .then(runNext);
+    };
+    for (var index = 0; index < workerCount; index += 1) workers.push(runNext());
+    return Promise.all(workers);
+  }
+
+  function startTabDataPreload() {
+    if (tabDataPreloadPromise || !state.snapshot || !tabDataPreloadPrerequisitesReady) return tabDataPreloadPromise || Promise.resolve();
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return Promise.resolve();
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return Promise.resolve();
+    if (snapshotRefreshInProgress(state.readModel)) return Promise.resolve();
+    var identity = tabDataPreloadIdentity();
+    var identityChanged = Boolean(tabDataPreloadLastIdentity && tabDataPreloadLastIdentity !== identity);
+    var stale = Boolean(tabDataPreloadLastAt && Date.now() - tabDataPreloadLastAt >= TAB_DATA_PRELOAD_STALE_MS);
+    var force = Boolean(tabDataPreloadForcePending || identityChanged || stale);
+    tabDataPreloadForcePending = false;
+    tabDataPreloadRequested = false;
+    var tasks = tabDataPreloadTasks(force);
+    if (!tasks.length) {
+      tabDataPreloadLastIdentity = identity;
+      tabDataPreloadLastAt = Date.now();
+      return Promise.resolve();
+    }
+    tabDataPreloadPromise = runTabDataPreloadQueue(tasks).finally(function () {
+      tabDataPreloadPromise = null;
+      tabDataPreloadLastIdentity = identity;
+      tabDataPreloadLastAt = Date.now();
+      if (tabDataPreloadRequested || tabDataPreloadLastIdentity !== tabDataPreloadIdentity()) {
+        scheduleTabDataPreload({ force: tabDataPreloadForcePending, reason: "queued" });
+      }
+    });
+    return tabDataPreloadPromise;
+  }
+
+  function scheduleTabDataPreload(options) {
+    options = options || {};
+    if (!state.snapshot) return;
+    tabDataPreloadRequested = true;
+    tabDataPreloadForcePending = tabDataPreloadForcePending || Boolean(options.force);
+    if (tabDataPreloadPromise || tabDataPreloadTimer || tabDataPreloadIdleHandle) return;
+    tabDataPreloadTimer = window.setTimeout(function () {
+      tabDataPreloadTimer = null;
+      var start = function () {
+        tabDataPreloadIdleHandle = null;
+        startTabDataPreload();
+      };
+      if (typeof window.requestIdleCallback === "function") {
+        tabDataPreloadIdleHandle = window.requestIdleCallback(start, { timeout: 1200 });
+      } else {
+        start();
+      }
+    }, options.immediate ? 0 : 300);
   }
 
   function navigateToTab(tab, options) {
@@ -3541,6 +3689,7 @@
     if (!options.skipHistory) writeTabHistory(nextTab, Boolean(options.replace));
     setAppNavHidden(false);
     primeActiveTabData(nextTab);
+    scheduleTabDataPreload({ reason: "tab-change" });
     render({ transition: "tab" });
   }
 
@@ -3618,6 +3767,7 @@
     state.activeTab = nextTab;
     if (nextTab !== "notifications") state.monitoringDetail = null;
     primeActiveTabData(nextTab);
+    scheduleTabDataPreload({ reason: "history-navigation" });
     render({ transition: "tab" });
     if (detailChanged && !nextWorkDetailLayer) restoreWorkDetailFocus();
   }
@@ -11969,7 +12119,12 @@
           state.portfolioReadModels = {};
           state.operationsHealth = null;
         }
-        primeActiveTabData(state.activeTab);
+        var refreshReadModels = snapshotChanged || Boolean(options.refresh && !snapshotRefreshInProgress(readModel));
+        primeActiveTabData(state.activeTab, refreshReadModels);
+        scheduleTabDataPreload({
+          force: refreshReadModels,
+          reason: options.reason || "snapshot-ready"
+        });
         if (snapshotRefreshInProgress(readModel)) {
           scheduleSnapshotPoll();
         } else {
@@ -12014,6 +12169,7 @@
     var recentlyChecked = snapshotLastCheckedAt && now - snapshotLastCheckedAt < SNAPSHOT_RESUME_CHECK_INTERVAL_MS;
     var shouldForce = Boolean(force || state.snapshotFromCache || (state.snapshot && snapshotFreshnessExpired(state.snapshot)));
     if (state.snapshot && recentlyChecked && !shouldForce && !snapshotRefreshInProgress(state.readModel)) {
+      scheduleTabDataPreload({ reason: reason || "fresh-snapshot" });
       return Promise.resolve(state.snapshot);
     }
     return load({ refresh: shouldForce, background: Boolean(state.snapshot), reason: reason || "automatic" });
@@ -36961,7 +37117,9 @@
       return null;
     });
   })).finally(function () {
+    tabDataPreloadPrerequisitesReady = true;
     if (state.snapshot) render();
+    scheduleTabDataPreload({ reason: "startup-prerequisites" });
   });
   snapshotLoadTask.catch(function () {
     return null;

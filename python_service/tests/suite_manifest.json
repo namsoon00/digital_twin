@@ -15,6 +15,7 @@
     {"file": "test_investment_decision_actionability.py", "tier": "unit", "core": true},
     {"file": "test_action_envelope_ai_gate.py", "tier": "unit", "core": true},
     {"file": "test_valuation_contracts.py", "tier": "unit", "core": true},
+    {"file": "test_instrument_valuation_query.py", "tier": "unit", "core": true},
     {"file": "test_decision_outcome_targets.py", "tier": "unit", "core": true},
     {"file": "test_ontology_change_impact.py", "tier": "unit", "core": true},
     {"file": "test_abox_lifecycle.py", "tier": "unit", "core": true},

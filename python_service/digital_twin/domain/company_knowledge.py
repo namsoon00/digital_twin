@@ -309,11 +309,15 @@ def _dividend_yield_contract(
     overview: Mapping[str, object],
     info: Mapping[str, object],
 ) -> Tuple[Optional[float], Optional[float], str]:
-    raw = optional_number(_overview_value(overview, info, "dividendYield"))
+    overview_raw = optional_number(overview.get("dividendYield"))
+    info_raw = optional_number(info.get("dividendYield"))
+    raw = overview_raw if overview_raw is not None else info_raw
     if raw is None:
         return None, None, ""
-    provider = _clean(overview.get("provider")).lower()
-    source_unit = _clean(overview.get("dividendYieldUnit")).lower()
+    provider = _clean(overview.get("provider")).lower() if overview_raw is not None else "yfinance"
+    source_unit = _clean(
+        overview.get("dividendYieldUnit") if overview_raw is not None else info.get("dividendYieldUnit")
+    ).lower()
     if source_unit not in {"ratio", "percent"}:
         source_unit = "percent" if provider == "yfinance" else "ratio"
     normalized = normalize_dividend_yield(raw, source_unit)
@@ -445,6 +449,103 @@ def _overview_value(overview: Mapping[str, object], info: Mapping[str, object], 
     return None
 
 
+def _positive_overview_value(overview: Mapping[str, object], info: Mapping[str, object], *keys: str) -> object:
+    """Prefer a usable positive multiple over provider zero sentinels."""
+
+    fallback = None
+    for key in keys:
+        for source in (overview, info):
+            value = source.get(key)
+            if not _nonempty(value):
+                continue
+            if fallback is None:
+                fallback = value
+            parsed = optional_number(value)
+            if parsed is not None and parsed > 0:
+                return value
+    return fallback
+
+
+def _nonzero_overview_value(overview: Mapping[str, object], info: Mapping[str, object], *keys: str) -> object:
+    """Keep negative earnings meaningful while treating zero as a fallback value."""
+
+    fallback = None
+    for key in keys:
+        for source in (overview, info):
+            value = source.get(key)
+            if not _nonempty(value):
+                continue
+            if fallback is None:
+                fallback = value
+            parsed = optional_number(value)
+            if parsed is not None and parsed != 0:
+                return value
+    return fallback
+
+
+def _valuation_facts(overview: Mapping[str, object], info: Mapping[str, object]) -> Dict[str, object]:
+    dividend_yield, dividend_yield_pct, _source_unit = _dividend_yield_contract(overview, info)
+    return {
+        "peRatio": optional_number(_positive_overview_value(overview, info, "peRatio", "trailingPE")),
+        "forwardPE": optional_number(_positive_overview_value(overview, info, "forwardPE")),
+        "pbr": optional_number(_positive_overview_value(overview, info, "pbr", "priceToBook")),
+        "pegRatio": optional_number(_positive_overview_value(overview, info, "pegRatio", "trailingPegRatio")),
+        "bookValue": optional_number(_nonzero_overview_value(overview, info, "bookValue", "bps")),
+        "trailingEPS": optional_number(_nonzero_overview_value(overview, info, "trailingEPS", "epsTrailingTwelveMonths", "trailingEps")),
+        "returnOnEquity": optional_number(_overview_value(overview, info, "returnOnEquity")),
+        "returnOnAssets": optional_number(_overview_value(overview, info, "returnOnAssets")),
+        "returnOnEquityPct": _ratio_percent(_overview_value(overview, info, "returnOnEquity")),
+        "returnOnAssetsPct": _ratio_percent(_overview_value(overview, info, "returnOnAssets")),
+        "enterpriseToEbitda": optional_number(_overview_value(overview, info, "enterpriseToEbitda")),
+        "dividendYield": dividend_yield,
+        "dividendYieldPct": dividend_yield_pct,
+        "beta": optional_number(_overview_value(overview, info, "beta")),
+    }
+
+
+def _current_valuation_fragment(external_signals: Mapping[str, object], symbol: str) -> Dict[str, object]:
+    """Refresh volatile valuation fields without rebuilding full statements."""
+
+    source = dict(external_signals or {}) if isinstance(external_signals, Mapping) else {}
+    overviews = source.get("companyOverviews") if isinstance(source.get("companyOverviews"), Mapping) else {}
+    yfinance_rows = source.get("yfinanceData") if isinstance(source.get("yfinanceData"), Mapping) else {}
+    overview = overviews.get(symbol) if isinstance(overviews.get(symbol), Mapping) else {}
+    yfinance = yfinance_rows.get(symbol) if isinstance(yfinance_rows.get(symbol), Mapping) else {}
+    info = yfinance.get("info") if isinstance(yfinance.get("info"), Mapping) else {}
+    if not overview and not info:
+        return {}
+    dividend_yield, _dividend_yield_pct, dividend_source_unit = _dividend_yield_contract(overview, info)
+    provenance = []
+    if _clean(overview.get("provider")):
+        provenance.append({
+            "provider": _clean(overview.get("provider")),
+            "asOf": _clean(overview.get("fetchedAt")),
+            "scope": "overview",
+        })
+    if info:
+        provenance.append({
+            "provider": _clean(yfinance.get("provider") or "yfinance"),
+            "asOf": _clean(yfinance.get("collectedAt")),
+            "scope": "overview-secondary",
+        })
+    return {
+        "schemaVersion": COMPANY_KNOWLEDGE_VERSION,
+        "symbol": symbol,
+        "companyName": _clean(overview.get("name") or info.get("longName") or symbol),
+        "valuation": {
+            key: value
+            for key, value in _valuation_facts(overview, info).items()
+            if value is not None
+        },
+        "valuationUnits": {
+            "dividendYield": "ratio",
+            "dividendYieldPct": "percent",
+            "dividendYieldSourceUnit": dividend_source_unit,
+        } if dividend_yield is not None else {},
+        "provenance": provenance,
+    }
+
+
 def build_company_knowledge(
     symbol: object,
     *,
@@ -509,23 +610,8 @@ def build_company_knowledge(
         "fiscalYearEndMonth": _clean(company.get("acc_mt")),
         "marketCapitalization": optional_number(_overview_value(overview, info, "marketCapitalization", "marketCap")),
     }
-    dividend_yield, dividend_yield_pct, dividend_source_unit = _dividend_yield_contract(overview, info)
-    valuation = {
-        "peRatio": optional_number(_overview_value(overview, info, "peRatio", "trailingPE")),
-        "forwardPE": optional_number(_overview_value(overview, info, "forwardPE")),
-        "pbr": optional_number(_overview_value(overview, info, "pbr", "priceToBook")),
-        "pegRatio": optional_number(_overview_value(overview, info, "pegRatio", "trailingPegRatio")),
-        "bookValue": optional_number(_overview_value(overview, info, "bookValue", "bps")),
-        "trailingEPS": optional_number(_overview_value(overview, info, "trailingEPS", "epsTrailingTwelveMonths", "trailingEps")),
-        "returnOnEquity": optional_number(_overview_value(overview, info, "returnOnEquity")),
-        "returnOnAssets": optional_number(_overview_value(overview, info, "returnOnAssets")),
-        "returnOnEquityPct": _ratio_percent(_overview_value(overview, info, "returnOnEquity")),
-        "returnOnAssetsPct": _ratio_percent(_overview_value(overview, info, "returnOnAssets")),
-        "enterpriseToEbitda": optional_number(_overview_value(overview, info, "enterpriseToEbitda")),
-        "dividendYield": dividend_yield,
-        "dividendYieldPct": dividend_yield_pct,
-        "beta": optional_number(_overview_value(overview, info, "beta")),
-    }
+    dividend_yield, _dividend_yield_pct, dividend_source_unit = _dividend_yield_contract(overview, info)
+    valuation = _valuation_facts(overview, info)
     ownership = {
         "institutionalOwnershipPct": (_safe_ratio(info.get("heldPercentInstitutions"), 1, 100.0) if optional_number(info.get("heldPercentInstitutions")) is not None else None),
         "insiderOwnershipPct": (_safe_ratio(info.get("heldPercentInsiders"), 1, 100.0) if optional_number(info.get("heldPercentInsiders")) is not None else None),
@@ -859,10 +945,14 @@ def company_prompt_context(
 
     normalized_symbol = _clean(symbol).upper()
     groups = external_signals.get("companyKnowledge") if isinstance(external_signals, Mapping) else {}
-    payload = groups.get(normalized_symbol) if isinstance(groups, Mapping) else {}
-    if not isinstance(payload, Mapping) or not payload:
+    stored = groups.get(normalized_symbol) if isinstance(groups, Mapping) else {}
+    refreshed = _current_valuation_fragment(external_signals, normalized_symbol)
+    payload = merge_company_knowledge_rows(
+        stored if isinstance(stored, Mapping) else {},
+        refreshed,
+    )
+    if not payload:
         return {}
-    payload = _normalize_company_knowledge_row(payload)
 
     def section(name: str, fields: Sequence[str]) -> Dict[str, object]:
         source = payload.get(name) if isinstance(payload.get(name), Mapping) else {}
@@ -922,15 +1012,19 @@ def company_prompt_context(
         if len(executives) >= 5:
             break
 
+    provenance_rows = sorted(
+        (item for item in payload.get("provenance", []) if isinstance(item, Mapping)),
+        key=lambda item: (provider_priority(item.get("provider")), _clean(item.get("asOf"))),
+        reverse=True,
+    )
     provenance = [
         {
             field: item.get(field)
             for field in ("provider", "scope", "asOf")
             if _nonempty(item.get(field))
         }
-        for item in payload.get("provenance", [])[:6]
-        if isinstance(item, Mapping)
-    ] if isinstance(payload.get("provenance"), list) else []
+        for item in provenance_rows[:8]
+    ]
 
     result = {
         "schemaVersion": payload.get("schemaVersion") or COMPANY_KNOWLEDGE_VERSION,

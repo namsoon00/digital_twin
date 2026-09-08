@@ -476,6 +476,15 @@ function checkWorkflowConsoleContract() {
   assertOk(code.indexOf("data-instrument-workspace-tab") >= 0 && code.indexOf("data-instrument-timeline-refresh") >= 0, "종목 워크스페이스 탐색 계약이 없습니다.");
   assertOk(webServer.indexOf('/api/instruments/') >= 0 && webServer.indexOf("InstrumentTimelineQuery") >= 0, "종목 타임라인 API가 등록되지 않았습니다.");
   assertOk(
+    code.indexOf("function loadInstrumentValuation") >= 0
+      && code.indexOf('["valuation", "기업가치"]') >= 0
+      && code.indexOf("function renderInstrumentValuation") >= 0
+      && styles.indexOf(".instrument-valuation-workspace") >= 0
+      && webServer.indexOf("InstrumentValuationQuery") >= 0
+      && webServer.indexOf('/valuation$') >= 0,
+    "종목 기업가치 탭, 지연 조회 또는 읽기 전용 API 계약이 없습니다."
+  );
+  assertOk(
     indexHtml.indexOf("lightweight-charts.standalone.production.js") < 0
       && code.indexOf('loadScriptOnce("vendor/lightweight-charts.standalone.production.js?v=5.2.1"') >= 0,
     "캔들 차트 런타임은 차트 상세에서만 지연 로드되어야 합니다."

@@ -27745,12 +27745,13 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
   top: 0;
   z-index: 5;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(68px, 1fr));
   gap: 4px;
   margin: -24px -24px 20px;
   padding: 10px 24px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 96%, transparent);
+  overflow-x: auto;
 }
 
 .instrument-workspace-tabs button,
@@ -27782,6 +27783,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .instrument-workspace-body,
+.instrument-valuation-workspace,
 .instrument-chart-workspace,
 .instrument-decision-workspace,
 .instrument-timeline-workspace {
@@ -27878,6 +27880,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .instrument-chart-workspace > header,
+.instrument-valuation-workspace > header,
 .instrument-decision-workspace > header,
 .instrument-timeline-workspace > header {
   display: flex;
@@ -27887,6 +27890,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .instrument-chart-workspace > header > div,
+.instrument-valuation-workspace > header > div,
 .instrument-decision-workspace > header > div,
 .instrument-timeline-workspace > header > div {
   display: grid;
@@ -27895,6 +27899,7 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .instrument-chart-workspace h3,
+.instrument-valuation-workspace h3,
 .instrument-decision-workspace h3,
 .instrument-timeline-workspace h3 {
   margin: 0;
@@ -27904,11 +27909,266 @@ html[data-theme="dark"] .ontology-graph-expanded-toolbar .icon-button.danger {
 }
 
 .instrument-chart-workspace header p,
+.instrument-valuation-workspace header p,
 .instrument-decision-workspace header p,
 .instrument-timeline-workspace header p {
   margin: 0;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.instrument-valuation-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.instrument-valuation-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.instrument-valuation-metric {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 14px;
+  border-top: 3px solid var(--line);
+}
+
+.instrument-valuation-metric + .instrument-valuation-metric {
+  border-left: 1px solid var(--line);
+}
+
+.instrument-valuation-metric.watch { border-top-color: var(--green); }
+.instrument-valuation-metric.caution { border-top-color: var(--amber); }
+.instrument-valuation-metric.danger { border-top-color: var(--red); }
+
+.instrument-valuation-metric span,
+.instrument-valuation-scenario span,
+.instrument-valuation-inline-values b {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.instrument-valuation-metric strong {
+  color: var(--ink);
+  font-size: 19px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.instrument-valuation-metric em,
+.instrument-valuation-scenario em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.instrument-valuation-band,
+.instrument-valuation-quality,
+.instrument-valuation-sources {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.instrument-valuation-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.instrument-valuation-section-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.instrument-valuation-section-head h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.instrument-valuation-section-head > span:not(.tone-chip) {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.instrument-valuation-model {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.instrument-valuation-model strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.instrument-valuation-model span,
+.instrument-valuation-band > p,
+.instrument-valuation-explanation {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.instrument-valuation-scenarios,
+.instrument-valuation-inline-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.instrument-valuation-scenario,
+.instrument-valuation-inline-values > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 14px;
+}
+
+.instrument-valuation-scenario + .instrument-valuation-scenario,
+.instrument-valuation-inline-values > span + span {
+  border-left: 1px solid var(--line);
+}
+
+.instrument-valuation-scenario strong,
+.instrument-valuation-inline-values strong {
+  color: var(--ink);
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.instrument-valuation-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  min-width: 0;
+}
+
+.instrument-valuation-unavailable {
+  display: grid;
+  gap: 5px;
+  padding: 16px;
+  border-left: 3px solid var(--amber);
+  background: var(--panel-soft);
+}
+
+.instrument-valuation-unavailable p,
+.instrument-valuation-missing p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.instrument-valuation-quality > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.instrument-valuation-quality > div:first-child p {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+}
+
+.instrument-valuation-quality em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.instrument-valuation-missing {
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.instrument-valuation-missing ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.instrument-valuation-missing li {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.instrument-valuation-missing li::before {
+  margin-right: 6px;
+  color: var(--amber);
+  content: "•";
+}
+
+.instrument-valuation-sources > div:last-child {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.instrument-valuation-sources > div:last-child p {
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) minmax(140px, 1fr) minmax(160px, .8fr);
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.instrument-valuation-sources > div:last-child p + p {
+  border-top: 1px solid var(--line);
+}
+
+.instrument-valuation-sources strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.instrument-valuation-sources time {
+  text-align: right;
 }
 
 .instrument-range-control {
@@ -38734,6 +38994,82 @@ html[data-theme="dark"] :where(
     min-height: 42px;
   }
 }
+@media (max-width: 1180px) {
+  .instrument-valuation-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .instrument-valuation-metric:nth-child(4) {
+    border-left: 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .instrument-valuation-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .instrument-valuation-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .instrument-valuation-metric:nth-child(3),
+  .instrument-valuation-metric:nth-child(5) {
+    border-left: 0;
+  }
+
+  .instrument-valuation-metric:nth-child(4) {
+    border-left: 1px solid var(--line);
+  }
+
+  .instrument-valuation-sources > div:last-child p {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .instrument-valuation-sources time {
+    text-align: left;
+  }
+}
+
+@media (max-width: 520px) {
+  .instrument-valuation-workspace > header,
+  .instrument-valuation-section-head,
+  .instrument-valuation-model {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .instrument-valuation-head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .instrument-valuation-section-head > span:not(.tone-chip) {
+    text-align: left;
+  }
+
+  .instrument-valuation-metrics,
+  .instrument-valuation-scenarios,
+  .instrument-valuation-inline-values {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .instrument-valuation-metric + .instrument-valuation-metric,
+  .instrument-valuation-metric:nth-child(4),
+  .instrument-valuation-scenario + .instrument-valuation-scenario,
+  .instrument-valuation-inline-values > span + span {
+    border-left: 0;
+  }
+
+  .instrument-valuation-metric + .instrument-valuation-metric,
+  .instrument-valuation-scenario + .instrument-valuation-scenario,
+  .instrument-valuation-inline-values > span + span {
+    border-top: 1px solid var(--line);
+  }
+}
+
 /* Runtime performance: long ledgers paint only when they approach the viewport. */
 @supports (content-visibility: auto) {
   [data-console-keyed-list] > *,

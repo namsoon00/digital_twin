@@ -45,6 +45,28 @@ production code must import the bounded context directly.
 7. Decision synthesis and AI receive only graph-backed eligible evidence plus
    explicit reference-only and blocked evidence.
 
+## Web Read Model
+
+The instrument workspace exposes a dedicated `기업가치` tab backed by
+`GET /api/instruments/{symbol}/valuation`. The endpoint reads the latest
+monitor snapshot and runs the same `ValuationModelService` used by ontology
+projection. It does not call a market vendor, write TypeDB facts, or create an
+investment action.
+
+The response keeps three concerns separate:
+
+- `marketMetrics`: observed PER, forward PER, EPS, PBR, PEG, and reporting basis;
+- `valuation`: model identity, EPS scenario, evidence-backed or bootstrap PER
+  band, fair-value range, safety margins, and quality gate state;
+- `sources` and `missingData`: provider lineage, observation dates, and inputs
+  that still prevent decision use.
+
+Current provider facts are rebuilt and merged with cached `companyKnowledge`
+before display. A positive KIS PER/PBR takes precedence over an older cached
+zero, while a broker zero sentinel cannot hide a usable forward multiple from
+another provider. Negative EPS remains meaningful and is displayed as
+`적자 · PER 산출 불가` rather than being converted into a multiple.
+
 ## Model Registry
 
 Primary models are selected by instrument archetype, in this order:

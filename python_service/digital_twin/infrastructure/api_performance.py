@@ -37,7 +37,7 @@ def route_template(path: object) -> str:
         "reasoning-engine", "rebalance", "refresh", "replay", "research-evidence", "rules",
         "research-runs", "rulebox", "run", "schedules", "sections", "service-accounts", "settings", "share",
         "status", "suggest", "summary", "sync", "templates", "time-series-platform",
-        "timeline", "trace", "validate", "version", "watchlist", "workspace",
+        "timeline", "trace", "validate", "valuation", "version", "watchlist", "workspace",
         "hypothesis-lifecycles", "hypothesis-templates", "hypothesis-policy-versions",
     }
     normalized = []

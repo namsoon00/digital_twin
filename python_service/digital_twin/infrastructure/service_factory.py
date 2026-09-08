@@ -62,6 +62,7 @@ from ..application.investment_calendar_extraction_service import InvestmentCalen
 from ..application.investment_calendar_research_service import InvestmentCalendarResearchRecommendationService
 from ..application.investment_calendar_service import InvestmentCalendarRunner, InvestmentCalendarService
 from ..application.instrument_timeline_query_service import InstrumentTimelineQueryService
+from ..application.instrument_valuation_query_service import InstrumentValuationQueryService
 from ..application.kis_realtime_service import KISRealtimeWebSocketRunner
 from ..application.market_data_collection_service import MarketDataCollectionRunner
 from ..application.external_data.collection_service import ExternalDataCollectionService
@@ -1287,6 +1288,14 @@ def build_instrument_timeline_query_service(settings=None) -> InstrumentTimeline
         hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured_settings),
         notification_job_store=stores.notification_job_store(configured_settings),
         symbol_store=stores.symbol_universe_store(configured_settings),
+    )
+
+
+def build_instrument_valuation_query_service(settings=None) -> InstrumentValuationQueryService:
+    configured_settings = settings or runtime_settings()
+    return InstrumentValuationQueryService(
+        monitor_store=stores.monitor_store(configured_settings),
+        settings=configured_settings,
     )
 
 

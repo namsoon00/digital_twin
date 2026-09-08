@@ -44,6 +44,7 @@ from ..application.ontology_diagnostics_service import OntologyDiagnosticsServic
 from ..application.research_evidence_governance_service import ResearchEvidenceGovernanceService
 from ..domain.accounts import split_symbols
 from ..domain.instrument_timeline import InstrumentTimelineQuery
+from ..domain.instrument_valuation import InstrumentValuationQuery
 from ..application.symbol_universe_service import DEFAULT_SYMBOL_SEEDS, SUPPORTED_MARKETS, seed_symbol
 from ..domain.events import (
     APP_ITEM_REMOVED,
@@ -126,6 +127,7 @@ from ..infrastructure.service_factory import (
     build_investment_calendar_runner,
     build_investment_calendar_service,
     build_instrument_timeline_query_service,
+    build_instrument_valuation_query_service,
     build_investment_strategy_proposal_service,
     build_investment_brain_service,
     build_historical_replay_job_service,
@@ -7482,6 +7484,20 @@ class DigitalTwinHandler(BaseHTTPRequestHandler):
             if self.share_access().shared:
                 return self.send_payload(403, {"error": "투자 브레인 질의는 이 컴퓨터에서 직접 접속할 때만 사용할 수 있습니다."})
             return self.send_payload(200, investment_brain_question_payload(self.read_json_body()))
+
+        instrument_valuation_match = re.match(r"^/api/instruments/([^/]+)/valuation$", path)
+        if instrument_valuation_match and self.command == "GET":
+            try:
+                payload = build_instrument_valuation_query_service(operational_read_settings()).query(
+                    InstrumentValuationQuery(
+                        symbol=urllib.parse.unquote(instrument_valuation_match.group(1)),
+                        account_id=first_query(query, "accountId"),
+                    )
+                )
+            except ValueError as error:
+                return self.send_payload(400, {"error": str(error)})
+            status = 200 if payload.get("status") == "ok" else 404
+            return self.send_payload(status, payload, cache_control="no-store")
 
         instrument_timeline_match = re.match(r"^/api/instruments/([^/]+)/timeline$", path)
         if instrument_timeline_match and self.command == "GET":

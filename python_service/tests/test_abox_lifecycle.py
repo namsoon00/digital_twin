@@ -141,6 +141,7 @@ class ABoxLifecycleContractTests(unittest.TestCase):
         )
         self._assert_complete_source_selector_replaces_every_changed_derived_companion()
         self._assert_complete_source_retires_omitted_derived_quality_companion()
+        self._assert_complete_source_retires_orphaned_relation_binding()
 
     def _assert_complete_source_selector_replaces_every_changed_derived_companion(self):
         graph = PortfolioOntology(
@@ -262,6 +263,105 @@ class ABoxLifecycleContractTests(unittest.TestCase):
         self.assertEqual(
             [quality_link_scope],
             result["removedDerivedCompanionScopeIds"],
+        )
+        self.assertTrue(result["manifestPatchContract"]["validation"]["valid"])
+
+    def _assert_complete_source_retires_orphaned_relation_binding(self):
+        episode_scope = "episode:default:world:test"
+        portfolio_scope = "portfolio:default:world:test"
+        old_link_scope = "link:account:default:state:old:world:test"
+        new_link_scope = "link:account:default:state:new:world:test"
+        active = [
+            {
+                "scopeId": episode_scope,
+                "scopeType": "episode",
+                "scopeFamily": "episode",
+                "generationId": "episode-old",
+                "baseFingerprint": "episode-old",
+                "fingerprint": "episode-old",
+                "dependencyScopeIds": [],
+                "entityCount": 1,
+                "nodeInventoryVersion": "scope-node-inventory-v1",
+                "nodeIds": ["portfolio-decision-cycle:old"],
+            },
+            {
+                "scopeId": portfolio_scope,
+                "scopeType": "portfolio",
+                "scopeFamily": "portfolio",
+                "generationId": "portfolio-current",
+                "baseFingerprint": "portfolio-current",
+                "fingerprint": "portfolio-current",
+                "dependencyScopeIds": [],
+                "entityCount": 1,
+                "nodeInventoryVersion": "scope-node-inventory-v1",
+                "nodeIds": ["portfolio:default"],
+            },
+            {
+                "scopeId": old_link_scope,
+                "scopeType": "link",
+                "scopeFamily": "state",
+                "generationId": "old-link",
+                "baseFingerprint": "old-link",
+                "fingerprint": "old-link",
+                "dependencyScopeIds": [episode_scope, portfolio_scope],
+                "relationCount": 1,
+                "relationEndpointBindingVersion": "relation-endpoint-binding-v1",
+                "relationEndpointNodeIdsByScope": {
+                    episode_scope: ["portfolio-decision-cycle:old"],
+                    portfolio_scope: ["portfolio:default"],
+                },
+            },
+        ]
+        incoming = [
+            {
+                **active[0],
+                "generationId": "episode-new",
+                "baseFingerprint": "episode-new",
+                "fingerprint": "episode-new",
+                "nodeIds": ["portfolio-decision-cycle:new"],
+            },
+            dict(active[1]),
+            {
+                **active[2],
+                "scopeId": new_link_scope,
+                "generationId": "new-link",
+                "baseFingerprint": "new-link",
+                "fingerprint": "new-link",
+                "relationEndpointNodeIdsByScope": {
+                    episode_scope: ["portfolio-decision-cycle:new"],
+                    portfolio_scope: ["portfolio:default"],
+                },
+            },
+        ]
+        graph = PortfolioOntology(
+            "default",
+            worldview={
+                "scopePlan": incoming,
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+                "targetScopeRetentionMode": "incremental-target-patch",
+            },
+        )
+        result = plan_target_scoped_manifest_patch(
+            graph,
+            {
+                "status": "ok",
+                "scopePlan": active,
+                "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                "scopeTopologyVersion": SCOPED_ABOX_SCOPE_TOPOLOGY_VERSION,
+            },
+            ["NVDA"],
+            source_graph_complete=True,
+        )
+
+        self.assertEqual("ready", result["status"])
+        self.assertIn(old_link_scope, result["retiredScopeIds"])
+        self.assertIn(new_link_scope, result["selectedIncomingScopeIds"])
+        self.assertEqual(
+            [old_link_scope],
+            result["scopeSelectionTrace"][
+                "integrityRetiredRelationScopeIds"
+            ],
         )
         self.assertTrue(result["manifestPatchContract"]["validation"]["valid"])
 

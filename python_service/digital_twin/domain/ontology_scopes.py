@@ -3089,6 +3089,7 @@ def select_target_scoped_manifest_patch(
     # after the patch has already reached persistence validation.
     integrity_repaired_relation_scope_ids: Set[str] = set()
     integrity_repaired_endpoint_scope_ids: Set[str] = set()
+    integrity_retired_relation_scope_ids: Set[str] = set()
 
     def prospective_scope_entry(scope_id: str) -> Mapping[str, object]:
         if scope_id in selected:
@@ -3149,6 +3150,22 @@ def select_target_scoped_manifest_patch(
 
                 incoming_relation = incoming.get(relation_scope_id) or {}
                 if not incoming_relation:
+                    # A complete source graph owns relation absence. If an
+                    # active relation points at a logical node removed by an
+                    # endpoint replacement and no current assertion replaces
+                    # it, retaining that relation would leave an orphaned
+                    # physical binding in the final Manifest. Retire the
+                    # relation atomically with the endpoint generation.
+                    retired_scope_set.add(relation_scope_id)
+                    retained_active_by_scope.pop(relation_scope_id, None)
+                    integrity_retired_relation_scope_ids.add(
+                        relation_scope_id
+                    )
+                    selection_reasons.setdefault(
+                        relation_scope_id,
+                        set(),
+                    ).add("retire-orphaned-relation-binding")
+                    changed = True
                     continue
                 if relation_scope_id not in selected:
                     selected.add(relation_scope_id)
@@ -3200,6 +3217,12 @@ def select_target_scoped_manifest_patch(
             fact_slot_selection["integrityRepairScopeIds"] = sorted(
                 repaired_scope_ids
             )
+        if integrity_retired_relation_scope_ids:
+            retired_scope_ids = sorted(retired_scope_set)
+            if bool(fact_slot_selection.get("enabled")):
+                fact_slot_selection[
+                    "integrityRetiredRelationScopeIds"
+                ] = sorted(integrity_retired_relation_scope_ids)
 
     if incomplete_source_endpoint_scopes:
         return {
@@ -3406,6 +3429,9 @@ def select_target_scoped_manifest_patch(
             ),
             "integrityRepairedEndpointScopeIds": sorted(
                 integrity_repaired_endpoint_scope_ids
+            ),
+            "integrityRetiredRelationScopeIds": sorted(
+                integrity_retired_relation_scope_ids
             ),
         },
         "scopeTopologyMigration": topology_migration,

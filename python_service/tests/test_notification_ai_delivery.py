@@ -12,6 +12,11 @@ from digital_twin.domain.notification_delivery_explanation import (
     build_customer_delivery_explanation,
 )
 from digital_twin.domain.notification_rules import NotificationRuleDecision
+from digital_twin.domain.notification_rules import (
+    apply_state_cooldown_rule,
+    default_notification_rule,
+    evaluate_notification_rule,
+)
 from digital_twin.domain.notifications import NotificationJob
 from digital_twin.domain.ontology_relation_delivery import relation_delivery_diff
 
@@ -22,6 +27,53 @@ class SuppressionQueue:
 
     def mark_suppressed(self, job, reason):
         self.reason = reason
+
+
+def initial_holding_review_context(ai_status="completed"):
+    context = review_observation_context()
+    context["ontologyRelationContext"]["targetRole"] = "holding"
+    context["ontologyRelationContext"].setdefault("actionEnvelope", {}).update({
+        "targetRole": "holding",
+    })
+    context["ontologyRelationDiff"] = {
+        "material": False,
+        "decisionTransition": {
+            "kind": "initial",
+            "material": False,
+            "currentAction": "NO_ACTION",
+        },
+    }
+    context["v2DecisionSynthesis"].update({
+        "action_authority": "originate",
+        "disposition_code": "HYPOTHESIS_QUALIFICATION_PENDING",
+        "execution_eligible_hypothesis_ids": [],
+        "review_level": "check",
+    })
+    context["reasoningDeliveryTrigger"] = {
+        "version": "reasoning-delivery-trigger-v1",
+        "status": "verified-material-transition",
+        "material": True,
+        "userObservable": True,
+        "kinds": ["verified-market-observation-followup"],
+        "materialRevisionKeys": ["revision:nvda:price:2"],
+    }
+    context["preDecisionDeliveryCadence"] = {
+        "eligible": True,
+        "minutes": 60,
+    }
+    context["notificationAiValidatedResponse"] = {
+        "action": "NO_ACTION",
+        "nextChecks": ["다음 거래일 가격과 거래량을 다시 확인합니다."],
+    }
+    context["notificationAiExecutionAudit"] = {
+        "status": ai_status,
+        "adoptionState": (
+            "narrative-adopted-action-not-applicable"
+            if ai_status == "completed"
+            else "typedb-fallback"
+        ),
+    }
+    return context
 
 
 def watchlist_context(ai_kind="unchanged", material_sources=None):
@@ -370,7 +422,57 @@ class FinalAIDeliveryTests(unittest.TestCase):
         self.assertEqual("suppress", decision["decision"])
         self.assertTrue(decision["typedbFallback"])
 
+    def _assert_material_review_delivery_is_not_revoked_by_initial_baseline_rule(self):
+        rule = default_notification_rule("investmentInsight")
+        context = initial_holding_review_context()
+        self.assertEqual("send", final_ai_delivery_decision(context)["decision"])
+        job = NotificationJob.create(
+            "NVDA 관계 검토",
+            account_id="main",
+            message_type="investmentInsight",
+            context=context,
+        )
+
+        decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=job,
+        )
+
+        self.assertTrue(decision.should_send)
+        self.assertEqual("new-condition", decision.state_decision)
+        self.assertNotEqual("initial_graph_baseline", decision.suppression_reason)
+
+        fallback_context = initial_holding_review_context(ai_status="typedb-fallback")
+        self.assertEqual(
+            "suppress",
+            final_ai_delivery_decision(fallback_context)["decision"],
+        )
+        fallback_job = NotificationJob.create(
+            "NVDA 관계 검토 fallback",
+            account_id="main",
+            message_type="investmentInsight",
+            context=fallback_context,
+        )
+        fallback_decision = apply_state_cooldown_rule(
+            evaluate_notification_rule(fallback_job, rule),
+            rule,
+            sent_count=0,
+            previous_context={},
+            job=fallback_job,
+        )
+
+        self.assertFalse(fallback_decision.should_send)
+        self.assertEqual("baseline", fallback_decision.state_decision)
+        self.assertEqual(
+            "initial_graph_baseline",
+            fallback_decision.suppression_reason,
+        )
+
     def test_typedb_fallback_never_sends_an_investment_push(self):
+        self._assert_material_review_delivery_is_not_revoked_by_initial_baseline_rule()
         context = watchlist_context()
         context["notificationAiExecutionAudit"] = {"status": "typedb-fallback"}
 

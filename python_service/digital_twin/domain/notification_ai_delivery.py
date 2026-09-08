@@ -88,12 +88,10 @@ def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> boo
 
     context = _mapping(context)
     # A reference-only relation can explain the current context, but it does
-    # not own an investment action.  Treating it as the first holding opinion
-    # lets threshold observations bypass the initial-baseline guard and
-    # produces a push that says only "자료 변화 관찰".  Keep those rows in web
-    # history until an action-eligible TypeDB hypothesis exists.
-    if typedb_context_observation_contract(context) or typedb_review_observation_contract(context):
+    # not own an investment action. Keep those rows in web history.
+    if typedb_context_observation_contract(context):
         return False
+    review_observation = typedb_review_observation_contract(context)
     relation = _mapping(context.get("ontologyRelationContext"))
     envelope = _mapping(relation.get("actionEnvelope"))
     relation_state = _mapping(relation.get("decisionState"))
@@ -110,9 +108,28 @@ def holding_review_baseline_is_deliverable(context: Mapping[str, object]) -> boo
         or envelope.get("reviewLevel")
         or context.get("deliveryReviewLevel")
     ).lower()
+    if target_role != "holding":
+        return False
+    if review_observation:
+        # The specialized review policy requires a verified material source
+        # transition and an AI-authored observable next condition. Once that
+        # stronger contract grants delivery, the generic initial-baseline
+        # guard must not revoke it.
+        execution = _mapping(context.get("notificationAiExecutionAudit"))
+        fallback = _mapping(execution.get("fallback"))
+        if (
+            _text(execution.get("status")).lower() != "completed"
+            or fallback.get("used") is True
+            or _text(execution.get("adoptionState")).lower()
+            != "narrative-adopted-action-not-applicable"
+        ):
+            return False
+        return (
+            review_observation_delivery_decision(context).get("decision")
+            == "send"
+        )
     return (
-        target_role == "holding"
-        and review_level != "blocked"
+        review_level != "blocked"
         and REVIEW_LEVEL_RANK.get(review_level, -1)
         >= REVIEW_LEVEL_RANK["check"]
     )

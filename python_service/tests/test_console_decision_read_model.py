@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from digital_twin.application.console_read_model_service import ConsoleReadModelService
 
@@ -53,6 +54,34 @@ class ConsoleDecisionReadModelTest(unittest.TestCase):
         )
         self.assertEqual(item["subjectDecisionCase"]["aiInsight"]["status"], "completed")
         self.assertEqual(item["statusDimensions"][0]["stateLabel"], "해석 완료")
+
+        now = datetime.now(timezone.utc)
+        cases = {
+            "status": "ok",
+            "items": [
+                {
+                    "caseId": "case:fresh",
+                    "symbol": "AAPL",
+                    "name": "Apple",
+                    "updatedAt": (now - timedelta(hours=2)).isoformat(),
+                    "decision": {"action": "BUY"},
+                    "attention": {"userActionable": True},
+                },
+                {
+                    "caseId": "case:old",
+                    "symbol": "SKHY",
+                    "name": "SK하이닉스(ADR)",
+                    "updatedAt": (now - timedelta(days=8)).isoformat(),
+                    "decision": {"action": "HOLD"},
+                    "attention": {"userReviewable": True},
+                },
+            ],
+        }
+        dashboard = ConsoleReadModelService().dashboard_summary({}, {}, cases, {})
+        self.assertEqual(["case:fresh"], [row["id"] for row in dashboard["tasks"]])
+        self.assertEqual(1, dashboard["taskSummary"]["actionable"])
+        self.assertEqual(1, dashboard["taskSummary"]["historical"])
+        self.assertEqual(96, dashboard["taskSummary"]["freshnessWindowHours"])
 
     def test_episode_head_does_not_invent_subject_case_identity(self):
         result = ConsoleReadModelService().decision_heads({

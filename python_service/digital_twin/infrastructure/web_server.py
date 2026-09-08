@@ -3554,12 +3554,38 @@ def notification_job_public_payload(
     data_mode = str(context.get("dataMode") or context.get("mode") or "").lower()
     is_mock = bool(context.get("isMock")) or data_quality.lower() in {"mock", "demo"} or data_mode in {"mock", "demo", "preview"}
     api_source = str(context.get("apiSource") or context.get("quoteSource") or context.get("sourceApi") or "notification_jobs")
+    configured_settings = configured_settings or operational_read_settings()
     if stale_minutes is None:
-        configured_settings = configured_settings or operational_read_settings()
         try:
             stale_minutes = max(1, int(configured_settings.get("notificationProcessingStaleMinutes") or 2))
         except (TypeError, ValueError):
             stale_minutes = 2
+    try:
+        active_failure_window_minutes = max(5, min(24 * 60, int(float(
+            configured_settings.get("operationalActiveFailureWindowMinutes") or 60
+        ))))
+    except (TypeError, ValueError):
+        active_failure_window_minutes = 60
+    changed_at = parse_utc(str(job.updated_at or job.created_at or ""))
+    changed_age_minutes = (
+        max(0.0, (datetime.now(timezone.utc) - changed_at).total_seconds() / 60)
+        if changed_at else None
+    )
+    recoverable_processing = bool(
+        job.status == "processing" and processing_age >= stale_minutes
+    )
+    recent_failure = bool(
+        job.status == "failed"
+        and changed_age_minutes is not None
+        and changed_age_minutes <= active_failure_window_minutes
+    )
+    priority_queue_eligible = recent_failure or recoverable_processing
+    priority_queue_state = (
+        "recent-failure" if recent_failure
+        else "stalled-processing" if recoverable_processing
+        else "historical-failure" if job.status == "failed"
+        else "not-actionable"
+    )
     payload = {
         "jobId": job.job_id,
         "messageType": job.message_type,
@@ -3583,7 +3609,10 @@ def notification_job_public_payload(
         "suppressionSummary": notification_suppression_summary(job),
         "nextEligibleAt": notification_next_eligible_at(context),
         "processingAgeMinutes": round(processing_age, 1),
-        "recoverableProcessing": bool(job.status == "processing" and processing_age >= stale_minutes),
+        "recoverableProcessing": recoverable_processing,
+        "priorityQueueEligible": priority_queue_eligible,
+        "priorityQueueState": priority_queue_state,
+        "priorityQueueWindowMinutes": active_failure_window_minutes,
         "deliveryDecision": context.get("deliveryDecision") or ("send" if job.status in {"pending", "processing", "done"} else job.status),
         "apiSource": api_source,
         "dataQuality": data_quality,
@@ -3702,14 +3731,23 @@ def notification_job_public_payload(
     return payload
 
 
-def notification_job_list_payload(job: NotificationJob, stale_minutes: int) -> Dict[str, object]:
+def notification_job_list_payload(
+    job: NotificationJob,
+    stale_minutes: int,
+    settings: Dict[str, object] = None,
+) -> Dict[str, object]:
     """Expose only the fields needed to render an outbox ledger row.
 
     The message body and policy audit trail remain available from the existing
     job-detail endpoint. This keeps a 20-row ledger from carrying 20 copies of
     full notification text and cooldown metadata.
     """
-    payload = notification_job_public_payload(job, detail=False, stale_minutes=stale_minutes)
+    payload = notification_job_public_payload(
+        job,
+        detail=False,
+        stale_minutes=stale_minutes,
+        settings=settings,
+    )
     if not payload.get("title"):
         headline = full_notification_text(job.text).split("\n", 1)[0].strip()
         payload["title"] = compact_notification_text(job.source_event_name or headline, 120)
@@ -3719,6 +3757,7 @@ def notification_job_list_payload(job: NotificationJob, stale_minutes: int) -> D
         "createdAt", "updatedAt", "sourceEventName", "title", "symbol", "rawSymbol",
         "symbolName", "textPreview", "lastError", "suppressionSummary", "nextEligibleAt",
         "processingAgeMinutes", "recoverableProcessing", "deliveryDecision",
+        "priorityQueueEligible", "priorityQueueState", "priorityQueueWindowMinutes",
         "apiSource", "dataQuality", "isMock",
     }
     return {key: value for key, value in payload.items() if key in fields}
@@ -3824,7 +3863,7 @@ def notification_jobs_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         inbox_summary = store.inbox_summary(recipient_id, scope=scope)
     items = []
     for job in jobs:
-        item = notification_job_list_payload(job, stale_minutes=stale_minutes)
+        item = notification_job_list_payload(job, stale_minutes=stale_minutes, settings=settings)
         receipt = receipts.get(job.job_id, {})
         item.update({
             "readAt": str(receipt.get("readAt") or ""),

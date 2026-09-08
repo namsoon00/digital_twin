@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -77,6 +78,34 @@ class WebReadPathPerformanceTests(unittest.TestCase):
         self.assertEqual(0, store.receipt_queries)
         self.assertEqual(1, len(payload["jobs"]))
         self.assertTrue(payload["jobs"][0]["important"])
+
+        now = datetime.now(timezone.utc)
+        recent = NotificationJob(
+            job_id="recent",
+            account_id="default",
+            account_label="기본 계정",
+            message_type="investmentInsight",
+            text="최근 실패",
+            status="failed",
+            created_at=(now - timedelta(minutes=40)).isoformat(),
+            updated_at=(now - timedelta(minutes=30)).isoformat(),
+        )
+        historical = NotificationJob(
+            job_id="historical",
+            account_id="default",
+            account_label="기본 계정",
+            message_type="investmentInsight",
+            text="이전 실패",
+            status="failed",
+            created_at=(now - timedelta(hours=3)).isoformat(),
+            updated_at=(now - timedelta(hours=2)).isoformat(),
+        )
+        recent_payload = web_server.notification_job_list_payload(recent, 2, settings)
+        historical_payload = web_server.notification_job_list_payload(historical, 2, settings)
+        self.assertTrue(recent_payload["priorityQueueEligible"])
+        self.assertEqual("recent-failure", recent_payload["priorityQueueState"])
+        self.assertFalse(historical_payload["priorityQueueEligible"])
+        self.assertEqual("historical-failure", historical_payload["priorityQueueState"])
 
     def test_notification_queue_store_disables_read_side_bootstrap(self):
         marker = object()

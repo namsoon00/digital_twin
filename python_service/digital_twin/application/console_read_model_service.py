@@ -17,6 +17,7 @@ from ..domain.operational_health import (
 
 
 CONSOLE_READ_MODEL_VERSION = "console-read-model-v2"
+DASHBOARD_DECISION_TASK_WINDOW_HOURS = 96
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -187,6 +188,8 @@ class ConsoleReadModelService:
         decisions = _rows(compact_cases.get("items"))
         portfolio = self.portfolio(lifecycle, "summary", snapshot=snapshot)
         tasks = []
+        historical_task_count = 0
+        task_cutoff = datetime.now(timezone.utc).timestamp() - DASHBOARD_DECISION_TASK_WINDOW_HOURS * 60 * 60
         for item in decisions:
             attention = _mapping(item.get("attention"))
             decision = _mapping(item.get("decision"))
@@ -194,6 +197,10 @@ class ConsoleReadModelService:
             actionable = bool(attention.get("userActionable")) or action in {"BUY", "ADD", "SELL", "TRIM", "AVOID"}
             reviewable = bool(attention.get("userReviewable"))
             if not actionable and not reviewable:
+                continue
+            updated_at = _text(item.get("updatedAt") or item.get("decidedAt"))
+            if not _iso_timestamp(updated_at) or _iso_timestamp(updated_at) < task_cutoff:
+                historical_task_count += 1
                 continue
             tasks.append({
                 "id": _text(item.get("caseId") or item.get("episodeId")),
@@ -204,7 +211,7 @@ class ConsoleReadModelService:
                 "nextAction": _text(item.get("nextAction")),
                 "attentionState": _text(attention.get("state")) or "action",
                 "taskType": "trade-review" if actionable else "evidence-review",
-                "updatedAt": _text(item.get("updatedAt") or item.get("decidedAt")),
+                "updatedAt": updated_at,
                 "detailPath": "/?tab=modeling&detail=investment-case&detailKey=" + _text(item.get("caseId") or item.get("episodeId")),
             })
         tasks.sort(key=lambda item: (_iso_timestamp(item.get("updatedAt")), item.get("symbol", "")), reverse=True)
@@ -218,7 +225,11 @@ class ConsoleReadModelService:
             "integrity": "판단 기록",
             "outcome": "결과 관측",
         }
-        for item in decisions:
+        current_decisions = [
+            item for item in decisions
+            if _iso_timestamp(item.get("updatedAt") or item.get("decidedAt")) >= task_cutoff
+        ]
+        for item in current_decisions:
             for dimension in _rows(item.get("statusDimensions")):
                 state = _text(dimension.get("state")).lower()
                 if state in {"", "pass"}:
@@ -273,11 +284,14 @@ class ConsoleReadModelService:
                 "actionable": len(tasks),
                 "displayed": min(3, len(tasks)),
                 "decisionCount": len(decisions),
+                "currentDecisionCount": len(current_decisions),
+                "historical": historical_task_count,
+                "freshnessWindowHours": DASHBOARD_DECISION_TASK_WINDOW_HOURS,
             },
             "blockerGroups": blockers[:3],
             "blockerSummary": {
                 "groups": len(blockers),
-                "affectedDecisions": sum(1 for item in decisions if _text(item.get("readinessState")) != "pass"),
+                "affectedDecisions": sum(1 for item in current_decisions if _text(item.get("readinessState")) != "pass"),
             },
             "upcomingEvents": events[:4],
             "calendarSummary": _mapping(calendar.get("summary")),

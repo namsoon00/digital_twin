@@ -648,6 +648,7 @@ function checkWorkflowConsoleContract() {
     "대량 알림 목록의 서버 페이징 계약이 없습니다."
   );
   assertOk(code.indexOf("todayQueueWorkDetailPayload") >= 0 && code.indexOf("decisionQueueWorkDetailPayload") >= 0 && code.indexOf('"today-work-queue"') >= 0 && code.indexOf('"decision-action-queue"') >= 0, "오늘/판단 목록의 전체 보기 경로가 없습니다.");
+  assertOk(code.indexOf("consoleTodayNotificationIsActionable") >= 0 && code.indexOf("priorityQueueEligible") >= 0 && code.indexOf("consoleTodayDecisionIsCurrent") >= 0, "오늘 처리 큐가 최신·조치 가능 항목을 선별하지 않습니다.");
   assertOk(code.indexOf('data-work-detail="market-instrument"') >= 0 && code.indexOf('data-work-detail="notification-job"') >= 0, "목록에서 전체화면 상세로 이동하는 경로가 없습니다.");
   assertOk(
     ["내 종목", "전체 종목", "뉴스·수급"].every(function (label) { return code.indexOf('label: "' + label + '"') >= 0; }) &&

@@ -158,6 +158,19 @@ class FakeSubjectCaseStore:
         return rows[:limit]
 
 
+class FakeAIInsightStore:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def latest_insight_episodes(self, account_id="", symbol="", limit=200):
+        rows = self.rows
+        if account_id:
+            rows = [item for item in rows if item.get("accountId") == account_id]
+        if symbol:
+            rows = [item for item in rows if item.get("symbol") == symbol]
+        return rows[:limit]
+
+
 class FakeMonitorStore:
     def load_previous(self):
         return {
@@ -277,9 +290,39 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         result = InvestmentCaseQueryService(
             FakeDecisionStore([episode()]),
             subject_case_repository=FakeSubjectCaseStore([subject_case]),
+            ai_insight_repository=FakeAIInsightStore([{
+                "episodeId": "ai-insight:1",
+                "subjectCaseId": "subject:1",
+                "accountId": "default",
+                "symbol": "AAPL",
+                "sourceAboxSnapshotId": "abox:2",
+                "inferenceGenerationId": "generation:2",
+                "candidateFingerprint": "candidate:1",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "max",
+                "validationState": "conditional",
+                "createdAt": "2026-08-20T03:01:00Z",
+                "insight": {
+                    "action": "BUY",
+                    "actionLabel": "매수 검토",
+                    "summary": "가격 회복을 확인하되 TypeDB 행동 권한을 따릅니다.",
+                    "nextChecks": ["다음 관측에서도 회복이 유지되는지 확인"],
+                    "evidence": ["가격 회복 규칙이 성립했습니다."],
+                },
+                "reconciliation": {
+                    "notificationDecision": "suppress",
+                    "reason": "중요 상태 변화가 없어 웹 이력에만 저장합니다.",
+                    "deliveryPolicy": {
+                        "actionAuthority": "observe",
+                        "aiAdoptionState": "narrative-adopted-action-not-applicable",
+                    },
+                },
+            }]),
         ).list_cases()
 
         item = result["items"][0]
+        insight = item["subjectDecisionCase"]["aiInsight"]
+        ai_dimension = next(row for row in item["statusDimensions"] if row["id"] == "ai")
         self.assertEqual("subject-decision-case", item["detailType"])
         self.assertEqual("review", item["attention"]["state"])
         self.assertTrue(item["attention"]["userReviewable"])
@@ -287,6 +330,36 @@ class InvestmentCaseQueryServiceTests(unittest.TestCase):
         self.assertEqual("BUY", item["decision"]["candidateAction"])
         self.assertEqual("NO_ACTION", item["decision"]["action"])
         self.assertEqual(1, result["summary"]["reviewRequired"])
+        self.assertEqual("completed", insight["status"])
+        self.assertTrue(insight["currentGeneration"])
+        self.assertEqual("gpt-5.6-sol", insight["model"])
+        self.assertEqual("max", insight["reasoningEffort"])
+        self.assertEqual("suppress", insight["notificationDecision"])
+        self.assertEqual("AI 해석", ai_dimension["label"])
+        self.assertEqual("해석 완료", ai_dimension["stateLabel"])
+        self.assertIn("AI 해석 완료", item["phaseLabel"])
+        projected = InvestmentCaseQueryService._ai_insight_projection(
+            {
+                "subjectCaseId": "subject:current",
+                "stage": "REVIEW_ONLY",
+                "inferenceGenerationId": "generation:current",
+                "candidateSet": {"fingerprint": "candidate:current"},
+            },
+            {
+                "episodeId": "ai-insight:previous",
+                "subjectCaseId": "subject:previous",
+                "inferenceGenerationId": "generation:previous",
+                "candidateFingerprint": "candidate:previous",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "max",
+                "insight": {"summary": "이전 세대 해석"},
+                "reconciliation": {"notificationDecision": "suppress"},
+            },
+        )
+
+        self.assertEqual("previous-generation", projected["status"])
+        self.assertFalse(projected["currentGeneration"])
+        self.assertIn("이전", projected["reason"])
 
     def test_subject_case_explains_rule_gap_without_requesting_user_action(self):
         subject_case = {

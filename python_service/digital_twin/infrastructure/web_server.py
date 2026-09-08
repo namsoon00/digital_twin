@@ -1787,6 +1787,7 @@ def investment_case_api_payload(
         investment_domain_store=stores.investment_domain_store(settings) if case_id else None,
         symbol_repository=stores.symbol_universe_store(settings),
         subject_case_repository=stores.subject_decision_case_store(settings),
+        ai_insight_repository=stores.ai_inference_queue_store(settings),
     )
     if case_id and section == "history":
         return service.history(

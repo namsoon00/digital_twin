@@ -1431,6 +1431,46 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
             ).fetchone()
         return self.request_from_row(row) if row else None
 
+    def latest_insight_episodes(
+        self,
+        account_id: str = "",
+        symbol: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, object]]:
+        """Read detached AI interpretations without requiring an alert row."""
+
+        clauses = []
+        params = []
+        normalized_account = _clean(account_id)
+        normalized_symbol = _clean(symbol).upper()
+        if normalized_account:
+            clauses.append("account_id = %s")
+            params.append(normalized_account)
+        if normalized_symbol:
+            clauses.append("symbol = %s")
+            params.append(normalized_symbol)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        try:
+            bounded_limit = max(1, min(1000, int(limit or 200)))
+        except (TypeError, ValueError):
+            bounded_limit = 200
+        params.append(bounded_limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM investment_ai_insight_episodes"
+                + where
+                + " ORDER BY created_at DESC, episode_id DESC LIMIT %s",
+                tuple(params),
+            ).fetchall()
+        return [
+            payload
+            for payload in (
+                _json_loads(row.get("payload_json"), {})
+                for row in rows or []
+            )
+            if isinstance(payload, dict) and payload.get("episodeId")
+        ]
+
     def trace_for_notification(self, notification_job_id: str) -> Dict[str, object]:
         """Return one read-only AI execution trace for notification diagnostics."""
 

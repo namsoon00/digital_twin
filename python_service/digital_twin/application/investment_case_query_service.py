@@ -39,6 +39,7 @@ class InvestmentCaseQueryService:
         investment_domain_store=None,
         symbol_repository=None,
         subject_case_repository=None,
+        ai_insight_repository=None,
     ):
         self.decision_episode_store = decision_episode_store
         self.notification_job_store = notification_job_store
@@ -47,6 +48,7 @@ class InvestmentCaseQueryService:
         self.investment_domain_store = investment_domain_store
         self.symbol_repository = symbol_repository
         self.subject_case_repository = subject_case_repository
+        self.ai_insight_repository = ai_insight_repository
         self.flow_service = InvestmentFlowQueryService(
             decision_episode_store=decision_episode_store,
             notification_job_store=notification_job_store,
@@ -194,6 +196,19 @@ class InvestmentCaseQueryService:
             rows = list(latest(account_id, symbol, max(1, min(200, int(limit or 100) * 2))) or [])
         except Exception:  # noqa: BLE001 - the canonical DecisionEpisode read path remains available.
             return []
+        insights = self._latest_ai_insights(account_id, symbol, limit)
+        insights_by_subject = {}
+        insights_by_scope = {}
+        for episode in insights:
+            subject_case_id = text(episode.get("subjectCaseId"))
+            scope = (
+                text(episode.get("accountId")) or "default",
+                text(episode.get("symbol")).upper(),
+            )
+            if subject_case_id and subject_case_id not in insights_by_subject:
+                insights_by_subject[subject_case_id] = episode
+            if scope[1] and scope not in insights_by_scope:
+                insights_by_scope[scope] = episode
         result = []
         seen = set()
         for subject_case in rows:
@@ -205,15 +220,121 @@ class InvestmentCaseQueryService:
             if not scope[1] or scope in seen:
                 continue
             seen.add(scope)
-            result.append(self._subject_case_item(payload))
+            subject_case_id = text(payload.get("subjectCaseId"))
+            insight = insights_by_subject.get(subject_case_id) or insights_by_scope.get(scope) or {}
+            result.append(self._subject_case_item(payload, insight))
         return result
 
-    def _subject_case_item(self, payload: Mapping[str, object]) -> Dict[str, object]:
+    def _latest_ai_insights(
+        self,
+        account_id: str,
+        symbol: str,
+        limit: int,
+    ) -> List[Dict[str, object]]:
+        loader = getattr(self.ai_insight_repository, "latest_insight_episodes", None)
+        if not callable(loader):
+            return []
+        try:
+            rows = loader(
+                account_id=account_id,
+                symbol=symbol,
+                limit=max(1, min(1000, int(limit or 100) * 4)),
+            )
+        except Exception:  # noqa: BLE001 - TypeDB cases remain readable without optional AI history.
+            return []
+        return [item_dict(row) for row in rows or [] if item_dict(row)]
+
+    @staticmethod
+    def _ai_insight_projection(
+        subject_case: Mapping[str, object],
+        episode: Mapping[str, object],
+    ) -> Dict[str, object]:
+        case = item_dict(subject_case)
+        saved = item_dict(episode)
+        stage = text(case.get("stage")).upper()
+        if not saved:
+            legacy_judgment = item_dict(case.get("aiJudgment"))
+            if legacy_judgment:
+                return {
+                    "status": "completed",
+                    "currentGeneration": True,
+                    "legacy": True,
+                    "validationState": text(legacy_judgment.get("validationState")),
+                    "action": text(legacy_judgment.get("action")).upper() or "NO_ACTION",
+                    "actionLabel": text(legacy_judgment.get("actionLabel")),
+                    "summary": text(
+                        legacy_judgment.get("summary")
+                        or legacy_judgment.get("investmentView")
+                    ),
+                    "currentActionPlan": text(legacy_judgment.get("currentActionPlan")),
+                    "nextActionPlan": text(legacy_judgment.get("nextActionPlan")),
+                    "nextChecks": list(legacy_judgment.get("nextChecks") or [])[:8],
+                    "invalidationCondition": text(legacy_judgment.get("invalidationCondition")),
+                    "evidence": list(legacy_judgment.get("evidence") or [])[:8],
+                    "counterEvidence": list(legacy_judgment.get("counterEvidence") or [])[:8],
+                    "reason": "현재 TypeDB 종목 판단에 연결된 기존 AI 판단 기록입니다.",
+                }
+            processing = stage in {"READY", "AI_PENDING", "AI_COMPLETED", "VALIDATED"}
+            return {
+                "status": "pending" if processing else "not-run",
+                "currentGeneration": False,
+                "reason": (
+                    "현재 TypeDB 판단 후보를 AI가 처리하고 있습니다."
+                    if processing
+                    else "현재 TypeDB 세대는 AI를 실행하지 않고 규칙 결과만 저장했습니다."
+                ),
+            }
+        insight = item_dict(saved.get("insight"))
+        reconciliation = item_dict(saved.get("reconciliation"))
+        delivery_policy = item_dict(reconciliation.get("deliveryPolicy"))
+        current_generation = bool(
+            text(saved.get("subjectCaseId")) == text(case.get("subjectCaseId"))
+            and text(saved.get("inferenceGenerationId")) == text(case.get("inferenceGenerationId"))
+            and text(saved.get("candidateFingerprint"))
+            == text(item_dict(case.get("candidateSet")).get("fingerprint"))
+        )
+        return {
+            "status": "completed" if current_generation else "previous-generation",
+            "currentGeneration": current_generation,
+            "episodeId": text(saved.get("episodeId")),
+            "subjectCaseId": text(saved.get("subjectCaseId")),
+            "inferenceGenerationId": text(saved.get("inferenceGenerationId")),
+            "candidateFingerprint": text(saved.get("candidateFingerprint")),
+            "model": text(saved.get("model")),
+            "reasoningEffort": text(saved.get("reasoningEffort")),
+            "validationState": text(saved.get("validationState")),
+            "action": text(insight.get("action")).upper() or "NO_ACTION",
+            "actionLabel": text(insight.get("actionLabel")) or "매매 판단 없음",
+            "summary": text(insight.get("summary") or insight.get("investmentView")),
+            "investmentView": text(insight.get("investmentView")),
+            "currentActionPlan": text(insight.get("currentActionPlan")),
+            "nextActionPlan": text(insight.get("nextActionPlan")),
+            "nextChecks": list(insight.get("nextChecks") or [])[:8],
+            "invalidationCondition": text(insight.get("invalidationCondition")),
+            "evidence": list(insight.get("evidence") or [])[:8],
+            "counterEvidence": list(insight.get("counterEvidence") or [])[:8],
+            "actionAuthority": text(delivery_policy.get("actionAuthority")),
+            "adoptionState": text(delivery_policy.get("aiAdoptionState")),
+            "notificationDecision": text(reconciliation.get("notificationDecision")) or "suppress",
+            "notificationJobId": text(reconciliation.get("notificationJobId")),
+            "deliveryReason": text(reconciliation.get("reason")),
+            "createdAt": text(saved.get("createdAt")),
+            "reason": (
+                "현재 TypeDB 세대와 일치하는 AI 해석입니다."
+                if current_generation
+                else "현재 TypeDB 세대보다 이전에 생성된 AI 해석이며 현재 행동을 변경하지 않습니다."
+            ),
+        }
+
+    def _subject_case_item(
+        self,
+        payload: Mapping[str, object],
+        ai_insight_episode: Mapping[str, object] = None,
+    ) -> Dict[str, object]:
         case = item_dict(payload)
         synthesis = item_dict(case.get("synthesis"))
         candidate_set = item_dict(case.get("candidateSet"))
         final = item_dict(case.get("finalDecision"))
-        judgment = item_dict(case.get("aiJudgment"))
         stage = text(case.get("stage")).upper() or "READY"
         symbol = text(case.get("symbol")).upper()
         disposition_code = text(
@@ -337,6 +458,28 @@ class InvestmentCaseQueryService:
             "symbol": symbol,
             "subjectName": symbol,
         })
+        ai_insight = self._ai_insight_projection(case, ai_insight_episode or {})
+        ai_status = text(ai_insight.get("status"))
+        ai_current = ai_status == "completed"
+        ai_processing = ai_status == "pending"
+        ai_state_label = (
+            "해석 완료"
+            if ai_current
+            else "처리 중"
+            if ai_processing
+            else "이전 해석 있음"
+            if ai_status == "previous-generation"
+            else "실행 생략"
+        )
+        phase_label = (
+            "최신 TypeDB 추론 · AI 해석 완료"
+            if ai_current
+            else "최신 TypeDB 추론 · 이전 AI 해석 있음"
+            if ai_status == "previous-generation"
+            else "최신 TypeDB 추론 · AI 처리 중"
+            if ai_processing
+            else "최신 TypeDB 추론 · AI 미실행"
+        )
         return {
             "version": INVESTMENT_CASE_VERSION,
             "detailType": "subject-decision-case",
@@ -350,7 +493,7 @@ class InvestmentCaseQueryService:
             "status": "active" if not blocked else "blocked",
             "caseStatus": "active" if not blocked else "blocked",
             "phase": "case",
-            "phaseLabel": "최신 TypeDB 추론",
+            "phaseLabel": phase_label,
             "readinessState": readiness,
             "readinessLabel": "판단 가능" if has_final else "최종 판단 전" if not blocked else "판단 보류",
             "headline": headline,
@@ -373,7 +516,13 @@ class InvestmentCaseQueryService:
             "outcome": {"state": "pending", "count": 0},
             "statusDimensions": [
                 {"id": "inference", "label": "관계 추론", "state": "pass", "stateLabel": "완료", "reason": "현재 TypeDB 세대의 관계와 가설을 저장했습니다."},
-                {"id": "ai", "label": "AI 판단", "state": "pass" if judgment else "pending", "stateLabel": "완료" if judgment else "대기", "reason": "AI 최종 의견이 저장됐습니다." if judgment else "TypeDB 후보와 알림 중요도 조건을 통과하면 AI가 최종 비교합니다."},
+                {
+                    "id": "ai",
+                    "label": "AI 해석",
+                    "state": "pending" if ai_processing else "pass",
+                    "stateLabel": ai_state_label,
+                    "reason": text(ai_insight.get("reason")),
+                },
                 {"id": "decision", "label": "현재 의견", "state": readiness, "stateLabel": "확정" if has_final else "후보", "reason": headline},
                 {"id": "data", "label": "판단 자료", "state": "warning" if missing_data else "pass", "stateLabel": "일부 확인" if missing_data else "사용 가능", "reason": text(missing_data[0] if missing_data else "현재 가설 평가에 사용한 자료가 기록되어 있습니다.")},
             ],
@@ -411,6 +560,7 @@ class InvestmentCaseQueryService:
                 "ruleCoverageState": rule_coverage_state,
                 "nextChecks": next_checks[:8],
                 "hypotheses": hypotheses,
+                "aiInsight": ai_insight,
             },
         }
 

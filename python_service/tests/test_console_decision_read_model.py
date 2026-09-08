@@ -16,11 +16,23 @@ class ConsoleDecisionReadModelTest(unittest.TestCase):
             "phase": "case",
             "readinessState": "warning",
             "headline": "TypeDB candidate",
+            "statusDimensions": [{
+                "id": "ai",
+                "label": "AI 해석",
+                "state": "pass",
+                "stateLabel": "해석 완료",
+                "reason": "현재 TypeDB 세대와 일치하는 AI 해석입니다.",
+            }],
             "subjectDecisionCase": {
                 "stage": "SYNTHESIZED",
                 "sourceAboxSnapshotId": "abox-manifest:1",
                 "inferenceGenerationId": "inference-generation:1",
                 "hypotheses": [{"hypothesisId": "hypothesis-instance:1"}],
+                "aiInsight": {
+                    "status": "completed",
+                    "model": "gpt-5.6-sol",
+                    "reasoningEffort": "max",
+                },
             },
         }
 
@@ -39,6 +51,8 @@ class ConsoleDecisionReadModelTest(unittest.TestCase):
             item["subjectDecisionCase"]["hypotheses"][0]["hypothesisId"],
             "hypothesis-instance:1",
         )
+        self.assertEqual(item["subjectDecisionCase"]["aiInsight"]["status"], "completed")
+        self.assertEqual(item["statusDimensions"][0]["stateLabel"], "해석 완료")
 
     def test_episode_head_does_not_invent_subject_case_identity(self):
         result = ConsoleReadModelService().decision_heads({

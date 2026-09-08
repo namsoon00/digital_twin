@@ -15656,6 +15656,67 @@
     );
   }
 
+  function renderSubjectDecisionAIInsight(detail) {
+    var ai = detail && detail.aiInsight && typeof detail.aiInsight === "object"
+      ? detail.aiInsight
+      : {};
+    var status = String(ai.status || "not-run");
+    var statusMeta = {
+      completed: { label: "현재 세대 해석 완료", tone: "watch" },
+      pending: { label: "AI 처리 중", tone: "hold" },
+      "previous-generation": { label: "이전 세대 해석", tone: "caution" },
+      "not-run": { label: "현재 세대 미실행", tone: "hold" }
+    }[status] || { label: status, tone: "hold" };
+    if (!ai.episodeId && status !== "completed") {
+      return [
+        '<section class="oa-assurance-context" data-flow-state="' + escapeHtml(status === "pending" ? "pending" : "pass") + '">',
+        '<span>AI INTERPRETATION</span>',
+        '<strong>' + escapeHtml(statusMeta.label) + '</strong>',
+        '<p>' + escapeHtml(ai.reason || "현재 TypeDB 세대에는 연결된 AI 해석이 없습니다.") + '</p>',
+        '</section>'
+      ].join("");
+    }
+    var validationLabels = {
+      ready: "검증 완료",
+      verified: "검증 완료",
+      conditional: "조건부 사용",
+      blocked: "판단 사용 제한"
+    };
+    var notificationLabel = ai.notificationDecision === "send" ? "알림 발송" : "웹 기록만";
+    var evidence = Array.isArray(ai.evidence) ? ai.evidence : [];
+    var counterEvidence = Array.isArray(ai.counterEvidence) ? ai.counterEvidence : [];
+    var nextChecks = Array.isArray(ai.nextChecks) ? ai.nextChecks : [];
+    var interpretation = ai.summary || ai.investmentView || "AI 해석 요약이 저장되지 않았습니다.";
+    var evidenceBody = evidence.length || counterEvidence.length ? [
+      '<div class="oa-assurance-groups">',
+      evidence.length ? '<section class="oa-assurance-group"><header><div><strong>AI가 사용한 근거</strong><p>TypeDB 후보 안에서 비교한 근거입니다.</p></div><span>' + escapeHtml(evidence.length) + '개</span></header><ul class="oa-decision-cause-list">' + evidence.map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '',
+      counterEvidence.length ? '<section class="oa-assurance-group"><header><div><strong>반대 근거</strong><p>현재 설명을 약화할 수 있는 근거입니다.</p></div><span>' + escapeHtml(counterEvidence.length) + '개</span></header><ul class="oa-decision-cause-list">' + counterEvidence.map(function (item) { return '<li><span>' + escapeHtml(item) + '</span></li>'; }).join("") + '</ul></section>' : '',
+      '</div>'
+    ].join("") : '';
+    return [
+      '<section class="oa-assurance-context" data-flow-state="' + escapeHtml(ai.currentGeneration ? "pass" : "warning") + '">',
+      '<span>AI INTERPRETATION</span>',
+      '<strong>' + escapeHtml(statusMeta.label) + '</strong>',
+      '<p>' + escapeHtml(ai.reason || "TypeDB 결과에 연결된 AI 해석입니다.") + '</p>',
+      '</section>',
+      '<div class="oa-console-metrics">',
+      '<article><span>AI 실행</span><strong>' + escapeHtml(ai.model || "모델 미기록") + '</strong><em>' + escapeHtml(ai.reasoningEffort ? "추론 " + ai.reasoningEffort : "추론 강도 미기록") + '</em></article>',
+      '<article><span>검증 상태</span><strong>' + escapeHtml(validationLabels[ai.validationState] || ai.validationState || "미기록") + '</strong><em>행동 범위는 TypeDB가 제한</em></article>',
+      '<article><span>AI 역할</span><strong>설명·후보 비교</strong><em>단독 주문 판단 권한 없음</em></article>',
+      '<article><span>알림 결과</span><strong>' + escapeHtml(notificationLabel) + '</strong><em>' + escapeHtml(ai.deliveryReason || "발송 정책 결과") + '</em></article>',
+      '</div>',
+      '<section class="oa-decision-rationale compact" data-flow-state="' + escapeHtml(ai.validationState === "blocked" ? "warning" : "pass") + '">',
+      '<header><div><span>AI READING</span><strong>AI가 해석한 의미</strong></div><b>' + escapeHtml(ai.actionLabel || "매매 판단 없음") + '</b></header>',
+      '<div class="oa-decision-rationale-body"><p>' + escapeHtml(interpretation) + '</p></div>',
+      ai.currentActionPlan ? '<footer><span>현재 대응 설명</span><strong>' + escapeHtml(ai.currentActionPlan) + '</strong></footer>' : '',
+      '</section>',
+      evidenceBody,
+      ai.nextActionPlan || nextChecks.length ? '<section class="oa-assurance-context"><span>NEXT CHECK</span><strong>AI가 제안한 다음 확인</strong><p>' + escapeHtml(ai.nextActionPlan || nextChecks.join(" · ")) + '</p></section>' : '',
+      ai.invalidationCondition ? '<section class="oa-assurance-context"><span>INVALIDATION</span><strong>이 해석이 무효가 되는 조건</strong><p>' + escapeHtml(ai.invalidationCondition) + '</p></section>' : '',
+      '<section class="oa-assurance-context"><span>AI TRACE</span><strong>분리 저장된 AI 인사이트</strong><p>' + escapeHtml([ai.episodeId, ai.inferenceGenerationId, ai.createdAt].filter(Boolean).join(" · ")) + '</p></section>'
+    ].join("");
+  }
+
   function subjectDecisionCaseWorkDetailPayload(key) {
     var rows = selectConsoleDecisionRows(state.snapshot || {});
     var row = rows.filter(function (item) {
@@ -15691,6 +15752,7 @@
       '<section class="oa-assurance-context"><span>TYPE DB SUBJECT CASE</span><strong>' + escapeHtml(row.name || row.symbol) + ' · ' + escapeHtml(candidate.label) + '</strong><p>' + escapeHtml(row.reason || "TypeDB 관계와 가설 후보를 확인합니다.") + '</p></section>',
       '<div class="oa-console-metrics"><article><span>현재 단계</span><strong>' + escapeHtml(detail.stage || "-") + '</strong><em>AI·발송과 분리된 추론 상태</em></article><article><span>가설</span><strong>' + escapeHtml(hypotheses.length + "개") + '</strong><em>현재 세대 후보</em></article><article><span>허용 행동</span><strong>' + escapeHtml((detail.allowedActions || []).length + "개") + '</strong><em>' + escapeHtml((detail.allowedActions || []).join(", ") || "없음") + '</em></article><article><span>자료 공백</span><strong>' + escapeHtml(gaps.length + "개") + '</strong><em>행동 확정 제약</em></article></div>',
       hypothesisBody,
+      renderSubjectDecisionAIInsight(detail),
       '<section class="oa-assurance-context"><span>NEXT VALIDATION</span><strong>다음 판단에서 확인할 조건</strong><p>' + escapeHtml(checks.join(" · ") || "다음 사실 변경에서 동일 가설과 반대 근거를 다시 비교합니다.") + '</p></section>',
       '<section class="oa-assurance-context"><span>TRACE IDENTITY</span><strong>재현 가능한 세대 식별자</strong><p>' + escapeHtml([detail.sourceAboxSnapshotId, detail.inferenceGenerationId, detail.candidateFingerprint].filter(Boolean).join(" · ") || "식별자 없음") + '</p></section>'
     ].join("");

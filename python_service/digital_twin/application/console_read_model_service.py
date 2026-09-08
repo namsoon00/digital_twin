@@ -149,7 +149,7 @@ class ConsoleReadModelService:
                 "statusDimensions": [
                     {
                         key: dimension.get(key)
-                        for key in ["id", "label", "state", "reason", "effect"]
+                        for key in ["id", "label", "state", "stateLabel", "reason", "effect"]
                         if key in dimension
                     }
                     for dimension in _rows(row.get("statusDimensions"))

@@ -319,6 +319,11 @@ AI가 만든 신규 가설은 `hypothesis_development_cases`에서 제안 계보
 
 ## AI Valuation Proposals
 
+구현 경계, 모델 등록 방식, 품질 차단 계약과 확장 절차는
+`docs/valuation-bounded-context.md`를 기준으로 한다. 기존 최상위 밸류에이션
+파이썬 모듈은 호환용 재노출 파일이며 신규 코드는 `domain/valuation/`을 직접
+사용한다.
+
 밸류에이션은 사용자 입력이 없어도 종목 타입별 초안을 만들 수 있다. 계산 자체는 `fundamental-evidence-per-v3` 같은 버전화된 결정론적 모델이 수행하며, AI는 이 결과를 설명하거나 검토할 뿐 EPS·PER 숫자를 임의로 만들지 않는다. 초안은 `ActiveValuation`으로 저장해 화면과 AI 설명에는 사용할 수 있지만, `valuationDecisionEligible=false`로 저장되어 사용자 승인 전에는 TypeDB의 저평가 기회·고평가 위험 추론을 작동시키지 않는다. 항상 `AIValuationProposal`과 `UserValuationReview`를 함께 만들고 `ai_applied_pending_review` 상태를 드러낸다. 메시지는 이를 "AI 제안 자동 적용 · 사용자 검토 전"과 "참고만 사용 · 매수·매도 추론에서 제외"로 표시해야 한다.
 
 현재 종목 타입별 초안 모델:

@@ -73,7 +73,7 @@ from .portfolio_ontology_lifecycle_concepts import add_portfolio_lifecycle_conce
 from .portfolio_ontology_security_line_concepts import add_security_line_concepts
 from .portfolio_ontology_temporal_concepts import add_position_temporal_concepts
 from .portfolio_ontology_statistical_concepts import add_position_statistical_signal_concepts
-from .portfolio_ontology_valuation_concepts import add_position_valuation_concepts
+from .valuation.projection import add_position_valuation_concepts
 from .portfolio import PortfolioSummary, Position
 from .portfolio_ontology_outputs import (
     dedupe_entities,

@@ -13,14 +13,14 @@ from . import news_analysis as news_domain
 from .accounts import investment_strategy_profile
 from .instrument_profiles import instrument_profile_for_position
 from .ontology_relation_contracts import BTC_SENSITIVE_SYMBOLS
-from .portfolio_ontology_valuation_concepts import (
+from .valuation.projection import (
     external_valuation_rows,
     position_runtime_valuation_rows,
-    valuation_values,
+    quality_checked_valuation_row,
 )
 from .portfolio import PortfolioSummary, Position, expects_kr_microstructure_signals
 from .portfolio_calculations import position_account_value_in_base
-from .valuation_ai_proposals import ai_valuation_proposal_rows
+from .valuation.service import evaluate_valuation_models
 from .volume_time_adjustment import trading_value_snapshot, volume_pace_snapshot
 from ..news_intelligence.domain.eligibility import assess_news_eligibility
 
@@ -384,7 +384,7 @@ def _valuation_explanation(values: Dict[str, object], row: Dict[str, object], cu
 
 def _valuation_row_payload(position: Position, row: Dict[str, object]) -> Dict[str, object]:
     currency = position.currency or "KRW"
-    values = valuation_values(row, position)
+    row, values = quality_checked_valuation_row(row, position)
     source = _valuation_source_metadata(row)
     missing_inputs = [
         VALUATION_MISSING_INPUT_LABELS.get(str(item), str(item))
@@ -482,7 +482,7 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
     raw_rows = position_runtime_valuation_rows(_valuation_runtime_context(settings), symbol)
     raw_rows.extend(external_valuation_rows(external_signals or {}, symbol))
     proposal_settings = settings.get("settings") if isinstance(settings, dict) and isinstance(settings.get("settings"), dict) else settings
-    raw_rows.extend(ai_valuation_proposal_rows(position, external_signals or {}, proposal_settings or {}))
+    raw_rows.extend(evaluate_valuation_models(position, external_signals or {}, proposal_settings or {}))
     rows = [_valuation_row_payload(position, row) for row in raw_rows]
     if not rows:
         return {
@@ -651,6 +651,8 @@ def _valuation_facts(position: Position, external_signals: Dict[str, object], se
         "valuationInputObservations": primary.get("inputObservations") if isinstance(primary.get("inputObservations"), list) else [],
         "valuationFamilyEvidence": primary.get("familyEvidence") if isinstance(primary.get("familyEvidence"), list) else [],
         "valuationModelExclusionReasons": primary.get("modelExclusionReasons") if isinstance(primary.get("modelExclusionReasons"), list) else [],
+        "valuationQualityStatus": primary.get("valuationQualityStatus"),
+        "valuationQualityIssues": primary.get("valuationQualityIssues") if isinstance(primary.get("valuationQualityIssues"), list) else [],
         "valuationExpectedEPSLow": number(primary.get("expectedEPSLow")),
         "valuationExpectedEPSHigh": number(primary.get("expectedEPSHigh")),
         "valuationTargetPERLow": number(primary.get("targetPERLow")),

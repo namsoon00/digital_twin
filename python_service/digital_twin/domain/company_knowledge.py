@@ -14,6 +14,8 @@ import json
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from .valuation.quality import normalize_dividend_yield
+
 
 COMPANY_KNOWLEDGE_VERSION = "company-knowledge-v1"
 COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v2"
@@ -314,8 +316,10 @@ def _dividend_yield_contract(
     source_unit = _clean(overview.get("dividendYieldUnit")).lower()
     if source_unit not in {"ratio", "percent"}:
         source_unit = "percent" if provider == "yfinance" else "ratio"
-    ratio = raw / 100.0 if source_unit == "percent" else raw
-    return round(ratio, 8), round(ratio * 100.0, 4), source_unit
+    normalized = normalize_dividend_yield(raw, source_unit)
+    if normalized.status != "valid":
+        return None, None, source_unit
+    return normalized.ratio, normalized.percent, normalized.source_unit
 
 
 def _normalize_company_knowledge_row(row: Mapping[str, object]) -> Dict[str, object]:

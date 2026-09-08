@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from digital_twin.domain.instrument_profiles import instrument_profile_for_position
+from digital_twin.domain.company_knowledge import build_company_knowledge
 from digital_twin.domain.market_data import known_stock, normalize_position
 from digital_twin.domain.portfolio import Position
 from digital_twin.domain.ontology_relation_facts import position_signal_facts
@@ -25,9 +26,114 @@ from digital_twin.domain.valuation_model_evidence import (
     fair_value_from_evidence,
     multiple_evidence_band,
 )
+from digital_twin.domain.valuation import (
+    VALUATION_MODEL_SERVICE_VERSION,
+    ValuationModelRequest,
+    ValuationModelService,
+    apply_valuation_quality_gate,
+    normalize_dividend_yield,
+)
+from digital_twin.domain.valuation.projection import add_valuation_row_concepts, quality_checked_valuation_row
 
 
 class ValuationContractTests(unittest.TestCase):
+    def _assert_dividend_yield_requires_an_explicit_and_valid_unit(self):
+        percent = normalize_dividend_yield(1.23, "percent")
+        ratio = normalize_dividend_yield(0.0123, "ratio")
+        invalid = normalize_dividend_yield(1.23, "ratio")
+
+        self.assertEqual("valid", percent.status)
+        self.assertEqual(0.0123, percent.ratio)
+        self.assertEqual(1.23, percent.percent)
+        self.assertEqual(percent.ratio, ratio.ratio)
+        self.assertEqual("invalid", invalid.status)
+
+    def _assert_company_knowledge_preserves_canonical_dividend_yield_units(self):
+        knowledge = build_company_knowledge(
+            "AAPL",
+            overview={
+                "provider": "yfinance",
+                "fetchedAt": "2026-09-08T00:00:00Z",
+                "dividendYield": 1.23,
+                "dividendYieldUnit": "percent",
+                "peRatio": 28.0,
+            },
+        )
+
+        self.assertEqual(0.0123, knowledge["valuation"]["dividendYield"])
+        self.assertEqual(1.23, knowledge["valuation"]["dividendYieldPct"])
+        self.assertEqual("ratio", knowledge["valuationUnits"]["dividendYield"])
+        self.assertEqual("percent", knowledge["valuationUnits"]["dividendYieldSourceUnit"])
+
+    def _assert_quality_gate_blocks_invalid_scenario_order(self):
+        checked = apply_valuation_quality_gate({
+            "currentPrice": 100,
+            "fairValueLow": 130,
+            "fairValue": 120,
+            "fairValueHigh": 160,
+            "valuationInputState": "sufficient",
+            "valuationFreshnessStatus": "fresh",
+            "valuationDecisionEligible": True,
+        })
+
+        self.assertEqual("blocked", checked["valuationQualityStatus"])
+        self.assertFalse(checked["valuationDecisionEligible"])
+        self.assertIn(
+            "invalid-scenario-order",
+            {issue["code"] for issue in checked["valuationQualityIssues"]},
+        )
+
+    def _assert_projection_quality_gate_blocks_stale_eligible_valuation(self):
+        position = Position(symbol="AAPL", name="Apple", current_price=100, currency="USD")
+        _row, values = quality_checked_valuation_row({
+            "currentPrice": 100,
+            "fairValueLow": 110,
+            "fairValue": 120,
+            "fairValueHigh": 130,
+            "valuationInputState": "sufficient",
+            "valuationFreshnessStatus": "stale",
+            "valuationDecisionEligible": True,
+        }, position)
+
+        self.assertEqual("blocked", values["valuationQualityStatus"])
+        self.assertFalse(values["valuationDecisionEligible"])
+        self.assertIn(
+            "unusable-freshness",
+            {issue["code"] for issue in values["valuationQualityIssues"]},
+        )
+
+    def _assert_model_service_owns_calculation_but_never_emits_an_action(self):
+        position = Position(
+            symbol="035720",
+            name="카카오",
+            market="KR",
+            currency="KRW",
+            current_price=34900,
+        )
+        result = ValuationModelService().evaluate(ValuationModelRequest(
+            position=position,
+            external_signals={
+                "companyOverviews": {
+                    "035720": {
+                        "provider": "KIS Open API",
+                        "trailingEPS": 1110,
+                        "epsPeriod": "annual",
+                        "peRatio": 31.13,
+                    }
+                }
+            },
+        ))
+
+        self.assertEqual("calculated", result.status)
+        self.assertEqual(VALUATION_MODEL_SERVICE_VERSION, result.model_service_version)
+        self.assertEqual(1, len(result.rows))
+        self.assertEqual("growth-quality-earnings", result.rows[0]["valuationModelId"])
+        self.assertEqual("growth", result.rows[0]["valuationModelFamily"])
+        self.assertEqual("valuation-bounded-context", result.rows[0]["calculationOwner"])
+        self.assertEqual(VALUATION_MODEL_SERVICE_VERSION, result.rows[0]["valuationModelServiceVersion"])
+        for action_key in ("action", "recommendedAction", "decision", "buy", "sell"):
+            self.assertNotIn(action_key, result.rows[0])
+
     def test_quarterly_eps_is_not_combined_with_annual_per(self):
         observation = annual_eps_observation(
             {},
@@ -49,8 +155,9 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(80000, values["fairValueLow"])
         self.assertEqual(120000, values["fairValueBase"])
         self.assertEqual(160000, values["fairValueHigh"])
+        self._assert_reported_consensus_range_is_used_without_synthetic_eps_stress()
 
-    def test_reported_consensus_range_is_used_without_synthetic_eps_stress(self):
+    def _assert_reported_consensus_range_is_used_without_synthetic_eps_stress(self):
         scenario = earnings_scenario([
             {
                 "observationId": "consensus:fy1",
@@ -113,6 +220,8 @@ class ValuationContractTests(unittest.TestCase):
         self.assertEqual(1200, observations[0]["base"])
         self.assertEqual("official", observations[0]["sourceType"])
         self.assertEqual("companyKnowledge.netIncome/sharesOutstanding", observations[0]["source"])
+        self._assert_dividend_yield_requires_an_explicit_and_valid_unit()
+        self._assert_company_knowledge_preserves_canonical_dividend_yield_units()
 
     def test_semiconductor_ai_valuation_uses_eps_not_moving_average(self):
         position = Position(
@@ -204,6 +313,7 @@ class ValuationContractTests(unittest.TestCase):
         self.assertIn("현재 PER 31.13배", message)
         self.assertIn("사용 EPS 1,110원", message)
         self.assertIn("기준 PER 26배", message)
+        self._assert_model_service_owns_calculation_but_never_emits_an_action()
 
         position = Position(
             symbol="MSTR",
@@ -265,6 +375,25 @@ class ValuationContractTests(unittest.TestCase):
         analyst = next(entity for entity in graph.entities if entity.kind == "analyst-revision")
         self.assertTrue(analyst.properties["valuationReferenceOnly"])
         self.assertFalse(analyst.properties["valuationDecisionEligible"])
+        stock = next(entity for entity in graph.entities if entity.kind == "stock")
+        add_valuation_row_concepts(graph, stock.entity_id, position, {
+            "assumptionKey": "AAPL:invalid-scenario",
+            "currentPrice": 100,
+            "fairValueLow": 130,
+            "fairValue": 120,
+            "fairValueHigh": 160,
+            "valuationInputState": "sufficient",
+            "valuationFreshnessStatus": "fresh",
+            "valuationDecisionEligible": True,
+        })
+        quality = next(entity for entity in graph.entities if entity.kind == "valuation-data-quality")
+        self.assertEqual("blocked", quality.properties["valuationQualityStatus"])
+        self.assertTrue(any(
+            relation.relation_type == "HAS_DATA_QUALITY" and relation.target == quality.entity_id
+            for relation in graph.relations
+        ))
+        self._assert_quality_gate_blocks_invalid_scenario_order()
+        self._assert_projection_quality_gate_blocks_stale_eligible_valuation()
 
 
 if __name__ == "__main__":

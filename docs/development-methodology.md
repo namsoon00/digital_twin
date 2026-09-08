@@ -232,6 +232,7 @@ Domain:
 - `python_service/digital_twin/domain/analytics.py`: compatibility facade for legacy analytics imports only
 - `python_service/digital_twin/domain/market_data.py`: market-data normalization, symbol hints, moving-average helpers, and numeric coercion
 - `python_service/digital_twin/domain/portfolio_calculations.py`: portfolio exposure, FX conversion, and summary calculations
+- `python_service/digital_twin/domain/valuation/`: independent valuation bounded context for evidence, model registry, deterministic calculations, quality gates, and ABox projection; it never emits an investment action
 - `python_service/digital_twin/domain/strategy.py`: TypeDB inference-backed strategy compatibility facade, raw market facts, and categorical position decision state
 - `python_service/digital_twin/domain/ontology_tbox.py`: bounded-context TBox vocabulary, relation definitions, and ontology reasoning rule catalog
 - `python_service/digital_twin/domain/ontology_domain_tbox.py`: canonical account-to-outcome domain modules layered over the compatibility TBox

@@ -386,6 +386,43 @@ class NotificationAIInferencePacketTests(unittest.TestCase):
         )
         self.assertIn("fact:currentPrice", view_claim["evidenceClosureAddedIds"])
 
+        class MissingNextReviewer:
+            calls = 0
+
+            def review(self, prepared):
+                self.calls += 1
+                core = prepared["_notificationAiPreparedDecisionCore"]
+                support_id = core["narrativeClaimContract"]["allowedEvidenceIdsBySection"]["support"][0]
+                payload = response_payload("fact:currentPrice", support_id, "fact:ma20Distance")
+                payload["narrativeClaims"] = payload["narrativeClaims"][:2]
+                payload["nextActionPlan"] = (
+                    "다음 관측에서 가격 흐름과 거래 조건이 유지되는지 확인합니다."
+                )
+                return validated_response_from_payload(
+                    prepared,
+                    payload,
+                    raw_response=json.dumps(payload, ensure_ascii=False),
+                    source="test AI",
+                )
+
+        missing_next_reviewer = MissingNextReviewer()
+        repaired_outcome = NotificationAIJudgementService(
+            missing_next_reviewer,
+            {},
+        ).judge(investment_context())
+
+        self.assertTrue(repaired_outcome.publishable)
+        self.assertEqual(1, missing_next_reviewer.calls)
+        self.assertFalse(repaired_outcome.repair_attempted)
+        self.assertIn(
+            "next-condition",
+            repaired_outcome.response.verified_claim_sections,
+        )
+        structured = repaired_outcome.execution_spans["structuredNarrativeRepair"]
+        self.assertEqual("repaired", structured["status"])
+        self.assertEqual("nextActionPlan", structured["sourceField"])
+        self.assertTrue(structured["evidenceIds"])
+
     def test_unrepairable_ai_claims_fall_back_without_ai_writer_label(self):
         class Reviewer:
             calls = 0

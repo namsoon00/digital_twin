@@ -224,6 +224,119 @@ def ensure_packet_claim_validation(
     response.claim_validation = validation
 
 
+def recover_structured_next_condition_claim(
+    context: Dict[str, object],
+    packet: NotificationAIInferencePacket,
+    response: NotificationAIValidatedResponse,
+) -> Dict[str, object]:
+    """Bind an omitted narrative claim to already-returned structured output.
+
+    The model can return a valid ``nextActionPlan`` while forgetting to repeat
+    it in ``narrativeClaims``.  A second model call is unnecessary in that
+    narrow case: reuse the returned text, attach only packet-approved evidence,
+    and run the ordinary claim validator again.  This never invents a market
+    fact or changes the selected action.
+    """
+
+    if str(context.get("messageType") or "") != INVESTMENT_INSIGHT:
+        return {"status": "not-applicable"}
+    if response.verified_claim_sections.intersection({"next-condition", "limitation"}):
+        return {"status": "not-required"}
+    structured_sources = [
+        ("nextActionPlan", response.next_action_plan),
+        ("invalidationCondition", response.invalidation_condition),
+        *(("nextChecks", value) for value in response.next_checks or []),
+    ]
+    source_field, text = next(
+        (
+            (field, str(value or "").strip())
+            for field, value in structured_sources
+            if str(value or "").strip()
+        ),
+        ("", ""),
+    )
+    if not text:
+        return {"status": "unavailable", "reason": "structured-next-condition-missing"}
+
+    prepared_core = context.get("_notificationAiPreparedDecisionCore")
+    prepared_core = prepared_core if isinstance(prepared_core, dict) else packet.decision_core
+    claim_contract = prepared_core.get("narrativeClaimContract")
+    claim_contract = claim_contract if isinstance(claim_contract, dict) else {}
+    recommended = claim_contract.get("recommendedEvidenceIdsBySection")
+    recommended = recommended if isinstance(recommended, dict) else {}
+    allowed = claim_contract.get("allowedEvidenceIdsBySection")
+    allowed = allowed if isinstance(allowed, dict) else {}
+    packet_ids = set(packet.evidence_ids)
+    permitted_ids = {
+        str(value or "")
+        for value in allowed.get("next-condition") or []
+        if str(value or "") in packet_ids
+    }
+    evidence_ids = []
+    for value in [
+        *(recommended.get("next-condition") or []),
+        *(allowed.get("next-condition") or []),
+    ]:
+        evidence_id = str(value or "").strip()
+        if (
+            evidence_id
+            and evidence_id in packet_ids
+            and (not permitted_ids or evidence_id in permitted_ids)
+            and evidence_id not in evidence_ids
+        ):
+            evidence_ids.append(evidence_id)
+        if len(evidence_ids) >= 4:
+            break
+    ledger_by_id = {
+        str(item.get("evidenceId") or ""): item
+        for item in prepared_core.get("evidenceLedger") or []
+        if isinstance(item, dict) and str(item.get("evidenceId") or "")
+    }
+    if not evidence_ids or not any(
+        str((ledger_by_id.get(evidence_id) or {}).get("kind") or "") != "inference"
+        for evidence_id in evidence_ids
+    ):
+        return {"status": "unavailable", "reason": "observable-evidence-missing"}
+
+    claim_id = "claim:structured-next:" + hashlib.sha256(
+        json.dumps(
+            {"text": text, "evidenceIds": evidence_ids},
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+    claims, validation = normalize_narrative_claims(
+        context,
+        {
+            "narrativeClaims": [
+                *(response.narrative_claims or []),
+                {
+                    "claimId": claim_id,
+                    "section": "next-condition",
+                    "text": text,
+                    "evidenceIds": evidence_ids,
+                },
+            ]
+        },
+        writer_kind="ai",
+    )
+    validation["inferencePacketId"] = packet.packet_id
+    validation["evidenceFingerprint"] = packet.evidence_fingerprint
+    response.narrative_claims = claims
+    response.claim_validation = validation
+    repaired = any(
+        item.get("claimId") == claim_id and item.get("section") == "next-condition"
+        for item in claims
+    )
+    return {
+        "status": "repaired" if repaired else "rejected",
+        "claimId": claim_id,
+        "sourceField": source_field,
+        "evidenceIds": evidence_ids,
+    }
+
+
 def narrative_publication_contract_error(
     context: Dict[str, object],
     packet: NotificationAIInferencePacket,
@@ -423,6 +536,19 @@ class NotificationAIJudgementService:
         )
         initial_contract_error = contract_error
         initial_publication_error = publication_error
+        structured_claim_repair = {"status": "not-required"}
+        if "next-condition-or-limitation" in publication_error:
+            structured_claim_repair = recover_structured_next_condition_claim(
+                review_context,
+                prepared_packet,
+                response,
+            )
+            if structured_claim_repair.get("status") == "repaired":
+                publication_error = narrative_publication_contract_error(
+                    review_context,
+                    prepared_packet,
+                    response,
+                )
         initial_validation_ms = int((time.monotonic() - validation_started) * 1000)
         repair_attempted = bool(
             (enforce_contract and hypothesis_comparison_needs_repair(context.get("messageType"), response))
@@ -508,6 +634,7 @@ class NotificationAIJudgementService:
                 "initialValidationMs": initial_validation_ms,
                 "repairModelMs": repair_model_ms,
                 "repairValidationMs": repair_validation_ms,
+                "structuredNarrativeRepair": structured_claim_repair,
                 "totalJudgementMs": int((time.monotonic() - total_started) * 1000),
                 "modelAttempts": list(getattr(self.reviewer, "execution_history", []) or []),
             },
